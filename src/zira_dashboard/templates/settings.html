@@ -1207,6 +1207,61 @@
       d.open = false;
     });
   }, true);
+
+  // ---------- Groups: Enter on the "+ add new group..." input quick-saves ----------
+  // Hits POST /settings/groups/add with just the typed name (doesn't touch
+  // any other in-progress edits on the page), then reloads so the new row
+  // appears in the list and a fresh empty add-row is ready for the next
+  // group. Lets you bang out groups quickly: type, Enter, type, Enter, ...
+  (function initGroupQuickAdd() {
+    document.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter') return;
+      const input = e.target;
+      if (!input || input.name !== 'group_new') return;
+      const name = (input.value || '').trim();
+      if (!name) return;
+      e.preventDefault();
+      input.disabled = true;
+      const fd = new FormData();
+      fd.append('name', name);
+      try {
+        const resp = await fetch('/settings/groups/add', { method: 'POST', body: fd });
+        if (resp.ok) {
+          // Reload so Jinja re-renders the groups table with the new row,
+          // and the new add-row input is empty + ready for the next entry.
+          // Preserve scroll position by stashing it; reload restores so
+          // the user stays in the Groups section visually.
+          sessionStorage.setItem('settings-scroll-y', String(window.scrollY));
+          sessionStorage.setItem('settings-focus-group-new', '1');
+          window.location.reload();
+          return;
+        }
+        const data = await resp.json().catch(() => ({}));
+        alert('Could not add group: ' + (data.error || ('HTTP ' + resp.status)));
+        input.disabled = false;
+        input.focus();
+      } catch (err) {
+        alert('Network error adding group: ' + err.message);
+        input.disabled = false;
+        input.focus();
+      }
+    });
+
+    // Restore scroll + focus after the quick-add reload.
+    window.addEventListener('DOMContentLoaded', () => {
+      const y = sessionStorage.getItem('settings-scroll-y');
+      const refocus = sessionStorage.getItem('settings-focus-group-new');
+      if (y !== null) {
+        sessionStorage.removeItem('settings-scroll-y');
+        window.scrollTo(0, parseInt(y, 10) || 0);
+      }
+      if (refocus) {
+        sessionStorage.removeItem('settings-focus-group-new');
+        const next = document.querySelector('input[name="group_new"]');
+        if (next) next.focus();
+      }
+    });
+  })();
 </script>
 </body>
 </html>

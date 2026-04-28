@@ -195,6 +195,22 @@ async def settings_save_schedule(request: Request):
     return RedirectResponse(url="/settings?saved=1#schedule", status_code=303)
 
 
+@router.post("/settings/groups/add")
+async def settings_add_group(request: Request):
+    """Quick-add endpoint for the Groups section's Enter-to-add UX. Saves
+    just the named group without touching WC rows, value-stream overrides,
+    or schedule fields, so power-typing groups doesn't clobber other
+    in-progress edits on the page."""
+    form = await request.form()
+    name = (form.get("name") or "").strip()[:80]
+    if not name:
+        return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
+    if name in set(work_centers_store.registered_groups()):
+        return JSONResponse({"ok": False, "error": "already exists", "name": name}, status_code=409)
+    work_centers_store.add_group(name)
+    return JSONResponse({"ok": True, "name": name})
+
+
 @router.post("/settings/work_centers")
 async def settings_save_work_centers(request: Request):
     """Bulk save: group registry edits, WC rows, group/VS overrides."""
