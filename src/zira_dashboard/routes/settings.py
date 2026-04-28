@@ -119,12 +119,20 @@ def settings_page(request: Request, saved: int = Query(default=0)):
             for b in sched.breaks
         ],
     }
+    # Skill list comes from synced roster (Odoo source of truth) so that
+    # the per-WC required-skills picker stays aligned with the People
+    # Matrix columns. Falls back to legacy SKILLS only if the roster is
+    # empty (first run before any sync).
+    if active_people_objs and active_people_objs[0].skills:
+        skills_all = list(active_people_objs[0].skills.keys())
+    else:
+        skills_all = list(staffing.SKILLS)
     return templates.TemplateResponse(
         request,
         "settings.html",
         {
             "wc_rows": wc_rows,
-            "skills_all": list(staffing.SKILLS),
+            "skills_all": skills_all,
             "value_streams": list(work_centers_store.VALUE_STREAMS),
             "groups_all": work_centers_store.registered_groups(),
             "group_rows": group_rows,
