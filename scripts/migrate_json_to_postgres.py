@@ -67,10 +67,13 @@ def migrate_people(roster: list[dict] | None) -> None:
 
 def migrate_work_centers(wc_data: dict | None) -> None:
     from zira_dashboard import staffing
-    overrides = wc_data or {}
+    # work_centers.json shape: {"work_centers": {key: {...}}, "groups": [names], "group_overrides": {...}}
+    wc_overrides = (wc_data or {}).get("work_centers", {}) if isinstance(wc_data, dict) else {}
     for loc in staffing.LOCATIONS:
         key = loc.meter_id if loc.meter_id else f"name:{loc.name}"
-        eff = overrides.get(key, {})
+        eff = wc_overrides.get(key, {}) if isinstance(wc_overrides, dict) else {}
+        groups_list = eff.get("groups") or []
+        first_group = groups_list[0] if groups_list else None
         db.execute(
             "INSERT INTO work_centers (name, meter_id, category, cell, value_stream, "
             "min_ops, max_ops, goal_per_day_override, group_name, note) "
@@ -81,19 +84,19 @@ def migrate_work_centers(wc_data: dict | None) -> None:
             "max_ops = EXCLUDED.max_ops, goal_per_day_override = EXCLUDED.goal_per_day_override, "
             "group_name = EXCLUDED.group_name, note = EXCLUDED.note",
             (
-                loc.name, loc.meter_id, loc.category, loc.cell,
+                loc.name, loc.meter_id, loc.skill, loc.bay,
                 eff.get("value_stream", "Recycled"),
                 eff.get("min_ops", loc.min_ops),
                 eff.get("max_ops", loc.max_ops),
                 eff.get("goal_per_day"),
-                eff.get("group"),
+                first_group,
                 eff.get("note", ""),
             ),
         )
     print(f"work_centers: {len(staffing.LOCATIONS)} rows")
     for loc in staffing.LOCATIONS:
         key = loc.meter_id if loc.meter_id else f"name:{loc.name}"
-        eff = overrides.get(key, {})
+        eff = wc_overrides.get(key, {}) if isinstance(wc_overrides, dict) else {}
         for s in (eff.get("required_skills") or []):
             db.execute(
                 "INSERT INTO work_center_required_skills (wc_id, skill_id) "
@@ -113,16 +116,32 @@ def migrate_work_centers(wc_data: dict | None) -> None:
 
 
 def migrate_groups_and_value_streams(wc_data: dict | None) -> None:
-    if not wc_data:
+    if not isinstance(wc_data, dict):
         return
-    groups = (wc_data.get("groups") or {})
-    for name, meta in groups.items():
+    # `groups` is a flat list of names; `group_overrides` may carry per-name goal overrides.
+    group_names = wc_data.get("groups") or []
+    group_overrides = ((wc_data.get("group_overrides") or {}).get("group") or {}) if isinstance(wc_data.get("group_overrides"), dict) else {}
+    for name in group_names:
+        if not isinstance(name, str):
+            continue
+        override = group_overrides.get(name)
         db.execute(
             "INSERT INTO groups (name, goal_per_day_override) VALUES (%s, %s) "
             "ON CONFLICT (name) DO UPDATE SET goal_per_day_override = EXCLUDED.goal_per_day_override",
-            (name, meta.get("goal_per_day") if isinstance(meta, dict) else None),
+            (name, override if isinstance(override, int) else None),
         )
-    print(f"groups: {len(groups)} rows")
+    print(f"groups: {len(group_names)} rows")
+    # Value streams: from VALUE_STREAMS constant + any overrides.
+    from zira_dashboard import work_centers_store
+    vs_overrides = ((wc_data.get("group_overrides") or {}).get("value_stream") or {}) if isinstance(wc_data.get("group_overrides"), dict) else {}
+    for vs in work_centers_store.VALUE_STREAMS:
+        override = vs_overrides.get(vs)
+        db.execute(
+            "INSERT INTO value_streams (name, goal_per_day_override) VALUES (%s, %s) "
+            "ON CONFLICT (name) DO UPDATE SET goal_per_day_override = EXCLUDED.goal_per_day_override",
+            (vs, override if isinstance(override, int) else None),
+        )
+    print(f"value_streams: {len(work_centers_store.VALUE_STREAMS)} rows")
 
 
 def migrate_schedules() -> None:
