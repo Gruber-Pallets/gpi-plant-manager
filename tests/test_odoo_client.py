@@ -96,3 +96,42 @@ def test_fetch_skill_level_buckets_rank_maps_3_levels(monkeypatch):
     buckets = odoo_client.fetch_skill_level_buckets()
     # 3 levels -> rank 0,1,2 -> 0, round(1*3/2)=2, round(2*3/2)=3
     assert buckets == {200: 0, 201: 2, 202: 3}
+
+
+def test_fetch_employees_returns_active_only_with_required_fields(monkeypatch):
+    responses = {
+        ("hr.employee", "search_read"): [
+            {"id": 1, "name": "Alice", "active": True, "work_email": "alice@x"},
+            {"id": 2, "name": "Bob",   "active": True, "work_email": False},
+        ],
+    }
+    calls = _stub_execute(monkeypatch, responses)
+    out = odoo_client.fetch_employees()
+    assert out == [
+        {"id": 1, "name": "Alice", "active": True, "work_email": "alice@x"},
+        {"id": 2, "name": "Bob",   "active": True, "work_email": False},
+    ]
+    # Search must filter to active only
+    args = calls[0][2]
+    assert ("active", "=", True) in args[0]
+
+
+def test_fetch_skills_for_groups_by_employee_id(monkeypatch):
+    responses = {
+        ("hr.employee.skill", "search_read"): [
+            {"id": 5, "employee_id": [1, "Alice"], "skill_id": [10, "Repair"],     "skill_level_id": [103, "Expert"]},
+            {"id": 6, "employee_id": [1, "Alice"], "skill_id": [11, "Dismantler"], "skill_level_id": [101, "Beginner"]},
+            {"id": 7, "employee_id": [2, "Bob"],   "skill_id": [10, "Repair"],     "skill_level_id": [102, "Adv"]},
+        ],
+    }
+    _stub_execute(monkeypatch, responses)
+    out = odoo_client.fetch_skills_for([1, 2])
+    assert out == {
+        1: [
+            {"skill_id": 10, "skill_name": "Repair",     "level_id": 103},
+            {"skill_id": 11, "skill_name": "Dismantler", "level_id": 101},
+        ],
+        2: [
+            {"skill_id": 10, "skill_name": "Repair", "level_id": 102},
+        ],
+    }

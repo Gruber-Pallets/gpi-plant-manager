@@ -132,3 +132,31 @@ def fetch_skill_level_buckets() -> dict[int, int]:
                 bucket = round(rank * 3 / (n - 1))
             out[lvl["id"]] = max(0, min(3, bucket))
     return out
+
+
+def fetch_employees() -> list[dict]:
+    """All active hr.employee records with the fields we need."""
+    return execute(
+        "hr.employee", "search_read",
+        [("active", "=", True)],
+        fields=["id", "name", "active", "work_email"],
+    )
+
+
+def fetch_skills_for(employee_ids: list[int]) -> dict[int, list[dict]]:
+    """Return {employee_id: [{skill_id, skill_name, level_id}, ...]}."""
+    if not employee_ids:
+        return {}
+    rows = execute(
+        "hr.employee.skill", "search_read",
+        [("employee_id", "in", employee_ids)],
+        fields=["id", "employee_id", "skill_id", "skill_level_id"],
+    )
+    out: dict[int, list[dict]] = {eid: [] for eid in employee_ids}
+    for r in rows:
+        eid = r["employee_id"][0] if isinstance(r["employee_id"], list) else r["employee_id"]
+        sid = r["skill_id"][0]    if isinstance(r["skill_id"], list)    else r["skill_id"]
+        lid = r["skill_level_id"][0] if isinstance(r["skill_level_id"], list) else r["skill_level_id"]
+        sname = r["skill_id"][1] if isinstance(r["skill_id"], list) else ""
+        out.setdefault(eid, []).append({"skill_id": sid, "skill_name": sname, "level_id": lid})
+    return out
