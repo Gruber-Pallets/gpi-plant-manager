@@ -133,187 +133,160 @@ def bootstrap_schema() -> None:
 
 
 _SCHEMA_DDL = """
--- People (employees)
+-- HR-mastered entities (mirrored from Odoo via TTL sync) ----------------
+
 CREATE TABLE IF NOT EXISTS people (
-    id              TEXT PRIMARY KEY,
-    name            TEXT NOT NULL,
-    active          BOOLEAN NOT NULL DEFAULT TRUE,
-    employee_number TEXT,
-    hire_date       DATE,
-    notes           TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              SERIAL PRIMARY KEY,
+  odoo_id         INTEGER UNIQUE,
+  name            TEXT NOT NULL UNIQUE,
+  active          BOOLEAN NOT NULL DEFAULT TRUE,
+  reserve         BOOLEAN NOT NULL DEFAULT FALSE,
+  last_pulled_at  TIMESTAMPTZ,
+  last_pushed_at  TIMESTAMPTZ,
+  local_dirty     BOOLEAN NOT NULL DEFAULT FALSE
 );
+CREATE INDEX IF NOT EXISTS people_active_idx ON people (active);
 
-CREATE INDEX IF NOT EXISTS idx_people_active ON people (active);
-
--- Skills catalog
 CREATE TABLE IF NOT EXISTS skills (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    description TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              SERIAL PRIMARY KEY,
+  odoo_id         INTEGER UNIQUE,
+  name            TEXT NOT NULL UNIQUE,
+  skill_type      TEXT NOT NULL,
+  sort_order      INTEGER NOT NULL DEFAULT 0,
+  last_pulled_at  TIMESTAMPTZ
 );
 
--- Many-to-many: people <-> skills
 CREATE TABLE IF NOT EXISTS person_skills (
-    person_id  TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
-    skill_id   TEXT NOT NULL REFERENCES skills (id) ON DELETE CASCADE,
-    level      INTEGER,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (person_id, skill_id)
+  person_id       INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  skill_id        INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+  level           SMALLINT NOT NULL DEFAULT 0,
+  last_pulled_at  TIMESTAMPTZ,
+  last_pushed_at  TIMESTAMPTZ,
+  local_dirty     BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (person_id, skill_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_person_skills_skill ON person_skills (skill_id);
+-- Work centers ---------------------------------------------------------
 
--- Work centers (machines / stations / lines)
 CREATE TABLE IF NOT EXISTS work_centers (
-    id            TEXT PRIMARY KEY,
-    name          TEXT NOT NULL,
-    odoo_id       INTEGER,
-    value_stream  TEXT,
-    group_name    TEXT,
-    capacity      INTEGER,
-    active        BOOLEAN NOT NULL DEFAULT TRUE,
-    config        JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              SERIAL PRIMARY KEY,
+  odoo_id         INTEGER UNIQUE,
+  name            TEXT NOT NULL UNIQUE,
+  meter_id        TEXT,
+  category        TEXT NOT NULL,
+  cell            TEXT,
+  value_stream    TEXT,
+  min_ops         INTEGER NOT NULL DEFAULT 1,
+  max_ops         INTEGER,
+  goal_per_day_override INTEGER,
+  group_name      TEXT,
+  note            TEXT,
+  last_pulled_at  TIMESTAMPTZ,
+  last_pushed_at  TIMESTAMPTZ,
+  local_dirty     BOOLEAN NOT NULL DEFAULT FALSE
 );
 
-CREATE INDEX IF NOT EXISTS idx_work_centers_active ON work_centers (active);
-CREATE INDEX IF NOT EXISTS idx_work_centers_value_stream ON work_centers (value_stream);
-CREATE INDEX IF NOT EXISTS idx_work_centers_group ON work_centers (group_name);
-
--- Skills required to staff a work center
 CREATE TABLE IF NOT EXISTS work_center_required_skills (
-    work_center_id TEXT NOT NULL REFERENCES work_centers (id) ON DELETE CASCADE,
-    skill_id       TEXT NOT NULL REFERENCES skills (id) ON DELETE CASCADE,
-    PRIMARY KEY (work_center_id, skill_id)
+  wc_id           INTEGER NOT NULL REFERENCES work_centers(id) ON DELETE CASCADE,
+  skill_id        INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+  PRIMARY KEY (wc_id, skill_id)
 );
 
--- Default people assigned to a work center
 CREATE TABLE IF NOT EXISTS work_center_default_people (
-    work_center_id TEXT NOT NULL REFERENCES work_centers (id) ON DELETE CASCADE,
-    person_id      TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
-    role           TEXT,
-    PRIMARY KEY (work_center_id, person_id)
+  wc_id           INTEGER NOT NULL REFERENCES work_centers(id) ON DELETE CASCADE,
+  person_id       INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  sort_order      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (wc_id, person_id)
 );
 
--- Logical groupings of work centers
 CREATE TABLE IF NOT EXISTS groups (
-    id         TEXT PRIMARY KEY,
-    name       TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  name            TEXT PRIMARY KEY,
+  goal_per_day_override INTEGER
 );
 
--- Value streams (e.g. "Sawmill", "Pallet Repair")
 CREATE TABLE IF NOT EXISTS value_streams (
-    id         TEXT PRIMARY KEY,
-    name       TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  name            TEXT PRIMARY KEY,
+  goal_per_day_override INTEGER
 );
 
--- Daily schedule documents (one row per date)
+-- App-specific (not mirrored anywhere) ---------------------------------
+
 CREATE TABLE IF NOT EXISTS schedules (
-    schedule_date DATE PRIMARY KEY,
-    notes         TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  day                 DATE PRIMARY KEY,
+  published           BOOLEAN NOT NULL DEFAULT FALSE,
+  testing_day         BOOLEAN NOT NULL DEFAULT FALSE,
+  notes               TEXT NOT NULL DEFAULT '',
+  custom_hours        JSONB,
+  published_snapshot  JSONB,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Person-to-work-center assignments inside a schedule
 CREATE TABLE IF NOT EXISTS schedule_assignments (
-    id             BIGSERIAL PRIMARY KEY,
-    schedule_date  DATE NOT NULL REFERENCES schedules (schedule_date) ON DELETE CASCADE,
-    person_id      TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
-    work_center_id TEXT REFERENCES work_centers (id) ON DELETE SET NULL,
-    role           TEXT,
-    hours          NUMERIC(5, 2),
-    notes          TEXT,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  day             DATE NOT NULL REFERENCES schedules(day) ON DELETE CASCADE,
+  wc_id           INTEGER NOT NULL REFERENCES work_centers(id) ON DELETE CASCADE,
+  person_id       INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  sort_order      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, wc_id, person_id)
 );
+CREATE INDEX IF NOT EXISTS schedule_assignments_day_idx ON schedule_assignments(day);
 
-CREATE INDEX IF NOT EXISTS idx_schedule_assignments_date ON schedule_assignments (schedule_date);
-CREATE INDEX IF NOT EXISTS idx_schedule_assignments_person ON schedule_assignments (person_id);
-CREATE INDEX IF NOT EXISTS idx_schedule_assignments_wc ON schedule_assignments (work_center_id);
-
--- Time-off / absence rows tied to a daily schedule
 CREATE TABLE IF NOT EXISTS schedule_time_off (
-    id            BIGSERIAL PRIMARY KEY,
-    schedule_date DATE NOT NULL REFERENCES schedules (schedule_date) ON DELETE CASCADE,
-    person_id     TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
-    reason        TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  day             DATE NOT NULL REFERENCES schedules(day) ON DELETE CASCADE,
+  person_id       INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  PRIMARY KEY (day, person_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_schedule_time_off_date ON schedule_time_off (schedule_date);
-CREATE INDEX IF NOT EXISTS idx_schedule_time_off_person ON schedule_time_off (person_id);
-
--- Per-work-center notes for a given schedule date
 CREATE TABLE IF NOT EXISTS schedule_wc_notes (
-    schedule_date  DATE NOT NULL REFERENCES schedules (schedule_date) ON DELETE CASCADE,
-    work_center_id TEXT NOT NULL REFERENCES work_centers (id) ON DELETE CASCADE,
-    note           TEXT NOT NULL,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (schedule_date, work_center_id)
+  day             DATE NOT NULL REFERENCES schedules(day) ON DELETE CASCADE,
+  wc_id           INTEGER NOT NULL REFERENCES work_centers(id) ON DELETE CASCADE,
+  note            TEXT NOT NULL,
+  PRIMARY KEY (day, wc_id)
 );
 
--- Plant-wide note for a given schedule date
 CREATE TABLE IF NOT EXISTS global_schedule (
-    schedule_date DATE PRIMARY KEY REFERENCES schedules (schedule_date) ON DELETE CASCADE,
-    note          TEXT NOT NULL,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  shift_start     TIME NOT NULL,
+  shift_end       TIME NOT NULL,
+  work_weekdays   INTEGER[] NOT NULL,
+  breaks          JSONB NOT NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Saved widget layouts per dashboard
 CREATE TABLE IF NOT EXISTS widget_layouts (
-    id           TEXT PRIMARY KEY,
-    dashboard_id TEXT NOT NULL,
-    name         TEXT NOT NULL,
-    layout       JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  page            TEXT PRIMARY KEY,
+  layout          JSONB NOT NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_widget_layouts_dashboard ON widget_layouts (dashboard_id);
-
--- Per-widget customization overrides
 CREATE TABLE IF NOT EXISTS widget_customizations (
-    id            TEXT PRIMARY KEY,
-    widget_key    TEXT NOT NULL,
-    customization JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  page            TEXT NOT NULL,
+  widget_id       TEXT NOT NULL,
+  customizations  JSONB NOT NULL,
+  PRIMARY KEY (page, widget_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_widget_customizations_key ON widget_customizations (widget_key);
-
--- Misc app key/value settings
 CREATE TABLE IF NOT EXISTS app_settings (
-    key        TEXT PRIMARY KEY,
-    value      JSONB NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  key             TEXT PRIMARY KEY,
+  value           JSONB NOT NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Outbox for reliable downstream sync (Odoo, etc.)
+-- Outbox for future two-way sync (not actively drained in Phase 1) ----
+
 CREATE TABLE IF NOT EXISTS sync_outbox (
-    id           BIGSERIAL PRIMARY KEY,
-    target       TEXT NOT NULL,
-    operation    TEXT NOT NULL,
-    payload      JSONB NOT NULL,
-    status       TEXT NOT NULL DEFAULT 'pending',
-    attempts     INTEGER NOT NULL DEFAULT 0,
-    last_error   TEXT,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    processed_at TIMESTAMPTZ
+  id              BIGSERIAL PRIMARY KEY,
+  kind            TEXT NOT NULL,
+  entity_id       INTEGER,
+  action          TEXT NOT NULL,
+  payload         JSONB NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  last_error      TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  pushed_at       TIMESTAMPTZ
 );
-
-CREATE INDEX IF NOT EXISTS idx_sync_outbox_status ON sync_outbox (status);
-CREATE INDEX IF NOT EXISTS idx_sync_outbox_target ON sync_outbox (target);
-CREATE INDEX IF NOT EXISTS idx_sync_outbox_created ON sync_outbox (created_at);
+CREATE INDEX IF NOT EXISTS sync_outbox_status_idx ON sync_outbox(status, created_at);
 """
 
 
