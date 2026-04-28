@@ -35,3 +35,8 @@ build/
 # IDE
 .vscode/
 .idea/
+
+.odoo_last_sync
+.odoo_last_sync_migrate
+roster.json.next
+schedules.bak/
