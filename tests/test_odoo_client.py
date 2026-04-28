@@ -55,13 +55,13 @@ def _stub_execute(monkeypatch, responses):
 def test_fetch_skill_columns_returns_production_then_supervisor(monkeypatch):
     responses = {
         ("hr.skill.type", "search_read"): [
-            {"id": 1, "name": "Production"},
-            {"id": 2, "name": "Supervisor"},
+            {"id": 1, "name": "Production Skills"},
+            {"id": 2, "name": "Supervisor Skills"},
         ],
         ("hr.skill", "search_read"): [
-            {"id": 10, "name": "Repair", "skill_type_id": [1, "Production"]},
-            {"id": 11, "name": "Dismantler", "skill_type_id": [1, "Production"]},
-            {"id": 12, "name": "Floor Lead", "skill_type_id": [2, "Supervisor"]},
+            {"id": 10, "name": "Repair", "skill_type_id": [1, "Production Skills"]},
+            {"id": 11, "name": "Dismantler", "skill_type_id": [1, "Production Skills"]},
+            {"id": 12, "name": "Floor Lead", "skill_type_id": [2, "Supervisor Skills"]},
         ],
     }
     _stub_execute(monkeypatch, responses)

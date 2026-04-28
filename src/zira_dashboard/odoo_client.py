@@ -75,7 +75,7 @@ def execute(model: str, method: str, *args: Any, **kwargs: Any) -> Any:
     )
 
 
-SKILL_TYPE_NAMES = ("Production", "Supervisor")
+SKILL_TYPE_NAMES = ("Production Skills", "Supervisor Skills")
 
 
 def fetch_skill_columns() -> list[str]:
