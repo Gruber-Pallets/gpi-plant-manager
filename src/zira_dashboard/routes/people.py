@@ -1,11 +1,15 @@
-"""Per-person directory + player card routes."""
+"""Player card route. The People directory was folded into the People
+Matrix — clicking a name in the matrix opens that person's player card.
+The /staffing/people path now redirects to the matrix so old bookmarks
+keep working.
+"""
 
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import staffing
 from ..deps import client, templates
@@ -13,15 +17,9 @@ from ..deps import client, templates
 router = APIRouter()
 
 
-@router.get("/staffing/people", response_class=HTMLResponse)
-def staffing_people(request: Request):
-    roster = staffing.load_roster()
-    active_people = sorted([p for p in roster if p.active], key=lambda p: p.name.lower())
-    return templates.TemplateResponse(
-        request,
-        "people_index.html",
-        {"active": "people", "people": active_people},
-    )
+@router.get("/staffing/people")
+def staffing_people_redirect():
+    return RedirectResponse(url="/staffing/skills", status_code=307)
 
 
 @router.get("/staffing/people/{name}", response_class=HTMLResponse)

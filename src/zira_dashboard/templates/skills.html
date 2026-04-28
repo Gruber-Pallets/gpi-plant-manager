@@ -45,6 +45,14 @@
     gap: 0.5rem;
     width: 100%;
   }
+  .skills-table td.name .name-link {
+    color: inherit;
+    text-decoration: none;
+  }
+  .skills-table td.name .name-link:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
 
   .skill-sel {
     width: 2.4rem;
@@ -191,7 +199,7 @@
         <tr class="{% if not p.active %}inactive{% endif %}" data-active="{{ '1' if p.active else '0' }}">
           <td class="name">
             <div class="name-inner">
-              <span>{{ p.name }}</span>
+              <a class="name-link" href="/staffing/people/{{ p.name | urlencode }}">{{ p.name }}</a>
               <button type="button" class="del-btn" data-person="{{ p.name }}" title="Remove from roster" aria-label="Remove {{ p.name }}">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <polyline points="3 6 5 6 21 6"></polyline>
