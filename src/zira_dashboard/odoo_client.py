@@ -78,9 +78,9 @@ def execute(model: str, method: str, *args: Any, **kwargs: Any) -> Any:
 SKILL_TYPE_NAMES = ("Production Skills", "Supervisor Skills")
 
 
-def fetch_skill_columns() -> list[str]:
-    """Return ordered skill names: all skills from the Production type
-    (alphabetical), then all from Supervisor (alphabetical)."""
+def fetch_skill_columns_with_types() -> list[dict]:
+    """Return ordered list of {name, type} dicts: all skills from the
+    Production type (alphabetical), then all from Supervisor (alphabetical)."""
     types = execute(
         "hr.skill.type", "search_read",
         [("name", "in", list(SKILL_TYPE_NAMES))],
@@ -89,6 +89,7 @@ def fetch_skill_columns() -> list[str]:
     type_order = {name: i for i, name in enumerate(SKILL_TYPE_NAMES)}
     types.sort(key=lambda t: type_order.get(t["name"], 999))
     type_ids = [t["id"] for t in types]
+    type_name_by_id = {t["id"]: t["name"] for t in types}
     if not type_ids:
         return []
     skills = execute(
@@ -100,10 +101,16 @@ def fetch_skill_columns() -> list[str]:
     for s in skills:
         tid = s["skill_type_id"][0] if isinstance(s["skill_type_id"], list) else s["skill_type_id"]
         by_type.setdefault(tid, []).append(s["name"])
-    out: list[str] = []
+    out: list[dict] = []
     for tid in type_ids:
-        out.extend(sorted(by_type.get(tid, []), key=str.lower))
+        for name in sorted(by_type.get(tid, []), key=str.lower):
+            out.append({"name": name, "type": type_name_by_id[tid]})
     return out
+
+
+def fetch_skill_columns() -> list[str]:
+    """Backwards-compatible name-only view."""
+    return [c["name"] for c in fetch_skill_columns_with_types()]
 
 
 def fetch_skill_level_buckets() -> dict[int, int]:

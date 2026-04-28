@@ -22,7 +22,8 @@ router = APIRouter()
 
 @router.get("/staffing/skills", response_class=HTMLResponse)
 def staffing_skills(request: Request):
-    from .. import odoo_sync
+    from .. import odoo_sync, skill_filter_store
+    import json
     sync_result = odoo_sync.sync(force=False)
     roster = staffing.load_roster()
     roster.sort(key=lambda p: (not p.active, p.name.lower()))
@@ -34,6 +35,15 @@ def staffing_skills(request: Request):
         columns = list(roster[0].skills.keys())
     else:
         columns = list(staffing.SKILLS)
+    # Type metadata for filter UI grouping.
+    columns_meta = []
+    if odoo_sync.SKILL_META_PATH.exists():
+        try:
+            columns_meta = json.loads(odoo_sync.SKILL_META_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            columns_meta = []
+    type_by_skill = {c["name"]: c.get("type", "") for c in columns_meta if isinstance(c, dict) and "name" in c}
+    hidden = set(skill_filter_store.load_hidden())
     return templates.TemplateResponse(
         request,
         "skills.html",
@@ -41,6 +51,8 @@ def staffing_skills(request: Request):
             "active": "skills",
             "people": roster,
             "skills": columns,
+            "type_by_skill": type_by_skill,
+            "hidden_skills": hidden,
             "active_count": active_count,
             "inactive_count": len(roster) - active_count,
             "sync_ok": sync_result.ok,
@@ -49,6 +61,17 @@ def staffing_skills(request: Request):
             "odoo_url": os.environ.get("ODOO_URL", "").rstrip("/"),
         },
     )
+
+
+@router.post("/staffing/skills/filter")
+async def staffing_skills_filter(request: Request):
+    from .. import skill_filter_store
+    body = await request.json()
+    hidden = body.get("hidden", []) if isinstance(body, dict) else []
+    if not isinstance(hidden, list):
+        return JSONResponse({"ok": False, "error": "hidden must be a list"}, status_code=400)
+    skill_filter_store.save_hidden([str(x) for x in hidden])
+    return JSONResponse({"ok": True})
 
 
 @router.post("/staffing/skills")

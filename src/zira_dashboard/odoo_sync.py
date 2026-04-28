@@ -19,6 +19,7 @@ from . import odoo_client
 
 ROSTER_PATH = Path("roster.json")
 LAST_SYNC_PATH = Path(".odoo_last_sync")
+SKILL_META_PATH = Path("skill_columns_meta.json")
 TTL = timedelta(hours=1)
 
 
@@ -65,7 +66,7 @@ def sync(force: bool = False) -> SyncResult:
         employees = odoo_client.fetch_employees()
         emp_ids = [e["id"] for e in employees]
         emp_skills = odoo_client.fetch_skills_for(emp_ids)
-        columns = odoo_client.fetch_skill_columns()
+        columns_meta = odoo_client.fetch_skill_columns_with_types()
         buckets = odoo_client.fetch_skill_level_buckets()
     except Exception as e:  # OdooConfigError, OdooAuthError, network, etc.
         return SyncResult(
@@ -73,6 +74,7 @@ def sync(force: bool = False) -> SyncResult:
             skill_column_count=0, last_sync_at=last, error=str(e),
         )
 
+    columns = [c["name"] for c in columns_meta]
     reserves = _read_existing_reserves()
     rows = []
     for emp in employees:
@@ -92,6 +94,11 @@ def sync(force: bool = False) -> SyncResult:
     tmp = ROSTER_PATH.with_suffix(ROSTER_PATH.suffix + ".tmp")
     tmp.write_text(json.dumps(rows, indent=2))
     os.replace(tmp, ROSTER_PATH)
+    # Write the skill columns metadata so the matrix can render type groups
+    # in the filter UI without re-fetching from Odoo on every page load.
+    meta_tmp = SKILL_META_PATH.with_suffix(SKILL_META_PATH.suffix + ".tmp")
+    meta_tmp.write_text(json.dumps(columns_meta, indent=2))
+    os.replace(meta_tmp, SKILL_META_PATH)
     LAST_SYNC_PATH.write_text(now.isoformat())
 
     return SyncResult(

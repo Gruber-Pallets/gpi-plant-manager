@@ -12,6 +12,7 @@ from zira_dashboard import odoo_sync, staffing
 def tmp_env(tmp_path, monkeypatch):
     monkeypatch.setattr(odoo_sync, "ROSTER_PATH", tmp_path / "roster.json")
     monkeypatch.setattr(odoo_sync, "LAST_SYNC_PATH", tmp_path / ".odoo_last_sync")
+    monkeypatch.setattr(odoo_sync, "SKILL_META_PATH", tmp_path / "skill_columns_meta.json")
     monkeypatch.setattr(staffing, "ROSTER_PATH", tmp_path / "roster.json")
     return tmp_path
 
@@ -32,8 +33,9 @@ def test_sync_force_refreshes_even_within_ttl(tmp_env, monkeypatch):
                         lambda: [{"id": 1, "name": "Alice", "active": True, "work_email": False}])
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skills_for",
                         lambda ids: {1: [{"skill_id": 10, "skill_name": "Repair", "level_id": 103}]})
-    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_columns",
-                        lambda: ["Repair", "Dismantler"])
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_columns_with_types",
+                        lambda: [{"name": "Repair", "type": "Production Skills"},
+                                 {"name": "Dismantler", "type": "Production Skills"}])
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_level_buckets",
                         lambda: {103: 3})
     result = odoo_sync.sync(force=True)
@@ -56,8 +58,8 @@ def test_sync_preserves_local_reserve_flag(tmp_env, monkeypatch):
                         lambda: [{"id": 1, "name": "Alice", "active": True, "work_email": False}])
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skills_for",
                         lambda ids: {1: []})
-    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_columns",
-                        lambda: ["Repair"])
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_columns_with_types",
+                        lambda: [{"name": "Repair", "type": "Production Skills"}])
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_level_buckets",
                         lambda: {})
     odoo_sync.sync(force=True)

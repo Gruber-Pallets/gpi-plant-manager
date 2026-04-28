@@ -40,3 +40,5 @@ build/
 .odoo_last_sync_migrate
 roster.json.next
 schedules.bak/
+skill_columns_meta.json
+skill_filter.json

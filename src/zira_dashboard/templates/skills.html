@@ -107,6 +107,46 @@
   .skills-table tr:hover .odoo-link { opacity: 0.7; }
   .odoo-link:hover { color: var(--accent); opacity: 1 !important; }
 
+  /* Column filter (Columns ▾ dropdown). State persists server-side. */
+  .skills-table th.col-hidden,
+  .skills-table td.col-hidden { display: none; }
+  .col-filter-wrap { position: relative; display: inline-block; }
+  .col-filter-btn {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.3rem 0.7rem; font: inherit; font-size: 0.85rem; cursor: pointer;
+  }
+  .col-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .col-filter-popover {
+    position: absolute; top: calc(100% + 0.3rem); right: 0; z-index: 100;
+    min-width: 18rem; max-height: 26rem; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    padding: 0.6rem 0.7rem;
+  }
+  .col-filter-popover[hidden] { display: none; }
+  .col-filter-group { margin-bottom: 0.6rem; }
+  .col-filter-group:last-child { margin-bottom: 0; }
+  .col-filter-group-header {
+    display: flex; align-items: center; gap: 0.4rem;
+    font-weight: 700; font-size: 0.78rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 0.3rem 0.2rem; border-bottom: 1px solid var(--border);
+    margin-bottom: 0.3rem;
+  }
+  .col-filter-skill {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.25rem 0.4rem; border-radius: 4px; cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .col-filter-skill:hover { background: var(--panel-2); }
+  .col-filter-skill input { accent-color: var(--accent); }
+  .col-filter-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+  .col-filter-actions button {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.25rem 0.6rem; font: inherit; font-size: 0.78rem; cursor: pointer;
+  }
+  .col-filter-actions button:hover { border-color: var(--accent); color: var(--accent); }
+
   .toolbar { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; }
   .toolbar .counts { color: var(--muted); font-size: 0.82rem; }
   /* Top-center save toast (shared with staffing + settings). */
@@ -164,6 +204,10 @@
     <div style="margin-left:auto;display:flex;gap:0.75rem;align-items:center">
       <input type="search" id="wheel-filter" placeholder="Filter people…">
       <label class="active-toggle"><input type="checkbox" id="hide-inactive" checked> Active only</label>
+      <div class="col-filter-wrap">
+        <button type="button" class="col-filter-btn" id="col-filter-btn" aria-haspopup="true" aria-expanded="false">Columns ▾</button>
+        <div class="col-filter-popover" id="col-filter-popover" hidden></div>
+      </div>
       <button type="button" class="undo-btn" id="undo-btn" title="Undo" aria-label="Undo" disabled>↶</button>
       <button type="button" class="redo-btn" id="redo-btn" title="Redo" aria-label="Redo" disabled>↷</button>
     </div>
@@ -198,7 +242,7 @@
           <th class="name" style="text-align:left">Name</th>
           <th>Active</th>
           <th>Reserve</th>
-          {% for s in skills %}<th>{{ s }}</th>{% endfor %}
+          {% for s in skills %}<th data-skill="{{ s }}" data-type="{{ type_by_skill.get(s, '') }}" class="skill-col{% if s in hidden_skills %} col-hidden{% endif %}">{{ s }}</th>{% endfor %}
         </tr>
       </thead>
       <tbody>
@@ -224,7 +268,7 @@
           </td>
           {% for s in skills %}
             {% set lvl = p.skills.get(s, 0) %}
-            <td>
+            <td data-skill="{{ s }}" class="skill-col{% if s in hidden_skills %} col-hidden{% endif %}">
               <span class="skill-display lvl-{{ lvl }}">{{ lvl if lvl > 0 else '—' }}</span>
             </td>
           {% endfor %}
@@ -433,5 +477,135 @@
     bd.appendChild(el);
     setTimeout(() => { el.classList.add('fade'); setTimeout(() => el.remove(), 300); }, 5000);
   }
+
+  // ---------- Column filter (Columns ▾ dropdown) ----------
+  // Build popover from the actual <th> elements so it reflects the current
+  // sync's columns + types. State saved to skill_filter.json server-side.
+  (function initColFilter() {
+    const btn = document.getElementById('col-filter-btn');
+    const pop = document.getElementById('col-filter-popover');
+    if (!btn || !pop) return;
+
+    const ths = Array.from(document.querySelectorAll('.skills-table thead th.skill-col'));
+    if (ths.length === 0) return;
+
+    // Group skills by their data-type attribute, preserving column order.
+    const groups = new Map();  // type -> [{skill, hidden}]
+    for (const th of ths) {
+      const skill = th.dataset.skill;
+      const type = th.dataset.type || '(no type)';
+      const hidden = th.classList.contains('col-hidden');
+      if (!groups.has(type)) groups.set(type, []);
+      groups.get(type).push({skill, hidden});
+    }
+
+    function hiddenSet() {
+      return new Set(Array.from(document.querySelectorAll('.skills-table thead th.skill-col.col-hidden')).map(th => th.dataset.skill));
+    }
+
+    function applyHide(skill, hide) {
+      document.querySelectorAll('.skills-table th[data-skill="' + CSS.escape(skill) + '"], .skills-table td[data-skill="' + CSS.escape(skill) + '"]').forEach(el => {
+        el.classList.toggle('col-hidden', hide);
+      });
+    }
+
+    let saveTimer = null;
+    function persist() {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        const hidden = Array.from(hiddenSet());
+        fetch('/staffing/skills/filter', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({hidden}),
+        }).catch(() => {});
+      }, 250);
+    }
+
+    function buildPopover() {
+      pop.innerHTML = '';
+      for (const [type, items] of groups.entries()) {
+        const allHidden = items.every(it => hiddenSet().has(it.skill));
+        const noneHidden = items.every(it => !hiddenSet().has(it.skill));
+
+        const groupEl = document.createElement('div');
+        groupEl.className = 'col-filter-group';
+
+        const header = document.createElement('label');
+        header.className = 'col-filter-group-header';
+        const groupCb = document.createElement('input');
+        groupCb.type = 'checkbox';
+        groupCb.checked = noneHidden;
+        groupCb.indeterminate = !allHidden && !noneHidden;
+        groupCb.addEventListener('change', () => {
+          const hide = !groupCb.checked;
+          for (const it of items) {
+            applyHide(it.skill, hide);
+          }
+          persist();
+          buildPopover();
+        });
+        header.appendChild(groupCb);
+        const headerText = document.createElement('span');
+        headerText.textContent = type;
+        header.appendChild(headerText);
+        groupEl.appendChild(header);
+
+        for (const it of items) {
+          const row = document.createElement('label');
+          row.className = 'col-filter-skill';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = !hiddenSet().has(it.skill);
+          cb.addEventListener('change', () => {
+            applyHide(it.skill, !cb.checked);
+            persist();
+            buildPopover();
+          });
+          row.appendChild(cb);
+          const lbl = document.createElement('span');
+          lbl.textContent = it.skill;
+          row.appendChild(lbl);
+          groupEl.appendChild(row);
+        }
+        pop.appendChild(groupEl);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'col-filter-actions';
+      const showAll = document.createElement('button');
+      showAll.type = 'button';
+      showAll.textContent = 'Show all';
+      showAll.addEventListener('click', () => {
+        for (const [, items] of groups.entries()) {
+          for (const it of items) applyHide(it.skill, false);
+        }
+        persist();
+        buildPopover();
+      });
+      actions.appendChild(showAll);
+      pop.appendChild(actions);
+    }
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = !pop.hasAttribute('hidden');
+      if (isOpen) {
+        pop.setAttribute('hidden', '');
+        btn.setAttribute('aria-expanded', 'false');
+      } else {
+        buildPopover();
+        pop.removeAttribute('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!pop.hasAttribute('hidden') && !pop.contains(e.target) && e.target !== btn) {
+        pop.setAttribute('hidden', '');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
 </script>
 {% endblock %}
