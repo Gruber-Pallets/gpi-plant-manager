@@ -1260,6 +1260,39 @@
     return removedFrom;
   }
 
+  // Remove `name` from the Unscheduled / Reserves left-rail lists if present.
+  // The lists are rendered server-side, so client-side mutation is needed to
+  // keep them in sync with autosaved state until the next page reload.
+  function removeFromUnscheduled(name) {
+    document.querySelectorAll('.section.unscheduled ul li').forEach(li => {
+      if (li.textContent.trim() === name) li.remove();
+    });
+    const sect = document.querySelector('.section.unscheduled');
+    if (sect) {
+      const items = sect.querySelectorAll('ul li:not(.empty)');
+      const cspan = sect.querySelector('h3 .count');
+      if (cspan) cspan.textContent = items.length;
+      const ul = sect.querySelector('ul');
+      if (ul && items.length === 0 && !ul.querySelector('li.empty')) {
+        const empty = document.createElement('li');
+        empty.className = 'empty';
+        empty.textContent = '— all scheduled —';
+        ul.appendChild(empty);
+      }
+    }
+  }
+  function removeFromReserves(name) {
+    document.querySelectorAll('.section.reserves ul li').forEach(li => {
+      if (li.textContent.trim() === name) li.remove();
+    });
+    const sect = document.querySelector('.section.reserves');
+    if (sect) {
+      const items = sect.querySelectorAll('ul li:not(.empty)');
+      const cspan = sect.querySelector('h3 .count');
+      if (cspan) cspan.textContent = items.length;
+    }
+  }
+
   // Remove `name` from the Time Off pill list (silent — caller just acted).
   function removeFromTimeOff(name) {
     const pills = document.querySelectorAll('.section.timeoff .pill');
@@ -1326,11 +1359,14 @@
       span.appendChild(hidden);
       pillsDiv.appendChild(span);
 
-      // Mutual exclusion: pull this person out of any WC they were scheduled at.
+      // Mutual exclusion: pull this person out of any WC they were scheduled at,
+      // and out of the Unscheduled / Reserves left-rail lists.
       const removedFrom = removeFromAllScheduledWcs(name);
       if (removedFrom.length) {
         showSavedToast(null, null, name + ' removed from ' + removedFrom.join(', '));
       }
+      removeFromUnscheduled(name);
+      removeFromReserves(name);
       refreshTimeOffCount();
       refreshPickerVisibility();
     }
