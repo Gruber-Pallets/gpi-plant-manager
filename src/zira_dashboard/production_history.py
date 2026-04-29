@@ -138,6 +138,37 @@ def attribution_range(
     return attribute_for_range(daily)
 
 
+def daily_records(
+    start_d: date, end_d: date, client
+) -> list[dict]:
+    """Return one record per (day, person, wc) where attributed units > 0.
+
+    Used by the leaderboards top-5 single-day computation.
+    Each record:
+        {"day": date, "person": str, "wc": str,
+         "units": float, "downtime": float, "hours": float}
+    """
+    from datetime import timedelta
+
+    records: list[dict] = []
+    cursor = start_d
+    while cursor <= end_d:
+        day_attr = attribution_for(cursor, client)
+        for person, wc_map in day_attr.items():
+            for wc_name, totals in wc_map.items():
+                if totals["units"] > 0:
+                    records.append({
+                        "day": cursor,
+                        "person": person,
+                        "wc": wc_name,
+                        "units": totals["units"],
+                        "downtime": totals["downtime"],
+                        "hours": totals["hours"],
+                    })
+        cursor += timedelta(days=1)
+    return records
+
+
 def rank_by_category(
     range_attribution: dict[str, dict[str, dict[str, float]]],
     category_wcs: list[str],
