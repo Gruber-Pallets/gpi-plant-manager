@@ -45,6 +45,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Zira Station Dashboard", lifespan=lifespan)
 
+from . import cert_icons
+from .deps import templates
+
+templates.env.globals["cert_icon_svg"] = cert_icons.icon_for
+
 
 @app.middleware("http")
 async def _security_headers(request, call_next):

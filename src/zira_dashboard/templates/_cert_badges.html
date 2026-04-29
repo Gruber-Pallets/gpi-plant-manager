@@ -1,0 +1,64 @@
+{# Reusable certification badges.
+
+Usage:
+  {% from "_cert_badges.html" import cert_badges, cert_badges_css %}
+  ...
+  <head>...{{ cert_badges_css() }}</head>
+  ...
+  <span class="name">{{ name }}</span>{{ cert_badges(name, person_certs) }}
+
+`cert_icon_svg` is registered as a Jinja global in app.py — it returns
+the inline SVG string for a known cert, or None for an unmapped cert
+(macro then falls back to a text pill).
+#}
+
+{% macro cert_badges_css() -%}
+<style>
+.cert-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.cert-badge {
+  display: inline-flex;
+  align-items: center;
+}
+.cert-badge svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  color: var(--accent, currentColor);
+  opacity: 0.85;
+}
+.cert-pill {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #ccc);
+  color: var(--muted, #666);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+}
+</style>
+{%- endmacro %}
+
+{% macro cert_badges(name, person_certs) -%}
+{%- set certs = (person_certs or {}).get(name, []) -%}
+{%- if certs -%}
+<span class="cert-badges">
+{%- for cert in certs -%}
+  {%- set svg = cert_icon_svg(cert) -%}
+  {%- if svg -%}
+    <span class="cert-badge" title="{{ cert }}">{{ svg|safe }}</span>
+  {%- else -%}
+    <span class="cert-pill" title="{{ cert }}">{{ cert.split()[0]|upper }}</span>
+  {%- endif -%}
+{%- endfor -%}
+</span>
+{%- endif -%}
+{%- endmacro %}
