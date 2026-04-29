@@ -45,6 +45,24 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Zira Station Dashboard", lifespan=lifespan)
 
+
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    """Tell browsers to remember this site is HTTPS-only and lock down a
+    few common attack surfaces. The HSTS max-age is one year with
+    includeSubDomains so www. and any future subdomains inherit. Do not
+    add `preload` until this is verified on a stable apex + www setup —
+    HSTS preload is hard to undo."""
+    response = await call_next(request)
+    response.headers.setdefault(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains",
+    )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return response
+
+
 # Mount each feature router. URL paths are owned by the routers themselves.
 app.include_router(dashboard.router)
 app.include_router(value_streams.router)
