@@ -2,76 +2,216 @@
 {% block title %}Leaderboards{% endblock %}
 
 {% block styles %}
-  .lb-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
-  .lb-toolbar .group {
-    display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  .lb-toolbar {
+    display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+    padding: 0.5rem 0.6rem; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 6px;
+    margin-bottom: 0.8rem; font-size: 0.85rem;
   }
-  .lb-toolbar .group a {
-    padding: 0.3rem 0.7rem; color: var(--muted); text-decoration: none;
-    font-size: 0.82rem; font-weight: 600; border-right: 1px solid var(--border);
+  .lb-tool-label { color: var(--muted); margin-right: 0.2rem; }
+  .lb-chip {
+    display: inline-block; padding: 0.25rem 0.6rem; border-radius: 999px;
+    background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--border); text-decoration: none;
+    font: inherit; font-size: 0.82rem; cursor: pointer;
   }
-  .lb-toolbar .group a:last-child { border-right: none; }
-  .lb-toolbar .group a.active { background: var(--accent-dim); color: var(--accent); }
-  .lb-toolbar .group a:hover { color: var(--fg); }
-  .lb-toolbar .range { color: var(--muted); font-size: 0.82rem; margin-left: auto; }
+  .lb-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .lb-chip-on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .lb-custom { display: inline-flex; gap: 0.4rem; align-items: center; padding-left: 0.5rem; border-left: 1px solid var(--border); margin-left: 0.3rem; }
+  .lb-custom input[type=date] {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.2rem 0.4rem; font: inherit; font-size: 0.8rem;
+  }
 
-  .lb-section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 0.85rem 1rem; margin-bottom: 0.75rem; }
-  .lb-section h3 { margin: 0 0 0.5rem; font-size: 0.95rem; font-weight: 600; }
-  .lb-section h3 .sub { color: var(--muted); font-size: 0.75rem; font-weight: 400; margin-left: 0.4rem; }
-  .lb-section .empty { color: var(--muted); font-style: italic; font-size: 0.85rem; }
-  table.lb { width: 100%; border-collapse: collapse; }
-  table.lb th, table.lb td { padding: 0.35rem 0.55rem; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.88rem; }
-  table.lb th { color: var(--muted); font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-  table.lb th.num, table.lb td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  table.lb td.rank { color: var(--muted); width: 2.5rem; font-variant-numeric: tabular-nums; }
-  table.lb td.name a { color: var(--fg); text-decoration: none; }
-  table.lb td.name a:hover { color: var(--accent); }
+  .lb-section {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    margin-bottom: 0.7rem; padding: 0.6rem 0.8rem;
+  }
+  .lb-section.dragging { opacity: 0.4; }
+  .lb-section-header {
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem;
+  }
+  .lb-section-header h3 { margin: 0; font-size: 0.95rem; flex: 1; }
+  .lb-drag-handle { cursor: move; color: var(--muted); font-size: 1rem; user-select: none; padding: 0 0.3rem; }
+  .lb-drag-handle:hover { color: var(--fg); }
+  .lb-hide-btn, .lb-show-btn {
+    background: transparent; border: none; color: var(--muted);
+    cursor: pointer; font-size: 1rem; padding: 0.2rem 0.5rem; border-radius: 4px;
+  }
+  .lb-hide-btn:hover { color: var(--bad); background: var(--panel-2); }
+  .lb-show-btn:hover { color: var(--accent); background: var(--panel-2); }
+  .lb-auto-empty { font-size: 0.7rem; color: var(--muted); font-style: italic; }
+  .lb-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .lb-table th, .lb-table td { padding: 0.25rem 0.5rem; text-align: left; }
+  .lb-table th { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+  .lb-table td { border-bottom: 1px solid var(--panel-2); }
+  .lb-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .lb-table .rank { color: var(--muted); width: 1.5rem; }
+  .lb-table .pct { font-weight: 600; }
+  .lb-name-count { color: var(--muted); font-size: 0.78rem; margin-left: 0.2rem; }
+  .lb-inactive-wrap { margin-top: 1.2rem; }
+  .lb-inactive-wrap > summary {
+    cursor: pointer; font-size: 0.85rem; color: var(--muted);
+    padding: 0.5rem 0.6rem; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  .lb-inactive-wrap[open] > summary { color: var(--fg); }
+  .lb-inactive-wrap > .lb-section { margin-top: 0.5rem; opacity: 0.85; }
 {% endblock %}
 
 {% block content %}
-<div class="lb-toolbar">
-  <div class="group">
-    <a href="?window=week&metric={{ metric }}"    class="{% if window == 'week'    %}active{% endif %}">Week</a>
-    <a href="?window=month&metric={{ metric }}"   class="{% if window == 'month'   %}active{% endif %}">Month</a>
-    <a href="?window=quarter&metric={{ metric }}" class="{% if window == 'quarter' %}active{% endif %}">Quarter</a>
-    <a href="?window=year&metric={{ metric }}"    class="{% if window == 'year'    %}active{% endif %}">Year</a>
-  </div>
-  <div class="group">
-    <a href="?window={{ window }}&metric=pct"   class="{% if metric == 'pct'   %}active{% endif %}">% of target</a>
-    <a href="?window={{ window }}&metric=units" class="{% if metric == 'units' %}active{% endif %}">Raw units</a>
-  </div>
-  <div class="range">{{ start }} &rarr; {{ end }}</div>
+<form class="lb-toolbar" method="get" action="/staffing/leaderboards">
+  <span class="lb-tool-label">Range:</span>
+  {% set windows = [('today', 'Today'), ('week', 'Week'), ('month', 'Month'), ('quarter', 'Quarter'), ('year', 'Year')] %}
+  {% for wval, wlabel in windows %}
+    <a href="/staffing/leaderboards?window={{ wval }}&metric={{ metric }}"
+       class="lb-chip{% if window == wval and not custom_range_active %} lb-chip-on{% endif %}">{{ wlabel }}</a>
+  {% endfor %}
+  <span class="lb-custom">
+    <label>From <input type="date" name="start" value="{{ start if custom_range_active else '' }}"></label>
+    <label>To <input type="date" name="end" value="{{ end if custom_range_active else '' }}"></label>
+    <input type="hidden" name="metric" value="{{ metric }}">
+    <button type="submit" class="lb-chip{% if custom_range_active %} lb-chip-on{% endif %}">Custom</button>
+  </span>
+
+  <span class="lb-tool-label" style="margin-left:1.2rem">Metric:</span>
+  <a href="/staffing/leaderboards?window={{ window }}&metric=units{% if custom_range_active %}&start={{ start }}&end={{ end }}{% endif %}"
+     class="lb-chip{% if metric == 'units' %} lb-chip-on{% endif %}">Units</a>
+  <a href="/staffing/leaderboards?window={{ window }}&metric=pct{% if custom_range_active %}&start={{ start }}&end={{ end }}{% endif %}"
+     class="lb-chip{% if metric == 'pct' %} lb-chip-on{% endif %}">% of target</a>
+</form>
+
+<div class="lb-active-list">
+  {% for s in active_sections %}
+    <div class="lb-section" data-wc="{{ s.loc_name }}" draggable="true">
+      <div class="lb-section-header">
+        <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
+        <h3>{{ s.loc_name }}</h3>
+        <button type="button" class="lb-hide-btn" title="Mark inactive">&#10005;</button>
+      </div>
+      {% if s.rows %}
+        <table class="lb-table">
+          <thead>
+            <tr>
+              <th>#</th><th>Operator</th><th>Date</th>
+              <th class="num">Units</th><th class="num">Expected</th><th class="num">%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in s.rows %}
+              <tr>
+                <td class="rank">{{ r.rank }}</td>
+                <td class="op">{{ r.name }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                <td>{{ r.day_label }}</td>
+                <td class="num">{{ r.units|round|int }}</td>
+                <td class="num">{{ r.expected|round|int }}</td>
+                <td class="num pct">{{ '%.0f' % (r.pct * 100) }}%</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </div>
+  {% endfor %}
 </div>
 
-{% for sec in sections %}
-<div class="lb-section">
-  <h3>Best {{ sec.category }}<span class="sub">— testing mode (no minimum)</span></h3>
-  {% if sec.rows %}
-  <table class="lb">
-    <thead>
-      <tr>
-        <th></th>
-        <th>Name</th>
-        <th class="num">% target</th>
-        <th class="num">Units</th>
-        <th class="num">Days</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in sec.rows %}
-      <tr>
-        <td class="rank">#{{ loop.index }}</td>
-        <td class="name"><a href="/staffing/people/{{ r.name | urlencode }}">{{ r.name }}</a></td>
-        <td class="num">{% if r.pct_of_target is not none %}{{ r.pct_of_target }}%{% else %}—{% endif %}</td>
-        <td class="num">{{ '{:,.0f}'.format(r.units) }}</td>
-        <td class="num">{{ r.days_worked }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="empty">No published-day production yet for any operator at a {{ sec.category }} WC this {{ window }}.</div>
-  {% endif %}
-</div>
-{% endfor %}
+<details class="lb-inactive-wrap" id="lb-inactive">
+  <summary>Inactive ({{ inactive_sections|length }})</summary>
+  {% for s in inactive_sections %}
+    <div class="lb-section lb-section-inactive" data-wc="{{ s.loc_name }}" draggable="true">
+      <div class="lb-section-header">
+        <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
+        <h3>{{ s.loc_name }}</h3>
+        {% if s.is_manually_inactive %}
+          <button type="button" class="lb-show-btn" title="Mark active">&#8634;</button>
+        {% else %}
+          <span class="lb-auto-empty" title="No data in this range — auto-hidden">auto-empty</span>
+        {% endif %}
+      </div>
+      {% if s.rows %}
+        <table class="lb-table">
+          <thead>
+            <tr>
+              <th>#</th><th>Operator</th><th>Date</th>
+              <th class="num">Units</th><th class="num">Expected</th><th class="num">%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in s.rows %}
+              <tr>
+                <td class="rank">{{ r.rank }}</td>
+                <td class="op">{{ r.name }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                <td>{{ r.day_label }}</td>
+                <td class="num">{{ r.units|round|int }}</td>
+                <td class="num">{{ r.expected|round|int }}</td>
+                <td class="num pct">{{ '%.0f' % (r.pct * 100) }}%</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </div>
+  {% endfor %}
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function initLeaderboards() {
+  let dragged = null;
+
+  function bindDrag(sec) {
+    sec.addEventListener('dragstart', () => {
+      dragged = sec;
+      sec.classList.add('dragging');
+    });
+    sec.addEventListener('dragend', () => {
+      if (dragged) dragged.classList.remove('dragging');
+      dragged = null;
+      saveOrder();
+    });
+    sec.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (!dragged || dragged === sec) return;
+      const rect = sec.getBoundingClientRect();
+      const after = (e.clientY - rect.top) > rect.height / 2;
+      sec.parentNode.insertBefore(dragged, after ? sec.nextSibling : sec);
+    });
+  }
+
+  document.querySelectorAll('.lb-section').forEach(bindDrag);
+
+  function saveOrder() {
+    const active = [...document.querySelectorAll('.lb-active-list .lb-section')]
+      .map(s => s.dataset.wc);
+    const inactive = [...document.querySelectorAll('.lb-inactive-wrap .lb-section')]
+      .map(s => s.dataset.wc);
+    fetch('/staffing/leaderboards/order', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({order: [...active, ...inactive]}),
+    }).catch(() => {});
+  }
+
+  document.querySelectorAll('.lb-hide-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const sec = btn.closest('.lb-section');
+      const name = sec.dataset.wc;
+      const resp = await fetch(`/staffing/leaderboards/wc/${encodeURIComponent(name)}/inactive`,
+                               {method: 'POST'});
+      if (resp.ok) window.location.reload();
+    });
+  });
+
+  document.querySelectorAll('.lb-show-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const sec = btn.closest('.lb-section');
+      const name = sec.dataset.wc;
+      const resp = await fetch(`/staffing/leaderboards/wc/${encodeURIComponent(name)}/active`,
+                               {method: 'POST'});
+      if (resp.ok) window.location.reload();
+    });
+  });
+})();
+</script>
 {% endblock %}
