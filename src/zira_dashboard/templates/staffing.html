@@ -747,6 +747,8 @@
     table.sched td.station .sub,
     table.sched td.dept { color: #333; }
     table.sched tr { page-break-inside: avoid; }
+    /* Close the schedule table with a bottom rule, mirroring the header. */
+    table.sched tbody tr:last-child td { border-bottom: 1px solid black !important; }
 
     /* WC notes: render the textarea as plain text on paper. */
     .wc-note-cell textarea {
