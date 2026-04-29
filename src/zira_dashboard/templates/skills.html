@@ -281,9 +281,9 @@
     <span><span class="swatch s3">3</span>proficient</span>
   </div>
 
-  {# Sync header bar — uses a button with formaction so we don't nest <form>s #}
+  {# Sync header bar — AJAX refresh so we can show progress while Odoo wakes up #}
   <div class="sync-bar">
-    <span>
+    <span id="sync-status">
       {% if sync_last_at %}
         Last synced: {{ sync_last_at | replace('T', ' ') | truncate(16, end='') }}
       {% else %}
@@ -293,7 +293,7 @@
         · <span class="sync-error">⚠ {{ sync_error }}</span>
       {% endif %}
     </span>
-    <button type="submit" class="sync-btn" formaction="/staffing/skills/refresh" formmethod="post">Refresh from Odoo</button>
+    <button type="button" class="sync-btn" id="refresh-btn">Refresh from Odoo</button>
   </div>
 
   <div style="overflow:auto;max-height:75vh">
@@ -1255,6 +1255,47 @@
       pop.setAttribute('hidden', '');
       btn.setAttribute('aria-expanded', 'false');
       closePicker();
+    });
+  })();
+
+  // ---------- Refresh from Odoo: AJAX with live status feedback ----------
+  // The Odoo XML-RPC sync can take 5–20s when the Odoo.sh container is
+  // cold-starting. The previous form-submit button gave no feedback and
+  // would silently time out at Railway's 30s gateway. AJAX it so we can
+  // show "Refreshing..." text and surface errors cleanly.
+  (function initRefreshFromOdoo() {
+    const btn = document.getElementById('refresh-btn');
+    const status = document.getElementById('sync-status');
+    if (!btn || !status) return;
+    const originalLabel = btn.textContent;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Refreshing…';
+      status.innerHTML = '<em>Refreshing from Odoo… can take a few seconds while Odoo wakes up.</em>';
+      try {
+        const resp = await fetch('/staffing/skills/refresh', {
+          method: 'POST',
+          headers: { 'Accept': 'application/json' },
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (data.ok) {
+          status.innerHTML = '<em>Synced ' + (data.employee_count || 0) +
+            ' employees, ' + (data.skill_column_count || 0) +
+            ' skills. Reloading…</em>';
+          window.location.reload();
+        } else {
+          status.innerHTML = '<span class="sync-error">⚠ ' +
+            (data.error ? String(data.error).slice(0, 200) : 'Refresh failed') +
+            '</span>';
+          btn.disabled = false;
+          btn.textContent = originalLabel;
+        }
+      } catch (e) {
+        status.innerHTML = '<span class="sync-error">⚠ Network error: ' +
+          (e && e.message ? e.message : 'unknown') + '</span>';
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+      }
     });
   })();
 </script>

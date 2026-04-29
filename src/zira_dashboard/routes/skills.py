@@ -79,9 +79,20 @@ async def staffing_skills_save(request: Request):
 
 
 @router.post("/staffing/skills/refresh")
-def staffing_skills_refresh():
+async def staffing_skills_refresh(request: Request):
+    """Force-sync from Odoo. Returns JSON for AJAX clients (so the matrix
+    can show progress + reload), or 303 for plain form submits."""
     from .. import odoo_sync
-    odoo_sync.sync(force=True)
+    result = odoo_sync.sync(force=True)
+    if (request.headers.get("accept") or "").startswith("application/json"):
+        return JSONResponse({
+            "ok": result.ok,
+            "refreshed": result.refreshed,
+            "employee_count": result.employee_count,
+            "skill_column_count": result.skill_column_count,
+            "last_sync_at": result.last_sync_at.isoformat() if result.last_sync_at else None,
+            "error": result.error,
+        })
     return RedirectResponse("/staffing/skills", status_code=303)
 
 
