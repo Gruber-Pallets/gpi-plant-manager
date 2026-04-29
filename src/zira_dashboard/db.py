@@ -289,6 +289,24 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
   pushed_at       TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS sync_outbox_status_idx ON sync_outbox(status, created_at);
+
+-- Saved Views for the People Matrix (filter bundles) ------------------
+
+CREATE TABLE IF NOT EXISTS skill_matrix_views (
+  id              SERIAL PRIMARY KEY,
+  name            TEXT NOT NULL UNIQUE,
+  is_default      BOOLEAN NOT NULL DEFAULT FALSE,
+  hidden_skills   TEXT[]  NOT NULL DEFAULT '{}',
+  visible_people  TEXT[],
+  active_filter   TEXT NOT NULL DEFAULT 'active'
+                  CHECK (active_filter IN ('active','inactive','all')),
+  reserve_filter  TEXT NOT NULL DEFAULT 'all'
+                  CHECK (reserve_filter IN ('include','exclude','only','all')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS skill_matrix_views_default_idx
+  ON skill_matrix_views (is_default) WHERE is_default = TRUE;
 """
 
 
