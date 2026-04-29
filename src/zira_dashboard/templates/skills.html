@@ -107,45 +107,109 @@
   .skills-table tr:hover .odoo-link { opacity: 0.7; }
   .odoo-link:hover { color: var(--accent); opacity: 1 !important; }
 
-  /* Column filter (Columns ▾ dropdown). State persists server-side. */
+  /* View ▾ popover replaces the legacy Columns ▾. */
   .skills-table th.col-hidden,
   .skills-table td.col-hidden { display: none; }
-  .col-filter-wrap { position: relative; display: inline-block; }
-  .col-filter-btn {
+  .skills-table tr.row-hidden { display: none; }
+  .view-wrap { position: relative; display: inline-block; }
+  .view-btn {
     background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
     border-radius: 6px; padding: 0.3rem 0.7rem; font: inherit; font-size: 0.85rem; cursor: pointer;
   }
-  .col-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .col-filter-popover {
+  .view-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .view-popover {
     position: absolute; top: calc(100% + 0.3rem); right: 0; z-index: 100;
-    min-width: 18rem; max-height: 26rem; overflow-y: auto;
+    width: 360px; max-height: 80vh; overflow-y: auto;
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-    padding: 0.6rem 0.7rem;
+    padding: 0.7rem 0.8rem;
   }
-  .col-filter-popover[hidden] { display: none; }
-  .col-filter-group { margin-bottom: 0.6rem; }
-  .col-filter-group:last-child { margin-bottom: 0; }
-  .col-filter-group-header {
-    display: flex; align-items: center; gap: 0.4rem;
-    font-weight: 700; font-size: 0.78rem; color: var(--muted);
+  .view-popover[hidden] { display: none; }
+  .view-section { margin-bottom: 0.8rem; }
+  .view-section:last-child { margin-bottom: 0; }
+  .view-section-header {
+    font-weight: 700; font-size: 0.72rem; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.5px;
-    padding: 0.3rem 0.2rem; border-bottom: 1px solid var(--border);
-    margin-bottom: 0.3rem;
+    padding: 0.3rem 0; border-bottom: 1px solid var(--border);
+    margin-bottom: 0.4rem;
   }
-  .col-filter-skill {
+  .view-row {
     display: flex; align-items: center; gap: 0.5rem;
-    padding: 0.25rem 0.4rem; border-radius: 4px; cursor: pointer;
+    padding: 0.2rem 0.2rem; font-size: 0.85rem;
+  }
+  .view-row label { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+  .view-row input[type=radio], .view-row input[type=checkbox] { accent-color: var(--accent); }
+  .view-loaded {
+    display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0;
     font-size: 0.85rem;
   }
-  .col-filter-skill:hover { background: var(--panel-2); }
-  .col-filter-skill input { accent-color: var(--accent); }
-  .col-filter-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
-  .col-filter-actions button {
+  .view-loaded select {
+    flex: 1; background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 0.25rem 0.4rem; font: inherit; font-size: 0.85rem;
+  }
+  .view-dirty-dot { color: var(--warn); font-size: 1rem; line-height: 1; }
+  .view-dirty-dot[hidden] { display: none; }
+  .view-skill-group { margin-bottom: 0.4rem; }
+  .view-skill-group-header {
+    display: flex; align-items: center; gap: 0.4rem;
+    font-weight: 700; font-size: 0.78rem; color: var(--fg);
+    padding: 0.25rem 0.2rem;
+  }
+  .view-skill-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.15rem 0.5rem;
+    padding: 0.1rem 0 0.2rem 1.2rem;
+  }
+  .view-skill-item {
+    display: flex; align-items: center; gap: 0.35rem;
+    font-size: 0.8rem; cursor: pointer;
+  }
+  .view-skill-item input { accent-color: var(--accent); }
+  .view-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; margin-top: 0.3rem; }
+  .view-actions button {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.35rem 0.5rem; font: inherit; font-size: 0.78rem; cursor: pointer;
+  }
+  .view-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .view-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .view-actions button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
+  .view-people-edit-btn {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.2rem 0.5rem; font: inherit; font-size: 0.78rem; cursor: pointer;
+    margin-left: 0.4rem;
+  }
+  .view-people-edit-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .view-people-count { color: var(--muted); font-size: 0.78rem; margin-left: 0.4rem; }
+  /* Nested people picker */
+  .people-picker {
+    position: absolute; top: 0; right: calc(100% + 0.4rem);
+    width: 280px; max-height: 80vh; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    padding: 0.6rem 0.7rem; z-index: 110;
+    display: flex; flex-direction: column;
+  }
+  .people-picker[hidden] { display: none; }
+  .people-picker input[type=search] { width: 100%; margin-bottom: 0.4rem; }
+  .people-picker-list {
+    flex: 1; overflow-y: auto; min-height: 0;
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 0.3rem; margin-bottom: 0.4rem;
+  }
+  .people-picker-row {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.2rem 0.3rem; font-size: 0.82rem; cursor: pointer; border-radius: 3px;
+  }
+  .people-picker-row:hover { background: var(--panel-2); }
+  .people-picker-row input { accent-color: var(--accent); }
+  .people-picker-actions {
+    display: flex; gap: 0.4rem; justify-content: space-between;
+  }
+  .people-picker-actions button {
     background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
     border-radius: 4px; padding: 0.25rem 0.6rem; font: inherit; font-size: 0.78rem; cursor: pointer;
   }
-  .col-filter-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  .people-picker-actions button:hover { border-color: var(--accent); color: var(--accent); }
 
   .toolbar { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; }
   .toolbar .counts { color: var(--muted); font-size: 0.82rem; }
@@ -204,9 +268,9 @@
     <div style="margin-left:auto;display:flex;gap:0.75rem;align-items:center">
       <input type="search" id="wheel-filter" placeholder="Filter people…">
       <label class="active-toggle"><input type="checkbox" id="hide-inactive" checked> Active only</label>
-      <div class="col-filter-wrap">
-        <button type="button" class="col-filter-btn" id="col-filter-btn" aria-haspopup="true" aria-expanded="false">Columns ▾</button>
-        <div class="col-filter-popover" id="col-filter-popover" hidden></div>
+      <div class="view-wrap">
+        <button type="button" class="view-btn" id="view-btn" aria-haspopup="true" aria-expanded="false">View ▾</button>
+        <div class="view-popover" id="view-popover" hidden></div>
       </div>
       <button type="button" class="undo-btn" id="undo-btn" title="Undo" aria-label="Undo" disabled>↶</button>
       <button type="button" class="redo-btn" id="redo-btn" title="Redo" aria-label="Redo" disabled>↷</button>
@@ -247,7 +311,7 @@
       </thead>
       <tbody>
         {% for p in people %}
-        <tr class="{% if not p.active %}inactive{% endif %}" data-active="{{ '1' if p.active else '0' }}">
+        <tr class="{% if not p.active %}inactive{% endif %}" data-name="{{ p.name }}" data-active="{{ '1' if p.active else '0' }}" data-reserve="{{ '1' if p.reserve else '0' }}">
           <td class="name">
             <div class="name-inner">
               <a class="name-link" href="/staffing/people/{{ p.name | urlencode }}">{{ p.name }}</a>
@@ -477,114 +541,706 @@
     setTimeout(() => { el.classList.add('fade'); setTimeout(() => el.remove(), 300); }, 5000);
   }
 
-  // ---------- Column filter (Columns ▾ dropdown) ----------
-  // Build popover from the actual <th> elements so it reflects the current
-  // sync's columns + types. State saved to skill_filter.json server-side.
-  (function initColFilter() {
-    const btn = document.getElementById('col-filter-btn');
-    const pop = document.getElementById('col-filter-popover');
+  // ---------- View ▾ popover (replaces Columns ▾) ----------
+  // Saved server-side views; client-session state in localStorage with a
+  // dirty flag. Filters apply via .col-hidden (TH/TD) and .row-hidden (TR).
+  (function initViewPopover() {
+    const btn = document.getElementById('view-btn');
+    const pop = document.getElementById('view-popover');
     if (!btn || !pop) return;
 
-    const ths = Array.from(document.querySelectorAll('.skills-table thead th.skill-col'));
-    if (ths.length === 0) return;
+    // ---- Server bootstrap data (from Jinja) ----
+    let views = {{ views | tojson if views is defined else '[]' }};
+    const defaultViewName = {{ default_view_name | tojson if default_view_name is defined else 'null' }};
+    const defaultViewState = {{ default_view_state | tojson if default_view_state is defined else 'null' }};
+    const allPeople = [
+      {% for p in people %}{name: {{ p.name | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}
+    ];
+    const skillTypes = {{ type_by_skill | tojson if type_by_skill is defined else '{}' }};
+    const allSkills = {{ skills | tojson if skills is defined else '[]' }};
 
-    // Group skills by their data-type attribute, preserving column order.
-    const groups = new Map();  // type -> [{skill, hidden}]
-    for (const th of ths) {
-      const skill = th.dataset.skill;
-      const type = th.dataset.type || '(no type)';
-      const hidden = th.classList.contains('col-hidden');
-      if (!groups.has(type)) groups.set(type, []);
-      groups.get(type).push({skill, hidden});
+    // ---- Local state ----
+    const STORAGE_KEY = 'skillMatrixSession';
+    const HARD_DEFAULTS = () => ({
+      hidden_skills: [],
+      visible_people: null,
+      active_filter: 'active',
+      reserve_filter: 'include',
+    });
+
+    function normalizeReserve(rf) {
+      // 'all' is legacy; render as 'include'.
+      if (rf === 'all' || !rf) return 'include';
+      if (rf === 'include' || rf === 'exclude' || rf === 'only') return rf;
+      return 'include';
+    }
+    function normalizeActive(af) {
+      if (af === 'active' || af === 'inactive' || af === 'all') return af;
+      return 'active';
+    }
+    function normalizeView(v) {
+      // Server view dict -> normalized current state.
+      return {
+        hidden_skills: Array.isArray(v.hidden_skills) ? v.hidden_skills.slice() : [],
+        visible_people: Array.isArray(v.visible_people) && v.visible_people.length > 0 ? v.visible_people.slice() : null,
+        active_filter: normalizeActive(v.active_filter),
+        reserve_filter: normalizeReserve(v.reserve_filter),
+      };
     }
 
-    function hiddenSet() {
-      return new Set(Array.from(document.querySelectorAll('.skills-table thead th.skill-col.col-hidden')).map(th => th.dataset.skill));
+    let session = null;  // {loaded_view_name, current, dirty}
+
+    function loadSession() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object' && parsed.current) {
+            return {
+              loaded_view_name: parsed.loaded_view_name || null,
+              current: {
+                hidden_skills: Array.isArray(parsed.current.hidden_skills) ? parsed.current.hidden_skills.slice() : [],
+                visible_people: Array.isArray(parsed.current.visible_people) ? parsed.current.visible_people.slice() : (parsed.current.visible_people === null ? null : null),
+                active_filter: normalizeActive(parsed.current.active_filter),
+                reserve_filter: normalizeReserve(parsed.current.reserve_filter),
+              },
+              dirty: !!parsed.dirty,
+            };
+          }
+        }
+      } catch (e) { /* fall through */ }
+      // No valid session; fall back.
+      if (defaultViewState) {
+        return {
+          loaded_view_name: defaultViewName,
+          current: normalizeView(defaultViewState),
+          dirty: false,
+        };
+      }
+      return {
+        loaded_view_name: null,
+        current: HARD_DEFAULTS(),
+        dirty: false,
+      };
     }
 
-    function applyHide(skill, hide) {
-      document.querySelectorAll('.skills-table th[data-skill="' + CSS.escape(skill) + '"], .skills-table td[data-skill="' + CSS.escape(skill) + '"]').forEach(el => {
-        el.classList.toggle('col-hidden', hide);
+    function saveSession() {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(session)); } catch (e) {}
+    }
+
+    function findView(name) {
+      return (views || []).find(v => v.name === name) || null;
+    }
+
+    function setsEqual(a, b) {
+      if (a === b) return true;
+      if (a === null || b === null) return false;
+      if (a.length !== b.length) return false;
+      const sa = new Set(a);
+      for (const x of b) if (!sa.has(x)) return false;
+      return true;
+    }
+
+    function statesEqual(a, b) {
+      if (!a || !b) return false;
+      if (normalizeActive(a.active_filter) !== normalizeActive(b.active_filter)) return false;
+      if (normalizeReserve(a.reserve_filter) !== normalizeReserve(b.reserve_filter)) return false;
+      if (!setsEqual(a.hidden_skills || [], b.hidden_skills || [])) return false;
+      const av = (Array.isArray(a.visible_people) && a.visible_people.length > 0) ? a.visible_people : null;
+      const bv = (Array.isArray(b.visible_people) && b.visible_people.length > 0) ? b.visible_people : null;
+      if (av === null && bv === null) return true;
+      if (av === null || bv === null) return false;
+      return setsEqual(av, bv);
+    }
+
+    function recomputeDirty() {
+      if (!session.loaded_view_name) {
+        // No view loaded — dirty has no meaning here; treat as false.
+        session.dirty = false;
+        return;
+      }
+      const v = findView(session.loaded_view_name);
+      if (!v) {
+        session.dirty = true;
+        return;
+      }
+      const saved = normalizeView(v);
+      session.dirty = !statesEqual(session.current, saved);
+    }
+
+    // ---- Apply state to DOM ----
+    function applyState(state) {
+      const hideSkillSet = new Set(state.hidden_skills || []);
+      // Columns
+      document.querySelectorAll('.skills-table th[data-skill], .skills-table td[data-skill]').forEach(el => {
+        el.classList.toggle('col-hidden', hideSkillSet.has(el.dataset.skill));
+      });
+      // Rows
+      const visibleSet = (Array.isArray(state.visible_people) && state.visible_people.length > 0)
+        ? new Set(state.visible_people) : null;
+      document.querySelectorAll('.skills-table tbody tr[data-name]').forEach(tr => {
+        const name = tr.dataset.name;
+        const isActive = tr.dataset.active === '1';
+        const isReserve = tr.dataset.reserve === '1';
+        let hide = false;
+        if (state.active_filter === 'active' && !isActive) hide = true;
+        if (state.active_filter === 'inactive' && isActive) hide = true;
+        if (state.reserve_filter === 'exclude' && isReserve) hide = true;
+        if (state.reserve_filter === 'only' && !isReserve) hide = true;
+        if (visibleSet && !visibleSet.has(name)) hide = true;
+        tr.classList.toggle('row-hidden', hide);
       });
     }
 
-    let saveTimer = null;
-    function persist() {
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        const hidden = Array.from(hiddenSet());
-        fetch('/staffing/skills/filter', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({hidden}),
-        }).catch(() => {});
-      }, 250);
-    }
-
-    function buildPopover() {
+    // ---- Popover render ----
+    function render() {
       pop.innerHTML = '';
-      for (const [type, items] of groups.entries()) {
-        const allHidden = items.every(it => hiddenSet().has(it.skill));
-        const noneHidden = items.every(it => !hiddenSet().has(it.skill));
 
-        const groupEl = document.createElement('div');
-        groupEl.className = 'col-filter-group';
+      // Loaded view section
+      const loadedSec = document.createElement('div');
+      loadedSec.className = 'view-section';
+      const loadedHdr = document.createElement('div');
+      loadedHdr.className = 'view-section-header';
+      loadedHdr.textContent = 'Loaded view';
+      loadedSec.appendChild(loadedHdr);
 
-        const header = document.createElement('label');
-        header.className = 'col-filter-group-header';
-        const groupCb = document.createElement('input');
-        groupCb.type = 'checkbox';
-        groupCb.checked = noneHidden;
-        groupCb.indeterminate = !allHidden && !noneHidden;
-        groupCb.addEventListener('change', () => {
-          const hide = !groupCb.checked;
-          for (const it of items) {
-            applyHide(it.skill, hide);
+      const loadedRow = document.createElement('div');
+      loadedRow.className = 'view-loaded';
+      const sel = document.createElement('select');
+      const blankOpt = document.createElement('option');
+      blankOpt.value = '';
+      blankOpt.textContent = '(no view)';
+      sel.appendChild(blankOpt);
+      for (const v of (views || [])) {
+        const opt = document.createElement('option');
+        opt.value = v.name;
+        opt.textContent = v.name + (v.is_default ? ' (default)' : '');
+        if (v.name === session.loaded_view_name) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      const newOpt = document.createElement('option');
+      newOpt.value = '__new__';
+      newOpt.textContent = '+ Save new view…';
+      sel.appendChild(newOpt);
+      sel.addEventListener('change', () => {
+        const name = sel.value;
+        if (name === '__new__') {
+          handleSaveAsNew();
+          return;
+        }
+        if (name === '') {
+          session.loaded_view_name = null;
+          recomputeDirty();
+          saveSession();
+          render();
+          return;
+        }
+        const v = findView(name);
+        if (v) {
+          session.loaded_view_name = v.name;
+          session.current = normalizeView(v);
+          recomputeDirty();
+          saveSession();
+          applyState(session.current);
+          render();
+        }
+      });
+      loadedRow.appendChild(sel);
+      const dot = document.createElement('span');
+      dot.className = 'view-dirty-dot';
+      dot.textContent = '● unsaved';
+      if (!session.dirty) dot.setAttribute('hidden', '');
+      loadedRow.appendChild(dot);
+      loadedSec.appendChild(loadedRow);
+      pop.appendChild(loadedSec);
+
+      // Active section
+      const activeSec = document.createElement('div');
+      activeSec.className = 'view-section';
+      const activeHdr = document.createElement('div');
+      activeHdr.className = 'view-section-header';
+      activeHdr.textContent = 'Active';
+      activeSec.appendChild(activeHdr);
+      const activeOpts = [
+        ['active', 'Active only'],
+        ['inactive', 'Inactive only'],
+        ['all', 'All'],
+      ];
+      for (const [val, label] of activeOpts) {
+        const row = document.createElement('div');
+        row.className = 'view-row';
+        const lab = document.createElement('label');
+        const r = document.createElement('input');
+        r.type = 'radio';
+        r.name = 'view-active';
+        r.value = val;
+        if (session.current.active_filter === val) r.checked = true;
+        r.addEventListener('change', () => {
+          if (r.checked) {
+            session.current.active_filter = val;
+            recomputeDirty();
+            saveSession();
+            applyState(session.current);
+            render();
           }
-          persist();
-          buildPopover();
         });
-        header.appendChild(groupCb);
-        const headerText = document.createElement('span');
-        headerText.textContent = type;
-        header.appendChild(headerText);
-        groupEl.appendChild(header);
+        lab.appendChild(r);
+        lab.appendChild(document.createTextNode(' ' + label));
+        row.appendChild(lab);
+        activeSec.appendChild(row);
+      }
+      pop.appendChild(activeSec);
 
-        for (const it of items) {
-          const row = document.createElement('label');
-          row.className = 'col-filter-skill';
+      // Reserve section
+      const reserveSec = document.createElement('div');
+      reserveSec.className = 'view-section';
+      const reserveHdr = document.createElement('div');
+      reserveHdr.className = 'view-section-header';
+      reserveHdr.textContent = 'Reserve';
+      reserveSec.appendChild(reserveHdr);
+      const reserveOpts = [
+        ['include', 'Include'],
+        ['exclude', 'Exclude'],
+        ['only', 'Reserves only'],
+      ];
+      for (const [val, label] of reserveOpts) {
+        const row = document.createElement('div');
+        row.className = 'view-row';
+        const lab = document.createElement('label');
+        const r = document.createElement('input');
+        r.type = 'radio';
+        r.name = 'view-reserve';
+        r.value = val;
+        if (session.current.reserve_filter === val) r.checked = true;
+        r.addEventListener('change', () => {
+          if (r.checked) {
+            session.current.reserve_filter = val;
+            recomputeDirty();
+            saveSession();
+            applyState(session.current);
+            render();
+          }
+        });
+        lab.appendChild(r);
+        lab.appendChild(document.createTextNode(' ' + label));
+        row.appendChild(lab);
+        reserveSec.appendChild(row);
+      }
+      pop.appendChild(reserveSec);
+
+      // People section
+      const peopleSec = document.createElement('div');
+      peopleSec.className = 'view-section';
+      const peopleHdr = document.createElement('div');
+      peopleHdr.className = 'view-section-header';
+      peopleHdr.textContent = 'People';
+      peopleSec.appendChild(peopleHdr);
+
+      const allRow = document.createElement('div');
+      allRow.className = 'view-row';
+      const allLab = document.createElement('label');
+      const allR = document.createElement('input');
+      allR.type = 'radio';
+      allR.name = 'view-people';
+      allR.value = 'all';
+      if (session.current.visible_people === null) allR.checked = true;
+      allR.addEventListener('change', () => {
+        if (allR.checked) {
+          session.current.visible_people = null;
+          recomputeDirty();
+          saveSession();
+          applyState(session.current);
+          render();
+        }
+      });
+      allLab.appendChild(allR);
+      allLab.appendChild(document.createTextNode(' All people'));
+      allRow.appendChild(allLab);
+      peopleSec.appendChild(allRow);
+
+      const selRow = document.createElement('div');
+      selRow.className = 'view-row';
+      const selLab = document.createElement('label');
+      const selR = document.createElement('input');
+      selR.type = 'radio';
+      selR.name = 'view-people';
+      selR.value = 'selected';
+      if (session.current.visible_people !== null) selR.checked = true;
+      selR.addEventListener('change', () => {
+        if (selR.checked) {
+          // Default to currently-empty selection (all hidden) — user clicks Edit to populate.
+          if (session.current.visible_people === null) {
+            session.current.visible_people = [];
+          }
+          recomputeDirty();
+          saveSession();
+          applyState(session.current);
+          render();
+        }
+      });
+      selLab.appendChild(selR);
+      selLab.appendChild(document.createTextNode(' Selected only'));
+      selRow.appendChild(selLab);
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'view-people-edit-btn';
+      editBtn.textContent = 'Edit selection…';
+      editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openPeoplePicker();
+      });
+      selRow.appendChild(editBtn);
+      if (session.current.visible_people !== null) {
+        const cnt = document.createElement('span');
+        cnt.className = 'view-people-count';
+        cnt.textContent = '(' + session.current.visible_people.length + ' / ' + allPeople.length + ')';
+        selRow.appendChild(cnt);
+      }
+      peopleSec.appendChild(selRow);
+      pop.appendChild(peopleSec);
+
+      // Skill columns section
+      const skillsSec = document.createElement('div');
+      skillsSec.className = 'view-section';
+      const skillsHdr = document.createElement('div');
+      skillsHdr.className = 'view-section-header';
+      skillsHdr.textContent = 'Skill Columns';
+      skillsSec.appendChild(skillsHdr);
+
+      // Group skills by type, preserving order from `allSkills`.
+      const grouped = new Map();  // type -> [skill]
+      for (const s of allSkills) {
+        const t = skillTypes[s] || '(no type)';
+        if (!grouped.has(t)) grouped.set(t, []);
+        grouped.get(t).push(s);
+      }
+      const hiddenSet = new Set(session.current.hidden_skills);
+      for (const [type, items] of grouped.entries()) {
+        const groupEl = document.createElement('div');
+        groupEl.className = 'view-skill-group';
+        const gh = document.createElement('label');
+        gh.className = 'view-skill-group-header';
+        const gcb = document.createElement('input');
+        gcb.type = 'checkbox';
+        const allHidden = items.every(s => hiddenSet.has(s));
+        const noneHidden = items.every(s => !hiddenSet.has(s));
+        gcb.checked = noneHidden;
+        gcb.indeterminate = !allHidden && !noneHidden;
+        gcb.addEventListener('change', () => {
+          const hide = !gcb.checked;
+          for (const s of items) {
+            if (hide) hiddenSet.add(s); else hiddenSet.delete(s);
+          }
+          session.current.hidden_skills = Array.from(hiddenSet);
+          recomputeDirty();
+          saveSession();
+          applyState(session.current);
+          render();
+        });
+        gh.appendChild(gcb);
+        const ghText = document.createElement('span');
+        ghText.textContent = ' ' + type + ' (' + items.length + ')';
+        gh.appendChild(ghText);
+        groupEl.appendChild(gh);
+
+        const grid = document.createElement('div');
+        grid.className = 'view-skill-grid';
+        for (const s of items) {
+          const item = document.createElement('label');
+          item.className = 'view-skill-item';
           const cb = document.createElement('input');
           cb.type = 'checkbox';
-          cb.checked = !hiddenSet().has(it.skill);
+          cb.checked = !hiddenSet.has(s);
           cb.addEventListener('change', () => {
-            applyHide(it.skill, !cb.checked);
-            persist();
-            buildPopover();
+            if (cb.checked) hiddenSet.delete(s); else hiddenSet.add(s);
+            session.current.hidden_skills = Array.from(hiddenSet);
+            recomputeDirty();
+            saveSession();
+            applyState(session.current);
+            render();
+          });
+          item.appendChild(cb);
+          const sp = document.createElement('span');
+          sp.textContent = ' ' + s;
+          item.appendChild(sp);
+          grid.appendChild(item);
+        }
+        groupEl.appendChild(grid);
+        skillsSec.appendChild(groupEl);
+      }
+      pop.appendChild(skillsSec);
+
+      // Actions section
+      const actSec = document.createElement('div');
+      actSec.className = 'view-section';
+      const actHdr = document.createElement('div');
+      actHdr.className = 'view-section-header';
+      actHdr.textContent = 'Actions';
+      actSec.appendChild(actHdr);
+      const grid2 = document.createElement('div');
+      grid2.className = 'view-actions';
+
+      const saveChangesBtn = document.createElement('button');
+      saveChangesBtn.type = 'button';
+      saveChangesBtn.textContent = 'Save changes';
+      saveChangesBtn.disabled = !(session.loaded_view_name && session.dirty);
+      saveChangesBtn.addEventListener('click', handleSaveChanges);
+      grid2.appendChild(saveChangesBtn);
+
+      const saveNewBtn = document.createElement('button');
+      saveNewBtn.type = 'button';
+      saveNewBtn.textContent = 'Save as new…';
+      saveNewBtn.addEventListener('click', handleSaveAsNew);
+      grid2.appendChild(saveNewBtn);
+
+      const setDefaultBtn = document.createElement('button');
+      setDefaultBtn.type = 'button';
+      setDefaultBtn.textContent = 'Set as default';
+      setDefaultBtn.disabled = !session.loaded_view_name;
+      setDefaultBtn.addEventListener('click', handleSetDefault);
+      grid2.appendChild(setDefaultBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'danger';
+      delBtn.textContent = 'Delete view';
+      delBtn.disabled = !session.loaded_view_name;
+      delBtn.addEventListener('click', handleDelete);
+      grid2.appendChild(delBtn);
+
+      actSec.appendChild(grid2);
+      pop.appendChild(actSec);
+    }
+
+    // ---- People picker ----
+    let pickerEl = null;
+    function closePicker() {
+      if (pickerEl) { pickerEl.remove(); pickerEl = null; }
+    }
+    function openPeoplePicker() {
+      closePicker();
+      pickerEl = document.createElement('div');
+      pickerEl.className = 'people-picker';
+      // Position it next to the popover via CSS (absolute, top:0, right:100%).
+      // Append to popover so it positions relative to it.
+      pop.style.position = 'absolute';
+
+      const search = document.createElement('input');
+      search.type = 'search';
+      search.placeholder = 'Search…';
+      pickerEl.appendChild(search);
+
+      const list = document.createElement('div');
+      list.className = 'people-picker-list';
+      pickerEl.appendChild(list);
+
+      // Working copy of selection
+      let selected = new Set(
+        Array.isArray(session.current.visible_people)
+          ? session.current.visible_people
+          : allPeople.map(p => p.name)
+      );
+
+      function renderList() {
+        list.innerHTML = '';
+        const q = (search.value || '').toLowerCase().trim();
+        for (const p of allPeople) {
+          if (q && !p.name.toLowerCase().includes(q)) continue;
+          const row = document.createElement('label');
+          row.className = 'people-picker-row';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = selected.has(p.name);
+          cb.addEventListener('change', () => {
+            if (cb.checked) selected.add(p.name); else selected.delete(p.name);
           });
           row.appendChild(cb);
-          const lbl = document.createElement('span');
-          lbl.textContent = it.skill;
-          row.appendChild(lbl);
-          groupEl.appendChild(row);
+          const sp = document.createElement('span');
+          sp.textContent = p.name;
+          row.appendChild(sp);
+          list.appendChild(row);
         }
-        pop.appendChild(groupEl);
       }
+      search.addEventListener('input', renderList);
+      renderList();
 
       const actions = document.createElement('div');
-      actions.className = 'col-filter-actions';
-      const showAll = document.createElement('button');
-      showAll.type = 'button';
-      showAll.textContent = 'Show all';
-      showAll.addEventListener('click', () => {
-        for (const [, items] of groups.entries()) {
-          for (const it of items) applyHide(it.skill, false);
-        }
-        persist();
-        buildPopover();
+      actions.className = 'people-picker-actions';
+      const selAll = document.createElement('button');
+      selAll.type = 'button';
+      selAll.textContent = 'Select all';
+      selAll.addEventListener('click', (e) => {
+        e.stopPropagation();
+        selected = new Set(allPeople.map(p => p.name));
+        renderList();
       });
-      actions.appendChild(showAll);
-      pop.appendChild(actions);
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.textContent = 'Clear';
+      clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        selected = new Set();
+        renderList();
+      });
+      const doneBtn = document.createElement('button');
+      doneBtn.type = 'button';
+      doneBtn.textContent = 'Done';
+      doneBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // If everyone is selected, revert to "All people" (null).
+        if (selected.size === allPeople.length) {
+          session.current.visible_people = null;
+        } else {
+          session.current.visible_people = Array.from(selected);
+        }
+        recomputeDirty();
+        saveSession();
+        applyState(session.current);
+        closePicker();
+        render();
+      });
+      actions.appendChild(selAll);
+      actions.appendChild(clearBtn);
+      actions.appendChild(doneBtn);
+      pickerEl.appendChild(actions);
+
+      pop.appendChild(pickerEl);
+      // Click inside picker shouldn't close popover.
+      pickerEl.addEventListener('click', (e) => e.stopPropagation());
     }
+
+    // ---- Save flows ----
+    function currentBody(name) {
+      return {
+        name: name,
+        hidden_skills: session.current.hidden_skills.slice(),
+        visible_people: session.current.visible_people === null ? null : session.current.visible_people.slice(),
+        active_filter: session.current.active_filter,
+        reserve_filter: session.current.reserve_filter,
+      };
+    }
+
+    function refreshViews(updatedView, opts) {
+      // updatedView: the {view: {...}} payload's view dict, optional.
+      // opts.removedName: name to drop from local list.
+      // opts.setDefaultName: name to mark default (and clear others).
+      // opts.clearDefault: if true, clear all is_default flags.
+      opts = opts || {};
+      let next = (views || []).slice();
+      if (opts.removedName) {
+        next = next.filter(v => v.name !== opts.removedName);
+      }
+      if (updatedView) {
+        const idx = next.findIndex(v => v.name === updatedView.name);
+        if (idx >= 0) next[idx] = updatedView;
+        else next.push(updatedView);
+      }
+      if (opts.setDefaultName) {
+        next = next.map(v => Object.assign({}, v, { is_default: v.name === opts.setDefaultName }));
+      }
+      if (opts.clearDefault) {
+        next = next.map(v => Object.assign({}, v, { is_default: false }));
+      }
+      views = next;
+    }
+
+    function handleSaveChanges() {
+      if (!session.loaded_view_name || !session.dirty) return;
+      const name = session.loaded_view_name;
+      fetch('/staffing/skills/views/' + encodeURIComponent(name), {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(currentBody(name)),
+      }).then(async (r) => {
+        if (!r.ok) {
+          alert('Save failed: ' + r.status);
+          return;
+        }
+        let payload = null;
+        try { payload = await r.json(); } catch (e) {}
+        const view = (payload && payload.view) ? payload.view : Object.assign({ is_default: false }, currentBody(name));
+        refreshViews(view);
+        session.dirty = false;
+        saveSession();
+        render();
+      }).catch(e => alert('Save failed: ' + e));
+    }
+
+    function handleSaveAsNew() {
+      let proposed = '';
+      while (true) {
+        proposed = prompt('View name?', proposed || '');
+        if (proposed === null) { render(); return; }
+        const name = proposed.trim();
+        if (!name) { alert('Name required'); continue; }
+        const body = currentBody(name);
+        const result = fetch('/staffing/skills/views', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body),
+        });
+        // Async handling — break out of the loop and use .then chain.
+        result.then(async (r) => {
+          if (r.status === 409) {
+            alert('A view named "' + name + '" already exists.');
+            handleSaveAsNew();  // re-prompt
+            return;
+          }
+          if (!r.ok) { alert('Save failed: ' + r.status); render(); return; }
+          let payload = null;
+          try { payload = await r.json(); } catch (e) {}
+          const view = (payload && payload.view) ? payload.view : Object.assign({ is_default: false }, body);
+          refreshViews(view);
+          session.loaded_view_name = name;
+          session.dirty = false;
+          saveSession();
+          render();
+        }).catch(e => alert('Save failed: ' + e));
+        return;
+      }
+    }
+
+    function handleSetDefault() {
+      if (!session.loaded_view_name) return;
+      const name = session.loaded_view_name;
+      fetch('/staffing/skills/views/' + encodeURIComponent(name) + '/default', {
+        method: 'POST',
+      }).then(r => {
+        if (!r.ok) { alert('Set default failed: ' + r.status); return; }
+        refreshViews(null, { setDefaultName: name });
+        render();
+      }).catch(e => alert('Set default failed: ' + e));
+    }
+
+    function handleDelete() {
+      if (!session.loaded_view_name) return;
+      const name = session.loaded_view_name;
+      if (!confirm('Delete view "' + name + '"?')) return;
+      fetch('/staffing/skills/views/' + encodeURIComponent(name), {
+        method: 'DELETE',
+      }).then(r => {
+        if (!r.ok) { alert('Delete failed: ' + r.status); return; }
+        refreshViews(null, { removedName: name });
+        // Fall back to default view (if any other than the deleted) or hard defaults.
+        const def = (views || []).find(v => v.is_default);
+        if (def) {
+          session.loaded_view_name = def.name;
+          session.current = normalizeView(def);
+        } else {
+          session.loaded_view_name = null;
+          session.current = HARD_DEFAULTS();
+        }
+        recomputeDirty();
+        saveSession();
+        applyState(session.current);
+        render();
+      }).catch(e => alert('Delete failed: ' + e));
+    }
+
+    // ---- Init ----
+    session = loadSession();
+    recomputeDirty();
+    applyState(session.current);
 
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -592,18 +1248,20 @@
       if (isOpen) {
         pop.setAttribute('hidden', '');
         btn.setAttribute('aria-expanded', 'false');
+        closePicker();
       } else {
-        buildPopover();
+        render();
         pop.removeAttribute('hidden');
         btn.setAttribute('aria-expanded', 'true');
       }
     });
 
     document.addEventListener('click', (e) => {
-      if (!pop.hasAttribute('hidden') && !pop.contains(e.target) && e.target !== btn) {
-        pop.setAttribute('hidden', '');
-        btn.setAttribute('aria-expanded', 'false');
-      }
+      if (pop.hasAttribute('hidden')) return;
+      if (pop.contains(e.target) || e.target === btn) return;
+      pop.setAttribute('hidden', '');
+      btn.setAttribute('aria-expanded', 'false');
+      closePicker();
     });
   })();
 </script>
