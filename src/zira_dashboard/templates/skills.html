@@ -241,8 +241,6 @@
     border-radius: 6px; padding: 0.3rem 0.55rem; font: inherit; font-size: 0.85rem;
     width: 14rem;
   }
-  label.active-toggle { color: var(--muted); font-size: 0.85rem; display: inline-flex; gap: 0.35rem; align-items: center; }
-
   /* Confirmation popup (reuse staffing.html's popover style) */
   .popover-backdrop {
     position: fixed; inset: 0; background: rgba(0,0,0,0.55);
@@ -267,7 +265,6 @@
     <span class="counts">{{ active_count }} active · {{ inactive_count }} inactive · {{ skills|length }} skills</span>
     <div style="margin-left:auto;display:flex;gap:0.75rem;align-items:center">
       <input type="search" id="wheel-filter" placeholder="Filter people…">
-      <label class="active-toggle"><input type="checkbox" id="hide-inactive" checked> Active only</label>
       <div class="view-wrap">
         <button type="button" class="view-btn" id="view-btn" aria-haspopup="true" aria-expanded="false">View ▾</button>
         <div class="view-popover" id="view-popover" hidden></div>
@@ -345,24 +342,20 @@
 
 {% block scripts %}
 <script>
-  // Filter + active-only.  The matrix is view-only; only Reserve is editable
-  // and autosaves below.
+  // Session-only name search. The matrix is view-only; only Reserve is
+  // editable and autosaves below. Active/Reserve filtering lives in the
+  // View popover and applies via .row-hidden, not display:none here.
   const filterInput = document.getElementById('wheel-filter');
-  const hideInactive = document.getElementById('hide-inactive');
   const rows = [...document.querySelectorAll('#skills-table tbody tr')];
   function apply() {
     const q = (filterInput.value || '').toLowerCase().trim();
-    const hideIn = hideInactive.checked;
     rows.forEach(r => {
       const name = r.querySelector('td.name').textContent.toLowerCase();
-      const active = r.dataset.active === '1';
       const nameMatch = !q || name.includes(q);
-      const activeMatch = !hideIn || active;
-      r.style.display = (nameMatch && activeMatch) ? '' : 'none';
+      r.style.display = nameMatch ? '' : 'none';
     });
   }
   filterInput.addEventListener('input', apply);
-  hideInactive.addEventListener('change', apply);
   apply();
 
   // Column sort: click any <th> to sort rows. Toggle asc/desc on repeat.
