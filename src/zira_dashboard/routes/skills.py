@@ -22,23 +22,20 @@ router = APIRouter()
 
 @router.get("/staffing/skills", response_class=HTMLResponse)
 def staffing_skills(request: Request):
-    from .. import odoo_sync, skill_filter_store
-    import json
+    from .. import odoo_sync, skill_filter_store, db
     sync_result = odoo_sync.sync(force=False)
     roster = staffing.load_roster()
     roster.sort(key=lambda p: (not p.active, p.name.lower()))
     active_count = sum(1 for p in roster if p.active)
-    # Skill columns come from the synced roster — every person has the same
-    # keys (sync writes a uniform skills dict per Odoo column). Falls back to
-    # legacy SKILLS only if roster is empty (e.g., first run before any sync).
-    if roster and roster[0].skills:
-        columns = list(roster[0].skills.keys())
-    else:
-        columns = list(staffing.SKILLS)
-    # Type metadata for filter UI grouping — direct from the skills table.
-    from .. import db
-    type_rows = db.query("SELECT name, skill_type FROM skills")
-    type_by_skill = {r["name"]: r["skill_type"] for r in type_rows}
+    # Columns come directly from the `skills` table — Odoo's "Production
+    # Skills" + "Supervisor Skills" types and nothing else. Production
+    # skills first (alphabetical), then Supervisor.
+    skill_rows = db.query(
+        "SELECT name, skill_type FROM skills "
+        "ORDER BY skill_type, lower(name)"
+    )
+    columns = [r["name"] for r in skill_rows]
+    type_by_skill = {r["name"]: r["skill_type"] for r in skill_rows}
     hidden = set(skill_filter_store.load_hidden())
     return templates.TemplateResponse(
         request,

@@ -123,14 +123,14 @@ def settings_page(request: Request, saved: int = Query(default=0)):
             for b in sched.breaks
         ],
     }
-    # Skill list comes from synced roster (Odoo source of truth) so that
-    # the per-WC required-skills picker stays aligned with the People
-    # Matrix columns. Falls back to legacy SKILLS only if the roster is
-    # empty (first run before any sync).
-    if active_people_objs and active_people_objs[0].skills:
-        skills_all = list(active_people_objs[0].skills.keys())
-    else:
-        skills_all = list(staffing.SKILLS)
+    # Skill list comes directly from the `skills` table — Odoo's
+    # Production + Supervisor skill types. Production first (alphabetical),
+    # then Supervisor.
+    from .. import db as _db
+    _skill_rows = _db.query(
+        "SELECT name FROM skills ORDER BY skill_type, lower(name)"
+    )
+    skills_all = [r["name"] for r in _skill_rows]
     return templates.TemplateResponse(
         request,
         "settings.html",
