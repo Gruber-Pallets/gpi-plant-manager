@@ -221,6 +221,7 @@ def staffing_page(
             "active": "plant",
             "day": d.isoformat(),
             "day_short": d.strftime("%m/%d/%y"),
+            "day_pretty": f"{d.strftime('%A, %B')} {d.day}, {d.year}",
             "tomorrow": (today + timedelta(days=1)).isoformat(),
             "today": today.isoformat(),
             "published": sched.published,

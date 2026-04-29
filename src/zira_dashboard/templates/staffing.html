@@ -581,9 +581,13 @@
      as a clean, paper-friendly view. Hide editing UI (toolbar, pickers,
      reserves panel, X buttons, modals) and keep WC assignments + cert badges
      + Unscheduled list + time-off chips + WC notes + day notes. */
+  /* The print-header (big "Plant Scheduler" title + date) is hidden on
+     screen; print stylesheet below switches it on. */
+  .print-header { display: none; }
+
   @media print {
     @page {
-      size: letter landscape;
+      size: letter portrait;
       margin: 0.4in;
     }
 
@@ -591,12 +595,14 @@
     body { background: white; color: black; }
     a { color: black; text-decoration: none; }
 
-    /* HIDE: top nav, sub-nav, reserves panel, title-bar toolbar, hint footer,
-       publish-block banner, modals, all interactive controls. */
+    /* HIDE: top nav, sub-nav, reserves AND unscheduled panels, title-bar
+       toolbar, hint footer, publish-block banner, modals, all interactive
+       controls, min/max text under each WC name, name list separators. */
     header.app,
     .sub-nav,
     .save-block,
     .section.reserves,
+    .section.unscheduled,
     .title-bar,
     .wc-training-toggle,
     .add-select,
@@ -606,8 +612,36 @@
     .dd-list,
     .hours-editor,
     .popover-backdrop,
+    .ops-range,
+    .dd-summary-text .sep,
     p.hint {
       display: none !important;
+    }
+
+    /* SHOW: the "Plant Scheduler" header + date banner. */
+    .print-header {
+      display: block;
+      text-align: center;
+      margin: 0 0 0.4rem 0;
+      padding: 0 0 0.3rem 0;
+      border-bottom: 2px solid black;
+    }
+    .print-header .title {
+      font-size: 24pt;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      line-height: 1.1;
+    }
+    .print-header .date {
+      font-size: 12pt;
+      font-weight: 500;
+      margin-top: 2pt;
+      color: #333;
+    }
+
+    /* Stack multiple assigned people on separate lines per WC. */
+    .multi-dd .dd-summary-text > span[class^="lvl-"] {
+      display: block;
     }
 
     /* The picker is a <details>; force its <summary> to render as plain text
@@ -722,6 +756,10 @@
 </style>
 </head>
 <body>
+<div class="print-header">
+  <div class="title">Plant Scheduler</div>
+  <div class="date">{{ day_pretty }}</div>
+</div>
 <header class="app">
   <div style="display:flex;gap:1.25rem;align-items:center">
     <h1>GPI Plant Manager</h1>
@@ -917,7 +955,7 @@
                 <summary>
                   <span class="dd-summary-text">
                     {% if row.assigned %}
-                      {% for a in row.assigned %}<span class="lvl-{{ a.level }}">{{ a.name }}{{ cert_badges(a.name, person_certs) }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+                      {% for a in row.assigned %}<span class="lvl-{{ a.level }}">{{ a.name }}{{ cert_badges(a.name, person_certs) }}</span>{% if not loop.last %}<span class="sep">, </span>{% endif %}{% endfor %}
                     {% else %}
                       <span class="empty">—</span>
                     {% endif %}
@@ -1391,7 +1429,12 @@
       span.appendChild(document.createTextNode(name));
       appendCertBadges(span, name);
       text.appendChild(span);
-      if (idx < items.length - 1) text.appendChild(document.createTextNode(', '));
+      if (idx < items.length - 1) {
+        const sep = document.createElement('span');
+        sep.className = 'sep';
+        sep.textContent = ', ';
+        text.appendChild(sep);
+      }
     });
   }
 
