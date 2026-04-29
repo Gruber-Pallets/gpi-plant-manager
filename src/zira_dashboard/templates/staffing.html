@@ -869,6 +869,7 @@
             <button type="submit" name="action" value="save" class="save-draft-btn">Save Draft</button>
           {% endif %}
           <button type="button" class="publish-btn print-btn" onclick="printSchedule()">Print</button>
+          <button type="button" class="publish-btn share-btn" onclick="postToSlack(this)">Post to Slack</button>
           <button type="submit" name="action" value="publish" class="publish-btn">{{ 'Re-publish' if published else 'Publish' }}</button>
         {% endif %}
       </div>
@@ -1888,6 +1889,68 @@
       win.focus();
       win.print();
     }, { once: true });
+  }
+
+  function showToast(message, link, severity) {
+    let host = document.getElementById('toast-host');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'toast-host';
+      host.style.cssText =
+        'position:fixed;bottom:20px;right:20px;z-index:9999;' +
+        'display:flex;flex-direction:column;gap:8px;';
+      document.body.appendChild(host);
+    }
+    const toast = document.createElement('div');
+    const isErr = severity === 'error';
+    toast.style.cssText =
+      'background:' + (isErr ? '#fee' : '#efe') + ';' +
+      'color:' + (isErr ? '#900' : '#060') + ';' +
+      'border:1px solid ' + (isErr ? '#fcc' : '#cfc') + ';' +
+      'border-radius:6px;padding:10px 14px;font-size:0.9rem;' +
+      'box-shadow:0 2px 8px rgba(0,0,0,0.15);max-width:340px;';
+    toast.textContent = message;
+    if (link) {
+      toast.appendChild(document.createTextNode(' '));
+      const a = document.createElement('a');
+      a.href = link;
+      a.target = '_blank';
+      a.textContent = 'View in Slack';
+      a.style.cssText = 'color:#06c;text-decoration:underline;';
+      toast.appendChild(a);
+    }
+    host.appendChild(toast);
+    setTimeout(() => toast.remove(), 6000);
+  }
+
+  async function postToSlack(btn) {
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Posting…';
+    try {
+      // Pull the day from the URL — same key the GET handler uses.
+      const params = new URLSearchParams(window.location.search);
+      const day = params.get('day');
+      if (!day) {
+        showToast('No day in URL — refresh the page', null, 'error');
+        return;
+      }
+      const r = await fetch(`/staffing/share-to-slack?day=${encodeURIComponent(day)}`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+      });
+      const data = await r.json();
+      if (data.ok) {
+        showToast(`Posted to #${data.channel_name}`, data.permalink);
+      } else {
+        showToast(`Slack post failed: ${data.error}`, null, 'error');
+      }
+    } catch (e) {
+      showToast(`Slack post failed: ${e.message}`, null, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
   }
 </script>
 </body>
