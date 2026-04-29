@@ -462,6 +462,117 @@
     .bar-row { grid-template-columns: 5.5rem 1fr 3.5rem; gap: 0.5rem; }
     .progress .bars { height: 110px; }
   }
+
+  /* ---- Cumulative progress widget ---- */
+  .cum-progress {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    font-size: 0.78rem;
+    color: var(--fg);
+  }
+  .cum-progress .legend {
+    display: flex;
+    gap: 1.25rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0 0 0.4rem 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+  }
+  .cum-progress .legend .swatch-line {
+    display: inline-block;
+    width: 18px;
+    height: 0;
+    border-top: 1.5px solid var(--muted);
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .cum-progress .legend .swatch-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--fg);
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .cum-progress .plot {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 80px;
+    margin-top: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cum-progress .bars {
+    display: grid;
+    grid-template-columns: repeat(var(--n-cols, 24), 1fr);
+    gap: 2px;
+    height: 100%;
+    align-items: end;
+  }
+  .cum-progress .col {
+    position: relative;
+    height: 100%;
+    display: flex;
+    align-items: end;
+  }
+  .cum-progress .bar {
+    width: 100%;
+    background: var(--good);
+    border-radius: 2px 2px 0 0;
+    min-height: 1px;
+  }
+  .cum-progress .col.miss .bar { background: var(--bad); }
+  .cum-progress .col.in-progress .bar { opacity: 0.7; }
+  .cum-progress .bar-label {
+    position: absolute;
+    bottom: calc(100% + 1px);
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.6rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--fg);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .cum-progress .target-line {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: visible;
+  }
+  .cum-progress .target-line svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .cum-progress .target-line polyline {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+  .cum-progress .target-line .end-label {
+    font-size: 9px;
+    fill: var(--muted);
+  }
+  .cum-progress .x-ticks {
+    display: grid;
+    grid-template-columns: repeat(var(--n-cols, 24), 1fr);
+    gap: 2px;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 0.65rem;
+  }
+  .cum-progress .x-ticks span {
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+  }
 </style>
 </head>
 <body>
@@ -710,6 +821,66 @@
               {% if not b.in_progress and b.target %}<div class="target-tick" style="bottom: {{ t_h }}%"></div>{% endif %}
             </div>
           {% endfor %}
+        </div>
+      </div>
+      <div class="x-ticks">
+        {% for b in buckets %}
+          {% if loop.index0 % 2 == 0 %}<span>{{ b.label }}</span>{% else %}<span></span>{% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  {%- endmacro %}
+
+  {% macro cumulative_progress_chart(buckets) -%}
+    {# Running totals computed in-template via namespace accumulator. #}
+    {% set acc = namespace(actual=[], target=[], a=0, t=0) %}
+    {% for b in buckets %}
+      {% set acc.a = acc.a + b.actual %}
+      {% set acc.t = acc.t + b.target %}
+      {% set _ = acc.actual.append(acc.a) %}
+      {% set _ = acc.target.append(acc.t) %}
+    {% endfor %}
+    {% set max_a = acc.actual[-1] if acc.actual else 0 %}
+    {% set max_t = acc.target[-1] if acc.target else 0 %}
+    {% set scale = max_a if max_a > max_t else max_t %}
+    {% if scale <= 0 %}{% set scale = 1 %}{% endif %}
+    {% set n = buckets|length %}
+
+    <div class="cum-progress" style="--n-cols: {{ n }}">
+      <div class="legend">
+        <span><span class="swatch-line"></span>Target</span>
+        <span><span class="swatch-dot"></span>Pallets</span>
+      </div>
+      <div class="plot">
+        <div class="bars">
+          {% for b in buckets %}
+            {% set i = loop.index0 %}
+            {% set cum_a = acc.actual[i] %}
+            {% set cum_t = acc.target[i] %}
+            {% set hit = cum_a >= cum_t %}
+            {% set h = (cum_a / scale * 100.0) if scale else 0 %}
+            <div class="col {% if hit %}hit{% else %}miss{% endif %} {% if b.in_progress %}in-progress{% endif %}"
+                 title="{{ b.label }} · {{ '{:,}'.format(cum_a|int) }} cumulative (target {{ '{:,}'.format(cum_t|int) }})">
+              <span class="bar-label">{{ '{:,}'.format(cum_a|int) }}</span>
+              <div class="bar" style="height: {{ h }}%"></div>
+            </div>
+          {% endfor %}
+        </div>
+        <div class="target-line" aria-hidden="true">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+            {% set pts = namespace(s='') %}
+            {% for i in range(n) %}
+              {% set x = ((i + 0.5) / n * 100.0) %}
+              {% set y = (100.0 - (acc.target[i] / scale * 100.0)) %}
+              {% set pts.s = pts.s + ('%.3f,%.3f ' % (x, y)) %}
+            {% endfor %}
+            <polyline points="{{ pts.s|trim }}"/>
+            {% if n > 0 %}
+              {% set last_x = ((n - 0.5) / n * 100.0) %}
+              {% set last_y = (100.0 - (acc.target[n-1] / scale * 100.0)) %}
+              <text class="end-label" x="{{ '%.2f'|format(last_x) }}" y="{{ '%.2f'|format(last_y - 1.5) }}" text-anchor="end">Target</text>
+            {% endif %}
+          </svg>
         </div>
       </div>
       <div class="x-ticks">
