@@ -23,14 +23,18 @@ router = APIRouter()
 @router.get("/staffing/skills", response_class=HTMLResponse)
 def staffing_skills(request: Request):
     from .. import odoo_sync, skill_matrix_views_store as views_store, db
+    from .. import cert_lookup
+    person_certs = cert_lookup.load_person_certs()
     sync_result = odoo_sync.sync(force=False)
     roster = staffing.load_roster()
     roster.sort(key=lambda p: (not p.active, p.name.lower()))
     active_count = sum(1 for p in roster if p.active)
 
-    # Columns directly from skills table.
+    # Columns directly from skills table — exclude certifications
+    # (those surface as badges next to names, not as matrix columns).
     skill_rows = db.query(
         "SELECT name, skill_type FROM skills "
+        "WHERE skill_type IN ('Production Skills', 'Supervisor Skills') "
         "ORDER BY skill_type, lower(name)"
     )
     columns = [r["name"] for r in skill_rows]
@@ -46,6 +50,7 @@ def staffing_skills(request: Request):
         {
             "active": "skills",
             "people": roster,
+            "person_certs": person_certs,
             "skills": columns,
             "type_by_skill": type_by_skill,
             "views": all_views,

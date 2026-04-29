@@ -1,7 +1,9 @@
 {% extends "_staffing_base.html" %}
+{% from "_cert_badges.html" import cert_badges, cert_badges_css %}
 {% block title %}People Matrix{% endblock %}
 
 {% block styles %}
+  {{ cert_badges_css() }}
   .skills-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   .skills-table th, .skills-table td {
     border: 1px solid var(--border);
@@ -311,7 +313,7 @@
         <tr class="{% if not p.active %}inactive{% endif %}" data-name="{{ p.name }}" data-active="{{ '1' if p.active else '0' }}" data-reserve="{{ '1' if p.reserve else '0' }}">
           <td class="name">
             <div class="name-inner">
-              <a class="name-link" href="/staffing/people/{{ p.name | urlencode }}">{{ p.name }}</a>
+              <a class="name-link" href="/staffing/people/{{ p.name | urlencode }}">{{ p.name }}{{ cert_badges(p.name, person_certs) }}</a>
               {% if p.employee_id and odoo_url %}
                 <a class="odoo-link" href="{{ odoo_url }}/web#id={{ p.employee_id }}&model=hr.employee&view_type=form" target="_blank" rel="noopener" title="Open in Odoo">↗</a>
               {% endif %}
