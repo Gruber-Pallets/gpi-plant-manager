@@ -87,6 +87,14 @@ def sync(force: bool = False) -> SyncResult:
     from . import db
     columns = [c["name"] for c in columns_meta]
     pulled_at = now
+
+    def _short_name(full: str) -> str:
+        """Take first two whitespace-delimited tokens. Odoo employee
+        cards often have 3–5 word full names (e.g. "Adrian Aragon
+        Olivera"); the dashboard displays the first two ("Adrian Aragon")
+        for compact matrix rows."""
+        parts = (full or "").strip().split()
+        return " ".join(parts[:2]) if parts else (full or "")
     with db.cursor() as cur:
         # Skills first (employees + person_skills FK them).
         for i, m in enumerate(columns_meta):
@@ -106,7 +114,7 @@ def sync(force: bool = False) -> SyncResult:
                 "VALUES (%s, %s, %s, %s) "
                 "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
                 "active = EXCLUDED.active, last_pulled_at = EXCLUDED.last_pulled_at",
-                (emp["id"], emp["name"], bool(emp.get("active", True)), pulled_at),
+                (emp["id"], _short_name(emp["name"]), bool(emp.get("active", True)), pulled_at),
             )
         # Refresh person_skills: for each employee, replace their skill levels
         # with the Odoo set. We use DELETE + INSERT inside one transaction so
