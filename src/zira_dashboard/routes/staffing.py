@@ -31,6 +31,8 @@ def staffing_page(
     publish_blocked: int = Query(default=0),
     view: str = Query(default="draft"),
 ):
+    from .. import cert_lookup
+    person_certs = cert_lookup.load_person_certs()
     today = datetime.now(timezone.utc).date()
     # Default to tomorrow (Dale plans the day before).
     try:
@@ -243,6 +245,7 @@ def staffing_page(
             "eff_breaks": eff_breaks,
             "has_custom_hours": has_custom_hours,
             "eff_hours_label": eff_hours_label,
+            "person_certs": person_certs,
         },
     )
 

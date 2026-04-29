@@ -1,3 +1,4 @@
+{% from "_cert_badges.html" import cert_badges, cert_badges_css %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -5,6 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Plant Scheduler — GPI Plant Manager</title>
 <style>
+  {{ cert_badges_css() }}
   :root {
     --bg: #0e1116;
     --panel: #161b22;
@@ -617,7 +619,7 @@
       <h3>Unscheduled <span class="count">{{ unassigned|length }}</span></h3>
       <ul>
         {% if unassigned %}
-          {% for n in unassigned %}<li data-name="{{ n }}">{{ n }}</li>{% endfor %}
+          {% for n in unassigned %}<li data-name="{{ n }}">{{ n }}{{ cert_badges(n, person_certs) }}</li>{% endfor %}
         {% else %}
           <li class="empty">— all scheduled —</li>
         {% endif %}
@@ -630,7 +632,7 @@
         <div class="pills" data-loc="__time_off">
           {% for n in time_off_names %}
             <span class="pill lvl-2" data-name="{{ n }}">
-              {{ n }}<button type="button" class="pill-x" aria-label="remove">×</button>
+              {{ n }}{{ cert_badges(n, person_certs) }}<button type="button" class="pill-x" aria-label="remove">×</button>
               <input type="hidden" name="loc____time_off" value="{{ n }}">
             </span>
           {% endfor %}
@@ -648,7 +650,7 @@
       <h3>Reserves <span class="count">{{ reserves|length }}</span></h3>
       <ul>
         {% if reserves %}
-          {% for n in reserves %}<li data-name="{{ n }}">{{ n }}</li>{% endfor %}
+          {% for n in reserves %}<li data-name="{{ n }}">{{ n }}{{ cert_badges(n, person_certs) }}</li>{% endfor %}
         {% else %}
           <li class="empty">— none flagged —</li>
         {% endif %}
@@ -769,7 +771,7 @@
                 <summary>
                   <span class="dd-summary-text">
                     {% if row.assigned %}
-                      {% for a in row.assigned %}<span class="lvl-{{ a.level }}">{{ a.name }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+                      {% for a in row.assigned %}<span class="lvl-{{ a.level }}">{{ a.name }}{{ cert_badges(a.name, person_certs) }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
                     {% else %}
                       <span class="empty">—</span>
                     {% endif %}
@@ -783,7 +785,7 @@
                     <label class="dd-item lvl-{{ p.level }} {% if p.level < 1 %}untrained{% endif %} {% if p.name in row.assigned_set %}selected{% endif %}" data-level="{{ p.level }}" data-name="{{ p.name }}">
                       <input type="checkbox" name="loc__{{ row.loc.name }}" value="{{ p.name }}"
                              {% if p.name in row.assigned_set %}checked{% endif %}>
-                      <span class="dd-item-text">{{ p.name }}</span>
+                      <span class="dd-item-text">{{ p.name }}{{ cert_badges(p.name, person_certs) }}</span>
                     </label>
                   {% endfor %}
                   {% set reserve_pool = row.pool | selectattr('reserve') | list %}
@@ -794,7 +796,7 @@
                         <label class="dd-item lvl-{{ p.level }} {% if p.level < 1 %}untrained{% endif %} {% if p.name in row.assigned_set %}selected{% endif %}" data-level="{{ p.level }}" data-name="{{ p.name }}">
                           <input type="checkbox" name="loc__{{ row.loc.name }}" value="{{ p.name }}"
                                  {% if p.name in row.assigned_set %}checked{% endif %}>
-                          <span class="dd-item-text">{{ p.name }}</span>
+                          <span class="dd-item-text">{{ p.name }}{{ cert_badges(p.name, person_certs) }}</span>
                         </label>
                       {% endfor %}
                     </details>
@@ -840,6 +842,37 @@
   <span class="pill lvl-0" style="padding:0.05rem 0.5rem;font-size:0.72rem">not trained</span>.
   Tick <em>Training</em> next to a work center to reveal untrained people in its picker.
 </p>
+
+<script>
+  window.PERSON_CERTS = {{ person_certs|tojson }};
+</script>
+
+<script>
+  // ---------- Cert badges (live-injected names) ----------
+  // Server-rendered names get real SVG badges via the Jinja macro.
+  // Live-built DOM nodes (drag/drop, time-off add, summary rebuild) call this
+  // helper to append simple text-pill badges. Trade-off documented in the plan:
+  // text pills only here so the helper has no CSS dependency; next page reload
+  // restores the SVG icons.
+  function appendCertBadges(parentEl, name) {
+    const certs = (window.PERSON_CERTS || {})[name] || [];
+    if (!certs.length) return;
+    const wrap = document.createElement('span');
+    wrap.className = 'cert-badges';
+    for (const cert of certs) {
+      const span = document.createElement('span');
+      span.className = 'cert-badge-js';
+      span.title = cert;
+      span.textContent = cert.split(' ')[0].toUpperCase();
+      span.style.cssText =
+        'font-size:0.65rem;font-weight:600;padding:1px 5px;' +
+        'border-radius:999px;border:1px solid #ccc;color:#666;' +
+        'text-transform:uppercase;margin-left:4px;';
+      wrap.appendChild(span);
+    }
+    parentEl.appendChild(wrap);
+  }
+</script>
 
 <script>
   // Day picker: jump to another day on change (no Load button needed).
@@ -1200,12 +1233,18 @@
       text.innerHTML = '<span class="empty">—</span>';
       return;
     }
-    const parts = items.map(it => {
+    // Rebuild via DOM so we can attach cert badges to each name span.
+    text.innerHTML = '';
+    items.forEach((it, idx) => {
       const lvl = it.dataset.level;
       const name = it.dataset.name;
-      return '<span class="lvl-' + (lvl || '2') + '">' + name + '</span>';
+      const span = document.createElement('span');
+      span.className = 'lvl-' + (lvl || '2');
+      span.appendChild(document.createTextNode(name));
+      appendCertBadges(span, name);
+      text.appendChild(span);
+      if (idx < items.length - 1) text.appendChild(document.createTextNode(', '));
     });
-    text.innerHTML = parts.join(', ');
   }
 
   // Track prior selection per Scheduled dropdown so we can revert an over-max attempt.
@@ -1267,7 +1306,7 @@
   // keep them in sync with autosaved state until the next page reload.
   function removeFromUnscheduled(name) {
     document.querySelectorAll('.section.unscheduled ul li').forEach(li => {
-      if (li.textContent.trim() === name) li.remove();
+      if (li.dataset.name === name) li.remove();
     });
     const sect = document.querySelector('.section.unscheduled');
     if (sect) {
@@ -1285,7 +1324,7 @@
   }
   function removeFromReserves(name) {
     document.querySelectorAll('.section.reserves ul li').forEach(li => {
-      if (li.textContent.trim() === name) li.remove();
+      if (li.dataset.name === name) li.remove();
     });
     const sect = document.querySelector('.section.reserves');
     if (sect) {
@@ -1301,9 +1340,11 @@
   function _insertSorted(ul, name) {
     const li = document.createElement('li');
     li.dataset.name = name;
-    li.textContent = name;
+    li.appendChild(document.createTextNode(name));
+    appendCertBadges(li, name);
     const existing = [...ul.querySelectorAll('li:not(.empty)')];
-    const target = existing.find(other => other.textContent.trim().toLowerCase() > name.toLowerCase());
+    // Sort by data-name (textContent now includes cert badge text).
+    const target = existing.find(other => (other.dataset.name || '').toLowerCase() > name.toLowerCase());
     if (target) ul.insertBefore(li, target); else ul.appendChild(li);
   }
 
@@ -1403,6 +1444,7 @@
       span.className = 'pill lvl-' + (level || '2');
       span.dataset.name = name;
       span.textContent = name;
+      appendCertBadges(span, name);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'pill-x';
