@@ -65,6 +65,9 @@ def staffing_past(
     wc: str | None = Query(default=None),
     published: str | None = Query(default=None),
 ):
+    from .. import cert_lookup
+    person_certs = cert_lookup.load_person_certs()
+
     def _parse(s):
         try: return date.fromisoformat(s) if s else None
         except ValueError: return None
@@ -136,5 +139,6 @@ def staffing_past(
                 "wc": wc or "",
                 "published": pub_filter,
             },
+            "person_certs": person_certs,
         },
     )

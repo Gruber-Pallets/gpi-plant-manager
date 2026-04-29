@@ -1,7 +1,9 @@
 {% extends "_staffing_base.html" %}
+{% from "_cert_badges.html" import cert_badges, cert_badges_css %}
 {% block title %}Past Schedules{% endblock %}
 
 {% block styles %}
+  {{ cert_badges_css() }}
   .row-actions { display: inline-flex; gap: 0.35rem; }
   .row-actions button {
     background: transparent; color: var(--muted);
@@ -241,7 +243,8 @@
         {% if r.notes %}<div class="day-notes-inline"><strong>Notes:</strong> {{ r.notes }}</div>{% endif %}
         {% for wc_name, people, wc_note in r.filtered_assignments %}
           <div class="wc-line">
-            <strong>{{ wc_name }}:</strong> {{ people | join(', ') }}
+            <strong>{{ wc_name }}:</strong>
+            {% for p in people %}{{ p }}{{ cert_badges(p, person_certs) }}{% if not loop.last %}, {% endif %}{% endfor %}
             {% if wc_note %}<span class="wc-note-inline"> — {{ wc_note }}</span>{% endif %}
           </div>
         {% endfor %}
