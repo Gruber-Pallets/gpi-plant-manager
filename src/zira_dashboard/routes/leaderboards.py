@@ -23,9 +23,12 @@ def staffing_leaderboards(
     end: str | None = Query(default=None),
 ):
     from datetime import date as _date
+    from .. import cert_lookup
     from .. import leaderboard_settings_store as lstore
     from .. import production_history
     from .. import work_centers_store
+
+    person_certs = cert_lookup.load_person_certs()
 
     today_d = datetime.now(timezone.utc).date()
     custom_range_active = False
@@ -183,6 +186,7 @@ def staffing_leaderboards(
             "end": end_d.isoformat(),
             "today": today_d.isoformat(),
             "custom_range_active": custom_range_active,
+            "person_certs": person_certs,
         },
     )
 

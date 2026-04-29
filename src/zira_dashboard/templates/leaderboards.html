@@ -1,7 +1,9 @@
 {% extends "_staffing_base.html" %}
+{% from "_cert_badges.html" import cert_badges, cert_badges_css %}
 {% block title %}Leaderboards{% endblock %}
 
 {% block styles %}
+  {{ cert_badges_css() }}
   .lb-toolbar {
     display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
     padding: 0.5rem 0.6rem; background: var(--panel);
@@ -116,7 +118,7 @@
             {% for r in s.rows %}
               <tr>
                 <td class="rank">{{ r.rank }}</td>
-                <td class="op">{{ r.name }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                 <td>{{ r.day_label }}</td>
                 <td>{{ r.wc }}</td>
                 <td class="num">{{ r.units|round|int }}</td>
@@ -147,7 +149,7 @@
             {% for r in s.rows %}
               <tr>
                 <td class="rank">{{ r.rank }}</td>
-                <td class="op">{{ r.name }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                 <td>{{ r.day_label }}</td>
                 <td class="num">{{ r.units|round|int }}</td>
                 <td class="num pct">{{ '%.0f' % (r.pct * 100) }}%</td>
@@ -186,7 +188,7 @@
               {% for r in s.rows %}
                 <tr>
                   <td class="rank">{{ r.rank }}</td>
-                  <td class="op">{{ r.name }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                  <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                   <td>{{ r.day_label }}</td>
                   <td>{{ r.wc }}</td>
                   <td class="num">{{ r.units|round|int }}</td>
@@ -221,7 +223,7 @@
               {% for r in s.rows %}
                 <tr>
                   <td class="rank">{{ r.rank }}</td>
-                  <td class="op">{{ r.name }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                  <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                   <td>{{ r.day_label }}</td>
                   <td class="num">{{ r.units|round|int }}</td>
                   <td class="num pct">{{ '%.0f' % (r.pct * 100) }}%</td>
