@@ -128,13 +128,34 @@ def attribution_range(
     end: date,
     client,
 ) -> dict[str, dict[str, dict[str, float]]]:
-    """Sum attribution_for() across [start, end] inclusive."""
+    """Sum attribution_for() across [start, end] inclusive.
+
+    Days are fetched concurrently via a thread pool so a multi-day
+    range doesn't pay sequential per-day latency. The downstream
+    `attribute_for_range` consumes the list in date order, so we
+    rely on `pool.map` preserving input order before returning.
+    """
     from datetime import timedelta
-    daily: list[dict] = []
+    from concurrent.futures import ThreadPoolExecutor
+
+    days: list[date] = []
     cursor = start
     while cursor <= end:
-        daily.append(attribution_for(cursor, client))
+        days.append(cursor)
         cursor += timedelta(days=1)
+
+    if not days:
+        return attribute_for_range([])
+
+    # Bound parallelism: we don't want to slam Zira on a cold cache.
+    # Most calls are cache hits (Postgres) which are cheap; on cold
+    # cache the bottleneck is Zira's per-station ThreadPoolExecutor
+    # inside leaderboard.py (max_workers=10), so 6 concurrent days
+    # gives room without saturating.
+    with ThreadPoolExecutor(max_workers=min(6, len(days))) as pool:
+        # Map preserves order.
+        daily = list(pool.map(lambda d: attribution_for(d, client), days))
+
     return attribute_for_range(daily)
 
 
@@ -147,25 +168,43 @@ def daily_records(
     Each record:
         {"day": date, "person": str, "wc": str,
          "units": float, "downtime": float, "hours": float}
+
+    Days fetched concurrently via thread pool.
     """
     from datetime import timedelta
+    from concurrent.futures import ThreadPoolExecutor
 
-    records: list[dict] = []
+    days: list[date] = []
     cursor = start_d
     while cursor <= end_d:
-        day_attr = attribution_for(cursor, client)
+        days.append(cursor)
+        cursor += timedelta(days=1)
+
+    if not days:
+        return []
+
+    def _records_for(d):
+        out: list[dict] = []
+        day_attr = attribution_for(d, client)
         for person, wc_map in day_attr.items():
             for wc_name, totals in wc_map.items():
                 if totals["units"] > 0:
-                    records.append({
-                        "day": cursor,
+                    out.append({
+                        "day": d,
                         "person": person,
                         "wc": wc_name,
                         "units": totals["units"],
                         "downtime": totals["downtime"],
                         "hours": totals["hours"],
                     })
-        cursor += timedelta(days=1)
+        return out
+
+    with ThreadPoolExecutor(max_workers=min(6, len(days))) as pool:
+        per_day = list(pool.map(_records_for, days))
+
+    records: list[dict] = []
+    for day_records in per_day:
+        records.extend(day_records)
     return records
 
 
