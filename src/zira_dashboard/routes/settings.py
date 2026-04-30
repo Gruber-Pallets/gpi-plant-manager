@@ -42,7 +42,13 @@ def _loc_by_key(key: str):
 
 
 @router.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request, saved: int = Query(default=0)):
+def settings_page(
+    request: Request,
+    saved: int = Query(default=0),
+    section: str = Query(default="work_centers"),
+):
+    if section not in ("work_centers", "schedule"):
+        section = "work_centers"
     from .. import odoo_sync
     # TTL-checked sync so /settings self-heals after a Railway redeploy
     # where the ephemeral roster.json got reset to the legacy seed.
@@ -145,6 +151,7 @@ def settings_page(request: Request, saved: int = Query(default=0)):
             "vs_rows": vs_rows,
             "active_people": active_people,
             "saved": bool(saved),
+            "active_section": section,
             "productive_minutes": productive_min,
             "schedule": schedule_ctx,
         },
@@ -194,7 +201,7 @@ async def settings_save_schedule(request: Request):
     ))
     if (request.headers.get("accept") or "").startswith("application/json"):
         return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1#schedule", status_code=303)
+    return RedirectResponse(url="/settings?saved=1&section=schedule", status_code=303)
 
 
 @router.post("/settings/groups/add")
@@ -235,7 +242,7 @@ async def settings_save_work_centers(request: Request):
         key = loc.meter_id or f"name:{loc.name}"
         prefix = f"wc__{key}__"
         updates: dict = {}
-        for field in ("goal_per_day", "min_ops", "max_ops", "note", "value_stream"):
+        for field in ("goal_per_day", "min_ops", "max_ops", "value_stream"):
             name = prefix + field
             if name in form:
                 updates[field] = form.get(name) or ""
@@ -263,7 +270,7 @@ async def settings_save_work_centers(request: Request):
                 work_centers_store.save_group_override(kind, name, form.get(field) or "")
     if (request.headers.get("accept") or "").startswith("application/json"):
         return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1", status_code=303)
+    return RedirectResponse(url="/settings?saved=1&section=work_centers", status_code=303)
 
 
 @router.post("/settings")
