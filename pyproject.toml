@@ -17,7 +17,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "tzdata>=2024.1; platform_system == 'Windows'",
     "psycopg2-binary>=2.9.9",
-    "weasyprint>=60",
+    "playwright>=1.40",
 ]
 
 [project.optional-dependencies]

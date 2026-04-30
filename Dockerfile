@@ -4,13 +4,15 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# WeasyPrint system deps (Pango/HarfBuzz; Cairo + GLib pulled transitively)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY . .
 
-RUN pip install --upgrade pip && pip install .
+# Install Python deps + Playwright Chromium (--with-deps apt-installs the
+# system libs Chromium needs: nss, atk, libdrm, etc.). This replaces the
+# previous WeasyPrint setup so the Slack-PDF render uses the same engine
+# as a real browser print preview.
+RUN pip install --upgrade pip \
+    && pip install . \
+    && playwright install --with-deps chromium \
+    && rm -rf /root/.cache/pip /var/lib/apt/lists/*
 
 CMD ["sh", "-c", "uvicorn zira_dashboard.app:app --host 0.0.0.0 --port ${PORT}"]

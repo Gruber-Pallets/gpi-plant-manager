@@ -56,14 +56,40 @@ def _inline_static_css(html: str) -> str:
 
 
 def _render_pdf(html: str, base_url: str) -> bytes:
-    """Render HTML to PDF bytes via WeasyPrint.
+    """Render HTML to PDF bytes via Playwright (headless Chromium).
 
-    `base_url` lets WeasyPrint resolve any relative asset URLs in the
-    HTML (e.g., images) against the running server.
+    Same rendering engine as the user's browser, so the PDF is
+    byte-for-byte equivalent to what the browser's print preview shows.
+    `base_url` is unused (kept for interface stability with the previous
+    WeasyPrint implementation) — Playwright loads the document via
+    `set_content` so external relative URLs would need a full page.goto.
+    We pre-inline the /static CSS so no external fetches are required.
     """
-    from weasyprint import HTML  # imported lazily — heavy dep
+    from playwright.sync_api import sync_playwright  # lazy — heavy dep
     inlined = _inline_static_css(html)
-    return HTML(string=inlined, base_url=base_url).write_pdf()
+    with sync_playwright() as p:
+        # --no-sandbox is required inside Railway's container — no
+        # privileged user namespace available for Chromium's sandbox.
+        browser = p.chromium.launch(args=["--no-sandbox"])
+        try:
+            page = browser.new_page()
+            page.set_content(inlined, wait_until="domcontentloaded")
+            # page.pdf() defaults to print media — no need to call
+            # emulate_media. print_background=True keeps colored
+            # backgrounds (the schedule's row striping etc.).
+            return page.pdf(
+                format="Letter",
+                landscape=False,
+                print_background=True,
+                margin={
+                    "top": "0.4in",
+                    "right": "0.4in",
+                    "bottom": "0.4in",
+                    "left": "0.4in",
+                },
+            )
+        finally:
+            browser.close()
 
 
 @router.post("/staffing/share-to-slack")
