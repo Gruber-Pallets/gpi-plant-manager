@@ -11,6 +11,64 @@ from .. import settings_store, staffing
 from ..deps import _window_dates, client, templates
 from ..stations import Station
 
+
+def averages_for_wc(
+    records: list[dict],
+    target_per_hour: float,
+    productive_minutes_for,
+    mode: str,
+) -> list[dict]:
+    """Per-person averages across the records (already filtered to one WC).
+
+    `records` is a list of dicts with keys: day, person, wc, units,
+    downtime, hours — same shape as production_history.daily_records().
+
+    `target_per_hour` is the hourly target for this WC.
+
+    `productive_minutes_for(day)` returns productive minutes for that day,
+    honoring per-day custom_hours. Inject shift_config.productive_minutes_for.
+
+    `mode` is 'units' or 'pct' — drives the sort.
+
+    Returns rows sorted by the active metric desc, with rank assigned.
+    Days where the operator earned zero units are excluded so they don't
+    drag down the average. Tiebreak: more days_worked ranks higher.
+    """
+    rows = [r for r in records if r["units"] > 0]
+    by_person: dict[str, list[dict]] = {}
+    for r in rows:
+        by_person.setdefault(r["person"], []).append(r)
+
+    out: list[dict] = []
+    for person, recs in by_person.items():
+        days_worked = len(recs)
+        total_units = sum(r["units"] for r in recs)
+        avg_units = total_units / days_worked
+
+        pct_per_day: list[float] = []
+        for r in recs:
+            prod_hr = productive_minutes_for(r["day"]) / 60.0
+            expected = target_per_hour * prod_hr
+            pct_per_day.append((r["units"] / expected) if expected > 0 else 0.0)
+        avg_pct = sum(pct_per_day) / len(pct_per_day) if pct_per_day else 0.0
+
+        out.append({
+            "name": person,
+            "name_count": days_worked,
+            "avg_units": avg_units,
+            "avg_pct": avg_pct,
+        })
+
+    if mode == "pct":
+        out.sort(key=lambda r: (-r["avg_pct"], -r["name_count"], r["name"].lower()))
+    else:
+        out.sort(key=lambda r: (-r["avg_units"], -r["name_count"], r["name"].lower()))
+
+    for i, row in enumerate(out, 1):
+        row["rank"] = i
+    return out
+
+
 router = APIRouter()
 
 
