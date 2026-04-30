@@ -20,10 +20,21 @@
       <a href="/settings">Settings</a>
     </nav>
   </div>
-  <form method="get" action="/recycling">
-    <label for="day">Day</label>
-    <input id="day" type="date" name="day" value="{{ day }}" max="{{ today }}">
-    <button type="submit">Update</button>
+  <form class="rc-toolbar" method="get" action="/recycling">
+    <span class="rc-tool-label">Range:</span>
+    {% set windows = [('today', 'Today'), ('yesterday', 'Yesterday'), ('week', 'This Week'), ('month', 'This Month')] %}
+    {% for wval, wlabel in windows %}
+      <a href="/recycling?window={{ wval }}"
+         class="rc-chip{% if window == wval and not custom_range_active %} rc-chip-on{% endif %}">{{ wlabel }}</a>
+    {% endfor %}
+    <details class="rc-custom-popover"{% if custom_range_active %} open{% endif %}>
+      <summary class="rc-chip{% if custom_range_active %} rc-chip-on{% endif %}">{% if custom_range_active %}Custom: {{ start }} → {{ end }}{% else %}Custom{% endif %}</summary>
+      <div class="rc-custom-panel">
+        <label>Start <input type="date" name="start" value="{{ start if custom_range_active else '' }}"></label>
+        <label>End <input type="date" name="end" value="{{ end if custom_range_active else '' }}"></label>
+        <button type="submit" class="rc-chip rc-custom-apply">Apply</button>
+      </div>
+    </details>
   </form>
 </header>
 {% include '_value_streams_subnav.html' %}
@@ -123,7 +134,9 @@
             {% if b.target_pct is not none %}<div class="vbar-target-line" style="bottom: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
           </div>
           <div class="vbar-name">
-            {% if b.who and b.who != b.name %}
+            {% if is_range %}
+              <span class="name-primary">{{ b.name }}</span>
+            {% elif b.who and b.who != b.name %}
               <span class="name-primary">{{ b.who }}</span>
               <span class="name-secondary">{{ b.name }}</span>
             {% else %}
@@ -139,7 +152,9 @@
       {% set fill_color = b.color or 'var(--good)' %}
       <div class="bar-row numpos-{{ numpos }}" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
         <div class="name">
-          {% if b.who and b.who != b.name %}
+          {% if is_range %}
+            <span class="name-primary">{{ b.name }}</span>
+          {% elif b.who and b.who != b.name %}
             <span class="name-primary">{{ b.who }}</span>
             <span class="name-secondary">{{ b.name }}</span>
           {% else %}
@@ -157,7 +172,7 @@
         {% if numpos == 'widget' %}<div class="val">{{ b.units }}{% if b.expected %}<span class="pct">/{{ b.expected }}</span>{% endif %}</div>{% endif %}
       </div>
     {% endfor %}
-    {% if widget_target_pct is not none %}
+    {% if widget_target_pct is not none and not is_range %}
       <div class="bar-row axis-row numpos-{{ numpos }}">
         <div></div>
         <div class="axis-track">
@@ -352,7 +367,7 @@
     <div class="grid-stack-item" {{ widget_attrs('dismantler-cumulative', 0, 16, 12, 5) }}>
       <div class="grid-stack-item-content" {% set pc = customs.get('dismantler-cumulative', {}).get('color') %}{% if pc %}style="--good: {{ pc }}"{% endif %}>
         {{ edit_controls('dismantler-cumulative', 'All Dismantlers — Daily Progress', 'progress') }}
-        <span class="people-count" title="People scheduled in this group">{{ dismantler_people }}</span>
+        <span class="people-count" title="{% if is_range %}Total person-days in this group across the range{% else %}People scheduled in this group{% endif %}">{{ dismantler_people }}{% if is_range %} pd{% endif %}</span>
         <h3>{{ widget_title('dismantler-cumulative', 'All Dismantlers — Daily Progress') }}</h3>
         <div class="widget-body">
           {% if dismantler_progress %}
@@ -367,7 +382,7 @@
     <div class="grid-stack-item" {{ widget_attrs('repair-cumulative', 0, 21, 12, 5) }}>
       <div class="grid-stack-item-content" {% set pc = customs.get('repair-cumulative', {}).get('color') %}{% if pc %}style="--good: {{ pc }}"{% endif %}>
         {{ edit_controls('repair-cumulative', 'All Repairs — Daily Progress', 'progress') }}
-        <span class="people-count" title="People scheduled in this group">{{ repair_people }}</span>
+        <span class="people-count" title="{% if is_range %}Total person-days in this group across the range{% else %}People scheduled in this group{% endif %}">{{ repair_people }}{% if is_range %} pd{% endif %}</span>
         <h3>{{ widget_title('repair-cumulative', 'All Repairs — Daily Progress') }}</h3>
         <div class="widget-body">
           {% if repair_progress %}
@@ -391,7 +406,9 @@
             {% for d in downtime_rows %}
               <div class="bar-row numpos-{{ dnumpos }}">
                 <div class="name">
-                  {% if d.who and d.who != d.name %}
+                  {% if is_range %}
+                    <span class="name-primary">{{ d.name }}</span>
+                  {% elif d.who and d.who != d.name %}
                     <span class="name-primary">{{ d.who }}</span>
                     <span class="name-secondary">{{ d.name }}</span>
                   {% else %}
@@ -417,7 +434,7 @@
   </div>
 
   <div class="footer">
-    Refreshed {{ refreshed_at }}{% if is_today %} · auto-refresh 60s{% endif %}
+    Refreshed {{ refreshed_at }}{% if range_includes_today %} · auto-refresh 60s{% endif %}
     {% if elapsed_minutes > 0 %} · shift elapsed: {{ elapsed_minutes }}m{% endif %}
   </div>
 </main>
@@ -506,7 +523,7 @@
   });
 </script>
 
-{% if is_today %}
+{% if range_includes_today %}
 <script>setTimeout(() => location.reload(), 60000);</script>
 {% endif %}
 </body>

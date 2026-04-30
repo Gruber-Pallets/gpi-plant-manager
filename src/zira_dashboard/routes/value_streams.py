@@ -17,29 +17,26 @@ from ..stations import Station, recycling_stations
 router = APIRouter()
 
 
-@router.get("/recycling", response_class=HTMLResponse)
-def recycling(request: Request, day: str | None = Query(default=None)):
-    d = _parse_day(day)
-    today = datetime.now(timezone.utc).date()
-    is_today = d == today
-    # Try cached HTML response.
-    from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
-    cache_key = ("recycling", d.isoformat())
-    cached = get_cached_response(cache_key, includes_today=is_today)
-    if cached is not None:
-        return cached
-    stations = recycling_stations()
-    now = datetime.now(timezone.utc)
-    results = leaderboard(client, stations, d, now_utc=now if is_today else None)
+def _recycling_day_data(d, now, is_today_d):
+    """Compute the per-day numbers for the recycling dashboard.
 
-    # Load schedule first so we can decide which WCs were "active" today.
-    # A WC is active iff someone was scheduled to it OR it produced more than
-    # the noise floor (5 units). Inactive WCs are dropped from every roll-up:
-    # uptime, group goals, bars, downtime — so the dashboard reflects only
-    # the staffing and stations that actually ran today.
-    sched_for_labels = staffing.load_schedule(d)
+    Returns a dict with the keys the route handler needs to aggregate:
+      total_units, total_downtime, elapsed, available, uptime_minutes,
+      total_man_hours, total_recycling_people,
+      per_wc_units {name: int}, per_wc_downtime {name: int},
+      per_wc_expected {name: float}, per_wc_who {name: str|None},
+      per_wc_state {name: str},  # only meaningful when is_today_d
+      dism_buckets, repair_buckets,  # list[dict] from progress_buckets
+      shift_start_label, schedule_assignments,
+      active_wc_names, per_wc_category, per_wc_station_obj.
+    Days outside the working schedule (weekends) return zero-shaped values.
+    """
+    stations = recycling_stations()
+    results = leaderboard(client, stations, d, now_utc=now if is_today_d else None)
+
+    sched = staffing.load_schedule(d)
     who_by_wc: dict[str, str] = {}
-    for wc_name, ops in sched_for_labels.assignments.items():
+    for wc_name, ops in sched.assignments.items():
         if wc_name == staffing.TIME_OFF_KEY or not ops:
             continue
         who_by_wc[wc_name] = " + ".join(ops)
@@ -58,43 +55,29 @@ def recycling(request: Request, day: str | None = Query(default=None)):
     elapsed = shift_elapsed_minutes(d, now)
     available = elapsed * len(active_stations)
     uptime_minutes = max(0, available - total_downtime)
-    uptime_pct = (uptime_minutes / available * 100.0) if available > 0 else 0.0
-    pallets_per_hour = (total_units / (elapsed / 60.0)) if elapsed > 0 else 0.0
-    # pallets/hr/person — metered pallet total divided by total recycling
-    # man-hours. Every person scheduled to a Recycled-stream WC contributes
-    # their full elapsed shift hours, metered or not (Trim Saw, Master
-    # Recycler, unmetered Repairs all count). Matches a clipboard calc.
     elapsed_hours = elapsed / 60.0 if elapsed else 0.0
     total_recycling_people = sum(
-        len(sched_for_labels.assignments.get(loc.name, []))
+        len(sched.assignments.get(loc.name, []))
         for loc in staffing.LOCATIONS
         if work_centers_store.value_stream(loc) == "Recycled"
     )
     total_man_hours = total_recycling_people * elapsed_hours
-    pph_per_person = (total_units / total_man_hours) if total_man_hours > 0 else 0.0
 
     dismantlers = [r for r in active_results if r.station.category == "Dismantler"]
     dismantlers.sort(key=lambda r: r.station.name)
     repairs = [r for r in active_results if r.station.category == "Repair"]
     repairs.sort(key=lambda r: r.station.name)
 
-    # ---- Productive intervals per WC ----
-    # active_intervals (from leaderboard's transfer rule) = time the WC was
-    # producing or in its 60-min grace tail. We also count the first 60 min of
-    # the shift as productive for any *scheduled* WC, since the 60-min rule
-    # can't possibly have triggered yet — that's the user-supplied "first 60
-    # min fixed" rule for the progress charts.
+    # ---- Productive intervals per WC (existing logic copied verbatim). ----
     shift_start_local = datetime.combine(d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ)
-    grace_end_local   = shift_start_local + timedelta(minutes=60)
-    # Cap grace at `now` for today, so a freshly-started shift doesn't bill
-    # the full 60-min grace as productive when only a few minutes have passed.
-    grace_end_capped_local = min(grace_end_local, now.astimezone(shift_config.SITE_TZ)) if is_today else grace_end_local
+    grace_end_local = shift_start_local + timedelta(minutes=60)
+    grace_end_capped_local = min(grace_end_local, now.astimezone(shift_config.SITE_TZ)) if is_today_d else grace_end_local
     grace_interval_utc = (
         shift_start_local.astimezone(timezone.utc),
         grace_end_capped_local.astimezone(timezone.utc),
     )
     people_by_wc: dict[str, int] = {
-        wc: len(ops) for wc, ops in sched_for_labels.assignments.items()
+        wc: len(ops) for wc, ops in sched.assignments.items()
         if wc != staffing.TIME_OFF_KEY and ops
     }
 
@@ -110,13 +93,10 @@ def recycling(request: Request, day: str | None = Query(default=None)):
                 out.append((s, e))
         return out
 
-    # Break windows in UTC for the day — subtracted from productive intervals
-    # so a station "productive all day" sums to *productive shift hours* (not
-    # wall-clock), matching the settings goal which is daily / productive_hours.
     breaks_utc: list[tuple[datetime, datetime]] = []
     for b in shift_config.breaks_for(d):
         bs = datetime.combine(d, b.start, tzinfo=shift_config.SITE_TZ).astimezone(timezone.utc)
-        be = datetime.combine(d, b.end,   tzinfo=shift_config.SITE_TZ).astimezone(timezone.utc)
+        be = datetime.combine(d, b.end, tzinfo=shift_config.SITE_TZ).astimezone(timezone.utc)
         if be > bs:
             breaks_utc.append((bs, be))
 
@@ -148,11 +128,6 @@ def recycling(request: Request, day: str | None = Query(default=None)):
     def _productive_minutes(name: str) -> float:
         return sum((b - a).total_seconds() / 60.0 for a, b in productive_by_wc.get(name, []))
 
-    # ---- Per-bucket target for progress chart ----
-    # First 60 min of shift: goal is sum across SCHEDULED WCs of
-    # (hourly_target × people_scheduled × bucket_fraction). After that:
-    # standard productive-interval-overlap math, so the dotted goal line steps
-    # up/down as stations transfer off and back on.
     def _make_target_fn(group):
         def fn(b_start_local: datetime, b_end_local: datetime) -> float:
             bucket_min = (b_end_local - b_start_local).total_seconds() / 60.0
@@ -179,28 +154,205 @@ def recycling(request: Request, day: str | None = Query(default=None)):
             return tot
         return fn
 
-    dism_progress = progress_buckets(dismantlers, d, now, target_fn=_make_target_fn(dismantlers))
-    repair_progress = progress_buckets(repairs, d, now, target_fn=_make_target_fn(repairs))
+    dism_buckets = progress_buckets(dismantlers, d, now, target_fn=_make_target_fn(dismantlers))
+    repair_buckets = progress_buckets(repairs, d, now, target_fn=_make_target_fn(repairs))
 
-    # Group hourly target shown in the legend: total productive expected for
-    # the shift so far, averaged over elapsed hours.
-    elapsed_hours_for_avg = (elapsed / 60.0) if elapsed else 0.0
-    def _group_goal(rows):
-        if elapsed_hours_for_avg <= 0:
+    # Per-WC dicts the aggregator can sum.
+    per_wc_units = {r.station.name: r.units for r in active_results}
+    per_wc_downtime = {r.station.name: r.downtime_minutes for r in active_results}
+    per_wc_expected = {
+        r.station.name: settings_store.station_target(r.station) * (_productive_minutes(r.station.name) / 60.0)
+        for r in active_results
+    }
+    per_wc_state = {r.station.name: _state(r, now, is_today_d) for r in active_results}
+    per_wc_who = {r.station.name: who_by_wc.get(r.station.name) for r in active_results}
+    per_wc_category = {r.station.name: r.station.category for r in active_results}
+    per_wc_station_obj = {r.station.name: r.station for r in active_results}
+
+    return {
+        "total_units": total_units,
+        "total_downtime": total_downtime,
+        "elapsed": elapsed,
+        "available": available,
+        "uptime_minutes": uptime_minutes,
+        "total_man_hours": total_man_hours,
+        "total_recycling_people": total_recycling_people,
+        "per_wc_units": per_wc_units,
+        "per_wc_downtime": per_wc_downtime,
+        "per_wc_expected": per_wc_expected,
+        "per_wc_state": per_wc_state,
+        "per_wc_who": per_wc_who,
+        "per_wc_category": per_wc_category,
+        "per_wc_station_obj": per_wc_station_obj,
+        "active_wc_names": active_wc_names,
+        "schedule_assignments": dict(sched.assignments),
+        "dism_buckets": dism_buckets,
+        "repair_buckets": repair_buckets,
+        "shift_start_label": shift_start_local.strftime("%H:%M"),
+    }
+
+
+@router.get("/recycling", response_class=HTMLResponse)
+def recycling(
+    request: Request,
+    window: str = Query(default="today"),
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+):
+    from datetime import date as _date
+    from ..deps import _window_dates
+
+    today = datetime.now(timezone.utc).date()
+    custom_range_active = False
+    start_d: _date
+    end_d: _date
+    if start and end:
+        try:
+            start_d = _date.fromisoformat(start)
+            end_d = _date.fromisoformat(end)
+            if end_d >= start_d:
+                custom_range_active = True
+        except ValueError:
+            start_d, end_d = _window_dates(window, today)
+    if not custom_range_active:
+        start_d, end_d = _window_dates(window, today)
+
+    is_today = (start_d == end_d == today)
+    is_range = (start_d != end_d)
+    range_includes_today = (start_d <= today <= end_d)
+
+    # Cache key includes both bounds.
+    from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
+    cache_key = ("recycling", start_d.isoformat(), end_d.isoformat())
+    cached = get_cached_response(cache_key, includes_today=range_includes_today)
+    if cached is not None:
+        return cached
+
+    now = datetime.now(timezone.utc)
+
+    # Walk every day in the range, computing per-day data.
+    days: list = []
+    cursor = start_d
+    while cursor <= end_d:
+        days.append(cursor)
+        cursor += timedelta(days=1)
+
+    per_day = [_recycling_day_data(d, now, d == today) for d in days]
+
+    # Aggregate top-line stats.
+    total_units = sum(p["total_units"] for p in per_day)
+    total_downtime = sum(p["total_downtime"] for p in per_day)
+    total_elapsed = sum(p["elapsed"] for p in per_day)
+    total_available = sum(p["available"] for p in per_day)
+    total_uptime_minutes = sum(p["uptime_minutes"] for p in per_day)
+    total_man_hours = sum(p["total_man_hours"] for p in per_day)
+
+    uptime_pct = (total_uptime_minutes / total_available * 100.0) if total_available > 0 else 0.0
+    pallets_per_hour = (total_units / (total_elapsed / 60.0)) if total_elapsed > 0 else 0.0
+    pph_per_person = (total_units / total_man_hours) if total_man_hours > 0 else 0.0
+
+    # Per-WC aggregation.
+    agg_units: dict[str, int] = {}
+    agg_downtime: dict[str, int] = {}
+    agg_expected: dict[str, float] = {}
+    agg_who_today: dict[str, str | None] = {}
+    agg_category: dict[str, str] = {}
+    agg_station_obj: dict[str, object] = {}
+    agg_active_names: set[str] = set()
+    schedule_today_assignments: dict[str, list[str]] = {}
+
+    for p, d in zip(per_day, days):
+        agg_active_names |= p["active_wc_names"]
+        for name, units in p["per_wc_units"].items():
+            agg_units[name] = agg_units.get(name, 0) + units
+        for name, dt in p["per_wc_downtime"].items():
+            agg_downtime[name] = agg_downtime.get(name, 0) + dt
+        for name, exp in p["per_wc_expected"].items():
+            agg_expected[name] = agg_expected.get(name, 0.0) + exp
+        for name, cat in p["per_wc_category"].items():
+            agg_category[name] = cat
+        for name, obj in p["per_wc_station_obj"].items():
+            agg_station_obj[name] = obj
+        if d == today:
+            agg_who_today = p["per_wc_who"]
+            schedule_today_assignments = p["schedule_assignments"]
+
+    # Buckets aggregated by time-of-day label.
+    def _aggregate_buckets(per_day_buckets: list[list[dict]]) -> list[dict]:
+        agg: dict[str, dict] = {}
+        order: list[str] = []
+        for day_buckets in per_day_buckets:
+            for b in day_buckets:
+                lbl = b["label"]
+                if lbl not in agg:
+                    agg[lbl] = {"label": lbl, "actual": 0, "target": 0, "in_progress": False}
+                    order.append(lbl)
+                agg[lbl]["actual"] += b["actual"]
+                agg[lbl]["target"] += b["target"]
+                if b["in_progress"]:
+                    agg[lbl]["in_progress"] = True
+        order.sort()
+        return [agg[lbl] for lbl in order]
+
+    dism_progress = _aggregate_buckets([p["dism_buckets"] for p in per_day])
+    repair_progress = _aggregate_buckets([p["repair_buckets"] for p in per_day])
+
+    # Group hourly target — average over total elapsed hours, summing per-WC expected.
+    elapsed_hours_total = total_elapsed / 60.0 if total_elapsed else 0.0
+    def _group_goal(category: str) -> float:
+        if elapsed_hours_total <= 0:
             return 0.0
         total_expected = sum(
-            settings_store.station_target(r.station) * (_productive_minutes(r.station.name) / 60.0)
-            for r in rows
+            agg_expected[name]
+            for name in agg_expected
+            if agg_category.get(name) == category
         )
-        return total_expected / elapsed_hours_for_avg
-    dism_group_target = _group_goal(dismantlers)
-    repair_group_target = _group_goal(repairs)
+        return total_expected / elapsed_hours_total
+    dism_group_target = _group_goal("Dismantler")
+    repair_group_target = _group_goal("Repair")
 
     customs_all = widget_customizer.load_all("recycling")
 
-    # Time-of-day label for the target-line marker on the bar widgets.
-    now_local = now.astimezone(shift_config.SITE_TZ)
-    now_label = now_local.strftime("%H:%M")
+    def _progress_color(pct_of_target):
+        if pct_of_target is None:
+            return None
+        p = max(0.0, min(200.0, pct_of_target))
+        delta = p - 100.0
+        if abs(delta) < 1.0:
+            return "#ffffff"
+        step = min(12, max(1, round(abs(delta) / 100.0 * 12)))
+        sat = 55.0 + step * 2.0
+        light = 65.0 - step * 3.5
+        hue = 130 if delta > 0 else 0
+        return f"hsl({hue:.0f}, {sat:.0f}%, {light:.0f}%)"
+
+    def _bars(category: str) -> list[dict]:
+        names = sorted(n for n in agg_active_names if agg_category.get(n) == category)
+        out = []
+        for name in names:
+            units = agg_units.get(name, 0)
+            expected = agg_expected.get(name, 0.0)
+            pct_of_target = (units / expected * 100.0) if expected > 0 else None
+            out.append({
+                "name": name,
+                "who": agg_who_today.get(name) if not is_range else None,
+                "units": units,
+                "pct_of_target": round(pct_of_target, 1) if pct_of_target is not None else None,
+                "expected": int(round(expected)),
+                "color": _progress_color(pct_of_target),
+                "downtime_minutes": agg_downtime.get(name, 0),
+            })
+        max_u = max((r["units"] for r in out), default=0)
+        max_e = max((r["expected"] for r in out), default=0)
+        base = max(max_u, max_e)
+        scale = (base * 1.1) if base > 0 else 1.0
+        # Hide target tick line for multi-day ranges: it represents "where you should be by now"
+        # which only makes sense for an in-progress single day.
+        has_target_line = (max_e > 0) and not is_range
+        for r in out:
+            r["pct"] = (r["units"] / scale * 100.0) if scale else 0.0
+            r["target_pct"] = (r["expected"] / scale * 100.0) if (scale and has_target_line) else None
+        return out
 
     def _sorted_bars(items: list, widget_id: str) -> list:
         s = customs_all.get(widget_id, {}).get("sort", "preset")
@@ -209,112 +361,93 @@ def recycling(request: Request, day: str | None = Query(default=None)):
         if s == "alpha": return sorted(items, key=lambda x: x["name"].lower())
         return items
 
-    def _progress_color(pct_of_target: float | None) -> str | None:
-        """Vivid 25-step palette: dark red → white (at 100%) → dark green.
-        Saturation stays high across the scale; lightness ramps from mid to dark
-        so even small deviations from target look clearly green or red (not washed-out)."""
-        if pct_of_target is None:
-            return None
-        p = max(0.0, min(200.0, pct_of_target))
-        delta = p - 100.0
-        if abs(delta) < 1.0:  # within 1% of target counts as at-target → white
-            return "#ffffff"
-        step = min(12, max(1, round(abs(delta) / 100.0 * 12)))
-        sat = 55.0 + step * 2.0          # 57% → 79%
-        light = 65.0 - step * 3.5        # 61.5% → 23%
-        hue = 130 if delta > 0 else 0
-        return f"hsl({hue:.0f}, {sat:.0f}%, {light:.0f}%)"
-
-    def _bars(items: list) -> list[dict]:
+    def _downtime_rows(category_filter):
+        names = sorted(
+            n for n in agg_active_names
+            if (category_filter is None or agg_category.get(n) == category_filter)
+        )
         out = []
-        for r in items:
-            station_tgt_hr = settings_store.station_target(r.station)  # pallets/hr
-            # Per-WC expected uses the station's *productive* time (active
-            # intervals + first-60-min grace if scheduled). A WC scheduled and
-            # producing all day reaches the full settings goal; a WC
-            # transferred away after 2h sees expected sized to its 2h of work.
-            station_active_hours = _productive_minutes(r.station.name) / 60.0
-            expected = station_tgt_hr * station_active_hours
-            pct_of_target = (r.units / expected * 100.0) if expected > 0 else None
-            out.append(
-                {
-                    "name": r.station.name,
-                    "who": who_by_wc.get(r.station.name, r.station.name),
-                    "units": r.units,
-                    "pct_of_target": round(pct_of_target, 1) if pct_of_target is not None else None,
-                    "expected": int(round(expected)),
-                    "color": _progress_color(pct_of_target),
-                    "downtime_minutes": r.downtime_minutes,
-                    "state": _state(r, now, is_today),
-                }
-            )
-        # Shared scale for bar width + target line position.
-        max_u = max((r["units"] for r in out), default=0)
-        max_e = max((r["expected"] for r in out), default=0)
-        base = max(max_u, max_e)
-        scale = (base * 1.1) if base > 0 else 1.0
-        has_target_line = max_e > 0
-        for r in out:
-            r["pct"] = (r["units"] / scale * 100.0) if scale else 0.0
-            r["target_pct"] = (r["expected"] / scale * 100.0) if (scale and has_target_line) else None
+        for name in names:
+            down = agg_downtime.get(name, 0)
+            working = max(0, total_elapsed - down)
+            total = total_elapsed if total_elapsed else 1
+            out.append({
+                "name": name,
+                "who": agg_who_today.get(name) if not is_range else None,
+                "working": working,
+                "down": down,
+                "working_pct": working / total * 100.0,
+                "down_pct": down / total * 100.0,
+            })
         return out
 
-    def _downtime_rows(items: list) -> list[dict]:
-        out = []
-        for r in items:
-            working = max(0, elapsed - r.downtime_minutes)
-            total = elapsed if elapsed else 1
-            out.append(
-                {
-                    "name": r.station.name,
-                    "who": who_by_wc.get(r.station.name),
-                    "working": working,
-                    "down": r.downtime_minutes,
-                    "working_pct": working / total * 100.0,
-                    "down_pct": r.downtime_minutes / total * 100.0,
-                }
-            )
-        return out
+    now_local = now.astimezone(shift_config.SITE_TZ)
+    now_label = now_local.strftime("%H:%M")
+    shift_start_label = per_day[-1]["shift_start_label"] if per_day else ""
+
+    # People count: total person-days across the range for ranges; today's count for Today.
+    if is_range:
+        dism_people = 0
+        repair_people = 0
+        for p in per_day:
+            for name, ops in p["schedule_assignments"].items():
+                if name == staffing.TIME_OFF_KEY or not ops:
+                    continue
+                cat = p["per_wc_category"].get(name)
+                if cat == "Dismantler":
+                    dism_people += len(ops)
+                elif cat == "Repair":
+                    repair_people += len(ops)
+    else:
+        dism_people = sum(
+            len(schedule_today_assignments.get(name, []))
+            for name in agg_active_names
+            if agg_category.get(name) == "Dismantler"
+        )
+        repair_people = sum(
+            len(schedule_today_assignments.get(name, []))
+            for name in agg_active_names
+            if agg_category.get(name) == "Repair"
+        )
 
     response = templates.TemplateResponse(
         request,
         "recycling.html",
         {
             "active_vs": "recycling",
-            "day": d.isoformat(),
+            "window": window,
+            "start": start_d.isoformat(),
+            "end": end_d.isoformat(),
             "today": today.isoformat(),
             "is_today": is_today,
+            "is_range": is_range,
+            "range_includes_today": range_includes_today,
+            "custom_range_active": custom_range_active,
             "total_units": total_units,
             "total_downtime_minutes": total_downtime,
             "total_downtime_display": f"{total_downtime / 60:.1f} h",
             "uptime_pct": round(uptime_pct, 1),
             "pallets_per_hour": round(pallets_per_hour, 1),
             "pph_per_person": round(pph_per_person, 1),
-            "elapsed_minutes": elapsed,
-            "dismantler_bars": _sorted_bars(_bars(dismantlers), "dismantler-bars"),
-            "repair_bars": _sorted_bars(_bars(repairs), "repair-bars"),
-            "downtime_rows": _downtime_rows(dismantlers + repairs),
+            "elapsed_minutes": total_elapsed,
+            "dismantler_bars": _sorted_bars(_bars("Dismantler"), "dismantler-bars"),
+            "repair_bars": _sorted_bars(_bars("Repair"), "repair-bars"),
+            "downtime_rows": _downtime_rows(None),
             "dismantler_progress": dism_progress,
             "repair_progress": repair_progress,
             "dismantler_group_target": dism_group_target,
             "repair_group_target": repair_group_target,
-            "dismantler_people": sum(
-                len(sched_for_labels.assignments.get(r.station.name, []))
-                for r in dismantlers
-            ),
-            "repair_people": sum(
-                len(sched_for_labels.assignments.get(r.station.name, []))
-                for r in repairs
-            ),
+            "dismantler_people": dism_people,
+            "repair_people": repair_people,
             "layout": layout_store.layout_map("recycling"),
             "customs": customs_all,
             "now_label": now_label,
-            "shift_start_label": shift_start_local.strftime("%H:%M"),
+            "shift_start_label": shift_start_label,
             "refreshed_at": now.strftime("%H:%M:%S UTC"),
         },
     )
-    set_cache_headers(response, includes_today=is_today)
-    store_cached_response(cache_key, includes_today=is_today, response=response)
+    set_cache_headers(response, includes_today=range_includes_today)
+    store_cached_response(cache_key, includes_today=range_includes_today, response=response)
     return response
 
 

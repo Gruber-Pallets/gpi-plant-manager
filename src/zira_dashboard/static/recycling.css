@@ -590,3 +590,56 @@
     white-space: nowrap;
     overflow: hidden;
   }
+
+  /* ---- Range chip toolbar ---- */
+  .rc-toolbar {
+    display: inline-flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+    margin-left: 1rem;
+    font-size: 0.85rem;
+  }
+  .rc-tool-label { color: var(--muted); margin-right: 0.2rem; }
+  .rc-chip {
+    display: inline-block; padding: 0.25rem 0.6rem; border-radius: 999px;
+    background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--border); text-decoration: none;
+    font: inherit; font-size: 0.82rem; cursor: pointer;
+  }
+  .rc-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .rc-chip-on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .rc-custom-popover { position: relative; }
+  .rc-custom-popover > summary {
+    list-style: none;
+    cursor: pointer;
+  }
+  .rc-custom-popover > summary::-webkit-details-marker { display: none; }
+  .rc-custom-panel {
+    position: absolute;
+    top: calc(100% + 0.3rem);
+    left: 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.7rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    z-index: 10;
+    white-space: nowrap;
+  }
+  .rc-custom-panel label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+  .rc-custom-panel input[type=date] {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.25rem 0.4rem; font: inherit; font-size: 0.85rem;
+    color-scheme: light;
+  }
+  .rc-custom-panel input[type=date]::-webkit-calendar-picker-indicator {
+    cursor: pointer; filter: brightness(0.4);
+  }
+  .rc-custom-apply { align-self: flex-end; }
