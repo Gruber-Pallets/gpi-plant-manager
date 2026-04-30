@@ -109,3 +109,73 @@ def test_averages_zero_target_yields_zero_pct():
     rows = averages_for_wc(records, 0.0, _const_productive, "pct")
     assert rows[0]["avg_pct"] == 0.0
     assert rows[0]["avg_units"] == 200.0  # units math still works
+
+
+from zira_dashboard.routes.leaderboards import averages_for_group
+
+
+def test_group_averages_basic_two_wcs():
+    target_by_wc = {"Repair-1": 30.0, "Repair-2": 25.0}
+    # Alice: 2 days at Repair-1 (210 each), 1 day at Repair-2 (175).
+    # Repair-1 expected = 210, Repair-2 expected = 175.
+    records = [
+        _rec(date(2026, 4, 27), "Alice", "Repair-1", 210),
+        _rec(date(2026, 4, 28), "Alice", "Repair-1", 210),
+        _rec(date(2026, 4, 29), "Alice", "Repair-2", 175),
+    ]
+    rows = averages_for_group(records, target_by_wc, _const_productive, "units")
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["name"] == "Alice"
+    assert r["name_count"] == 3  # total person-days across the group
+    assert r["avg_units"] == (210 + 210 + 175) / 3
+    # All three days were exactly at goal → pct = 1.0
+    assert abs(r["avg_pct"] - 1.0) < 1e-9
+    assert r["top_wc"] == "Repair-1"  # 2 days vs 1
+
+
+def test_group_averages_top_wc_alphabetical_tiebreak():
+    # Alice worked Repair-1 once and Repair-2 once → tie, alphabetical first wins.
+    target_by_wc = {"Repair-1": 30.0, "Repair-2": 30.0}
+    records = [
+        _rec(date(2026, 4, 27), "Alice", "Repair-2", 100),
+        _rec(date(2026, 4, 28), "Alice", "Repair-1", 100),
+    ]
+    rows = averages_for_group(records, target_by_wc, _const_productive, "units")
+    assert rows[0]["top_wc"] == "Repair-1"
+
+
+def test_group_averages_sort_and_rank():
+    target_by_wc = {"WC1": 30.0}
+    records = [
+        _rec(date(2026, 4, 27), "Alice", "WC1", 100),
+        _rec(date(2026, 4, 27), "Bob",   "WC1", 300),
+    ]
+    rows = averages_for_group(records, target_by_wc, _const_productive, "units")
+    assert [r["name"] for r in rows] == ["Bob", "Alice"]
+    assert rows[0]["rank"] == 1
+
+
+def test_group_averages_unknown_wc_target_yields_zero_pct_for_that_record():
+    # If a record's WC isn't in target_by_wc, treat its expected as 0 and pct as 0
+    # (don't crash). Units math is unaffected.
+    target_by_wc = {"WC1": 30.0}
+    records = [
+        _rec(date(2026, 4, 27), "Alice", "WC1",      210),  # pct = 1.0
+        _rec(date(2026, 4, 28), "Alice", "WC-Other", 100),  # pct = 0.0
+    ]
+    rows = averages_for_group(records, target_by_wc, _const_productive, "pct")
+    # avg_pct = (1.0 + 0.0) / 2
+    assert abs(rows[0]["avg_pct"] - 0.5) < 1e-9
+    assert rows[0]["avg_units"] == 155.0
+
+
+def test_group_averages_filters_zero_unit_records():
+    target_by_wc = {"WC1": 30.0}
+    records = [
+        _rec(date(2026, 4, 27), "Alice", "WC1", 200),
+        _rec(date(2026, 4, 28), "Alice", "WC1", 0),
+    ]
+    rows = averages_for_group(records, target_by_wc, _const_productive, "units")
+    assert rows[0]["name_count"] == 1
+    assert rows[0]["avg_units"] == 200.0

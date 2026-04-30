@@ -69,6 +69,63 @@ def averages_for_wc(
     return out
 
 
+def averages_for_group(
+    records: list[dict],
+    target_per_hour_by_wc: dict[str, float],
+    productive_minutes_for,
+    mode: str,
+) -> list[dict]:
+    """Per-person averages across a group's WCs.
+
+    Each (person, day, wc) record is one sample. `expected` for the
+    pct math is computed per record using that record's WC target.
+    `top_wc` = the WC the operator most often worked in the range
+    (highest day count); ties broken by WC name alphabetical.
+
+    Same filtering, sorting, and tiebreak rules as averages_for_wc.
+    """
+    rows = [r for r in records if r["units"] > 0]
+    by_person: dict[str, list[dict]] = {}
+    for r in rows:
+        by_person.setdefault(r["person"], []).append(r)
+
+    out: list[dict] = []
+    for person, recs in by_person.items():
+        days_worked = len(recs)
+        total_units = sum(r["units"] for r in recs)
+        avg_units = total_units / days_worked
+
+        pct_per_day: list[float] = []
+        wc_counts: dict[str, int] = {}
+        for r in recs:
+            wc_counts[r["wc"]] = wc_counts.get(r["wc"], 0) + 1
+            prod_hr = productive_minutes_for(r["day"]) / 60.0
+            target = target_per_hour_by_wc.get(r["wc"], 0.0)
+            expected = target * prod_hr
+            pct_per_day.append((r["units"] / expected) if expected > 0 else 0.0)
+        avg_pct = sum(pct_per_day) / len(pct_per_day) if pct_per_day else 0.0
+
+        # top_wc: highest count; tiebreak alphabetical by WC name.
+        top_wc = min(wc_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+
+        out.append({
+            "name": person,
+            "name_count": days_worked,
+            "top_wc": top_wc,
+            "avg_units": avg_units,
+            "avg_pct": avg_pct,
+        })
+
+    if mode == "pct":
+        out.sort(key=lambda r: (-r["avg_pct"], -r["name_count"], r["name"].lower()))
+    else:
+        out.sort(key=lambda r: (-r["avg_units"], -r["name_count"], r["name"].lower()))
+
+    for i, row in enumerate(out, 1):
+        row["rank"] = i
+    return out
+
+
 router = APIRouter()
 
 
