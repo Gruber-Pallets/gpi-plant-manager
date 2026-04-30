@@ -44,7 +44,9 @@ def _parse_day(day: str | None) -> date:
 
 
 def _window_dates(window: str, today_d: date) -> tuple[date, date]:
-    """Return (start, end) inclusive for one of: week|month|quarter|year."""
+    """Return (start, end) inclusive for one of: today|week|month|quarter|year."""
+    if window == "today":
+        return today_d, today_d
     if window == "month":
         return today_d.replace(day=1), today_d
     if window == "quarter":

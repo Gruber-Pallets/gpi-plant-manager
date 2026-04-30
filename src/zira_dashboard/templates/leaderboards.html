@@ -18,12 +18,15 @@
     <a href="/staffing/leaderboards?window={{ wval }}&metric={{ metric }}"
        class="lb-chip{% if window == wval and not custom_range_active %} lb-chip-on{% endif %}">{{ wlabel }}</a>
   {% endfor %}
-  <span class="lb-custom">
-    <label>From <input type="date" name="start" value="{{ start if custom_range_active else '' }}"></label>
-    <label>To <input type="date" name="end" value="{{ end if custom_range_active else '' }}"></label>
-    <input type="hidden" name="metric" value="{{ metric }}">
-    <button type="submit" class="lb-chip{% if custom_range_active %} lb-chip-on{% endif %}">Custom</button>
-  </span>
+  <details class="lb-custom-popover"{% if custom_range_active %} open{% endif %}>
+    <summary class="lb-chip{% if custom_range_active %} lb-chip-on{% endif %}">{% if custom_range_active %}Custom: {{ start }} → {{ end }}{% else %}Custom{% endif %}</summary>
+    <div class="lb-custom-panel">
+      <label>Start <input type="date" name="start" value="{{ start if custom_range_active else '' }}"></label>
+      <label>End <input type="date" name="end" value="{{ end if custom_range_active else '' }}"></label>
+      <input type="hidden" name="metric" value="{{ metric }}">
+      <button type="submit" class="lb-chip lb-custom-apply">Apply</button>
+    </div>
+  </details>
 
   <span class="lb-tool-label" style="margin-left:1.2rem">Metric:</span>
   <a href="/staffing/leaderboards?window={{ window }}&metric=units{% if custom_range_active %}&start={{ start }}&end={{ end }}{% endif %}"
