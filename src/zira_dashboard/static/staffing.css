@@ -95,7 +95,12 @@
     padding: 0.3rem 0.5rem;
     font: inherit; font-size: 0.88rem;
     font-variant-numeric: tabular-nums;
-    color-scheme: dark;
+    color-scheme: light;
+    cursor: pointer;
+  }
+  .title-bar .date-input::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    filter: brightness(0.4);
   }
   .title-bar .date-input:hover, .title-bar .date-input:focus { border-color: var(--muted); outline: none; }
   .title-bar .day-hot {

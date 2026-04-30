@@ -399,6 +399,12 @@
       const v = e.target.value;
       if (v) location.href = '/staffing?day=' + encodeURIComponent(v);
     });
+    // Click anywhere in the input box opens the calendar (not just the icon).
+    __dayPicker.addEventListener('click', () => {
+      if (typeof __dayPicker.showPicker === 'function') {
+        __dayPicker.showPicker();
+      }
+    });
   }
 
   // ---------- Per-WC training checkbox ----------
