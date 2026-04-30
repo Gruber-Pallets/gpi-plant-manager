@@ -213,10 +213,8 @@
         {% else %}
           {% if published %}
             <span class="pub-pill on">Posted</span>
-            <button type="button" id="edit-posted-btn" class="posted-edit-btn">Edit</button>
           {% else %}
             <span class="draft-label">DRAFT</span>
-            <button type="submit" name="action" value="save" class="save-draft-btn">Save Draft</button>
           {% endif %}
           <span id="autosave-indicator" class="autosave clean" aria-live="polite"></span>
           <button type="button" class="publish-btn icon-btn print-btn" onclick="printSchedule()" title="Print" aria-label="Print">
@@ -418,27 +416,18 @@
   const __isPublished = {{ 'true' if published else 'false' }};
   const __viewingPosted = {{ 'true' if viewing_posted else 'false' }};
   const __form = document.getElementById('staffing-form');
-  const __editBtn = document.getElementById('edit-posted-btn');
   let __unlocked = !__isPublished && !__viewingPosted;
   if (__isPublished || __viewingPosted) {
     __form.classList.add('locked');
   }
-  if (__editBtn) {
-    __editBtn.addEventListener('click', () => {
-      if (__unlocked) {
-        __form.classList.add('locked');
-        __editBtn.classList.remove('editing');
-        __editBtn.textContent = 'Edit';
-        __unlocked = false;
-        return;
-      }
-      if (confirm("This schedule is already POSTED to the plant.\n\nEditing it now will change what's recorded in Past Schedules. Only proceed if you're correcting a real mistake.\n\nProceed with edits?")) {
-        __form.classList.remove('locked');
-        __editBtn.classList.add('editing');
-        __editBtn.textContent = 'Editing…';
-        __unlocked = true;
-      }
-    });
+
+  // Wake the autosave controller after a programmatic DOM mutation (pill
+  // remove, checkbox toggled by code, options stripped from a select, etc.).
+  // The controller listens for `input`/`change` events on the form, but
+  // assigning to .checked or removing nodes doesn't fire those — dispatch a
+  // synthetic, bubbling change so autosave is triggered exactly once.
+  function kickAutosave() {
+    __form.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   // ---------- Reset to defaults ----------
@@ -467,11 +456,11 @@
         __prevSel.set(dd, [...dd.querySelectorAll('.dd-item.selected')].map(i => i.dataset.name));
       });
       refreshPickerVisibility();
-      if (typeof scheduleAutosave === 'function') scheduleAutosave();
+      kickAutosave();
     });
   }
 
-  // ---------- Auto-save with Undo ----------
+  // ---------- Undo / Redo helpers ----------
 
   function serializeForm(form) {
     const map = {};
@@ -508,7 +497,6 @@
   // After redo:     __lastUndoSnap = pre-redo state, __lastRedoSnap = null.
   let __lastUndoSnap = null;
   let __lastRedoSnap = null;
-  let __saveTimer = null;
   let __saving = false;
 
   const __undoBtn = document.getElementById('undo-btn');
@@ -542,41 +530,11 @@
   // default_people during this page's saves — exactly what we want.
   function __buildAutosaveBody() { return new FormData(__form); }
 
-  function scheduleAutosave() {
-    if (__viewingPosted) return;  // posted-snapshot view is read-only
-    clearTimeout(__saveTimer);
-    __saveTimer = setTimeout(doAutosave, 600);
-  }
-
-  function doAutosave() {
-    if (__saving) { scheduleAutosave(); return; }
-    __saving = true;
-    const before = __undoSnapshot;
-    const after = serializeForm(__form);
-    const body = __buildAutosaveBody();
-    const url = __form.action + (__form.action.includes('?') ? '&' : '?') + 'auto=1';
-    fetch(url, { method: 'POST', body, headers: { 'Accept': 'application/json' } })
-      .then(r => {
-        if (r.ok) {
-          __undoSnapshot = after;
-          __lastUndoSnap = before;
-          __lastRedoSnap = null;  // new save branches the history
-          updateUndoRedoBtns();
-          showSavedToast(before);
-        } else {
-          showSavedToast(null, 'Save failed');
-        }
-      })
-      .catch(() => showSavedToast(null, 'Save failed'))
-      .finally(() => { __saving = false; });
-  }
-
   function performUndo(snap) {
     if (!snap || __saving || __viewingPosted) return;
     const beforeRevert = serializeForm(__form);
     applyState(__form, snap);
     reapplyVisualState();
-    clearTimeout(__saveTimer);
     __saving = true;
     const body = __buildAutosaveBody();
     const url = __form.action + (__form.action.includes('?') ? '&' : '?') + 'auto=1';
@@ -595,7 +553,6 @@
     const beforeRedo = serializeForm(__form);
     applyState(__form, snap);
     reapplyVisualState();
-    clearTimeout(__saveTimer);
     __saving = true;
     const body = __buildAutosaveBody();
     const url = __form.action + (__form.action.includes('?') ? '&' : '?') + 'auto=1';
@@ -612,25 +569,6 @@
   if (__undoBtn) __undoBtn.addEventListener('click', () => performUndo(__lastUndoSnap));
   if (__redoBtn) __redoBtn.addEventListener('click', () => performRedo(__lastRedoSnap));
   updateUndoRedoBtns();
-
-  __form.addEventListener('change', scheduleAutosave);
-  __form.addEventListener('input',  (e) => {
-    // Throttle textarea input to avoid spamming
-    if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT')) scheduleAutosave();
-  });
-
-  // Flush any pending debounced save before the page unloads (clicking a nav
-  // link, picking a different day, closing the tab). Without this, a recent
-  // change is lost because the 600ms autosave timer never fires.
-  window.addEventListener('beforeunload', () => {
-    if (!__saveTimer) return;
-    clearTimeout(__saveTimer);
-    __saveTimer = null;
-    if (__viewingPosted) return;
-    const body = __buildAutosaveBody();
-    const url = __form.action + (__form.action.includes('?') ? '&' : '?') + 'auto=1';
-    if (navigator.sendBeacon) navigator.sendBeacon(url, body);
-  });
 
   function showSavedToast(undoSnap, errorMsg, successOverride) {
     let bd = document.getElementById('save-toast-bd');
@@ -720,8 +658,8 @@
     inp.value = '1';
     const pill = document.getElementById('testing-pill');
     if (pill) pill.style.display = '';
-    // Trigger autosave so the flag persists immediately.
-    scheduleAutosave();
+    // Programmatic value mutation doesn't fire change/input on its own.
+    kickAutosave();
   }
 
   // ---------- Cross-picker visibility ----------
@@ -788,7 +726,7 @@
     // Live-update the left rail: send them back to whichever list owns them.
     if (name) addBackToCorrectList(name);
     refreshTimeOffCount();
-    if (typeof scheduleAutosave === 'function') scheduleAutosave();
+    kickAutosave();
   });
 
   // ---------- Time Off helpers ----------
@@ -999,7 +937,7 @@
       if (o.value && o.value.split('|')[0] === name) o.remove();
     });
     sel.value = '';
-    if (typeof scheduleAutosave === 'function') scheduleAutosave();
+    kickAutosave();
   });
 
   document.addEventListener('click', (e) => {
@@ -1034,7 +972,7 @@
             removeFromUnscheduled(item.dataset.name);
             removeFromReserves(item.dataset.name);
             refreshPickerVisibility();
-            if (typeof scheduleAutosave === 'function') scheduleAutosave();
+            kickAutosave();
           },
         });
         return;
@@ -1078,7 +1016,7 @@
     refreshPickerVisibility();
 
     // Kick autosave on every selection change.
-    if (typeof scheduleAutosave === 'function') scheduleAutosave();
+    kickAutosave();
   });
 
   // ---------- Per-dropdown quick clear (Scheduled picker × button) ----------
@@ -1114,7 +1052,7 @@
       if (!stillScheduled && !inTimeOff) addBackToCorrectList(name);
     });
     refreshPickerVisibility();
-    if (typeof scheduleAutosave === 'function') scheduleAutosave();
+    kickAutosave();
   });
 
   // Close dropdowns when clicking outside.
@@ -1152,7 +1090,7 @@
       title: loc + ' · Understaffed',
       msg: loc + ' needs at least ' + min + ' operators but you only have ' + count + '. Add ' + (min - count) + ' more, remove all to close the station, or override — this flags today as a Testing Day.',
       overrideLabel: 'Override (Testing Day)',
-      onOverride: () => { flagTestingDay(); if (typeof scheduleAutosave === 'function') scheduleAutosave(); },
+      onOverride: () => { flagTestingDay(); kickAutosave(); },
     });
   }, true);
 
