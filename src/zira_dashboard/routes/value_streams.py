@@ -22,6 +22,12 @@ def recycling(request: Request, day: str | None = Query(default=None)):
     d = _parse_day(day)
     today = datetime.now(timezone.utc).date()
     is_today = d == today
+    # Try cached HTML response.
+    from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
+    cache_key = ("recycling", d.isoformat())
+    cached = get_cached_response(cache_key, includes_today=is_today)
+    if cached is not None:
+        return cached
     stations = recycling_stations()
     now = datetime.now(timezone.utc)
     results = leaderboard(client, stations, d, now_utc=now if is_today else None)
@@ -307,8 +313,8 @@ def recycling(request: Request, day: str | None = Query(default=None)):
             "refreshed_at": now.strftime("%H:%M:%S UTC"),
         },
     )
-    from .._http_cache import set_cache_headers
     set_cache_headers(response, includes_today=is_today)
+    store_cached_response(cache_key, includes_today=is_today, response=response)
     return response
 
 
@@ -320,6 +326,12 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
     d = _parse_day(day)
     today = datetime.now(timezone.utc).date()
     is_today = d == today
+    # Try cached HTML response.
+    from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
+    cache_key = ("new_vs", d.isoformat())
+    cached = get_cached_response(cache_key, includes_today=is_today)
+    if cached is not None:
+        return cached
     now = datetime.now(timezone.utc)
 
     new_locs = [
@@ -469,6 +481,6 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
             "refreshed_at": now.strftime("%H:%M:%S UTC"),
         },
     )
-    from .._http_cache import set_cache_headers
     set_cache_headers(response, includes_today=is_today)
+    store_cached_response(cache_key, includes_today=is_today, response=response)
     return response

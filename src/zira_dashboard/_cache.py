@@ -50,6 +50,31 @@ class TTLCache:
                 self._store.pop(oldest_key, None)
         return value
 
+    def peek(self, key: Hashable) -> Any | None:
+        """Return cached value if present and unexpired; None otherwise.
+        Does NOT compute on miss."""
+        now = time.monotonic()
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return None
+            ts, value = entry
+            if now - ts >= self._ttl:
+                return None
+            # Move to end (most-recently-used).
+            self._store.pop(key, None)
+            self._store[key] = (ts, value)
+            return value
+
+    def set(self, key: Hashable, value: Any) -> None:
+        """Store a value with the current timestamp (TTL window starts now)."""
+        now = time.monotonic()
+        with self._lock:
+            self._store[key] = (now, value)
+            while len(self._store) > self._max:
+                oldest_key = next(iter(self._store))
+                self._store.pop(oldest_key, None)
+
     def invalidate(self, key: Hashable | None = None) -> None:
         with self._lock:
             if key is None:

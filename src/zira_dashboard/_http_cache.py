@@ -39,3 +39,46 @@ def range_includes_today(end_d: date, today: date) -> bool:
     """For range-based pages (leaderboards): the range's end determines
     whether the data is still moving."""
     return end_d >= today
+
+
+from starlette.responses import HTMLResponse, Response
+from ._cache import TTLCache
+
+# Server-side response cache. Keyed by route + query state.
+# Today's pages: 15s — matches the existing browser Cache-Control short
+# window so we never serve content older than what the browser would
+# fetch on its own. Past pages: 5 minutes (server-side; the browser side
+# caches longer via Cache-Control).
+_RESPONSE_CACHE_TODAY = TTLCache(ttl_seconds=15.0, max_entries=64)
+_RESPONSE_CACHE_PAST = TTLCache(ttl_seconds=300.0, max_entries=128)
+
+
+def get_cached_response(cache_key, *, includes_today: bool) -> Response | None:
+    """Return a cached HTMLResponse for the given key, or None on miss.
+
+    The returned response is a fresh HTMLResponse built from cached bytes
+    + content_type. We re-apply Cache-Control headers so the browser side
+    of the cache stays in sync.
+    """
+    cache = _RESPONSE_CACHE_TODAY if includes_today else _RESPONSE_CACHE_PAST
+    cached = cache.peek(cache_key)
+    if cached is None:
+        return None
+    body, content_type = cached
+    response = HTMLResponse(content=body, media_type=content_type)
+    set_cache_headers(response, includes_today=includes_today)
+    return response
+
+
+def store_cached_response(cache_key, *, includes_today: bool, response: Response) -> None:
+    """Cache a response's body bytes + content_type for future serve.
+
+    Safe to call after `set_cache_headers` — we capture the body only,
+    not the headers (those are re-applied on serve)."""
+    cache = _RESPONSE_CACHE_TODAY if includes_today else _RESPONSE_CACHE_PAST
+    # Force Starlette's TemplateResponse to render its template if it
+    # hasn't already; .body is the rendered bytes.
+    body = response.body if hasattr(response, "body") else b""
+    if isinstance(body, memoryview):
+        body = bytes(body)
+    cache.set(cache_key, (body, response.media_type or "text/html; charset=utf-8"))
