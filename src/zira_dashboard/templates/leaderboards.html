@@ -67,7 +67,47 @@
           </table>
         {% endif %}
       </div>
-      <div class="lb-side-avg"></div>
+        <div class="lb-side-avg">
+          {% set a = avg_groups_by_name.get(s.loc_name) %}
+          {% if a and a.rows %}
+            {% set top5 = a.rows[:5] %}
+            {% set rest = a.rows[5:] %}
+            <table class="lb-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>Operator</th><th>Top WC</th>
+                  <th class="num">Avg/day{% if metric == 'units' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                  <th class="num">Avg %{% if metric == 'pct' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in top5 %}
+                  <tr>
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td>{{ r.top_wc }}</td>
+                    <td class="num">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+                {% for r in rest %}
+                  <tr class="lb-row-hidden">
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td>{{ r.top_wc }}</td>
+                    <td class="num">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% if rest %}
+              <button type="button" class="lb-expand-btn" onclick="toggleAll(this)" data-count="{{ rest|length }}">
+                &#9662; Show all ({{ a.rows|length }})
+              </button>
+            {% endif %}
+          {% endif %}
+        </div>
     </div>
   {% endfor %}
   {% for s in active_sections %}
@@ -100,7 +140,45 @@
           </table>
         {% endif %}
       </div>
-      <div class="lb-side-avg"></div>
+        <div class="lb-side-avg">
+          {% set a = avg_sections_by_name.get(s.loc_name) %}
+          {% if a and a.rows %}
+            {% set top5 = a.rows[:5] %}
+            {% set rest = a.rows[5:] %}
+            <table class="lb-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>Operator</th>
+                  <th class="num">Avg/day{% if metric == 'units' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                  <th class="num">Avg %{% if metric == 'pct' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in top5 %}
+                  <tr>
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td class="num">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+                {% for r in rest %}
+                  <tr class="lb-row-hidden">
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td class="num">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% if rest %}
+              <button type="button" class="lb-expand-btn" onclick="toggleAll(this)" data-count="{{ rest|length }}">
+                &#9662; Show all ({{ a.rows|length }})
+              </button>
+            {% endif %}
+          {% endif %}
+        </div>
     </div>
   {% endfor %}
 </div>
@@ -143,7 +221,47 @@
             </table>
           {% endif %}
         </div>
-        <div class="lb-side-avg"></div>
+        <div class="lb-side-avg">
+          {% set a = avg_groups_by_name.get(s.loc_name) %}
+          {% if a and a.rows %}
+            {% set top5 = a.rows[:5] %}
+            {% set rest = a.rows[5:] %}
+            <table class="lb-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>Operator</th><th>Top WC</th>
+                  <th class="num">Avg/day{% if metric == 'units' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                  <th class="num">Avg %{% if metric == 'pct' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in top5 %}
+                  <tr>
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td>{{ r.top_wc }}</td>
+                    <td class="num">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+                {% for r in rest %}
+                  <tr class="lb-row-hidden">
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td>{{ r.top_wc }}</td>
+                    <td class="num">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% if rest %}
+              <button type="button" class="lb-expand-btn" onclick="toggleAll(this)" data-count="{{ rest|length }}">
+                &#9662; Show all ({{ a.rows|length }})
+              </button>
+            {% endif %}
+          {% endif %}
+        </div>
       </div>
     {% endfor %}
     {% for s in inactive_sections %}
@@ -180,7 +298,45 @@
             </table>
           {% endif %}
         </div>
-        <div class="lb-side-avg"></div>
+        <div class="lb-side-avg">
+          {% set a = avg_sections_by_name.get(s.loc_name) %}
+          {% if a and a.rows %}
+            {% set top5 = a.rows[:5] %}
+            {% set rest = a.rows[5:] %}
+            <table class="lb-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>Operator</th>
+                  <th class="num">Avg/day{% if metric == 'units' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                  <th class="num">Avg %{% if metric == 'pct' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in top5 %}
+                  <tr>
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td class="num">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+                {% for r in rest %}
+                  <tr class="lb-row-hidden">
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td class="num">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% if rest %}
+              <button type="button" class="lb-expand-btn" onclick="toggleAll(this)" data-count="{{ rest|length }}">
+                &#9662; Show all ({{ a.rows|length }})
+              </button>
+            {% endif %}
+          {% endif %}
+        </div>
       </div>
     {% endfor %}
   </div>
@@ -188,6 +344,26 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+function toggleAll(btn) {
+  var card = btn.closest('.lb-side-avg');
+  if (!card) return;
+  var hidden = card.querySelectorAll('.lb-row-hidden, .lb-row-revealed');
+  var nowVisible = !card.classList.contains('lb-expanded');
+  card.classList.toggle('lb-expanded', nowVisible);
+  hidden.forEach(function (tr) {
+    tr.classList.toggle('lb-row-hidden', !nowVisible);
+    tr.classList.toggle('lb-row-revealed', nowVisible);
+  });
+  if (nowVisible) {
+    btn.innerHTML = '&#9650; Hide';
+  } else {
+    var card2 = btn.closest('.lb-side-avg');
+    var totalRows = card2.querySelectorAll('tbody tr').length;
+    btn.innerHTML = '&#9662; Show all (' + totalRows + ')';
+  }
+}
+</script>
 <script>
 (function initLeaderboards() {
   let dragged = null;
