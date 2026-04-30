@@ -207,7 +207,7 @@
     background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 6px;
     padding: 0.35rem 0.7rem; font: inherit; font-size: 0.8rem; cursor: pointer;
   }
-  .widget-edit button.primary { background: var(--accent); color: #0e1116; border-color: var(--accent); font-weight: 700; }
+  .widget-edit button.primary { background: var(--accent); color: white; border-color: var(--accent); font-weight: 700; }
   .widget-edit button.danger  { color: var(--bad); border-color: var(--bad-bg); }
   .widget-edit button:hover { filter: brightness(1.1); }
 
@@ -218,7 +218,7 @@
   .grid-stack-item-content .bar-row.numpos-hidden { grid-template-columns: 7rem 1fr; }
   .grid-stack-item-content .bar-fill { position: relative; overflow: visible; display: flex; align-items: center; justify-content: flex-end; }
   .grid-stack-item-content .bar-fill .in {
-    color: #0e1116; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: white; font-weight: 700; font-variant-numeric: tabular-nums;
     padding-right: 0.5rem; font-size: clamp(0.75rem, 3cqh, 1rem);
   }
   .grid-stack-item-content .bar-fill .edge {
@@ -256,7 +256,7 @@
     display: flex; flex-direction: column; align-items: center;
   }
   .grid-stack-item-content .vbar-fill .in {
-    color: #0e1116; font-weight: 700; padding-top: 0.3rem;
+    color: white; font-weight: 700; padding-top: 0.3rem;
     font-size: clamp(0.7rem, 3cqh, 1rem); font-variant-numeric: tabular-nums;
   }
   .grid-stack-item-content .vbar-fill .edge {
@@ -282,7 +282,7 @@
     position: relative; display: flex; align-items: center; justify-content: flex-end;
   }
   .grid-stack-item-content .stacked-track .in {
-    color: #0e1116; font-weight: 700; padding-right: 0.5rem;
+    color: white; font-weight: 700; padding-right: 0.5rem;
     font-size: clamp(0.75rem, 3cqh, 0.95rem); font-variant-numeric: tabular-nums;
   }
   .grid-stack-item-content .stacked-track .edge {

@@ -109,7 +109,7 @@
   .title-bar .day-hot:hover { color: var(--fg); border-color: var(--muted); }
   .title-bar .day-hot.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-dim); }
   .title-bar .title-actions { margin-left: auto; display: inline-flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  .title-bar .publish-btn { background: var(--accent); color: #0e1116; border: 1px solid var(--accent); border-radius: 6px; padding: 0.45rem 1rem; font: inherit; font-weight: 700; cursor: pointer; }
+  .title-bar .publish-btn { background: var(--accent); color: white; border: 1px solid var(--accent); border-radius: 6px; padding: 0.45rem 1rem; font: inherit; font-weight: 700; cursor: pointer; }
   .title-bar .publish-btn:hover { filter: brightness(1.08); }
   /* Icon-only variants of .publish-btn (Print + Post-to-Slack). */
   .title-bar .publish-btn.icon-btn { padding: 0.4rem 0.55rem; display: inline-flex; align-items: center; justify-content: center; }
@@ -278,7 +278,7 @@
   .multi-dd .dd-list .dd-reserves > summary {
     list-style: none;
     cursor: pointer;
-    color: #a78bfa;
+    color: #7e22ce;
     font-size: 0.78rem; font-weight: 600;
     padding: 0.25rem 0.55rem;
     border-radius: 4px;
@@ -293,7 +293,7 @@
   }
   .multi-dd .dd-list .dd-reserves[open] > summary::before { transform: rotate(90deg); }
   .multi-dd .dd-list .dd-reserves > summary:hover { background: var(--panel-2); }
-  .multi-dd .dd-list .dd-reserves[open] > summary { color: #c4b5fd; }
+  .multi-dd .dd-list .dd-reserves[open] > summary { color: #581c87; }
   .multi-dd .dd-list .dd-reserves-count { color: var(--muted); font-weight: 500; margin-left: 0.15rem; font-size: 0.75rem; }
 
   /* Per-WC training checkbox sits next to the Work Center name */
@@ -395,7 +395,7 @@
     font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer;
   }
   .popover button.primary { background: var(--panel-2); color: var(--fg); border-color: var(--border); }
-  .popover button.override { background: var(--warn); color: #0e1116; border-color: var(--warn); }
+  .popover button.override { background: var(--warn); color: white; border-color: var(--warn); }
   .popover button:hover { filter: brightness(1.08); }
 
   /* Save toast (top-center) — shared with skills + settings. */
@@ -462,7 +462,7 @@
   .save-block strong { font-weight: 700; }
   .save-block ul { margin: 0.3rem 0 0 1.2rem; padding: 0; }
   .override-btn {
-    background: var(--warn); color: #0e1116;
+    background: var(--warn); color: white;
     border: 1px solid var(--warn);
     border-radius: 6px;
     padding: 0.35rem 0.8rem;
@@ -562,7 +562,7 @@
     font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer;
   }
   .hours-editor .actions .cancel { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border); }
-  .hours-editor .actions .save { background: var(--accent); color: #0e1116; border: 1px solid var(--accent); }
+  .hours-editor .actions .save { background: var(--accent); color: white; border: 1px solid var(--accent); }
 
   /* Custom-hours banner shown in the day-notes section. */
   .custom-hours-banner {
