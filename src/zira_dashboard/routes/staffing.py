@@ -145,6 +145,22 @@ def staffing_page(
         d = date.fromisoformat(day) if day else _next_working_day(today)
     except ValueError:
         d = _next_working_day(today)
+
+    # Server-side response cache: 15 s for today, 5 min for past days.
+    # Most pageviews — including the reload after a clear-partial click —
+    # serve from cache and never pay the StratusTime/Zira/DB chain.
+    # Mutations (POST /staffing, /api/staffing/attribute, clear-partial,
+    # declare-absent, etc.) all call invalidate_today_cache() so saves
+    # show up on the next reload regardless of TTL.
+    is_today = d >= today
+    view_mode_normalized = view if view in ("draft", "posted") else "draft"
+    response_cache_key = (
+        "staffing", d.isoformat(), view_mode_normalized, int(publish_blocked or 0)
+    )
+    cached_resp = _http_cache.get_cached_response(response_cache_key, includes_today=is_today)
+    if cached_resp is not None:
+        return cached_resp
+
     # One pool fans out everything that doesn't depend on the schedule:
     # 3 DB reads (certs, roster, schedule) + StratusTime time-off. The
     # attendance fetch is fired AFTER the schedule resolves (it needs
@@ -528,10 +544,15 @@ def staffing_page(
     # Past-day staffing pages are immutable, so the browser can cache them
     # for a long time. Today / future days get the short cache (so edits
     # appear immediately on reload).
-    _http_cache.set_cache_headers(response, includes_today=(d >= today))
+    _http_cache.set_cache_headers(response, includes_today=is_today)
 
     phases["total"] = (time.perf_counter() - _total_t0) * 1000.0
     response.headers["Server-Timing"] = _server_timing_header(phases)
+    # Stash in the server-side response cache. Mutations bust this via
+    # invalidate_today_cache; non-today buckets live for 5 min.
+    _http_cache.store_cached_response(
+        response_cache_key, includes_today=is_today, response=response
+    )
     return response
 
 
@@ -605,6 +626,7 @@ async def staffing_save(
             custom_hours=existing.custom_hours,
         )
         staffing.save_schedule(restored)
+        _http_cache.invalidate_today_cache()
         if (request.headers.get("accept") or "").startswith("application/json"):
             return JSONResponse({"ok": True, "published": True, "discarded": True})
         return RedirectResponse(f"/staffing?day={d.isoformat()}", status_code=303)
@@ -642,6 +664,8 @@ async def staffing_save(
         # publish / save / unpublish so the user's overrides aren't dropped.
         custom_hours=existing.custom_hours,
     ))
+    # Bust the today response cache so the next GET sees fresh data.
+    _http_cache.invalidate_today_cache()
 
     # Auto-save (fetch with ?auto=1) → JSON, no redirect.
     if auto or (request.headers.get("accept") or "").startswith("application/json"):
@@ -690,6 +714,7 @@ async def staffing_hours_save(request: Request):
     if form.get("reset") == "1":
         sched.custom_hours = None
         staffing.save_schedule(sched)
+        _http_cache.invalidate_today_cache()
         return JSONResponse({"ok": True, "reset": True})
 
     start_s = (form.get("start") or "").strip()
@@ -711,6 +736,7 @@ async def staffing_hours_save(request: Request):
 
     sched.custom_hours = {"start": start_s, "end": end_s, "breaks": breaks_out}
     staffing.save_schedule(sched)
+    _http_cache.invalidate_today_cache()
     return JSONResponse({"ok": True})
 
 

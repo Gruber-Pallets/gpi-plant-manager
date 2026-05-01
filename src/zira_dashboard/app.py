@@ -39,6 +39,26 @@ _log = logging.getLogger(__name__)
 _WARMER_INTERVAL_SECONDS = 30
 
 
+async def _warm_stratustime_loop():
+    """Re-warm today's StratusTime caches every ~3 minutes so we never
+    pay the cold-cache penalty mid-shift. The underlying caches expire
+    at 5 min (employee directory, time-off requests) or 60 s (attendance,
+    GetUserSchedule); ticking at 3 min keeps everything fresh.
+
+    Errors are logged and swallowed."""
+    from datetime import datetime as _dt, timezone as _tz
+    from . import stratustime_client
+    while True:
+        try:
+            today = _dt.now(_tz.utc).date()
+            await asyncio.to_thread(stratustime_client._employee_id_to_name_map)
+            await asyncio.to_thread(stratustime_client.name_to_emp_id_map)
+            await asyncio.to_thread(stratustime_client.time_off_entries_for_day, today)
+        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
+            _log.warning("StratusTime warmer tick failed: %s", e)
+        await asyncio.sleep(180)  # 3 min — well under the 5 min cache TTL
+
+
 async def _warm_zira_cache_loop():
     """Periodically warm today's Zira leaderboard cache so user
     requests on /recycling never pay the cold-cache penalty.
@@ -120,14 +140,16 @@ async def lifespan(app: FastAPI):
     db.bootstrap_schema()
     _prewarm_stratustime()
     warmer_task = asyncio.create_task(_warm_zira_cache_loop())
+    st_warmer_task = asyncio.create_task(_warm_stratustime_loop())
     try:
         yield
     finally:
-        warmer_task.cancel()
-        try:
-            await warmer_task
-        except asyncio.CancelledError:
-            pass
+        for t in (warmer_task, st_warmer_task):
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
         db.shutdown_pool()
 
 

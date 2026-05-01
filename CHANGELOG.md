@@ -4,6 +4,11 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-01
 
+### 7:00 PM
+
+- **/staffing now caches its full HTTP response** — every previous render rebuilt the page from scratch (DB + StratusTime + Zira chain), even when nothing had changed. Now the rendered HTML is stashed in-process for 15 s today (5 min for past days). Most pageviews — including the reload after a partial-clear click, the redirect after a save, and tab-switching back to the page — serve from cache in <1 ms instead of 1-3 s. Mutations (POST /staffing save, hours edit, attribute, clear-partial, declare-absent, snooze) all invalidate the cache so saves still appear immediately.
+- **Periodic StratusTime warmer** — a background task now re-warms the StratusTime caches every 3 minutes (employee directory, name maps, today's full time-off chain). Previously the prewarm fired only once at boot and caches expired after 5 min, meaning the first page request after that was a cold-cache hit. Now every user request lands on warm caches.
+
 ### 6:45 PM
 
 - **Whole-site speed pass** — five concentrated changes that should compound into a 3-5× speedup on cold pages and basically eliminate the chain on hot ones:
