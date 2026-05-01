@@ -494,6 +494,17 @@
       padding-bottom: 0.5rem;
     }
   }
+
+  /* Intermediate breakpoint: tighten settings padding + sidebar on 13" laptops
+     (1280-1400px) before the existing 900/700 stack thresholds kick in. */
+  @media (max-width: 1400px) {
+    header { padding: 0.7rem 0.9rem; }
+    main { padding: 0.55rem 0.85rem 0.9rem; }
+    .settings-shell { grid-template-columns: 180px 1fr; gap: 1rem; }
+    .settings-nav-item { padding: 0.45rem 0.7rem; font-size: 0.88rem; }
+    .panel { padding: 0.55rem 0.7rem; }
+    th, td { padding: 0.35rem 0.45rem; font-size: 0.85rem; }
+  }
 </style>
 </head>
 <body>

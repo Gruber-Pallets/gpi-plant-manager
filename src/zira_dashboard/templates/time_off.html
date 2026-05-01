@@ -25,7 +25,15 @@
   table.month td.weekend { background: var(--panel-2); }
   .day-num { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .off-pills { margin-top: 0.3rem; display: flex; flex-wrap: wrap; gap: 0.2rem; }
-  .off-pill { border-radius: 999px; padding: 0.05rem 0.5rem; font-size: 0.72rem; font-weight: 500; }
+  .off-pill { border-radius: 999px; padding: 0.05rem 0.5rem; font-size: clamp(0.68rem, 0.55vw + 0.5rem, 0.78rem); font-weight: 500; }
+
+  /* Intermediate breakpoint: shrink month-cell heights on 13" laptops so
+     the calendar fits the viewport without scrolling. */
+  @media (max-width: 1400px) {
+    table.month td { padding: 0.4rem; min-height: 9rem; height: 9rem; }
+    .day-num { font-size: 0.7rem; }
+    .cal-header .title { font-size: clamp(1rem, 0.8vw + 0.7rem, 1.15rem); }
+  }
   .off-pill.full { background: #dbeafe; color: #1d4ed8; }
   .off-pill.partial { background: var(--warn-dim); color: var(--warn); border: 1px solid var(--warn); }
   .off-none { color: var(--muted); font-size: 0.7rem; font-style: italic; }

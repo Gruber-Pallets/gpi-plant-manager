@@ -251,3 +251,18 @@
   .popover button.ghost { background: var(--panel-2); color: var(--fg); }
   .popover button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
   .popover button:hover { filter: brightness(1.08); }
+
+  /* Intermediate breakpoint: tighten the wide People Matrix table and
+     toolbar on 13" laptops (1280-1400px). Table itself already scrolls
+     horizontally inside its scroll container. */
+  @media (max-width: 1400px) {
+    .toolbar { gap: 0.55rem; margin-bottom: 0.55rem; }
+    .legend { gap: 0.45rem; font-size: 0.74rem; margin-bottom: 0.55rem; }
+    .skills-table { font-size: 0.8rem; }
+    .skills-table th, .skills-table td { padding: 0.18rem 0.3rem; }
+    .skills-table thead th { padding: 0.35rem 0.3rem; font-size: 0.66rem; }
+    .skill-display { font-size: 0.78rem; padding: 0.12rem 0.3rem; }
+    .skill-sel { font-size: 0.78rem; width: 2.2rem; }
+    .sync-bar { padding: 0.35rem 0.5rem; font-size: 0.78rem; }
+    input[type=search] { width: 12rem; font-size: 0.82rem; }
+  }

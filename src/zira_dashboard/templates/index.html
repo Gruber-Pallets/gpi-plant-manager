@@ -151,6 +151,16 @@
   .bar { height: 6px; background: var(--running-bg); border-radius: 3px; overflow: hidden; }
   .bar > div { height: 100%; background: var(--running); border-radius: 3px; }
   .footer { color: var(--muted); font-size: 0.75rem; margin-top: 1.5rem; text-align: center; padding-bottom: 1rem; }
+  /* Intermediate breakpoint: tighten padding + KPI font on 13" laptops
+     (1280-1400px) before existing 560px mobile rules kick in. */
+  @media (max-width: 1400px) {
+    header { padding: 0.75rem 0.9rem; }
+    main { padding: 0.75rem 0.9rem; }
+    .sub-nav { padding-left: 0.9rem; padding-right: 0.9rem; }
+    .card { padding: 0.7rem 0.85rem; }
+    .card .units { font-size: clamp(1.3rem, 1.4vw + 0.6rem, 1.75rem); }
+  }
+
   @media (max-width: 560px) {
     .bar-wrap { display: none; }
     header { flex-direction: column; align-items: flex-start; }

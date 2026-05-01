@@ -90,6 +90,23 @@
   }
   .lb-expand-btn:hover { color: var(--accent); border-color: var(--accent); }
 
+  /* Intermediate breakpoint: pack widgets tighter on 13" laptops
+     (1280-1400px) so both panes stay side-by-side without cramping. */
+  @media (max-width: 1400px) {
+    .lb-page-panes { gap: 1rem; }
+    .lb-pane-avg { padding-left: 1rem; }
+    .lb-pane-active {
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 0.55rem;
+    }
+    .lb-pane-header { font-size: 0.9rem; }
+    .lb-section { padding: 0.5rem 0.65rem; }
+    .lb-section-header h3 { font-size: 0.88rem; }
+    .lb-table { font-size: 0.8rem; }
+    .lb-table th, .lb-table td { padding: 0.2rem 0.4rem; }
+    .lb-table th { font-size: 0.66rem; }
+  }
+
   @media (max-width: 1100px) {
     .lb-page-panes {
       grid-template-columns: 1fr;
