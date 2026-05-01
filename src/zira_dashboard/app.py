@@ -77,6 +77,27 @@ def _zira_client():
     return client
 
 
+def _prewarm_stratustime() -> None:
+    """Fire StratusTime token + employee directory once on app boot.
+
+    The first /staffing request after a Railway redeploy otherwise pays
+    for the cold-cache walk (token CreateToken + GetUserBasic SELECT-ALL).
+    Doing it on a daemon thread at startup means the first user gets a
+    warm cache. Wrapped in try/except — a StratusTime outage at boot
+    must never crash the app.
+    """
+    import threading
+
+    def _warm() -> None:
+        try:
+            from . import stratustime_client
+            stratustime_client._employee_id_to_name_map()
+        except Exception as e:  # noqa: BLE001 — pre-warm must never bubble
+            _log.warning("StratusTime pre-warm failed: %s", e)
+
+    threading.Thread(target=_warm, daemon=True, name="stratustime-prewarm").start()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialise the Postgres pool, start the Zira cache warmer,
@@ -88,6 +109,7 @@ async def lifespan(app: FastAPI):
     """
     db.init_pool()
     db.bootstrap_schema()
+    _prewarm_stratustime()
     warmer_task = asyncio.create_task(_warm_zira_cache_loop())
     try:
         yield

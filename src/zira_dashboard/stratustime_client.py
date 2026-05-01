@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -43,6 +44,10 @@ def _is_configured(cfg: dict) -> bool:
 
 # Module-level token cache: (token, expires_at_epoch_seconds).
 _token_cache: tuple[str, float] | None = None
+# Guards _create_token so concurrent callers (e.g., the parallel
+# ThreadPoolExecutor on /staffing) don't all stampede CreateToken on a
+# cold cache. See get_token() for the double-checked-locking pattern.
+_token_lock = threading.Lock()
 
 
 def _post(path: str, body: dict, timeout: int = TIMEOUT_SECONDS) -> tuple[int, str]:
@@ -100,17 +105,28 @@ def _create_token() -> tuple[str | None, str]:
 
 
 def get_token(force_refresh: bool = False) -> tuple[str | None, str]:
-    """Cached token getter. Returns (token, error_message)."""
+    """Cached token getter. Returns (token, error_message).
+
+    Uses double-checked-locking around `_create_token` so concurrent
+    callers don't all fire CreateToken when the cache is cold/expired.
+    """
     global _token_cache
     now = time.time()
     if not force_refresh and _token_cache is not None:
         token, expires_at = _token_cache
         if expires_at > now:
             return token, ""
-    token, err = _create_token()
-    if token:
-        _token_cache = (token, now + TOKEN_TTL_SECONDS)
-    return token, err
+    with _token_lock:
+        # Double-check inside the lock — another thread may have
+        # populated the cache while we were waiting.
+        if not force_refresh and _token_cache is not None:
+            token, expires_at = _token_cache
+            if expires_at > time.time():
+                return token, ""
+        token, err = _create_token()
+        if token:
+            _token_cache = (token, time.time() + TOKEN_TTL_SECONDS)
+        return token, err
 
 
 def _now_wcf_date() -> str:

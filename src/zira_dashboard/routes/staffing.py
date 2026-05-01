@@ -2,15 +2,84 @@
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import schedule_store, shift_config, staffing, stratustime_client, work_centers_store
+from .. import _http_cache, schedule_store, shift_config, staffing, stratustime_client, work_centers_store
 from ..deps import templates
 
 router = APIRouter()
+
+
+class _Phase:
+    """Tiny context manager that records milliseconds elapsed under a name.
+
+    Used to build a Server-Timing header so the GET /staffing response
+    exposes phase durations (db, stratustime, render, total) directly in
+    browser devtools' Network → Timing tab.
+    """
+
+    __slots__ = ("store", "name", "_t0")
+
+    def __init__(self, store: dict, name: str) -> None:
+        self.store = store
+        self.name = name
+
+    def __enter__(self) -> "_Phase":
+        self._t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self.store[self.name] = (time.perf_counter() - self._t0) * 1000.0
+
+
+def _server_timing_header(phases: dict) -> str:
+    """Format a Server-Timing value: 'db;dur=42.1, stratustime;dur=320.4, ...'."""
+    return ", ".join(f"{name};dur={dur:.1f}" for name, dur in phases.items())
+
+
+def _safe_time_off_entries(d):
+    """Wrap stratustime_client.time_off_entries_for_day so a StratusTime
+    outage never breaks /staffing rendering."""
+    try:
+        return stratustime_client.time_off_entries_for_day(d)
+    except Exception:
+        return []
+
+
+def _safe_attendance(d, sched, today):
+    """Wrap StratusTime attendance lookup. Returns {} on any error or
+    when attendance isn't applicable (not today, or before shift start).
+    """
+    if d != today:
+        return {}
+    try:
+        now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+        shift_start_local = datetime.combine(
+            d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ
+        )
+        if now_local < shift_start_local:
+            return {}
+        name_to_id = stratustime_client.name_to_emp_id_map()
+        scheduled_names: set[str] = set()
+        for ops in sched.assignments.values():
+            for n in (ops or []):
+                if n:
+                    scheduled_names.add(n)
+        scheduled_ids = [name_to_id[n] for n in scheduled_names if n in name_to_id]
+        id_to_name = {v: k for k, v in name_to_id.items()}
+        attendance_by_id = stratustime_client.attendance_for_day(d, scheduled_ids)
+        out: dict[str, dict] = {}
+        for emp_id, info in attendance_by_id.items():
+            name = id_to_name.get(emp_id)
+            if name:
+                out[name] = info
+        return out
+    except Exception:
+        return {}
 
 
 def _next_working_day(d: date) -> date:
@@ -33,54 +102,64 @@ def staffing_page(
 ):
     from concurrent.futures import ThreadPoolExecutor
     from .. import cert_lookup
+    phases: dict[str, float] = {}
+    _total_t0 = time.perf_counter()
     today = datetime.now(timezone.utc).date()
     # Default to the next working day (Dale plans the day before; skip weekends).
     try:
         d = date.fromisoformat(day) if day else _next_working_day(today)
     except ValueError:
         d = _next_working_day(today)
-    # Three independent reads — run concurrently so Postgres I/O overlaps.
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        f_certs  = pool.submit(cert_lookup.load_person_certs)
-        f_roster = pool.submit(staffing.load_roster)
-        f_sched  = pool.submit(staffing.load_schedule, d)
-        person_certs = f_certs.result()
-        roster = f_roster.result()
-        sched = f_sched.result()
-    # If this day has both a current draft and a posted snapshot, the user may want
-    # to view the posted version. Swap the visible fields in from the snapshot.
-    has_snapshot = bool(sched.published_snapshot) and not sched.published
-    view_mode = view if view in ("draft", "posted") else "draft"
-    viewing_posted = has_snapshot and view_mode == "posted"
-    if viewing_posted:
-        snap = sched.published_snapshot or {}
-        sched.assignments = {k: list(v) for k, v in (snap.get("assignments") or {}).items()}
-        sched.notes = str(snap.get("notes") or "")
-        sched.wc_notes = dict(snap.get("wc_notes") or {})
-        sched.testing_day = bool(snap.get("testing_day", False))
-    # If the day has no saved assignments, pre-fill from per-work-center defaults.
-    if not sched.assignments:
-        seeded: dict[str, list[str]] = {}
-        for loc in staffing.LOCATIONS:
-            dp = work_centers_store.default_people(loc)
-            if dp:
-                seeded[loc.name] = list(dp)
-        if not seeded:  # fallback for first-run: legacy CSV defaults
-            seeded = staffing.default_assignments()
-        sched.assignments = seeded
+    # One pool fans out everything that doesn't depend on the schedule:
+    # 3 DB reads (certs, roster, schedule) + StratusTime time-off. The
+    # attendance fetch is fired AFTER the schedule resolves (it needs
+    # `sched.assignments`) but still runs concurrently with the rest of
+    # the page-prep work.
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        with _Phase(phases, "db"):
+            f_certs = pool.submit(cert_lookup.load_person_certs)
+            f_roster = pool.submit(staffing.load_roster)
+            f_sched = pool.submit(staffing.load_schedule, d)
+            f_time_off_entries = pool.submit(_safe_time_off_entries, d)
+            person_certs = f_certs.result()
+            roster = f_roster.result()
+            sched = f_sched.result()
+        # If this day has both a current draft and a posted snapshot, the user may want
+        # to view the posted version. Swap the visible fields in from the snapshot.
+        has_snapshot = bool(sched.published_snapshot) and not sched.published
+        view_mode = view if view in ("draft", "posted") else "draft"
+        viewing_posted = has_snapshot and view_mode == "posted"
+        if viewing_posted:
+            snap = sched.published_snapshot or {}
+            sched.assignments = {k: list(v) for k, v in (snap.get("assignments") or {}).items()}
+            sched.notes = str(snap.get("notes") or "")
+            sched.wc_notes = dict(snap.get("wc_notes") or {})
+            sched.testing_day = bool(snap.get("testing_day", False))
+        # If the day has no saved assignments, pre-fill from per-work-center defaults.
+        if not sched.assignments:
+            seeded: dict[str, list[str]] = {}
+            for loc in staffing.LOCATIONS:
+                dp = work_centers_store.default_people(loc)
+                if dp:
+                    seeded[loc.name] = list(dp)
+            if not seeded:  # fallback for first-run: legacy CSV defaults
+                seeded = staffing.default_assignments()
+            sched.assignments = seeded
+
+        # Now that the schedule is in hand, kick off attendance in parallel
+        # with our render-prep work below.
+        f_attendance = pool.submit(_safe_attendance, d, sched, today)
+
+        # Collect StratusTime time-off (already fetched in parallel above).
+        with _Phase(phases, "stratustime"):
+            time_off_entries = f_time_off_entries.result()
+            attendance_by_name = f_attendance.result()
+
+    time_off_names = [e["name"] for e in time_off_entries]
+    time_off_set = set(time_off_names)
 
     active_people = [p for p in roster if p.active]
     all_by_name = {p.name: p for p in roster}
-
-    # Time Off list — sourced from StratusTime (sub-project #2). Pulled up here
-    # so we can filter time-off names out of every WC's pool and the Reserves list.
-    # If StratusTime is unreachable, fall back to an empty list (page still renders).
-    try:
-        time_off_entries = stratustime_client.time_off_entries_for_day(d)
-    except Exception:
-        time_off_entries = []
-    time_off_names = [e["name"] for e in time_off_entries]
-    time_off_set = set(time_off_names)
 
     # Per-person hours-off-today (for partial entries) so the scheduler
     # can show a badge next to their name.
@@ -94,32 +173,6 @@ def staffing_page(
         for e in time_off_entries
         if e.get("time_range") and e.get("hours") is not None and e["hours"] < 8
     }
-
-    # Attendance: only meaningful when viewing today and current time is past shift-start.
-    # Page still renders if StratusTime is unreachable (try/except covers all errors).
-    attendance_by_name: dict[str, dict] = {}
-    if d == today:
-        now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
-        shift_start_local = datetime.combine(
-            d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ
-        )
-        if now_local >= shift_start_local:
-            try:
-                name_to_id = stratustime_client.name_to_emp_id_map()
-                scheduled_names: set[str] = set()
-                for ops in sched.assignments.values():
-                    for n in (ops or []):
-                        if n:
-                            scheduled_names.add(n)
-                scheduled_ids = [name_to_id[n] for n in scheduled_names if n in name_to_id]
-                id_to_name = {v: k for k, v in name_to_id.items()}
-                attendance_by_id = stratustime_client.attendance_for_day(d, scheduled_ids)
-                for emp_id, info in attendance_by_id.items():
-                    name = id_to_name.get(emp_id)
-                    if name:
-                        attendance_by_name[name] = info
-            except Exception:
-                attendance_by_name = {}
 
     _options_cache: dict[tuple[str, ...], list[dict]] = {}
 
@@ -262,44 +315,54 @@ def staffing_page(
     has_custom_hours = sched.custom_hours is not None
     eff_hours_label = f"{eff_start.strftime('%H:%M')}–{eff_end.strftime('%H:%M')}"
 
-    return templates.TemplateResponse(
-        request,
-        "staffing.html",
-        {
-            "active": "plant",
-            "day": d.isoformat(),
-            "day_short": d.strftime("%m/%d/%y"),
-            "day_pretty": f"{d.strftime('%A, %B')} {d.day}, {d.year}",
-            "tomorrow": _next_working_day(today).isoformat(),
-            "today": today.isoformat(),
-            "published": sched.published,
-            "bays": bays,
-            "notes": sched.notes or "",
-            "testing_day": bool(sched.testing_day),
-            "publish_block_reasons": publish_block_reasons,
-            "time_off_names": sorted(time_off_names),
-            "time_off_entries": sorted(time_off_entries, key=lambda e: e["name"].lower()),
-            "partial_hours_by_name": partial_hours_by_name,
-            "partial_range_by_name": partial_range_by_name,
-            "attendance_by_name": attendance_by_name,
-            "unassigned": sorted(unassigned),
-            "reserves": sorted(reserves),
-            # JS uses this to route auto-removed people back to the right
-            # left-rail list (Unscheduled vs Reserves) on uncheck/X.
-            "people_meta": {p.name: {"reserve": p.reserve} for p in active_people},
-            "defaults_by_loc": defaults_by_loc,
-            "skill_labels": staffing.SKILL_LABELS,
-            "has_snapshot": has_snapshot,
-            "viewing_posted": viewing_posted,
-            "view_mode": view_mode,
-            "eff_hours_start": eff_start.strftime("%H:%M"),
-            "eff_hours_end": eff_end.strftime("%H:%M"),
-            "eff_breaks": eff_breaks,
-            "has_custom_hours": has_custom_hours,
-            "eff_hours_label": eff_hours_label,
-            "person_certs": person_certs,
-        },
-    )
+    with _Phase(phases, "render"):
+        response = templates.TemplateResponse(
+            request,
+            "staffing.html",
+            {
+                "active": "plant",
+                "day": d.isoformat(),
+                "day_short": d.strftime("%m/%d/%y"),
+                "day_pretty": f"{d.strftime('%A, %B')} {d.day}, {d.year}",
+                "tomorrow": _next_working_day(today).isoformat(),
+                "today": today.isoformat(),
+                "published": sched.published,
+                "bays": bays,
+                "notes": sched.notes or "",
+                "testing_day": bool(sched.testing_day),
+                "publish_block_reasons": publish_block_reasons,
+                "time_off_names": sorted(time_off_names),
+                "time_off_entries": sorted(time_off_entries, key=lambda e: e["name"].lower()),
+                "partial_hours_by_name": partial_hours_by_name,
+                "partial_range_by_name": partial_range_by_name,
+                "attendance_by_name": attendance_by_name,
+                "unassigned": sorted(unassigned),
+                "reserves": sorted(reserves),
+                # JS uses this to route auto-removed people back to the right
+                # left-rail list (Unscheduled vs Reserves) on uncheck/X.
+                "people_meta": {p.name: {"reserve": p.reserve} for p in active_people},
+                "defaults_by_loc": defaults_by_loc,
+                "skill_labels": staffing.SKILL_LABELS,
+                "has_snapshot": has_snapshot,
+                "viewing_posted": viewing_posted,
+                "view_mode": view_mode,
+                "eff_hours_start": eff_start.strftime("%H:%M"),
+                "eff_hours_end": eff_end.strftime("%H:%M"),
+                "eff_breaks": eff_breaks,
+                "has_custom_hours": has_custom_hours,
+                "eff_hours_label": eff_hours_label,
+                "person_certs": person_certs,
+            },
+        )
+
+    # Past-day staffing pages are immutable, so the browser can cache them
+    # for a long time. Today / future days get the short cache (so edits
+    # appear immediately on reload).
+    _http_cache.set_cache_headers(response, includes_today=(d >= today))
+
+    phases["total"] = (time.perf_counter() - _total_t0) * 1000.0
+    response.headers["Server-Timing"] = _server_timing_header(phases)
+    return response
 
 
 @router.post("/staffing")

@@ -331,6 +331,7 @@ def load_schedule(day: date) -> Schedule:
 
 
 def _load_schedule_from_db(day: date) -> "Schedule":
+    from concurrent.futures import ThreadPoolExecutor
     from . import db
     rows = db.query(
         "SELECT day, published, testing_day, notes, custom_hours, published_snapshot "
@@ -340,24 +341,31 @@ def _load_schedule_from_db(day: date) -> "Schedule":
     if not rows:
         return Schedule(day=day, published=False, assignments={})
     r = rows[0]
-    asg_rows = db.query(
-        "SELECT wc.name AS wc_name, pe.name AS person_name "
-        "FROM schedule_assignments sa "
-        "JOIN work_centers wc ON wc.id = sa.wc_id "
-        "JOIN people pe ON pe.id = sa.person_id "
-        "WHERE sa.day = %s ORDER BY sa.wc_id, sa.sort_order",
-        (day,),
-    )
+    # Assignments + per-WC notes are independent reads; fan out so they
+    # overlap on the connection pool instead of running back-to-back.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_assignments = pool.submit(
+            db.query,
+            "SELECT wc.name AS wc_name, pe.name AS person_name "
+            "FROM schedule_assignments sa "
+            "JOIN work_centers wc ON wc.id = sa.wc_id "
+            "JOIN people pe ON pe.id = sa.person_id "
+            "WHERE sa.day = %s ORDER BY sa.wc_id, sa.sort_order",
+            (day,),
+        )
+        f_notes = pool.submit(
+            db.query,
+            "SELECT wc.name AS wc_name, sn.note "
+            "FROM schedule_wc_notes sn JOIN work_centers wc ON wc.id = sn.wc_id "
+            "WHERE sn.day = %s",
+            (day,),
+        )
+        asg_rows = f_assignments.result()
+        notes_rows = f_notes.result()
     assignments: dict[str, list[str]] = {}
     for a in asg_rows:
         assignments.setdefault(a["wc_name"], []).append(a["person_name"])
     # Time-off is now sourced from StratusTime (sub-project #2), not the local DB.
-    notes_rows = db.query(
-        "SELECT wc.name AS wc_name, sn.note "
-        "FROM schedule_wc_notes sn JOIN work_centers wc ON wc.id = sn.wc_id "
-        "WHERE sn.day = %s",
-        (day,),
-    )
     wc_notes = {n["wc_name"]: n["note"] for n in notes_rows}
     return Schedule(
         day=day,
