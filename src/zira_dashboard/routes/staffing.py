@@ -184,6 +184,25 @@ def staffing_page(
             })
     except Exception:
         assignments_todo = []
+
+    # Saved-today list: existing attributions for the modal's "Saved today"
+    # sub-list with delete buttons. Same try/except guard as the todo list.
+    assignments_done: list[dict] = []
+    try:
+        from .. import wc_attributions
+        site_tz = shift_config.SITE_TZ
+        for r in wc_attributions.for_day(d):
+            s_local = r["start_utc"].astimezone(site_tz)
+            e_local = r["end_utc"].astimezone(site_tz)
+            assignments_done.append({
+                "id": r["id"],
+                "wc_name": r["wc_name"],
+                "person_name": r["person_name"],
+                "first_label": s_local.strftime("%I:%M %p").lstrip("0"),
+                "last_label": e_local.strftime("%I:%M %p").lstrip("0"),
+            })
+    except Exception:
+        assignments_done = []
     all_active_people = sorted(p.name for p in active_people)
 
     # Per-person hours-off-today (for partial entries) so the scheduler
@@ -378,6 +397,7 @@ def staffing_page(
                 "eff_hours_label": eff_hours_label,
                 "person_certs": person_certs,
                 "assignments_todo": assignments_todo,
+                "assignments_done": assignments_done,
                 "all_active_people": all_active_people,
             },
         )
@@ -597,6 +617,17 @@ async def staffing_attribute(request: Request):
         return JSONResponse({"ok": False, "error": "missing/invalid fields"}, status_code=400)
     new_id = wc_attributions.add(day, wc, person, start_utc, end_utc)
     return JSONResponse({"ok": True, "id": new_id})
+
+
+@router.delete("/api/staffing/attribute/{attribution_id}")
+def staffing_attribute_delete(attribution_id: int):
+    """Remove one retro WC attribution row by id."""
+    from .. import wc_attributions
+    try:
+        wc_attributions.delete(attribution_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True})
 
 
 @router.get("/api/stratustime/refresh")

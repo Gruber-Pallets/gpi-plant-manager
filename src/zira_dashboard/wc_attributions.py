@@ -69,7 +69,7 @@ def unattributed_for_day(day: date, client) -> list[dict]:
     """
     from . import staffing
     from .leaderboard import cached_leaderboard as leaderboard
-    from .stations import recycling_stations
+    from .stations import STATIONS
 
     sched = staffing.load_schedule(day)
     scheduled_wcs = {
@@ -78,7 +78,10 @@ def unattributed_for_day(day: date, client) -> list[dict]:
     }
     attributed_wcs = set(people_by_wc(day).keys())
 
-    stations = recycling_stations()
+    # All metered work centers, regardless of cell. Production at any metered
+    # WC without a schedule entry deserves to surface as a todo (Junior 2,
+    # Trim Saw, etc., not just Recycling-cell stations).
+    stations = [s for s in STATIONS if s.meter_id]
     # Don't pass now_utc for past days; for today use now.
     today = datetime.now(timezone.utc).date()
     now_arg = datetime.now(timezone.utc) if day == today else None

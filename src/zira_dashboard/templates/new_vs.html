@@ -112,7 +112,12 @@
               <span class="name-secondary">{{ b.name }}</span>
             {% else %}
               <span class="name-primary">{{ b.name }}</span>
-              <span class="name-secondary"><em>(no assignment)</em></span>
+              {% if assignments_todo_by_wc and b.name in assignments_todo_by_wc %}
+                {% set _todo = assignments_todo_by_wc[b.name] %}
+                <button type="button" class="no-assign-btn" data-wc="{{ b.name }}" data-day="{{ today }}" data-start="{{ _todo.first_iso }}" data-end="{{ _todo.last_iso }}" title="Assign person to this WC's work">↪ assign</button>
+              {% else %}
+                <span class="name-secondary"><em>(no assignment)</em></span>
+              {% endif %}
             {% endif %}
           </div>
           <div class="bar-track">
@@ -186,6 +191,79 @@
     {% if elapsed_minutes > 0 %} · shift elapsed: {{ elapsed_minutes }}m{% endif %}
   </div>
 </main>
+
+<script>
+  // Inline-assign popover for "(no assignment)" bars.
+  (function () {
+    var people = {{ all_active_people | tojson }};
+    if (!people || !people.length) return;
+    var popover = null;
+    function buildPopover() {
+      var p = document.createElement('div');
+      p.className = 'assign-popover';
+      p.innerHTML = '<select class="assign-pick"><option value="">— pick person —</option>'
+        + people.map(function (n) { return '<option value="' + n.replace(/"/g, '&quot;') + '">' + n + '</option>'; }).join('')
+        + '</select> <button type="button" class="assign-save">Save</button>'
+        + '<span class="assign-status" hidden></span>';
+      document.body.appendChild(p);
+      return p;
+    }
+    function close() {
+      if (popover) { popover.remove(); popover = null; }
+      document.removeEventListener('mousedown', onOutside, true);
+    }
+    function onOutside(e) {
+      if (popover && !popover.contains(e.target) && !e.target.classList.contains('no-assign-btn')) close();
+    }
+    document.addEventListener('mousedown', function (e) {
+      if (!e.target.classList.contains('no-assign-btn')) return;
+      e.preventDefault(); e.stopPropagation();
+      var btn = e.target;
+      if (popover) close();
+      popover = buildPopover();
+      var rect = btn.getBoundingClientRect();
+      popover.style.position = 'absolute';
+      popover.style.left = (rect.left + window.scrollX) + 'px';
+      popover.style.top = (rect.bottom + 4 + window.scrollY) + 'px';
+      var sel = popover.querySelector('.assign-pick');
+      var save = popover.querySelector('.assign-save');
+      var status = popover.querySelector('.assign-status');
+      save.addEventListener('click', function () {
+        var person = sel.value;
+        if (!person) { status.hidden = false; status.textContent = 'Pick a person.'; return; }
+        save.disabled = true; sel.disabled = true; status.hidden = true;
+        fetch('/api/staffing/attribute', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            day: btn.dataset.day,
+            wc_name: btn.dataset.wc,
+            person_name: person,
+            start_utc: btn.dataset.start,
+            end_utc: btn.dataset.end,
+          }),
+        }).then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.ok) {
+              status.hidden = false; status.textContent = 'Saved ✓ ' + person;
+              setTimeout(function () { location.reload(); }, 600);
+            } else {
+              save.disabled = false; sel.disabled = false;
+              status.hidden = false; status.textContent = 'Failed: ' + (data.error || 'unknown');
+            }
+          }).catch(function () {
+            save.disabled = false; sel.disabled = false;
+            status.hidden = false; status.textContent = 'Network error.';
+          });
+      });
+      // close on Escape
+      document.addEventListener('keydown', function once(e2) {
+        if (e2.key === 'Escape') { close(); document.removeEventListener('keydown', once); }
+      });
+      setTimeout(function () { document.addEventListener('mousedown', onOutside, true); }, 0);
+    }, true);
+  })();
+</script>
 
 {% if is_today %}
 <script>setTimeout(() => location.reload(), 60000);</script>

@@ -406,6 +406,20 @@
       {% else %}
         <p class="ats-help">Nothing to attribute right now — every WC with production today has someone assigned.</p>
       {% endif %}
+      {% if assignments_done %}
+        <h4 class="ats-section-title">Saved today</h4>
+        <ul class="ats-saved-list">
+          {% for r in assignments_done %}
+            <li class="ats-saved-item" data-attribution-id="{{ r.id }}">
+              <span class="ats-saved-text">
+                <strong>{{ r.wc_name }}</strong> — {{ r.person_name }}
+                <span class="ats-saved-meta">{{ r.first_label }}–{{ r.last_label }}</span>
+              </span>
+              <button type="button" class="ats-delete" title="Remove this attribution" aria-label="Remove">×</button>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
     </div>
   </div>
 </div>
@@ -1546,6 +1560,32 @@
             btnEl.disabled = false; sel.disabled = false;
             status.hidden = false;
             status.textContent = 'Network error.';
+          });
+      });
+    });
+    // Delete handlers for the "Saved today" sub-list.
+    document.querySelectorAll('.ats-delete').forEach(function (btnEl) {
+      btnEl.addEventListener('click', function () {
+        var li = btnEl.closest('.ats-saved-item');
+        if (!li) return;
+        var id = li.dataset.attributionId;
+        if (!id) return;
+        if (!confirm('Remove this attribution?')) return;
+        btnEl.disabled = true;
+        fetch('/api/staffing/attribute/' + encodeURIComponent(id), {method: 'DELETE'})
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.ok) {
+              li.style.opacity = '0.4';
+              li.style.textDecoration = 'line-through';
+              setTimeout(function () { location.reload(); }, 400);
+            } else {
+              btnEl.disabled = false;
+              alert('Delete failed: ' + (data.error || 'unknown'));
+            }
+          }).catch(function () {
+            btnEl.disabled = false;
+            alert('Network error.');
           });
       });
     });

@@ -644,11 +644,39 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
             "down_pct": r.downtime_minutes / total * 100.0,
         })
 
+    # Inline-assign popover: today only. Mirrors the recycling route so the
+    # "(no assignment)" bars on /new-vs become click-to-attribute buttons.
+    assignments_todo_by_wc: dict[str, dict] = {}
+    all_active_people: list[str] = []
+    if is_today:
+        try:
+            from .. import staffing as _staffing, wc_attributions
+            todo = wc_attributions.unattributed_for_day(today, client)
+            site_tz = shift_config.SITE_TZ
+            for item in todo:
+                first = item["first_sample_utc"].astimezone(site_tz)
+                last = item["last_sample_utc"].astimezone(site_tz)
+                assignments_todo_by_wc[item["wc_name"]] = {
+                    "wc_name": item["wc_name"],
+                    "units": item["units"],
+                    "first_label": first.strftime("%I:%M %p").lstrip("0"),
+                    "last_label": last.strftime("%I:%M %p").lstrip("0"),
+                    "first_iso": item["first_sample_utc"].isoformat(),
+                    "last_iso": item["last_sample_utc"].isoformat(),
+                }
+            roster = _staffing.load_roster()
+            all_active_people = sorted((p.name for p in roster if p.active), key=str.lower)
+        except Exception:
+            assignments_todo_by_wc = {}
+            all_active_people = []
+
     response = templates.TemplateResponse(
         request,
         "new_vs.html",
         {
             "active_vs": "new",
+            "assignments_todo_by_wc": assignments_todo_by_wc,
+            "all_active_people": all_active_people,
             "day": d.isoformat(),
             "today": today.isoformat(),
             "is_today": is_today,
