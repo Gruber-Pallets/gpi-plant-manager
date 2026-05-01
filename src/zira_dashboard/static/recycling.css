@@ -11,6 +11,9 @@
     --bad-bg: #7f1d1d;
     --accent: #16a34a;
     --accent-dim: #dcfce7;
+    --warn: #a16207;
+    --warn-dim: #fef3c7;
+    --bad-dim: #fee2e2;
   }
   * { box-sizing: border-box; }
   body {
