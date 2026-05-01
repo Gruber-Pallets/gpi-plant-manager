@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-01
 
+### 8:00 PM
+
+- **Partial pill is now a real `<button>` with a visible ✕** — the previous span-with-`role="button"` rendered fine but document-delegated clicks on elements inside `<summary>` are unreliable in some browsers (the details toggle wins). Three changes: (1) the partial pill is now a real `<button type="button">`, which gets a built-in browser exemption from triggering the details toggle when clicked inside `<summary>`; (2) the time text now ends with a small `✕` so it visibly reads as a clear-action; (3) handlers are bound directly to each button on page load, not via document delegation, so the click can't be eaten by anything in between. Console logs `[partial] clear for <name> on <date>` so you can verify in DevTools that the click fires.
+
 ### 7:50 PM
 
 - **Clear-partial finally works for everyone** — root cause: the click target was conditionally rendered based on whether the underlying StratusTime entry had a `request_id` OR an `emp_id`. Jose Luis's partial came from a path where both happened to be empty, so the pill rendered without the `clearable` class and clicks did nothing. New approach: clear by **name** (the natural key from the user's perspective). Every partial pill is now always clickable, and the backend writes (day, name) to a new `cleared_partials_by_name` table that gets honored on render. Same simplification on the Time Off section rows. The endpoint still accepts the old request_id/emp_id payload shapes for back-compat until the page reloads with new JS.

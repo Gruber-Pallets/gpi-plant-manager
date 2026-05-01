@@ -307,7 +307,7 @@
                 <summary>
                   <span class="dd-summary-text">
                     {% if visible_assigned %}
-                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ a.name }}{{ cert_badges(a.name, person_certs) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<span class="partial-hours-badge clearable" role="button" tabindex="0" data-day="{{ day }}" data-name="{{ a.name }}" title="Click to clear this partial for {{ a.name }} — they actually worked through it">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}</span>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
+                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ a.name }}{{ cert_badges(a.name, person_certs) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<button type="button" class="partial-hours-badge clearable" data-day="{{ day }}" data-name="{{ a.name }}" title="Click to clear this partial for {{ a.name }} — they actually worked through it">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }} ✕</button>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
                     {% endif %}
                     {% if _wc_attribs_for_row %}
                       {% for attrib in _wc_attribs_for_row %}<span class="lvl-attribution" title="Worked {{ attrib.first_label }}–{{ attrib.last_label }}">{{ attrib.person_name }}{{ cert_badges(attrib.person_name, person_certs) }}{% if attrib.time_range %}<span class="attribution-range">{{ attrib.time_range }}</span>{% endif %}</span>{% if not loop.last %}<span class="sep">, </span>{% endif %}{% endfor %}
@@ -1092,12 +1092,14 @@
   // Click a clearable partial pill (the amber 9-10a badge on a scheduled
   // person OR a partial row in the Time Off section) → confirm → clear.
   // Click a "restore" button in the Cleared-today footer → un-clear.
-  // Capture-phase listener on the badge so it fires before the
-  // <details>/<summary> default toggle inside the scheduler dropdown.
   async function _doPartialAction(target, isClear) {
     const day = target.dataset.day;
     const name = target.dataset.name;
-    if (!day || !name) return;
+    console.log('[partial]', isClear ? 'clear' : 'restore', 'for', name, 'on', day);
+    if (!day || !name) {
+      console.warn('[partial] missing day/name on target', target);
+      return;
+    }
     if (isClear) {
       if (!confirm(`Clear ${name}'s partial off for today? They’ll show as fully available.`)) return;
     }
@@ -1123,31 +1125,39 @@
     }
   }
 
-  // Capture phase: intercept clicks on the partial badge BEFORE the
-  // <details>/<summary> default action toggles the dropdown.
-  document.addEventListener('click', (e) => {
-    const badge = e.target.closest('.partial-hours-badge.clearable');
-    if (badge) {
-      e.preventDefault();
-      e.stopPropagation();
-      _doPartialAction(badge, true);
-      return;
-    }
-    const row = e.target.closest('.time-off-row.clearable');
-    if (row) {
-      e.preventDefault();
-      e.stopPropagation();
-      _doPartialAction(row, true);
-      return;
-    }
-    const restoreBtn = e.target.closest('.time-off-restore');
-    if (restoreBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      _doPartialAction(restoreBtn, false);
-      return;
-    }
-  }, true);
+  // Direct per-element listeners. More reliable than document delegation
+  // for elements inside <summary> (the scheduler dropdowns), where
+  // browser default actions can interfere.
+  function _bindPartialHandlers() {
+    document.querySelectorAll('button.partial-hours-badge.clearable').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        _doPartialAction(btn, true);
+      });
+    });
+    document.querySelectorAll('.time-off-row.clearable').forEach((row) => {
+      if (row.dataset.bound) return;
+      row.dataset.bound = '1';
+      row.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        _doPartialAction(row, true);
+      });
+    });
+    document.querySelectorAll('.time-off-restore').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        _doPartialAction(btn, false);
+      });
+    });
+  }
+  _bindPartialHandlers();
 
   // Close dropdowns when clicking outside.
   document.addEventListener('click', (e) => {
