@@ -1,184 +1,203 @@
 """Client for the StratusTime time-clock web services API.
 
-Auth is configured via two env vars:
-  - STRATUSTIME_SHARED_KEY   (UUID configured in StratusTime's "Inbound Services" admin page)
-  - STRATUSTIME_WS_PASSWORD  (the wsuser password set on that same page)
+Auth flow (confirmed by live probe):
+  1. POST /CreateToken with {CustomerAlias, SharedKey, UserName, UserPass}
+     → returns a base64 token (JSON-quoted string).
+  2. POST /<Method> with {"AuthToken": <token>, ...method-specific fields...}.
 
-The exact auth wire format is not documented publicly, so `health_check()`
-tries several common patterns in order and returns which one worked.
-Once we know the right one, callers can use `request()` directly.
+Required env vars:
+  STRATUSTIME_SHARED_KEY      — UUID from Inbound Services admin page
+  STRATUSTIME_WS_PASSWORD     — wsuser password from same page
+  STRATUSTIME_CUSTOMER_ALIAS  — tenant alias (e.g., "gruberpallets")
+  STRATUSTIME_WS_USERNAME     — defaults to "wsuser"
+
+Module-level token cache keeps the same token in memory across calls within
+one process for TOKEN_TTL_SECONDS. Callers can force refresh.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 import os
-import urllib.request
+import time
 import urllib.error
-from typing import Any
+import urllib.request
 
-BASE_URL = "https://stratustime.centralservers.com/Service/ws-json"
-DEFAULT_VERSION = "v1"
+BASE_URL = "https://stratustime.centralservers.com/service/ws-json/2.0"
 TIMEOUT_SECONDS = 30
+TOKEN_TTL_SECONDS = 60 * 30  # refresh well before any reasonable expiry
 
 
-def _shared_key() -> str | None:
-    return os.environ.get("STRATUSTIME_SHARED_KEY")
-
-
-def _ws_password() -> str | None:
-    return os.environ.get("STRATUSTIME_WS_PASSWORD")
-
-
-def _build_url(path: str, version: str = DEFAULT_VERSION) -> str:
-    path = path.lstrip("/")
-    return f"{BASE_URL}/{version}/{path}"
-
-
-# Auth strategies — each is (name, request-builder).
-# A request-builder receives the URL, body, shared key, password and returns
-# (final_url, headers_dict, final_body_bytes). The body is JSON-encoded by us
-# at the call site.
-
-def _auth_basic(url: str, body: dict, key: str, pwd: str):
-    """Basic auth: base64(SharedKey:wsPassword)."""
-    token = base64.b64encode(f"{key}:{pwd}".encode()).decode()
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Basic {token}",
+def _config() -> dict:
+    return {
+        "shared_key": os.environ.get("STRATUSTIME_SHARED_KEY"),
+        "ws_password": os.environ.get("STRATUSTIME_WS_PASSWORD"),
+        "customer_alias": os.environ.get("STRATUSTIME_CUSTOMER_ALIAS"),
+        "ws_username": os.environ.get("STRATUSTIME_WS_USERNAME") or "wsuser",
     }
-    return url, headers, json.dumps(body).encode()
 
 
-def _auth_header_pair(url: str, body: dict, key: str, pwd: str):
-    """Custom headers Shared-Key + Password."""
-    headers = {
-        "Content-Type": "application/json",
-        "Shared-Key": key,
-        "Password": pwd,
-    }
-    return url, headers, json.dumps(body).encode()
+def _is_configured(cfg: dict) -> bool:
+    return bool(cfg["shared_key"] and cfg["ws_password"] and cfg["customer_alias"])
 
 
-def _auth_body_wrapper(url: str, body: dict, key: str, pwd: str):
-    """Credentials embedded in JSON body."""
-    wrapped = {"SharedKey": key, "Password": pwd, **body}
-    headers = {"Content-Type": "application/json"}
-    return url, headers, json.dumps(wrapped).encode()
+# Module-level token cache: (token, expires_at_epoch_seconds).
+_token_cache: tuple[str, float] | None = None
 
 
-AUTH_STRATEGIES = [
-    ("basic", _auth_basic),
-    ("header-pair", _auth_header_pair),
-    ("body-wrapper", _auth_body_wrapper),
-]
-
-
-def _try_request(method: str, url: str, body: dict, scheme_name: str, builder) -> tuple[int, str]:
-    """Make an HTTP call using the given auth strategy. Returns (status, body_text)."""
-    key = _shared_key() or ""
-    pwd = _ws_password() or ""
-    final_url, headers, payload = builder(url, body, key, pwd)
+def _post(path: str, body: dict, timeout: int = TIMEOUT_SECONDS) -> tuple[int, str]:
+    """Raw POST to a service endpoint. Returns (status, body_text)."""
+    url = f"{BASE_URL}/{path.lstrip('/')}"
+    payload = json.dumps(body).encode()
     req = urllib.request.Request(
-        final_url,
-        data=payload if method != "GET" else None,
-        headers=headers,
-        method=method,
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", errors="replace") if hasattr(e, "read") else str(e)
+        try:
+            body_text = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            body_text = str(e)
+        return e.code, body_text
     except urllib.error.URLError as e:
         return 0, f"network error: {e.reason}"
     except Exception as e:
         return 0, f"error: {e}"
 
 
+def ping() -> tuple[int, str]:
+    """Unauthenticated ping. Returns (status, body)."""
+    return _post("PingTest", {})
+
+
+def _create_token() -> tuple[str | None, str]:
+    """Request a fresh token. Returns (token, error_message)."""
+    cfg = _config()
+    if not _is_configured(cfg):
+        return None, "Missing env vars (need SHARED_KEY, WS_PASSWORD, CUSTOMER_ALIAS)"
+    body = {
+        "CustomerAlias": cfg["customer_alias"],
+        "CustomerAliasExternal": "",
+        "SharedKey": cfg["shared_key"],
+        "UserName": cfg["ws_username"],
+        "UserPass": cfg["ws_password"],
+    }
+    status, resp = _post("CreateToken", body)
+    if not (200 <= status < 300):
+        return None, f"HTTP {status}: {resp[:200]}"
+    try:
+        token = json.loads(resp)
+    except json.JSONDecodeError:
+        return None, f"Invalid JSON token response: {resp[:200]}"
+    if not isinstance(token, str) or not token:
+        return None, f"Unexpected token shape: {repr(resp)[:200]}"
+    return token, ""
+
+
+def get_token(force_refresh: bool = False) -> tuple[str | None, str]:
+    """Cached token getter. Returns (token, error_message)."""
+    global _token_cache
+    now = time.time()
+    if not force_refresh and _token_cache is not None:
+        token, expires_at = _token_cache
+        if expires_at > now:
+            return token, ""
+    token, err = _create_token()
+    if token:
+        _token_cache = (token, now + TOKEN_TTL_SECONDS)
+    return token, err
+
+
+def _now_wcf_date() -> str:
+    """Current time formatted as Microsoft WCF date string: /Date(epoch_ms+0000)/."""
+    ms = int(time.time() * 1000)
+    return f"/Date({ms}+0000)/"
+
+
+def authenticated_post(method: str, body: dict | None = None) -> tuple[int, dict | str]:
+    """POST a method with an injected AuthToken. Returns (status, parsed_json_or_text)."""
+    token, err = get_token()
+    if not token:
+        return 0, err or "No token"
+    full_body = dict(body or {})
+    full_body["AuthToken"] = token
+    status, resp_text = _post(method, full_body)
+    if 200 <= status < 300:
+        try:
+            return status, json.loads(resp_text)
+        except json.JSONDecodeError:
+            return status, resp_text
+    return status, resp_text
+
+
 def health_check() -> dict:
-    """Try to authenticate against a known endpoint and report results.
+    """Verify connectivity + auth.
 
     Returns:
       {
-        "ok": bool,
-        "configured": bool,           # both env vars present
-        "scheme": str | None,         # which auth pattern worked (None if all failed)
-        "endpoint": str,              # the URL we hit
-        "status": int,                # HTTP status of the working call (0 if all failed)
-        "body_preview": str,          # first 200 chars of the working response
-        "attempts": [                 # diagnostic trail
-          {"scheme": str, "status": int, "body_preview": str},
-          ...
-        ],
+        "ok": bool,                      # ping_ok AND token_ok
+        "configured": bool,              # all three required env vars present
+        "ping_ok": bool,                 # /PingTest returned 2xx
+        "ping_status": int,
+        "token_ok": bool,                # /CreateToken returned a token
+        "token_error": str,              # only set when token_ok is False
+        "endpoint": str,                 # base URL we used
       }
     """
-    if not _shared_key() or not _ws_password():
+    cfg = _config()
+    if not _is_configured(cfg):
+        missing = [
+            n for n, v in [
+                ("STRATUSTIME_SHARED_KEY", cfg["shared_key"]),
+                ("STRATUSTIME_WS_PASSWORD", cfg["ws_password"]),
+                ("STRATUSTIME_CUSTOMER_ALIAS", cfg["customer_alias"]),
+            ] if not v
+        ]
         return {
             "ok": False,
             "configured": False,
-            "scheme": None,
-            "endpoint": "",
-            "status": 0,
-            "body_preview": "",
-            "attempts": [],
+            "ping_ok": False,
+            "ping_status": 0,
+            "token_ok": False,
+            "token_error": f"Set on Railway: {', '.join(missing)}.",
+            "endpoint": BASE_URL,
         }
-
-    # Use a likely-stable smoke endpoint. We don't know the exact path yet,
-    # so try the employees list — most TWS systems expose one. If 404, the
-    # error body should hint at the correct path.
-    smoke_path = "/Employees"
-    url = _build_url(smoke_path)
-
-    attempts = []
-    for name, builder in AUTH_STRATEGIES:
-        status, body = _try_request("GET", url, {}, name, builder)
-        preview = body[:200].replace("\n", " ")
-        attempts.append({"scheme": name, "status": status, "body_preview": preview})
-        if 200 <= status < 300:
-            return {
-                "ok": True,
-                "configured": True,
-                "scheme": name,
-                "endpoint": url,
-                "status": status,
-                "body_preview": preview,
-                "attempts": attempts,
-            }
-
+    ping_status, _ = ping()
+    ping_ok = 200 <= ping_status < 300
+    token, token_err = get_token(force_refresh=True)
+    token_ok = token is not None
     return {
-        "ok": False,
+        "ok": ping_ok and token_ok,
         "configured": True,
-        "scheme": None,
-        "endpoint": url,
-        "status": attempts[-1]["status"] if attempts else 0,
-        "body_preview": attempts[-1]["body_preview"] if attempts else "",
-        "attempts": attempts,
+        "ping_ok": ping_ok,
+        "ping_status": ping_status,
+        "token_ok": token_ok,
+        "token_error": token_err if not token_ok else "",
+        "endpoint": BASE_URL,
     }
 
 
 def list_employees() -> list[dict]:
-    """Smoke fetch — once health_check succeeds, this should return employees.
+    """Smoke fetch via GetUserBasic (DataAction SELECT-ALL).
 
-    Uses the auth scheme discovered by health_check. If health_check hasn't
-    succeeded, returns []. Caller should display health_check details first.
+    Returns a list of employee dicts with keys like:
+      Badge, Email, EmpIdentifier, FirstName, LastName, Phone1/2/3,
+      Status, TimeZoneDisplayName, ...
+    Returns [] on failure (caller should display health_check details first).
     """
-    hc = health_check()
-    if not hc["ok"]:
+    status, parsed = authenticated_post("GetUserBasic", {
+        "EffectiveDate": _now_wcf_date(),
+        "DataAction": {"Name": "SELECT-ALL", "Values": []},
+    })
+    if status < 200 or status >= 300:
         return []
-    builder = dict(AUTH_STRATEGIES)[hc["scheme"]]
-    status, body = _try_request("GET", hc["endpoint"], {}, hc["scheme"], builder)
-    if not (200 <= status < 300):
-        return []
-    try:
-        data = json.loads(body)
-    except json.JSONDecodeError:
-        return []
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ("Employees", "employees", "data", "Data", "Items"):
-            if key in data and isinstance(data[key], list):
-                return data[key]
+    if isinstance(parsed, dict):
+        results = parsed.get("Results")
+        if isinstance(results, list):
+            return results
     return []
