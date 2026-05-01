@@ -158,7 +158,7 @@
       <h2>Daily Plant Scheduler</h2>
       <input type="date" id="day-picker" value="{{ day }}" class="date-input" title="Jump to another day">
       <a href="/staffing?day={{ today }}" class="day-hot {% if day == today %}active{% endif %}" title="Jump to today">Today</a>
-      <a href="/staffing?day={{ tomorrow }}" class="day-hot {% if day == tomorrow %}active{% endif %}" title="Jump to tomorrow">Next Day</a>
+      <a href="/staffing?day={{ tomorrow }}" class="day-hot {% if day == tomorrow %}active{% endif %}" title="Jump to the next working day">Next Day</a>
       <button type="button" class="hours-pill {% if has_custom_hours %}custom{% endif %}" id="hours-pill"
               title="Click to edit shift hours for this day">
         <span class="label">Hours</span>

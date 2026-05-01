@@ -34,11 +34,11 @@ def staffing_page(
     from concurrent.futures import ThreadPoolExecutor
     from .. import cert_lookup
     today = datetime.now(timezone.utc).date()
-    # Default to tomorrow (Dale plans the day before).
+    # Default to the next working day (Dale plans the day before; skip weekends).
     try:
-        d = date.fromisoformat(day) if day else today + timedelta(days=1)
+        d = date.fromisoformat(day) if day else _next_working_day(today)
     except ValueError:
-        d = today + timedelta(days=1)
+        d = _next_working_day(today)
     # Three independent reads — run concurrently so Postgres I/O overlaps.
     with ThreadPoolExecutor(max_workers=3) as pool:
         f_certs  = pool.submit(cert_lookup.load_person_certs)
@@ -237,7 +237,7 @@ def staffing_page(
             "day": d.isoformat(),
             "day_short": d.strftime("%m/%d/%y"),
             "day_pretty": f"{d.strftime('%A, %B')} {d.day}, {d.year}",
-            "tomorrow": (today + timedelta(days=1)).isoformat(),
+            "tomorrow": _next_working_day(today).isoformat(),
             "today": today.isoformat(),
             "published": sched.published,
             "bays": bays,
