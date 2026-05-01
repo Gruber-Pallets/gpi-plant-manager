@@ -6,7 +6,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### 5:45 PM
 
-- **Absent entries now red** — derived absences, manager-declared "Manual Absent", and StratusTime non-work-shift entries (Pascual case) all render in red on the Time Off section of the scheduler AND on the time-off calendar (day/week/month views). Planned PTO and partials keep their existing blue/amber so the eye distinguishes "expected to be off" from "didn't show / forced absent."
+- **Absent entries now red** — only true absences (derived no-punch + manager-declared Manual Absent) render in red on the scheduler's Time Off section and on the time-off calendar. Unpaid Time and other non-work-shift entries stay blue with the rest of the planned time-off. Three states: blue (planned PTO / Unpaid), amber (partial), red (absent).
 
 ### 5:35 PM
 
