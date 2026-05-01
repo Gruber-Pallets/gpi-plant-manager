@@ -262,6 +262,31 @@ CREATE TABLE IF NOT EXISTS wc_time_attributions (
 CREATE INDEX IF NOT EXISTS wc_time_attributions_day_idx ON wc_time_attributions(day);
 CREATE INDEX IF NOT EXISTS wc_time_attributions_day_wc_idx ON wc_time_attributions(day, wc_name);
 
+-- Late / absence overrides for the Late/Absence Report ----------------
+-- manual_absences: marks a scheduled person as Absent for a single day
+-- (manager-declared via the Late/Absence Report). Layered into the
+-- StratusTime time-off list so they drop out of Unscheduled + picker.
+CREATE TABLE IF NOT EXISTS manual_absences (
+  day            DATE NOT NULL,
+  emp_id         TEXT NOT NULL,
+  name           TEXT NOT NULL,
+  declared_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (day, emp_id)
+);
+CREATE INDEX IF NOT EXISTS manual_absences_day_idx ON manual_absences(day);
+
+-- late_snoozes: silences a person from the Late/Absence Report until
+-- `until_utc`. After expiry the report re-checks them automatically.
+CREATE TABLE IF NOT EXISTS late_snoozes (
+  day            DATE NOT NULL,
+  emp_id         TEXT NOT NULL,
+  name           TEXT NOT NULL,
+  until_utc      TIMESTAMPTZ NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (day, emp_id)
+);
+CREATE INDEX IF NOT EXISTS late_snoozes_day_idx ON late_snoozes(day);
+
 CREATE TABLE IF NOT EXISTS global_schedule (
   id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   shift_start     TIME NOT NULL,

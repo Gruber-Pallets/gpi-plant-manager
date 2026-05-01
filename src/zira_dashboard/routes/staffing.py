@@ -51,18 +51,22 @@ def _safe_time_off_entries(d):
 
 
 def _safe_attendance(d, sched, today):
-    """Wrap StratusTime attendance lookup. Returns {} on any error or
-    when attendance isn't applicable (not today, or before shift start).
+    """Wrap StratusTime attendance lookup. Returns {by_name, by_id, name_to_id}.
+
+    Returns empty dicts on any error or when attendance isn't applicable
+    (not today, or before shift start). by_name keys are roster names;
+    by_id keys are StratusTime EmpIdentifiers (used by late_report).
     """
+    empty = {"by_name": {}, "by_id": {}, "name_to_id": {}, "scheduled_ids": []}
     if d != today:
-        return {}
+        return empty
     try:
         now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
         shift_start_local = datetime.combine(
             d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ
         )
         if now_local < shift_start_local:
-            return {}
+            return empty
         name_to_id = stratustime_client.name_to_emp_id_map()
         scheduled_names: set[str] = set()
         for ops in sched.assignments.values():
@@ -72,14 +76,45 @@ def _safe_attendance(d, sched, today):
         scheduled_ids = [name_to_id[n] for n in scheduled_names if n in name_to_id]
         id_to_name = {v: k for k, v in name_to_id.items()}
         attendance_by_id = stratustime_client.attendance_for_day(d, scheduled_ids)
-        out: dict[str, dict] = {}
+        by_name: dict[str, dict] = {}
         for emp_id, info in attendance_by_id.items():
             name = id_to_name.get(emp_id)
             if name:
-                out[name] = info
-        return out
+                by_name[name] = info
+        return {
+            "by_name": by_name,
+            "by_id": attendance_by_id,
+            "name_to_id": name_to_id,
+            "scheduled_ids": scheduled_ids,
+        }
     except Exception:
-        return {}
+        return empty
+
+
+def _late_emp_ids(d, today, attendance_pkg) -> set[str]:
+    """Compute the set of currently-late StratusTime EmpIdentifiers for `d`.
+
+    Uses the same threshold + filtering as the Late/Absence Report so the
+    scheduler highlight stays in sync with the global modal.
+    """
+    if d != today or not attendance_pkg.get("by_id"):
+        return set()
+    try:
+        from .. import late_report
+        now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+        shift_start_local = datetime.combine(
+            d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ
+        )
+        late = late_report.late_people_for_day(
+            d,
+            attendance_pkg.get("scheduled_ids") or [],
+            attendance_pkg.get("by_id") or {},
+            now_local,
+            shift_start_local,
+        )
+        return {r["emp_id"] for r in late}
+    except Exception:
+        return set()
 
 
 def _next_working_day(d: date) -> date:
@@ -153,7 +188,13 @@ def staffing_page(
         # Collect StratusTime time-off (already fetched in parallel above).
         with _Phase(phases, "stratustime"):
             time_off_entries = f_time_off_entries.result()
-            attendance_by_name = f_attendance.result()
+            attendance_pkg = f_attendance.result()
+            attendance_by_name = attendance_pkg.get("by_name") or {}
+
+    # Resolve the late-emp-id set to roster names for the template highlight.
+    late_emp_ids = _late_emp_ids(d, today, attendance_pkg)
+    id_to_name = {v: k for k, v in (attendance_pkg.get("name_to_id") or {}).items()}
+    late_names_set = {id_to_name[e] for e in late_emp_ids if e in id_to_name}
 
     time_off_names = [e["name"] for e in time_off_entries]
     time_off_set = set(time_off_names)
@@ -389,6 +430,7 @@ def staffing_page(
                 "partial_hours_by_name": partial_hours_by_name,
                 "partial_range_by_name": partial_range_by_name,
                 "attendance_by_name": attendance_by_name,
+                "late_names_set": late_names_set,
                 "unassigned": sorted(unassigned),
                 "reserves": sorted(reserves),
                 # JS uses this to route auto-removed people back to the right
@@ -685,6 +727,138 @@ def assignments_todo_json():
     except Exception:
         pass
     return JSONResponse(out)
+
+
+@router.get("/api/late-report")
+def late_report_json():
+    """JSON snapshot for the global Late/Absence Report badge + modal.
+
+    Always for today. Returns:
+      late:     [{emp_id, name, minutes_late}]   — currently late, actionable
+      snoozed:  [{emp_id, name, until_iso, mins_remaining}] — silenced, will recheck
+      count:    len(late)                         — drives the badge visibility
+    """
+    from .. import late_report
+    today = datetime.now(timezone.utc).date()
+    out: dict = {"count": 0, "today": today.isoformat(), "late": [], "snoozed": []}
+    try:
+        sched = staffing.load_schedule(today)
+        attendance_pkg = _safe_attendance(today, sched, today)
+        if attendance_pkg.get("by_id"):
+            now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+            shift_start_local = datetime.combine(
+                today, shift_config.shift_start_for(today), tzinfo=shift_config.SITE_TZ
+            )
+            late = late_report.late_people_for_day(
+                today,
+                attendance_pkg.get("scheduled_ids") or [],
+                attendance_pkg.get("by_id") or {},
+                now_local,
+                shift_start_local,
+            )
+            id_to_name = {v: k for k, v in (attendance_pkg.get("name_to_id") or {}).items()}
+            full_map = stratustime_client._employee_id_to_name_map()
+            for r in late:
+                eid = r["emp_id"]
+                out["late"].append({
+                    "emp_id": eid,
+                    "name": id_to_name.get(eid) or full_map.get(eid) or f"Unknown ({eid})",
+                    "minutes_late": r["minutes_late"],
+                })
+        # Snoozed list (independent of attendance — even after they punch in,
+        # we want to clear the snooze; that happens on the next page load
+        # because they'll no longer be no_punch).
+        now_utc = datetime.now(timezone.utc)
+        for s in late_report.active_snoozes(today):
+            until = s["until_utc"]
+            mins_remaining = max(0, int((until - now_utc).total_seconds() // 60))
+            out["snoozed"].append({
+                "emp_id": s["emp_id"],
+                "name": s["name"],
+                "until_iso": until.isoformat(),
+                "mins_remaining": mins_remaining,
+            })
+        out["count"] = len(out["late"])
+    except Exception:
+        pass
+    return JSONResponse(out)
+
+
+@router.post("/api/late-report/declare-absent")
+async def late_report_declare_absent(request: Request):
+    """Mark a scheduled person as Absent for today.
+
+    Body (JSON): {emp_id, name}
+    Side effects: writes to manual_absences; clears any pending snooze for
+    the same person; busts the StratusTime time-off cache so the next
+    /staffing render shows them in the Time Off list.
+    """
+    from .. import late_report
+    body = await request.json()
+    emp_id = str(body.get("emp_id") or "").strip()
+    name = str(body.get("name") or "").strip()
+    if not emp_id or not name:
+        return JSONResponse({"ok": False, "error": "emp_id and name required"}, status_code=400)
+    today = datetime.now(timezone.utc).date()
+    try:
+        late_report.declare_absent(today, emp_id, name)
+        # Drop any existing snooze — declaring absent is the terminal action.
+        from .. import db as _db
+        _db.execute(
+            "DELETE FROM late_snoozes WHERE day = %s AND emp_id = %s",
+            (today, emp_id),
+        )
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    stratustime_client.cache_clear()
+    _http_cache.invalidate_today_cache()
+    return JSONResponse({"ok": True})
+
+
+@router.post("/api/late-report/snooze")
+async def late_report_snooze(request: Request):
+    """Silence a person from the Late/Absence Report for `minutes` (default 30).
+
+    Body (JSON): {emp_id, name, minutes?}
+    """
+    from .. import late_report
+    body = await request.json()
+    emp_id = str(body.get("emp_id") or "").strip()
+    name = str(body.get("name") or "").strip()
+    try:
+        minutes = int(body.get("minutes") or late_report.DEFAULT_SNOOZE_MINUTES)
+    except (TypeError, ValueError):
+        minutes = late_report.DEFAULT_SNOOZE_MINUTES
+    minutes = max(1, min(minutes, 8 * 60))
+    if not emp_id or not name:
+        return JSONResponse({"ok": False, "error": "emp_id and name required"}, status_code=400)
+    today = datetime.now(timezone.utc).date()
+    try:
+        late_report.snooze(today, emp_id, name, minutes)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True, "minutes": minutes})
+
+
+@router.post("/api/late-report/undo-absent")
+async def late_report_undo_absent(request: Request):
+    """Reverse a declared absence (e.g., manager mis-clicked).
+
+    Body (JSON): {emp_id}
+    """
+    from .. import late_report
+    body = await request.json()
+    emp_id = str(body.get("emp_id") or "").strip()
+    if not emp_id:
+        return JSONResponse({"ok": False, "error": "emp_id required"}, status_code=400)
+    today = datetime.now(timezone.utc).date()
+    try:
+        late_report.undo_absent(today, emp_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    stratustime_client.cache_clear()
+    _http_cache.invalidate_today_cache()
+    return JSONResponse({"ok": True})
 
 
 @router.get("/api/stratustime/refresh")

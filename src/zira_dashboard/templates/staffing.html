@@ -280,24 +280,6 @@
               </div>
               <div class="sub">
                 <span class="ops-range">min {{ row.min_ops }} · max {{ row.max_ops_label }}</span>
-                {% if attendance_by_name and visible_assigned %}
-                  {% set ns = namespace(in_count=0, late=0, no_punch=0) %}
-                  {% for a in visible_assigned %}
-                    {% if a.name in attendance_by_name %}
-                      {% set s = attendance_by_name[a.name].status %}
-                      {% if s == 'on_time' %}{% set ns.in_count = ns.in_count + 1 %}{% endif %}
-                      {% if s == 'late' %}{% set ns.in_count = ns.in_count + 1 %}{% set ns.late = ns.late + 1 %}{% endif %}
-                      {% if s == 'no_punch' %}{% set ns.no_punch = ns.no_punch + 1 %}{% endif %}
-                    {% endif %}
-                  {% endfor %}
-                  {% set total = visible_assigned|length %}
-                  {% if total > 0 %}
-                    <span class="wc-att-rollup{% if ns.no_punch > 0 %} has-missing{% elif ns.late > 0 %} has-late{% elif ns.in_count == total %} all-in{% endif %}"
-                          title="{{ ns.in_count }} clocked in, {{ ns.late }} late, {{ ns.no_punch }} not clocked in (of {{ total }} scheduled)">
-                      {% if ns.no_punch > 0 %}✗ {{ ns.no_punch }} missing{% elif ns.late > 0 %}⚠ {{ ns.in_count }}/{{ total }} ({{ ns.late }} late){% else %}✓ {{ ns.in_count }}/{{ total }}{% endif %}
-                    </span>
-                  {% endif %}
-                {% endif %}
                 {% if row.loc.note %}· {{ row.loc.note }}{% endif %}
               </div>
             </td>
@@ -310,7 +292,7 @@
                 <summary>
                   <span class="dd-summary-text">
                     {% if visible_assigned %}
-                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}">{{ a.name }}{{ cert_badges(a.name, person_certs) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<span class="partial-hours-badge" title="Off {{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}</span>{% endif %}{% if attendance_by_name and a.name in attendance_by_name %}{% set att = attendance_by_name[a.name] %}{% if att.status == 'on_time' %}<span class="att-badge att-on-time" title="Clocked in {{ att.clocked_in_at }} (on time)">✓</span>{% elif att.status == 'late' %}<span class="att-badge att-late" title="Clocked in {{ att.clocked_in_at }} ({{ att.minutes_late }}m late)">⚠ +{{ att.minutes_late }}m</span>{% elif att.status == 'no_punch' %}<span class="att-badge att-no-punch" title="No clock-in yet today">✗</span>{% elif att.status == 'clocked_out' %}<span class="att-badge att-clocked-out" title="Clocked out at {{ att.clocked_in_at }}">⏸</span>{% endif %}{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
+                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ a.name }}{{ cert_badges(a.name, person_certs) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<span class="partial-hours-badge" title="Off {{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}</span>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
                     {% endif %}
                     {% if _wc_attribs_for_row %}
                       {% for attrib in _wc_attribs_for_row %}<span class="lvl-attribution" title="Worked {{ attrib.first_label }}–{{ attrib.last_label }}">{{ attrib.person_name }}{{ cert_badges(attrib.person_name, person_certs) }}{% if attrib.time_range %}<span class="attribution-range">{{ attrib.time_range }}</span>{% endif %}</span>{% if not loop.last %}<span class="sep">, </span>{% endif %}{% endfor %}

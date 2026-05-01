@@ -183,6 +183,80 @@
     padding: 0 0.5rem; font: inherit; font-size: 1.1rem; line-height: 1.4; cursor: pointer;
   }
   .atd-saved-item .atd-delete:hover { color: var(--bad, #ef4444); border-color: var(--bad, #ef4444); }
+
+  /* Global "Late/Absence Report" badge — appears on every page when one or
+     more scheduled people are 15+ minutes past shift-start without a punch. */
+  .late-nav-badge {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    background: #fee2e2; color: #b91c1c;
+    border: 1px solid #b91c1c; border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.78rem; font-weight: 700; text-decoration: none;
+    margin-right: 0.2rem;
+    animation: late-pulse 1.6s ease-in-out infinite;
+  }
+  .late-nav-badge:hover { background: #b91c1c; color: white; }
+  .late-nav-badge .cnt {
+    background: #b91c1c; color: white;
+    border-radius: 999px; padding: 0 0.45rem; font-size: 0.72rem;
+  }
+  .late-nav-badge:hover .cnt { background: white; color: #b91c1c; }
+  @keyframes late-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(185,28,28,0.7); }
+    50%      { box-shadow: 0 0 0 6px rgba(185,28,28,0.0); }
+  }
+
+  .late-modal[hidden] { display: none; }
+  .late-modal { position: fixed; inset: 0; z-index: 9100; display: flex; align-items: center; justify-content: center; }
+  .late-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+  .late-card {
+    position: relative;
+    background: var(--panel, #fff); color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5); border-radius: 12px;
+    width: min(560px, 92vw); max-height: 80vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.25);
+  }
+  .late-head { display: flex; justify-content: space-between; align-items: center; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border, #d8dee5); }
+  .late-head h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .late-close { background: transparent; border: none; cursor: pointer; color: var(--muted, #6b7280); font-size: 1.3rem; padding: 0.1rem 0.5rem; border-radius: 6px; }
+  .late-close:hover { background: var(--panel-2, #f1f4f7); color: var(--fg, #1f2937); }
+  .late-body { padding: 0.8rem 1rem; overflow-y: auto; }
+  .late-help { color: var(--muted, #6b7280); font-size: 0.85rem; margin: 0 0 0.7rem; }
+  .late-section-title {
+    font-size: 0.7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--muted, #6b7280);
+    margin: 1rem 0 0.4rem;
+    border-top: 1px solid var(--border, #d8dee5);
+    padding-top: 0.6rem;
+  }
+  .late-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  .late-item {
+    border: 1px solid #fecaca; border-radius: 8px;
+    padding: 0.55rem 0.75rem; background: #fef2f2;
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  }
+  .late-item-name { flex: 1 1 auto; font-weight: 600; font-size: 0.95rem; color: #b91c1c; }
+  .late-item-mins { color: #b91c1c; font-size: 0.78rem; font-weight: 600; }
+  .late-item-actions { display: flex; gap: 0.4rem; }
+  .late-item-actions button {
+    border: 1px solid var(--border, #d8dee5); border-radius: 6px;
+    padding: 0.3rem 0.7rem; font: inherit; font-size: 0.82rem; font-weight: 600;
+    cursor: pointer; background: var(--panel, #fff); color: var(--fg, #1f2937);
+  }
+  .late-item-actions .late-declare { background: #b91c1c; color: white; border-color: #b91c1c; }
+  .late-item-actions .late-declare:hover { background: #991b1b; }
+  .late-item-actions .late-snooze:hover { background: var(--panel-2, #f1f4f7); }
+  .late-item-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .late-snoozed-item {
+    border: 1px solid var(--border, #d8dee5); border-radius: 8px;
+    padding: 0.45rem 0.75rem; background: var(--panel-2, #f1f4f7);
+    display: flex; align-items: center; gap: 0.6rem;
+    color: var(--muted, #6b7280); font-size: 0.85rem;
+  }
+  .late-snoozed-name { flex: 1 1 auto; font-weight: 600; }
+  .late-status { font-size: 0.78rem; color: var(--muted, #6b7280); width: 100%; margin-top: 0.3rem; }
 </style>
 <script>
 (function () {
@@ -418,5 +492,194 @@
 
   // Kick it off after a short delay so the rest of the page renders first.
   setTimeout(refreshCount, 300);
+})();
+
+// Global "Late/Absence Report" badge + modal — present on every page.
+(function () {
+  var navBadge = null;
+  var modal = null;
+  var data = null;
+  var LATE_ENDPOINT = '/api/late-report';
+
+  function settingsLink() {
+    return document.querySelector('header nav a[href="/settings"]')
+        || document.querySelector('header.app nav a[href="/settings"]');
+  }
+
+  function refreshCount() {
+    fetch(LATE_ENDPOINT).then(function (r) { return r.json(); }).then(function (d) {
+      data = d;
+      injectOrUpdateBadge();
+    }).catch(function () {});
+  }
+
+  function injectOrUpdateBadge() {
+    if (!data || (!data.count && !(data.snoozed && data.snoozed.length))) {
+      if (navBadge) { navBadge.remove(); navBadge = null; }
+      return;
+    }
+    var anchor = settingsLink();
+    if (!anchor) return;
+    if (!navBadge) {
+      navBadge = document.createElement('a');
+      navBadge.href = '#';
+      navBadge.className = 'late-nav-badge';
+      navBadge.title = 'Scheduled people who haven\'t clocked in yet — click to manage';
+      navBadge.addEventListener('click', function (e) { e.preventDefault(); openModal(); });
+      // Sit to the right of any existing assignments-todo badge, or directly
+      // after Settings if that badge isn't present.
+      var prev = anchor.nextSibling;
+      while (prev && prev.classList && prev.classList.contains('assign-todo-nav-badge')) {
+        prev = prev.nextSibling;
+      }
+      anchor.parentNode.insertBefore(navBadge, prev);
+    }
+    if (data.count) {
+      navBadge.innerHTML = '🚨 <span class="cnt">' + data.count + '</span> Late/Absence';
+      navBadge.style.display = '';
+    } else {
+      // Only snoozed people remain — render in a lower-key style but still visible.
+      navBadge.innerHTML = '⏱ <span class="cnt">' + data.snoozed.length + '</span> Snoozed';
+      navBadge.style.animation = 'none';
+    }
+  }
+
+  function openModal() {
+    closeModal();
+    modal = document.createElement('div');
+    modal.className = 'late-modal';
+    modal.innerHTML = ''
+      + '<div class="late-backdrop"></div>'
+      + '<div class="late-card" role="dialog" aria-modal="true" aria-label="Late and absence report">'
+      + '  <div class="late-head"><h3>Late / Absence Report</h3>'
+      + '    <button type="button" class="late-close" aria-label="Close">×</button></div>'
+      + '  <div class="late-body">Loading…</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    document.documentElement.style.overflow = 'hidden';
+    modal.querySelector('.late-backdrop').addEventListener('click', closeModal);
+    modal.querySelector('.late-close').addEventListener('click', closeModal);
+    document.addEventListener('keydown', escClose);
+    fetch(LATE_ENDPOINT).then(function (r) { return r.json(); }).then(renderModal);
+  }
+
+  function closeModal() {
+    if (modal) { modal.remove(); modal = null; }
+    document.documentElement.style.overflow = '';
+    document.removeEventListener('keydown', escClose);
+  }
+
+  function escClose(e) { if (e.key === 'Escape') closeModal(); }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function renderModal(d) {
+    data = d;
+    if (!modal) return;
+    var body = modal.querySelector('.late-body');
+    var html = '';
+    if (d.late && d.late.length) {
+      html += '<p class="late-help">These scheduled people haven\'t clocked in yet (more than 15 min past shift start). Declare them absent for the day or snooze the alert for 30 min and re-check.</p>';
+      html += '<ul class="late-list">';
+      d.late.forEach(function (item) {
+        html += '<li class="late-item" data-emp-id="' + escapeHtml(item.emp_id) + '" data-name="' + escapeHtml(item.name) + '">';
+        html += '<span class="late-item-name">' + escapeHtml(item.name) + '</span>';
+        html += '<span class="late-item-mins">' + item.minutes_late + ' min late</span>';
+        html += '<span class="late-item-actions">';
+        html += '<button type="button" class="late-snooze">Snooze 30 min</button>';
+        html += '<button type="button" class="late-declare">Declare Absent</button>';
+        html += '</span>';
+        html += '<span class="late-status" hidden></span>';
+        html += '</li>';
+      });
+      html += '</ul>';
+    } else {
+      html += '<p class="late-help">No one is currently flagged late. Anyone scheduled today who hasn\'t clocked in by 15 min past shift-start will appear here.</p>';
+    }
+    if (d.snoozed && d.snoozed.length) {
+      html += '<h4 class="late-section-title">Snoozed</h4>';
+      html += '<ul class="late-list">';
+      d.snoozed.forEach(function (s) {
+        html += '<li class="late-snoozed-item">';
+        html += '<span class="late-snoozed-name">' + escapeHtml(s.name) + '</span>';
+        html += '<span>re-checks in ' + s.mins_remaining + ' min</span>';
+        html += '</li>';
+      });
+      html += '</ul>';
+    }
+    body.innerHTML = html;
+    wireBodyHandlers();
+  }
+
+  function wireBodyHandlers() {
+    if (!modal) return;
+    modal.querySelectorAll('.late-declare').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var li = b.closest('.late-item');
+        var status = li.querySelector('.late-status');
+        var name = li.dataset.name;
+        if (!confirm('Declare ' + name + ' absent for the day?')) return;
+        b.disabled = true;
+        var snoozeBtn = li.querySelector('.late-snooze');
+        if (snoozeBtn) snoozeBtn.disabled = true;
+        fetch('/api/late-report/declare-absent', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({emp_id: li.dataset.empId, name: name}),
+        }).then(function (r) { return r.json(); }).then(function (resp) {
+          if (resp.ok) {
+            status.hidden = false; status.textContent = 'Marked absent ✓';
+            li.style.opacity = '0.5';
+            // Reload so /staffing picks up the new manual_absences row in
+            // the Time Off section + drops the late-flag highlight.
+            setTimeout(function () { location.reload(); }, 600);
+          } else {
+            b.disabled = false;
+            if (snoozeBtn) snoozeBtn.disabled = false;
+            status.hidden = false; status.textContent = 'Failed: ' + (resp.error || 'unknown');
+          }
+        }).catch(function () {
+          b.disabled = false;
+          if (snoozeBtn) snoozeBtn.disabled = false;
+          status.hidden = false; status.textContent = 'Network error.';
+        });
+      });
+    });
+    modal.querySelectorAll('.late-snooze').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var li = b.closest('.late-item');
+        var status = li.querySelector('.late-status');
+        b.disabled = true;
+        var declareBtn = li.querySelector('.late-declare');
+        if (declareBtn) declareBtn.disabled = true;
+        fetch('/api/late-report/snooze', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({emp_id: li.dataset.empId, name: li.dataset.name, minutes: 30}),
+        }).then(function (r) { return r.json(); }).then(function (resp) {
+          if (resp.ok) {
+            status.hidden = false; status.textContent = 'Snoozed for ' + (resp.minutes || 30) + ' min ✓';
+            li.style.opacity = '0.5';
+            setTimeout(function () { location.reload(); }, 600);
+          } else {
+            b.disabled = false;
+            if (declareBtn) declareBtn.disabled = false;
+            status.hidden = false; status.textContent = 'Failed: ' + (resp.error || 'unknown');
+          }
+        }).catch(function () {
+          b.disabled = false;
+          if (declareBtn) declareBtn.disabled = false;
+          status.hidden = false; status.textContent = 'Network error.';
+        });
+      });
+    });
+  }
+
+  setTimeout(refreshCount, 400);
+  // Re-poll every 60 seconds — keeps the badge fresh as people arrive late
+  // or as snoozes expire, without a full page reload.
+  setInterval(refreshCount, 60000);
 })();
 </script>

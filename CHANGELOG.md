@@ -4,6 +4,11 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-01
 
+### 4:30 PM
+
+- **Late / Absence Report** — replaces the old per-person attendance badges (✓/⚠/✗/⏸) and per-WC rollup pill on the scheduler. New global red **🚨 N Late/Absence** badge sits next to Settings on every page whenever a scheduled person is more than 15 min past shift-start without a clock-in. Click the badge for a modal listing each late person with two actions: **Declare Absent** (writes to `manual_absences`, flows into the Time Off section, drops them from Unscheduled + the picker) or **Snooze 30 min** (silences the alert and re-checks automatically). Snoozed people show in a secondary list with a countdown.
+- **Inline late highlight on the scheduler** — anyone who would appear in the report also gets a red ⚠ + pulsing border on their scheduler pill, so a quick glance at the bay shows where the gaps are. The flag clears the moment they punch in.
+
 ### 4:00 PM
 
 - **Derived "Absent" now actually fires** — fix to a subtle bug in the attendance calculation: when StratusTime's status board returned a person's last transaction from a previous day (typical case for someone who clocked out yesterday and hasn't punched in today), the app left them as `unknown` instead of `no_punch`. The derived-absence filter only checked `no_punch`, so people like Porfirio (last punch 4/30, scheduled today, no clock-in) were never flagged. `attendance_for_day` now classifies "last transaction not on `day`" as `no_punch`, which is the semantically correct value for the rollup, the per-person ✗ badge, and the derived-absence path.

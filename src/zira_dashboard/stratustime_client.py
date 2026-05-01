@@ -749,6 +749,35 @@ def time_off_entries_for_day(day) -> list[dict]:
         if d["name"] in listed_names:
             continue
         out.append(d)
+        listed_names.add(d["name"])
+
+    # Layer in manager-declared absences from the Late/Absence Report.
+    # These take precedence — a manager pressing "Declare Absent" should
+    # always show this person in the Time Off section regardless of what
+    # StratusTime reports.
+    try:
+        from . import late_report
+        for r in late_report.absences_for_day(day):
+            nm = r["name"]
+            emp_id = r["emp_id"]
+            # Prefer the roster-friendly name if we have one (in case the
+            # caller passed a StratusTime full name when declaring).
+            roster_name = roster_map.get(emp_id) or full_map.get(emp_id) or nm
+            if roster_name in listed_names:
+                continue
+            out.append({
+                "name": roster_name,
+                "pay_type": "Manual Absent",
+                "hours": 8.0,
+                "time_range": "",
+                "status_type": None,
+                "request_id": None,
+                "non_work": True,
+                "manual_absent": True,
+            })
+            listed_names.add(roster_name)
+    except Exception:
+        pass
 
     return out
 

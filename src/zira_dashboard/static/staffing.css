@@ -87,32 +87,25 @@
     letter-spacing: 0.3px;
     white-space: nowrap;
   }
-  /* Attendance status badges (sub-project #4): live indicators of clock-in
-     state next to each assigned-person pill on today's scheduler. */
-  .att-badge {
-    display: inline-block; margin-left: 0.2rem;
-    padding: 0 0.3rem;
+  /* Late-arrival flag: scheduled person who is more than 15 min past
+     shift-start without a punch. Surfaces on the scheduler pill alongside
+     the global Late/Absence Report badge in the header. */
+  .att-late-flag {
+    background: #fee2e2 !important;
+    color: #b91c1c !important;
+    border: 1px solid #b91c1c !important;
     border-radius: 4px;
-    font-size: 0.7rem; font-weight: 700;
-    vertical-align: 1px;
-    line-height: 1.4;
-    white-space: nowrap;
+    padding: 0.05rem 0.35rem !important;
+    animation: att-late-flag-pulse 1.6s ease-in-out infinite;
   }
-  .att-badge.att-on-time     { background: var(--accent-dim); color: var(--accent); }
-  .att-badge.att-late        { background: var(--warn-dim);   color: var(--warn);   }
-  .att-badge.att-no-punch    { background: var(--bad-dim);    color: var(--bad);    }
-  .att-badge.att-clocked-out { background: var(--panel-3);    color: var(--muted);  }
-  .wc-att-rollup {
-    display: inline-block; margin-left: 0.4rem;
-    padding: 0 0.4rem;
-    border-radius: 4px;
-    background: var(--panel-3); color: var(--muted);
-    font-size: 0.7rem; font-weight: 700;
-    letter-spacing: 0.3px;
+  .att-late-icon {
+    display: inline-block; margin-right: 0.25rem;
+    font-weight: 700;
   }
-  .wc-att-rollup.all-in     { background: var(--accent-dim); color: var(--accent); }
-  .wc-att-rollup.has-late   { background: var(--warn-dim);   color: var(--warn);   }
-  .wc-att-rollup.has-missing{ background: var(--bad-dim);    color: var(--bad);    }
+  @keyframes att-late-flag-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(185,28,28,0.6); }
+    50%      { box-shadow: 0 0 0 4px rgba(185,28,28,0.0); }
+  }
   .timeoff .ts-note { font-size: 0.72rem; color: var(--muted); margin-top: 0.6rem; font-style: italic; }
   .timeoff .ts-note a { color: var(--accent); text-decoration: none; }
   .timeoff .ts-note a:hover { text-decoration: underline; }
