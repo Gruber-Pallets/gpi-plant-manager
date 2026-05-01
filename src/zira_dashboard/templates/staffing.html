@@ -271,6 +271,24 @@
               </div>
               <div class="sub">
                 <span class="ops-range">min {{ row.min_ops }} · max {{ row.max_ops_label }}</span>
+                {% if attendance_by_name and row.assigned %}
+                  {% set ns = namespace(in_count=0, late=0, no_punch=0) %}
+                  {% for a in row.assigned %}
+                    {% if a.name in attendance_by_name %}
+                      {% set s = attendance_by_name[a.name].status %}
+                      {% if s == 'on_time' %}{% set ns.in_count = ns.in_count + 1 %}{% endif %}
+                      {% if s == 'late' %}{% set ns.in_count = ns.in_count + 1 %}{% set ns.late = ns.late + 1 %}{% endif %}
+                      {% if s == 'no_punch' %}{% set ns.no_punch = ns.no_punch + 1 %}{% endif %}
+                    {% endif %}
+                  {% endfor %}
+                  {% set total = row.assigned|length %}
+                  {% if total > 0 %}
+                    <span class="wc-att-rollup{% if ns.no_punch > 0 %} has-missing{% elif ns.late > 0 %} has-late{% elif ns.in_count == total %} all-in{% endif %}"
+                          title="{{ ns.in_count }} clocked in, {{ ns.late }} late, {{ ns.no_punch }} not clocked in (of {{ total }} scheduled)">
+                      {% if ns.no_punch > 0 %}✗ {{ ns.no_punch }} missing{% elif ns.late > 0 %}⚠ {{ ns.in_count }}/{{ total }} ({{ ns.late }} late){% else %}✓ {{ ns.in_count }}/{{ total }}{% endif %}
+                    </span>
+                  {% endif %}
+                {% endif %}
                 {% if row.loc.note %}· {{ row.loc.note }}{% endif %}
               </div>
             </td>
