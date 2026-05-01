@@ -383,7 +383,9 @@
           if (resp.ok) {
             status.hidden = false; status.textContent = 'Saved ✓ ' + person;
             li.classList.add('atd-saved');
-            setTimeout(function () { fetch(ATD_ENDPOINT).then(function (r) { return r.json(); }).then(renderModal); refreshCount(); }, 400);
+            // Hard reload so the dashboards' bars/downtime widgets show the
+            // new name immediately in the (no assignment) slot.
+            setTimeout(function () { location.reload(); }, 500);
           } else {
             b.disabled = false; sel.disabled = false;
             status.hidden = false; status.textContent = 'Failed: ' + (resp.error || 'unknown');
@@ -404,7 +406,7 @@
           .then(function (resp) {
             if (resp.ok) {
               li.style.opacity = '0.4'; li.style.textDecoration = 'line-through';
-              setTimeout(function () { fetch(ATD_ENDPOINT).then(function (r) { return r.json(); }).then(renderModal); refreshCount(); }, 400);
+              setTimeout(function () { location.reload(); }, 500);
             } else {
               b.disabled = false; alert('Delete failed: ' + (resp.error || 'unknown'));
             }

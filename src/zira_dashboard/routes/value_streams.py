@@ -41,6 +41,18 @@ def _recycling_day_data(d, now, is_today_d):
             continue
         who_by_wc[wc_name] = " + ".join(ops)
 
+    # Layer in retro WC attributions so a saved attribution shows up
+    # immediately on the dashboard's bar/downtime widgets in the `who` slot.
+    try:
+        from .. import wc_attributions
+        for wc_name, names in wc_attributions.people_by_wc(d).items():
+            if not names:
+                continue
+            joined = " + ".join(names)
+            who_by_wc[wc_name] = (who_by_wc[wc_name] + " + " + joined) if wc_name in who_by_wc else joined
+    except Exception:
+        pass
+
     ACTIVE_UNITS_THRESHOLD = 5
     active_wc_names: set[str] = set(who_by_wc.keys())
     for r in results:
@@ -581,6 +593,16 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
         if wc_name == staffing.TIME_OFF_KEY or not ops:
             continue
         who_by_wc[wc_name] = " + ".join(ops)
+
+    try:
+        from .. import wc_attributions
+        for wc_name, names in wc_attributions.people_by_wc(d).items():
+            if not names:
+                continue
+            joined = " + ".join(names)
+            who_by_wc[wc_name] = (who_by_wc[wc_name] + " + " + joined) if wc_name in who_by_wc else joined
+    except Exception:
+        pass
 
     bars: list[dict] = []
     for r in results:

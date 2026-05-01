@@ -70,6 +70,13 @@ def get_cached_response(cache_key, *, includes_today: bool) -> Response | None:
     return response
 
 
+def invalidate_today_cache() -> None:
+    """Drop every cached response in the today bucket. Call this from write
+    paths (e.g., saving a retro WC attribution) so the next dashboard load
+    reflects the new data immediately rather than waiting up to 15s."""
+    _RESPONSE_CACHE_TODAY.invalidate()
+
+
 def store_cached_response(cache_key, *, includes_today: bool, response: Response) -> None:
     """Cache a response's body bytes + content_type for future serve.
 

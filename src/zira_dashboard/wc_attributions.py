@@ -59,9 +59,15 @@ def delete(attribution_id: int) -> None:
     db.execute("DELETE FROM wc_time_attributions WHERE id = %s", (attribution_id,))
 
 
+UNATTRIBUTED_MIN_UNITS = 5
+"""WCs with units at or below this threshold are skipped — could be a stray
+sample / fluke and shouldn't surface as work to attribute. Matches the
+dashboards' existing ACTIVE_UNITS_THRESHOLD."""
+
+
 def unattributed_for_day(day: date, client) -> list[dict]:
     """Walk metered WCs for ``day``. Return rows for WCs that:
-      1. Produced units > 0 (not just transient noise)
+      1. Produced more than UNATTRIBUTED_MIN_UNITS (filters flukes)
       2. Are NOT in the schedule's assignments
       3. Are NOT in the attributions table
 
@@ -89,7 +95,7 @@ def unattributed_for_day(day: date, client) -> list[dict]:
 
     out: list[dict] = []
     for r in results:
-        if r.units <= 0:
+        if r.units <= UNATTRIBUTED_MIN_UNITS:
             continue
         wc = r.station.name
         if wc in scheduled_wcs or wc in attributed_wcs:

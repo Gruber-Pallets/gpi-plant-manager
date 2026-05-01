@@ -616,6 +616,9 @@ async def staffing_attribute(request: Request):
     if not (wc and person and end_utc > start_utc):
         return JSONResponse({"ok": False, "error": "missing/invalid fields"}, status_code=400)
     new_id = wc_attributions.add(day, wc, person, start_utc, end_utc)
+    # Drop cached dashboard responses so the next load reflects the change.
+    from .._http_cache import invalidate_today_cache
+    invalidate_today_cache()
     return JSONResponse({"ok": True, "id": new_id})
 
 
@@ -627,6 +630,8 @@ def staffing_attribute_delete(attribution_id: int):
         wc_attributions.delete(attribution_id)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    from .._http_cache import invalidate_today_cache
+    invalidate_today_cache()
     return JSONResponse({"ok": True})
 
 
