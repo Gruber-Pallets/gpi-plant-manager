@@ -48,8 +48,16 @@ def _recycling_day_data(d, now, is_today_d):
         for wc_name, names in wc_attributions.people_by_wc(d).items():
             if not names:
                 continue
-            joined = " + ".join(names)
-            who_by_wc[wc_name] = (who_by_wc[wc_name] + " + " + joined) if wc_name in who_by_wc else joined
+            existing = who_by_wc.get(wc_name, "")
+            existing_names = [n.strip() for n in existing.split(" + ") if n.strip()] if existing else []
+            # Dedupe: if a name is both scheduled and attributed at the same
+            # WC, list them once. Order: scheduled first, then attribution-only.
+            seen, combined = set(), []
+            for n in existing_names + list(names):
+                if n and n not in seen:
+                    seen.add(n)
+                    combined.append(n)
+            who_by_wc[wc_name] = " + ".join(combined)
     except Exception:
         pass
 
@@ -599,8 +607,16 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
         for wc_name, names in wc_attributions.people_by_wc(d).items():
             if not names:
                 continue
-            joined = " + ".join(names)
-            who_by_wc[wc_name] = (who_by_wc[wc_name] + " + " + joined) if wc_name in who_by_wc else joined
+            existing = who_by_wc.get(wc_name, "")
+            existing_names = [n.strip() for n in existing.split(" + ") if n.strip()] if existing else []
+            # Dedupe: if a name is both scheduled and attributed at the same
+            # WC, list them once. Order: scheduled first, then attribution-only.
+            seen, combined = set(), []
+            for n in existing_names + list(names):
+                if n and n not in seen:
+                    seen.add(n)
+                    combined.append(n)
+            who_by_wc[wc_name] = " + ".join(combined)
     except Exception:
         pass
 
