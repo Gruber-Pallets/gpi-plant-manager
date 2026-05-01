@@ -4,6 +4,11 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-01
 
+### 4:00 PM
+
+- **Derived "Absent" now actually fires** — fix to a subtle bug in the attendance calculation: when StratusTime's status board returned a person's last transaction from a previous day (typical case for someone who clocked out yesterday and hasn't punched in today), the app left them as `unknown` instead of `no_punch`. The derived-absence filter only checked `no_punch`, so people like Porfirio (last punch 4/30, scheduled today, no clock-in) were never flagged. `attendance_for_day` now classifies "last transaction not on `day`" as `no_punch`, which is the semantically correct value for the rollup, the per-person ✗ badge, and the derived-absence path.
+- **Name-mapping now filters out terminated employees** — Jesus Martinez was showing the ✗ "didn't punch in" badge even though he had clocked in. Root cause: `name_to_emp_id_map` was building its candidate pool from `GetUserBasic` SELECT-ALL, which includes terminated employees. If StratusTime had a terminated "Jesus *M-something*" who appeared before active Jesus Martinez in API order, the roster's "Jesus M" got mapped to the terminated emp_id, the attendance lookup returned empty for that id, and the active Jesus's punch went uncounted. Now skips anyone whose `Status` isn't "active" before adding them to the candidate pool.
+
 ### 3:15 PM
 
 - **"Absent" status now derived from scheduled-but-not-punched** — StratusTime's "Absent" flag is computed in their UI in real time and isn't stored in any queryable record (verified via 7 endpoint probes against Porfirio's data). New `derived_absences_for_day` helper does the same derivation locally: scheduled in StratusTime today + no clock-in by shift-start + 30-min buffer + no existing time-off / non-work entry → flagged as Absent in our time-off list. Shows up in the scheduler's Time Off section, the /time-off tab, and gets the same picker-exclusion treatment as PTO and manual non-work entries.

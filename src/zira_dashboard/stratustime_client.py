@@ -301,9 +301,16 @@ def name_to_emp_id_map() -> dict[str, str]:
     if cached is not None:
         return cached
 
+    # Only consider StratusTime-active employees as candidates. Terminated
+    # employees still come back from GetUserBasic SELECT-ALL, and if a
+    # terminated "Jesus M*" appears before the active one in API order, the
+    # roster's "Jesus M" would map to the wrong (terminated) emp_id and
+    # attendance lookups would return empty / no_punch.
     by_first: dict[str, list[tuple[str, str, str]]] = {}
     full_name_map: dict[str, str] = {}
     for emp in list_employees():
+        if (emp.get("Status") or "").lower() != "active":
+            continue
         emp_id = str(emp.get("EmpIdentifier") or "")
         first = (emp.get("FirstName") or "").strip()
         last = (emp.get("LastName") or "").strip()
@@ -909,6 +916,11 @@ def attendance_for_day(day, emp_ids, grace_minutes: int = 7) -> dict:
                     # Lunch, transfer, etc. — treat as on the clock today.
                     entry["status"] = "on_time"
                     entry["clocked_in_at"] = hr_min
+            elif tx_dt is not None:
+                # Last transaction is from a previous day — they haven't
+                # punched yet today. Equivalent to no_punch for absence /
+                # rollup purposes.
+                entry["status"] = "no_punch"
             out[emp_id] = entry
 
     # Anyone we asked about who didn't appear in Results -> no_punch.
