@@ -342,11 +342,26 @@ def name_to_emp_id_map() -> dict[str, str]:
         candidates = by_first.get(first.lower(), [])
         if not candidates:
             continue
-        if len(parts) >= 2 and len(parts[1]) >= 1:
+        if len(parts) >= 2 and len(parts[1]):
+            second = parts[1].lower()
+            # First try a prefix match against the FULL last name. This
+            # disambiguates between e.g. "Jesus Moreno" → "Moreno Carreon"
+            # vs "Jesus Martinez" → "Martinez", where both share initial M
+            # but only one starts with "Moreno". Prefix match wins over
+            # single-letter init when there's a real word to compare.
+            prefix_matches = [
+                c for c in candidates if c[2] and c[2].lower().startswith(second)
+            ]
+            if len(second) >= 2 and prefix_matches:
+                active_pref = [c for c in prefix_matches if c[3] == "active"]
+                pick = active_pref[0] if active_pref else prefix_matches[0]
+                out[rname] = pick[0]
+                continue
+            # Fallback to single-letter init match (handles "Jesus M",
+            # "Jose L", etc. — short-form roster names).
             init = parts[1][0].upper()
             init_matches = [c for c in candidates if c[2] and c[2][0].upper() == init]
             if init_matches:
-                # Prefer Status=='active' candidates; fall back to first match.
                 active_matches = [c for c in init_matches if c[3] == "active"]
                 pick = active_matches[0] if active_matches else init_matches[0]
                 out[rname] = pick[0]
@@ -354,8 +369,6 @@ def name_to_emp_id_map() -> dict[str, str]:
         if len(candidates) == 1:
             out[rname] = candidates[0][0]
         else:
-            # No last-name initial in roster name and multiple candidates —
-            # disambiguate by Status=='active' if exactly one matches.
             active_matches = [c for c in candidates if c[3] == "active"]
             if len(active_matches) == 1:
                 out[rname] = active_matches[0][0]
@@ -580,7 +593,7 @@ def derived_absences_for_day(day) -> list[dict]:
     Returns dicts compatible with time_off_entries_for_day's shape, with
     `derived: True` so the UI can label them differently.
     """
-    from datetime import datetime as _dt, timedelta
+    from datetime import datetime as _dt, timedelta, timezone
     from . import shift_config
 
     today_d = _dt.now(timezone.utc).date()

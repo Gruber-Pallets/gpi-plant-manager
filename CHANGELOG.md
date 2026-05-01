@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-01
 
+### 5:05 PM
+
+- **Two real bug fixes from the diagnostic** — the debug endpoint surfaced what was actually wrong: (1) `derived_absences_for_day` had a `NameError: name 'timezone' is not defined` because the local datetime import didn't include `timezone`. The function was crashing silently every call (caught by a broad `except`), so Porfirio's derived absence never got added to today's time-off list — that's why he stayed in Unscheduled regardless of every other fix. Now imports `timezone` properly. (2) Name disambiguation was picking the wrong Jesus Moreno — when two candidates shared a last-name initial (Martinez + **Moreno** Carreon, both starting "M"), the roster's "Jesus Moreno" matched whichever was first in API order. Now does a full prefix match against the last name first ("Moreno Carreon" starts with "Moreno"), only falling back to single-letter init when the roster name is short-form like "Jesus M".
+
 ### 4:50 PM
 
 - **Diagnostic endpoint + looser name-mapping** — Jesus Martinez and Porfirio still showing wrong despite the earlier fixes. Two changes: (1) the active-employee filter on name resolution was too strict (required `Status=='active'` literally), so anyone whose StratusTime Status field is empty/null/whitespace was getting excluded — likely Porfirio's case, which dropped him through to the StratusTime full-name fallback ("Porfirio Cazares Herrera") and broke the time-off-set filter. Now treats empty Status as active and only excludes explicit Inactive/Terminated/Suspended/Deleted. (2) Multi-candidate disambiguation prefers Status=='active' over equally-matching candidates, so the right Jesus M wins when there are several. (3) Added `/api/debug/staffing-diag?names=jesus,porfirio` for one-shot inspection of the full pipeline (employee list, name map, schedule, attendance, derived absences, time-off entries) so we can stop guessing.

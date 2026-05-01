@@ -311,6 +311,122 @@ def test_time_off_entries_for_day_unmapped_emp_id(env_creds):
     assert "999" in entries[0]["name"]
 
 
+def test_name_to_emp_id_map_prefix_beats_init_collision(env_creds):
+    """When two candidates share a last-name initial (Martinez + Moreno
+    Carreon), the roster's "Jesus Moreno" should map to Moreno Carreon,
+    not Martinez. Prefix match on the second word disambiguates."""
+    employees_payload = {
+        "Report": {},
+        "Results": [
+            {"EmpIdentifier": "669", "FirstName": "Jesus", "LastName": "Martinez", "Status": "Active"},
+            {"EmpIdentifier": "386", "FirstName": "Jesus", "LastName": "Moreno Carreon", "Status": "Active"},
+        ],
+    }
+    import json as _json
+    from types import SimpleNamespace
+
+    def fake_post(path, body, **k):
+        if path == "CreateToken":
+            return 200, '"tok"'
+        if path == "GetUserBasic":
+            return 200, _json.dumps(employees_payload)
+        return 404, "not found"
+
+    fake_roster = [
+        SimpleNamespace(name="Jesus Martinez", active=True, reserve=False),
+        SimpleNamespace(name="Jesus Moreno", active=True, reserve=False),
+    ]
+
+    from zira_dashboard import staffing as _s
+    with patch.object(stc, "_post", side_effect=fake_post), \
+         patch.object(_s, "load_roster", return_value=fake_roster):
+        m = stc.name_to_emp_id_map()
+    assert m["Jesus Martinez"] == "669"
+    assert m["Jesus Moreno"] == "386"  # NOT 669
+
+
+def test_name_to_emp_id_map_init_fallback_for_short_form(env_creds):
+    """Short-form roster names like 'Jesus M' still resolve via single-
+    letter initial match."""
+    employees_payload = {
+        "Report": {},
+        "Results": [
+            {"EmpIdentifier": "669", "FirstName": "Jesus", "LastName": "Martinez", "Status": "Active"},
+        ],
+    }
+    import json as _json
+    from types import SimpleNamespace
+
+    def fake_post(path, body, **k):
+        if path == "CreateToken":
+            return 200, '"tok"'
+        if path == "GetUserBasic":
+            return 200, _json.dumps(employees_payload)
+        return 404, "not found"
+
+    fake_roster = [SimpleNamespace(name="Jesus M", active=True, reserve=False)]
+    from zira_dashboard import staffing as _s
+    with patch.object(stc, "_post", side_effect=fake_post), \
+         patch.object(_s, "load_roster", return_value=fake_roster):
+        m = stc.name_to_emp_id_map()
+    assert m["Jesus M"] == "669"
+
+
+def test_name_to_emp_id_map_treats_empty_status_as_active(env_creds):
+    """Employees whose Status field is missing/empty should NOT be
+    excluded — they're still active in StratusTime's data model."""
+    employees_payload = {
+        "Report": {},
+        "Results": [
+            {"EmpIdentifier": "711", "FirstName": "Porfirio", "LastName": "Cazares Herrera", "Status": ""},
+        ],
+    }
+    import json as _json
+    from types import SimpleNamespace
+
+    def fake_post(path, body, **k):
+        if path == "CreateToken":
+            return 200, '"tok"'
+        if path == "GetUserBasic":
+            return 200, _json.dumps(employees_payload)
+        return 404, "not found"
+
+    fake_roster = [SimpleNamespace(name="Porfirio Cazares", active=True, reserve=False)]
+    from zira_dashboard import staffing as _s
+    with patch.object(stc, "_post", side_effect=fake_post), \
+         patch.object(_s, "load_roster", return_value=fake_roster):
+        m = stc.name_to_emp_id_map()
+    assert m["Porfirio Cazares"] == "711"
+
+
+def test_name_to_emp_id_map_excludes_terminated(env_creds):
+    """Employees with explicit Inactive/Terminated status are still
+    skipped so a terminated emp can't claim an active person's slot."""
+    employees_payload = {
+        "Report": {},
+        "Results": [
+            {"EmpIdentifier": "111", "FirstName": "Bob", "LastName": "Smith", "Status": "Terminated"},
+            {"EmpIdentifier": "222", "FirstName": "Bob", "LastName": "Smith", "Status": "Active"},
+        ],
+    }
+    import json as _json
+    from types import SimpleNamespace
+
+    def fake_post(path, body, **k):
+        if path == "CreateToken":
+            return 200, '"tok"'
+        if path == "GetUserBasic":
+            return 200, _json.dumps(employees_payload)
+        return 404, "not found"
+
+    fake_roster = [SimpleNamespace(name="Bob Smith", active=True, reserve=False)]
+    from zira_dashboard import staffing as _s
+    with patch.object(stc, "_post", side_effect=fake_post), \
+         patch.object(_s, "load_roster", return_value=fake_roster):
+        m = stc.name_to_emp_id_map()
+    assert m["Bob Smith"] == "222"
+
+
 def test_cache_clear_drops_data_cache(env_creds):
     stc._cache_set(("time_off", "x", "y"), [{"foo": "bar"}])
     assert stc._cache_get(("time_off", "x", "y")) is not None
