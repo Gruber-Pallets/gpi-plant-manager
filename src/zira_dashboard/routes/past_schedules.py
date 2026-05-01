@@ -14,7 +14,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .. import staffing
-from ..deps import _iter_saved_schedule_files, templates
+from ..deps import templates
 
 router = APIRouter()
 
@@ -50,9 +50,10 @@ async def staffing_past_delete(request: Request):
         d = date.fromisoformat(day_raw)
     except ValueError:
         return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
-    path = staffing.SCHEDULES_DIR / f"{d.isoformat()}.json"
-    if path.exists():
-        path.unlink()
+    # Hard-delete from Postgres (cascades to schedule_assignments, etc.).
+    from .. import db as _db
+    _db.execute("DELETE FROM schedules WHERE day = %s", (d,))
+    staffing._invalidate_schedule_cache(d)
     return JSONResponse({"ok": True, "day": d.isoformat()})
 
 
@@ -79,7 +80,7 @@ def staffing_past(
     all_people: set[str] = set()
     all_wcs: set[str] = set()
 
-    for day, sched in _iter_saved_schedule_files():
+    for day, sched in staffing.iter_saved_schedules():
         # Collect for filter dropdowns (all days)
         for loc_name, names in sched.assignments.items():
             if loc_name == staffing.TIME_OFF_KEY:

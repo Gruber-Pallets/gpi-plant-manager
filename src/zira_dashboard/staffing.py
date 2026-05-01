@@ -330,6 +330,22 @@ def load_schedule(day: date) -> Schedule:
     return sched
 
 
+def iter_saved_schedules():
+    """Yield (date, Schedule) for every persisted schedule in Postgres,
+    newest first. Past schedules used to live as local JSON files; that
+    storage was retired when the app moved to Railway/Postgres."""
+    from . import db
+    rows = db.query("SELECT day FROM schedules ORDER BY day DESC")
+    for r in rows:
+        day_val = r["day"]
+        if not isinstance(day_val, date):
+            try:
+                day_val = date.fromisoformat(str(day_val))
+            except ValueError:
+                continue
+        yield day_val, load_schedule(day_val)
+
+
 def _load_schedule_from_db(day: date) -> "Schedule":
     from concurrent.futures import ThreadPoolExecutor
     from . import db
