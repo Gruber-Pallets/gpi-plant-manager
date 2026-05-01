@@ -4,6 +4,11 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-01
 
+### 5:30 PM
+
+- **Clear a partial-day off when it's wrong** — every amber partial pill on the scheduler (and every partial entry in the Time Off section) now has a small × button. Click it, confirm, and that partial is hidden for the day: no badge, no `partial_hours_by_name` deduction, gone from the Time Off list. The StratusTime request itself isn't touched, so other days render normally. A "Cleared today" footer in the Time Off section lets you restore a mis-clicked clear with one click. Use case: Jose Luis filed PTO 9-10a but actually worked through it — × the partial and he goes back to being a normal scheduled person.
+- **Wider scheduler + roomier scheduled column** — page max-width bumped 1600 → 1700. Per-WC notes column shrunk (36% → 22%) and the scheduled-people column expanded (22% → 36%) so long pill rows breathe on big monitors.
+
 ### 5:05 PM
 
 - **Two real bug fixes from the diagnostic** — the debug endpoint surfaced what was actually wrong: (1) `derived_absences_for_day` had a `NameError: name 'timezone' is not defined` because the local datetime import didn't include `timezone`. The function was crashing silently every call (caught by a broad `except`), so Porfirio's derived absence never got added to today's time-off list — that's why he stayed in Unscheduled regardless of every other fix. Now imports `timezone` properly. (2) Name disambiguation was picking the wrong Jesus Moreno — when two candidates shared a last-name initial (Martinez + **Moreno** Carreon, both starting "M"), the roster's "Jesus Moreno" matched whichever was first in API order. Now does a full prefix match against the last name first ("Moreno Carreon" starts with "Moreno"), only falling back to single-letter init when the roster name is short-form like "Jesus M".

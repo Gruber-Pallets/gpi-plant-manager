@@ -427,6 +427,52 @@ def test_name_to_emp_id_map_excludes_terminated(env_creds):
     assert m["Bob Smith"] == "222"
 
 
+def test_time_off_entries_skips_cleared_request(env_creds):
+    """A request_id present in cleared_time_off should be filtered out."""
+    requests_payload = {
+        "Report": {},
+        "Results": [
+            {
+                "ID": 5591,
+                "EmpIdentifier": "100",
+                "StatusType": 1,
+                "StartDateTimeSchema": "2026-05-04T09:00:00",
+                "EndDateTimeSchema":   "2026-05-04T10:00:00",
+                "DurationPerDaySecs": 3600,
+                "PayTypeName": "PTO",
+            },
+        ],
+    }
+    employees_payload = {
+        "Report": {},
+        "Results": [{"EmpIdentifier": "100", "FirstName": "Jose", "LastName": "Luis", "Status": "Active"}],
+    }
+    import json as _json
+    from zira_dashboard import late_report
+
+    def fake_post(path, body, **k):
+        if path == "CreateToken":
+            return 200, '"tok"'
+        if path == "GetUserTimeOffRequest":
+            return 200, _json.dumps(requests_payload)
+        if path == "GetUserBasic":
+            return 200, _json.dumps(employees_payload)
+        return 404, "not found"
+
+    # Without a clear: entry shows up.
+    with patch.object(stc, "_post", side_effect=fake_post), \
+         patch.object(late_report, "cleared_request_ids_for_day", return_value=set()):
+        entries = stc.time_off_entries_for_day(date(2026, 5, 4))
+    assert any(e.get("request_id") == 5591 for e in entries)
+
+    # With a clear for that request_id: entry is filtered out.
+    stc._data_cache.clear()
+    with patch.object(stc, "_post", side_effect=fake_post), \
+         patch.object(late_report, "cleared_request_ids_for_day", return_value={5591}):
+        entries = stc.time_off_entries_for_day(date(2026, 5, 4))
+    assert not any(e.get("request_id") == 5591 for e in entries)
+
+
 def test_cache_clear_drops_data_cache(env_creds):
     stc._cache_set(("time_off", "x", "y"), [{"foo": "bar"}])
     assert stc._cache_get(("time_off", "x", "y")) is not None

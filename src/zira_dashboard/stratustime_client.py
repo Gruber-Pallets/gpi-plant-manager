@@ -693,12 +693,25 @@ def time_off_entries_for_day(day) -> list[dict]:
     # roster doesn't have a match.
     roster_map = _emp_id_to_roster_name_map()
     full_map = _employee_id_to_name_map()
+    # Per-day, per-request opt-outs (Jose Luis case: PTO partial filed but
+    # the person actually worked through it — manager clears it from the
+    # scheduler).
+    try:
+        from . import late_report
+        cleared_req_ids = late_report.cleared_request_ids_for_day(day)
+    except Exception:
+        cleared_req_ids = set()
     out = []
     for r in requests_:
         if r.get("StatusType") != 1:
             continue
         if not _request_covers_day(r, day):
             continue
+        try:
+            if int(r.get("ID")) in cleared_req_ids:
+                continue
+        except (TypeError, ValueError):
+            pass
         emp_id = str(r.get("EmpIdentifier") or "")
         name = roster_map.get(emp_id) or full_map.get(emp_id) or f"Unknown ({emp_id})"
         secs = r.get("DurationPerDaySecs") or 0

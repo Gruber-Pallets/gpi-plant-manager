@@ -81,6 +81,50 @@ def active_snoozes(day) -> list[dict]:
     )
 
 
+def clear_time_off_request(day, request_id) -> None:
+    """Mark a StratusTime time-off request as cleared for `day`. Filters
+    out the entry from time_off_entries_for_day, hiding the partial pill
+    on the scheduler and removing the person from the Time Off list.
+    Doesn't touch StratusTime — purely a local override."""
+    db.execute(
+        """
+        INSERT INTO cleared_time_off (day, request_id) VALUES (%s, %s)
+        ON CONFLICT (day, request_id) DO NOTHING
+        """,
+        (day, int(request_id)),
+    )
+
+
+def restore_time_off_request(day, request_id) -> None:
+    """Undo clear_time_off_request — partial reappears on next render."""
+    db.execute(
+        "DELETE FROM cleared_time_off WHERE day = %s AND request_id = %s",
+        (day, int(request_id)),
+    )
+
+
+def cleared_request_ids_for_day(day) -> set[int]:
+    rows = db.query(
+        "SELECT request_id FROM cleared_time_off WHERE day = %s",
+        (day,),
+    )
+    return {int(r["request_id"]) for r in rows}
+
+
+def cleared_partials_for_day(day) -> list[dict]:
+    """Return list of {request_id, declared_at} for the Time Off
+    'Cleared today' restore footer."""
+    return db.query(
+        """
+        SELECT request_id, declared_at
+        FROM cleared_time_off
+        WHERE day = %s
+        ORDER BY declared_at ASC
+        """,
+        (day,),
+    )
+
+
 def cleanup_expired_snoozes(day) -> None:
     """Best-effort cleanup so the table doesn't grow unbounded."""
     db.execute(

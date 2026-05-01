@@ -49,7 +49,7 @@
 
 
   /* Main layout */
-  .layout { padding: 1rem 1.5rem; display: grid; grid-template-columns: 200px minmax(0, 1fr) 280px; gap: 1rem; max-width: 1600px; margin-left: auto; margin-right: auto; }
+  .layout { padding: 1rem 1.5rem; display: grid; grid-template-columns: 200px minmax(0, 1fr) 280px; gap: 1rem; max-width: 1700px; margin-left: auto; margin-right: auto; }
   .day-context { min-width: 0; }
   .side .section h3 {
     margin: 0 0 0.55rem;
@@ -86,6 +86,50 @@
     vertical-align: 1px;
     letter-spacing: 0.3px;
     white-space: nowrap;
+  }
+  .partial-hours-badge .partial-clear {
+    display: inline-block; margin-left: 0.25rem;
+    background: transparent; color: var(--warn);
+    border: none; padding: 0; cursor: pointer;
+    font: inherit; font-size: 0.85rem; line-height: 1;
+    opacity: 0.7;
+  }
+  .partial-hours-badge .partial-clear:hover {
+    opacity: 1; color: var(--bad, #ef4444);
+  }
+  .time-off-row .time-off-clear {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--muted, #6b7280); font-size: 1rem; line-height: 1;
+    padding: 0 0.35rem; margin-left: 0.3rem; border-radius: 4px;
+    opacity: 0.65;
+  }
+  .time-off-row .time-off-clear:hover {
+    color: var(--bad, #ef4444); opacity: 1; background: var(--panel-2, #f1f4f7);
+  }
+  .cleared-partials {
+    margin-top: 0.6rem; padding-top: 0.5rem;
+    border-top: 1px dashed var(--border, #d8dee5);
+    font-size: 0.78rem;
+  }
+  .cleared-partials h4 {
+    margin: 0 0 0.3rem; font-size: 0.7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--muted, #6b7280);
+  }
+  .cleared-partials ul { list-style: none; margin: 0; padding: 0; }
+  .cleared-partials li {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 0.4rem; padding: 0.15rem 0;
+    color: var(--muted, #6b7280);
+  }
+  .cleared-partials .time-off-restore {
+    background: transparent; border: 1px solid var(--border, #d8dee5);
+    border-radius: 4px; padding: 0.05rem 0.45rem;
+    font: inherit; font-size: 0.72rem; cursor: pointer;
+    color: var(--accent, #16a34a);
+  }
+  .cleared-partials .time-off-restore:hover {
+    background: var(--accent-dim, #dcfce7); border-color: var(--accent, #16a34a);
   }
   /* Late-arrival flag: scheduled person who is more than 15 min past
      shift-start without a punch. Surfaces on the scheduler pill alongside
@@ -216,8 +260,8 @@
   table.sched thead th.wc-col { width: 1%; white-space: nowrap; }
   table.sched tbody td.station .name { white-space: nowrap; }
   table.sched thead th.dept { width: 110px; }
-  table.sched thead th.sched-col    { width: 22%; }
-  table.sched thead th.wc-note-col  { width: 36%; }
+  table.sched thead th.sched-col    { width: 36%; }
+  table.sched thead th.wc-note-col  { width: 22%; }
   table.sched td { border-bottom: 1px solid var(--border); padding: 0.3rem 0.6rem; vertical-align: middle; }
   table.sched td.bay {
     background: var(--panel-3);

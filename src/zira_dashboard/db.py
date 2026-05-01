@@ -266,6 +266,18 @@ CREATE INDEX IF NOT EXISTS wc_time_attributions_day_wc_idx ON wc_time_attributio
 -- manual_absences: marks a scheduled person as Absent for a single day
 -- (manager-declared via the Late/Absence Report). Layered into the
 -- StratusTime time-off list so they drop out of Unscheduled + picker.
+-- cleared_time_off: per-day, per-request opt-out for StratusTime
+-- partial-day off entries. When a StratusTime PTO/Early-Leave request
+-- is filed but the person actually worked through it (Jose Luis case),
+-- the user can clear that request for the day. Doesn't touch StratusTime.
+CREATE TABLE IF NOT EXISTS cleared_time_off (
+  day            DATE NOT NULL,
+  request_id     BIGINT NOT NULL,
+  declared_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (day, request_id)
+);
+CREATE INDEX IF NOT EXISTS cleared_time_off_day_idx ON cleared_time_off(day);
+
 CREATE TABLE IF NOT EXISTS manual_absences (
   day            DATE NOT NULL,
   emp_id         TEXT NOT NULL,

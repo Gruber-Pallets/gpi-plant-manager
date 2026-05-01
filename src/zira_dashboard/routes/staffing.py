@@ -267,6 +267,51 @@ def staffing_page(
         for e in time_off_entries
         if e.get("time_range") and e.get("hours") is not None and e["hours"] < 8
     }
+    # request_id per partial-by-name → drives the × clear button. Only
+    # StratusTime requests (with an ID) can be cleared in v1; non-work
+    # shifts and derived absences fall through.
+    partial_request_by_name: dict[str, int] = {
+        e["name"]: int(e["request_id"])
+        for e in time_off_entries
+        if e.get("request_id") and e.get("hours") is not None and 0 < e["hours"] < 8
+    }
+    # Build the "Cleared today" footer list (request_id → person/range)
+    # so the user can restore a mis-clicked clear.
+    cleared_partials_today: list[dict] = []
+    try:
+        from .. import late_report as _lr
+        if d == today:
+            cleared_rows = _lr.cleared_partials_for_day(d)
+            if cleared_rows:
+                # Resolve each cleared request_id back to a {name, time_range}
+                # by re-fetching the StratusTime requests window. Cheap —
+                # this hits the time-off cache.
+                from datetime import timedelta as _td
+                req_window = stratustime_client.get_time_off_requests(
+                    d - _td(days=3), d + _td(days=3)
+                )
+                req_by_id = {int(r["ID"]): r for r in req_window if r.get("ID")}
+                roster_map = stratustime_client._emp_id_to_roster_name_map()
+                full_map = stratustime_client._employee_id_to_name_map()
+                for row in cleared_rows:
+                    rid = int(row["request_id"])
+                    r = req_by_id.get(rid)
+                    if not r:
+                        continue
+                    emp_id = str(r.get("EmpIdentifier") or "")
+                    nm = roster_map.get(emp_id) or full_map.get(emp_id) or f"Unknown ({emp_id})"
+                    start_str = r.get("StartDateTimeSchema") or ""
+                    end_str = r.get("EndDateTimeSchema") or ""
+                    tr = ""
+                    if start_str[:10] == end_str[:10] and start_str:
+                        tr = stratustime_client._fmt_time_range(start_str, end_str)
+                    cleared_partials_today.append({
+                        "request_id": rid,
+                        "name": nm,
+                        "time_range": tr,
+                    })
+    except Exception:
+        cleared_partials_today = []
 
     _options_cache: dict[tuple[str, ...], list[dict]] = {}
 
@@ -429,6 +474,8 @@ def staffing_page(
                 "time_off_entries": sorted(time_off_entries, key=lambda e: e["name"].lower()),
                 "partial_hours_by_name": partial_hours_by_name,
                 "partial_range_by_name": partial_range_by_name,
+                "partial_request_by_name": partial_request_by_name,
+                "cleared_partials_today": cleared_partials_today,
                 "attendance_by_name": attendance_by_name,
                 "late_names_set": late_names_set,
                 "unassigned": sorted(unassigned),
@@ -854,6 +901,55 @@ async def late_report_undo_absent(request: Request):
     today = datetime.now(timezone.utc).date()
     try:
         late_report.undo_absent(today, emp_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    stratustime_client.cache_clear()
+    _http_cache.invalidate_today_cache()
+    return JSONResponse({"ok": True})
+
+
+@router.post("/api/staffing/clear-partial")
+async def staffing_clear_partial(request: Request):
+    """Hide a StratusTime time-off request from the scheduler for one day.
+
+    Use case: Jose Luis filed PTO 9-10a in StratusTime, but actually
+    worked through it. Manager presses × on the partial pill → this
+    endpoint records (day, request_id) → next render the partial is
+    gone (no amber badge, hours restored to total_man_hours, person no
+    longer in Time Off list).
+
+    Body (JSON): {day: ISO date, request_id: int}
+    """
+    from datetime import date as _date
+    from .. import late_report
+    body = await request.json()
+    try:
+        day = _date.fromisoformat(body["day"])
+        request_id = int(body["request_id"])
+    except (KeyError, TypeError, ValueError) as e:
+        return JSONResponse({"ok": False, "error": f"bad body: {e}"}, status_code=400)
+    try:
+        late_report.clear_time_off_request(day, request_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    stratustime_client.cache_clear()
+    _http_cache.invalidate_today_cache()
+    return JSONResponse({"ok": True})
+
+
+@router.post("/api/staffing/restore-partial")
+async def staffing_restore_partial(request: Request):
+    """Undo clear-partial — partial reappears on next render."""
+    from datetime import date as _date
+    from .. import late_report
+    body = await request.json()
+    try:
+        day = _date.fromisoformat(body["day"])
+        request_id = int(body["request_id"])
+    except (KeyError, TypeError, ValueError) as e:
+        return JSONResponse({"ok": False, "error": f"bad body: {e}"}, status_code=400)
+    try:
+        late_report.restore_time_off_request(day, request_id)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     stratustime_client.cache_clear()

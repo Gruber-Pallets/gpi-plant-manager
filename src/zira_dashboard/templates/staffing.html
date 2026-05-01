@@ -134,11 +134,27 @@
             <li class="time-off-row {% if is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }}{% if is_partial %} · off {{ e.time_range or (e.hours ~ 'h') }}{% endif %}">
               <span class="name">{{ e.name }}{{ cert_badges(e.name, person_certs) }}{% if is_partial %} <span class="partial-tag">partial</span>{% endif %}</span>
               <span class="ts-meta">{{ e.pay_type }}{% if is_partial %} · {% if e.time_range %}off {{ e.time_range }}{% else %}{{ e.hours }}h{% endif %}{% endif %}</span>
+              {% if is_partial and e.request_id %}
+                <button type="button" class="time-off-clear" data-request-id="{{ e.request_id }}" data-day="{{ day }}" data-name="{{ e.name }}" title="Clear this partial — they actually worked through it" aria-label="Clear partial for {{ e.name }}">×</button>
+              {% endif %}
             </li>
           {% endfor %}
         </ul>
       {% else %}
         <p class="empty">— none —</p>
+      {% endif %}
+      {% if cleared_partials_today %}
+        <div class="cleared-partials">
+          <h4>Cleared today</h4>
+          <ul>
+            {% for c in cleared_partials_today %}
+              <li>
+                <span>{{ c.name }}{% if c.time_range %} · {{ c.time_range }}{% endif %}</span>
+                <button type="button" class="time-off-restore" data-request-id="{{ c.request_id }}" data-day="{{ day }}">restore</button>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
       {% endif %}
       <p class="ts-note">From StratusTime · cached 5 min · <a href="/api/stratustime/refresh?back=/staffing?day={{ day }}">Refresh now</a></p>
     </div>
@@ -292,7 +308,7 @@
                 <summary>
                   <span class="dd-summary-text">
                     {% if visible_assigned %}
-                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ a.name }}{{ cert_badges(a.name, person_certs) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<span class="partial-hours-badge" title="Off {{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}</span>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
+                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ a.name }}{{ cert_badges(a.name, person_certs) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<span class="partial-hours-badge" title="Off {{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}{% if partial_request_by_name and a.name in partial_request_by_name %}<button type="button" class="partial-clear" data-request-id="{{ partial_request_by_name[a.name] }}" data-day="{{ day }}" data-name="{{ a.name }}" title="Clear this partial — they actually worked through it" aria-label="Clear partial for {{ a.name }}">×</button>{% endif %}</span>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
                     {% endif %}
                     {% if _wc_attribs_for_row %}
                       {% for attrib in _wc_attribs_for_row %}<span class="lvl-attribution" title="Worked {{ attrib.first_label }}–{{ attrib.last_label }}">{{ attrib.person_name }}{{ cert_badges(attrib.person_name, person_certs) }}{% if attrib.time_range %}<span class="attribution-range">{{ attrib.time_range }}</span>{% endif %}</span>{% if not loop.last %}<span class="sep">, </span>{% endif %}{% endfor %}
@@ -1072,6 +1088,44 @@
     });
     refreshPickerVisibility();
     kickAutosave();
+  });
+
+  // Clear/restore a partial-day time-off entry. Two button classes share
+  // the handler since the payload is identical (request_id + day).
+  document.addEventListener('click', async (e) => {
+    const clearBtn = e.target.closest('.partial-clear, .time-off-clear');
+    const restoreBtn = e.target.closest('.time-off-restore');
+    if (!clearBtn && !restoreBtn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const btn = clearBtn || restoreBtn;
+    const day = btn.dataset.day;
+    const requestId = btn.dataset.requestId;
+    if (!day || !requestId) return;
+    const isClear = !!clearBtn;
+    if (isClear) {
+      const name = btn.dataset.name || 'this person';
+      if (!confirm(`Clear ${name}'s partial off for today? They’ll show as fully available.`)) return;
+    }
+    btn.disabled = true;
+    try {
+      const url = isClear ? '/api/staffing/clear-partial' : '/api/staffing/restore-partial';
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({day, request_id: Number(requestId)}),
+      });
+      const j = await resp.json();
+      if (j.ok) {
+        location.reload();
+      } else {
+        btn.disabled = false;
+        alert((isClear ? 'Clear' : 'Restore') + ' failed: ' + (j.error || 'unknown'));
+      }
+    } catch (err) {
+      btn.disabled = false;
+      alert('Network error.');
+    }
   });
 
   // Close dropdowns when clicking outside.
