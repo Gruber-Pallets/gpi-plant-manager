@@ -352,14 +352,22 @@ def _emp_id_to_roster_name_map() -> dict[str, str]:
     return {v: k for k, v in name_to_emp_id_map().items()}
 
 
+TIME_OFF_CACHE_TTL_SECONDS = 60  # short — Dale wants new entries to appear fast
+
+
 def get_time_off_requests(start_d, end_d) -> list[dict]:
     """Return raw time-off request dicts for [start_d, end_d] (inclusive).
 
+    Includes ALL time-off types — PTO, Unpaid Time, Early Leave - Late
+    Start, etc. — and ALL approved (StatusType == 1) entries. No filter
+    by PayTypeName here; downstream callers categorise as needed.
+
     StratusTime caps each call at a 60-day window — caller passes ranges
-    within that. Cached 5 minutes per (start, end).
+    within that. Cached 60 seconds per (start, end) so newly-entered
+    time-off shows up within ~1 min instead of 5.
     """
     key = ("time_off", start_d.isoformat(), end_d.isoformat())
-    cached = _cache_get(key)
+    cached = _cache_get_with_ttl(key, TIME_OFF_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
     status, parsed = authenticated_post("GetUserTimeOffRequest", {
@@ -375,7 +383,7 @@ def get_time_off_requests(start_d, end_d) -> list[dict]:
     results = parsed.get("Results")
     if not isinstance(results, list):
         return []
-    _cache_set(key, results)
+    _cache_set_with_ttl(key, results, TIME_OFF_CACHE_TTL_SECONDS)
     return results
 
 
