@@ -1,0 +1,116 @@
+<footer class="app-footer">
+  <a href="#" id="changelog-open" class="changelog-link">What's new ↗</a>
+</footer>
+<div id="changelog-modal" class="changelog-modal" hidden>
+  <div class="changelog-backdrop" id="changelog-backdrop"></div>
+  <div class="changelog-card" role="dialog" aria-modal="true" aria-label="What's new">
+    <div class="changelog-head">
+      <h3>What's new</h3>
+      <button type="button" id="changelog-close" class="changelog-close" aria-label="Close">×</button>
+    </div>
+    <div id="changelog-body" class="changelog-body">Loading…</div>
+  </div>
+</div>
+<style>
+  .app-footer {
+    border-top: 1px solid var(--border, #d8dee5);
+    background: var(--panel, #fff);
+    padding: 0.5rem 1rem;
+    font-size: 0.78rem;
+    color: var(--muted, #6b7280);
+    text-align: center;
+  }
+  .app-footer .changelog-link {
+    color: var(--muted, #6b7280);
+    text-decoration: none;
+  }
+  .app-footer .changelog-link:hover { color: var(--accent, #16a34a); }
+
+  .changelog-modal[hidden] { display: none; }
+  .changelog-modal {
+    position: fixed; inset: 0; z-index: 9000;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .changelog-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.45);
+  }
+  .changelog-card {
+    position: relative;
+    background: var(--panel, #fff); color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5); border-radius: 12px;
+    width: min(720px, 92vw);
+    max-height: 80vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.25);
+  }
+  .changelog-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--border, #d8dee5);
+  }
+  .changelog-head h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .changelog-close {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--muted, #6b7280); font-size: 1.3rem; line-height: 1;
+    padding: 0.1rem 0.5rem; border-radius: 6px;
+  }
+  .changelog-close:hover { background: var(--panel-2, #f1f4f7); color: var(--fg, #1f2937); }
+  .changelog-body {
+    padding: 0.6rem 1.1rem 1.1rem;
+    overflow-y: auto;
+    line-height: 1.55;
+    font-size: 0.92rem;
+  }
+  .changelog-body h1 { font-size: 1.05rem; margin: 0.6rem 0 0.4rem; }
+  .changelog-body h2 {
+    font-size: 0.78rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--muted, #6b7280);
+    margin: 1.1rem 0 0.4rem;
+    border-bottom: 1px solid var(--border, #d8dee5);
+    padding-bottom: 0.25rem;
+  }
+  .changelog-body h2:first-child { margin-top: 0; }
+  .changelog-body h3 { font-size: 0.95rem; margin: 0.6rem 0 0.3rem; }
+  .changelog-body ul { margin: 0 0 0.6rem 1.1rem; padding: 0; }
+  .changelog-body li { margin: 0.18rem 0; }
+  .changelog-body p { margin: 0.4rem 0; color: var(--muted, #6b7280); }
+  .changelog-body code {
+    background: var(--panel-2, #f1f4f7);
+    padding: 0.05rem 0.3rem; border-radius: 4px;
+    font-size: 0.86em;
+  }
+</style>
+<script>
+(function () {
+  var btn = document.getElementById('changelog-open');
+  var modal = document.getElementById('changelog-modal');
+  var backdrop = document.getElementById('changelog-backdrop');
+  var closeBtn = document.getElementById('changelog-close');
+  var body = document.getElementById('changelog-body');
+  if (!btn || !modal) return;
+  var loaded = false;
+  function open(e) {
+    if (e) e.preventDefault();
+    modal.hidden = false;
+    document.documentElement.style.overflow = 'hidden';
+    if (!loaded) {
+      fetch('/changelog')
+        .then(function (r) { return r.text(); })
+        .then(function (html) { body.innerHTML = html; loaded = true; })
+        .catch(function () { body.innerHTML = '<p>Could not load changelog.</p>'; });
+    }
+  }
+  function close() {
+    modal.hidden = true;
+    document.documentElement.style.overflow = '';
+  }
+  btn.addEventListener('click', open);
+  backdrop.addEventListener('click', close);
+  closeBtn.addEventListener('click', close);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !modal.hidden) close();
+  });
+})();
+</script>
