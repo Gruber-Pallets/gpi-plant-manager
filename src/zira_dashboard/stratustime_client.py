@@ -355,6 +355,104 @@ def _emp_id_to_roster_name_map() -> dict[str, str]:
 TIME_OFF_CACHE_TTL_SECONDS = 60  # short — Dale wants new entries to appear fast
 
 
+def get_non_work_shifts(start_d, end_d) -> list[dict]:
+    """Return non-work-shift punches for [start_d, end_d].
+
+    These are 'manual' time-off entries created by managers in StratusTime
+    that don't appear in GetUserTimeOffRequest (which only returns approved
+    requests). They show up in V1's TimeGetPunchesByEmpIdentifier with
+    InType == 'Start Non-Work' and a PayTypeName like 'Unpaid Time'.
+
+    Returns dicts with: emp_id, pay_type_name, apply_date (ISO YYYY-MM-DD),
+    in_time_str, out_time_str (StratusTime's "M/D/YYYY HH:MM AM" strings).
+
+    V1 endpoint is deprecated but there is no V2 equivalent that exposes
+    these manual non-work entries today.
+    """
+    key = ("non_work", start_d.isoformat(), end_d.isoformat())
+    cached = _cache_get_with_ttl(key, TIME_OFF_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached
+
+    # Build the list of active roster empids — V1 endpoint requires an
+    # explicit EmpIdentifierList. Falling back to all StratusTime active
+    # employees if the roster map is empty.
+    emp_ids: list[str] = []
+    try:
+        emp_ids = sorted({
+            eid for eid in name_to_emp_id_map().values() if eid
+        })
+    except Exception:
+        emp_ids = []
+    if not emp_ids:
+        for emp in list_employees():
+            if (emp.get("Status") or "").lower() == "active":
+                eid = str(emp.get("EmpIdentifier") or "")
+                if eid:
+                    emp_ids.append(eid)
+    if not emp_ids:
+        _cache_set_with_ttl(key, [], TIME_OFF_CACHE_TTL_SECONDS)
+        return []
+
+    body = {
+        "EmpIdentifierList": emp_ids,
+        "StartDate": _wcf_date(_epoch_ms(start_d)),
+        "EndDate": _wcf_date(_epoch_ms(end_d)),
+        "IgnoreLaborLevelCodes": True,
+        "SearchAction": 0,
+        "IncludeKioskTerminalInfo": False,
+        "AfterModifiedOnDate": "/Date(0+0000)/",
+    }
+    # V1 endpoint — direct call, not via authenticated_post, since the path
+    # version differs from the V2 BASE_URL.
+    token, err = get_token()
+    if not token:
+        _cache_set_with_ttl(key, [], TIME_OFF_CACHE_TTL_SECONDS)
+        return []
+    body["AuthToken"] = token
+    payload = json.dumps(body).encode()
+    url_v1 = "https://stratustime.centralservers.com/service/ws-json/1.0/TimeGetPunchesByEmpIdentifier"
+    req = urllib.request.Request(
+        url_v1, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.HTTPError, urllib.error.URLError, Exception):
+        _cache_set_with_ttl(key, [], TIME_OFF_CACHE_TTL_SECONDS)
+        return []
+
+    try:
+        rows = json.loads(text)
+    except json.JSONDecodeError:
+        rows = []
+    if not isinstance(rows, list):
+        rows = []
+
+    out: list[dict] = []
+    for r in rows:
+        in_type = (r.get("InType") or "").strip().lower()
+        if "non-work" not in in_type:
+            continue
+        apply_date = (r.get("ApplyToDate") or "").strip()
+        # ApplyToDate is "M/D/YYYY"; normalize to ISO.
+        try:
+            from datetime import datetime as _dt
+            iso = _dt.strptime(apply_date, "%m/%d/%Y").date().isoformat()
+        except ValueError:
+            continue
+        out.append({
+            "emp_id": str(r.get("EmpIdentifier") or ""),
+            "pay_type_name": r.get("PayTypeName") or "",
+            "apply_date": iso,
+            "in_time": r.get("InTime") or "",
+            "out_time": r.get("OutTime") or "",
+        })
+    _cache_set_with_ttl(key, out, TIME_OFF_CACHE_TTL_SECONDS)
+    return out
+
+
 def get_time_off_requests(start_d, end_d) -> list[dict]:
     """Return raw time-off request dicts for [start_d, end_d] (inclusive).
 
@@ -484,6 +582,48 @@ def time_off_entries_for_day(day) -> list[dict]:
             "status_type": r.get("StatusType"),
             "request_id": r.get("ID"),
         })
+
+    # Layer in "non-work shift" punches — manager-entered manual absences
+    # that don't appear in GetUserTimeOffRequest.
+    try:
+        non_work = get_non_work_shifts(start_d, end_d)
+    except Exception:
+        non_work = []
+    target_iso = day.isoformat()
+    for nw in non_work:
+        if nw.get("apply_date") != target_iso:
+            continue
+        emp_id = nw.get("emp_id") or ""
+        name = roster_map.get(emp_id) or full_map.get(emp_id) or f"Unknown ({emp_id})"
+        in_str = (nw.get("in_time") or "").strip()
+        out_str = (nw.get("out_time") or "").strip()
+        # Compute hours from "M/D/YYYY HH:MM AM" timestamps.
+        hours = 0.0
+        time_range = ""
+        try:
+            from datetime import datetime as _dt
+            in_dt = _dt.strptime(in_str, "%m/%d/%Y %I:%M %p")
+            out_dt = _dt.strptime(out_str, "%m/%d/%Y %I:%M %p")
+            if out_dt > in_dt:
+                hours = round((out_dt - in_dt).total_seconds() / 3600.0, 1)
+                time_range = _fmt_time_range(in_dt.isoformat(), out_dt.isoformat())
+        except ValueError:
+            pass
+        # Skip if a non-work shift duplicates an already-listed time-off
+        # entry for the same person on the same day (defensive — they
+        # shouldn't both exist, but if they do, prefer the request entry).
+        if any(e["name"] == name for e in out):
+            continue
+        out.append({
+            "name": name,
+            "pay_type": nw.get("pay_type_name") or "Non-Work",
+            "hours": hours,
+            "time_range": time_range,
+            "status_type": None,           # non-work shifts have no StatusType
+            "request_id": None,
+            "non_work": True,              # marker so UI can label differently
+        })
+
     return out
 
 
