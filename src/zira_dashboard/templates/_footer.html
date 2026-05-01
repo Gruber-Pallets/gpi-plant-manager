@@ -103,6 +103,86 @@
     0%   { background: var(--accent-dim, #dcfce7); box-shadow: 0 0 0 1px var(--accent, #16a34a) inset; }
     100% { background: transparent; box-shadow: 0 0 0 0 transparent inset; }
   }
+
+  /* Global "Assignments to Do" nav badge + modal — appears on every page
+     when at least one metered WC produced today without a person assigned. */
+  .assign-todo-nav-badge {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    background: var(--warn-dim, #fef3c7); color: var(--warn, #a16207);
+    border: 1px solid var(--warn, #a16207); border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.78rem; font-weight: 700; text-decoration: none;
+    margin-right: 0.2rem;
+    animation: atd-pulse 2.4s ease-in-out infinite;
+  }
+  .assign-todo-nav-badge:hover { background: var(--warn, #a16207); color: white; }
+  .assign-todo-nav-badge .cnt {
+    background: var(--warn, #a16207); color: white;
+    border-radius: 999px; padding: 0 0.45rem; font-size: 0.72rem;
+  }
+  .assign-todo-nav-badge:hover .cnt { background: white; color: var(--warn, #a16207); }
+  @keyframes atd-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--warn, #a16207); }
+    50%      { box-shadow: 0 0 0 4px rgba(161,98,7,0.18); }
+  }
+
+  .atd-modal[hidden] { display: none; }
+  .atd-modal { position: fixed; inset: 0; z-index: 9100; display: flex; align-items: center; justify-content: center; }
+  .atd-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+  .atd-card {
+    position: relative;
+    background: var(--panel, #fff); color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5); border-radius: 12px;
+    width: min(660px, 92vw); max-height: 80vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.25);
+  }
+  .atd-head { display: flex; justify-content: space-between; align-items: center; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border, #d8dee5); }
+  .atd-head h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .atd-close { background: transparent; border: none; cursor: pointer; color: var(--muted, #6b7280); font-size: 1.3rem; padding: 0.1rem 0.5rem; border-radius: 6px; }
+  .atd-close:hover { background: var(--panel-2, #f1f4f7); color: var(--fg, #1f2937); }
+  .atd-body { padding: 0.8rem 1rem; overflow-y: auto; }
+  .atd-help { color: var(--muted, #6b7280); font-size: 0.85rem; margin: 0 0 0.7rem; }
+  .atd-section-title {
+    font-size: 0.7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--muted, #6b7280);
+    margin: 1rem 0 0.4rem;
+    border-top: 1px solid var(--border, #d8dee5);
+    padding-top: 0.6rem;
+  }
+  .atd-section-title:first-child, .atd-list:first-child + .atd-section-title { margin-top: 0; border-top: none; padding-top: 0; }
+  .atd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  .atd-item, .atd-saved-item {
+    border: 1px solid var(--border, #d8dee5); border-radius: 8px;
+    padding: 0.55rem 0.75rem; background: var(--panel-2, #f1f4f7);
+  }
+  .atd-saved-item { background: var(--accent-dim, #dcfce7); display: flex; align-items: center; gap: 0.5rem; }
+  .atd-saved-text { flex: 1 1 auto; font-size: 0.88rem; }
+  .atd-saved-meta { color: var(--muted, #6b7280); font-size: 0.78rem; margin-left: 0.4rem; }
+  .atd-item.atd-saved { background: var(--accent-dim, #dcfce7); border-color: var(--accent, #16a34a); }
+  .atd-item-head { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.4rem; }
+  .atd-item-head strong { font-size: 0.95rem; }
+  .atd-meta { color: var(--muted, #6b7280); font-size: 0.78rem; }
+  .atd-pick { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .atd-pick select {
+    background: var(--panel, #fff); border: 1px solid var(--border, #d8dee5); border-radius: 6px;
+    padding: 0.3rem 0.5rem; font: inherit; font-size: 0.85rem; color: var(--fg, #1f2937);
+    flex: 1 1 auto; min-width: 12rem;
+  }
+  .atd-pick button {
+    background: var(--accent, #16a34a); color: white;
+    border: 1px solid var(--accent, #16a34a); border-radius: 6px;
+    padding: 0.3rem 0.8rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  .atd-pick button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .atd-status { font-size: 0.8rem; color: var(--muted, #6b7280); }
+  .atd-saved-item .atd-delete {
+    background: transparent; color: var(--muted, #6b7280);
+    border: 1px solid var(--border, #d8dee5); border-radius: 6px;
+    padding: 0 0.5rem; font: inherit; font-size: 1.1rem; line-height: 1.4; cursor: pointer;
+  }
+  .atd-saved-item .atd-delete:hover { color: var(--bad, #ef4444); border-color: var(--bad, #ef4444); }
 </style>
 <script>
 (function () {
@@ -173,5 +253,167 @@
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && !modal.hidden) close();
   });
+})();
+
+// Global "Assignments to Do" badge + modal — present on every page.
+(function () {
+  var navBadge = null;
+  var modal = null;
+  var data = null;
+  var ATD_ENDPOINT = '/api/assignments-todo';
+
+  function settingsLink() {
+    return document.querySelector('header nav a[href="/settings"]')
+        || document.querySelector('header.app nav a[href="/settings"]');
+  }
+
+  function refreshCount() {
+    fetch(ATD_ENDPOINT).then(function (r) { return r.json(); }).then(function (d) {
+      data = d;
+      injectOrUpdateBadge();
+    }).catch(function () {});
+  }
+
+  function injectOrUpdateBadge() {
+    if (!data || !data.count) {
+      if (navBadge) { navBadge.remove(); navBadge = null; }
+      return;
+    }
+    var anchor = settingsLink();
+    if (!anchor) return;
+    if (!navBadge) {
+      navBadge = document.createElement('a');
+      navBadge.href = '#';
+      navBadge.className = 'assign-todo-nav-badge';
+      navBadge.title = 'Production happened at unscheduled work centers — click to attribute';
+      navBadge.addEventListener('click', function (e) { e.preventDefault(); openModal(); });
+      anchor.parentNode.insertBefore(navBadge, anchor);
+    }
+    navBadge.innerHTML = '⚠ <span class="cnt">' + data.count + '</span> to attribute';
+  }
+
+  function openModal() {
+    closeModal();
+    modal = document.createElement('div');
+    modal.className = 'atd-modal';
+    modal.innerHTML = ''
+      + '<div class="atd-backdrop"></div>'
+      + '<div class="atd-card" role="dialog" aria-modal="true" aria-label="Assignments to do">'
+      + '  <div class="atd-head"><h3>Assignments to Do</h3>'
+      + '    <button type="button" class="atd-close" aria-label="Close">×</button></div>'
+      + '  <div class="atd-body">Loading…</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    document.documentElement.style.overflow = 'hidden';
+    modal.querySelector('.atd-backdrop').addEventListener('click', closeModal);
+    modal.querySelector('.atd-close').addEventListener('click', closeModal);
+    document.addEventListener('keydown', escClose);
+    fetch(ATD_ENDPOINT).then(function (r) { return r.json(); }).then(renderModal);
+  }
+
+  function closeModal() {
+    if (modal) { modal.remove(); modal = null; }
+    document.documentElement.style.overflow = '';
+    document.removeEventListener('keydown', escClose);
+  }
+
+  function escClose(e) { if (e.key === 'Escape') closeModal(); }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function renderModal(d) {
+    data = d;
+    if (!modal) return;
+    var body = modal.querySelector('.atd-body');
+    var html = '';
+    if (d.items && d.items.length) {
+      html += '<p class="atd-help">These work centers produced units today but had no one scheduled. Pick the person who actually worked there. Any active employee can be picked, even if they\'re scheduled elsewhere.</p>';
+      html += '<ul class="atd-list">';
+      d.items.forEach(function (item) {
+        html += '<li class="atd-item" data-wc="' + escapeHtml(item.wc_name) + '" data-day="' + escapeHtml(d.today) + '" data-start="' + escapeHtml(item.first_iso) + '" data-end="' + escapeHtml(item.last_iso) + '">';
+        html += '<div class="atd-item-head"><strong>' + escapeHtml(item.wc_name) + '</strong>';
+        html += ' <span class="atd-meta">' + item.units + ' pallets · ' + escapeHtml(item.first_label) + '–' + escapeHtml(item.last_label) + '</span></div>';
+        html += '<div class="atd-pick"><select class="atd-person"><option value="">— pick person —</option>';
+        d.people.forEach(function (n) {
+          html += '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + '</option>';
+        });
+        html += '</select> <button type="button" class="atd-save">Save</button>';
+        html += '<span class="atd-status" hidden></span></div></li>';
+      });
+      html += '</ul>';
+    } else {
+      html += '<p class="atd-help">Nothing to attribute right now — every metered WC with production today has someone assigned.</p>';
+    }
+    if (d.saved && d.saved.length) {
+      html += '<h4 class="atd-section-title">Saved today</h4>';
+      html += '<ul class="atd-list">';
+      d.saved.forEach(function (r) {
+        html += '<li class="atd-saved-item" data-attribution-id="' + r.id + '">';
+        html += '<span class="atd-saved-text"><strong>' + escapeHtml(r.wc_name) + '</strong> — ' + escapeHtml(r.person_name);
+        html += ' <span class="atd-saved-meta">' + escapeHtml(r.first_label) + '–' + escapeHtml(r.last_label) + '</span></span>';
+        html += '<button type="button" class="atd-delete" title="Remove this attribution" aria-label="Remove">×</button></li>';
+      });
+      html += '</ul>';
+    }
+    body.innerHTML = html;
+    wireBodyHandlers();
+  }
+
+  function wireBodyHandlers() {
+    if (!modal) return;
+    modal.querySelectorAll('.atd-save').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var li = b.closest('.atd-item');
+        var sel = li.querySelector('.atd-person');
+        var status = li.querySelector('.atd-status');
+        var person = sel.value;
+        if (!person) { status.hidden = false; status.textContent = 'Pick a person.'; return; }
+        b.disabled = true; sel.disabled = true; status.hidden = true;
+        fetch('/api/staffing/attribute', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            day: li.dataset.day, wc_name: li.dataset.wc, person_name: person,
+            start_utc: li.dataset.start, end_utc: li.dataset.end,
+          }),
+        }).then(function (r) { return r.json(); }).then(function (resp) {
+          if (resp.ok) {
+            status.hidden = false; status.textContent = 'Saved ✓ ' + person;
+            li.classList.add('atd-saved');
+            setTimeout(function () { fetch(ATD_ENDPOINT).then(function (r) { return r.json(); }).then(renderModal); refreshCount(); }, 400);
+          } else {
+            b.disabled = false; sel.disabled = false;
+            status.hidden = false; status.textContent = 'Failed: ' + (resp.error || 'unknown');
+          }
+        }).catch(function () {
+          b.disabled = false; sel.disabled = false;
+          status.hidden = false; status.textContent = 'Network error.';
+        });
+      });
+    });
+    modal.querySelectorAll('.atd-delete').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var li = b.closest('.atd-saved-item');
+        if (!li || !confirm('Remove this attribution?')) return;
+        b.disabled = true;
+        fetch('/api/staffing/attribute/' + encodeURIComponent(li.dataset.attributionId), {method: 'DELETE'})
+          .then(function (r) { return r.json(); })
+          .then(function (resp) {
+            if (resp.ok) {
+              li.style.opacity = '0.4'; li.style.textDecoration = 'line-through';
+              setTimeout(function () { fetch(ATD_ENDPOINT).then(function (r) { return r.json(); }).then(renderModal); refreshCount(); }, 400);
+            } else {
+              b.disabled = false; alert('Delete failed: ' + (resp.error || 'unknown'));
+            }
+          }).catch(function () { b.disabled = false; alert('Network error.'); });
+      });
+    });
+  }
+
+  // Kick it off after a short delay so the rest of the page renders first.
+  setTimeout(refreshCount, 300);
 })();
 </script>

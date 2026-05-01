@@ -630,6 +630,48 @@ def staffing_attribute_delete(attribution_id: int):
     return JSONResponse({"ok": True})
 
 
+@router.get("/api/assignments-todo")
+def assignments_todo_json():
+    """JSON snapshot for the global "Assignments to Do" nav badge + modal.
+
+    Always for today. Returns count, items (pending), saved (already
+    attributed today), and the active-people roster.
+    """
+    from .. import staffing as _staffing, wc_attributions
+    from ..deps import client as _client
+    today = datetime.now(timezone.utc).date()
+    out: dict = {"count": 0, "today": today.isoformat(), "items": [], "saved": [], "people": []}
+    try:
+        site_tz = shift_config.SITE_TZ
+        for item in wc_attributions.unattributed_for_day(today, _client):
+            first = item["first_sample_utc"].astimezone(site_tz)
+            last = item["last_sample_utc"].astimezone(site_tz)
+            out["items"].append({
+                "wc_name": item["wc_name"],
+                "units": item["units"],
+                "first_label": first.strftime("%I:%M %p").lstrip("0"),
+                "last_label": last.strftime("%I:%M %p").lstrip("0"),
+                "first_iso": item["first_sample_utc"].isoformat(),
+                "last_iso": item["last_sample_utc"].isoformat(),
+            })
+        for r in wc_attributions.for_day(today):
+            s_local = r["start_utc"].astimezone(site_tz)
+            e_local = r["end_utc"].astimezone(site_tz)
+            out["saved"].append({
+                "id": r["id"],
+                "wc_name": r["wc_name"],
+                "person_name": r["person_name"],
+                "first_label": s_local.strftime("%I:%M %p").lstrip("0"),
+                "last_label": e_local.strftime("%I:%M %p").lstrip("0"),
+            })
+        roster = _staffing.load_roster()
+        out["people"] = sorted((p.name for p in roster if p.active), key=str.lower)
+        out["count"] = len(out["items"])
+    except Exception:
+        pass
+    return JSONResponse(out)
+
+
 @router.get("/api/stratustime/refresh")
 def stratustime_refresh(back: str | None = Query(default=None)):
     """Bust the StratusTime in-process cache, then redirect back.
