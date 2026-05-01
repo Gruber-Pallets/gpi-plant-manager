@@ -95,6 +95,32 @@ def staffing_page(
         if e.get("time_range") and e.get("hours") is not None and e["hours"] < 8
     }
 
+    # Attendance: only meaningful when viewing today and current time is past shift-start.
+    # Page still renders if StratusTime is unreachable (try/except covers all errors).
+    attendance_by_name: dict[str, dict] = {}
+    if d == today:
+        now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+        shift_start_local = datetime.combine(
+            d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ
+        )
+        if now_local >= shift_start_local:
+            try:
+                name_to_id = stratustime_client.name_to_emp_id_map()
+                scheduled_names: set[str] = set()
+                for ops in sched.assignments.values():
+                    for n in (ops or []):
+                        if n:
+                            scheduled_names.add(n)
+                scheduled_ids = [name_to_id[n] for n in scheduled_names if n in name_to_id]
+                id_to_name = {v: k for k, v in name_to_id.items()}
+                attendance_by_id = stratustime_client.attendance_for_day(d, scheduled_ids)
+                for emp_id, info in attendance_by_id.items():
+                    name = id_to_name.get(emp_id)
+                    if name:
+                        attendance_by_name[name] = info
+            except Exception:
+                attendance_by_name = {}
+
     _options_cache: dict[tuple[str, ...], list[dict]] = {}
 
     def options_for(required: tuple[str, ...]) -> list[dict]:
@@ -255,6 +281,7 @@ def staffing_page(
             "time_off_entries": sorted(time_off_entries, key=lambda e: e["name"].lower()),
             "partial_hours_by_name": partial_hours_by_name,
             "partial_range_by_name": partial_range_by_name,
+            "attendance_by_name": attendance_by_name,
             "unassigned": sorted(unassigned),
             "reserves": sorted(reserves),
             # JS uses this to route auto-removed people back to the right

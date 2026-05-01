@@ -386,3 +386,63 @@ def test_partial_off_intervals_excludes_unapproved(env_creds):
     with patch.object(stc, "_post", side_effect=fake_post):
         intervals = stc.partial_off_intervals_for_day(date(2026, 4, 29))
     assert intervals == {}
+
+
+# --- Attendance helpers (sub-project #4) ---
+
+
+def _fake_status_record(empid, last_tx, tx_type):
+    return {
+        "EmpIdentifier": empid,
+        "LastTransactionDate": last_tx,
+        "LastTransactionType": tx_type,
+        "LastTransctionTypeID": 2,
+    }
+
+
+def test_attendance_for_day_marks_on_time_and_late(env_creds, monkeypatch):
+    # Pin shift_start to 7:00 AM on 2026-05-01 so the test isn't dependent on
+    # whatever the current schedule_store says.
+    from datetime import time as _time
+    from zira_dashboard import shift_config as sc
+    monkeypatch.setattr(sc, "shift_start_for", lambda d: _time(7, 0))
+
+    payload = {
+        "Report": {},
+        "Results": [
+            _fake_status_record("AAA", "05/01/2026 06:55 AM", "Clock In"),   # on time
+            _fake_status_record("BBB", "05/01/2026 07:15 AM", "Clock In"),   # 15m late
+            _fake_status_record("CCC", "05/01/2026 09:30 AM", "Clock Out"),  # clocked out
+        ],
+    }
+    import json as _json
+
+    def fake_post(path, body, **k):
+        if path == "CreateToken":
+            return 200, '"tok"'
+        if path == "GetUserTimeOnStatusBoard":
+            return 200, _json.dumps(payload)
+        return 404, "not found"
+
+    with patch.object(stc, "_post", side_effect=fake_post):
+        result = stc.attendance_for_day(date(2026, 5, 1), ["AAA", "BBB", "CCC", "DDD"])
+
+    assert result["AAA"]["status"] == "on_time"
+    assert result["BBB"]["status"] == "late"
+    assert result["BBB"]["minutes_late"] == 15
+    assert result["CCC"]["status"] == "clocked_out"
+    assert result["DDD"]["status"] == "no_punch"  # not in Results
+
+
+def test_attendance_for_day_empty_emp_ids(env_creds):
+    # Empty list short-circuits before any HTTP call — no _post mock needed.
+    assert stc.attendance_for_day(date(2026, 5, 1), []) == {}
+
+
+def test_parse_status_board_datetime_handles_garbage():
+    assert stc._parse_status_board_datetime("garbage") is None
+    assert stc._parse_status_board_datetime("") is None
+    dt = stc._parse_status_board_datetime("05/01/2026 06:41 AM")
+    assert dt is not None
+    assert dt.hour == 6
+    assert dt.minute == 41

@@ -224,6 +224,20 @@ def _cache_set(key, value):
     _data_cache[key] = (value, time.time() + DATA_CACHE_TTL_SECONDS)
 
 
+def _cache_get_with_ttl(key, ttl_seconds):
+    """Like _cache_get but treats entries written via _cache_set_with_ttl correctly.
+
+    The existing _cache_get already checks expiry against the stored expires_at,
+    so this is just an alias for symmetry with _cache_set_with_ttl.
+    """
+    return _cache_get(key)
+
+
+def _cache_set_with_ttl(key, value, ttl_seconds):
+    """Set with custom TTL (overrides DATA_CACHE_TTL_SECONDS)."""
+    _data_cache[key] = (value, time.time() + ttl_seconds)
+
+
 def cache_clear() -> None:
     """Drop all cached data (token cache untouched)."""
     _data_cache.clear()
@@ -254,6 +268,20 @@ def _employee_id_to_name_map() -> dict[str, str]:
             out[str(emp_id)] = f"{first} {last}".strip()
     _cache_set(("emp_map",), out)
     return out
+
+
+def name_to_emp_id_map() -> dict[str, str]:
+    """Reverse of _employee_id_to_name_map: 'FirstName LastName' → 'EmpIdentifier'.
+
+    Cached separately from emp_map but populated from the same source.
+    """
+    cached = _cache_get(("name_to_id_map",))
+    if cached is not None:
+        return cached
+    forward = _employee_id_to_name_map()
+    inverted = {name: emp_id for emp_id, name in forward.items()}
+    _cache_set(("name_to_id_map",), inverted)
+    return inverted
 
 
 def get_time_off_requests(start_d, end_d) -> list[dict]:
@@ -435,3 +463,120 @@ def partial_off_intervals_for_day(day) -> dict[str, list]:
 
 # Public deep-link to StratusTime's time-off page (for "Manage in StratusTime ↗" links).
 STRATUSTIME_TIME_OFF_URL = "https://stratustime.centralservers.com/"
+
+
+# --- Attendance (sub-project #4) ---
+
+ATTENDANCE_CACHE_TTL_SECONDS = 60  # punches move fast
+
+
+def _parse_status_board_datetime(date_str: str):
+    """Parse '05/01/2026 06:41 AM' into a SITE_TZ-aware datetime.
+
+    Returns None on parse failure or empty input.
+    """
+    from datetime import datetime as _dt
+    from . import shift_config
+    if not date_str:
+        return None
+    try:
+        dt = _dt.strptime(date_str, "%m/%d/%Y %I:%M %p")
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=shift_config.SITE_TZ)
+
+
+def attendance_for_day(day, emp_ids, grace_minutes: int = 7) -> dict:
+    """Return per-EmpIdentifier attendance status against `day`'s shift-start.
+
+    Result shape:
+      {
+        emp_id: {
+          "status": "on_time" | "late" | "clocked_out" | "no_punch" | "unknown",
+          "clocked_in_at": "06:41 AM" | None,    # display string (site-local)
+          "minutes_late": int,                    # 0 if on_time, positive if late
+          "transaction_type": str,                # raw LastTransactionType
+        },
+        ...
+      }
+
+    Status values:
+      - on_time: Clock In transaction on `day`, at or before shift_start + grace.
+      - late: Clock In transaction on `day`, after shift_start + grace; minutes_late > 0.
+      - clocked_out: most-recent transaction is a Clock Out today. Person worked today
+        but is not currently on the clock (lunch, left for the day, etc.).
+      - no_punch: no transaction record found for this emp on `day`.
+      - unknown: data shape unexpected.
+
+    Empty `emp_ids` returns {}. Cached 60s per (day, sorted_emp_ids tuple).
+    """
+    if not emp_ids:
+        return {}
+    from datetime import datetime as _dt, timedelta
+    from . import shift_config
+
+    cache_key = ("attendance", day.isoformat(), tuple(sorted(set(emp_ids))))
+    cached = _cache_get_with_ttl(cache_key, ATTENDANCE_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached
+
+    status, parsed = authenticated_post("GetUserTimeOnStatusBoard", {
+        "DataAction": {"Name": "SELECT-EMPID", "Values": list(emp_ids)},
+    })
+    out: dict = {}
+    if status < 200 or status >= 300 or not isinstance(parsed, dict):
+        _cache_set_with_ttl(cache_key, out, ATTENDANCE_CACHE_TTL_SECONDS)
+        return out
+
+    results = parsed.get("Results")
+    seen_ids: set[str] = set()
+    if isinstance(results, list):
+        shift_start_dt = _dt.combine(
+            day, shift_config.shift_start_for(day), tzinfo=shift_config.SITE_TZ
+        )
+        on_time_cutoff = shift_start_dt + timedelta(minutes=grace_minutes)
+        for r in results:
+            emp_id = str(r.get("EmpIdentifier") or "")
+            if not emp_id:
+                continue
+            seen_ids.add(emp_id)
+            tx_type = r.get("LastTransactionType") or ""
+            tx_dt = _parse_status_board_datetime(r.get("LastTransactionDate") or "")
+            entry = {
+                "status": "unknown",
+                "clocked_in_at": None,
+                "minutes_late": 0,
+                "transaction_type": tx_type,
+            }
+            if tx_dt is not None and tx_dt.date() == day:
+                hr_min = tx_dt.strftime("%I:%M %p").lstrip("0")
+                if tx_type.lower().startswith("clock in"):
+                    entry["clocked_in_at"] = hr_min
+                    if tx_dt <= on_time_cutoff:
+                        entry["status"] = "on_time"
+                    else:
+                        late = int((tx_dt - shift_start_dt).total_seconds() // 60)
+                        entry["status"] = "late"
+                        entry["minutes_late"] = max(0, late)
+                elif tx_type.lower().startswith("clock out"):
+                    entry["status"] = "clocked_out"
+                    entry["clocked_in_at"] = hr_min
+                else:
+                    # Lunch, transfer, etc. — treat as on the clock today.
+                    entry["status"] = "on_time"
+                    entry["clocked_in_at"] = hr_min
+            out[emp_id] = entry
+
+    # Anyone we asked about who didn't appear in Results -> no_punch.
+    for emp_id in emp_ids:
+        sid = str(emp_id)
+        if sid not in seen_ids and sid not in out:
+            out[sid] = {
+                "status": "no_punch",
+                "clocked_in_at": None,
+                "minutes_late": 0,
+                "transaction_type": "",
+            }
+
+    _cache_set_with_ttl(cache_key, out, ATTENDANCE_CACHE_TTL_SECONDS)
+    return out
