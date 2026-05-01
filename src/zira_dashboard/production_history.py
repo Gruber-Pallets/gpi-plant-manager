@@ -20,6 +20,7 @@ def attribute_for_day(
     assignments: dict[str, list[str]],
     wc_totals: dict[str, tuple[int, int]],
     elapsed_minutes: int,
+    extra_assignments: dict[str, list[str]] | None = None,
 ) -> dict[str, dict[str, dict[str, float]]]:
     """Attribute one day's WC output to the operators on each WC.
 
@@ -30,6 +31,11 @@ def attribute_for_day(
             leaderboard call. Missing entries (WC with no meter) are
             treated as zero output.
         elapsed_minutes: shift minutes available that day; same for everyone.
+        extra_assignments: optional ``{wc_name: [person, ...]}`` for retro
+            time-window attributions. Adds operators to UNSCHEDULED WCs only
+            (a WC already present in ``assignments`` with people is left
+            alone -- the published schedule wins). Used to flow retro
+            attributions into leaderboards and dashboards.
 
     Returns:
         {person: {wc_name: {"units": float, "downtime": float, "hours": float,
@@ -39,11 +45,22 @@ def attribute_for_day(
 
     out: dict[str, dict[str, dict[str, float]]] = {}
     hours = elapsed_minutes / 60.0
+
+    # Merge: scheduled wins; extras only fire when a WC has no scheduled people.
+    merged: dict[str, list[str]] = {}
     for wc_name, operators in assignments.items():
-        if wc_name == TIME_OFF_KEY:
+        if wc_name == TIME_OFF_KEY or not operators:
             continue
-        if not operators:
-            continue
+        merged[wc_name] = list(operators)
+    if extra_assignments:
+        for wc_name, ppl in extra_assignments.items():
+            if wc_name in merged:  # scheduled — skip
+                continue
+            if not ppl:
+                continue
+            merged[wc_name] = list(ppl)
+
+    for wc_name, operators in merged.items():
         units, downtime = wc_totals.get(wc_name, (0, 0))
         n = len(operators)
         per_units = units / n
@@ -114,13 +131,16 @@ def _elapsed_minutes_for(d: date) -> int:
 
 def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
     """Attribute production on a single published day. Returns {} for drafts."""
-    from . import staffing
+    from . import staffing, wc_attributions
     sched = staffing.load_schedule(d)
     if not sched.published:
         return {}
     wc_totals = _fetch_wc_totals(client, d)
     elapsed = _elapsed_minutes_for(d)
-    return attribute_for_day(sched.assignments, wc_totals, elapsed)
+    extra = wc_attributions.people_by_wc(d)
+    return attribute_for_day(
+        sched.assignments, wc_totals, elapsed, extra_assignments=extra
+    )
 
 
 def attribution_range(

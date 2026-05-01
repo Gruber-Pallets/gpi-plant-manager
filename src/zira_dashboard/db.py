@@ -244,6 +244,24 @@ CREATE TABLE IF NOT EXISTS schedule_wc_notes (
   PRIMARY KEY (day, wc_id)
 );
 
+-- Retro time-windowed WC attributions: when a metered WC produced units but
+-- had no one scheduled there, the user can attribute the production to the
+-- person who actually worked it. Used by attribute_for_day so leaderboards
+-- and dashboards pick up the credit. No FK on day -- attribution can predate
+-- the schedule entry.
+CREATE TABLE IF NOT EXISTS wc_time_attributions (
+  id              BIGSERIAL PRIMARY KEY,
+  day             DATE NOT NULL,
+  wc_name         TEXT NOT NULL,
+  person_name     TEXT NOT NULL,
+  start_utc       TIMESTAMPTZ NOT NULL,
+  end_utc         TIMESTAMPTZ NOT NULL,
+  source          TEXT NOT NULL DEFAULT 'manual',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS wc_time_attributions_day_idx ON wc_time_attributions(day);
+CREATE INDEX IF NOT EXISTS wc_time_attributions_day_wc_idx ON wc_time_attributions(day, wc_name);
+
 CREATE TABLE IF NOT EXISTS global_schedule (
   id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   shift_start     TIME NOT NULL,

@@ -158,6 +158,12 @@
     <div class="title-bar">
       <h2>Daily Plant Scheduler</h2>
       <div class="title-bar-actions">
+      {% if assignments_todo %}
+        <button type="button" class="todo-btn" id="assignments-todo-btn"
+                aria-label="Assignments to do" title="Unscheduled WCs that produced today">
+          Assignments to Do <span class="todo-count">{{ assignments_todo|length }}</span>
+        </button>
+      {% endif %}
       <input type="date" id="day-picker" value="{{ day }}" class="date-input" title="Jump to another day">
       <a href="/staffing?day={{ today }}" class="day-hot {% if day == today %}active{% endif %}" title="Jump to today">Today</a>
       <a href="/staffing?day={{ tomorrow }}" class="day-hot {% if day == tomorrow %}active{% endif %}" title="Jump to the next working day">Next Day</a>
@@ -364,6 +370,44 @@
     </div>
   </aside>
 
+</div>
+
+<div id="assignments-todo-modal" class="ats-modal" hidden>
+  <div class="ats-backdrop" id="ats-backdrop"></div>
+  <div class="ats-card" role="dialog" aria-modal="true" aria-label="Assignments to do">
+    <div class="ats-head">
+      <h3>Assignments to Do</h3>
+      <button type="button" id="ats-close" class="ats-close" aria-label="Close">×</button>
+    </div>
+    <div class="ats-body">
+      {% if assignments_todo %}
+        <p class="ats-help">These work centers produced units today but had no one scheduled. Pick the person who actually worked there. (Any employee — including someone scheduled elsewhere.)</p>
+        <ul class="ats-list">
+          {% for item in assignments_todo %}
+            <li class="ats-item" data-wc="{{ item.wc_name }}" data-day="{{ day }}"
+                data-start="{{ item.first_iso }}" data-end="{{ item.last_iso }}">
+              <div class="ats-item-head">
+                <strong>{{ item.wc_name }}</strong>
+                <span class="ats-meta">{{ item.units }} pallets · {{ item.first_label }}–{{ item.last_label }}</span>
+              </div>
+              <div class="ats-pick">
+                <select class="ats-person">
+                  <option value="">— pick person —</option>
+                  {% for n in all_active_people %}
+                    <option value="{{ n }}">{{ n }}</option>
+                  {% endfor %}
+                </select>
+                <button type="button" class="ats-save">Save</button>
+                <span class="ats-status" hidden></span>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="ats-help">Nothing to attribute right now — every WC with production today has someone assigned.</p>
+      {% endif %}
+    </div>
+  </div>
 </div>
 </form>
 
@@ -1438,6 +1482,74 @@
       btn.innerHTML = originalContent;
     }
   }
+
+  // ---------- Assignments to Do modal ----------
+  // Retro WC attributions: list metered WCs that produced units today but
+  // had no one scheduled. Pick a person → POST /api/staffing/attribute →
+  // production_history.attribute_for_day picks it up via wc_attributions.
+  (function () {
+    var btn = document.getElementById('assignments-todo-btn');
+    var modal = document.getElementById('assignments-todo-modal');
+    if (!btn || !modal) return;
+    var backdrop = document.getElementById('ats-backdrop');
+    var closeBtn = document.getElementById('ats-close');
+    function open(e) {
+      if (e) e.preventDefault();
+      modal.hidden = false;
+      document.documentElement.style.overflow = 'hidden';
+    }
+    function close() {
+      modal.hidden = true;
+      document.documentElement.style.overflow = '';
+    }
+    btn.addEventListener('click', open);
+    if (backdrop) backdrop.addEventListener('click', close);
+    if (closeBtn) closeBtn.addEventListener('click', close);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !modal.hidden) close();
+    });
+    // Save handlers
+    document.querySelectorAll('.ats-save').forEach(function (btnEl) {
+      btnEl.addEventListener('click', function () {
+        var li = btnEl.closest('.ats-item');
+        var sel = li.querySelector('.ats-person');
+        var status = li.querySelector('.ats-status');
+        var person = sel.value;
+        if (!person) {
+          status.hidden = false;
+          status.textContent = 'Pick a person first.';
+          return;
+        }
+        btnEl.disabled = true; sel.disabled = true; status.hidden = true;
+        fetch('/api/staffing/attribute', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            day: li.dataset.day,
+            wc_name: li.dataset.wc,
+            person_name: person,
+            start_utc: li.dataset.start,
+            end_utc: li.dataset.end,
+          }),
+        }).then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.ok) {
+              li.classList.add('ats-saved');
+              status.hidden = false;
+              status.textContent = 'Saved ✓ ' + person;
+            } else {
+              btnEl.disabled = false; sel.disabled = false;
+              status.hidden = false;
+              status.textContent = 'Failed: ' + (data.error || 'unknown');
+            }
+          }).catch(function () {
+            btnEl.disabled = false; sel.disabled = false;
+            status.hidden = false;
+            status.textContent = 'Network error.';
+          });
+      });
+    });
+  })();
 </script>
 {% include '_footer.html' %}
 </body>

@@ -161,6 +161,31 @@ def staffing_page(
     active_people = [p for p in roster if p.active]
     all_by_name = {p.name: p for p in roster}
 
+    # Retro WC attributions ("Assignments to Do"). Lists metered WCs that
+    # produced units today but have no one scheduled. Wrapped in try/except
+    # so a transient StratusTime / Zira / Postgres failure doesn't break the
+    # scheduler page.
+    assignments_todo: list[dict] = []
+    try:
+        from .. import wc_attributions
+        from ..deps import client as zira_client
+        todo = wc_attributions.unattributed_for_day(d, zira_client)
+        site_tz = shift_config.SITE_TZ
+        for item in todo:
+            first = item["first_sample_utc"].astimezone(site_tz)
+            last = item["last_sample_utc"].astimezone(site_tz)
+            assignments_todo.append({
+                "wc_name": item["wc_name"],
+                "units": item["units"],
+                "first_label": first.strftime("%I:%M %p").lstrip("0"),
+                "last_label": last.strftime("%I:%M %p").lstrip("0"),
+                "first_iso": item["first_sample_utc"].isoformat(),
+                "last_iso": item["last_sample_utc"].isoformat(),
+            })
+    except Exception:
+        assignments_todo = []
+    all_active_people = sorted(p.name for p in active_people)
+
     # Per-person hours-off-today (for partial entries) so the scheduler
     # can show a badge next to their name.
     partial_hours_by_name: dict[str, float] = {
@@ -352,6 +377,8 @@ def staffing_page(
                 "has_custom_hours": has_custom_hours,
                 "eff_hours_label": eff_hours_label,
                 "person_certs": person_certs,
+                "assignments_todo": assignments_todo,
+                "all_active_people": all_active_people,
             },
         )
 
@@ -542,6 +569,34 @@ async def staffing_hours_save(request: Request):
     sched.custom_hours = {"start": start_s, "end": end_s, "breaks": breaks_out}
     staffing.save_schedule(sched)
     return JSONResponse({"ok": True})
+
+
+@router.post("/api/staffing/attribute")
+async def staffing_attribute(request: Request):
+    """Insert one retro WC attribution row.
+
+    Body (JSON):
+      day:         ISO date
+      wc_name:     work center name
+      person_name: person to credit
+      start_utc:   ISO datetime (UTC)
+      end_utc:     ISO datetime (UTC)
+    """
+    from datetime import date as _date, datetime as _dt
+    from .. import wc_attributions
+    body = await request.json()
+    try:
+        day = _date.fromisoformat(body["day"])
+        wc = str(body["wc_name"]).strip()
+        person = str(body["person_name"]).strip()
+        start_utc = _dt.fromisoformat(body["start_utc"])
+        end_utc = _dt.fromisoformat(body["end_utc"])
+    except (KeyError, TypeError, ValueError) as e:
+        return JSONResponse({"ok": False, "error": f"bad body: {e}"}, status_code=400)
+    if not (wc and person and end_utc > start_utc):
+        return JSONResponse({"ok": False, "error": "missing/invalid fields"}, status_code=400)
+    new_id = wc_attributions.add(day, wc, person, start_utc, end_utc)
+    return JSONResponse({"ok": True, "id": new_id})
 
 
 @router.get("/api/stratustime/refresh")
