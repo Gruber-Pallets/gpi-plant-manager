@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
-from .. import stratustime_client
+from .. import _http_cache, stratustime_client
 from ..deps import templates
 
 router = APIRouter()
@@ -15,21 +15,22 @@ router = APIRouter()
 
 def _time_off_by_day(start_d: date, end_d: date) -> dict[date, list[dict]]:
     """Return {day: [time_off_entry, ...]} for [start_d, end_d] inclusive,
-    sourced from StratusTime. Each entry is a dict with keys
-    name / pay_type / hours / status_type / request_id.
-
-    Falls back to an empty list per day if StratusTime is unreachable, so the
-    page always renders.
-    """
-    out: dict[date, list[dict]] = {}
-    cursor = start_d
-    while cursor <= end_d:
-        try:
-            out[cursor] = stratustime_client.time_off_entries_for_day(cursor)
-        except Exception:
-            out[cursor] = []
-        cursor += timedelta(days=1)
-    return out
+    sourced from StratusTime via a single bulk fetch (one StratusTime call
+    per data type for the whole range, vs N per-day calls)."""
+    try:
+        return stratustime_client.time_off_entries_for_range(start_d, end_d)
+    except Exception:
+        # Fallback: per-day path so a transient StratusTime hiccup never
+        # blanks the whole calendar.
+        out: dict[date, list[dict]] = {}
+        cursor = start_d
+        while cursor <= end_d:
+            try:
+                out[cursor] = stratustime_client.time_off_entries_for_day(cursor)
+            except Exception:
+                out[cursor] = []
+            cursor += timedelta(days=1)
+        return out
 
 
 @router.get("/staffing/time-off", response_class=HTMLResponse)
@@ -44,6 +45,14 @@ def staffing_time_off(
         cursor = date.fromisoformat(date_) if date_ else today
     except ValueError:
         cursor = today
+
+    # Server-side response cache: today bucket (15s) for any view that
+    # includes today; past bucket (5min) for purely historical views.
+    is_today = cursor >= today  # conservative — if cursor is on/after today, treat as live
+    cache_key = ("time_off", scale, cursor.isoformat())
+    cached_resp = _http_cache.get_cached_response(cache_key, includes_today=is_today)
+    if cached_resp is not None:
+        return cached_resp
 
     # Compute the visible date range so we only fetch StratusTime data for what
     # the user actually sees (cached 5 min per day inside the client).
@@ -158,4 +167,7 @@ def staffing_time_off(
         ctx["prev_date"] = date(cursor.year - 1, cursor.month, 1).isoformat()
         ctx["next_date"] = date(cursor.year + 1, cursor.month, 1).isoformat()
 
-    return templates.TemplateResponse(request, "time_off.html", ctx)
+    response = templates.TemplateResponse(request, "time_off.html", ctx)
+    _http_cache.set_cache_headers(response, includes_today=is_today)
+    _http_cache.store_cached_response(cache_key, includes_today=is_today, response=response)
+    return response

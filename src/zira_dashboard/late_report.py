@@ -151,6 +151,47 @@ def cleared_non_work_for_day(day) -> list[dict]:
     )
 
 
+def cleared_request_ids_for_range(start_d, end_d) -> dict:
+    """Bulk version of cleared_request_ids_for_day for [start_d, end_d].
+    Returns {date: set(request_id, ...)}. One DB query for the whole range."""
+    rows = db.query(
+        "SELECT day, request_id FROM cleared_time_off WHERE day BETWEEN %s AND %s",
+        (start_d, end_d),
+    )
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["day"], set()).add(int(r["request_id"]))
+    return out
+
+
+def cleared_non_work_emp_ids_for_range(start_d, end_d) -> dict:
+    rows = db.query(
+        "SELECT day, emp_id FROM cleared_non_work_shifts WHERE day BETWEEN %s AND %s",
+        (start_d, end_d),
+    )
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["day"], set()).add(str(r["emp_id"]))
+    return out
+
+
+def absences_for_range(start_d, end_d) -> dict:
+    """Bulk version of absences_for_day. {date: [{emp_id, name, declared_at}, ...]}."""
+    rows = db.query(
+        "SELECT day, emp_id, name, declared_at FROM manual_absences "
+        "WHERE day BETWEEN %s AND %s",
+        (start_d, end_d),
+    )
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["day"], []).append({
+            "emp_id": r["emp_id"],
+            "name": r["name"],
+            "declared_at": r["declared_at"],
+        })
+    return out
+
+
 def cleared_partials_for_day(day) -> list[dict]:
     """Return list of {request_id, declared_at} for the Time Off
     'Cleared today' restore footer."""

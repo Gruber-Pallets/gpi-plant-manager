@@ -849,6 +849,163 @@ def time_off_entries_for_day(day) -> list[dict]:
     return out
 
 
+def time_off_entries_for_range(start_d, end_d) -> dict:
+    """Bulk version of time_off_entries_for_day for [start_d, end_d].
+
+    Returns {date: [entry, ...]}. Designed for the calendar / time-off
+    page which would otherwise call time_off_entries_for_day once per
+    visible day (~42 calls for a month, ~365 for a year). This collapses
+    that into ONE StratusTime requests fetch + ONE non-work-shifts fetch
+    + 3 bulk DB queries, then bucketizes in memory.
+
+    Derived absences only fire for `today`, so they're added only if
+    `today` falls within the range.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime as _dt, timedelta, timezone as _tz
+
+    if end_d < start_d:
+        start_d, end_d = end_d, start_d
+
+    # Pad the StratusTime window by 3 days on each side so we still pick
+    # up multi-day requests that span the boundary.
+    sx_start = start_d - timedelta(days=3)
+    sx_end = end_d + timedelta(days=3)
+
+    def _safe(fn, *a, default=None):
+        try:
+            return fn(*a)
+        except Exception:
+            return default
+
+    from . import late_report as _lr
+    with ThreadPoolExecutor(max_workers=7) as pool:
+        f_requests = pool.submit(_safe, get_time_off_requests, sx_start, sx_end, default=[])
+        f_non_work = pool.submit(_safe, get_non_work_shifts, sx_start, sx_end, default=[])
+        f_cleared_req = pool.submit(_safe, _lr.cleared_request_ids_for_range, start_d, end_d, default={})
+        f_cleared_emp = pool.submit(_safe, _lr.cleared_non_work_emp_ids_for_range, start_d, end_d, default={})
+        f_manual = pool.submit(_safe, _lr.absences_for_range, start_d, end_d, default={})
+        f_roster_map = pool.submit(_emp_id_to_roster_name_map)
+        f_full_map = pool.submit(_employee_id_to_name_map)
+
+        requests_ = f_requests.result() or []
+        non_work = f_non_work.result() or []
+        cleared_req_by_day = f_cleared_req.result() or {}
+        cleared_emp_by_day = f_cleared_emp.result() or {}
+        manual_abs_by_day = f_manual.result() or {}
+        roster_map = f_roster_map.result() or {}
+        full_map = f_full_map.result() or {}
+
+    # Pre-filter approved requests once. _request_covers_day is cheap
+    # (string compare), so per-day looping over the filtered list is fine.
+    approved = [r for r in requests_ if r.get("StatusType") == 1]
+
+    today = _dt.now(_tz.utc).date()
+    out: dict = {}
+    cursor = start_d
+    while cursor <= end_d:
+        day_iso = cursor.isoformat()
+        cleared_req_ids = cleared_req_by_day.get(cursor, set())
+        cleared_emp_ids = cleared_emp_by_day.get(cursor, set())
+        day_out: list[dict] = []
+
+        for r in approved:
+            if not _request_covers_day(r, cursor):
+                continue
+            try:
+                if int(r.get("ID")) in cleared_req_ids:
+                    continue
+            except (TypeError, ValueError):
+                pass
+            emp_id = str(r.get("EmpIdentifier") or "")
+            name = roster_map.get(emp_id) or full_map.get(emp_id) or f"Unknown ({emp_id})"
+            secs = r.get("DurationPerDaySecs") or 0
+            start_str = r.get("StartDateTimeSchema") or ""
+            end_str = r.get("EndDateTimeSchema") or ""
+            time_range = (
+                _fmt_time_range(start_str, end_str)
+                if start_str[:10] == end_str[:10] and start_str
+                else ""
+            )
+            day_out.append({
+                "name": name,
+                "emp_id": emp_id,
+                "pay_type": r.get("PayTypeName") or "",
+                "hours": round(secs / 3600.0, 1),
+                "time_range": time_range,
+                "status_type": r.get("StatusType"),
+                "request_id": r.get("ID"),
+            })
+
+        for nw in non_work:
+            if nw.get("apply_date") != day_iso:
+                continue
+            emp_id = nw.get("emp_id") or ""
+            if emp_id and emp_id in cleared_emp_ids:
+                continue
+            name = roster_map.get(emp_id) or full_map.get(emp_id) or f"Unknown ({emp_id})"
+            in_str = (nw.get("in_time") or "").strip()
+            out_str = (nw.get("out_time") or "").strip()
+            hours = 0.0
+            time_range = ""
+            try:
+                in_dt = _dt.strptime(in_str, "%m/%d/%Y %I:%M %p")
+                out_dt = _dt.strptime(out_str, "%m/%d/%Y %I:%M %p")
+                if out_dt > in_dt:
+                    hours = round((out_dt - in_dt).total_seconds() / 3600.0, 1)
+                    time_range = _fmt_time_range(in_dt.isoformat(), out_dt.isoformat())
+            except ValueError:
+                pass
+            if any(e["name"] == name for e in day_out):
+                continue
+            day_out.append({
+                "name": name,
+                "emp_id": emp_id,
+                "pay_type": nw.get("pay_type_name") or "Non-Work",
+                "hours": hours,
+                "time_range": time_range,
+                "status_type": None,
+                "request_id": None,
+                "non_work": True,
+            })
+
+        listed_names = {e["name"] for e in day_out}
+
+        if cursor == today:
+            try:
+                derived = derived_absences_for_day(cursor)
+            except Exception:
+                derived = []
+            for d in derived:
+                if d["name"] in listed_names:
+                    continue
+                day_out.append(d)
+                listed_names.add(d["name"])
+
+        for r in manual_abs_by_day.get(cursor, []):
+            nm = r["name"]
+            emp_id = r["emp_id"]
+            roster_name = roster_map.get(emp_id) or full_map.get(emp_id) or nm
+            if roster_name in listed_names:
+                continue
+            day_out.append({
+                "name": roster_name,
+                "pay_type": "Manual Absent",
+                "hours": 8.0,
+                "time_range": "",
+                "status_type": None,
+                "request_id": None,
+                "non_work": True,
+                "manual_absent": True,
+            })
+            listed_names.add(roster_name)
+
+        out[cursor] = day_out
+        cursor += timedelta(days=1)
+
+    return out
+
+
 def time_off_names_for_day(day) -> list[str]:
     """Just the names — convenience for callers that only need a list of strings."""
     return [e["name"] for e in time_off_entries_for_day(day)]

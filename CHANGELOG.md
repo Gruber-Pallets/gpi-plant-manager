@@ -4,6 +4,13 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-01
 
+### 7:30 PM
+
+- **/time-off page rebuilt around a single bulk fetch** — month view was making ~42 sequential calls to `time_off_entries_for_day`, year view ~365. Each call spawned its own thread pool and ran 5+ DB queries. New `time_off_entries_for_range` does the entire calendar in ONE pass: one StratusTime requests fetch, one non-work-shifts fetch, three bulk DB queries (cleared partials, cleared non-work, manual absences) — then bucketizes by day in memory. Should be 5-15× faster for month/year views.
+- **/time-off page also gets HTTP response caching** — same 15s today / 5min past pattern as /staffing. Switching tabs back to the calendar now hits cache and serves in <1 ms.
+
+**On StratusTime calls being slow in general** — the limit is HTTPS round-trip latency to `stratustime.centralservers.com`, ~200-500ms per call. There's no way to make a single uncached call faster, only to (1) avoid making it (caching, bulk windows), (2) parallelize so multiple calls share wall-clock time, or (3) keep caches warm so user requests never hit cold. We're now doing all three: 30 min cache on the employee directory, 5 min on time-off requests, bulk-window queries instead of per-day, parallel fan-out everywhere, and a 3-min background warmer.
+
 ### 7:00 PM
 
 - **/staffing now caches its full HTTP response** — every previous render rebuilt the page from scratch (DB + StratusTime + Zira chain), even when nothing had changed. Now the rendered HTML is stashed in-process for 15 s today (5 min for past days). Most pageviews — including the reload after a partial-clear click, the redirect after a save, and tab-switching back to the page — serve from cache in <1 ms instead of 1-3 s. Mutations (POST /staffing save, hours edit, attribute, clear-partial, declare-absent, snooze) all invalidate the cache so saves still appear immediately.
