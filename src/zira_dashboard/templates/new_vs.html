@@ -147,7 +147,12 @@
               <span class="name-secondary">{{ d.name }}</span>
             {% else %}
               <span class="name-primary">{{ d.name }}</span>
-              <span class="name-secondary"><em>(no assignment)</em></span>
+              {% if assignments_todo_by_wc and d.name in assignments_todo_by_wc %}
+                {% set _todo = assignments_todo_by_wc[d.name] %}
+                <button type="button" class="no-assign-btn" data-wc="{{ d.name }}" data-day="{{ today }}" data-start="{{ _todo.first_iso }}" data-end="{{ _todo.last_iso }}" title="Assign person to this WC's work">↪ assign</button>
+              {% else %}
+                <span class="name-secondary"><em>(no assignment)</em></span>
+              {% endif %}
             {% endif %}
           </div>
           <div class="stacked-track">
