@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-01
 
+### 6:15 PM
+
+- **Click the partial pill itself to clear it** — the × button wasn't surfacing well visually, so the whole partial pill is now the click target. Hovering the amber 9-10a badge changes it to a darker amber and grows it slightly; clicking pops a confirm dialog with the person's name. Same on the Time Off section's partial rows. Capture-phase listener so the click doesn't toggle the WC's dropdown.
+
 ### 6:00 PM
 
 - **Partial × button now works for non-work-shift partials too** — Jose Luis's partial wasn't a regular StratusTime time-off request, it was a manager-entered "non-work shift" via the V1 punch endpoint (no `request_id`), so the × button was silently never rendering for him. Two changes: (1) every partial pill now gets a × regardless of source — request-id partials post to `cleared_time_off`, non-work-shift partials post to a new `cleared_non_work_shifts (day, emp_id)` table. (2) Added the same fallback in the Time Off section's per-row clear and the "Cleared today" restore list.

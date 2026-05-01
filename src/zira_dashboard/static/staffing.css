@@ -93,36 +93,31 @@
     letter-spacing: 0.3px;
     white-space: nowrap;
   }
-  .partial-hours-badge .partial-clear {
-    display: inline-flex; align-items: center; justify-content: center;
-    margin-left: 0.35rem;
-    background: white; color: #b91c1c;
-    border: 1.5px solid #b91c1c; border-radius: 50%;
-    width: 0.95rem; height: 0.95rem; min-width: 0.95rem;
-    padding: 0; cursor: pointer;
-    font: 700 0.7rem/1 sans-serif;
-    vertical-align: -2px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-    transition: transform 0.1s ease, background 0.1s ease, color 0.1s ease;
+  /* Clickable partial pill: click anywhere on the badge to clear the
+     partial. Hover treatment makes the click affordance obvious. */
+  .partial-hours-badge.clearable {
+    cursor: pointer;
+    transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.1s ease;
   }
-  .partial-hours-badge .partial-clear:hover {
-    background: #b91c1c; color: white;
-    transform: scale(1.2);
+  .partial-hours-badge.clearable:hover {
+    background: var(--warn);
+    color: white;
+    transform: scale(1.05);
+    box-shadow: 0 2px 6px rgba(161,98,7,0.4);
   }
-  .time-off-row .time-off-clear {
-    display: inline-flex; align-items: center; justify-content: center;
-    margin-left: 0.4rem;
-    background: white; color: #b91c1c;
-    border: 1.5px solid #b91c1c; border-radius: 50%;
-    width: 1.15rem; height: 1.15rem;
-    padding: 0; cursor: pointer;
-    font: 700 0.85rem/1 sans-serif;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  .partial-hours-badge.clearable:focus-visible {
+    outline: 2px solid var(--warn);
+    outline-offset: 2px;
   }
-  .time-off-row .time-off-clear:hover {
-    background: #b91c1c; color: white;
-    transform: scale(1.1);
+  .timeoff .time-off-row.clearable {
+    cursor: pointer;
+    transition: background 0.1s ease, border-left-color 0.1s ease;
   }
+  .timeoff .time-off-row.clearable:hover {
+    background: var(--warn);
+    color: white;
+  }
+  .timeoff .time-off-row.clearable:hover .ts-meta { color: rgba(255,255,255,0.85); }
   .cleared-partials {
     margin-top: 0.6rem; padding-top: 0.5rem;
     border-top: 1px dashed var(--border, #d8dee5);

@@ -132,12 +132,10 @@
           {% for e in time_off_entries %}
             {% set is_partial = e.hours is not none and e.hours < 8 %}
             {% set is_absent = e.derived or e.manual_absent %}
-            <li class="time-off-row {% if is_absent %}absent{% elif is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }}{% if is_partial %} · off {{ e.time_range or (e.hours ~ 'h') }}{% endif %}">
+            {% set is_clearable = is_partial and (e.request_id or e.emp_id) %}
+            <li class="time-off-row {% if is_absent %}absent{% elif is_partial %}partial{% else %}full{% endif %}{% if is_clearable %} clearable{% endif %}"{% if is_clearable %} role="button" tabindex="0" data-day="{{ day }}" data-name="{{ e.name }}"{% if e.request_id %} data-request-id="{{ e.request_id }}"{% endif %}{% if e.emp_id %} data-emp-id="{{ e.emp_id }}"{% endif %} title="Click to clear this partial — {{ e.pay_type }} · off {{ e.time_range or (e.hours ~ 'h') }}"{% else %} title="{{ e.pay_type }}{% if is_partial %} · off {{ e.time_range or (e.hours ~ 'h') }}{% endif %}"{% endif %}>
               <span class="name">{{ e.name }}{{ cert_badges(e.name, person_certs) }}{% if is_partial %} <span class="partial-tag">partial</span>{% endif %}</span>
               <span class="ts-meta">{{ e.pay_type }}{% if is_partial %} · {% if e.time_range %}off {{ e.time_range }}{% else %}{{ e.hours }}h{% endif %}{% endif %}</span>
-              {% if is_partial and (e.request_id or e.emp_id) %}
-                <button type="button" class="time-off-clear" {% if e.request_id %}data-request-id="{{ e.request_id }}"{% endif %}{% if e.emp_id %} data-emp-id="{{ e.emp_id }}"{% endif %} data-day="{{ day }}" data-name="{{ e.name }}" title="Clear this partial — they actually worked through it" aria-label="Clear partial for {{ e.name }}">×</button>
-              {% endif %}
             </li>
           {% endfor %}
         </ul>
@@ -309,7 +307,7 @@
                 <summary>
                   <span class="dd-summary-text">
                     {% if visible_assigned %}
-                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ a.name }}{{ cert_badges(a.name, person_certs) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<span class="partial-hours-badge" title="Off {{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}{% if partial_clear_by_name and a.name in partial_clear_by_name %}<button type="button" class="partial-clear" {% if partial_clear_by_name[a.name].request_id %}data-request-id="{{ partial_clear_by_name[a.name].request_id }}"{% endif %}{% if partial_clear_by_name[a.name].emp_id %} data-emp-id="{{ partial_clear_by_name[a.name].emp_id }}"{% endif %} data-day="{{ day }}" data-name="{{ a.name }}" title="Clear this partial — they actually worked through it" aria-label="Clear partial for {{ a.name }}">×</button>{% endif %}</span>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
+                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ a.name }}{{ cert_badges(a.name, person_certs) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<span class="partial-hours-badge{% if partial_clear_by_name and a.name in partial_clear_by_name %} clearable{% endif %}"{% if partial_clear_by_name and a.name in partial_clear_by_name %} role="button" tabindex="0" data-day="{{ day }}" data-name="{{ a.name }}"{% if partial_clear_by_name[a.name].request_id %} data-request-id="{{ partial_clear_by_name[a.name].request_id }}"{% endif %}{% if partial_clear_by_name[a.name].emp_id %} data-emp-id="{{ partial_clear_by_name[a.name].emp_id }}"{% endif %} title="Click to clear this partial — they actually worked through it"{% else %} title="Off {{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}"{% endif %}>{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}</span>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
                     {% endif %}
                     {% if _wc_attribs_for_row %}
                       {% for attrib in _wc_attribs_for_row %}<span class="lvl-attribution" title="Worked {{ attrib.first_label }}–{{ attrib.last_label }}">{{ attrib.person_name }}{{ cert_badges(attrib.person_name, person_certs) }}{% if attrib.time_range %}<span class="attribution-range">{{ attrib.time_range }}</span>{% endif %}</span>{% if not loop.last %}<span class="sep">, </span>{% endif %}{% endfor %}
@@ -1091,30 +1089,26 @@
     kickAutosave();
   });
 
-  // Clear/restore a partial-day time-off entry. Two button classes share
-  // the handler since the payload is identical (request_id + day).
-  document.addEventListener('click', async (e) => {
-    const clearBtn = e.target.closest('.partial-clear, .time-off-clear');
-    const restoreBtn = e.target.closest('.time-off-restore');
-    if (!clearBtn && !restoreBtn) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const btn = clearBtn || restoreBtn;
-    const day = btn.dataset.day;
-    const requestId = btn.dataset.requestId;
-    const empId = btn.dataset.empId;
+  // Click a clearable partial pill (the amber 9-10a badge on a scheduled
+  // person OR a partial row in the Time Off section) → confirm → clear.
+  // Click a "restore" button in the Cleared-today footer → un-clear.
+  // Capture-phase listener on the badge so it fires before the
+  // <details>/<summary> default toggle inside the scheduler dropdown.
+  async function _doPartialAction(target, isClear) {
+    const day = target.dataset.day;
+    const requestId = target.dataset.requestId;
+    const empId = target.dataset.empId;
     if (!day || (!requestId && !empId)) return;
-    const isClear = !!clearBtn;
     if (isClear) {
-      const name = btn.dataset.name || 'this person';
+      const name = target.dataset.name || 'this person';
       if (!confirm(`Clear ${name}'s partial off for today? They’ll show as fully available.`)) return;
     }
-    btn.disabled = true;
+    const url = isClear ? '/api/staffing/clear-partial' : '/api/staffing/restore-partial';
+    const payload = {day};
+    if (requestId) payload.request_id = Number(requestId);
+    else if (empId) payload.emp_id = empId;
+    target.style.opacity = '0.5';
     try {
-      const url = isClear ? '/api/staffing/clear-partial' : '/api/staffing/restore-partial';
-      const payload = {day};
-      if (requestId) payload.request_id = Number(requestId);
-      else if (empId) payload.emp_id = empId;
       const resp = await fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -1124,14 +1118,40 @@
       if (j.ok) {
         location.reload();
       } else {
-        btn.disabled = false;
+        target.style.opacity = '';
         alert((isClear ? 'Clear' : 'Restore') + ' failed: ' + (j.error || 'unknown'));
       }
     } catch (err) {
-      btn.disabled = false;
+      target.style.opacity = '';
       alert('Network error.');
     }
-  });
+  }
+
+  // Capture phase: intercept clicks on the partial badge BEFORE the
+  // <details>/<summary> default action toggles the dropdown.
+  document.addEventListener('click', (e) => {
+    const badge = e.target.closest('.partial-hours-badge.clearable');
+    if (badge) {
+      e.preventDefault();
+      e.stopPropagation();
+      _doPartialAction(badge, true);
+      return;
+    }
+    const row = e.target.closest('.time-off-row.clearable');
+    if (row) {
+      e.preventDefault();
+      e.stopPropagation();
+      _doPartialAction(row, true);
+      return;
+    }
+    const restoreBtn = e.target.closest('.time-off-restore');
+    if (restoreBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      _doPartialAction(restoreBtn, false);
+      return;
+    }
+  }, true);
 
   // Close dropdowns when clicking outside.
   document.addEventListener('click', (e) => {
