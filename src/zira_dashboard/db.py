@@ -233,11 +233,9 @@ CREATE TABLE IF NOT EXISTS schedule_assignments (
 );
 CREATE INDEX IF NOT EXISTS schedule_assignments_day_idx ON schedule_assignments(day);
 
-CREATE TABLE IF NOT EXISTS schedule_time_off (
-  day             DATE NOT NULL REFERENCES schedules(day) ON DELETE CASCADE,
-  person_id       INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-  PRIMARY KEY (day, person_id)
-);
+-- schedule_time_off: removed (sub-project #2 — time-off now sourced live
+-- from StratusTime, not stored locally). Drop the orphan table on bootstrap.
+DROP TABLE IF EXISTS schedule_time_off;
 
 CREATE TABLE IF NOT EXISTS schedule_wc_notes (
   day             DATE NOT NULL REFERENCES schedules(day) ON DELETE CASCADE,

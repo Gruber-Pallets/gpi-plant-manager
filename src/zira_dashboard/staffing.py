@@ -351,13 +351,7 @@ def _load_schedule_from_db(day: date) -> "Schedule":
     assignments: dict[str, list[str]] = {}
     for a in asg_rows:
         assignments.setdefault(a["wc_name"], []).append(a["person_name"])
-    to_rows = db.query(
-        "SELECT pe.name FROM schedule_time_off s "
-        "JOIN people pe ON pe.id = s.person_id WHERE s.day = %s ORDER BY pe.name",
-        (day,),
-    )
-    if to_rows:
-        assignments[TIME_OFF_KEY] = [t["name"] for t in to_rows]
+    # Time-off is now sourced from StratusTime (sub-project #2), not the local DB.
     notes_rows = db.query(
         "SELECT wc.name AS wc_name, sn.note "
         "FROM schedule_wc_notes sn JOIN work_centers wc ON wc.id = sn.wc_id "
@@ -404,16 +398,11 @@ def save_schedule(schedule: Schedule) -> None:
             ),
         )
         cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (schedule.day,))
-        cur.execute("DELETE FROM schedule_time_off WHERE day = %s", (schedule.day,))
         cur.execute("DELETE FROM schedule_wc_notes WHERE day = %s", (schedule.day,))
         for wc_name, names in (schedule.assignments or {}).items():
             if wc_name == TIME_OFF_KEY:
-                for n in names or []:
-                    cur.execute(
-                        "INSERT INTO schedule_time_off (day, person_id) "
-                        "SELECT %s, pe.id FROM people pe WHERE pe.name = %s",
-                        (schedule.day, n),
-                    )
+                # Legacy in-memory key from older snapshots; time-off is now
+                # StratusTime-driven and never persisted locally. Skip silently.
                 continue
             for i, n in enumerate(names or []):
                 cur.execute(
