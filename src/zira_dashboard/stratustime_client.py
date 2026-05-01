@@ -283,6 +283,36 @@ def get_time_off_requests(start_d, end_d) -> list[dict]:
     return results
 
 
+def _fmt_time_short(dt_str: str) -> str:
+    """Format an ISO datetime string like '2026-04-29T09:00:00' as a short
+    time-of-day: '9a', '9:30a', '12p', '1:15p'. Returns '' on parse failure.
+    """
+    from datetime import datetime as _dt
+    try:
+        dt = _dt.fromisoformat(dt_str)
+    except (ValueError, TypeError):
+        return ""
+    h, m = dt.hour, dt.minute
+    period = "a" if h < 12 else "p"
+    h12 = h % 12 or 12
+    if m == 0:
+        return f"{h12}{period}"
+    return f"{h12}:{m:02d}{period}"
+
+
+def _fmt_time_range(start_str: str, end_str: str) -> str:
+    """Compact time range. Drops am/pm from start when both share the same period.
+    Examples: '9-10a', '11a-1p', '9:30-10:15a', '12-1p'.
+    """
+    s = _fmt_time_short(start_str)
+    e = _fmt_time_short(end_str)
+    if not s or not e:
+        return ""
+    if s[-1] == e[-1]:
+        s = s[:-1]
+    return f"{s}-{e}"
+
+
 def _request_covers_day(req: dict, day) -> bool:
     """True if the time-off request `req` includes `day`.
 
@@ -328,10 +358,20 @@ def time_off_entries_for_day(day) -> list[dict]:
         emp_id = str(r.get("EmpIdentifier") or "")
         name = emp_map.get(emp_id) or f"Unknown ({emp_id})"
         secs = r.get("DurationPerDaySecs") or 0
+        start_str = r.get("StartDateTimeSchema") or ""
+        end_str = r.get("EndDateTimeSchema") or ""
+        # Show a time range only when the request is single-day. Multi-day
+        # requests (e.g., 3-day PTO) report their first-day start time and
+        # last-day end time, which would be misleading on middle days.
+        if start_str[:10] == end_str[:10] and start_str:
+            time_range = _fmt_time_range(start_str, end_str)
+        else:
+            time_range = ""
         out.append({
             "name": name,
             "pay_type": r.get("PayTypeName") or "",
             "hours": round(secs / 3600.0, 1),
+            "time_range": time_range,
             "status_type": r.get("StatusType"),
             "request_id": r.get("ID"),
         })

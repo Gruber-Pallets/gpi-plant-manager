@@ -190,6 +190,55 @@ def _fake_request(empid, start_iso, end_iso, status=1, secs=28800, paytype="PTO"
     }
 
 
+def test_fmt_time_short_basic():
+    assert stc._fmt_time_short("2026-04-29T09:00:00") == "9a"
+    assert stc._fmt_time_short("2026-04-29T13:00:00") == "1p"
+    assert stc._fmt_time_short("2026-04-29T12:00:00") == "12p"
+    assert stc._fmt_time_short("2026-04-29T00:00:00") == "12a"
+    assert stc._fmt_time_short("2026-04-29T09:30:00") == "9:30a"
+    assert stc._fmt_time_short("2026-04-29T15:45:00") == "3:45p"
+    assert stc._fmt_time_short("garbage") == ""
+    assert stc._fmt_time_short("") == ""
+
+
+def test_fmt_time_range_drops_period_when_same():
+    assert stc._fmt_time_range("2026-04-29T09:00:00", "2026-04-29T10:00:00") == "9-10a"
+    assert stc._fmt_time_range("2026-04-29T13:00:00", "2026-04-29T14:00:00") == "1-2p"
+    assert stc._fmt_time_range("2026-04-29T11:00:00", "2026-04-29T13:00:00") == "11a-1p"
+    assert stc._fmt_time_range("2026-04-29T09:30:00", "2026-04-29T10:15:00") == "9:30-10:15a"
+    assert stc._fmt_time_range("2026-04-29T12:00:00", "2026-04-29T13:00:00") == "12-1p"
+    assert stc._fmt_time_range("", "2026-04-29T10:00:00") == ""
+
+
+def test_time_off_entries_includes_time_range_for_single_day(env_creds):
+    requests_payload = {
+        "Report": {},
+        "Results": [{
+            "ID": 1, "EmpIdentifier": "777", "StatusType": 1,
+            "DurationPerDaySecs": 3600, "PayTypeName": "Early Leave",
+            "StartDateTimeSchema": "2026-04-29T09:00:00",
+            "EndDateTimeSchema": "2026-04-29T10:00:00",
+            "IncludeWeekends": False,
+        }],
+    }
+    employees_payload = {"Report": {}, "Results": [_fake_emp_data("777", "Jesus", "Martinez")]}
+    import json as _json
+
+    def fake_post(path, body, **k):
+        if path == "CreateToken":
+            return 200, '"tok"'
+        if path == "GetUserTimeOffRequest":
+            return 200, _json.dumps(requests_payload)
+        if path == "GetUserBasic":
+            return 200, _json.dumps(employees_payload)
+        return 404, "not found"
+
+    with patch.object(stc, "_post", side_effect=fake_post):
+        entries = stc.time_off_entries_for_day(date(2026, 4, 29))
+    assert len(entries) == 1
+    assert entries[0]["time_range"] == "9-10a"
+
+
 def test_request_covers_day_simple_range():
     req = _fake_request("1", "2026-05-04", "2026-05-06", include_weekends=True)
     assert stc._request_covers_day(req, date(2026, 5, 4)) is True

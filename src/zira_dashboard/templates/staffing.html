@@ -128,9 +128,9 @@
         <ul class="time-off-list">
           {% for e in time_off_entries %}
             {% set is_partial = e.hours is not none and e.hours < 8 %}
-            <li class="time-off-row {% if is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }} · {{ e.hours }}h{% if is_partial %} (partial day){% endif %}">
+            <li class="time-off-row {% if is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }}{% if is_partial %} · off {{ e.time_range or (e.hours ~ 'h') }}{% endif %}">
               <span class="name">{{ e.name }}{{ cert_badges(e.name, person_certs) }}{% if is_partial %} <span class="partial-tag">partial</span>{% endif %}</span>
-              <span class="ts-meta">{{ e.pay_type }}{% if is_partial %} · {{ e.hours }}h{% endif %}</span>
+              <span class="ts-meta">{{ e.pay_type }}{% if is_partial %} · {% if e.time_range %}off {{ e.time_range }}{% else %}{{ e.hours }}h{% endif %}{% endif %}</span>
             </li>
           {% endfor %}
         </ul>

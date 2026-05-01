@@ -71,8 +71,9 @@
       <div class="day-view-list">
         {% for e in day_names %}
           {% set is_partial = e.hours is not none and e.hours < 8 %}
-          <span class="off-pill {% if is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }} · {{ e.hours }}h{% if is_partial %} (partial day){% endif %}">
-            {{ e.name }}{% if e.pay_type %} <span style="opacity:0.75;font-weight:400">· {{ e.pay_type }}{% if is_partial %} · {{ e.hours }}h{% endif %}</span>{% endif %}
+          {% set partial_label = e.time_range or (e.hours ~ 'h') %}
+          <span class="off-pill {% if is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }}{% if is_partial %} · off {{ partial_label }}{% endif %}">
+            {{ e.name }}{% if e.pay_type %} <span style="opacity:0.75;font-weight:400">· {{ e.pay_type }}{% if is_partial %} · off {{ partial_label }}{% endif %}</span>{% endif %}
           </span>
         {% endfor %}
       </div>
@@ -93,7 +94,8 @@
             <div class="off-pills">
               {% for e in d.names %}
                 {% set is_partial = e.hours is not none and e.hours < 8 %}
-                <span class="off-pill {% if is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }} · {{ e.hours }}h{% if is_partial %} (partial day){% endif %}">{{ e.name }}{% if is_partial %} · {{ e.hours }}h{% endif %}</span>
+                {% set partial_label = e.time_range or (e.hours ~ 'h') %}
+                <span class="off-pill {% if is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }}{% if is_partial %} · off {{ partial_label }}{% endif %}">{{ e.name }}{% if is_partial %} · {{ partial_label }}{% endif %}</span>
               {% endfor %}
             </div>
           {% else %}
@@ -119,7 +121,8 @@
                 <div class="off-pills">
                   {% for e in d.names %}
                     {% set is_partial = e.hours is not none and e.hours < 8 %}
-                <span class="off-pill {% if is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }} · {{ e.hours }}h{% if is_partial %} (partial day){% endif %}">{{ e.name }}{% if is_partial %} · {{ e.hours }}h{% endif %}</span>
+                {% set partial_label = e.time_range or (e.hours ~ 'h') %}
+                <span class="off-pill {% if is_partial %}partial{% else %}full{% endif %}" title="{{ e.pay_type }}{% if is_partial %} · off {{ partial_label }}{% endif %}">{{ e.name }}{% if is_partial %} · {{ partial_label }}{% endif %}</span>
                   {% endfor %}
                 </div>
               {% endif %}
