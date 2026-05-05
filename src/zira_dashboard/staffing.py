@@ -109,85 +109,11 @@ class Person:
 
 ROSTER_PATH = Path("roster.json")
 PLANT_SCHEDULER_CSV = Path("Plant Scheduler(Plant Scheduler).csv")
-SCHEDULES_DIR = Path("schedules")
 
 _lock = RLock()
 
 
-# ---------- bootstrap seed ----------
-
-# Core roster pulled from skill-matrix screenshot + names added from Plant Scheduler CSV.
-_SEED_ACTIVE = [
-    "Ben", "Carlos", "Christian", "Eulogio", "Francisco", "Gerardo G", "Gerardo V",
-    "Iban", "Isidro", "Jesus C", "Jesus M", "Jose L", "Juan", "Lauro", "Louie",
-    "Lupe", "Isaac", "Trent", "Jose O",
-    # names from CSV only
-    "Ian", "Dale", "Luke",
-]
-_SEED_INACTIVE = [
-    "Adrian", "Alejandro", "Humberto", "Jesus G", "Jose C", "Pascual", "Porfirio",
-]
-
-# Partial skills that are visible in the Plant Scheduler CSV (example day 04/27/2026).
-# Fill the rest in via the Roster page or by dropping a skill-matrix CSV later.
-_SEED_SKILL_HINTS: dict[str, dict[str, int]] = {
-    "Jesus M":    {"Trim Saw": 3},
-    "Lupe":       {"Hand Build": 3},
-    "Gerardo G":  {"Hand Build": 3},
-    "Isaac":      {"Woodpecker": 1},
-    "Carlos":     {"Woodpecker": 3},
-    "Gerardo V":  {"Junior": 3},
-    "Jesus C":    {"Forklift: Load/Jockey": 2},
-    "Lauro":      {"Forklift: Tablets": 1},
-    "Trent":      {"Forklift: Tablets": 3},
-    "Isidro":     {"Forklift: Tablets": 3},
-    "Iban":       {"Forklift: Tablets": 3},
-    "Juan":       {"Forklift: Tablets": 3},
-    "Francisco":  {"Mechanic": 3},
-    "Ben":        {"Mechanic": 3},
-}
-
-
-def _seed_roster() -> list[Person]:
-    out: list[Person] = []
-    for name in _SEED_ACTIVE:
-        skills = {s: 0 for s in SKILLS}
-        for k, v in _SEED_SKILL_HINTS.get(name, {}).items():
-            skills[k] = v
-        out.append(Person(name=name, active=True, skills=skills))
-    for name in _SEED_INACTIVE:
-        out.append(Person(name=name, active=False, skills={s: 0 for s in SKILLS}))
-    return out
-
-
-# ---------- CSV import helpers ----------
-
-def _import_skill_matrix_csv(path: Path) -> list[Person] | None:
-    """Recognize a skill-matrix CSV by presence of 'Master List' + skill columns."""
-    try:
-        with path.open(newline="", encoding="utf-8-sig") as fh:
-            reader = csv.DictReader(fh)
-            if not reader.fieldnames or "Master List" not in reader.fieldnames:
-                return None
-            people: list[Person] = []
-            for row in reader:
-                name = (row.get("Master List") or "").strip()
-                if not name:
-                    continue
-                active_raw = (row.get("is Scheduled") or "").strip().lower()
-                active = active_raw in {"true", "1", "yes", "y"}
-                skills: dict[str, int] = {}
-                for s in SKILLS:
-                    raw = (row.get(s) or "0").strip()
-                    try:
-                        skills[s] = max(0, min(3, int(raw)))
-                    except ValueError:
-                        skills[s] = 0
-                people.append(Person(name=name, active=active, skills=skills))
-            return people or None
-    except (OSError, csv.Error):
-        return None
-
+# ---------- CSV bootstrap helper ----------
 
 def _default_assignments_from_plant_scheduler() -> dict[str, list[str]]:
     """Parse 'Defaults for New Day' column to get default person per position."""

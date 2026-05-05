@@ -19,7 +19,6 @@ from fastapi.templating import Jinja2Templates
 
 from zira_probe.client import ZiraClient
 
-from . import staffing
 from .leaderboard import StationTotal
 from .stations import STATIONS
 
@@ -131,19 +130,3 @@ def _fmt_duration(minutes: int) -> str:
     if minutes < 60:
         return f"{minutes}m"
     return f"{minutes // 60}h {minutes % 60}m"
-
-
-def _iter_saved_schedule_files():
-    """Yield (date, Schedule) for every saved schedule file, sorted newest first."""
-    d = staffing.SCHEDULES_DIR
-    if not d.exists():
-        return
-    files = sorted(d.glob("*.json"), reverse=True)
-    for p in files:
-        stem = p.stem
-        try:
-            day = date.fromisoformat(stem)
-        except ValueError:
-            continue
-        sched = staffing.load_schedule(day)
-        yield day, sched
