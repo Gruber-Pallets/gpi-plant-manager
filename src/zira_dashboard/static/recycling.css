@@ -461,10 +461,25 @@
   .progress .col .bar {
     width: 100%;
     border-radius: 2px 2px 0 0;
+    position: relative;
   }
   .progress .col.hit  .bar { background: var(--hit, var(--good)); }
   .progress .col.miss .bar { background: var(--bad); }
   .progress .col.in-progress .bar { opacity: 0.55; }
+  .progress .col .bar-label {
+    position: absolute;
+    top: 2px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 0.7rem;
+    color: #fff;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
+    line-height: 1;
+  }
   /* Per-bucket target — a dashed segment per col so the goal line steps up
      and down as stations get transferred away or come back online. */
   .progress .col .target-tick {

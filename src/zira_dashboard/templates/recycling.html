@@ -278,7 +278,9 @@
             {% set t_h = (b.target / scale * 100.0) if (scale and b.target) else 0 %}
             <div class="col {% if hit %}hit{% else %}{% if b.in_progress %}hit{% else %}miss{% endif %}{% endif %} {% if b.in_progress %}in-progress{% endif %}"
                  title="{{ b.label }} · {{ b.actual }} pallets (goal {{ b.target }})">
-              <div class="bar" style="height: {{ h }}%"></div>
+              <div class="bar" style="height: {{ h }}%">
+                {% if b.actual > 0 %}<span class="bar-label">{{ b.actual }}</span>{% endif %}
+              </div>
               {% if not b.in_progress and b.target %}<div class="target-tick" style="bottom: {{ t_h }}%"></div>{% endif %}
             </div>
           {% endfor %}
