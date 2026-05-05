@@ -34,7 +34,12 @@ def test_player_card_renders_per_day_breakdown_table():
     # Date hyperlinks point at the recycling dashboard for that day.
     assert 'href="/recycling?start=2026-04-28&end=2026-04-28"' in html
     assert 'href="/recycling?start=2026-04-27&end=2026-04-27"' in html
-    # Newest first.
-    assert html.index("2026-04-28") < html.index("2026-04-27")
+    # Newest first — anchor on the per-day-row href so we don't accidentally
+    # match the date input fields at the top of the page (which carry the same
+    # YYYY-MM-DD strings via value="..."  attributes).
+    assert (
+        html.index('href="/recycling?start=2026-04-28&end=2026-04-28"')
+        < html.index('href="/recycling?start=2026-04-27&end=2026-04-27"')
+    )
     # Carlos's entries appear, "Other" does not.
     assert "Repair-1" in html and "Repair-2" in html
