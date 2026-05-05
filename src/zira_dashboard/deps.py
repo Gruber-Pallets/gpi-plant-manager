@@ -44,14 +44,22 @@ def _parse_day(day: str | None) -> date:
 
 
 def _window_dates(window: str, today_d: date) -> tuple[date, date]:
-    """Return (start, end) inclusive for one of: today|yesterday|week|month|quarter|year."""
+    """Return (start, end) inclusive for one of:
+    today|yesterday|week|last_week|month|last_month|quarter|year.
+    """
     if window == "today":
         return today_d, today_d
     if window == "yesterday":
         y = today_d - timedelta(days=1)
         return y, y
+    if window == "last_week":
+        monday = today_d - timedelta(days=today_d.weekday())
+        return monday - timedelta(days=7), monday - timedelta(days=1)
     if window == "month":
         return today_d.replace(day=1), today_d
+    if window == "last_month":
+        last_of_prev = today_d.replace(day=1) - timedelta(days=1)
+        return last_of_prev.replace(day=1), last_of_prev
     if window == "quarter":
         q_start_month = ((today_d.month - 1) // 3) * 3 + 1
         return today_d.replace(month=q_start_month, day=1), today_d

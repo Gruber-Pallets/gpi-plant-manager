@@ -4,6 +4,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-05
 
+### 10:25 AM
+
+- **Recycling range toolbar — Last Week / Last Month + popup fix** —
+  (1) Two new preset chips on the recycling dashboard's range bar: **Last Week** (Mon–Sun of the previous calendar week) and **Last Month** (1st through last day of the previous calendar month). Order in the toolbar pairs each "this" with its "last": `Today | Yesterday | This Week | Last Week | This Month | Last Month | Custom`.
+  (2) Custom date-picker popup no longer overflows the right edge of the screen. The panel now anchors to the right side of the Custom chip and grows leftward into toolbar space rather than rightward off the viewport.
+
 ### 9:42 AM
 
 - **Three dashboard chart fixes** —

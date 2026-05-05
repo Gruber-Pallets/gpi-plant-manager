@@ -23,7 +23,14 @@
   </div>
   <form class="rc-toolbar" method="get" action="/recycling">
     <span class="rc-tool-label">Range:</span>
-    {% set windows = [('today', 'Today'), ('yesterday', 'Yesterday'), ('week', 'This Week'), ('month', 'This Month')] %}
+    {% set windows = [
+      ('today', 'Today'),
+      ('yesterday', 'Yesterday'),
+      ('week', 'This Week'),
+      ('last_week', 'Last Week'),
+      ('month', 'This Month'),
+      ('last_month', 'Last Month'),
+    ] %}
     {% for wval, wlabel in windows %}
       <a href="/recycling?window={{ wval }}"
          class="rc-chip{% if window == wval and not custom_range_active %} rc-chip-on{% endif %}">{{ wlabel }}</a>

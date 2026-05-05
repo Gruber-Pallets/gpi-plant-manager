@@ -678,7 +678,8 @@
   .rc-custom-panel {
     position: absolute;
     top: calc(100% + 0.3rem);
-    left: 0;
+    right: 0;
+    left: auto;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 6px;
