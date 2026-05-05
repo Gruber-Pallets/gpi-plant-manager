@@ -2,6 +2,12 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+## 2026-05-05
+
+### 7:22 AM
+
+- **Post to Slack now shows the real error when it fails** — clicking Post to Slack was sometimes surfacing a cryptic `"Unexpected token 'I', "Internal S"... is not valid JSON"` toast. Cause: the `/staffing/share-to-slack` endpoint wraps three steps (render the schedule page → convert to PDF → upload to Slack), but only the last two had try/except. If the schedule render itself threw — DB hiccup, Zira API blip, StratusTime timeout, anything — FastAPI's default 500 returned a plain-text "Internal Server Error" page, which the client JS then choked on at `r.json()`. Now wrapped: the route always returns JSON, and the toast shows `"Schedule render failed: <actual error>"` so we can see what's actually breaking. (The underlying schedule-render failure is a separate bug; this just makes it visible.)
+
 ## 2026-05-01
 
 ### 8:45 PM

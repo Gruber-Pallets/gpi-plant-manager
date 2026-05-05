@@ -108,8 +108,16 @@ def share_to_slack(
     # 1. Render the scheduler page for this day by calling the existing
     #    handler as a regular function. The handler returns an
     #    HTMLResponse; we read its body for the HTML string.
-    response = staffing_page(request, day=day)
-    html = response.body.decode("utf-8")
+    try:
+        response = staffing_page(request, day=day)
+        html = response.body.decode("utf-8")
+    except Exception as e:
+        # Without this, FastAPI's default 500 returns plain "Internal Server
+        # Error", which the client JS tries to JSON.parse and fails on.
+        return JSONResponse(
+            {"ok": False, "error": f"Schedule render failed: {e}"},
+            status_code=500,
+        )
 
     # 2. Render the HTML to PDF.
     try:

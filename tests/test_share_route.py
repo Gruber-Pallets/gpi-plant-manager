@@ -43,6 +43,31 @@ def test_share_returns_ok_when_slack_succeeds(monkeypatch):
     assert "Schedule for" in kwargs["initial_comment"]
 
 
+def test_share_returns_json_500_when_staffing_page_raises(monkeypatch):
+    """If the underlying schedule render throws, the route must still
+    return JSON — otherwise the client's `await r.json()` chokes on
+    FastAPI's plain-text "Internal Server Error" page.
+    """
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C123")
+
+    with patch(
+        "zira_dashboard.routes.share.staffing_page",
+        side_effect=RuntimeError("db connection lost"),
+    ):
+        client = TestClient(app)
+        resp = client.post(
+            "/staffing/share-to-slack?day=2026-04-30",
+            # TestClient defaults to raising on server errors; we want
+            # to inspect the response body instead.
+        )
+
+    assert resp.status_code == 500
+    body = resp.json()  # would raise if the body weren't JSON
+    assert body["ok"] is False
+    assert "Schedule render failed" in body["error"]
+    assert "db connection lost" in body["error"]
+
+
 def test_share_returns_500_when_pdf_render_fails(monkeypatch):
     monkeypatch.setenv("SLACK_CHANNEL_ID", "C123")
 
