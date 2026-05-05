@@ -146,6 +146,17 @@
   .lb-table .rank { color: var(--muted); width: 1.5rem; }
   .lb-table .pct { font-weight: 600; }
   .lb-name-count { color: var(--muted); font-size: 0.78rem; margin-left: 0.2rem; }
+  .lb-name-btn {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .lb-name-btn:hover { text-decoration: underline; text-decoration-color: var(--accent); }
   .lb-inactive-wrap { margin-top: 1.2rem; }
   .lb-inactive-wrap > summary {
     cursor: pointer; font-size: 0.85rem; color: var(--muted);

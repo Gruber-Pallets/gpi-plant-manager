@@ -204,7 +204,10 @@
                 {% for r in top5 %}
                   <tr>
                     <td class="rank">{{ r.rank }}</td>
-                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td class="op"><button type="button" class="lb-name-btn"
+   data-name="{{ r.name }}" data-group="{{ s.loc_name }}"
+   data-start="{{ start }}" data-end="{{ end }}"
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                     <td>{{ r.top_wc }}</td>
                     <td class="num">{{ r.avg_units|round|int }}</td>
                     <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
@@ -213,7 +216,10 @@
                 {% for r in rest %}
                   <tr class="lb-row-hidden">
                     <td class="rank">{{ r.rank }}</td>
-                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td class="op"><button type="button" class="lb-name-btn"
+   data-name="{{ r.name }}" data-group="{{ s.loc_name }}"
+   data-start="{{ start }}" data-end="{{ end }}"
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                     <td>{{ r.top_wc }}</td>
                     <td class="num">{{ r.avg_units|round|int }}</td>
                     <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
@@ -251,7 +257,10 @@
                 {% for r in top5 %}
                   <tr>
                     <td class="rank">{{ r.rank }}</td>
-                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td class="op"><button type="button" class="lb-name-btn"
+   data-name="{{ r.name }}" data-wc="{{ s.loc_name }}"
+   data-start="{{ start }}" data-end="{{ end }}"
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                     <td class="num">{{ r.avg_units|round|int }}</td>
                     <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
                   </tr>
@@ -259,7 +268,10 @@
                 {% for r in rest %}
                   <tr class="lb-row-hidden">
                     <td class="rank">{{ r.rank }}</td>
-                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td class="op"><button type="button" class="lb-name-btn"
+   data-name="{{ r.name }}" data-wc="{{ s.loc_name }}"
+   data-start="{{ start }}" data-end="{{ end }}"
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                     <td class="num">{{ r.avg_units|round|int }}</td>
                     <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
                   </tr>
@@ -305,7 +317,10 @@
                   {% for r in top5 %}
                     <tr>
                       <td class="rank">{{ r.rank }}</td>
-                      <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                      <td class="op"><button type="button" class="lb-name-btn"
+   data-name="{{ r.name }}" data-group="{{ s.loc_name }}"
+   data-start="{{ start }}" data-end="{{ end }}"
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                       <td>{{ r.top_wc }}</td>
                       <td class="num">{{ r.avg_units|round|int }}</td>
                       <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
@@ -314,7 +329,10 @@
                   {% for r in rest %}
                     <tr class="lb-row-hidden">
                       <td class="rank">{{ r.rank }}</td>
-                      <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                      <td class="op"><button type="button" class="lb-name-btn"
+   data-name="{{ r.name }}" data-group="{{ s.loc_name }}"
+   data-start="{{ start }}" data-end="{{ end }}"
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                       <td>{{ r.top_wc }}</td>
                       <td class="num">{{ r.avg_units|round|int }}</td>
                       <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
@@ -356,7 +374,10 @@
                   {% for r in top5 %}
                     <tr>
                       <td class="rank">{{ r.rank }}</td>
-                      <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                      <td class="op"><button type="button" class="lb-name-btn"
+   data-name="{{ r.name }}" data-wc="{{ s.loc_name }}"
+   data-start="{{ start }}" data-end="{{ end }}"
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                       <td class="num">{{ r.avg_units|round|int }}</td>
                       <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
                     </tr>
@@ -364,7 +385,10 @@
                   {% for r in rest %}
                     <tr class="lb-row-hidden">
                       <td class="rank">{{ r.rank }}</td>
-                      <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                      <td class="op"><button type="button" class="lb-name-btn"
+   data-name="{{ r.name }}" data-wc="{{ s.loc_name }}"
+   data-start="{{ start }}" data-end="{{ end }}"
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
                       <td class="num">{{ r.avg_units|round|int }}</td>
                       <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
                     </tr>
