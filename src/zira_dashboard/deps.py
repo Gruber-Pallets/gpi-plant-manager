@@ -42,9 +42,16 @@ def _parse_day(day: str | None) -> date:
     return date.fromisoformat(day)
 
 
+_ALLTIME_START = date(2024, 1, 1)
+
+
 def _window_dates(window: str, today_d: date) -> tuple[date, date]:
     """Return (start, end) inclusive for one of:
-    today|yesterday|week|last_week|month|last_month|quarter|year.
+    today|yesterday|week|last_week|month|last_month|quarter|year|alltime.
+
+    "alltime" is bounded by _ALLTIME_START — currently 2024-01-01, well
+    before the plant's earliest production data. Push the constant back
+    if older data ever shows up.
     """
     if window == "today":
         return today_d, today_d
@@ -64,6 +71,8 @@ def _window_dates(window: str, today_d: date) -> tuple[date, date]:
         return today_d.replace(month=q_start_month, day=1), today_d
     if window == "year":
         return today_d.replace(month=1, day=1), today_d
+    if window == "alltime":
+        return _ALLTIME_START, today_d
     # default: week (Monday → today)
     monday = today_d - timedelta(days=today_d.weekday())
     return monday, today_d

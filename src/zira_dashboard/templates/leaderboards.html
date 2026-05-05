@@ -13,7 +13,7 @@
 {% block content %}
 <form class="lb-toolbar" method="get" action="/staffing/leaderboards">
   <span class="lb-tool-label">Range:</span>
-  {% set windows = [('today', 'Today'), ('week', 'Week'), ('month', 'Month'), ('quarter', 'Quarter'), ('year', 'Year')] %}
+  {% set windows = [('today', 'Today'), ('week', 'Week'), ('month', 'Month'), ('quarter', 'Quarter'), ('year', 'Year'), ('alltime', 'All Time')] %}
   {% for wval, wlabel in windows %}
     <a href="/staffing/leaderboards?window={{ wval }}&metric={{ metric }}"
        class="lb-chip{% if window == wval and not custom_range_active %} lb-chip-on{% endif %}">{{ wlabel }}</a>

@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-05
 
+### 1:30 PM
+
+- **Leaderboards range bar gets an "All Time" preset** — the range chip toolbar on `/staffing/leaderboards` was `Today | Week | Month | Quarter | Year | Custom`. Now adds **All Time** at the end (between Year and Custom) — start date pinned to 2024-01-01 (well before the plant's earliest production data), end date today. If older data ever shows up the constant in `deps._ALLTIME_START` is the only thing that needs nudging back. First click on All Time may take a moment on cold cache (the range fans out per-day to attribution data); subsequent clicks within the hour are cached.
+
 ### 1:22 PM
 
 - **Fix: leaderboards drill-down popup now finds days for per-group widgets** — the popup said "No production days for this person in the selected range" when you clicked an operator name on any per-group averages widget (Repair, Dismantler, Junior, etc.) even when production clearly happened. The endpoint was resolving the group name by `loc.skill == group` (the work-center's category column from `staffing.LOCATIONS`), but leaderboards "groups" are actually user-defined memberships from the Settings → Work Centers → Groups list — different concept, different names. Now resolved via `work_centers_store.members("group", group_name)`, the same way the leaderboards page itself builds those widgets. Per-WC popups (Repair-1, Dismantler-3, etc.) were unaffected by the bug — those used the WC name directly.

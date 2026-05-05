@@ -34,3 +34,9 @@ def test_last_month_january_crosses_year():
     start, end = _window_dates("last_month", date(2026, 1, 15))
     assert start == date(2025, 12, 1)
     assert end == date(2025, 12, 31)
+
+
+def test_alltime_starts_at_2024_and_ends_today():
+    start, end = _window_dates("alltime", date(2026, 5, 5))
+    assert start == date(2024, 1, 1)
+    assert end == date(2026, 5, 5)
