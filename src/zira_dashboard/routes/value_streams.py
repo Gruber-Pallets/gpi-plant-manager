@@ -99,15 +99,14 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     available = elapsed * len(active_stations)
     uptime_minutes = max(0, available - total_downtime)
 
-    # Per-person effective minutes during [shift_start, now-or-shift-end] on this day,
-    # subtracting any partial-day StratusTime off intervals that overlap.
-    shift_start_local_for_mh = datetime.combine(d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ)
-    shift_end_local_for_mh = datetime.combine(d, shift_config.shift_end_for(d), tzinfo=shift_config.SITE_TZ)
-    window_end_local = (
-        min(now.astimezone(shift_config.SITE_TZ), shift_end_local_for_mh)
-        if is_today_d else shift_end_local_for_mh
-    )
-    window_start_utc = shift_start_local_for_mh.astimezone(timezone.utc)
+    # Resolve the day's shift bounds once; reused for the man-hours window,
+    # the grace interval, and the productive-intervals math below. Honors
+    # per-day custom_hours via the `_for(d)` variants.
+    shift_start_local = datetime.combine(d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ)
+    shift_end_local = datetime.combine(d, shift_config.shift_end_for(d), tzinfo=shift_config.SITE_TZ)
+    now_local = now.astimezone(shift_config.SITE_TZ)
+    window_end_local = min(now_local, shift_end_local) if is_today_d else shift_end_local
+    window_start_utc = shift_start_local.astimezone(timezone.utc)
     window_end_utc = window_end_local.astimezone(timezone.utc)
 
     total_man_minutes = 0
@@ -137,10 +136,9 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     repairs = [r for r in active_results if r.station.category == "Repair"]
     repairs.sort(key=lambda r: r.station.name)
 
-    # ---- Productive intervals per WC (existing logic copied verbatim). ----
-    shift_start_local = datetime.combine(d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ)
+    # ---- Productive intervals per WC ----
     grace_end_local = shift_start_local + timedelta(minutes=60)
-    grace_end_capped_local = min(grace_end_local, now.astimezone(shift_config.SITE_TZ)) if is_today_d else grace_end_local
+    grace_end_capped_local = min(grace_end_local, now_local) if is_today_d else grace_end_local
     grace_interval_utc = (
         shift_start_local.astimezone(timezone.utc),
         grace_end_capped_local.astimezone(timezone.utc),
