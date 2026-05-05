@@ -4,6 +4,19 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-05
 
+### 12:14 PM
+
+- **Refactor pass — DRY, dead-code removal, shared helpers** — seven small commits to clean up duplication and trim the codebase by ~150 lines without changing behavior:
+  - **Pyflakes clean** — dropped two unused imports (`psycopg2` in `db.py`; `SKILLS` in `work_centers_store.upsert_work_center`) and two never-read locals (`elapsed_hours`, `people_count` in `value_streams.py`).
+  - **Shared `_who_by_wc` helper** — the recycling and new-vs routes each had a 24-line block that built the WC-to-operator label dict from schedule assignments + retro WC-attribution overlay (with dedupe). Extracted to one helper at the top of `value_streams.py`.
+  - **Shared `_progress_color` helper** — same routes each defined a near-identical local function for the actual-vs-goal HSL color ramp. Hoisted to a single module-level function.
+  - **Shared `resolve_range` helper** — three routes (recycling, new-vs's caller, leaderboards) hand-rolled the same custom-range parsing dance (try `?start`/`?end` as ISO dates, fall back to a named-window preset). Extracted to `deps.resolve_range()`.
+  - **Shared `_cumulative_progress_chart.html` partial** — the cumulative-progress Jinja macro was duplicated verbatim between `recycling.html` and `new_vs.html`. Extracted to a partial template imported via `{% from %}` in both pages. Future macro changes happen in one place.
+  - **Shift bounds computed once per day** — `_recycling_day_data()` was calling `shift_config.shift_start_for(d)` twice and `shift_config.shift_end_for(d)` twice per invocation under different local-variable names. Resolved once at the top, reused for the man-hours window and grace-interval math.
+  - **Dropped local-file-storage-era code** — the bootstrap seed (`_SEED_ACTIVE`, `_SEED_INACTIVE`, `_SEED_SKILL_HINTS`, `_seed_roster`), the unused skill-matrix CSV importer, and the JSON-files schedule iterator (`SCHEDULES_DIR`, `_iter_saved_schedule_files`) all date from before the Postgres migration. None had callers. Net -80 lines.
+
+  Behavior is identical — same outputs from the same inputs. Existing test suite still passes (174 tests). Eyeball the recycling and new-vs dashboards on Railway after deploy to confirm the cumulative chart and bar-chart goal lines render the same as before.
+
 ### 10:58 AM
 
 - **Settings panels are always open now** — clicking `Company Schedule` or `Work Centers & Goals` in the settings sidebar used to take you to the section, but you still had to click the panel's chevron to actually see the form. Now both panels render as plain expanded sections — the sidebar is the only thing that decides what you're looking at, no extra click. Per-row pickers inside the Work Centers table (skills, default people, reserves) are still collapsible since expanding them all would make the table unreadable.
