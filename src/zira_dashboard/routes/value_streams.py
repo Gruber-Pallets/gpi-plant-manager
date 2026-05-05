@@ -17,7 +17,7 @@ from ..stations import Station, recycling_stations
 router = APIRouter()
 
 
-def _recycling_day_data(d, now, is_today_d):
+def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     """Compute the per-day numbers for the recycling dashboard.
 
     Returns a dict with the keys the route handler needs to aggregate:
@@ -191,8 +191,16 @@ def _recycling_day_data(d, now, is_today_d):
             return tot
         return fn
 
-    dism_buckets = progress_buckets(dismantlers, d, now, target_fn=_make_target_fn(dismantlers))
-    repair_buckets = progress_buckets(repairs, d, now, target_fn=_make_target_fn(repairs))
+    dism_buckets = progress_buckets(
+        dismantlers, d, now,
+        target_fn=_make_target_fn(dismantlers),
+        align_to_standard=align_to_standard,
+    )
+    repair_buckets = progress_buckets(
+        repairs, d, now,
+        target_fn=_make_target_fn(repairs),
+        align_to_standard=align_to_standard,
+    )
 
     # Per-WC dicts the aggregator can sum.
     per_wc_units = {r.station.name: r.units for r in active_results}
@@ -274,7 +282,7 @@ def recycling(
         days.append(cursor)
         cursor += timedelta(days=1)
 
-    per_day = [_recycling_day_data(d, now, d == today) for d in days]
+    per_day = [_recycling_day_data(d, now, d == today, align_to_standard=is_range) for d in days]
 
     # Aggregate top-line stats.
     total_units = sum(p["total_units"] for p in per_day)
