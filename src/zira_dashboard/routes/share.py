@@ -108,8 +108,14 @@ def share_to_slack(
     # 1. Render the scheduler page for this day by calling the existing
     #    handler as a regular function. The handler returns an
     #    HTMLResponse; we read its body for the HTML string.
+    #    Pass explicit values for every Query() param — when called
+    #    directly (not via FastAPI's router), the defaults arrive as
+    #    Query() objects instead of their inner default values, which
+    #    breaks anything that does e.g. int(publish_blocked or 0).
     try:
-        response = staffing_page(request, day=day)
+        response = staffing_page(
+            request, day=day, publish_blocked=0, view="draft"
+        )
         html = response.body.decode("utf-8")
     except Exception as e:
         # Without this, FastAPI's default 500 returns plain "Internal Server

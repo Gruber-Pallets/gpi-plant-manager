@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-05
 
+### 7:29 AM
+
+- **Post to Slack actually works again** — the underlying error the previous deploy surfaced was `int() argument must be a string... not 'Query'`. Cause: `share.py` calls the existing `/staffing` handler as a regular Python function to get the rendered HTML, but that handler uses FastAPI's `Query(default=...)` for `publish_blocked` and `view`. When you bypass the router and call the function directly, those defaults arrive *as Query objects*, not as their inner values — so `int(publish_blocked or 0)` inside the page builder blew up. Fixed by passing explicit `publish_blocked=0, view="draft"` at the call site, plus a regression test that asserts the kwargs are concrete ints/strings (so a future "cleanup" can't reintroduce the bug). Posting today's schedule to Slack should now succeed end-to-end.
+
 ### 7:22 AM
 
 - **Post to Slack now shows the real error when it fails** — clicking Post to Slack was sometimes surfacing a cryptic `"Unexpected token 'I', "Internal S"... is not valid JSON"` toast. Cause: the `/staffing/share-to-slack` endpoint wraps three steps (render the schedule page → convert to PDF → upload to Slack), but only the last two had try/except. If the schedule render itself threw — DB hiccup, Zira API blip, StratusTime timeout, anything — FastAPI's default 500 returned a plain-text "Internal Server Error" page, which the client JS then choked on at `r.json()`. Now wrapped: the route always returns JSON, and the toast shows `"Schedule render failed: <actual error>"` so we can see what's actually breaking. (The underlying schedule-render failure is a separate bug; this just makes it visible.)
