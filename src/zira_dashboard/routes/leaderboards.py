@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .. import settings_store, staffing
 from ..deps import client, resolve_range, templates
+from ..production_history import attribution_per_day
 from ..stations import Station
 
 
@@ -383,3 +384,50 @@ def leaderboards_set_active(name: str, kind: str = Query(default="wc")):
         return JSONResponse({"ok": False, "error": "invalid kind"}, status_code=400)
     lstore.set_inactive(kind, name, False)
     return JSONResponse({"ok": True})
+
+
+@router.get("/api/staffing/leaderboards/person-days")
+def person_days_json(
+    name: str = Query(...),
+    wc: str | None = Query(default=None),
+    group: str | None = Query(default=None),
+    start: str = Query(...),
+    end: str = Query(...),
+):
+    """Per-day breakdown of a person's production within a scope (a single
+    WC or a category group) over [start, end] inclusive. Used by the
+    leaderboards averages popup. Returns rows sorted newest-first.
+    """
+    if (wc and group) or (not wc and not group):
+        return JSONResponse({"error": "exactly one of wc / group must be set"}, status_code=400)
+    try:
+        start_d = date.fromisoformat(start)
+        end_d = date.fromisoformat(end)
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "start / end must be YYYY-MM-DD"}, status_code=400)
+    if end_d < start_d:
+        return JSONResponse({"error": "end must be on or after start"}, status_code=400)
+
+    # Build the WC-name filter set.
+    if wc:
+        wc_filter = {wc}
+    else:
+        # group: gather every LOCATIONS entry whose .skill equals the group name.
+        wc_filter = {loc.name for loc in staffing.LOCATIONS if loc.skill == group}
+        if not wc_filter:
+            return JSONResponse({"rows": []})
+
+    rows: list[dict] = []
+    for day, daily in attribution_per_day(start_d, end_d, client):
+        person_data = daily.get(name, {})
+        matching = {w: t for w, t in person_data.items() if w in wc_filter}
+        if not matching:
+            continue
+        rows.append({
+            "date": day.isoformat(),
+            "wcs": sorted(matching.keys()),
+            "units": sum(t["units"] for t in matching.values()),
+            "downtime": sum(t["downtime"] for t in matching.values()),
+        })
+    rows.sort(key=lambda r: r["date"], reverse=True)
+    return JSONResponse({"rows": rows})
