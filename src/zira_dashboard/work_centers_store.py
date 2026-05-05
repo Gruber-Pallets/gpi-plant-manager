@@ -180,7 +180,6 @@ def save_one(loc: Location, updates: dict) -> dict:
     """Upsert one work_center row + replace its required_skills and
     default_people lists. Only fields present in `updates` are touched."""
     from . import db
-    from .staffing import SKILLS
 
     # Whitelist + coerce updates.
     direct: dict = {}  # column → new value

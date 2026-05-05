@@ -75,7 +75,6 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     elapsed = shift_elapsed_minutes(d, now)
     available = elapsed * len(active_stations)
     uptime_minutes = max(0, available - total_downtime)
-    elapsed_hours = elapsed / 60.0 if elapsed else 0.0
 
     # Per-person effective minutes during [shift_start, now-or-shift-end] on this day,
     # subtracting any partial-day StratusTime off intervals that overlap.
@@ -597,7 +596,6 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
                 person_name, d, window_start_utc, window_end_utc,
             )
     total_man_hours = total_man_minutes_new / 60.0
-    people_count = total_new_vs_people
     pph_per_person = (total_units / total_man_hours) if total_man_hours > 0 else 0.0
 
     def _color(pct: float | None) -> str | None:

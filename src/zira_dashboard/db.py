@@ -23,7 +23,6 @@ import os
 from contextlib import contextmanager
 from typing import Any, Iterable, Optional, Sequence
 
-import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
 from psycopg2.pool import ThreadedConnectionPool
 
