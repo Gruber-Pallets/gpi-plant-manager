@@ -17,6 +17,23 @@ from ..stations import Station, recycling_stations
 router = APIRouter()
 
 
+def _progress_color(pct_of_target: float | None) -> str | None:
+    """HSL color for an actual-vs-goal percentage. White at 100%, ramps to
+    red below and green above; saturation/lightness step in 12 buckets so
+    big misses stand out and small ones are subtle.
+    """
+    if pct_of_target is None:
+        return None
+    delta = max(-100.0, min(100.0, pct_of_target - 100.0))
+    if abs(delta) < 1.0:
+        return "#ffffff"
+    step = min(12, max(1, round(abs(delta) / 100.0 * 12)))
+    sat = 55.0 + step * 2.0
+    light = 65.0 - step * 3.5
+    hue = 130 if delta > 0 else 0
+    return f"hsl({hue:.0f}, {sat:.0f}%, {light:.0f}%)"
+
+
 def _who_by_wc(assignments: dict[str, list[str]], day) -> dict[str, str]:
     """Map work-center name → " + "-joined operator string for the dashboard
     `who` labels. Starts from the schedule assignments, then layers in retro
@@ -373,19 +390,6 @@ def recycling(
 
     customs_all = widget_customizer.load_all("recycling")
 
-    def _progress_color(pct_of_target):
-        if pct_of_target is None:
-            return None
-        p = max(0.0, min(200.0, pct_of_target))
-        delta = p - 100.0
-        if abs(delta) < 1.0:
-            return "#ffffff"
-        step = min(12, max(1, round(abs(delta) / 100.0 * 12)))
-        sat = 55.0 + step * 2.0
-        light = 65.0 - step * 3.5
-        hue = 130 if delta > 0 else 0
-        return f"hsl({hue:.0f}, {sat:.0f}%, {light:.0f}%)"
-
     def _bars(category: str) -> list[dict]:
         names = sorted(n for n in agg_active_names if agg_category.get(n) == category)
         out = []
@@ -604,18 +608,6 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
     total_man_hours = total_man_minutes_new / 60.0
     pph_per_person = (total_units / total_man_hours) if total_man_hours > 0 else 0.0
 
-    def _color(pct: float | None) -> str | None:
-        if pct is None:
-            return None
-        if abs(pct - 100.0) < 1.0:
-            return "#ffffff"
-        delta = max(-100.0, min(100.0, pct - 100.0))
-        step = min(12, max(1, round(abs(delta) / 100.0 * 12)))
-        sat = 55.0 + step * 2.0
-        light = 65.0 - step * 3.5
-        hue = 130 if delta > 0 else 0
-        return f"hsl({hue:.0f}, {sat:.0f}%, {light:.0f}%)"
-
     who_by_wc = _who_by_wc(sched_for_labels.assignments, d)
 
     bars: list[dict] = []
@@ -628,7 +620,7 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
             "who": who_by_wc.get(r.station.name, r.station.name),
             "units": r.units,
             "expected": int(round(expected)),
-            "color": _color(pct_of_target),
+            "color": _progress_color(pct_of_target),
             "pct_of_target": round(pct_of_target, 1) if pct_of_target is not None else None,
         })
     base = max((max(b["units"], b["expected"]) for b in bars), default=0)
