@@ -429,7 +429,11 @@ def person_days_json(
     if wc:
         wc_filter = {wc}
     else:
-        wc_filter = {loc.name for loc in staffing.LOCATIONS if loc.skill == group}
+        # Leaderboards "groups" are user-defined memberships maintained in
+        # work_centers_store, NOT the loc.skill category. Resolve the group
+        # name to its WC members exactly the way the leaderboards page does.
+        from .. import work_centers_store
+        wc_filter = {loc.name for loc in work_centers_store.members("group", group)}
         if not wc_filter:
             payload = {"rows": []}
             cache.set(cache_key, payload)

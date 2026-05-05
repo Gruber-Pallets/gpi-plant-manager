@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-05
 
+### 1:22 PM
+
+- **Fix: leaderboards drill-down popup now finds days for per-group widgets** — the popup said "No production days for this person in the selected range" when you clicked an operator name on any per-group averages widget (Repair, Dismantler, Junior, etc.) even when production clearly happened. The endpoint was resolving the group name by `loc.skill == group` (the work-center's category column from `staffing.LOCATIONS`), but leaderboards "groups" are actually user-defined memberships from the Settings → Work Centers → Groups list — different concept, different names. Now resolved via `work_centers_store.members("group", group_name)`, the same way the leaderboards page itself builds those widgets. Per-WC popups (Repair-1, Dismantler-3, etc.) were unaffected by the bug — those used the WC name directly.
+
 ### 1:10 PM
 
 - **Drill-down popups on leaderboards averages widgets + per-day rows on the player card** — clicking any operator name on any averages widget on `/staffing/leaderboards` (per-WC and per-group, active and inactive) now opens a modal showing that person's days contributing to the widget's average over the page's selected range. Each row's date hyperlinks to the `/recycling` dashboard for that single day, and a primary "Open full player card" button opens the full player card with the same timeframe carried through. The player card itself now has a per-day-per-WC breakdown table below the existing per-WC summary, with date hyperlinks into the recycling dashboard. Speed-first: the leaderboards page render adds zero work for this feature; popup data lazy-loads on click via a new `/api/staffing/leaderboards/person-days` endpoint with TTL caching (1 h for past-only ranges, 60 s when today is included), so repeated opens skip re-aggregation entirely.

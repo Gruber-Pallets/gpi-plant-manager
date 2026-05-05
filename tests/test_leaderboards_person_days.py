@@ -59,13 +59,16 @@ def test_person_days_aggregates_group_scope():
             "Carlos": {"Dismantler-1": _attr(60)},  # no Repair WC; should drop the day
         }),
     ]
-    fake_locs = (
+    # Leaderboards groups are user-defined memberships, not loc.skill
+    # categories. Mock work_centers_store.members so the endpoint sees a
+    # "Repair" group whose members are Repair-1 + Repair-2.
+    fake_repair_members = [
         staffing.Location("Repair-1", "Repair", "Bay 1", "Recycled", None),
         staffing.Location("Repair-2", "Repair", "Bay 1", "Recycled", None),
-        staffing.Location("Dismantler-1", "Dismantler", "Bay 3", "Recycled", None),
-    )
+    ]
     with patch("zira_dashboard.routes.leaderboards.attribution_per_day", return_value=fake), \
-         patch("zira_dashboard.routes.leaderboards.staffing.LOCATIONS", fake_locs):
+         patch("zira_dashboard.work_centers_store.members",
+               return_value=fake_repair_members):
         client = TestClient(app)
         r = client.get("/api/staffing/leaderboards/person-days?name=Carlos&group=Repair&start=2026-04-27&end=2026-04-28")
     assert r.status_code == 200
