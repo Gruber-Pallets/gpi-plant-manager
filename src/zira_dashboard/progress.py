@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from typing import Callable, Iterable
 
+from . import shift_config
 from .leaderboard import StationTotal
 from .settings_store import station_target
 from .shift_config import SITE_TZ, breaks_for, shift_end_for, shift_start_for, work_weekdays
@@ -45,6 +46,7 @@ def progress_buckets(
     now_utc: datetime,
     bucket_minutes: int = 15,
     target_fn: TargetFn | None = None,
+    align_to_standard: bool = False,
 ) -> list[dict]:
     """Return one dict per 15-min bucket from shift start to min(now, shift end).
 
@@ -53,6 +55,11 @@ def progress_buckets(
     apply rules (first-60-min staffing-based, transfer-rule afterwards) that
     this module on its own can't know about. Otherwise, falls back to the
     default per-station active-interval calculation.
+
+    When ``align_to_standard`` is True, anchor bucket boundaries to the
+    GLOBAL shift hours (shift_start/shift_end/breaks) rather than the
+    per-day custom-hours-aware variants. Used by the recycling route in
+    multi-day range mode so all days share a common 15-min grid.
     """
     group = list(group)
     if not group or day.weekday() not in work_weekdays():
@@ -64,13 +71,20 @@ def progress_buckets(
         for ts_utc, units in st.samples:
             samples.append((ts_utc.astimezone(SITE_TZ), units))
 
-    start = datetime.combine(day, shift_start_for(day), tzinfo=SITE_TZ)
-    end = datetime.combine(day, shift_end_for(day), tzinfo=SITE_TZ)
+    if align_to_standard:
+        s_start = shift_config.shift_start()
+        s_end = shift_config.shift_end()
+        day_breaks = shift_config.breaks()
+    else:
+        s_start = shift_start_for(day)
+        s_end = shift_end_for(day)
+        day_breaks = breaks_for(day)
+
+    start = datetime.combine(day, s_start, tzinfo=SITE_TZ)
+    end = datetime.combine(day, s_end, tzinfo=SITE_TZ)
     edge = min(now_utc.astimezone(SITE_TZ), end)
     if edge <= start:
         return []
-
-    day_breaks = breaks_for(day)
 
     buckets: list[dict] = []
     cursor = start
