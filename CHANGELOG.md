@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-05
 
+### 10:45 AM
+
+- **Custom date-range popup auto-closes after Apply** — the popup used to stay open after submitting because the template re-rendered the `<details>` element with `open` set whenever a custom range was active. The Custom chip already shows the active range (`Custom: 2026-04-19 → 2026-04-25`), so leaving the popup open just got in the way. Now it closes after Apply and on page load with a saved custom-range URL.
+
 ### 10:41 AM
 
 - **pallets/hr/person no longer reads 0 on days without a published schedule** — the recycling dashboard's per-day man-hours calculation iterated `sched.assignments`, so any day where Dale hadn't published a schedule contributed zero hours. In a range like 4/19–4/25 that crossed unpublished days, total man-hours got dragged down (often to zero) and `pallets/hr/person` collapsed to 0 even though units were clearly there. Now: if nobody was scheduled on a day but production still happened, each active WC (producing above the 5-unit activity threshold) counts as one person working the full shift window. Days with a published schedule keep using the real assignments — the fallback only kicks in when there's no scheduled labor at all.

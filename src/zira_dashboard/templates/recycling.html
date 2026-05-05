@@ -35,7 +35,7 @@
       <a href="/recycling?window={{ wval }}"
          class="rc-chip{% if window == wval and not custom_range_active %} rc-chip-on{% endif %}">{{ wlabel }}</a>
     {% endfor %}
-    <details class="rc-custom-popover"{% if custom_range_active %} open{% endif %}>
+    <details class="rc-custom-popover">
       <summary class="rc-chip{% if custom_range_active %} rc-chip-on{% endif %}">{% if custom_range_active %}Custom: {{ start }} → {{ end }}{% else %}Custom{% endif %}</summary>
       <div class="rc-custom-panel">
         <label>Start <input type="date" name="start" value="{{ start if custom_range_active else '' }}"></label>
