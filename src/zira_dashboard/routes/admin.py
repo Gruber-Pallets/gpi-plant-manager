@@ -93,19 +93,18 @@ def data_status(
 
 @router.get("/admin/pph-debug")
 def pph_debug(day: str | None = Query(default=None)):
-    """Dump the per-person man-hours math for the recycling pph_per_person KPI.
+    """Dump the per-person man-hours math for the recycling pph_per_person KPI."""
+    try:
+        return _pph_debug_impl(day)
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }, status_code=500)
 
-    Shows for the given day (default today):
-      - Each LOCATION's value_stream classification (the filter that
-        decides whether the WC is counted as "Recycled")
-      - The scheduled assignments dict
-      - Per-(WC, person) effective_minutes_worked
-      - The set of names skipped as full-day absent
-      - The final total_man_minutes / total_recycling_people
 
-    If pph reads wrong, this tells you exactly where the math diverges
-    from a hand-calc.
-    """
+def _pph_debug_impl(day: str | None):
     from .. import staffing, stratustime_client, work_centers_store
 
     today = datetime.now(timezone.utc).date()
@@ -160,7 +159,7 @@ def pph_debug(day: str | None = Query(default=None)):
         locations_dump.append({
             "name": loc.name,
             "loc_skill": loc.skill,
-            "loc_default_value_stream": loc.value_stream,
+            "loc_department": loc.department,
             "wc_store_value_stream": vs,
             "counted_as_recycled": is_recycled,
             "assigned": assigned,
