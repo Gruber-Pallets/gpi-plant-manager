@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from .. import shift_config, staffing
 from ..deps import client
-from ..leaderboard import cached_leaderboard
+from ..leaderboard import cached_leaderboard, leaderboard
 from ..stations import Station
 
 router = APIRouter()
@@ -266,8 +266,22 @@ def zira_backfill(
 
     def _do_day(d: date):
         try:
-            result = cached_leaderboard(client, stations, d)
+            # Bypass cached_leaderboard's Postgres-first lookup — we may be
+            # backfilling specifically because the cache has stale/empty
+            # data we want to overwrite. Call live Zira and persist
+            # unconditionally; save_day uses ON CONFLICT DO UPDATE so the
+            # row gets replaced with the fresh payload.
+            result = leaderboard(client, stations, d)
             total = sum(r.units for r in result)
+            if result:
+                from .. import _zira_persist
+                _zira_persist.save_day(result, d)
+                # Also invalidate the in-process _PAST_CACHE entry so the
+                # next pageview gets the fresh payload from Postgres
+                # rather than the (possibly empty) in-memory cache.
+                from ..leaderboard import _PAST_CACHE
+                key = (tuple(sorted(s.meter_id for s in stations)), d.isoformat(), False)
+                _PAST_CACHE.invalidate(key)
             with counts_lock:
                 days_checked[0] += 1
                 if total > 0:
