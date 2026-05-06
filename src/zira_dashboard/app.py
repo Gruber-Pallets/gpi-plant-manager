@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .routes import (
+    admin,
     api_layout,
     changelog,
     dashboard,
@@ -224,6 +225,7 @@ app.include_router(time_off.router)
 app.include_router(settings.router)
 app.include_router(api_layout.router)
 app.include_router(changelog.router)
+app.include_router(admin.router)
 
 
 def main() -> None:

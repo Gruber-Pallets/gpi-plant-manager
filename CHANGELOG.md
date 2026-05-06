@@ -4,6 +4,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-06
 
+### 9:47 AM
+
+- **Admin endpoints for inspecting and backfilling historical Zira data** — past-day production has been lazy-loaded since the Postgres migration: the first time anyone views a past day, Zira gets called and the result is saved to `zira_daily_cache`. Days never browsed had no cached data. New endpoints:
+  - **`GET /admin/data-status?start=YYYY-MM-DD&end=YYYY-MM-DD`** — inspects the DB and reports per-day: how many stations are cached in `zira_daily_cache`, whether a schedule row exists and is published, how many `schedule_assignments` rows exist. Read-only. No fetching. Use this first to see what's actually in the DB.
+  - **`GET /admin/zira-backfill?start=YYYY-MM-DD&end=YYYY-MM-DD`** — proactively pulls Zira readings for every work-day in the range and saves them to `zira_daily_cache`. Idempotent (already-cached days skip via the Postgres-first lookup in `cached_leaderboard`). Capped at 90 days per request to stay under typical browser timeouts; for longer windows, invoke multiple times with non-overlapping ranges. Returns counts + a list of dates that came back with zero units.
+
 ### 9:13 AM
 
 - **Historical production data now shows for past days regardless of publish status** — leaderboards, player cards, and the new operator drill-down popup were all empty for any past day where the schedule had never been formally Published. The hard gate was `attribution_for(d, client)` returning `{}` when `sched.published` was False — but most past days have a saved draft (assignments + people) without anyone ever clicking Publish, and by the time a day is in the past, the saved draft is the closest available record of what actually happened. Now: **today's** drafts still gate on Publish (so a supervisor mid-edit doesn't pollute live leaderboards with partial assignments), but **past** days use whatever's saved. Days with no saved schedule at all still show no per-person attribution — there's literally nothing to attribute against — but Zira-meter unit totals on the recycling/new-vs dashboards aren't affected (those don't depend on schedules). Existing pph-per-person fallback on the recycling dashboard (1 person per active WC) still kicks in for those no-schedule days.
