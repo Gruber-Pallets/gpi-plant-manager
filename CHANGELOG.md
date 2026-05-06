@@ -2,6 +2,12 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+## 2026-05-06
+
+### 8:51 AM
+
+- **Leaderboards is now a top-level tab** — moved out of the Staffing sub-nav and into the main top nav between Dashboards and Staffing. Visible from every page in the app. When you're on the leaderboards page, that tab is highlighted (and Staffing is not), and the Plant-Scheduler/Time-Off/People-Matrix/Past-Schedules sub-nav strip is hidden — Leaderboards isn't a Staffing sub-page anymore. The previous spot at the right end of the Staffing sub-nav is gone; existing `/staffing/leaderboards` URLs still work.
+
 ## 2026-05-05
 
 ### 1:30 PM
