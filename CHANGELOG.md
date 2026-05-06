@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-06
 
+### 3:04 PM
+
+- **pallets/hr/person now reads correctly — fixes the bad denominator from earlier today** — Dale's `pph_debug` dump showed two compounding bugs that together pushed pph to 28.1 vs the expected ~63. (1) The man-hours filter used `work_centers_store.value_stream(loc) == "Recycled"`, the user-editable DB-backed setting. Loading/Jockeying, Tablets, and Work Orders were configured there as "Recycled" (so they show up under the Recycled value-stream rollup) but their actual `loc.department` is "Supervisor"/"Maintenance" — they're forklift and mechanic support roles, not production-line labor. They were adding 8 ghost operators × full window of hours to the man-hours total. Switched the filter to `loc.department == "Recycled"`, the static schema field that's the right source of truth for "is this a recycling-line WC?". (2) `effective_minutes_worked` was returning gross minutes — it didn't subtract scheduled lunch + cleanup breaks. Other parts of the dashboard (e.g., `pallets_per_hour`) use the break-adjusted `shift_elapsed_minutes`, so the two denominators were inconsistent. `effective_minutes_worked` now also subtracts breaks that overlap the requested window. The two fixes together drop man-hours from 128.5 h to roughly 8 × 7 = 56 h, putting pph back near the hand-calc.
+
 ### 2:41 PM
 
 - **pallets/hr/person no longer counts absent operators as labor** — Dale reported the headline stat reading 28.1 vs an expected ~65 mid-shift. Root cause: `effective_minutes_worked` only subtracted *partial-day* StratusTime time-off from per-person hours; full-day absences (8+ hour off requests, manual "Declare Absent" entries, and derived no-punch absences) were silently treated as full-shift labor. With ~half the recycling crew out today, total man-hours roughly doubled and the pph denominator inflated by ~2x. Now both the recycling and new-vs man-hours computations skip anyone whose name is in today's full-day-absent set before counting them. Partial-day off entries still get prorated the same way as before via `partial_off_intervals_for_day`.

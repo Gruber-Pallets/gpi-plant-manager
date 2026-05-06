@@ -121,7 +121,13 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     total_man_minutes = 0
     total_recycling_people = 0
     for loc in staffing.LOCATIONS:
-        if work_centers_store.value_stream(loc) != "Recycled":
+        # Filter on loc.department (the static "Recycled / New / Supervisor /
+        # Maintenance" classification) rather than the user-editable
+        # work_centers_store.value_stream — the latter has Loading/Jockeying,
+        # Tablets, and Work Orders set to "Recycled" as a value-stream
+        # association, but those are forklift + mechanic support roles, not
+        # production-line labor on the recycling line.
+        if loc.department != "Recycled":
             continue
         for person_name in sched.assignments.get(loc.name, []):
             if person_name in _absent_today:
