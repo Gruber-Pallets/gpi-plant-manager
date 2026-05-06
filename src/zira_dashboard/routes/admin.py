@@ -161,15 +161,45 @@ def zira_probe(
         cursor = None
         envelope_type = type(payload).__name__
 
+    if not isinstance(rows, list):
+        rows = []
+
+    # Tally event-type / status / units distribution so the response is
+    # diagnostic-rich without requiring a huge sample dump.
+    units_total = 0
+    rows_with_units = 0
+    event_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    submitted_by_counts: dict[str, int] = {}
+    for r in rows:
+        u = r.get("units")
+        u_int = int(u) if isinstance(u, (int, float)) else 0
+        if u_int > 0:
+            rows_with_units += 1
+            units_total += u_int
+        event_counts[str(r.get("event"))] = event_counts.get(str(r.get("event")), 0) + 1
+        status_counts[str(r.get("status"))] = status_counts.get(str(r.get("status")), 0) + 1
+        submitted_by_counts[str(r.get("submitted_by"))] = submitted_by_counts.get(str(r.get("submitted_by")), 0) + 1
+
+    # First N rows that actually have units > 0 — the real production events,
+    # if any. Used to compare against meta/shift-end rows in `sample_rows`.
+    rows_with_units_sample = [r for r in rows if isinstance(r.get("units"), (int, float)) and r.get("units") > 0][:sample_rows]
+
     return JSONResponse({
         "meter_id": meter_id,
         "wc_name": wc_name,
         "day": d.isoformat(),
         "window": {"start": start_iso, "end": end_iso},
         "envelope_type": envelope_type,
-        "row_count": len(rows) if isinstance(rows, list) else 0,
+        "row_count": len(rows),
+        "rows_with_units": rows_with_units,
+        "units_total": units_total,
+        "event_counts": event_counts,
+        "status_counts": status_counts,
+        "submitted_by_counts": submitted_by_counts,
         "cursor": cursor,
-        "sample_rows": rows[:sample_rows] if isinstance(rows, list) else None,
+        "sample_rows": rows[:sample_rows],
+        "rows_with_units_sample": rows_with_units_sample,
     })
 
 
