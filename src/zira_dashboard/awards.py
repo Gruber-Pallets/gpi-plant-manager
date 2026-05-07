@@ -161,3 +161,180 @@ def annual_best_avg_wc(wc_name: str, year: int) -> dict | None:
     start, end = _year_range(year)
     rows = person_days_in_wc(wc_name, start, end)
     return _rank_avg(rows, min_days=30)
+
+
+# ---- Override layer ----------------------------------------------------
+
+def _load_overrides() -> list[dict]:
+    """Read all override rows. Cheap query — table is tiny."""
+    from . import db
+    return db.query(
+        "SELECT scope, group_name, wc_name, year, month, position, action, name "
+        "FROM award_overrides"
+    )
+
+
+def _override_matches(o: dict, *, scope: str, group_name: str | None = None,
+                      wc_name: str | None = None, year: int | None = None,
+                      month: int | None = None, position: int | None = None) -> bool:
+    if o["scope"] != scope:
+        return False
+    if (o["group_name"] or None) != group_name:
+        return False
+    if (o["wc_name"] or None) != wc_name:
+        return False
+    if (o["year"] or None) != year:
+        return False
+    if (o["month"] or None) != month:
+        return False
+    if position is not None and o["position"] != position:
+        return False
+    return True
+
+
+def apply_overrides(slot_list: list[dict], *, scope: str, group_name: str | None = None,
+                    wc_name: str | None = None, year: int | None = None,
+                    month: int | None = None, overrides: list[dict] | None = None) -> list[dict]:
+    """Apply replace/delete overrides to a list of position-keyed slots."""
+    if overrides is None:
+        overrides = _load_overrides()
+    out = []
+    for s in slot_list:
+        match = next(
+            (o for o in overrides if _override_matches(
+                o, scope=scope, group_name=group_name, wc_name=wc_name,
+                year=year, month=month, position=s["position"])),
+            None,
+        )
+        if match is None:
+            out.append(s)
+            continue
+        if match["action"] == "delete":
+            continue
+        if match["action"] == "replace":
+            out.append({**s, "name": match["name"]})
+            continue
+        out.append(s)
+    return out
+
+
+def apply_overrides_single(slot: dict | None, *, scope: str,
+                           group_name: str | None = None,
+                           wc_name: str | None = None,
+                           year: int | None = None,
+                           month: int | None = None,
+                           overrides: list[dict] | None = None) -> dict | None:
+    """Single-winner version (goat, best-avg). Returns None if deleted."""
+    if overrides is None:
+        overrides = _load_overrides()
+    match = next(
+        (o for o in overrides if _override_matches(
+            o, scope=scope, group_name=group_name, wc_name=wc_name,
+            year=year, month=month, position=1)),
+        None,
+    )
+    if match is None:
+        return slot
+    if match["action"] == "delete":
+        return None
+    if match["action"] == "replace":
+        if slot is None:
+            return {"name": match["name"]}
+        return {**slot, "name": match["name"]}
+    return slot
+
+
+# ---- Reverse lookup for player card -----------------------------------
+
+def awards_earned_by(name: str, today: date) -> list[dict]:
+    """Return every award this person currently holds.
+
+    Each entry: {type, group, wc, year, month, position, day, units, pph, days}
+    where the irrelevant keys are None. type is one of:
+      'goat' | 'trophy_top_day' | 'trophy_best_avg_group' |
+      'trophy_best_avg_wc' | 'badge'.
+    """
+    from . import work_centers_store
+    overrides = _load_overrides()
+    earned: list[dict] = []
+    groups = work_centers_store.registered_groups()
+
+    # GOATs
+    for g in groups:
+        live = goat(g)
+        final = apply_overrides_single(live, scope="award_goat", group_name=g, overrides=overrides)
+        if final and final.get("name") == name:
+            earned.append({
+                "type": "goat", "group": g, "wc": None,
+                "year": None, "month": None, "position": 1,
+                "day": final.get("day"), "units": final.get("units"),
+                "pph": final.get("pph"), "days": None,
+            })
+
+    # Annual + monthly — current year + prior 2
+    years = [today.year, today.year - 1, today.year - 2]
+    for y in years:
+        for g in groups:
+            top = apply_overrides(
+                annual_top_days(g, y),
+                scope="trophy_top_day", group_name=g, year=y, overrides=overrides,
+            )
+            for s in top:
+                if s["name"] == name:
+                    earned.append({
+                        "type": "trophy_top_day", "group": g, "wc": None,
+                        "year": y, "month": None, "position": s["position"],
+                        "day": s["day"], "units": s["units"], "pph": s["pph"],
+                        "days": None,
+                    })
+
+            ba = apply_overrides_single(
+                annual_best_avg_group(g, y),
+                scope="trophy_best_avg_group", group_name=g, year=y, overrides=overrides,
+            )
+            if ba and ba.get("name") == name:
+                earned.append({
+                    "type": "trophy_best_avg_group", "group": g, "wc": None,
+                    "year": y, "month": None, "position": 1,
+                    "day": None, "units": ba.get("units"),
+                    "pph": ba.get("pph"), "days": ba.get("days"),
+                })
+
+        # Per-WC best avg, dedup across groups
+        seen_wcs: set[str] = set()
+        for g in groups:
+            for wc_name in _wc_names_for_group(g):
+                if wc_name in seen_wcs:
+                    continue
+                seen_wcs.add(wc_name)
+                bw = apply_overrides_single(
+                    annual_best_avg_wc(wc_name, y),
+                    scope="trophy_best_avg_wc", wc_name=wc_name, year=y, overrides=overrides,
+                )
+                if bw and bw.get("name") == name:
+                    earned.append({
+                        "type": "trophy_best_avg_wc", "group": None, "wc": wc_name,
+                        "year": y, "month": None, "position": 1,
+                        "day": None, "units": bw.get("units"),
+                        "pph": bw.get("pph"), "days": bw.get("days"),
+                    })
+
+        # Monthly badges (current year + prior year only)
+        if y >= today.year - 1:
+            for m in range(12, 0, -1):
+                if y == today.year and m > today.month:
+                    continue
+                for g in groups:
+                    badges = apply_overrides(
+                        monthly_badges(g, y, m),
+                        scope="badge", group_name=g, year=y, month=m, overrides=overrides,
+                    )
+                    for s in badges:
+                        if s["name"] == name:
+                            earned.append({
+                                "type": "badge", "group": g, "wc": None,
+                                "year": y, "month": m, "position": s["position"],
+                                "day": s["day"], "units": s["units"], "pph": s["pph"],
+                                "days": None,
+                            })
+    return earned

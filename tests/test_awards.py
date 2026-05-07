@@ -264,3 +264,113 @@ def test_annual_best_avg_wc_filters_to_single_wc(monkeypatch):
     w = awards.annual_best_avg_wc("Repair 1", 2026)
     assert w["pph"] == 10.0  # 100u / 10h, only Repair 1 counts
     assert w["days"] == 30
+
+
+def test_apply_overrides_replace(monkeypatch):
+    """A 'replace' override swaps the name in the matching slot."""
+    from zira_dashboard import awards
+    slots = [
+        {"position": 1, "name": "A", "day": date(2026, 4, 1), "units": 100.0, "pph": 12.5},
+        {"position": 2, "name": "B", "day": date(2026, 4, 5), "units": 90.0, "pph": 11.2},
+        {"position": 3, "name": "C", "day": date(2026, 4, 7), "units": 80.0, "pph": 10.0},
+    ]
+    overrides = [
+        {"scope": "badge", "group_name": "Repairs", "wc_name": None,
+         "year": 2026, "month": 4, "position": 2,
+         "action": "replace", "name": "Replacement"},
+    ]
+    out = awards.apply_overrides(
+        slots, scope="badge", group_name="Repairs", year=2026, month=4,
+        overrides=overrides,
+    )
+    assert [s["name"] for s in out] == ["A", "Replacement", "C"]
+
+
+def test_apply_overrides_delete(monkeypatch):
+    from zira_dashboard import awards
+    slots = [
+        {"position": 1, "name": "A", "day": date(2026, 4, 1), "units": 100.0, "pph": 12.5},
+        {"position": 2, "name": "B", "day": date(2026, 4, 5), "units": 90.0, "pph": 11.2},
+        {"position": 3, "name": "C", "day": date(2026, 4, 7), "units": 80.0, "pph": 10.0},
+    ]
+    overrides = [
+        {"scope": "badge", "group_name": "Repairs", "wc_name": None,
+         "year": 2026, "month": 4, "position": 3,
+         "action": "delete", "name": None},
+    ]
+    out = awards.apply_overrides(
+        slots, scope="badge", group_name="Repairs", year=2026, month=4,
+        overrides=overrides,
+    )
+    assert [s["position"] for s in out] == [1, 2]
+
+
+def test_apply_overrides_passthrough_when_no_match(monkeypatch):
+    from zira_dashboard import awards
+    slots = [{"position": 1, "name": "A", "day": date(2026, 4, 1), "units": 100.0, "pph": 12.5}]
+    overrides = [
+        {"scope": "badge", "group_name": "Repairs", "wc_name": None,
+         "year": 2026, "month": 5, "position": 1,
+         "action": "replace", "name": "Other"},
+    ]
+    out = awards.apply_overrides(
+        slots, scope="badge", group_name="Repairs", year=2026, month=4,
+        overrides=overrides,
+    )
+    assert out == slots
+
+
+def test_apply_overrides_handles_single_winner_scope(monkeypatch):
+    """Single-value (not list) override application — for goat, best-avg trophies."""
+    from zira_dashboard import awards
+    slot = {"name": "A", "day": date(2026, 4, 1), "units": 200.0, "pph": 25.0}
+    overrides = [
+        {"scope": "award_goat", "group_name": "Repairs", "wc_name": None,
+         "year": None, "month": None, "position": 1,
+         "action": "replace", "name": "True GOAT"},
+    ]
+    out = awards.apply_overrides_single(
+        slot, scope="award_goat", group_name="Repairs",
+        overrides=overrides,
+    )
+    assert out["name"] == "True GOAT"
+
+
+def test_apply_overrides_single_delete_returns_none(monkeypatch):
+    from zira_dashboard import awards
+    slot = {"name": "A", "day": date(2026, 4, 1), "units": 200.0, "pph": 25.0}
+    overrides = [
+        {"scope": "award_goat", "group_name": "Repairs", "wc_name": None,
+         "year": None, "month": None, "position": 1,
+         "action": "delete", "name": None},
+    ]
+    out = awards.apply_overrides_single(
+        slot, scope="award_goat", group_name="Repairs",
+        overrides=overrides,
+    )
+    assert out is None
+
+
+def test_awards_earned_by_aggregates_across_types(monkeypatch):
+    """Given fixtures producing GOAT + monthly badge for one person,
+    earned_by returns entries with type/period info."""
+    _stub_data(
+        monkeypatch,
+        records=[
+            {"day": date(2026, 4, 1), "person": "Hero", "wc": "Repair 1",
+             "units": 250.0, "hours": 8.0, "downtime": 0.0},
+            {"day": date(2026, 4, 5), "person": "Other", "wc": "Repair 1",
+             "units": 100.0, "hours": 8.0, "downtime": 0.0},
+        ],
+        members_map={"Repairs": ["Repair 1"]},
+    )
+    from zira_dashboard import awards, work_centers_store
+    monkeypatch.setattr(awards, "_all_time_range", lambda: (date(2026, 1, 1), date(2026, 4, 30)))
+    monkeypatch.setattr(work_centers_store, "registered_groups", lambda: ["Repairs"])
+    monkeypatch.setattr(awards, "_load_overrides", lambda: [])
+
+    earned = awards.awards_earned_by("Hero", today=date(2026, 4, 30))
+    types = {e["type"] for e in earned}
+    assert "goat" in types
+    assert any(e["type"] == "badge" and e["position"] == 1 and e["group"] == "Repairs"
+               for e in earned)
