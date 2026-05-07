@@ -445,6 +445,28 @@ BEGIN
     ALTER TABLE leaderboard_wc_settings ADD PRIMARY KEY (kind, wc_name);
   END IF;
 END $$;
+
+-- Award overrides ------------------------------------------------------
+-- Trophy/badge/award winners are computed live from daily_records.
+-- This table stores manual reassignments + deletions; the unique
+-- index ensures one override per slot.
+
+CREATE TABLE IF NOT EXISTS award_overrides (
+  id            SERIAL PRIMARY KEY,
+  scope         TEXT NOT NULL,
+  group_name    TEXT,
+  wc_name       TEXT,
+  year          INT,
+  month         INT,
+  position      INT NOT NULL,
+  action        TEXT NOT NULL,
+  name          TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  note          TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS award_overrides_slot ON award_overrides
+  (scope, COALESCE(group_name,''), COALESCE(wc_name,''),
+   COALESCE(year,0), COALESCE(month,0), position);
 """
 
 
