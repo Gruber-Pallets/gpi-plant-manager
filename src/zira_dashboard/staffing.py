@@ -151,8 +151,10 @@ def _invalidate_roster_cache() -> None:
 
 
 def load_roster() -> list[Person]:
-    """Load all people + their skill levels from Postgres. Inactive people
-    are returned too (sorted to the bottom). Cached in-process for 60 s;
+    """Load all NON-EXCLUDED people from Postgres. Inactive people
+    are returned too (sorted to the bottom). Excluded people are
+    filtered out — they're hidden from current views via the
+    Settings → Roster Filter UI. Cached in-process for 60 s;
     invalidated on save_roster()."""
     import time as _time
     global _ROSTER_CACHE
@@ -169,6 +171,7 @@ def load_roster() -> list[Person]:
         "FROM people p "
         "LEFT JOIN person_skills ps ON ps.person_id = p.id "
         "LEFT JOIN skills s ON s.id = ps.skill_id "
+        "WHERE NOT p.excluded "
         "GROUP BY p.id "
         "ORDER BY (NOT p.active), lower(p.name)"
     )
