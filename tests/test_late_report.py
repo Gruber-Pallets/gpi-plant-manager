@@ -126,3 +126,103 @@ def test_custom_threshold(patch_db_empty):
     att = _attendance(no_punch_ids=["100"])
     out = late_report.late_people_for_day(d, ["100"], att, now, start, threshold_minutes=5)
     assert len(out) == 1
+
+
+# Append to tests/test_late_report.py
+import os
+import pytest
+
+requires_db = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"),
+    reason="DATABASE_URL not set; this test needs Postgres.",
+)
+
+
+@requires_db
+def test_declare_absent_accepts_optional_reason():
+    from datetime import date
+    from zira_dashboard import db, late_report
+
+    d = date(2026, 5, 7)
+    db.execute("DELETE FROM manual_absences WHERE day = %s", (d,))
+    late_report.declare_absent(d, "999", "Test Person", reason="sick")
+    rows = db.query(
+        "SELECT name, reason FROM manual_absences WHERE day = %s AND emp_id = %s",
+        (d, "999"),
+    )
+    assert rows == [{"name": "Test Person", "reason": "sick"}]
+    db.execute("DELETE FROM manual_absences WHERE day = %s AND emp_id = %s", (d, "999"))
+
+
+@requires_db
+def test_declare_absent_reason_defaults_to_none():
+    from datetime import date
+    from zira_dashboard import db, late_report
+
+    d = date(2026, 5, 7)
+    db.execute("DELETE FROM manual_absences WHERE day = %s", (d,))
+    late_report.declare_absent(d, "998", "No-Reason Person")
+    rows = db.query(
+        "SELECT reason FROM manual_absences WHERE day = %s AND emp_id = %s",
+        (d, "998"),
+    )
+    assert rows == [{"reason": None}]
+    db.execute("DELETE FROM manual_absences WHERE day = %s AND emp_id = %s", (d, "998"))
+
+
+@requires_db
+def test_save_late_arrival_upserts():
+    from datetime import date
+    from zira_dashboard import db, late_report
+
+    d = date(2026, 5, 7)
+    db.execute("DELETE FROM late_arrivals WHERE day = %s AND emp_id = %s", (d, "777"))
+    late_report.save_late_arrival(d, "777", "Late Person", reason="car issues")
+    rows = db.query(
+        "SELECT name, reason FROM late_arrivals WHERE day = %s AND emp_id = %s",
+        (d, "777"),
+    )
+    assert rows == [{"name": "Late Person", "reason": "car issues"}]
+    late_report.save_late_arrival(d, "777", "Late Person", reason="overslept")
+    rows = db.query(
+        "SELECT reason FROM late_arrivals WHERE day = %s AND emp_id = %s",
+        (d, "777"),
+    )
+    assert rows == [{"reason": "overslept"}]
+    db.execute("DELETE FROM late_arrivals WHERE day = %s AND emp_id = %s", (d, "777"))
+
+
+@requires_db
+def test_late_arrivals_for_day_returns_emp_id_set():
+    from datetime import date
+    from zira_dashboard import db, late_report
+
+    d = date(2026, 5, 7)
+    db.execute("DELETE FROM late_arrivals WHERE day = %s", (d,))
+    late_report.save_late_arrival(d, "100", "A", reason=None)
+    late_report.save_late_arrival(d, "200", "B", reason=None)
+    out = late_report.late_arrivals_for_day(d)
+    assert out == {"100", "200"}
+    db.execute("DELETE FROM late_arrivals WHERE day = %s", (d,))
+
+
+@requires_db
+def test_history_for_name_returns_absent_and_late_rows():
+    from datetime import date
+    from zira_dashboard import db, late_report
+
+    d1 = date(2026, 5, 5)
+    d2 = date(2026, 5, 6)
+    name = "Test History"
+    db.execute("DELETE FROM manual_absences WHERE name = %s", (name,))
+    db.execute("DELETE FROM late_arrivals WHERE name = %s", (name,))
+    late_report.declare_absent(d1, "555", name, reason="sick")
+    late_report.save_late_arrival(d2, "555", name, reason="overslept")
+
+    abs_rows = late_report.absences_history_for_name(name, d1, d2)
+    late_rows = late_report.late_arrivals_history_for_name(name, d1, d2)
+    assert abs_rows == [{"day": d1, "reason": "sick"}]
+    assert late_rows == [{"day": d2, "reason": "overslept"}]
+
+    db.execute("DELETE FROM manual_absences WHERE name = %s", (name,))
+    db.execute("DELETE FROM late_arrivals WHERE name = %s", (name,))

@@ -19,14 +19,16 @@ LATE_THRESHOLD_MINUTES = 15
 DEFAULT_SNOOZE_MINUTES = 30
 
 
-def declare_absent(day, emp_id: str, name: str) -> None:
+def declare_absent(day, emp_id: str, name: str, reason: str | None = None) -> None:
     db.execute(
         """
-        INSERT INTO manual_absences (day, emp_id, name)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (day, emp_id) DO UPDATE SET name = EXCLUDED.name
+        INSERT INTO manual_absences (day, emp_id, name, reason)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (day, emp_id) DO UPDATE SET
+          name = EXCLUDED.name,
+          reason = EXCLUDED.reason
         """,
-        (day, str(emp_id), name),
+        (day, str(emp_id), name, reason),
     )
 
 
@@ -309,3 +311,59 @@ def late_people_for_day(
             "minutes_late": minutes_past_start,
         })
     return out
+
+
+def save_late_arrival(day, emp_id: str, name: str, reason: str | None = None) -> None:
+    """Record a late-arrival event for `day` + `emp_id`. Idempotent — a
+    second save with a different reason overwrites the first."""
+    db.execute(
+        """
+        INSERT INTO late_arrivals (day, emp_id, name, reason)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (day, emp_id) DO UPDATE SET
+          name = EXCLUDED.name,
+          reason = EXCLUDED.reason
+        """,
+        (day, str(emp_id), name, reason),
+    )
+
+
+def late_arrivals_for_day(day) -> set[str]:
+    """Set of emp_ids that already have a late-arrival record for `day`.
+    Used by /api/late-report to suppress 'needs reason' rows once
+    they've been handled."""
+    rows = db.query(
+        "SELECT emp_id FROM late_arrivals WHERE day = %s",
+        (day,),
+    )
+    return {r["emp_id"] for r in rows}
+
+
+def absences_history_for_name(name: str, start_d, end_d) -> list[dict]:
+    """Per-day absence history for `name` within [start_d, end_d].
+    Newest first. Each row: {day, reason}."""
+    rows = db.query(
+        """
+        SELECT day, reason
+        FROM manual_absences
+        WHERE name = %s AND day BETWEEN %s AND %s
+        ORDER BY day DESC
+        """,
+        (name, start_d, end_d),
+    )
+    return [{"day": r["day"], "reason": r["reason"]} for r in rows]
+
+
+def late_arrivals_history_for_name(name: str, start_d, end_d) -> list[dict]:
+    """Per-day late-arrival history for `name` within [start_d, end_d].
+    Newest first. Each row: {day, reason}."""
+    rows = db.query(
+        """
+        SELECT day, reason
+        FROM late_arrivals
+        WHERE name = %s AND day BETWEEN %s AND %s
+        ORDER BY day DESC
+        """,
+        (name, start_d, end_d),
+    )
+    return [{"day": r["day"], "reason": r["reason"]} for r in rows]
