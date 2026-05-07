@@ -226,3 +226,93 @@ def test_history_for_name_returns_absent_and_late_rows():
 
     db.execute("DELETE FROM manual_absences WHERE name = %s", (name,))
     db.execute("DELETE FROM late_arrivals WHERE name = %s", (name,))
+
+
+def test_late_people_for_day_three_sections():
+    """The expanded helper returns dict with scheduled_late, unscheduled_late,
+    needs_reason — derived from the same attendance dict."""
+    from datetime import date, datetime
+    from zira_dashboard import shift_config, late_report
+
+    d = date(2026, 5, 7)
+    shift_start_local = datetime(2026, 5, 7, 7, 0, tzinfo=shift_config.SITE_TZ)
+    now_local = datetime(2026, 5, 7, 9, 0, tzinfo=shift_config.SITE_TZ)  # 2h past start
+
+    attendance = {
+        # Scheduled, no_punch — counts as scheduled_late
+        "111": {"status": "no_punch", "minutes_late": 0},
+        # Scheduled, late punch — counts as needs_reason
+        "222": {"status": "late", "minutes_late": 31},
+        # Scheduled, on time — appears nowhere
+        "333": {"status": "on_time", "minutes_late": 0},
+        # Unscheduled, no_punch — counts as unscheduled_late
+        "444": {"status": "no_punch", "minutes_late": 0},
+        # Unscheduled, late — counts as needs_reason
+        "555": {"status": "late", "minutes_late": 18},
+    }
+    out = late_report.late_people_for_day_v2(
+        day=d,
+        scheduled_emp_ids=["111", "222", "333"],
+        unscheduled_emp_ids=["444", "555"],
+        attendance=attendance,
+        now_local=now_local,
+        shift_start_local=shift_start_local,
+        absent_ids=set(),
+        snoozed_ids=set(),
+        already_recorded_late_ids=set(),
+    )
+
+    assert {r["emp_id"] for r in out["scheduled_late"]} == {"111"}
+    assert {r["emp_id"] for r in out["unscheduled_late"]} == {"444"}
+    assert {r["emp_id"] for r in out["needs_reason"]} == {"222", "555"}
+
+
+def test_late_people_for_day_v2_suppresses_already_recorded():
+    """Once a late_arrivals row exists for an emp_id, that emp_id no
+    longer appears in needs_reason."""
+    from datetime import date, datetime
+    from zira_dashboard import shift_config, late_report
+
+    d = date(2026, 5, 7)
+    shift_start_local = datetime(2026, 5, 7, 7, 0, tzinfo=shift_config.SITE_TZ)
+    now_local = datetime(2026, 5, 7, 9, 0, tzinfo=shift_config.SITE_TZ)
+
+    attendance = {"222": {"status": "late", "minutes_late": 31}}
+    out = late_report.late_people_for_day_v2(
+        day=d,
+        scheduled_emp_ids=["222"],
+        unscheduled_emp_ids=[],
+        attendance=attendance,
+        now_local=now_local,
+        shift_start_local=shift_start_local,
+        absent_ids=set(),
+        snoozed_ids=set(),
+        already_recorded_late_ids={"222"},
+    )
+    assert out["needs_reason"] == []
+
+
+def test_late_people_for_day_v2_skips_absent_and_snoozed():
+    from datetime import date, datetime
+    from zira_dashboard import shift_config, late_report
+
+    d = date(2026, 5, 7)
+    shift_start_local = datetime(2026, 5, 7, 7, 0, tzinfo=shift_config.SITE_TZ)
+    now_local = datetime(2026, 5, 7, 9, 0, tzinfo=shift_config.SITE_TZ)
+
+    attendance = {
+        "111": {"status": "no_punch", "minutes_late": 0},
+        "222": {"status": "no_punch", "minutes_late": 0},
+    }
+    out = late_report.late_people_for_day_v2(
+        day=d,
+        scheduled_emp_ids=["111", "222"],
+        unscheduled_emp_ids=[],
+        attendance=attendance,
+        now_local=now_local,
+        shift_start_local=shift_start_local,
+        absent_ids={"111"},
+        snoozed_ids={"222"},
+        already_recorded_late_ids=set(),
+    )
+    assert out["scheduled_late"] == []

@@ -313,6 +313,75 @@ def late_people_for_day(
     return out
 
 
+def late_people_for_day_v2(
+    day,
+    scheduled_emp_ids: Iterable[str],
+    unscheduled_emp_ids: Iterable[str],
+    attendance: dict,
+    now_local: datetime,
+    shift_start_local: datetime,
+    absent_ids: set[str],
+    snoozed_ids: set[str],
+    already_recorded_late_ids: set[str],
+    threshold_minutes: int = LATE_THRESHOLD_MINUTES,
+) -> dict:
+    """Three-section structured output for /api/late-report.
+
+    Returns:
+      {
+        "scheduled_late":   [{emp_id, minutes_late}, ...],
+        "unscheduled_late": [{emp_id}, ...],
+        "needs_reason":     [{emp_id, minutes_late}, ...],
+      }
+
+    Args mirror late_people_for_day plus:
+      - unscheduled_emp_ids: active non-reserve people not on today's
+        schedule. They join scheduled_emp_ids in the no_punch check.
+      - already_recorded_late_ids: emp_ids that already have a row in
+        late_arrivals for `day`. Suppresses needs_reason entries once
+        a manager has captured the reason.
+
+    Pure: no DB calls, no cache lookups. Caller passes everything in.
+    """
+    scheduled = {str(e) for e in scheduled_emp_ids}
+    unscheduled = {str(e) for e in unscheduled_emp_ids}
+    if now_local <= shift_start_local + timedelta(minutes=threshold_minutes):
+        return {"scheduled_late": [], "unscheduled_late": [], "needs_reason": []}
+
+    minutes_past_start = int((now_local - shift_start_local).total_seconds() // 60)
+
+    scheduled_late: list[dict] = []
+    unscheduled_late: list[dict] = []
+    needs_reason: list[dict] = []
+
+    for emp_id, info in attendance.items():
+        if emp_id in absent_ids or emp_id in snoozed_ids:
+            continue
+        status = info.get("status")
+        if status == "no_punch":
+            if emp_id in scheduled:
+                scheduled_late.append({
+                    "emp_id": emp_id,
+                    "minutes_late": minutes_past_start,
+                })
+            elif emp_id in unscheduled:
+                unscheduled_late.append({"emp_id": emp_id})
+        elif status == "late":
+            if emp_id in already_recorded_late_ids:
+                continue
+            if emp_id in scheduled or emp_id in unscheduled:
+                needs_reason.append({
+                    "emp_id": emp_id,
+                    "minutes_late": int(info.get("minutes_late") or 0),
+                })
+
+    return {
+        "scheduled_late": scheduled_late,
+        "unscheduled_late": unscheduled_late,
+        "needs_reason": needs_reason,
+    }
+
+
 def save_late_arrival(day, emp_id: str, name: str, reason: str | None = None) -> None:
     """Record a late-arrival event for `day` + `emp_id`. Idempotent — a
     second save with a different reason overwrites the first."""
