@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-07
 
+### 10:08 AM
+
+- **Roster Filter — exclude specific Odoo employees from current views** — new sub-tab in Settings (between Work Centers & Goals and Company Schedule). Renders one row per Odoo-synced person with a checkbox; uncheck to hide that person from the People Matrix, scheduler pickers, player-card picklist, and late/absence report. The exclusion flag is local-only — Odoo's hourly sync preserves it across runs the same way it preserves the `reserve` flag. Historical data (past schedules, leaderboards, attendance records) is unaffected — old assignment data still references excluded people, by design.
+
 ### 9:33 AM
 
 - **Skills Matrix rename + new People tab + clickable names on the scheduler** — three small staffing-nav improvements: (1) The Staffing sub-tab labeled "People Matrix" is now **Skills Matrix** — the matrix has always been about skills, so the label finally matches. (2) New **People** sub-tab (between Skills Matrix and Past Schedules) lands you straight on the first active roster member's player card; from there the new name picklist takes you anywhere else. (3) On the Plant Scheduler, every name in **Unscheduled**, **Time Off**, and **Reserves** is now a hyperlink to that person's player card. Click-to-clear on partial Time-Off entries still works — clicking a name navigates, clicking anywhere else on the row clears the partial.
