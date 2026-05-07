@@ -104,3 +104,42 @@ def test_sync_returns_error_on_odoo_failure(monkeypatch):
     assert result.ok is False
     assert "nope" in (result.error or "")
     assert result.refreshed is False
+
+
+def test_sync_upsert_does_not_clear_excluded_flag():
+    """The Odoo sync's INSERT … ON CONFLICT (odoo_id) DO UPDATE clause
+    only names (name, active, last_pulled_at) — local-only columns
+    like reserve and excluded must survive across syncs.
+
+    Validate by simulating a sync's UPSERT against a row that's
+    already marked excluded, and checking the flag is preserved.
+    """
+    from datetime import datetime, timezone
+    from zira_dashboard import db
+
+    # Seed a row with excluded=TRUE.
+    db.execute(
+        "INSERT INTO people (odoo_id, name, active, excluded, last_pulled_at) "
+        "VALUES (%s, %s, %s, %s, %s) "
+        "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
+        "  active = EXCLUDED.active, excluded = EXCLUDED.excluded, "
+        "  last_pulled_at = EXCLUDED.last_pulled_at",
+        (999995, "EXCLUDED Sync Test", True, True, datetime.now(timezone.utc)),
+    )
+
+    # Simulate the sync's UPSERT (matches odoo_sync.sync()'s SQL exactly).
+    db.execute(
+        "INSERT INTO people (odoo_id, name, active, last_pulled_at) "
+        "VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
+        "active = EXCLUDED.active, last_pulled_at = EXCLUDED.last_pulled_at",
+        (999995, "EXCLUDED Sync Test (renamed)", True, datetime.now(timezone.utc)),
+    )
+
+    rows = db.query(
+        "SELECT excluded FROM people WHERE odoo_id = %s", (999995,)
+    )
+    assert rows[0]["excluded"] is True
+
+    # Cleanup.
+    db.execute("DELETE FROM people WHERE odoo_id = %s", (999995,))

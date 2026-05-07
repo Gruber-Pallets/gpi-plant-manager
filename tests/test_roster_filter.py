@@ -66,3 +66,61 @@ def test_load_roster_includes_inactive_but_not_excluded():
 
     db.execute("DELETE FROM people WHERE odoo_id IN (%s, %s)", (999993, 999994))
     staffing._invalidate_roster_cache()
+
+
+def test_toggle_endpoint_400_when_odoo_id_missing():
+    from fastapi.testclient import TestClient
+    from zira_dashboard.app import app
+    client = TestClient(app)
+    r = client.post(
+        "/api/settings/roster-filter/toggle",
+        json={"excluded": True},
+    )
+    assert r.status_code == 400
+
+
+def test_toggle_endpoint_400_when_odoo_id_not_int():
+    from fastapi.testclient import TestClient
+    from zira_dashboard.app import app
+    client = TestClient(app)
+    r = client.post(
+        "/api/settings/roster-filter/toggle",
+        json={"odoo_id": "not-an-int", "excluded": True},
+    )
+    assert r.status_code == 400
+
+
+def test_toggle_endpoint_400_when_excluded_not_bool():
+    from fastapi.testclient import TestClient
+    from zira_dashboard.app import app
+    client = TestClient(app)
+    r = client.post(
+        "/api/settings/roster-filter/toggle",
+        json={"odoo_id": 123, "excluded": "yes"},
+    )
+    assert r.status_code == 400
+
+
+def test_toggle_endpoint_writes_excluded_flag(monkeypatch):
+    """Mock db.execute and assert it gets called with (excluded, odoo_id).
+    Verifies the SQL shape without needing DATABASE_URL."""
+    from unittest.mock import MagicMock
+    from fastapi.testclient import TestClient
+    from zira_dashboard.app import app
+    from zira_dashboard import db, staffing
+
+    spy = MagicMock()
+    monkeypatch.setattr(db, "execute", spy)
+    monkeypatch.setattr(staffing, "_invalidate_roster_cache", MagicMock())
+
+    client = TestClient(app)
+    r = client.post(
+        "/api/settings/roster-filter/toggle",
+        json={"odoo_id": 1234, "excluded": True},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    spy.assert_called_once()
+    args = spy.call_args.args
+    assert "UPDATE people SET excluded" in args[0]
+    assert args[1] == (True, 1234)
