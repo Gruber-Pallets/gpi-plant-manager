@@ -18,8 +18,22 @@ router = APIRouter()
 
 
 @router.get("/staffing/people")
-def staffing_people_redirect():
-    return RedirectResponse(url="/staffing/skills", status_code=307)
+def staffing_people_landing():
+    """Land on the first active roster member's card. With the player-card
+    name picklist, the user can immediately switch to anyone else.
+    """
+    roster = staffing.load_roster()
+    actives = sorted(
+        (p.name for p in roster if p.active),
+        key=str.lower,
+    )
+    if not actives:
+        # Fallback: the matrix is the only place that handles an empty roster.
+        return RedirectResponse(url="/staffing/skills", status_code=307)
+    return RedirectResponse(
+        url=f"/staffing/people/{actives[0]}",
+        status_code=307,
+    )
 
 
 @router.get("/staffing/people/{name}", response_class=HTMLResponse)

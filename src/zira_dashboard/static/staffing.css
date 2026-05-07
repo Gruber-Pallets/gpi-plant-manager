@@ -174,6 +174,17 @@
   .timeoff .ts-note a { color: var(--accent); text-decoration: none; }
   .timeoff .ts-note a:hover { text-decoration: underline; }
   .side .section.reserves    h3 { border-left-color: #a78bfa; }
+  /* Names in Unscheduled / Time Off / Reserves are links to the player
+     card. Inherit color so they read as names, not blue underlines. */
+  .person-card-link {
+    color: inherit;
+    text-decoration: none;
+  }
+  .person-card-link:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-underline-offset: 2px;
+  }
   .side .section h3 .count {
     display: inline-block;
     margin-left: 0.4rem;

@@ -1,7 +1,8 @@
-{# Staffing sub-nav. Renders 4 tabs; pass `active` = "plant"|"time_off"|"skills"|"past". #}
+{# Staffing sub-nav. Pass `active` = "plant"|"time_off"|"skills"|"people"|"past". #}
 <div class="sub-nav">
   <a href="/staffing"            class="{% if active == 'plant'     %}active{% endif %}">Plant Scheduler</a>
   <a href="/staffing/time-off"   class="{% if active == 'time_off'  %}active{% endif %}">Time Off</a>
-  <a href="/staffing/skills"     class="{% if active == 'skills' or active == 'people' %}active{% endif %}">People Matrix</a>
+  <a href="/staffing/skills"     class="{% if active == 'skills'    %}active{% endif %}">Skills Matrix</a>
+  <a href="/staffing/people"     class="{% if active == 'people'    %}active{% endif %}">People</a>
   <a href="/staffing/past"       class="{% if active == 'past'      %}active{% endif %}">Past Schedules</a>
 </div>

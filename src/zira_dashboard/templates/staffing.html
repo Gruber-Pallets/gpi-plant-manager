@@ -117,7 +117,7 @@
       <h3>Unscheduled <span class="count">{{ unassigned|length }}</span></h3>
       <ul>
         {% if unassigned %}
-          {% for n in unassigned %}<li data-name="{{ n }}">{{ n }}{{ cert_badges(n, person_certs) }}</li>{% endfor %}
+          {% for n in unassigned %}<li data-name="{{ n }}"><a href="/staffing/people/{{ n|urlencode }}" class="person-card-link">{{ n }}</a>{{ cert_badges(n, person_certs) }}</li>{% endfor %}
         {% else %}
           <li class="empty">— all scheduled —</li>
         {% endif %}
@@ -135,7 +135,7 @@
             {% set is_absent = e.derived or e.manual_absent %}
             {% set is_clearable = is_partial %}
             <li class="time-off-row {% if is_absent %}absent{% elif is_partial %}partial{% else %}full{% endif %}{% if is_clearable %} clearable{% endif %}"{% if is_clearable %} role="button" tabindex="0" data-day="{{ day }}" data-name="{{ e.name }}" title="Click to clear this partial — {{ e.pay_type }} · off {{ e.time_range or (e.hours ~ 'h') }}"{% else %} title="{{ e.pay_type }}{% if is_partial %} · off {{ e.time_range or (e.hours ~ 'h') }}{% endif %}"{% endif %}>
-              <span class="name">{{ e.name }}{{ cert_badges(e.name, person_certs) }}{% if is_partial %} <span class="partial-tag">partial</span>{% endif %}</span>
+              <span class="name"><a href="/staffing/people/{{ e.name|urlencode }}" class="person-card-link" onclick="event.stopPropagation()">{{ e.name }}</a>{{ cert_badges(e.name, person_certs) }}{% if is_partial %} <span class="partial-tag">partial</span>{% endif %}</span>
               <span class="ts-meta">{{ e.pay_type }}{% if is_partial %} · {% if e.time_range %}off {{ e.time_range }}{% else %}{{ e.hours }}h{% endif %}{% endif %}</span>
             </li>
           {% endfor %}
@@ -163,7 +163,7 @@
       <h3>Reserves <span class="count">{{ reserves|length }}</span></h3>
       <ul>
         {% if reserves %}
-          {% for n in reserves %}<li data-name="{{ n }}">{{ n }}{{ cert_badges(n, person_certs) }}</li>{% endfor %}
+          {% for n in reserves %}<li data-name="{{ n }}"><a href="/staffing/people/{{ n|urlencode }}" class="person-card-link">{{ n }}</a>{{ cert_badges(n, person_certs) }}</li>{% endfor %}
         {% else %}
           <li class="empty">— none flagged —</li>
         {% endif %}
@@ -837,7 +837,11 @@
   function _insertSorted(ul, name) {
     const li = document.createElement('li');
     li.dataset.name = name;
-    li.appendChild(document.createTextNode(name));
+    const a = document.createElement('a');
+    a.href = '/staffing/people/' + encodeURIComponent(name);
+    a.className = 'person-card-link';
+    a.textContent = name;
+    li.appendChild(a);
     appendCertBadges(li, name);
     const existing = [...ul.querySelectorAll('li:not(.empty)')];
     // Sort by data-name (textContent now includes cert badge text).
