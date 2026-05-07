@@ -26,7 +26,11 @@
   table.pc { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
   table.pc th, table.pc td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; }
   table.pc th { color: var(--muted); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-  table.pc td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.pc td.num, table.pc th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pc-group-avgs { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.6rem; margin-bottom: 1rem; }
+  .pc-group-avgs .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.9rem; }
+  .pc-group-avgs .stat .lab { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  .pc-group-avgs .stat .v { font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 0.2rem; color: var(--accent); }
 {% endblock %}
 
 {% block content %}
@@ -73,16 +77,26 @@
 
 <div class="pc-totals">
   <div class="stat"><div class="lab">Days worked</div><div class="v">{{ total_days }}</div></div>
-  <div class="stat"><div class="lab">Total units (split)</div><div class="v">{{ '{:,.0f}'.format(total_units) }}</div></div>
   <div class="stat"><div class="lab">Total downtime (min)</div><div class="v">{{ '{:,.0f}'.format(total_downtime) }}</div></div>
   <div class="stat"><div class="lab">Days Absent</div><div class="v">{{ total_absent_days }}</div></div>
   <div class="stat"><div class="lab">Days Late</div><div class="v">{{ total_late_days }}</div></div>
 </div>
 
+{% if group_avgs %}
+<div class="pc-group-avgs">
+  {% for g in group_avgs %}
+  <div class="stat">
+    <div class="lab">{{ g.name }}</div>
+    <div class="v">{{ '{:,.1f}'.format(g.pph) }} <span style="font-size:0.85rem;color:var(--muted);font-weight:500">pph</span></div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% if rows %}
 <table class="pc">
   <thead>
-    <tr><th>Work Center</th><th class="num">Days</th><th class="num">Units</th><th class="num">Downtime (min)</th></tr>
+    <tr><th>Work Center</th><th class="num">Days</th><th class="num">Units</th><th class="num">Avg (pph)</th><th class="num">Downtime (min)</th></tr>
   </thead>
   <tbody>
     {% for r in rows %}
@@ -90,6 +104,7 @@
       <td>{{ r.wc }}</td>
       <td class="num">{{ r.days_worked }}</td>
       <td class="num">{{ '{:,.0f}'.format(r.units) }}</td>
+      <td class="num">{% if r.avg_pph %}{{ '{:,.1f}'.format(r.avg_pph) }}{% else %}—{% endif %}</td>
       <td class="num">{{ '{:,.0f}'.format(r.downtime) }}</td>
     </tr>
     {% endfor %}
