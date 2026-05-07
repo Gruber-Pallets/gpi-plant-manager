@@ -81,14 +81,29 @@ def _safe_attendance(d, sched, today):
             for n in (ops or []):
                 if n:
                     scheduled_names.add(n)
+
+        # Anyone with an active StratusTime time-off entry today —
+        # full-day or partial — is officially excused. They don't
+        # belong on the late/absence report. Drop them from both
+        # scheduled and unscheduled lists before fetching attendance.
+        try:
+            time_off_today = set(stratustime_client.time_off_names_for_day(d))
+        except Exception:
+            time_off_today = set()
+        scheduled_names = {n for n in scheduled_names if n not in time_off_today}
+
         scheduled_ids = [name_to_id[n] for n in scheduled_names if n in name_to_id]
 
         # Unscheduled = active non-reserve people not in scheduled_names
-        # (matches the /staffing left-rail "Unscheduled" definition).
+        # and not on time off (matches the /staffing left-rail
+        # "Unscheduled" definition).
         roster = staffing.load_roster()
         unscheduled_names = [
             p.name for p in roster
-            if p.active and not p.reserve and p.name not in scheduled_names
+            if p.active
+            and not p.reserve
+            and p.name not in scheduled_names
+            and p.name not in time_off_today
         ]
         unscheduled_ids = [name_to_id[n] for n in unscheduled_names if n in name_to_id]
 

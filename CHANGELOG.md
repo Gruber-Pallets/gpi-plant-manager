@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-07
 
+### 8:36 AM
+
+- **Late/absence report no longer flags people on StratusTime time off** — operators with an active approved time-off entry today (full-day or partial) are officially excused; the report shouldn't be calling them out as late or no-punch. `_safe_attendance` now drops them from both the scheduled and unscheduled id lists before fetching attendance, so they never enter the report at all. The Time Off section on the scheduler is still the single source of truth for who's out.
+
 ### 8:26 AM
 
 - **Late/Absence report covers unscheduled people, captures reasons, and the Player card grows an Attendance section** — three coupled improvements: (1) The popup now lists active non-reserve operators who didn't punch in even if they weren't on today's schedule (Gerardo Vergara would now show up alongside Isaac Miller). Same Snooze and Declare Absent buttons. (2) When someone clocks in past the late threshold, the popup auto-surfaces a "Late arrivals — reason needed" entry. Quick-pick buttons (Sick / Car issues / Overslept / Other) populate a short text field; click Save to record. Declare Absent now also has an inline reason editor (optional). (3) Each player's card at `/staffing/people/{name}` gains an Attendance table showing per-day Absent / Late history with reasons in the active range, plus two new tiles (Days Absent, Days Late). Reason cells are inline-editable so today's "(no reason)" entries can be filled in later from the card.
