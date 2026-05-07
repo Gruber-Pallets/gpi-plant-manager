@@ -582,24 +582,88 @@
     if (!modal) return;
     var body = modal.querySelector('.late-body');
     var html = '';
-    if (d.late && d.late.length) {
-      html += '<p class="late-help">These scheduled people haven\'t clocked in yet (more than 15 min past shift start). Declare them absent for the day or snooze the alert for 30 min and re-check.</p>';
+
+    function renderActionableRow(item, sectionKind) {
+      // sectionKind: 'scheduled' | 'unscheduled' | 'needs_reason'
+      var rowClass = 'late-item late-item-' + sectionKind;
+      var minsHtml = '';
+      if (sectionKind === 'scheduled') {
+        minsHtml = '<span class="late-item-mins">' + item.minutes_late + ' min late</span>';
+      } else if (sectionKind === 'needs_reason') {
+        minsHtml = '<span class="late-item-mins">clocked in ' + item.minutes_late + ' min late</span>';
+      }
+      var actionsHtml;
+      if (sectionKind === 'needs_reason') {
+        actionsHtml = ''
+          + '<div class="late-reason-row">'
+          + '  <button type="button" class="late-quickpick" data-pick="Sick">Sick</button>'
+          + '  <button type="button" class="late-quickpick" data-pick="Car issues">Car issues</button>'
+          + '  <button type="button" class="late-quickpick" data-pick="Overslept">Overslept</button>'
+          + '  <button type="button" class="late-quickpick" data-pick="">Other</button>'
+          + '  <input type="text" class="late-reason-input" placeholder="Reason (optional)">'
+          + '  <button type="button" class="late-save-late">Save</button>'
+          + '</div>';
+      } else {
+        actionsHtml = ''
+          + '<span class="late-item-actions">'
+          + '  <button type="button" class="late-snooze">Snooze 30 min</button>'
+          + '  <button type="button" class="late-declare">Declare Absent</button>'
+          + '</span>'
+          + '<div class="late-reason-row late-declare-reason" hidden>'
+          + '  <button type="button" class="late-quickpick" data-pick="Sick">Sick</button>'
+          + '  <button type="button" class="late-quickpick" data-pick="Car issues">Car issues</button>'
+          + '  <button type="button" class="late-quickpick" data-pick="Overslept">Overslept</button>'
+          + '  <button type="button" class="late-quickpick" data-pick="">Other</button>'
+          + '  <input type="text" class="late-reason-input" placeholder="Reason (optional)">'
+          + '  <button type="button" class="late-save-absent">Save</button>'
+          + '</div>';
+      }
+      return ''
+        + '<li class="' + rowClass + '" data-emp-id="' + escapeHtml(item.emp_id)
+        +    '" data-name="' + escapeHtml(item.name) + '">'
+        + '<span class="late-item-name">' + escapeHtml(item.name) + '</span>'
+        + minsHtml
+        + actionsHtml
+        + '<span class="late-status" hidden></span>'
+        + '</li>';
+    }
+
+    var anyActionable = false;
+
+    if (d.scheduled_late && d.scheduled_late.length) {
+      anyActionable = true;
+      html += '<h4 class="late-section-title">Scheduled — haven\'t clocked in</h4>';
       html += '<ul class="late-list">';
-      d.late.forEach(function (item) {
-        html += '<li class="late-item" data-emp-id="' + escapeHtml(item.emp_id) + '" data-name="' + escapeHtml(item.name) + '">';
-        html += '<span class="late-item-name">' + escapeHtml(item.name) + '</span>';
-        html += '<span class="late-item-mins">' + item.minutes_late + ' min late</span>';
-        html += '<span class="late-item-actions">';
-        html += '<button type="button" class="late-snooze">Snooze 30 min</button>';
-        html += '<button type="button" class="late-declare">Declare Absent</button>';
-        html += '</span>';
-        html += '<span class="late-status" hidden></span>';
-        html += '</li>';
+      d.scheduled_late.forEach(function (item) {
+        html += renderActionableRow(item, 'scheduled');
       });
       html += '</ul>';
-    } else {
-      html += '<p class="late-help">No one is currently flagged late. Anyone scheduled today who hasn\'t clocked in by 15 min past shift-start will appear here.</p>';
     }
+
+    if (d.unscheduled_late && d.unscheduled_late.length) {
+      anyActionable = true;
+      html += '<h4 class="late-section-title">Unscheduled — also haven\'t clocked in</h4>';
+      html += '<ul class="late-list">';
+      d.unscheduled_late.forEach(function (item) {
+        html += renderActionableRow(item, 'unscheduled');
+      });
+      html += '</ul>';
+    }
+
+    if (d.needs_reason && d.needs_reason.length) {
+      anyActionable = true;
+      html += '<h4 class="late-section-title">Late arrivals — reason needed</h4>';
+      html += '<ul class="late-list">';
+      d.needs_reason.forEach(function (item) {
+        html += renderActionableRow(item, 'needs_reason');
+      });
+      html += '</ul>';
+    }
+
+    if (!anyActionable) {
+      html += '<p class="late-help">No one is currently flagged. Anyone scheduled today who hasn\'t clocked in by 15 min past shift-start, anyone unscheduled in the same situation, or anyone who clocked in late without a recorded reason, will appear here.</p>';
+    }
+
     if (d.snoozed && d.snoozed.length) {
       html += '<h4 class="late-section-title">Snoozed</h4>';
       html += '<ul class="late-list">';
@@ -611,69 +675,94 @@
       });
       html += '</ul>';
     }
+
     body.innerHTML = html;
     wireBodyHandlers();
   }
 
   function wireBodyHandlers() {
     if (!modal) return;
-    modal.querySelectorAll('.late-declare').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var li = b.closest('.late-item');
-        var status = li.querySelector('.late-status');
-        var name = li.dataset.name;
-        if (!confirm('Declare ' + name + ' absent for the day?')) return;
-        b.disabled = true;
-        var snoozeBtn = li.querySelector('.late-snooze');
-        if (snoozeBtn) snoozeBtn.disabled = true;
-        fetch('/api/late-report/declare-absent', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({emp_id: li.dataset.empId, name: name}),
-        }).then(function (r) { return r.json(); }).then(function (resp) {
-          if (resp.ok) {
-            status.hidden = false; status.textContent = 'Marked absent ✓';
-            li.style.opacity = '0.5';
-            // Reload so /staffing picks up the new manual_absences row in
-            // the Time Off section + drops the late-flag highlight.
-            setTimeout(function () { location.reload(); }, 600);
-          } else {
-            b.disabled = false;
-            if (snoozeBtn) snoozeBtn.disabled = false;
-            status.hidden = false; status.textContent = 'Failed: ' + (resp.error || 'unknown');
-          }
-        }).catch(function () {
-          b.disabled = false;
-          if (snoozeBtn) snoozeBtn.disabled = false;
-          status.hidden = false; status.textContent = 'Network error.';
+    var body = modal.querySelector('.late-body');
+
+    // Quick-pick buttons populate the adjacent text input.
+    body.querySelectorAll('.late-quickpick').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var input = btn.parentElement.querySelector('.late-reason-input');
+        if (input) {
+          input.value = btn.dataset.pick || '';
+          input.focus();
+        }
+      });
+    });
+
+    // Snooze.
+    body.querySelectorAll('.late-snooze').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var li = btn.closest('.late-item');
+        doAction(li, '/api/late-report/snooze', {
+          emp_id: li.dataset.empId,
+          name: li.dataset.name,
+          minutes: 30,
         });
       });
     });
-    modal.querySelectorAll('.late-snooze').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var li = b.closest('.late-item');
-        var status = li.querySelector('.late-status');
-        b.disabled = true;
-        var declareBtn = li.querySelector('.late-declare');
-        if (declareBtn) declareBtn.disabled = true;
-        fetch('/api/late-report/snooze', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({emp_id: li.dataset.empId, name: li.dataset.name, minutes: 30}),
-        }).then(function (r) { return r.json(); }).then(function (resp) {
-          if (resp.ok) {
-            status.hidden = false; status.textContent = 'Snoozed for ' + (resp.minutes || 30) + ' min ✓';
-            li.style.opacity = '0.5';
-            setTimeout(function () { location.reload(); }, 600);
-          } else {
-            b.disabled = false;
-            if (declareBtn) declareBtn.disabled = false;
-            status.hidden = false; status.textContent = 'Failed: ' + (resp.error || 'unknown');
-          }
-        }).catch(function () {
-          b.disabled = false;
-          if (declareBtn) declareBtn.disabled = false;
-          status.hidden = false; status.textContent = 'Network error.';
+
+    // Declare Absent — toggles the inline reason editor.
+    body.querySelectorAll('.late-declare').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var li = btn.closest('.late-item');
+        var editor = li.querySelector('.late-declare-reason');
+        if (editor) {
+          editor.hidden = false;
+          var input = editor.querySelector('.late-reason-input');
+          if (input) input.focus();
+        }
+      });
+    });
+
+    // Save (Declare Absent).
+    body.querySelectorAll('.late-save-absent').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var li = btn.closest('.late-item');
+        var input = li.querySelector('.late-reason-input');
+        doAction(li, '/api/late-report/declare-absent', {
+          emp_id: li.dataset.empId,
+          name: li.dataset.name,
+          reason: input ? input.value : '',
         });
       });
+    });
+
+    // Save (Late Arrival reason).
+    body.querySelectorAll('.late-save-late').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var li = btn.closest('.late-item');
+        var input = li.querySelector('.late-reason-input');
+        doAction(li, '/api/late-report/save-late-arrival', {
+          emp_id: li.dataset.empId,
+          name: li.dataset.name,
+          reason: input ? input.value : '',
+        });
+      });
+    });
+  }
+
+  function doAction(li, url, payload) {
+    var status = li.querySelector('.late-status');
+    if (status) { status.hidden = false; status.textContent = 'Saving…'; }
+    fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    }).then(function (r) { return r.json(); }).then(function (resp) {
+      if (resp && resp.ok) {
+        li.style.opacity = 0.5;
+        setTimeout(function () { refreshCount(); }, 300);
+      } else {
+        if (status) { status.textContent = 'Failed: ' + ((resp && resp.error) || 'unknown'); }
+      }
+    }).catch(function () {
+      if (status) { status.textContent = 'Network error.'; }
     });
   }
 
