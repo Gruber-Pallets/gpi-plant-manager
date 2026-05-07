@@ -51,6 +51,8 @@
   <div class="stat"><div class="lab">Days worked</div><div class="v">{{ total_days }}</div></div>
   <div class="stat"><div class="lab">Total units (split)</div><div class="v">{{ '{:,.0f}'.format(total_units) }}</div></div>
   <div class="stat"><div class="lab">Total downtime (min)</div><div class="v">{{ '{:,.0f}'.format(total_downtime) }}</div></div>
+  <div class="stat"><div class="lab">Days Absent</div><div class="v">{{ total_absent_days }}</div></div>
+  <div class="stat"><div class="lab">Days Late</div><div class="v">{{ total_late_days }}</div></div>
 </div>
 
 {% if rows %}
@@ -90,5 +92,59 @@
     {% endfor %}
   </tbody>
 </table>
+{% endif %}
+
+{% if attendance_rows %}
+<h3 style="margin-top:1rem">Attendance</h3>
+<table class="pc">
+  <thead>
+    <tr><th>Date</th><th>Type</th><th>Reason</th></tr>
+  </thead>
+  <tbody>
+    {% for r in attendance_rows %}
+    <tr data-attendance-name="{{ name }}"
+        data-attendance-date="{{ r.date }}"
+        data-attendance-type="{{ r.type|lower }}">
+      <td><a href="/recycling?start={{ r.date }}&end={{ r.date }}">{{ r.date }}</a></td>
+      <td>{{ r.type }}</td>
+      <td class="attendance-reason"
+          contenteditable="true"
+          data-original="{{ r.reason }}"
+          style="cursor:text;border:1px dashed transparent;padding:0.2rem 0.4rem;border-radius:4px"
+          onfocus="this.style.borderColor='var(--border)'"
+          onblur="window._saveAttendanceReason && window._saveAttendanceReason(this)"
+        >{{ r.reason }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<script>
+window._saveAttendanceReason = function (cell) {
+  const original = cell.dataset.original || '';
+  const next = (cell.textContent || '').trim();
+  cell.style.borderColor = 'transparent';
+  if (next === original) return;
+  const row = cell.closest('tr');
+  if (!row) return;
+  const name = row.dataset.attendanceName;
+  const date = row.dataset.attendanceDate;
+  const type = row.dataset.attendanceType;
+  fetch('/api/staffing/people/' + encodeURIComponent(name) + '/attendance/reason', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({date: date, type: type, reason: next}),
+  }).then(function (r) {
+    if (r.ok) {
+      cell.dataset.original = next;
+    } else {
+      cell.textContent = original;
+      cell.style.borderColor = 'var(--bad)';
+      setTimeout(function () { cell.style.borderColor = 'transparent'; }, 1500);
+    }
+  }).catch(function () {
+    cell.textContent = original;
+  });
+};
+</script>
 {% endif %}
 {% endblock %}

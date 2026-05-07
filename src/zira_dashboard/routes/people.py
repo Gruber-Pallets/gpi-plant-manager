@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import staffing
 from ..deps import client, templates
@@ -95,3 +95,29 @@ def staffing_player_card(
             "total_late_days": total_late_days,
         },
     )
+
+
+@router.post("/api/staffing/people/{name}/attendance/reason")
+async def update_attendance_reason(name: str, request: Request):
+    """Inline-edit endpoint for the Attendance section's Reason cells.
+
+    Body (JSON): {date: YYYY-MM-DD, type: "absent"|"late", reason: str}
+    Updates the matching row in manual_absences or late_arrivals.
+    """
+    from .. import db
+    body = await request.json()
+    try:
+        d = date.fromisoformat(str(body.get("date") or ""))
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "bad date"}, status_code=400)
+    type_ = str(body.get("type") or "").strip().lower()
+    if type_ not in ("absent", "late"):
+        return JSONResponse({"ok": False, "error": "type must be absent or late"}, status_code=400)
+    reason_raw = body.get("reason")
+    reason = (str(reason_raw).strip() or None) if reason_raw is not None else None
+    table = "manual_absences" if type_ == "absent" else "late_arrivals"
+    db.execute(
+        f"UPDATE {table} SET reason = %s WHERE day = %s AND name = %s",
+        (reason, d, name),
+    )
+    return JSONResponse({"ok": True})
