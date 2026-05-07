@@ -26,6 +26,7 @@ def test_player_card_renders_per_day_breakdown_table():
                                         "Repair-2": {"units": 70.0, "downtime": 0.0,
                                                      "hours": 8.0, "days_worked": 1}}}), \
          patch("zira_dashboard.staffing.load_roster", return_value=[]), \
+         patch("zira_dashboard.work_centers_store.registered_groups", return_value=[]), \
          patch("zira_dashboard.late_report.absences_history_for_name", return_value=[]), \
          patch("zira_dashboard.late_report.late_arrivals_history_for_name", return_value=[]):
         client = TestClient(app)
@@ -61,6 +62,7 @@ def test_player_card_renders_attendance_section_with_reasons():
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=[]), \
          patch("zira_dashboard.production_history.attribution_range", return_value={}), \
          patch("zira_dashboard.staffing.load_roster", return_value=[]), \
+         patch("zira_dashboard.work_centers_store.registered_groups", return_value=[]), \
          patch("zira_dashboard.late_report.absences_history_for_name", return_value=abs_rows), \
          patch("zira_dashboard.late_report.late_arrivals_history_for_name", return_value=late_rows):
         client = TestClient(app)
@@ -84,6 +86,7 @@ def test_player_card_attendance_section_hidden_when_empty():
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=[]), \
          patch("zira_dashboard.production_history.attribution_range", return_value={}), \
          patch("zira_dashboard.staffing.load_roster", return_value=[]), \
+         patch("zira_dashboard.work_centers_store.registered_groups", return_value=[]), \
          patch("zira_dashboard.late_report.absences_history_for_name", return_value=[]), \
          patch("zira_dashboard.late_report.late_arrivals_history_for_name", return_value=[]):
         client = TestClient(app)

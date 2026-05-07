@@ -53,9 +53,33 @@ def staffing_player_card(
         ({"wc": wc, **t} for wc, t in person.items()),
         key=lambda r: -r["units"],
     )
+    for r in rows:
+        hrs = r.get("hours", 0.0)
+        r["avg_pph"] = round(r["units"] / hrs, 1) if hrs > 0 else 0
     total_units    = sum(r["units"] for r in rows)
     total_downtime = sum(r["downtime"] for r in rows)
     total_days     = sum(r["days_worked"] for r in rows)
+
+    # Group averages — one entry per registered group with hours > 0.
+    # Hours-weighted pph across the group's WCs. Order follows
+    # registered_groups() (which sorts by lower(name)).
+    from .. import work_centers_store
+    group_avgs: list[dict] = []
+    for group_name in work_centers_store.registered_groups():
+        wc_names = {loc.name for loc in work_centers_store.members("group", group_name)}
+        if not wc_names:
+            continue
+        units_sum = 0.0
+        hours_sum = 0.0
+        for wc_name, totals in person.items():
+            if wc_name in wc_names:
+                units_sum += totals.get("units", 0.0)
+                hours_sum += totals.get("hours", 0.0)
+        if hours_sum > 0:
+            group_avgs.append({
+                "name": group_name,
+                "pph": round(units_sum / hours_sum, 1),
+            })
     roster = {p.name: p for p in staffing.load_roster()}
     p = roster.get(name)
     skills = []
@@ -106,6 +130,7 @@ def staffing_player_card(
             "end": end_d.isoformat(),
             "today": today.isoformat(),
             "rows": rows,
+            "group_avgs": group_avgs,
             "total_units": round(total_units, 1),
             "total_downtime": round(total_downtime, 1),
             "total_days": total_days,
