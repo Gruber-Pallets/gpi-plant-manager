@@ -67,7 +67,8 @@
     <nav>
       <a href="/recycling">Dashboards</a>
       <a href="/staffing/leaderboards" class="{% if active == 'leaderboards' %}active{% endif %}">Leaderboards</a>
-      <a href="/staffing" class="{% if active != 'leaderboards' %}active{% endif %}">Staffing</a>
+      <a href="/trophies" class="{% if active == 'trophies' %}active{% endif %}">Trophy Case</a>
+      <a href="/staffing" class="{% if active not in ['leaderboards', 'trophies'] %}active{% endif %}">Staffing</a>
       <a href="/settings">Settings</a>
     </nav>
   </div>
