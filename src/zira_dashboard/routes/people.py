@@ -75,6 +75,13 @@ def staffing_player_card(
     attendance_rows.sort(key=lambda r: (r["date"], r["type"]), reverse=True)
     total_absent_days = len(abs_rows)
     total_late_days = len(late_rows)
+    # Roster names for the picklist — active people first (alphabetical),
+    # so the dropdown lets you jump straight to anyone's card without
+    # bouncing back through the matrix.
+    roster_names = sorted(
+        (p.name for p in roster.values() if p.active),
+        key=str.lower,
+    )
     return templates.TemplateResponse(
         request,
         "player_card.html",
@@ -93,6 +100,7 @@ def staffing_player_card(
             "attendance_rows": attendance_rows,
             "total_absent_days": total_absent_days,
             "total_late_days": total_late_days,
+            "roster_names": roster_names,
         },
     )
 

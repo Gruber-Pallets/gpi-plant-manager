@@ -31,7 +31,31 @@
 
 {% block content %}
 <div class="pc-header">
-  <h2>{{ name }}</h2>
+  <h2 style="margin:0">
+    <select id="pc-name-picker"
+            aria-label="Switch player card"
+            style="font-size:1.05rem;font-weight:600;padding:0.25rem 0.5rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--fg);cursor:pointer">
+      {% for n in roster_names %}
+        <option value="{{ n }}" {% if n == name %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+      {% if name not in roster_names %}
+        <option value="{{ name }}" selected>{{ name }}</option>
+      {% endif %}
+    </select>
+  </h2>
+  <script>
+  (function () {
+    var picker = document.getElementById('pc-name-picker');
+    if (!picker) return;
+    picker.addEventListener('change', function () {
+      var nm = picker.value;
+      if (!nm) return;
+      var url = '/staffing/people/' + encodeURIComponent(nm)
+        + '?start={{ start }}&end={{ end }}';
+      window.location.assign(url);
+    });
+  })();
+  </script>
   <span class="pc-skills">
     {% for s, lvl in skills %}<span class="lvl-{{ lvl }}">{{ s }}</span>{% if not loop.last %} · {% endif %}{% endfor %}
     {% if not skills %}<span style="color:var(--muted)">— no trained skills</span>{% endif %}
