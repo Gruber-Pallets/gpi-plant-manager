@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-07
 
+### 1:07 PM
+
+- **Trophy system — badges, trophies, GOAT awards** — three tiers of recognition derived from production data: **monthly badges** (Gold/Silver/Bronze for top single-day units in each group's WCs), **annual trophies** (top-3 days per group + best avg pph per group + best avg per individual WC, both with a 30-day floor), and all-time **🐐 GOAT awards** (best single-day units in each group, holder displaced only by a strictly better day). New **Trophy Case** sub-tab between Leaderboards and Staffing with year/month pickers; player cards now show a **Trophy case** section listing every award the operator currently holds. Manual ✏️ button on every awarded slot lets you reassign, delete, or reset to computed (corrections persist in `award_overrides`).
+
 ### 12:20 PM
 
 - **Player card stats redesign** — at the top of `/staffing/people/{name}`, the **Total units** bubble is gone, replaced by a row of **group-average pph** tiles (Repairs, Dismantlers, Juniors, etc.). One tile per registered group; tiles auto-hide when the operator has no hours in any of that group's WCs. The per-WC table below now has an **Avg (pph)** column alongside Units, and the table headers right-align with their numbers (the old `th.num` was left-aligned, putting headers offset from their numeric cells).
