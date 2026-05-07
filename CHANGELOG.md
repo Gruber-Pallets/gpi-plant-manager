@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-07
 
+### 8:44 AM
+
+- **Late/absence report: reason required before any record posts** — Snooze still files instantly with no reason (it's transient by design). But Declare Absent and the auto-detected Late Arrival entries now refuse to post until a non-empty reason is captured. Backend: both endpoints return 400 if the reason is empty/missing. UI: the Save button on each reason editor stays disabled until the input has content; clicking a quick-pick (Sick / Car issues / Overslept) enables Save instantly because it fills the input. The "Other" quick-pick clears the input and waits for you to type, so Save stays disabled until you do. Net effect: nothing lands in `manual_absences` or `late_arrivals` without a reason attached.
+
 ### 8:36 AM
 
 - **Late/absence report no longer flags people on StratusTime time off** — operators with an active approved time-off entry today (full-day or partial) are officially excused; the report shouldn't be calling them out as late or no-punch. `_safe_attendance` now drops them from both the scheduled and unscheduled id lists before fetching attendance, so they never enter the report at all. The Time Off section on the scheduler is still the single source of truth for who's out.

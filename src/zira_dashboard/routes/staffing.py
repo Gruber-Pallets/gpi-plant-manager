@@ -998,19 +998,25 @@ def _bust_after_mutation() -> None:
 async def late_report_declare_absent(request: Request):
     """Mark a person as Absent for today.
 
-    Body (JSON): {emp_id, name, reason?}
+    Body (JSON): {emp_id, name, reason}
 
-    Reason is optional. Side effects: writes to manual_absences (with
-    reason); clears any pending snooze; busts caches.
+    Reason is REQUIRED — no manual_absences row gets written until
+    a non-empty reason is captured. Side effects: writes to
+    manual_absences; clears any pending snooze; busts caches.
     """
     from .. import late_report
     body = await request.json()
     emp_id = str(body.get("emp_id") or "").strip()
     name = str(body.get("name") or "").strip()
     reason_raw = body.get("reason")
-    reason = (str(reason_raw).strip() or None) if reason_raw is not None else None
+    reason = str(reason_raw).strip() if reason_raw is not None else ""
     if not emp_id or not name:
         return JSONResponse({"ok": False, "error": "emp_id and name required"}, status_code=400)
+    if not reason:
+        return JSONResponse(
+            {"ok": False, "error": "reason required — no record posts until a reason is given"},
+            status_code=400,
+        )
     today = datetime.now(timezone.utc).date()
     try:
         late_report.declare_absent(today, emp_id, name, reason=reason)
@@ -1029,18 +1035,26 @@ async def late_report_declare_absent(request: Request):
 async def late_report_save_late_arrival(request: Request):
     """Record a late-arrival event for today.
 
-    Body (JSON): {emp_id, name, reason?}
-    Side effects: writes to late_arrivals; busts the report cache so
-    the row drops out of needs_reason on the next poll.
+    Body (JSON): {emp_id, name, reason}
+
+    Reason is REQUIRED — no late_arrivals row gets written until a
+    non-empty reason is captured. Side effects: writes to
+    late_arrivals; busts the report cache so the row drops out of
+    needs_reason on the next poll.
     """
     from .. import late_report
     body = await request.json()
     emp_id = str(body.get("emp_id") or "").strip()
     name = str(body.get("name") or "").strip()
     reason_raw = body.get("reason")
-    reason = (str(reason_raw).strip() or None) if reason_raw is not None else None
+    reason = str(reason_raw).strip() if reason_raw is not None else ""
     if not emp_id or not name:
         return JSONResponse({"ok": False, "error": "emp_id and name required"}, status_code=400)
+    if not reason:
+        return JSONResponse(
+            {"ok": False, "error": "reason required — no record posts until a reason is given"},
+            status_code=400,
+        )
     today = datetime.now(timezone.utc).date()
     try:
         late_report.save_late_arrival(today, emp_id, name, reason=reason)

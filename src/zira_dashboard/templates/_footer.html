@@ -600,8 +600,8 @@
           + '  <button type="button" class="late-quickpick" data-pick="Car issues">Car issues</button>'
           + '  <button type="button" class="late-quickpick" data-pick="Overslept">Overslept</button>'
           + '  <button type="button" class="late-quickpick" data-pick="">Other</button>'
-          + '  <input type="text" class="late-reason-input" placeholder="Reason (optional)">'
-          + '  <button type="button" class="late-save-late">Save</button>'
+          + '  <input type="text" class="late-reason-input" placeholder="Reason required">'
+          + '  <button type="button" class="late-save-late" disabled>Save</button>'
           + '</div>';
       } else {
         actionsHtml = ''
@@ -614,8 +614,8 @@
           + '  <button type="button" class="late-quickpick" data-pick="Car issues">Car issues</button>'
           + '  <button type="button" class="late-quickpick" data-pick="Overslept">Overslept</button>'
           + '  <button type="button" class="late-quickpick" data-pick="">Other</button>'
-          + '  <input type="text" class="late-reason-input" placeholder="Reason (optional)">'
-          + '  <button type="button" class="late-save-absent">Save</button>'
+          + '  <input type="text" class="late-reason-input" placeholder="Reason required">'
+          + '  <button type="button" class="late-save-absent" disabled>Save</button>'
           + '</div>';
       }
       return ''
@@ -684,13 +684,30 @@
     if (!modal) return;
     var body = modal.querySelector('.late-body');
 
-    // Quick-pick buttons populate the adjacent text input.
+    // Save button is gated on the reason input having content. Empty
+    // input → button disabled. Each row gets its own listener.
+    function refreshSaveDisabled(input) {
+      var row = input.closest('.late-reason-row');
+      if (!row) return;
+      var save = row.querySelector('.late-save-late, .late-save-absent');
+      if (!save) return;
+      save.disabled = (input.value || '').trim().length === 0;
+    }
+
+    body.querySelectorAll('.late-reason-input').forEach(function (input) {
+      refreshSaveDisabled(input);
+      input.addEventListener('input', function () { refreshSaveDisabled(input); });
+    });
+
+    // Quick-pick buttons populate the adjacent text input + re-check the
+    // Save button's enabled state.
     body.querySelectorAll('.late-quickpick').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var input = btn.parentElement.querySelector('.late-reason-input');
         if (input) {
           input.value = btn.dataset.pick || '';
           input.focus();
+          refreshSaveDisabled(input);
         }
       });
     });
