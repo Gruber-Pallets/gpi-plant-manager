@@ -92,5 +92,23 @@ def test_production_daily_pk_and_indexes():
         "WHERE schemaname = 'public' AND tablename = 'production_daily'"
     )
     idx_names = {r["indexname"] for r in idx_rows}
-    assert any("name" in n and "day" in n for n in idx_names)
-    assert any("wc_name" in n and "day" in n for n in idx_names)
+    assert "idx_production_daily_name_day" in idx_names
+    assert "idx_production_daily_wc_day" in idx_names
+    # Verify the columns each secondary index covers — guards against
+    # rename-but-broken regressions (right name, wrong columns).
+    cols_by_idx = db.query(
+        "SELECT i.relname AS idx, a.attname AS col, "
+        "       array_position(ix.indkey::int[], a.attnum) AS pos "
+        "FROM pg_class t "
+        "JOIN pg_index ix ON ix.indrelid = t.oid "
+        "JOIN pg_class i ON i.oid = ix.indexrelid "
+        "JOIN pg_attribute a ON a.attrelid = t.oid "
+        "  AND a.attnum = ANY(ix.indkey) "
+        "WHERE t.relname = 'production_daily' AND NOT ix.indisprimary "
+        "ORDER BY i.relname, pos"
+    )
+    by_idx: dict = {}
+    for r in cols_by_idx:
+        by_idx.setdefault(r["idx"], []).append(r["col"])
+    assert by_idx["idx_production_daily_name_day"] == ["name", "day"]
+    assert by_idx["idx_production_daily_wc_day"] == ["wc_name", "day"]
