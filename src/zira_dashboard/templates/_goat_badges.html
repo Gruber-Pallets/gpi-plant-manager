@@ -1,0 +1,40 @@
+{# Reusable GOAT badges. One 🐐 per group an operator currently holds
+   the all-time GOAT record in. Hover reveals the group.
+
+   Usage:
+     {% from "_goat_badges.html" import goat_badges, goat_badges_css %}
+     ...
+     <head><style>... {{ goat_badges_css() }} ...</style></head>
+     ...
+     <span class="name">{{ name }}</span>{{ goat_badges(name, goat_holders()) }}
+
+   `goat_holders` is a Jinja global (registered in app.py) that returns
+   the cached {name: [group, ...]} map. Templates invoke it explicitly.
+#}
+
+{% macro goat_badges_css() -%}
+.goat-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  vertical-align: middle;
+  line-height: 1;
+}
+.goat-badge {
+  font-size: 0.95em;
+  cursor: help;
+  user-select: none;
+}
+{%- endmacro %}
+
+{% macro goat_badges(name, goat_holders) -%}
+{%- set groups = (goat_holders or {}).get(name, []) -%}
+{%- if groups -%}
+<span class="goat-badges">
+{%- for g in groups -%}
+<span class="goat-badge" title="GOAT — {{ g }}">🐐</span>
+{%- endfor -%}
+</span>
+{%- endif -%}
+{%- endmacro %}
