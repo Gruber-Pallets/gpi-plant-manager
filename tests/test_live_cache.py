@@ -60,10 +60,18 @@ def test_refresh_attendance_calls_stratustime_and_writes_cache(monkeypatch):
 
     called = {}
 
-    def fake_attendance(day):
-        called["day"] = day
-        return {"E1": {"status": "no_punch"}}
+    def fake_emp_id_map():
+        return {"E1": "Alice", "E2": "Bob"}
 
+    def fake_attendance(day, emp_ids, grace_minutes=7):
+        called["day"] = day
+        called["emp_ids"] = sorted(emp_ids)
+        return {"E1": {"status": "no_punch"}, "E2": {"status": "on_time"}}
+
+    monkeypatch.setattr(
+        "zira_dashboard.stratustime_client._employee_id_to_name_map",
+        fake_emp_id_map,
+    )
     monkeypatch.setattr(
         "zira_dashboard.stratustime_client.attendance_for_day", fake_attendance
     )
@@ -71,16 +79,24 @@ def test_refresh_attendance_calls_stratustime_and_writes_cache(monkeypatch):
     live_cache.refresh_attendance(date(2099, 9, 4))
     got, _ = live_cache.read_attendance(date(2099, 9, 4))
     assert called["day"] == date(2099, 9, 4)
-    assert got == {"E1": {"status": "no_punch"}}
+    assert called["emp_ids"] == ["E1", "E2"]
+    assert got == {"E1": {"status": "no_punch"}, "E2": {"status": "on_time"}}
 
 
 def test_refresh_attendance_swallows_errors(monkeypatch):
     from zira_dashboard import db, live_cache
     db.init_pool(); db.bootstrap_schema(); _reset_caches()
 
-    def boom(day):
+    def fake_emp_id_map():
+        return {"E1": "Alice"}
+
+    def boom(day, emp_ids, grace_minutes=7):
         raise RuntimeError("stratustime down")
 
+    monkeypatch.setattr(
+        "zira_dashboard.stratustime_client._employee_id_to_name_map",
+        fake_emp_id_map,
+    )
     monkeypatch.setattr(
         "zira_dashboard.stratustime_client.attendance_for_day", boom
     )

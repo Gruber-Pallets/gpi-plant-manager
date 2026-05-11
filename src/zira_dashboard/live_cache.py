@@ -78,13 +78,19 @@ def is_stale(refreshed_at: datetime | None) -> bool:
 
 
 def refresh_attendance(day: date) -> None:
-    """Pull today's StratusTime attendance, write to cache.
+    """Pull today's StratusTime attendance for every known emp_id and
+    write the full dict to cache.
+
+    Routes read the cached payload and filter to the emp_ids they care
+    about. Caching the superset means one warmer tick serves every
+    consumer of attendance data.
 
     Errors are logged and swallowed — the warmer keeps running and the
     previous good payload (if any) remains in the cache table."""
     try:
         from . import stratustime_client
-        payload = stratustime_client.attendance_for_day(day)
+        emp_ids = list(stratustime_client._employee_id_to_name_map().keys())
+        payload = stratustime_client.attendance_for_day(day, emp_ids)
         write_attendance(day, payload)
     except Exception as e:
         _log.warning("refresh_attendance(%s) failed: %s", day, e)
