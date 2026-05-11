@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-11
 
+### 12:29 PM
+
+- **Live warmer + nightly precompute job both running** — third in-process asyncio task ticks every 45 s and refreshes today's StratusTime attendance, today's time-off entries, and today's `production_daily` rows (so MTD leaderboards include today's partial-day data). The scheduler day-view and `/api/late-report` both now read from the live cache instead of blocking on StratusTime in the request path — measured median is ~285 ms for `/api/late-report`, ~1.9 s for `/staffing` (includes full template render). Nightly `/admin/precompute-run` is scheduled in Windows Task Scheduler at 3:30 AM daily, hitting yesterday by default; logs land at `%USERPROFILE%\Logs\zira-precompute-YYYY-MM-DD.log`. Backfill for 2026-02-05 → 2026-05-10 already complete (61 rows from 10 scheduled days; the rest of the year had no published schedules to attribute). Going forward every scheduled day shows up in `production_daily` overnight.
+
 ### 10:39 AM
 
 - **Backend speedup — daily-OK pages now read from a precomputed fact table** — leaderboards, player cards, trophies/awards, and value-stream production views previously recomputed per-person attribution from raw Zira on every page hit. They now read from a new `production_daily` table populated by `POST /admin/precompute-run` (default = yesterday; with `from`/`to` query params = backfill). Three core history functions (`daily_records`, `attribution_range`, `attribution_per_day`) keep their existing signatures but now run a single SUM/GROUP BY against `production_daily` instead of parallel-fetching per-day attribution. The user-visible speedup lands once the table is backfilled and the live warmer (next deploy) keeps today's row fresh. Award overrides flow unchanged.
