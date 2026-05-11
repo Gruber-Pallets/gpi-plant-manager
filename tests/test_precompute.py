@@ -136,3 +136,73 @@ def test_precompute_day_flattens_and_upserts(monkeypatch):
     assert result == {"day": "2026-05-01", "rows_written": 2}
     assert calls["attribution"] == 1
     assert {r["name"] for r in calls["upsert"]} == {"Alice", "Bob"}
+
+
+def _seed(rows):
+    from zira_dashboard import db
+    db.execute("DELETE FROM production_daily WHERE day BETWEEN %s AND %s",
+               (date(2099, 6, 1), date(2099, 6, 30)))
+    from zira_dashboard.precompute import upsert_production_daily
+    upsert_production_daily(rows)
+
+
+@pytestmark_pg
+def test_sum_by_range_groups_by_name():
+    from zira_dashboard import db
+    from zira_dashboard.precompute import sum_by_range
+    db.init_pool(); db.bootstrap_schema()
+    _seed([
+        {"day": date(2099, 6, 1), "emp_id": "E1", "name": "Alice", "wc_name": "WC1",
+         "units": 10.0, "downtime": 1.0, "hours": 4.0, "days_worked": 1.0},
+        {"day": date(2099, 6, 2), "emp_id": "E1", "name": "Alice", "wc_name": "WC1",
+         "units": 20.0, "downtime": 2.0, "hours": 4.0, "days_worked": 1.0},
+        {"day": date(2099, 6, 1), "emp_id": "E2", "name": "Bob", "wc_name": "WC1",
+         "units": 30.0, "downtime": 0.0, "hours": 8.0, "days_worked": 1.0},
+    ])
+
+    out = sum_by_range(
+        start=date(2099, 6, 1), end=date(2099, 6, 30),
+        wc_names=["WC1"], group_by="name",
+    )
+    by_name = {r["name"]: r for r in out}
+    assert float(by_name["Alice"]["units"]) == 30.0
+    assert float(by_name["Alice"]["days_worked"]) == 2.0
+    assert float(by_name["Bob"]["units"]) == 30.0
+
+
+@pytestmark_pg
+def test_sum_by_name_returns_per_wc_breakdown():
+    from zira_dashboard import db
+    from zira_dashboard.precompute import sum_by_name
+    db.init_pool(); db.bootstrap_schema()
+    _seed([
+        {"day": date(2099, 6, 1), "emp_id": "E1", "name": "Alice", "wc_name": "WC1",
+         "units": 10.0, "downtime": 1.0, "hours": 4.0, "days_worked": 1.0},
+        {"day": date(2099, 6, 1), "emp_id": "E1", "name": "Alice", "wc_name": "WC2",
+         "units": 5.0,  "downtime": 0.5, "hours": 2.0, "days_worked": 1.0},
+    ])
+
+    out = sum_by_name("Alice", start=date(2099, 6, 1), end=date(2099, 6, 30))
+    by_wc = {r["wc_name"]: r for r in out}
+    assert float(by_wc["WC1"]["units"]) == 10.0
+    assert float(by_wc["WC2"]["units"]) == 5.0
+
+
+@pytestmark_pg
+def test_daily_records_in_range_returns_per_row():
+    from zira_dashboard import db
+    from zira_dashboard.precompute import daily_records_in_range
+    db.init_pool(); db.bootstrap_schema()
+    _seed([
+        {"day": date(2099, 6, 1), "emp_id": "E1", "name": "Alice", "wc_name": "WC1",
+         "units": 10.0, "downtime": 1.0, "hours": 4.0, "days_worked": 1.0},
+        {"day": date(2099, 6, 2), "emp_id": "E1", "name": "Alice", "wc_name": "WC1",
+         "units": 20.0, "downtime": 2.0, "hours": 4.0, "days_worked": 1.0},
+    ])
+
+    out = daily_records_in_range(date(2099, 6, 1), date(2099, 6, 30))
+    assert len(out) == 2
+    out_sorted = sorted(out, key=lambda r: r["day"])
+    assert out_sorted[0]["units"] == 10.0
+    assert out_sorted[1]["units"] == 20.0
+    assert out_sorted[0]["person"] == "Alice"

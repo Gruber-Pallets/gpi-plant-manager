@@ -102,3 +102,85 @@ def precompute_day(day: date, client) -> dict:
     rows = flatten_attribution(day, attribution, name_to_emp_id)
     written = upsert_production_daily(rows)
     return {"day": day.isoformat(), "rows_written": written}
+
+
+def sum_by_range(
+    start: date,
+    end: date,
+    wc_names: list[str] | None = None,
+    group_by: str = "name",
+) -> list[dict]:
+    """Sum units / downtime / hours / days_worked over [start, end]
+    grouped by `group_by` (currently only "name").
+
+    `wc_names` filters which WCs to include. None = all WCs.
+    """
+    from . import db
+    if group_by != "name":
+        raise ValueError(f"group_by must be 'name'; got {group_by!r}")
+    params: list = [start, end]
+    sql = """
+        SELECT name,
+               SUM(units)       AS units,
+               SUM(downtime)    AS downtime,
+               SUM(hours)       AS hours,
+               SUM(days_worked) AS days_worked
+        FROM production_daily
+        WHERE day BETWEEN %s AND %s
+    """
+    if wc_names:
+        sql += " AND wc_name = ANY(%s)"
+        params.append(list(wc_names))
+    sql += " GROUP BY name"
+    return db.query(sql, params)
+
+
+def sum_by_name(name: str, start: date, end: date) -> list[dict]:
+    """Per-WC totals for one person across [start, end].
+
+    Return rows: {wc_name, units, downtime, hours, days_worked}.
+    """
+    from . import db
+    return db.query(
+        """
+        SELECT wc_name,
+               SUM(units)       AS units,
+               SUM(downtime)    AS downtime,
+               SUM(hours)       AS hours,
+               SUM(days_worked) AS days_worked
+        FROM production_daily
+        WHERE name = %s AND day BETWEEN %s AND %s
+        GROUP BY wc_name
+        """,
+        (name, start, end),
+    )
+
+
+def daily_records_in_range(start: date, end: date) -> list[dict]:
+    """One row per (day, person, wc) in [start, end], matching the shape
+    of the existing `production_history.daily_records` so awards/trophy
+    code can swap over with no behavior change.
+
+    Each row: {day, person, wc, units, downtime, hours}.
+    """
+    from . import db
+    rows = db.query(
+        """
+        SELECT day, name AS person, wc_name AS wc,
+               units, downtime, hours
+        FROM production_daily
+        WHERE day BETWEEN %s AND %s AND units > 0
+        """,
+        (start, end),
+    )
+    return [
+        {
+            "day": r["day"],
+            "person": r["person"],
+            "wc": r["wc"],
+            "units": float(r["units"]),
+            "downtime": float(r["downtime"]),
+            "hours": float(r["hours"]),
+        }
+        for r in rows
+    ]
