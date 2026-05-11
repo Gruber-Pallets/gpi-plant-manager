@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-11
 
+### 2:03 PM
+
+- **GOAT badges on the Recycling + New value-stream dashboards + better hover** — the 🐐 icons now also appear next to operator names on the dashboard widgets (both today's per-WC bars where a person is assigned, and the per-person bars in range views). The hover tooltip was rebuilt: no more question-mark cursor, no more half-second browser delay, no more tiny black-on-black text — hovering any 🐐 instantly pops a bigger pill-shaped tooltip with the group name. Same visual treatment everywhere the badge appears (scheduler, leaderboards, skills matrix, past schedules, player cards, and now dashboards).
+
 ### 1:57 PM
 
 - **Trophy Case Annual + Monthly sections now use a side-by-side grid** — the per-group blocks in Annual Trophies and Monthly Ribbons no longer stack as full-width rows; they flow into the same kind of responsive 4-up grid the GOATs section already uses. New shared `.tc-grid` class wraps both loops with `repeat(auto-fit, minmax(280px, 1fr))` so the layout adapts to viewport width while keeping at least 280px per card for readable per-WC rows in the Annual blocks.

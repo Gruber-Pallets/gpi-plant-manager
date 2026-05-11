@@ -1,5 +1,7 @@
 {# Reusable GOAT badges. One 🐐 per group an operator currently holds
-   the all-time GOAT record in. Hover reveals the group.
+   the all-time GOAT record in. Hover reveals the group via a CSS
+   pseudo-element tooltip — instant, no question-mark cursor, no
+   browser-native delay.
 
    Usage:
      {% from "_goat_badges.html" import goat_badges, goat_badges_css %}
@@ -22,9 +24,33 @@
   line-height: 1;
 }
 .goat-badge {
+  position: relative;
   font-size: 0.95em;
-  cursor: help;
+  cursor: default;
   user-select: none;
+}
+.goat-badge::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1f2937;
+  color: #f9fafb;
+  padding: 0.4rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  z-index: 9999;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+.goat-badge:hover::after {
+  opacity: 1;
+  visibility: visible;
 }
 {%- endmacro %}
 
@@ -33,7 +59,7 @@
 {%- if groups -%}
 <span class="goat-badges">
 {%- for g in groups -%}
-<span class="goat-badge" title="GOAT — {{ g }}">🐐</span>
+<span class="goat-badge" data-tip="GOAT — {{ g }}" aria-label="GOAT — {{ g }}">🐐</span>
 {%- endfor -%}
 </span>
 {%- endif -%}

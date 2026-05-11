@@ -6,6 +6,8 @@
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>Value Streams — New — GPI Plant Manager</title>
 <link rel="stylesheet" href="/static/new_vs.css?v={{ static_v('new_vs.css') }}">
+{% from "_goat_badges.html" import goat_badges, goat_badges_css %}
+<style>{{ goat_badges_css() }}</style>
 </head>
 <body>
 {% from "_cumulative_progress_chart.html" import cumulative_progress_chart %}
@@ -58,7 +60,7 @@
         <div class="bar-row" title="{{ b.who if b.who else b.name }} — {{ b.units }}{% if b.expected %} / {{ b.expected }} expected{% endif %}{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
           <div class="name">
             {% if b.who and b.who != b.name %}
-              <span class="name-primary">{{ b.who }}</span>
+              <span class="name-primary">{{ b.who }}{{ goat_badges(b.who, goat_holders()) }}</span>
               <span class="name-secondary">{{ b.name }}</span>
             {% else %}
               <span class="name-primary">{{ b.name }}</span>

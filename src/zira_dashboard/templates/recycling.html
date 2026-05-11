@@ -7,6 +7,8 @@
 <title>Value Streams — Recycling — GPI Plant Manager</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
+{% from "_goat_badges.html" import goat_badges, goat_badges_css %}
+<style>{{ goat_badges_css() }}</style>
 </head>
 <body>
 <header>
@@ -145,9 +147,9 @@
           </div>
           <div class="vbar-name">
             {% if is_range %}
-              <span class="name-primary">{{ b.name }}</span>
+              <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
             {% elif b.who and b.who != b.name %}
-              <span class="name-primary">{{ b.who }}</span>
+              <span class="name-primary">{{ b.who }}{{ goat_badges(b.who, goat_holders()) }}</span>
               <span class="name-secondary">{{ b.name }}</span>
             {% else %}
               <span class="name-primary">{{ b.name }}</span>
@@ -168,9 +170,9 @@
       <div class="bar-row numpos-{{ numpos }}" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
         <div class="name">
           {% if is_range %}
-            <span class="name-primary">{{ b.name }}</span>
+            <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
           {% elif b.who and b.who != b.name %}
-            <span class="name-primary">{{ b.who }}</span>
+            <span class="name-primary">{{ b.who }}{{ goat_badges(b.who, goat_holders()) }}</span>
             <span class="name-secondary">{{ b.name }}</span>
           {% else %}
             <span class="name-primary">{{ b.name }}</span>
