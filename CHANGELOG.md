@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-11
 
+### 3:05 PM
+
+- **Hover tooltips no longer clip off the left/right edge of the screen** — both the small 🐐 GOAT badge tooltips and the bigger player-card trophy icon tooltips were rendering past the viewport when the icon sat near the left or right edge (centered popups + `transform: translateX(-50%)`). A tiny shared script measures the icon's viewport position on hover and toggles `.tip-anchor-left` / `.tip-anchor-right` so the tooltip's left or right edge clamps to the icon instead of overflowing. Wired into the shared base template so every staffing-family page picks it up; the three standalone templates (scheduler, recycling, new-vs) include it explicitly.
+
 ### 2:06 PM
 
 - **Trophy Case → Player Card jumps + Player Card trophy-icon redesign** — every operator name on the Trophy Case page (GOAT cards, Annual top-days, Annual best-avg, per-WC best-avg, Monthly ribbons) is now a hyperlink to that person's player card. Subtle hover-only dotted underline keeps the page readable. On the player card itself, the "Trophy case" section is now a row of icon-only trophies at ~3x the previous size; hovering any icon pops a dark pill tooltip with the full detail (group, year, units, pph, day, etc.), and clicking jumps straight to the matching anchor on `/trophies` (e.g. `#annual-repairs`) so you land in context.

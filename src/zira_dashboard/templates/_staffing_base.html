@@ -1,3 +1,4 @@
+{% from "_goat_badges.html" import hover_tip_clamp_script %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -92,6 +93,7 @@ document.addEventListener('toggle', (e) => {
   });
 }, true);
 </script>
+{{ hover_tip_clamp_script() }}
 {% block scripts %}{% endblock %}
 </body>
 </html>

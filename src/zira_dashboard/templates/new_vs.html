@@ -6,7 +6,7 @@
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>Value Streams — New — GPI Plant Manager</title>
 <link rel="stylesheet" href="/static/new_vs.css?v={{ static_v('new_vs.css') }}">
-{% from "_goat_badges.html" import goat_badges, goat_badges_css %}
+{% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 <style>{{ goat_badges_css() }}</style>
 </head>
 <body>
@@ -226,5 +226,6 @@
 <script>setTimeout(() => location.reload(), 60000);</script>
 {% endif %}
 {% include '_footer.html' %}
+{{ hover_tip_clamp_script() }}
 </body>
 </html>

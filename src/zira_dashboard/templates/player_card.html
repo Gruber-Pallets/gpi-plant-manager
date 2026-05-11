@@ -66,6 +66,10 @@
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
   }
   .pc-trophy-icon:hover::after { opacity: 1; visibility: visible; }
+  /* Viewport-clamp helpers — same anchor pattern as .goat-badge so
+     tooltips on edge icons stay on-screen. */
+  .pc-trophy-icon.tip-anchor-left::after { left: 0; transform: none; }
+  .pc-trophy-icon.tip-anchor-right::after { left: auto; right: 0; transform: none; }
   /* Trophy-tier filters mirror the trophy_case page so a top-day
      trophy reads consistently across the system. */
   .pc-trophy-gold   { filter: none; }

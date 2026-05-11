@@ -7,7 +7,7 @@
 <title>Value Streams — Recycling — GPI Plant Manager</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
-{% from "_goat_badges.html" import goat_badges, goat_badges_css %}
+{% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 <style>{{ goat_badges_css() }}</style>
 </head>
 <body>
@@ -574,5 +574,6 @@
 <script>setTimeout(() => location.reload(), 60000);</script>
 {% endif %}
 {% include '_footer.html' %}
+{{ hover_tip_clamp_script() }}
 </body>
 </html>

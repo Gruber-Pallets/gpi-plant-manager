@@ -52,6 +52,41 @@
   opacity: 1;
   visibility: visible;
 }
+/* Viewport-clamp helpers — toggled on by the hover-tip script when an
+   icon is near the left/right edge so the tooltip never clips. */
+.goat-badge.tip-anchor-left::after {
+  left: 0;
+  transform: none;
+}
+.goat-badge.tip-anchor-right::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+{%- endmacro %}
+
+{% macro hover_tip_clamp_script() -%}
+<script>
+// Keeps `.goat-badge` and `.pc-trophy-icon` hover tooltips inside the
+// viewport: on mouseover, measure the icon's position and add
+// `tip-anchor-left` / `tip-anchor-right` so the matching CSS rule
+// shifts the tooltip's anchor. ~280px is the practical max tooltip
+// width across all current detail strings (GOAT lines, "🏆 Best <wc>
+// of <year> — <pph> pph (<days> days)", etc.).
+(function () {
+  var W = 280;
+  document.addEventListener('mouseover', function (e) {
+    var el = e.target.closest('.goat-badge, .pc-trophy-icon');
+    if (!el) return;
+    var rect = el.getBoundingClientRect();
+    var center = rect.left + rect.width / 2;
+    var nearLeft = center - W / 2 < 8;
+    var nearRight = center + W / 2 > window.innerWidth - 8;
+    el.classList.toggle('tip-anchor-left', nearLeft);
+    el.classList.toggle('tip-anchor-right', nearRight && !nearLeft);
+  });
+})();
+</script>
 {%- endmacro %}
 
 {% macro goat_badges(name, goat_holders) -%}

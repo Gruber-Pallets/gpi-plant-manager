@@ -1,5 +1,5 @@
 {% from "_cert_badges.html" import cert_badges, cert_badges_css %}
-{% from "_goat_badges.html" import goat_badges, goat_badges_css %}
+{% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -1550,5 +1550,6 @@
   // Assignments to Do modal moved to the global footer; no per-page handler here.
 </script>
 {% include '_footer.html' %}
+{{ hover_tip_clamp_script() }}
 </body>
 </html>
