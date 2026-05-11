@@ -12,8 +12,11 @@ trigger an inline refresh before returning.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 STALE_THRESHOLD = timedelta(minutes=3)
 
@@ -72,3 +75,43 @@ def is_stale(refreshed_at: datetime | None) -> bool:
     if refreshed_at is None:
         return True
     return (datetime.now(timezone.utc) - refreshed_at) > STALE_THRESHOLD
+
+
+def refresh_attendance(day: date) -> None:
+    """Pull today's StratusTime attendance, write to cache.
+
+    Errors are logged and swallowed — the warmer keeps running and the
+    previous good payload (if any) remains in the cache table."""
+    try:
+        from . import stratustime_client
+        payload = stratustime_client.attendance_for_day(day)
+        write_attendance(day, payload)
+    except Exception as e:
+        _log.warning("refresh_attendance(%s) failed: %s", day, e)
+
+
+def refresh_timeoff(day: date) -> None:
+    """Pull today's StratusTime time-off entries, write to cache."""
+    try:
+        from . import stratustime_client
+        payload = stratustime_client.time_off_entries_for_day(day)
+        write_timeoff(day, payload)
+    except Exception as e:
+        _log.warning("refresh_timeoff(%s) failed: %s", day, e)
+
+
+def refresh_production(day: date, client) -> None:
+    """Refresh today's Zira production AND today's production_daily rows.
+
+    The cache table holds the raw payload (used by the recycling/new-vs
+    pages); production_daily rows are written so MTD / today leaderboards
+    see today's partial-day data without a separate query path.
+    """
+    try:
+        from . import precompute
+        # Side effect: also UPSERTs today's production_daily rows because
+        # precompute_day calls attribution_for(day) + flatten + upsert.
+        result = precompute.precompute_day(day, client)
+        write_production(day, result)
+    except Exception as e:
+        _log.warning("refresh_production(%s) failed: %s", day, e)
