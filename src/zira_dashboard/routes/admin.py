@@ -6,11 +6,12 @@ JSON so Dale can paste the result into a chat to share status.
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from threading import Lock
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from .. import shift_config, staffing
@@ -397,5 +398,79 @@ def zira_backfill(
         "days_checked": days_checked[0],
         "with_units": with_units[0],
         "no_units": no_units,
+        "errors": errors,
+    })
+
+
+def _check_admin_secret(request: Request) -> bool:
+    expected = os.environ.get("ZIRA_ADMIN_SECRET", "")
+    if not expected:
+        return False
+    provided = request.headers.get("X-Admin-Secret", "")
+    return provided == expected
+
+
+@router.post("/admin/precompute-run")
+def precompute_run(
+    request: Request,
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = Query(default=None),
+):
+    """Run the production_daily precompute for one or more days.
+
+    Default (no params): precompute yesterday.
+    With `from` + `to`: precompute every day in that inclusive range.
+
+    Auth: X-Admin-Secret header must match $ZIRA_ADMIN_SECRET.
+    Idempotent — re-running a day overwrites cleanly.
+    """
+    import time
+    from .. import precompute
+    from ..deps import client
+
+    if not _check_admin_secret(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    today = datetime.now(timezone.utc).date()
+    if from_ or to:
+        if not (from_ and to):
+            return JSONResponse(
+                {"error": "must supply both `from` and `to`, or neither"},
+                status_code=400,
+            )
+        try:
+            start_d = date.fromisoformat(from_)
+            end_d = date.fromisoformat(to)
+        except ValueError:
+            return JSONResponse(
+                {"error": "from/to must be YYYY-MM-DD"}, status_code=400
+            )
+    else:
+        start_d = end_d = today - timedelta(days=1)
+
+    if end_d < start_d:
+        return JSONResponse({"error": "to must be >= from"}, status_code=400)
+
+    started = time.time()
+    days_processed = 0
+    rows_written = 0
+    errors: list[dict] = []
+
+    cursor = start_d
+    while cursor <= end_d:
+        try:
+            result = precompute.precompute_day(cursor, client)
+            rows_written += int(result.get("rows_written", 0))
+        except Exception as e:
+            errors.append({"day": cursor.isoformat(), "error": str(e)[:200]})
+        days_processed += 1
+        cursor += timedelta(days=1)
+
+    return JSONResponse({
+        "from": start_d.isoformat(),
+        "to": end_d.isoformat(),
+        "days_processed": days_processed,
+        "rows_written": rows_written,
+        "duration_ms": int((time.time() - started) * 1000),
         "errors": errors,
     })
