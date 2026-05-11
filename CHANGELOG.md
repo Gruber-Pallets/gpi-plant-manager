@@ -2,6 +2,12 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+## 2026-05-11
+
+### 9:12 AM
+
+- **Late/absence report: modal now auto-clears after a save** — declaring someone absent and picking a reason no longer leaves the row stuck showing "Saving…". The report re-pulls fresh data on save; the saved row drops out, and if nothing actionable is left the popup closes itself automatically. Multiple late/absent people still keep the popup open until you've worked through them.
+
 ## 2026-05-07
 
 ### 1:07 PM

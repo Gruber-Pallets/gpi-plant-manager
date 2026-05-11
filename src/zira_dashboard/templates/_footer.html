@@ -781,8 +781,21 @@
       body: JSON.stringify(payload),
     }).then(function (r) { return r.json(); }).then(function (resp) {
       if (resp && resp.ok) {
-        li.style.opacity = 0.5;
-        setTimeout(function () { refreshCount(); }, 300);
+        // Re-pull the report so the saved row drops out. If nothing's
+        // actionable left, auto-close — otherwise re-render so the user
+        // can keep working without "Saving…" lingering on the saved row.
+        fetch(LATE_ENDPOINT).then(function (r) { return r.json(); }).then(function (d) {
+          data = d;
+          injectOrUpdateBadge();
+          var anyActionable = (d.scheduled_late && d.scheduled_late.length)
+              || (d.unscheduled_late && d.unscheduled_late.length)
+              || (d.needs_reason && d.needs_reason.length);
+          if (!anyActionable) {
+            closeModal();
+          } else if (modal) {
+            renderModal(d);
+          }
+        });
       } else {
         if (status) { status.textContent = 'Failed: ' + ((resp && resp.error) || 'unknown'); }
       }
