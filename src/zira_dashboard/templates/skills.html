@@ -1,9 +1,11 @@
 {% extends "_staffing_base.html" %}
 {% from "_cert_badges.html" import cert_badges, cert_badges_css %}
+{% from "_goat_badges.html" import goat_badges, goat_badges_css %}
 {% block title %}People Matrix{% endblock %}
 
 {% block styles %}
   {{ cert_badges_css() }}
+  {{ goat_badges_css() }}
   {% include "_save_toast.html" %}
 {% endblock %}
 
@@ -64,7 +66,7 @@
         <tr class="{% if not p.active %}inactive{% endif %}" data-name="{{ p.name }}" data-active="{{ '1' if p.active else '0' }}" data-reserve="{{ '1' if p.reserve else '0' }}">
           <td class="name">
             <div class="name-inner">
-              <a class="name-link" href="/staffing/people/{{ p.name | urlencode }}">{{ p.name }}{{ cert_badges(p.name, person_certs) }}</a>
+              <a class="name-link" href="/staffing/people/{{ p.name | urlencode }}">{{ p.name }}{{ cert_badges(p.name, person_certs) }}{{ goat_badges(p.name, goat_holders()) }}</a>
               {% if p.employee_id and odoo_url %}
                 <a class="odoo-link" href="{{ odoo_url }}/web#id={{ p.employee_id }}&model=hr.employee&view_type=form" target="_blank" rel="noopener" title="Open in Odoo">↗</a>
               {% endif %}
