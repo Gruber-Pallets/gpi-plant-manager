@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-11
 
+### 1:48 PM
+
+- **🐐 GOAT badges next to every employee name** — anywhere an operator's name appears (Plant Scheduler, Leaderboards, People Matrix, Past Schedules, player-card headline), a 🐐 emoji now sits next to it for each group they currently hold the all-time GOAT record in. Hover over the icon to see which group ("GOAT — Repairs", etc.). People who hold GOAT in multiple groups get one icon per group, stacked. Updates within ~5 min of any change (in-process cache TTL) and recomputes from `production_daily` each render — so if anyone takes the GOAT record away on a given day, the badge moves overnight after the nightly precompute. Trophies page itself unchanged — names there are already grouped under their GOAT scope.
+
 ### 12:29 PM
 
 - **Live warmer + nightly precompute job both running** — third in-process asyncio task ticks every 45 s and refreshes today's StratusTime attendance, today's time-off entries, and today's `production_daily` rows (so MTD leaderboards include today's partial-day data). The scheduler day-view and `/api/late-report` both now read from the live cache instead of blocking on StratusTime in the request path — measured median is ~285 ms for `/api/late-report`, ~1.9 s for `/staffing` (includes full template render). Nightly `/admin/precompute-run` is scheduled in Windows Task Scheduler at 3:30 AM daily, hitting yesterday by default; logs land at `%USERPROFILE%\Logs\zira-precompute-YYYY-MM-DD.log`. Backfill for 2026-02-05 → 2026-05-10 already complete (61 rows from 10 scheduled days; the rest of the year had no published schedules to attribute). Going forward every scheduled day shows up in `production_daily` overnight.
