@@ -592,6 +592,10 @@
     line-height: 1.35; resize: vertical;
   }
   .wc-note-cell textarea:focus { outline: none; border-color: var(--accent); }
+  /* Print-only mirror of the WC note. The textarea is fixed at rows=1
+     and clips long notes on paper; this div auto-grows with content
+     so the cell (and its row) stretches to fit the full text. */
+  .wc-note-print { display: none; }
 
   /* Draft / Posted header indicators */
   .draft-label { color: var(--bad); font-weight: 800; font-size: 0.78rem; letter-spacing: 1.5px; padding: 0.1rem 0.45rem; border: 1px solid var(--bad); border-radius: 6px; }
@@ -950,16 +954,21 @@
     /* Close the schedule table with a bottom rule, mirroring the header. */
     table.sched tbody tr:last-child td { border-bottom: 1px solid black !important; }
 
-    /* WC notes: render the textarea as plain text on paper. */
-    .wc-note-cell textarea {
-      background: white !important;
-      border: none !important;
-      color: black !important;
-      padding: 0 !important;
-      resize: none;
+    /* WC notes: hide the form control entirely on paper and use the
+       auto-sizing div so the cell stretches to fit the full note. */
+    .wc-note-cell textarea { display: none !important; }
+    .wc-note-cell .wc-note-print {
+      display: block;
       font-size: 9pt;
-      min-height: 1em;
+      line-height: 1.3;
+      color: black;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
+    /* Top-align the table cells so a long note doesn't visually
+       float in the middle of an otherwise-short row. */
+    table.sched td { vertical-align: top !important; }
 
     /* Day notes panel: short height for single-page fit. */
     .day-notes .notes-label {
