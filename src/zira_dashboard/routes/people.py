@@ -12,7 +12,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import staffing
-from ..deps import client, templates
+from ..deps import templates
 
 router = APIRouter()
 
@@ -47,7 +47,7 @@ def staffing_player_card(
     today = datetime.now(timezone.utc).date()
     end_d = date.fromisoformat(end) if end else today
     start_d = date.fromisoformat(start) if start else (end_d - timedelta(days=29))
-    range_out = production_history.attribution_range(start_d, end_d, client)
+    range_out = production_history.attribution_range(start_d, end_d)
     person = range_out.get(name, {})
     rows = sorted(
         ({"wc": wc, **t} for wc, t in person.items()),
@@ -90,7 +90,7 @@ def staffing_player_card(
         )
     # Per-day-per-WC rows for the breakdown table. Newest first.
     day_rows: list[dict] = []
-    for day, daily in production_history.attribution_per_day(start_d, end_d, client):
+    for day, daily in production_history.attribution_per_day(start_d, end_d):
         person_data = daily.get(name, {})
         for wc_name, totals in person_data.items():
             day_rows.append({

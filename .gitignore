@@ -1,6 +1,10 @@
 # Secrets
 .env
 
+# Local superpowers session state (brainstorm artifacts etc.) — committed
+# specs and plans live under docs/superpowers/.
+.superpowers/
+
 # User-configured dashboard targets + widget layouts (local, not source)
 settings.json
 layouts.json

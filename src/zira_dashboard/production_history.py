@@ -159,13 +159,12 @@ def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
 def attribution_per_day(
     start: date,
     end: date,
-    client,
 ) -> list[tuple[date, dict[str, dict[str, dict[str, float]]]]]:
     """Per-day attribution across [start, end] inclusive.
 
     Returns one (day, attribution_dict) tuple per day in the range,
-    in date-ascending order. Empty days return ({}). `client` is kept
-    for signature compatibility but unused — reads from production_daily.
+    in date-ascending order. Empty days return ({}). Reads from
+    production_daily.
     """
     from datetime import timedelta
     from . import db
@@ -202,16 +201,13 @@ def attribution_per_day(
 def attribution_range(
     start: date,
     end: date,
-    client,
 ) -> dict[str, dict[str, dict[str, float]]]:
     """Sum attribution across [start, end] inclusive.
 
     Reads from production_daily and reshapes into the legacy
     {person: {wc: {units, downtime, hours, days_worked}}} envelope so
-    that existing callers (player cards, leaderboards via rank_by_category)
-    don't have to change.
-
-    `client` is kept for signature compatibility but unused.
+    callers (player cards, leaderboards via rank_by_category) don't
+    have to change.
     """
     from . import db
     rows = db.query(
@@ -239,14 +235,11 @@ def attribution_range(
     return out
 
 
-def daily_records(
-    start_d: date, end_d: date, client
-) -> list[dict]:
+def daily_records(start_d: date, end_d: date) -> list[dict]:
     """Return one record per (day, person, wc) where attributed units > 0.
 
-    Now reads from production_daily. The `client` argument is kept for
-    signature compatibility with existing callers, but is unused —
-    production_daily is the canonical source.
+    Reads from production_daily — the canonical source for historical
+    per-(day, person, wc) production.
     """
     from . import precompute
     return precompute.daily_records_in_range(start_d, end_d)

@@ -32,12 +32,12 @@ def _stub_route_dependencies(monkeypatch, *, person_data, registered, members_ma
     monkeypatch.setattr(
         production_history,
         "attribution_range",
-        lambda s, e, c: {"Test Person": person_data},
+        lambda s, e: {"Test Person": person_data},
     )
     monkeypatch.setattr(
         production_history,
         "attribution_per_day",
-        lambda s, e, c: [],
+        lambda s, e: [],
     )
     monkeypatch.setattr(
         work_centers_store, "registered_groups", lambda: list(registered),

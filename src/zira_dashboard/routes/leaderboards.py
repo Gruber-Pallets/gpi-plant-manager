@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .. import settings_store, staffing
-from ..deps import client, resolve_range, templates
+from ..deps import resolve_range, templates
 from ..production_history import attribution_per_day
 from ..stations import Station
 from .._cache import TTLCache
@@ -155,7 +155,7 @@ def staffing_leaderboards(
     today_d = datetime.now(timezone.utc).date()
     start_d, end_d, custom_range_active = resolve_range(window, start, end, today_d)
 
-    records = production_history.daily_records(start_d, end_d, client)
+    records = production_history.daily_records(start_d, end_d)
 
     snap = lstore.snapshot()
     wc_settings_dict = snap.get("wc", {})
@@ -440,7 +440,7 @@ def person_days_json(
             return JSONResponse(payload)
 
     rows: list[dict] = []
-    for day, daily in attribution_per_day(start_d, end_d, client):
+    for day, daily in attribution_per_day(start_d, end_d):
         person_data = daily.get(name, {})
         matching = {w: t for w, t in person_data.items() if w in wc_filter}
         if not matching:

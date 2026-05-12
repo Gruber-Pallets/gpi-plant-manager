@@ -37,7 +37,7 @@ def person_days_in_group(group_name: str, start: date, end: date) -> list[dict]:
     wc_names = _wc_names_for_group(group_name)
     if not wc_names:
         return []
-    raw = production_history.daily_records(start, end, None)
+    raw = production_history.daily_records(start, end)
     agg: dict[tuple[str, date], dict] = defaultdict(lambda: {"units": 0.0, "hours": 0.0})
     for r in raw:
         if r["wc"] not in wc_names:
@@ -55,7 +55,7 @@ def person_days_in_group(group_name: str, start: date, end: date) -> list[dict]:
 def person_days_in_wc(wc_name: str, start: date, end: date) -> list[dict]:
     """Same shape as person_days_in_group but for a single WC."""
     from . import production_history
-    raw = production_history.daily_records(start, end, None)
+    raw = production_history.daily_records(start, end)
     return [
         {"name": r["person"], "day": r["day"], "units": r["units"], "hours": r["hours"]}
         for r in raw
