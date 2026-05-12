@@ -1,0 +1,222 @@
+/* Print-only rules for /staffing.
+ *
+ * Loaded with media="print" so the browser only parses this sheet when
+ * printing (or rendering the PDF via Playwright). Hides editing UI
+ * (toolbar, pickers, reserves, X buttons, modals) and renders WC
+ * assignments + cert badges + Unscheduled list + time-off chips +
+ * WC notes + day notes in a clean, paper-friendly two-column layout.
+ *
+ * `.print-header { display: none }` lives in staffing.css (screen side
+ * hides the print-only header); the show-rule for it is below.
+ */
+
+@page {
+  size: letter portrait;
+  margin: 0.4in;
+}
+
+/* Light theme on paper. */
+body { background: white; color: black; }
+a { color: black; text-decoration: none; }
+
+/* HIDE: top nav, sub-nav, reserves AND unscheduled panels, title-bar
+   toolbar, hint footer, publish-block banner, modals, all interactive
+   controls, min/max text under each WC name, name list separators. */
+header.app,
+.sub-nav,
+.save-block,
+.section.reserves,
+.section.unscheduled,
+.title-bar,
+.wc-training-toggle,
+.add-select,
+.pill .pill-x,
+.dd-clear,
+.dd-chev,
+.dd-list,
+.hours-editor,
+.popover-backdrop,
+.ops-range,
+.dd-summary-text .sep,
+.bay .bay-sub,
+.day-notes .notes-label .hint,
+.custom-hours-banner,
+p.hint {
+  display: none !important;
+}
+
+/* SHOW: 3-column header — date on left, title centered, custom hours
+   (when present) on the right. */
+.print-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  column-gap: 0.5rem;
+  align-items: end;
+  margin: 0 0 0.35rem 0;
+  padding: 0 0 0.25rem 0;
+  border-bottom: 2px solid black;
+}
+.print-header .title {
+  font-size: 22pt;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  line-height: 1.1;
+  text-align: center;
+}
+.print-header .date {
+  font-size: 11pt;
+  font-weight: 500;
+  color: #333;
+  text-align: left;
+  justify-self: start;
+  margin: 0;
+}
+.print-header .hours {
+  font-size: 11pt;
+  font-weight: 600;
+  color: #333;
+  text-align: right;
+  justify-self: end;
+  margin: 0;
+}
+
+/* Stack multiple assigned people on separate lines per WC. */
+.multi-dd .dd-summary-text > span[class^="lvl-"] {
+  display: block;
+}
+
+/* The picker is a <details>; force its <summary> to render as plain text
+   so the assigned names + cert badges still show without the dropdown
+   affordance. */
+.multi-dd > summary,
+.sched-picker > summary {
+  list-style: none;
+  cursor: default;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  color: black !important;
+  min-height: auto !important;
+  line-height: 1.25;
+}
+/* Table rows shrink to fit content (1 name → 1 line; multi-name expands). */
+table.sched td {
+  vertical-align: top !important;
+}
+.multi-dd .dd-summary-text .lvl-3,
+.multi-dd .dd-summary-text .lvl-2,
+.multi-dd .dd-summary-text .lvl-1,
+.multi-dd .dd-summary-text .lvl-0 {
+  color: black !important;
+  font-weight: normal;
+}
+
+/* Two-column print layout:
+     row 1: [time-off]  [day notes]
+     row 2: [   schedule table   ]
+   `main.panel` becomes display: contents so its child <table> can
+   be placed directly in the grid alongside the asides. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  grid-template-areas:
+    "side notes"
+    "table table";
+  column-gap: 0.5rem;
+  row-gap: 0.3rem;
+  padding: 0;
+}
+.panel {
+  background: white !important;
+  border: none !important;
+  padding: 0;
+  border-radius: 0;
+}
+aside.panel.side {
+  grid-area: side;
+  margin: 0;
+  display: block;
+}
+main.panel {
+  display: contents;
+}
+table.sched {
+  grid-area: table;
+  margin: 0;
+}
+aside.day-context {
+  grid-area: notes;
+  margin: 0;
+}
+.side .section h3 {
+  color: black;
+  border-left-color: black;
+  font-size: 9pt;
+  margin: 0 0 0.2rem 0;
+}
+.side .section h3 .count {
+  background: transparent;
+  color: black;
+  border: 1px solid black;
+}
+.side li, .side .empty { color: black; font-size: 9pt; }
+
+/* Time-off chips: flat black-and-white pills. */
+.pill {
+  background: white !important;
+  border: 1px solid black !important;
+  color: black !important;
+  font-size: 9pt;
+}
+
+/* Schedule table: tighter padding, no dark background, no row striping. */
+table.sched { font-size: 9pt; }
+table.sched thead th { color: black; border-bottom: 1px solid black; }
+table.sched td {
+  border-bottom: 1px solid #ccc;
+  padding: 2pt 4pt;
+  color: black;
+}
+table.sched td.bay {
+  background: white !important;
+  color: black;
+  border-right: 1px solid black;
+}
+table.sched td.bay .bay-sub,
+table.sched td.station .sub,
+table.sched td.dept { color: #333; }
+table.sched tr { page-break-inside: avoid; }
+/* Close the schedule table with a bottom rule, mirroring the header. */
+table.sched tbody tr:last-child td { border-bottom: 1px solid black !important; }
+
+/* WC notes: hide the form control entirely on paper and use the
+   auto-sizing div so the cell stretches to fit the full note. */
+.wc-note-cell textarea { display: none !important; }
+.wc-note-cell .wc-note-print {
+  display: block;
+  font-size: 9pt;
+  line-height: 1.3;
+  color: black;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+/* Top-align the table cells so a long note doesn't visually
+   float in the middle of an otherwise-short row. */
+table.sched td { vertical-align: top !important; }
+
+/* Day notes panel: short height for single-page fit. */
+.day-notes .notes-label {
+  color: black;
+  font-size: 8pt;
+  margin: 0 0 0.15rem 0;
+}
+.day-notes textarea {
+  background: white !important;
+  border: 1px solid #ccc !important;
+  color: black !important;
+  font-size: 9pt;
+  height: 4em !important;
+  min-height: 4em !important;
+  resize: none;
+}
