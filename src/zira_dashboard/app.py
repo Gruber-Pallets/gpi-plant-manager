@@ -38,6 +38,7 @@ from .routes import (
     tv_templates,
     value_streams,
     wc_dashboard,
+    widgets,
 )
 
 
@@ -253,6 +254,7 @@ async def _static_cache_headers(request, call_next):
 app.include_router(dashboard.router)
 app.include_router(value_streams.router)
 app.include_router(wc_dashboard.router)
+app.include_router(widgets.router)
 app.include_router(tv_templates.router)
 app.include_router(tv_displays.router)
 app.include_router(staffing.router)

@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/static/gpi-logo.png">
+<title>Widget Workshop — GPI Plant Manager</title>
+<style>
+  :root {
+    --bg: #f1f4f7; --panel: #ffffff; --panel-2: #f1f4f7;
+    --border: #d8dee5; --fg: #1f2937; --muted: #6b7280;
+    --accent: #16a34a; --accent-dim: #dcfce7; --bad: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+         background: var(--bg); color: var(--fg); }
+  header { padding: 0.9rem 1.25rem; background: var(--panel);
+           border-bottom: 1px solid var(--border); display: flex; gap: 1rem; align-items: center; }
+  h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+  nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem;
+          padding: 0.25rem 0.6rem; border-radius: 6px; }
+  nav a.active { color: var(--accent); background: var(--accent-dim); font-weight: 600; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 1rem; }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 10px; padding: 0.8rem 1rem; }
+  h2 { margin: 0 0 0.5rem; font-size: 0.75rem; font-weight: 600;
+       text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); }
+  .def-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.5rem;
+             align-items: center; padding: 0.35rem 0; border-bottom: 1px solid var(--border); }
+  .def-row:last-child { border-bottom: none; }
+  .def-row .name { font-weight: 600; }
+  .def-row .type { font-size: 0.75rem; color: var(--muted); font-variant: small-caps; }
+  .def-row button { background: transparent; border: 1px solid var(--border);
+                    border-radius: 5px; padding: 0.2rem 0.6rem; cursor: pointer;
+                    font: inherit; font-size: 0.8rem; color: var(--muted); }
+  .def-row button.danger { color: var(--bad); }
+  form input[type=text], form select, form input[type=color] {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.3rem 0.5rem; font: inherit; font-size: 0.9rem; width: 100%;
+  }
+  form label { display: block; margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--muted); }
+  form .submit { background: var(--accent); color: white; border: 1px solid var(--accent);
+                 border-radius: 6px; padding: 0.4rem 1rem; font-weight: 700; cursor: pointer;
+                 margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Widget Workshop</h1>
+  <nav>
+    <a href="/recycling">Dashboards</a>
+    <a href="/widgets" class="active">Widgets</a>
+    <a href="/dashboards">My Dashboards</a>
+    <a href="/trophies">Trophy Case</a>
+    <a href="/staffing">Staffing</a>
+    <a href="/settings">Settings</a>
+  </nav>
+</header>
+<main>
+  <section class="panel">
+    <h2>Saved widgets</h2>
+    <div id="defs-list">
+      {% for d in definitions %}
+        <div class="def-row" data-id="{{ d.id }}">
+          <div><span class="name">{{ d.name }}</span> <span class="type">{{ d.type }}</span></div>
+          <button type="button" class="edit-btn">Edit</button>
+          <button type="button" class="danger delete-btn">Delete</button>
+        </div>
+      {% else %}
+        <div class="def-row"><em>No widgets yet — create one →</em></div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Create / edit</h2>
+    <form id="def-form">
+      <input type="hidden" id="def-id" value="">
+      <label>Name<input type="text" id="def-name" placeholder="e.g. Repairs Pallets" required></label>
+      <label>Type
+        <select id="def-type" required>
+          <option value="">Pick a type…</option>
+          {% for t in types %}
+            <option value="{{ t.type }}">{{ t.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div id="type-fields"></div>
+      <button type="button" id="save-btn" class="submit">Save widget</button>
+      <span id="save-status"></span>
+    </form>
+  </section>
+</main>
+
+<script>
+(function() {
+  const TYPES = {{ types | tojson }};
+  const typeSel = document.getElementById('def-type');
+  const fieldsHost = document.getElementById('type-fields');
+
+  function fieldEl(field, currentValue) {
+    const label = document.createElement('label');
+    label.textContent = field.label;
+    let input;
+    if (field.input === 'select') {
+      input = document.createElement('select');
+      if (field.options) {
+        for (const o of field.options) {
+          const opt = document.createElement('option');
+          opt.value = o.value; opt.textContent = o.label;
+          if (currentValue === o.value) opt.selected = true;
+          input.appendChild(opt);
+        }
+      }
+      if (field.options_from) {
+        input.disabled = true;
+        fetch('/api/widgets/options/' + field.options_from).then(r => r.json()).then(data => {
+          for (const o of (data.options || [])) {
+            const opt = document.createElement('option');
+            opt.value = o.value; opt.textContent = o.label;
+            if (currentValue === o.value) opt.selected = true;
+            input.appendChild(opt);
+          }
+          input.disabled = false;
+        });
+      }
+    } else if (field.input === 'color') {
+      input = document.createElement('input');
+      input.type = 'color';
+      input.value = currentValue || field.default || '#22c55e';
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+      if (currentValue !== undefined) input.value = currentValue;
+    }
+    input.dataset.key = field.key;
+    input.dataset.section = field.__section;
+    label.appendChild(input);
+    return label;
+  }
+
+  function rebuildFields(typeId, existingVisual, existingData) {
+    fieldsHost.innerHTML = '';
+    if (!typeId) return;
+    const def = TYPES.find(t => t.type === typeId);
+    if (!def) return;
+    if (def.visual_params_schema.length) {
+      const h = document.createElement('h2'); h.textContent = 'Visual';
+      fieldsHost.appendChild(h);
+      for (const f of def.visual_params_schema) {
+        f.__section = 'visual';
+        fieldsHost.appendChild(fieldEl(f, (existingVisual || {})[f.key]));
+      }
+    }
+    if (def.data_params_schema.length) {
+      const h = document.createElement('h2'); h.textContent = 'Default data scope';
+      fieldsHost.appendChild(h);
+      for (const f of def.data_params_schema) {
+        f.__section = 'data';
+        fieldsHost.appendChild(fieldEl(f, (existingData || {})[f.key]));
+      }
+    }
+  }
+
+  typeSel.addEventListener('change', () => rebuildFields(typeSel.value, {}, {}));
+
+  function collectForm() {
+    const visual = {}, data = {};
+    fieldsHost.querySelectorAll('input, select').forEach(el => {
+      const v = el.value;
+      if (v === '' || v === null || v === undefined) return;
+      if (el.dataset.section === 'visual') visual[el.dataset.key] = v;
+      else if (el.dataset.section === 'data') data[el.dataset.key] = v;
+    });
+    return {visual, data};
+  }
+
+  document.getElementById('save-btn').addEventListener('click', () => {
+    const id = document.getElementById('def-id').value;
+    const name = document.getElementById('def-name').value.trim();
+    const type = typeSel.value;
+    const status = document.getElementById('save-status');
+    if (!name || !type) { status.textContent = 'name + type required'; return; }
+    const {visual, data} = collectForm();
+    const body = {name, type, visual, default_data: data};
+    if (id) body.id = parseInt(id, 10);
+    status.textContent = 'Saving…';
+    fetch('/api/widget-defs', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    }).then(r => r.json()).then(d => {
+      if (d.ok) { status.textContent = 'Saved'; setTimeout(() => location.reload(), 400); }
+      else status.textContent = 'Error: ' + (d.error || 'unknown');
+    });
+  });
+
+  document.querySelectorAll('.delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('.def-row');
+      const id = row.dataset.id;
+      if (!confirm('Delete this widget? (will fail if any dashboard uses it)')) return;
+      fetch('/api/widget-defs/' + id, {method: 'DELETE'}).then(r => r.json()).then(d => {
+        if (d.ok) row.remove();
+        else alert('Cannot delete: ' + (d.error || 'unknown'));
+      });
+    });
+  });
+
+  document.querySelectorAll('.edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('.def-row');
+      const id = row.dataset.id;
+      fetch('/api/widget-defs').then(r => r.json()).then(data => {
+        const def = (data.definitions || []).find(d => d.id == id);
+        if (!def) return;
+        document.getElementById('def-id').value = def.id;
+        document.getElementById('def-name').value = def.name;
+        typeSel.value = def.type;
+        rebuildFields(def.type, def.visual, def.default_data);
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
