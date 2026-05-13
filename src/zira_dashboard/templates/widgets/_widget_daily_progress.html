@@ -1,0 +1,15 @@
+{# Per-15-min bar chart with color-coded bars (green ≥ target, amber ≥ 75%, red < 75%).
+   data = {buckets: [{bucket_index, minute_offset, units, color, target}, ...], target}
+#}
+<div class="grid-stack-item-content">
+  <h3>{{ placement_title or 'Daily Progress' }}{% if data.target %} (target {{ data.target }}/15 min){% endif %}</h3>
+  <div class="fifteen-min-bars">
+    {% for b in data.buckets %}
+      <div class="bar bar-{{ b.color }}"
+           style="--units: {{ b.units }}; --target: {{ b.target }};"
+           title="{{ b.units }} units · target {{ b.target }}"></div>
+    {% else %}
+      <div class="empty-state">No data yet.</div>
+    {% endfor %}
+  </div>
+</div>

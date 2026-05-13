@@ -132,3 +132,25 @@ def test_resolve_pallets_banner_missing_wc_returns_empty():
     assert out["units_today"] == 0
     assert out["target_today"] == 0
     assert out["pct_of_target"] is None
+
+
+def test_resolve_daily_progress_returns_buckets(monkeypatch):
+    from zira_dashboard import widget_data, wc_dashboard_data
+
+    monkeypatch.setattr(
+        wc_dashboard_data, "fifteen_min_increments",
+        lambda wc, d: [
+            {"bucket_index": 0, "minute_offset": 0, "units": 5, "color": "green", "target": 4},
+            {"bucket_index": 1, "minute_offset": 15, "units": 2, "color": "red", "target": 4},
+        ] if wc == "Repair 1" else [],
+    )
+    out = widget_data._resolve_daily_progress({"wc_name": "Repair 1"}, day=date(2026, 5, 13))
+    assert len(out["buckets"]) == 2
+    assert out["target"] == 4
+    assert out["buckets"][0]["color"] == "green"
+
+
+def test_resolve_daily_progress_missing_wc_returns_empty():
+    from zira_dashboard import widget_data
+    out = widget_data._resolve_daily_progress({}, day=date(2026, 5, 13))
+    assert out == {"buckets": [], "target": 0}

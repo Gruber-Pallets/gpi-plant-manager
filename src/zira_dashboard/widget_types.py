@@ -81,6 +81,17 @@ _REGISTRY: list[dict] = [
         "resolver": "_resolve_pallets_banner",
         "partial": "widgets/_widget_pallets_banner.html",
     },
+    {
+        "type": "daily_progress",
+        "label": "Daily Progress (15-min bars)",
+        "data_params_schema": [
+            {"key": "wc_name", "label": "Work Center", "input": "select",
+             "options_from": "wcs", "required": True},
+        ],
+        "visual_params_schema": [],
+        "resolver": "_resolve_daily_progress",
+        "partial": "widgets/_widget_daily_progress.html",
+    },
 ]
 
 

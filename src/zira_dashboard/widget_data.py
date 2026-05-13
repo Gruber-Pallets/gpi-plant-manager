@@ -132,3 +132,18 @@ def _resolve_pallets_banner(params: dict, day: date) -> dict:
         return {"units_today": 0, "target_today": 0,
                 "target_full_day": 0, "pct_of_target": None}
     return wc_dashboard_data.pallets_banner(wc_name, day)
+
+
+def _resolve_daily_progress(params: dict, day: date) -> dict:
+    """Per-15-min bar chart with target-based color (green/amber/red).
+
+    Wraps `wc_dashboard_data.fifteen_min_increments`. Returns
+    {buckets: [...], target}.
+    """
+    from . import wc_dashboard_data
+    wc_name = (params or {}).get("wc_name")
+    if not wc_name:
+        return {"buckets": [], "target": 0}
+    buckets = wc_dashboard_data.fifteen_min_increments(wc_name, day) or []
+    target = buckets[0]["target"] if buckets else 0
+    return {"buckets": buckets, "target": target}
