@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>Widget Workshop — GPI Plant Manager</title>
+<link rel="stylesheet" href="/static/wc_dashboard.css?v={{ static_v('wc_dashboard.css') }}">
+<link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 <style>
   :root {
     --bg: #f1f4f7; --panel: #ffffff; --panel-2: #f1f4f7;
@@ -20,7 +22,24 @@
   nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem;
           padding: 0.25rem 0.6rem; border-radius: 6px; }
   nav a.active { color: var(--accent); background: var(--accent-dim); font-weight: 600; }
-  main { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 1rem; }
+  main { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; padding: 1rem; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  /* Live-preview panel */
+  .preview-host {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.6rem; min-height: 280px;
+    container-type: size;
+  }
+  .preview-host .empty { color: var(--muted); font-style: italic; font-size: 0.85rem; }
+  .preview-host .grid-stack-item-content {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.6rem 0.8rem; height: 260px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .preview-host .grid-stack-item-content h3 {
+    margin: 0 0 0.5rem; font-size: 0.78rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; color: var(--muted);
+  }
   .panel { background: var(--panel); border: 1px solid var(--border);
            border-radius: 10px; padding: 0.8rem 1rem; }
   h2 { margin: 0 0 0.5rem; font-size: 0.75rem; font-weight: 600;
@@ -125,6 +144,13 @@
       <span id="save-status"></span>
     </form>
   </section>
+
+  <section class="panel">
+    <h2>Live preview</h2>
+    <div class="preview-host" id="preview-host">
+      <div class="empty">Pick a widget on the left to preview, or fill in the form to preview a new one.</div>
+    </div>
+  </section>
 </main>
 
 <div id="edit-warning-modal" hidden>
@@ -209,7 +235,7 @@
     }
   }
 
-  typeSel.addEventListener('change', () => rebuildFields(typeSel.value, {}, {}));
+  typeSel.addEventListener('change', () => { rebuildFields(typeSel.value, {}, {}); schedulePreview(); });
 
   function collectForm() {
     const visual = {}, data = {};
@@ -221,6 +247,36 @@
     });
     return {visual, data};
   }
+
+  // ---- Live preview ----
+  let previewTimer = null;
+  function schedulePreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(refreshPreview, 250);
+  }
+  function refreshPreview() {
+    const host = document.getElementById('preview-host');
+    const type = typeSel.value;
+    if (!type) {
+      host.innerHTML = '<div class="empty">Pick a widget on the left to preview, or fill in the form to preview a new one.</div>';
+      return;
+    }
+    const name = document.getElementById('def-name').value.trim();
+    const {visual, data} = collectForm();
+    fetch('/api/widgets/preview', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({type, name, visual, default_data: data}),
+    }).then(r => r.json()).then(d => {
+      if (d.ok) host.innerHTML = d.html;
+      else host.innerHTML = '<div class="empty">Preview unavailable: ' + (d.error || 'unknown') + '</div>';
+    }).catch(() => {
+      host.innerHTML = '<div class="empty">Preview unavailable (network).</div>';
+    });
+  }
+  // Refresh on any form input. Listener attached to the form container,
+  // so dynamically rebuilt fields are covered too.
+  document.getElementById('def-form').addEventListener('input', schedulePreview);
+  document.getElementById('def-form').addEventListener('change', schedulePreview);
 
   document.getElementById('save-btn').addEventListener('click', () => {
     const id = document.getElementById('def-id').value;
@@ -261,6 +317,7 @@
       document.getElementById('def-name').value = def.name;
       typeSel.value = def.type;
       rebuildFields(def.type, def.visual, def.default_data);
+      schedulePreview();
       return def;
     });
   }

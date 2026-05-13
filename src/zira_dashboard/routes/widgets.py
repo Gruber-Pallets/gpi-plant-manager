@@ -112,6 +112,55 @@ def duplicate_def(def_id: int):
     return JSONResponse({"ok": True, "definition": dup})
 
 
+@router.post("/api/widgets/preview")
+async def preview_widget(request: Request):
+    """Render a single widget for the workshop live preview.
+
+    Body: {type, name?, visual, default_data}
+    Returns: {ok, html} — the rendered widget partial as an HTML fragment.
+    Uses default_data as the effective data for preview (no per-placement
+    overrides exist here).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    body = body or {}
+    type_ = body.get("type")
+    name = body.get("name") or ""
+    visual = body.get("visual") or {}
+    default_data = body.get("default_data") or {}
+    entry = widget_types.get(type_)
+    if entry is None:
+        return JSONResponse({"ok": False, "error": f"unknown type: {type_}"}, status_code=400)
+    if not isinstance(visual, dict) or not isinstance(default_data, dict):
+        return JSONResponse({"ok": False, "error": "visual and default_data must be objects"}, status_code=400)
+
+    from datetime import datetime, timezone
+    from .. import widget_data
+    resolver = getattr(widget_data, entry["resolver"], None)
+    today = datetime.now(timezone.utc).date()
+    try:
+        data = resolver(default_data, day=today) if resolver else {}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"resolver failed: {e}"}, status_code=500)
+
+    placement = {
+        "id": 0, "type": entry["type"], "name": name or entry["label"],
+        "visual": visual, "default_data": default_data,
+        "data_overrides": {}, "effective_data": default_data,
+        "x": 0, "y": 0, "w": 4, "h": 4,
+    }
+    try:
+        html = templates.env.get_template(entry["partial"]).render(
+            placement=placement, data=data,
+            visual=visual, placement_title=placement["name"],
+        )
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"render failed: {e}"}, status_code=500)
+    return JSONResponse({"ok": True, "html": html})
+
+
 def _pinned_for_subnav():
     from .. import dashboard_catalog
     return dashboard_catalog.pinned_dashboards_for_subnav()

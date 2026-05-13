@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-13
 
+### 3:38 PM
+
+- **Widget Workshop live preview** — `/widgets` gets a third panel on the right that renders the widget you're working on as you type. Click **Edit** on any saved widget → the form fills in AND the preview renders the current saved config. Change the color, sort, group, WC, KPI metric, etc. → the preview re-renders ~250 ms after you stop typing. New endpoint `POST /api/widgets/preview` resolves the widget's data via its registered resolver and returns the rendered partial; the workshop loads `wc_dashboard.css` + `recycling.css` so the preview matches what the widget looks like on a dashboard. Panel layout switches to a single column below 1100 px wide.
+
 ### 3:35 PM
 
 - **Removed third-tier VS sub-nav; Work Centers promoted to the dashboards sub-nav** — `/recycling`, `/new-vs`, and `/work-centers` no longer render the redundant **Recycling VS · New VS · Work Centers** sub-tabs (the first two were already pinned in the dashboards sub-nav). Work Centers is now a built-in dashboard kind (`vs_work_centers`) — pinned by default alongside Recycling VS and New VS, listed in the My Dashboards Built-in section with a star pin toggle, and reachable in one click from any dashboard-family page's sub-nav. No TV variant for Work Centers (it's a status board), so its row hides the "Open as TV" action. Existing /work-centers URL unchanged.
