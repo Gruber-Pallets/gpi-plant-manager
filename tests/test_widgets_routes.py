@@ -115,3 +115,23 @@ def test_get_widgets_page_renders():
     r = c.get("/widgets")
     assert r.status_code == 200
     assert "Workshop" in r.text or "Widgets" in r.text
+
+
+def test_post_duplicate_creates_copy():
+    c = TestClient(app)
+    orig = c.post("/api/widget-defs", json={
+        "name": "wr-dup-source", "type": "ribbons",
+        "visual": {}, "default_data": {"group": "Repairs"},
+    }).json()
+    r = c.post(f"/api/widget-defs/{orig['definition']['id']}/duplicate")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["definition"]["name"] == "wr-dup-source (copy)"
+    assert body["definition"]["id"] != orig["definition"]["id"]
+
+
+def test_post_duplicate_unknown_id_returns_404():
+    c = TestClient(app)
+    r = c.post("/api/widget-defs/999999999/duplicate")
+    assert r.status_code == 404

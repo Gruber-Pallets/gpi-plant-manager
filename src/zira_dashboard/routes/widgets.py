@@ -9,6 +9,7 @@ API:
   GET    /api/widget-defs            list all definitions
   POST   /api/widget-defs            create or update (body {id?, name, type, visual, default_data})
   DELETE /api/widget-defs/{id}       delete (409 if in use)
+  POST   /api/widget-defs/{id}/duplicate  clone def, name " (copy)" appended
 """
 from __future__ import annotations
 
@@ -98,3 +99,12 @@ def delete_def(def_id: int):
         )
     widget_definitions_store.delete(def_id)
     return JSONResponse({"ok": True})
+
+
+@router.post("/api/widget-defs/{def_id}/duplicate")
+def duplicate_def(def_id: int):
+    try:
+        dup = widget_definitions_store.duplicate(def_id)
+    except LookupError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    return JSONResponse({"ok": True, "definition": dup})
