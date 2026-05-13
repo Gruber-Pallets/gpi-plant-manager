@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-13
 
+### 10:07 AM
+
+- **Per-work-center TV dashboards** — every WC can now have its own URL on a TV mounted at the workstation. Editor at `/wc/{slug}` (drag/resize the six widgets, layout auto-saves); TV view at `/tv/wc/{slug}` (read-only, no chrome, `?theme=light` for a bright-area TV, 60 s auto-refresh). Widgets: pallets banner (today's count vs prorated goal for THIS WC), daily progress chart (cumulative 15-min buckets), GOAT race (status pill + WC group's all-time GOAT pace), monthly ribbons (group's top-3 person-days), 15-min increments (color-coded green/amber/red), downtime report (events derived from active-interval gaps + total minutes). Header shows WC name top-left + assigned operator names top-right (only the people scheduled for THIS WC, not the whole group). Sub-project 2 of 4 in the TV-dashboards spec; layout templates + the Settings panel still to follow.
+
 ### 9:19 AM
 
 - **TV mode for the Recycling + New value-stream dashboards** — two new permanent URLs designed to live on a TV browser: `/tv/recycling` and `/tv/new-vs`. No top nav, no range chips, no per-widget edit buttons, no sub-nav — just the data with bigger fonts. Dashboard title sits top-left ("Recycling VS" / "New VS") so anyone walking by knows what's on screen. Page auto-refreshes every 60 s. Dark theme by default; pass `?theme=light` for a bright-area TV. Gridstack drag is disabled on the recycling TV variant so a stray touch can't reshuffle the widgets. The screen versions (`/recycling`, `/new-vs`) are byte-identical to before — TV mode is gated entirely on a `tv_mode` context flag the new routes set. First of four sub-projects in the TV-dashboards spec; per-WC dashboards + dashboard templates + Settings panel to follow.
