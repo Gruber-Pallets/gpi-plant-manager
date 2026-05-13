@@ -609,6 +609,18 @@ END$$;
 ALTER TABLE tv_displays DROP CONSTRAINT IF EXISTS tv_displays_kind_check;
 ALTER TABLE tv_displays ADD CONSTRAINT tv_displays_kind_check
   CHECK (kind IN ('vs_recycling', 'vs_new', 'wc', 'custom'));
+
+-- pinned_dashboards: which dashboards (built-in VS / per-WC / custom)
+-- the user has favorited for the sub-nav. ref is '' for vs_*, WC name
+-- for wc, slug for custom.
+CREATE TABLE IF NOT EXISTS pinned_dashboards (
+  id          SERIAL PRIMARY KEY,
+  kind        TEXT NOT NULL CHECK (kind IN ('vs_recycling', 'vs_new', 'wc', 'custom')),
+  ref         TEXT NOT NULL,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (kind, ref)
+);
 """
 
 

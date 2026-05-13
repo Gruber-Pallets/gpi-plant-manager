@@ -266,3 +266,29 @@ def test_tv_displays_custom_dashboard_id_fk_on_delete_set_null():
     rows = db.query("SELECT custom_dashboard_id FROM tv_displays WHERE slug = 'p3-fk-test'")
     assert rows and rows[0]["custom_dashboard_id"] is None
     db.execute("DELETE FROM tv_displays WHERE slug = 'p3-fk-test'")
+
+
+def test_bootstrap_creates_pinned_dashboards_table():
+    db.init_pool()
+    db.bootstrap_schema()
+    rows = db.query(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name = 'pinned_dashboards'"
+    )
+    assert len(rows) == 1, "pinned_dashboards table missing"
+    cols = db.query(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'pinned_dashboards'"
+    )
+    names = {r["column_name"] for r in cols}
+    expected = {"id", "kind", "ref", "sort_order", "created_at"}
+    assert expected.issubset(names), f"missing columns: {expected - names}"
+    idx_rows = db.query(
+        "SELECT indexdef FROM pg_indexes "
+        "WHERE schemaname = 'public' AND tablename = 'pinned_dashboards'"
+    )
+    found = any(
+        "UNIQUE" in r["indexdef"].upper() and "kind" in r["indexdef"] and "ref" in r["indexdef"]
+        for r in idx_rows
+    )
+    assert found, "UNIQUE (kind, ref) constraint missing"
