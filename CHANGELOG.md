@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-13
 
+### 8:01 AM
+
+- **Top nav fixes: drop "Leaderboards" from `/settings` and home** — earlier nav restructure removed the "Leaderboards" top-tab from the staffing-family templates, `/staffing`, `/recycling`, and `/new-vs`, but missed `settings.html` (the Settings page kept showing 5 tabs) and `index.html` (the very first page if anyone hits `/`). Now the top nav reads **Dashboards · Trophy Case · Staffing · Settings** consistently across every page in the system, with **Trophies** and **Leaderboards** as sub-tabs only under Trophy Case.
+
 ### 7:39 AM
 
 - **Archived-in-Odoo people now auto-drop from the scheduler** — Isaac Miller (and any other employee you archive in Odoo) used to keep `people.active = TRUE` locally forever because the sync only upserted what Odoo returned and never marked the disappeared rows inactive. Two fixes: (1) the Odoo sync now flips `active = FALSE` for any local person whose `odoo_id` is missing from the response (guarded so an empty response doesn't wipe everyone out); (2) `late_report.absences_for_day` / `absences_for_range` / `late_arrivals_for_day` now LEFT JOIN `people` and skip rows whose person is archived or roster-filter-excluded, so even a stale `manual_absences` record from before the archive stops surfacing as "Absent". The historical row is preserved in Postgres for audit.
