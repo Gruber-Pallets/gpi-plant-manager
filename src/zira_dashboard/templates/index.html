@@ -167,6 +167,7 @@
     header { flex-direction: column; align-items: flex-start; }
   }
 </style>
+<link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 </head>
 <body>
 <header>
@@ -194,7 +195,7 @@
     <button type="submit">Update</button>
   </form>
 </header>
-{% include '_value_streams_subnav.html' %}
+{% include "_dashboards_subnav.html" %}
 <main>
   {% if is_today %}
   <div class="summary">

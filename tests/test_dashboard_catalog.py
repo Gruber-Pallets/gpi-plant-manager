@@ -21,10 +21,11 @@ def test_all_dashboards_lists_vs_then_wcs_then_custom(monkeypatch):
 
     out = dashboard_catalog.all_dashboards()
     kinds = [d["kind"] for d in out]
-    assert kinds == ["vs_recycling", "vs_new", "wc", "wc", "custom"]
+    assert kinds == ["vs_recycling", "vs_new", "vs_work_centers", "wc", "wc", "custom"]
     by_key = {(d["kind"], d["ref"]): d for d in out}
     assert by_key[("vs_recycling", "")]["pinned"] is True
     assert by_key[("vs_new", "")]["pinned"] is False
+    assert by_key[("vs_work_centers", "")]["pinned"] is False
     assert by_key[("wc", "Repair 1")]["pinned"] is False
     assert by_key[("custom", "floor-hub")]["pinned"] is True
 
@@ -46,6 +47,7 @@ def test_all_dashboards_urls_are_correct(monkeypatch):
     urls = {(d["kind"], d["ref"]): (d["open_url"], d["tv_url"]) for d in out}
     assert urls[("vs_recycling", "")] == ("/recycling", "/tv/recycling")
     assert urls[("vs_new", "")] == ("/new-vs", "/tv/new-vs")
+    assert urls[("vs_work_centers", "")] == ("/work-centers", None)
     assert urls[("wc", "Repair 1")] == ("/wc/repair-1", "/tv/wc/repair-1")
     assert urls[("custom", "x")] == ("/dashboards/x", "/tv/dashboards/x")
 

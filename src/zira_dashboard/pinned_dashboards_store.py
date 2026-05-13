@@ -3,13 +3,15 @@
 Tracks which dashboards (built-in VS, built-in per-WC, custom) the user
 has favorited for the Dashboards sub-nav. `kind` + `ref` together
 identify a dashboard:
-  - kind='vs_recycling', ref=''   (Recycling VS)
-  - kind='vs_new',       ref=''   (New VS)
-  - kind='wc',           ref=<WC name>
-  - kind='custom',       ref=<custom_dashboards.slug>
+  - kind='vs_recycling',     ref=''   (Recycling VS)
+  - kind='vs_new',           ref=''   (New VS)
+  - kind='vs_work_centers',  ref=''   (Work Centers status board)
+  - kind='wc',               ref=<WC name>
+  - kind='custom',           ref=<custom_dashboards.slug>
 
-Seed on first boot pins the two VS dashboards. Deleted seeds stay
-deleted across redeploys (same pattern as tv_displays_store).
+Seed on first boot pins the three built-in VS-family dashboards.
+Deleted seeds stay deleted across redeploys (same pattern as
+tv_displays_store).
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ _log = logging.getLogger(__name__)
 def pin(kind: str, ref: str) -> None:
     """Insert a pin. Idempotent — duplicate inserts no-op via ON CONFLICT."""
     from . import db
-    if kind not in ("vs_recycling", "vs_new", "wc", "custom"):
+    if kind not in ("vs_recycling", "vs_new", "vs_work_centers", "wc", "custom"):
         raise ValueError(f"invalid kind: {kind}")
     if not isinstance(ref, str):
         raise ValueError("ref must be a string")
@@ -67,7 +69,8 @@ def list_pins() -> list[dict]:
 
 
 def seed_defaults_if_empty() -> None:
-    """Pin Recycling VS + New VS on first boot. No-op on a non-empty table.
+    """Pin Recycling VS + New VS + Work Centers on first boot. No-op on
+    a non-empty table.
 
     Deleted seeds stay deleted across redeploys.
     """
@@ -78,6 +81,7 @@ def seed_defaults_if_empty() -> None:
     db.execute(
         "INSERT INTO pinned_dashboards (kind, ref, sort_order) VALUES "
         "  ('vs_recycling', '', 0), "
-        "  ('vs_new', '', 1)"
+        "  ('vs_new', '', 1), "
+        "  ('vs_work_centers', '', 2)"
     )
-    _log.info("pinned_dashboards seeded 2 default pins (Recycling VS + New VS)")
+    _log.info("pinned_dashboards seeded 3 default pins (Recycling VS + New VS + Work Centers)")

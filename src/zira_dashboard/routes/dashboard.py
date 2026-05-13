@@ -78,6 +78,7 @@ def index(
     for row in enriched:
         by_category[row["station"].category].append(row)
 
+    from .. import dashboard_catalog
     response = templates.TemplateResponse(
         request,
         "index.html",
@@ -94,6 +95,8 @@ def index(
             "top_units": top,
             "refreshed_at": now.strftime("%H:%M:%S UTC"),
             "active_vs": "work_centers",
+            "pinned_dashboards": dashboard_catalog.pinned_dashboards_for_subnav(),
+            "active_dashboard_key": "vs_work_centers:",
         },
     )
     set_cache_headers(response, includes_today=is_today)

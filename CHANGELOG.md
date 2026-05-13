@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-13
 
+### 3:35 PM
+
+- **Removed third-tier VS sub-nav; Work Centers promoted to the dashboards sub-nav** — `/recycling`, `/new-vs`, and `/work-centers` no longer render the redundant **Recycling VS · New VS · Work Centers** sub-tabs (the first two were already pinned in the dashboards sub-nav). Work Centers is now a built-in dashboard kind (`vs_work_centers`) — pinned by default alongside Recycling VS and New VS, listed in the My Dashboards Built-in section with a star pin toggle, and reachable in one click from any dashboard-family page's sub-nav. No TV variant for Work Centers (it's a status board), so its row hides the "Open as TV" action. Existing /work-centers URL unchanged.
+
 ### 3:20 PM
 
 - **Dashboards sub-nav + pinning + unified index + simpler TVs picker** — major restructure of the dashboards family. (1) A new sub-nav strip under the top "Dashboards" tab shows your **pinned dashboards** left-aligned (Recycling VS + New VS pinned by default), with **My Dashboards** and **Workshop** anchored on the right. The strip renders on every dashboard-family page (`/recycling`, `/new-vs`, `/wc/{slug}`, `/dashboards/{slug}`, `/dashboards`, `/widgets`) so you can hop between favorites in one click. TV-mode pages stay chrome-stripped (no sub-nav there). (2) The redesigned `/dashboards` index lists **every dashboard in the system** — Built-in (Recycling VS, New VS, one per WC) and My custom dashboards — with a star/unstar pin toggle per row that saves to a new `pinned_dashboards` table. (3) **Top nav + Settings sidebar cleanup**: the "My Dashboards" top-nav link and the Settings sidebar entries for Widget Workshop / My Dashboards are gone (now reachable via the sub-nav). The four top tabs are back to Dashboards, Trophy Case, Staffing, Settings. (4) **TVs settings flat picker**: the kind / wc / custom-dashboard cascading selects collapse into one **Dashboard** picker listing everything with Built-in and Custom optgroups. Existing TV display rows render correctly with the new picker auto-selected to their target. Schema unchanged.

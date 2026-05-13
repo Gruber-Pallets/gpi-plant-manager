@@ -58,7 +58,6 @@
   </form>
 </header>
 {% include "_dashboards_subnav.html" %}
-{% include '_value_streams_subnav.html' %}
 {% macro widget_attrs(id, dx, dy, dw, dh) -%}
   {%- set l = layout.get(id, {'x': dx, 'y': dy, 'w': dw, 'h': dh}) -%}
   gs-id="{{ id }}" gs-x="{{ l.x }}" gs-y="{{ l.y }}" gs-w="{{ l.w }}" gs-h="{{ l.h }}"

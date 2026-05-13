@@ -3,9 +3,9 @@
 Single source of truth for the unified /dashboards index, the dashboards
 sub-nav partial, and the TVs settings flat picker.
 
-Order is stable: vs_recycling, vs_new, then WCs in staffing.LOCATIONS
-order, then custom dashboards in custom_dashboards_store.list_dashboards()
-order.
+Order is stable: vs_recycling, vs_new, vs_work_centers, then WCs in
+staffing.LOCATIONS order, then custom dashboards in
+custom_dashboards_store.list_dashboards() order.
 """
 from __future__ import annotations
 
@@ -35,6 +35,13 @@ def all_dashboards() -> list[dict]:
         "name": "New VS",
         "open_url": "/new-vs", "tv_url": "/tv/new-vs",
         "pinned": ("vs_new", "") in pinned_set,
+    })
+    # Work Centers — status board, no TV variant.
+    out.append({
+        "kind": "vs_work_centers", "ref": "",
+        "name": "Work Centers",
+        "open_url": "/work-centers", "tv_url": None,
+        "pinned": ("vs_work_centers", "") in pinned_set,
     })
 
     for loc in staffing.LOCATIONS:

@@ -245,7 +245,7 @@ async def post_pinned_dashboard(request: Request):
     kind = body.get("kind")
     ref = body.get("ref")
     pinned = body.get("pinned")
-    if kind not in ("vs_recycling", "vs_new", "wc", "custom"):
+    if kind not in ("vs_recycling", "vs_new", "vs_work_centers", "wc", "custom"):
         return JSONResponse({"ok": False, "error": "invalid kind"}, status_code=400)
     if not isinstance(ref, str):
         return JSONResponse({"ok": False, "error": "ref must be string"}, status_code=400)

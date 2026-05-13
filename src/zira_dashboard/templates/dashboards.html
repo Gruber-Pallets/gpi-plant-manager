@@ -59,7 +59,7 @@
             <td>{{ d.name }}</td>
             <td>
               <a class="btn" href="{{ d.open_url }}">Open</a>
-              <a class="btn btn-tv" href="{{ d.tv_url }}">Open as TV</a>
+              {% if d.tv_url %}<a class="btn btn-tv" href="{{ d.tv_url }}">Open as TV</a>{% endif %}
             </td>
           </tr>
         {% endfor %}

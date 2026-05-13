@@ -615,12 +615,18 @@ ALTER TABLE tv_displays ADD CONSTRAINT tv_displays_kind_check
 -- for wc, slug for custom.
 CREATE TABLE IF NOT EXISTS pinned_dashboards (
   id          SERIAL PRIMARY KEY,
-  kind        TEXT NOT NULL CHECK (kind IN ('vs_recycling', 'vs_new', 'wc', 'custom')),
+  kind        TEXT NOT NULL CHECK (kind IN ('vs_recycling', 'vs_new', 'vs_work_centers', 'wc', 'custom')),
   ref         TEXT NOT NULL,
   sort_order  INTEGER NOT NULL DEFAULT 0,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (kind, ref)
 );
+
+-- Extend pinned_dashboards.kind to include vs_work_centers (idempotent
+-- on fresh DBs since the CREATE TABLE above already has it).
+ALTER TABLE pinned_dashboards DROP CONSTRAINT IF EXISTS pinned_dashboards_kind_check;
+ALTER TABLE pinned_dashboards ADD CONSTRAINT pinned_dashboards_kind_check
+  CHECK (kind IN ('vs_recycling', 'vs_new', 'vs_work_centers', 'wc', 'custom'));
 """
 
 
