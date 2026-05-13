@@ -27,10 +27,16 @@
               <option value="vs_recycling" {% if d.kind == 'vs_recycling' %}selected{% endif %}>Recycling VS</option>
               <option value="vs_new" {% if d.kind == 'vs_new' %}selected{% endif %}>New VS</option>
               <option value="wc" {% if d.kind == 'wc' %}selected{% endif %}>Work Center</option>
+              <option value="custom" {% if d.kind == 'custom' %}selected{% endif %}>Custom Dashboard</option>
             </select>
             <select class="tv-wc-select" {% if d.kind != 'wc' %}style="display:none"{% endif %}>
               {% for loc in wc_locations_for_picker %}
                 <option value="{{ loc.name }}" {% if d.wc_name == loc.name %}selected{% endif %}>{{ loc.name }}</option>
+              {% endfor %}
+            </select>
+            <select class="tv-custom-select" {% if d.kind != 'custom' %}style="display:none"{% endif %}>
+              {% for cd in custom_dashboards_rows %}
+                <option value="{{ cd.id }}" {% if d.custom_dashboard_id == cd.id %}selected{% endif %}>{{ cd.name }}</option>
               {% endfor %}
             </select>
           </td>
@@ -60,10 +66,16 @@
       <option value="vs_recycling">Recycling VS</option>
       <option value="vs_new">New VS</option>
       <option value="wc" selected>Work Center</option>
+      <option value="custom">Custom Dashboard</option>
     </select>
     <select id="tv-add-wc">
       {% for loc in wc_locations_for_picker %}
         <option value="{{ loc.name }}">{{ loc.name }}</option>
+      {% endfor %}
+    </select>
+    <select id="tv-add-custom" style="display:none">
+      {% for cd in custom_dashboards_rows %}
+        <option value="{{ cd.id }}">{{ cd.name }}</option>
       {% endfor %}
     </select>
     <select id="tv-add-theme">
@@ -174,11 +186,13 @@
     const name = tr.querySelector('.tv-name-input').value.trim();
     const kind = tr.querySelector('.tv-kind-select').value;
     const wcSel = tr.querySelector('.tv-wc-select');
+    const customSel = tr.querySelector('.tv-custom-select');
     const wc_name = kind === 'wc' ? wcSel.value : null;
+    const custom_dashboard_id = kind === 'custom' ? parseInt(customSel.value, 10) : null;
     const themeBtn = tr.querySelector('.tv-theme-btn.active');
     const theme = themeBtn ? themeBtn.dataset.theme : 'dark';
     return postJson('/api/tv-displays', {
-      id: parseInt(id, 10), name, kind, wc_name, theme,
+      id: parseInt(id, 10), name, kind, wc_name, custom_dashboard_id, theme,
     }).then(data => {
       if (data.ok) {
         tr.dataset.slug = data.slug;
@@ -193,10 +207,13 @@
     tr.querySelector('.tv-name-input').addEventListener('blur', () => saveRow(tr));
     tr.querySelector('.tv-kind-select').addEventListener('change', (e) => {
       const wcSel = tr.querySelector('.tv-wc-select');
+      const customSel = tr.querySelector('.tv-custom-select');
       wcSel.style.display = e.target.value === 'wc' ? '' : 'none';
+      customSel.style.display = e.target.value === 'custom' ? '' : 'none';
       saveRow(tr);
     });
     tr.querySelector('.tv-wc-select').addEventListener('change', () => saveRow(tr));
+    tr.querySelector('.tv-custom-select').addEventListener('change', () => saveRow(tr));
 
     tr.querySelectorAll('.tv-theme-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -228,9 +245,11 @@
 
   const addKindSel = document.getElementById('tv-add-kind');
   const addWcSel = document.getElementById('tv-add-wc');
+  const addCustomSel = document.getElementById('tv-add-custom');
   if (addKindSel) {
     addKindSel.addEventListener('change', (e) => {
       addWcSel.style.display = e.target.value === 'wc' ? '' : 'none';
+      addCustomSel.style.display = e.target.value === 'custom' ? '' : 'none';
     });
   }
   const addBtn = document.getElementById('tv-add-btn');
@@ -239,10 +258,11 @@
       const name = document.getElementById('tv-add-name').value.trim();
       const kind = addKindSel.value;
       const wc_name = kind === 'wc' ? addWcSel.value : null;
+      const custom_dashboard_id = kind === 'custom' ? parseInt(addCustomSel.value, 10) : null;
       const theme = document.getElementById('tv-add-theme').value;
       if (!name) { showStatus('tv-add-status', 'name required'); return; }
       showStatus('tv-add-status', 'Adding…');
-      postJson('/api/tv-displays', {name, kind, wc_name, theme}).then(data => {
+      postJson('/api/tv-displays', {name, kind, wc_name, custom_dashboard_id, theme}).then(data => {
         if (data.ok) {
           showStatus('tv-add-status', 'Added — reloading…');
           setTimeout(() => location.reload(), 500);
