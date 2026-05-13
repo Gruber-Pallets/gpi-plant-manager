@@ -34,6 +34,7 @@ from .routes import (
     staffing,
     time_off,
     trophies,
+    tv_displays,
     tv_templates,
     value_streams,
     wc_dashboard,
@@ -166,6 +167,8 @@ async def lifespan(app: FastAPI):
     """
     db.init_pool()
     db.bootstrap_schema()
+    from . import tv_displays_store
+    tv_displays_store.seed_defaults_if_empty()
     _prewarm_stratustime()
     warmer_task = asyncio.create_task(_warm_zira_cache_loop())
     st_warmer_task = asyncio.create_task(_warm_stratustime_loop())
@@ -251,6 +254,7 @@ app.include_router(dashboard.router)
 app.include_router(value_streams.router)
 app.include_router(wc_dashboard.router)
 app.include_router(tv_templates.router)
+app.include_router(tv_displays.router)
 app.include_router(staffing.router)
 app.include_router(late_report.router)
 app.include_router(share.router)
