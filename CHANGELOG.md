@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-13
 
+### 4:09 PM
+
+- **Per-WC dashboards (`/wc/{slug}`) now match /recycling's visual style** — the per-WC pages used to render their own custom widget styles that looked nothing like the Recycling VS dashboard. Rewritten to use the workshop's widget partials (same partials a custom dashboard uses), so every widget renders with the same CSS classes /recycling uses. New layout, all 12 cols wide stacked vertically: (1) Pallets banner (this WC), (2) **15-min progress chart** for this WC (slot the recycling dismantler-progress occupies), (3) **Cumulative Daily Progress** for this WC (dismantler-cumulative slot), (4) **Vs. GOAT Pace** for the WC's group (in the repair-progress slot), (5) **Monthly Ribbons** for the WC's group (in the repair-cumulative slot), (6) **Downtime Report** for this WC. The "All Repairs / All Dismantlers" doubling-up is gone — those slots now hold GOAT race + ribbons. Cumulative widget resolver was also unified with daily_progress (both produce the same buckets shape, the partials render them differently — bar vs cumulative line). `recycling.css` is loaded on the per-WC page so all the `.bar-row`, `.progress`, `.cum-progress`, `.stacked-track` rules apply.
+
 ### 3:55 PM
 
 - **Workshop and My Dashboards now show the standard Plant Manager header** — both pages used to render their own bare header (`<h1>Widget Workshop</h1>` and a plain `<h1>Plant Manager</h1>` without the logo), which made it harder to jump back to the main dashboards. Both pages now show the same clickable logo + "Plant Manager" title + Dashboards / Trophy Case / Staffing / Settings top nav as every other page, so clicking the logo or "Dashboards" gets you back to `/recycling` in one click. Sub-nav strip is unchanged.

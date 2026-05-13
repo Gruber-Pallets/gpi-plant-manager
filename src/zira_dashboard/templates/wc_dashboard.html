@@ -13,6 +13,7 @@
 <title>{% if tv_mode %}TV · {% endif %}{{ wc_name }} — GPI Plant Manager</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 <link rel="stylesheet" href="/static/wc_dashboard.css?v={{ static_v('wc_dashboard.css') }}">
+<link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 {% if tv_mode %}
 <link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
 <meta http-equiv="refresh" content="60">
@@ -62,108 +63,70 @@
 
   {# Pallets banner — full width #}
   <div class="grid-stack-item" gs-id="wc-pallets-banner" gs-x="0" gs-y="0" gs-w="12" gs-h="2">
-    <div class="grid-stack-item-content">
-      <h3>Today · Pallets</h3>
-      <div class="pallets-banner">
-        <div class="pallets-numbers">
-          <span class="units">{{ pallets.units_today }}</span>
-          <span class="target">/ {{ pallets.target_today }} goal so far ({{ pallets.target_full_day }} full day)</span>
-        </div>
-        <div class="bar-track">
-          <div class="bar-fill" style="width: {{ (pallets.pct_of_target|float)|round(0)|int if pallets.pct_of_target else 0 }}%"></div>
-        </div>
-      </div>
-    </div>
+    {% with placement={"type":"pallets_banner","name":"Today · " + wc_name},
+            data=widgets.pallets_banner, visual={}, placement_title="Today · " + wc_name %}
+      {% include "widgets/_widget_pallets_banner.html" %}
+    {% endwith %}
   </div>
 
-  {# Daily progress chart #}
-  <div class="grid-stack-item" gs-id="wc-daily-progress" gs-x="0" gs-y="2" gs-w="6" gs-h="4">
-    <div class="grid-stack-item-content">
-      <h3>Daily Progress</h3>
-      <svg class="daily-progress-chart" viewBox="0 0 200 80" preserveAspectRatio="none">
-        {%- set max_y = pallets.target_full_day or 1 -%}
-        {%- set n = daily_progress|length or 1 -%}
-        {%- set pts = [] -%}
-        {%- for p in daily_progress -%}
-          {%- set _ = pts.append("%.1f,%.1f"|format(loop.index0 / (n-1 if n>1 else 1) * 200, 80 - (p.cumulative_units / max_y) * 80 if max_y else 80)) -%}
-        {%- endfor -%}
-        <polyline fill="none" stroke="var(--accent)" stroke-width="1.5" points="{{ pts|join(' ') }}"/>
-        <line x1="0" y1="0" x2="200" y2="0" stroke="var(--muted)" stroke-dasharray="3 3" stroke-width="0.5"/>
-        <text x="2" y="6" fill="var(--muted)" font-size="6">goal {{ max_y }}</text>
-      </svg>
-    </div>
+  {# 15-min progress — THIS WC #}
+  <div class="grid-stack-item" gs-id="wc-15min-progress" gs-x="0" gs-y="2" gs-w="12" gs-h="5">
+    {% with placement={"type":"daily_progress","name":wc_name + " — 15-minute progress"},
+            data=widgets.fifteen_min, visual={}, placement_title=wc_name + " — 15-minute progress" %}
+      {% include "widgets/_widget_daily_progress.html" %}
+    {% endwith %}
   </div>
 
-  {# GOAT race widget #}
-  <div class="grid-stack-item" gs-id="wc-goat-race" gs-x="6" gs-y="2" gs-w="3" gs-h="4">
-    <div class="grid-stack-item-content">
-      <h3>Vs. GOAT Pace</h3>
-      <div class="goat-race">
-        {% if goat_race.status %}
-          <div class="status-pill status-{{ goat_race.status|lower }}">{{ goat_race.status|replace('_', ' ') }}</div>
-        {% else %}
-          <div class="status-pill status-none">no record yet</div>
-        {% endif %}
-        <div class="race-stats">
-          <div>Today: <b>{{ goat_race.units_today }}</b></div>
-          <div>GOAT pace now: <b>{{ goat_race.goat_pace_today|round(0)|int }}</b></div>
-          {% if goat_race.goat %}
-            <div class="goat-meta">
-              🐐 {{ goat_race.goat.name }} · {{ goat_race.goat.units }} on {{ goat_race.goat.day }}
-            </div>
-          {% endif %}
+  {# Cumulative Daily Progress — THIS WC #}
+  <div class="grid-stack-item" gs-id="wc-cumulative" gs-x="0" gs-y="7" gs-w="12" gs-h="5">
+    {% with placement={"type":"cumulative","name":wc_name + " — Daily Progress"},
+            data=widgets.cumulative, visual={}, placement_title=wc_name + " — Daily Progress" %}
+      {% include "widgets/_widget_cumulative.html" %}
+    {% endwith %}
+  </div>
+
+  {# Vs. Goat Pace — group of THIS WC (in the slot Recycling uses for repair-progress) #}
+  <div class="grid-stack-item" gs-id="wc-goat-race" gs-x="0" gs-y="12" gs-w="12" gs-h="5">
+    {% if widgets.goat_race %}
+      {% with placement={"type":"goat_race","name":"Vs. GOAT Pace — " + (wc_group or "")},
+              data=widgets.goat_race, visual={},
+              placement_title="Vs. GOAT Pace — " + (wc_group or "") %}
+        {% include "widgets/_widget_goat_race.html" %}
+      {% endwith %}
+    {% else %}
+      <div class="grid-stack-item-content">
+        <h3>Vs. GOAT Pace</h3>
+        <div class="empty-state" style="color:var(--muted);font-size:0.85rem">
+          {{ wc_name }} isn't in a group — assign it one in Settings to enable this widget.
         </div>
       </div>
-    </div>
+    {% endif %}
   </div>
 
-  {# Monthly ribbons #}
-  <div class="grid-stack-item" gs-id="wc-monthly-ribbons" gs-x="9" gs-y="2" gs-w="3" gs-h="4">
-    <div class="grid-stack-item-content">
-      <h3>{{ month_name(month) }} {{ year }} · {{ ribbons.group or 'Ribbons' }}</h3>
-      <ul class="ribbons-list">
-        {% for r in ribbons.entries %}
-          <li>
-            <span class="medal">{% if r.position == 1 %}🥇{% elif r.position == 2 %}🥈{% else %}🥉{% endif %}</span>
-            <span class="name"><a href="/staffing/people/{{ r.name|urlencode }}">{{ r.name }}</a></span>
-            <span class="units">{{ r.units|round(0)|int }}</span>
-          </li>
-        {% else %}
-          <li class="empty">no qualifying days yet</li>
-        {% endfor %}
-      </ul>
-    </div>
-  </div>
-
-  {# 15-min increments #}
-  <div class="grid-stack-item" gs-id="wc-15min-increments" gs-x="0" gs-y="6" gs-w="8" gs-h="3">
-    <div class="grid-stack-item-content">
-      <h3>15-min Increments</h3>
-      <div class="fifteen-min-bars">
-        {% for b in fifteen_min %}
-          <div class="bar bar-{{ b.color }}"
-               style="--units: {{ b.units }}; --target: {{ b.target }};"
-               title="{{ b.units }} units · target {{ b.target }}"></div>
-        {% endfor %}
+  {# Monthly Ribbons — group of THIS WC (in the slot Recycling uses for repair-cumulative) #}
+  <div class="grid-stack-item" gs-id="wc-monthly-ribbons" gs-x="0" gs-y="17" gs-w="12" gs-h="5">
+    {% if widgets.ribbons %}
+      {% with placement={"type":"ribbons","name":month_name(month) + " " + (year|string) + " · " + (wc_group or "")},
+              data=widgets.ribbons, visual={},
+              placement_title=month_name(month) + " " + (year|string) + " · " + (wc_group or "Ribbons") %}
+        {% include "widgets/_widget_ribbons.html" %}
+      {% endwith %}
+    {% else %}
+      <div class="grid-stack-item-content">
+        <h3>Monthly Ribbons</h3>
+        <div class="empty-state" style="color:var(--muted);font-size:0.85rem">
+          {{ wc_name }} isn't in a group — assign it one in Settings to enable this widget.
+        </div>
       </div>
-    </div>
+    {% endif %}
   </div>
 
-  {# Downtime report #}
-  <div class="grid-stack-item" gs-id="wc-downtime-report" gs-x="8" gs-y="6" gs-w="4" gs-h="3">
-    <div class="grid-stack-item-content">
-      <h3>Downtime · {{ downtime.total_minutes }}m total</h3>
-      <ul class="downtime-list">
-        {% for e in downtime.events %}
-          <li>
-            <span class="time">{{ e.time }}</span>
-            <span class="duration">{{ e.duration_minutes }}m</span>
-          </li>
-        {% else %}
-          <li class="empty">no downtime</li>
-        {% endfor %}
-      </ul>
-    </div>
+  {# Downtime — THIS WC (single-row stacked working/down) #}
+  <div class="grid-stack-item" gs-id="wc-downtime-report" gs-x="0" gs-y="22" gs-w="12" gs-h="4">
+    {% with placement={"type":"downtime","name":wc_name + " — Downtime"},
+            data=widgets.downtime, visual={}, placement_title=wc_name + " — Downtime" %}
+      {% include "widgets/_widget_downtime.html" %}
+    {% endwith %}
   </div>
 
 </div>{# /.grid-stack #}

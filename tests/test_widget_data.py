@@ -242,31 +242,35 @@ def test_resolve_daily_progress_missing_scope_returns_empty():
     assert out == {"buckets": [], "bucket_target": 0}
 
 
-def test_resolve_cumulative_combines_points_and_target(monkeypatch):
-    from zira_dashboard import widget_data, wc_dashboard_data
+def test_resolve_cumulative_uses_same_buckets_as_daily_progress(monkeypatch):
+    """Cumulative widget shares the per-15-min bucket data shape with
+    daily_progress; the partial running-totals them in-template."""
+    from zira_dashboard import widget_data, wc_dashboard_data, work_centers_store, shift_config
+    from datetime import time
 
     monkeypatch.setattr(
-        wc_dashboard_data, "daily_progress",
+        wc_dashboard_data, "fifteen_min_increments",
         lambda wc, d: [
-            {"bucket_index": 0, "minute_offset": 0, "cumulative_units": 0},
-            {"bucket_index": 1, "minute_offset": 15, "cumulative_units": 5},
-            {"bucket_index": 2, "minute_offset": 30, "cumulative_units": 11},
+            {"bucket_index": 0, "minute_offset": 0, "units": 5, "target": 4},
+            {"bucket_index": 1, "minute_offset": 15, "units": 3, "target": 4},
         ] if wc == "Repair 1" else [],
     )
-    monkeypatch.setattr(
-        wc_dashboard_data, "pallets_banner",
-        lambda wc, d: {"target_full_day": 80} if wc == "Repair 1" else {},
-    )
-    out = widget_data._resolve_cumulative({"wc_name": "Repair 1"}, day=date(2026, 5, 13))
-    assert len(out["points"]) == 3
-    assert out["max_y"] == 80
-    assert out["points"][-1]["cumulative_units"] == 11
+    monkeypatch.setattr(work_centers_store, "members", lambda kind, name: [])
+    monkeypatch.setattr(shift_config, "productive_minutes_per_day", lambda: 480)
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda d: time(7, 0))
+    monkeypatch.setattr(widget_data, "_elapsed_fraction", lambda day: 0.0)
+
+    out = widget_data._resolve_cumulative({"wcs": ["Repair 1"]}, day=date(2026, 5, 13))
+    assert "buckets" in out and "bucket_target" in out
+    assert len(out["buckets"]) == 2
+    assert out["buckets"][0]["actual"] == 5
+    assert out["buckets"][0]["target"] == 4
 
 
-def test_resolve_cumulative_missing_wc_returns_empty():
+def test_resolve_cumulative_missing_scope_returns_empty():
     from zira_dashboard import widget_data
     out = widget_data._resolve_cumulative({}, day=date(2026, 5, 13))
-    assert out == {"points": [], "max_y": 0}
+    assert out == {"buckets": [], "bucket_target": 0}
 
 
 def test_resolve_kpi_units_today_wc(monkeypatch):

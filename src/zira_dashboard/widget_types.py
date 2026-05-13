@@ -100,17 +100,15 @@ _REGISTRY: list[dict] = [
     },
     {
         "type": "cumulative",
-        "label": "Cumulative Progress (line chart)",
+        "label": "Cumulative Daily Progress",
         "data_params_schema": [
-            {"key": "wc_name", "label": "Work Center", "input": "select",
-             "options_from": "wcs", "required": True},
+            {"key": "wcs", "label": "Work Centers", "input": "multiselect",
+             "options_from": "wcs"},
+            {"key": "groups", "label": "Groups", "input": "multiselect",
+             "options_from": "groups"},
         ],
         "visual_params_schema": [
-            {"key": "color", "label": "Line color", "input": "color", "default": "#22c55e"},
-            {"key": "show_target", "label": "Show goal line",
-             "input": "select", "options": [
-                 {"value": "true", "label": "Yes"}, {"value": "false", "label": "No"},
-             ], "default": "true"},
+            {"key": "color", "label": "Hit color", "input": "color", "default": "#22c55e"},
         ],
         "resolver": "_resolve_cumulative",
         "partial": "widgets/_widget_cumulative.html",

@@ -259,19 +259,13 @@ def _resolve_daily_progress(params: dict, day: date) -> dict:
 
 
 def _resolve_cumulative(params: dict, day: date) -> dict:
-    """Cumulative bucket data + the WC's full-day target for the goal line.
+    """Cumulative progress data — same per-15-min buckets as
+    `_resolve_daily_progress` produces; the `cumulative_progress_chart`
+    macro running-totals them in the template.
 
-    Wraps `wc_dashboard_data.daily_progress` (which returns cumulative
-    per bucket) and pulls the full-day goal from `pallets_banner`.
+    Shape: {buckets: [{label, actual, target, in_progress}, ...], bucket_target}
     """
-    from . import wc_dashboard_data
-    wc_name = (params or {}).get("wc_name")
-    if not wc_name:
-        return {"points": [], "max_y": 0}
-    points = wc_dashboard_data.daily_progress(wc_name, day) or []
-    banner = wc_dashboard_data.pallets_banner(wc_name, day) or {}
-    max_y = banner.get("target_full_day") or 0
-    return {"points": points, "max_y": max_y}
+    return _resolve_daily_progress(params, day)
 
 
 def _resolve_kpi(params: dict, day: date) -> dict:

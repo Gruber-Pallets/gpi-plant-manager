@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from .. import layout_store, wc_dashboard_data, work_centers_store
+from .. import layout_store, wc_dashboard_data, widget_data, work_centers_store
 from ..deps import templates
 
 router = APIRouter()
@@ -28,7 +28,14 @@ def _render_wc_dashboard(
     tv_mode: bool,
     tv_theme: str,
 ):
-    """Shared implementation for the editor + TV routes."""
+    """Shared implementation for the editor + TV routes.
+
+    Widgets are rendered via the workshop's widget partials, so the
+    per-WC dashboard looks identical to /recycling (same markup, same
+    CSS classes). Scope per widget:
+      - pallets banner / 15-min progress / cumulative / downtime → this WC only
+      - GOAT race / monthly ribbons → this WC's group
+    """
     loc = wc_dashboard_data.wc_by_slug(slug)
     if loc is None:
         return JSONResponse({"error": f"no work center matches slug {slug!r}"}, status_code=404)
@@ -40,12 +47,17 @@ def _render_wc_dashboard(
     groups = work_centers_store.groups(loc) or []
     wc_group = groups[0] if groups else None
 
-    pallets = wc_dashboard_data.pallets_banner(wc_name, today)
-    daily_progress = wc_dashboard_data.daily_progress(wc_name, today)
-    goat_race = wc_dashboard_data.goat_race(wc_name, today)
-    ribbons = wc_dashboard_data.monthly_ribbons(wc_name, today.year, today.month)
-    fifteen_min = wc_dashboard_data.fifteen_min_increments(wc_name, today)
-    downtime = wc_dashboard_data.downtime_report(wc_name, today)
+    wc_scope = {"wcs": [wc_name]}
+    group_scope = {"group": wc_group} if wc_group else {}
+
+    widgets_data = {
+        "pallets_banner": wc_dashboard_data.pallets_banner(wc_name, today),
+        "fifteen_min": widget_data._resolve_daily_progress(wc_scope, day=today),
+        "cumulative":   widget_data._resolve_cumulative(wc_scope, day=today),
+        "goat_race":    widget_data._resolve_goat_race(group_scope, day=today) if wc_group else None,
+        "ribbons":      widget_data._resolve_ribbons(group_scope, day=today) if wc_group else None,
+        "downtime":     widget_data._resolve_downtime(wc_scope, day=today),
+    }
 
     layout_key = f"wc:{slug}"
 
@@ -63,12 +75,7 @@ def _render_wc_dashboard(
             "today": today.isoformat(),
             "year": today.year,
             "month": today.month,
-            "pallets": pallets,
-            "daily_progress": daily_progress,
-            "goat_race": goat_race,
-            "ribbons": ribbons,
-            "fifteen_min": fifteen_min,
-            "downtime": downtime,
+            "widgets": widgets_data,
             "layout": layout_store.layout_map(layout_key),
             "layout_key": layout_key,
             "tv_mode": tv_mode,
