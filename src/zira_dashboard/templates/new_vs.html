@@ -12,6 +12,7 @@
 {% endif %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 <style>{{ goat_badges_css() }}</style>
+<link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 </head>
 <body>
 {% if tv_mode %}
@@ -39,6 +40,7 @@
     <button type="submit">Update</button>
   </form>
 </header>
+{% include "_dashboards_subnav.html" %}
 {% include '_value_streams_subnav.html' %}
 
 <main>

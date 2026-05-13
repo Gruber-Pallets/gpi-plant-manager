@@ -55,6 +55,8 @@ def _render_wc_dashboard(
         {
             "slug": slug,
             "wc_name": wc_name,
+            "pinned_dashboards": _pinned_for_subnav(),
+            "active_dashboard_key": "wc:" + wc_name,
             "wc_group": wc_group,
             "operators": operators,
             "operators_display": operators_display,
@@ -103,3 +105,8 @@ def tv_wc_dashboard(
         tv_mode=True,
         tv_theme=tv_theme,
     )
+
+
+def _pinned_for_subnav():
+    from .. import dashboard_catalog
+    return dashboard_catalog.pinned_dashboards_for_subnav()

@@ -29,6 +29,8 @@ def widgets_page(request: Request):
         {
             "definitions": widget_definitions_store.list_definitions(),
             "types": widget_types.all_types(),
+            "pinned_dashboards": _pinned_for_subnav(),
+            "active_dashboard_key": "meta:widgets",
         },
     )
 
@@ -108,3 +110,8 @@ def duplicate_def(def_id: int):
     except LookupError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
     return JSONResponse({"ok": True, "definition": dup})
+
+
+def _pinned_for_subnav():
+    from .. import dashboard_catalog
+    return dashboard_catalog.pinned_dashboards_for_subnav()

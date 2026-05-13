@@ -64,19 +64,19 @@
     background: var(--accent); color: white; border-color: var(--accent);
   }
 </style>
+<link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 </head>
 <body>
 <header>
   <h1>Widget Workshop</h1>
   <nav>
     <a href="/recycling">Dashboards</a>
-    <a href="/widgets" class="active">Widgets</a>
-    <a href="/dashboards">My Dashboards</a>
     <a href="/trophies">Trophy Case</a>
     <a href="/staffing">Staffing</a>
     <a href="/settings">Settings</a>
   </nav>
 </header>
+{% include "_dashboards_subnav.html" %}
 <main>
   <section class="panel">
     <h2>Saved widgets</h2>

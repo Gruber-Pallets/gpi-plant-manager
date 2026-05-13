@@ -18,13 +18,18 @@
 <meta http-equiv="refresh" content="60">
 {% endif %}
 <style>{{ goat_badges_css() }}</style>
+<link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 </head>
 <body>
+{% if tv_mode %}
 {{ tv_header(
     wc_name,
     crumb="WORK CENTER · " + (wc_group or "")|upper,
     right=operators_display or "(unassigned)",
 ) }}
+{% else %}
+{% include "_dashboards_subnav.html" %}
+{% endif %}
 
 {% if not tv_mode %}
 <div class="wc-template-bar">

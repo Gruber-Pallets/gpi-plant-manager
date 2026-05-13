@@ -76,6 +76,7 @@
   }
   #placement-edit-popover button.primary { background: var(--accent, #16a34a); color: white; border-color: var(--accent, #16a34a); }
 </style>
+<link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 </head>
 <body>
 {% if tv_mode %}
@@ -93,6 +94,7 @@
       <a href="/tv/dashboards/{{ dashboard.slug }}">Open as TV</a>
     </nav>
   </header>
+  {% include "_dashboards_subnav.html" %}
 {% endif %}
 
 <main>

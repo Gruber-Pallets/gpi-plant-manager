@@ -530,6 +530,8 @@ def _render_recycling(
         "recycling.html",
         {
             "active_vs": "recycling",
+            "pinned_dashboards": _pinned_for_subnav(),
+            "active_dashboard_key": "vs_recycling:",
             "assignments_todo_by_wc": assignments_todo_by_wc,
             "all_active_people": all_active_people,
             "window": window,
@@ -779,6 +781,8 @@ def _render_new_vs(
         "new_vs.html",
         {
             "active_vs": "new",
+            "pinned_dashboards": _pinned_for_subnav(),
+            "active_dashboard_key": "vs_new:",
             "assignments_todo_by_wc": assignments_todo_by_wc,
             "all_active_people": all_active_people,
             "day": d.isoformat(),
@@ -826,3 +830,8 @@ def tv_new_vs(request: Request, theme: str | None = Query(default=None)):
         tv_mode=True,
         tv_theme=tv_theme,
     )
+
+
+def _pinned_for_subnav():
+    from .. import dashboard_catalog
+    return dashboard_catalog.pinned_dashboards_for_subnav()

@@ -39,6 +39,8 @@ def dashboards_index(request: Request):
             "dashboards": custom_dashboards_store.list_dashboards(),
             "wcs": _wc_options(),
             "groups": _group_options(),
+            "pinned_dashboards": _pinned_for_subnav(),
+            "active_dashboard_key": "meta:dashboards",
         },
     )
 
@@ -90,6 +92,8 @@ def _render_dashboard(request: Request, *, slug: str, tv_mode: bool, tv_theme: s
         request, "custom_dashboard.html",
         {
             "dashboard": dash,
+            "pinned_dashboards": _pinned_for_subnav(),
+            "active_dashboard_key": "custom:" + dash["slug"],
             "placements": placements,
             "definitions": widget_definitions_store.list_definitions(),
             "tv_mode": tv_mode,
@@ -261,3 +265,8 @@ async def post_pinned_dashboard(request: Request):
     else:
         pinned_dashboards_store.unpin(kind, ref)
     return JSONResponse({"ok": True, "pinned": pinned})
+
+
+def _pinned_for_subnav():
+    from .. import dashboard_catalog
+    return dashboard_catalog.pinned_dashboards_for_subnav()
