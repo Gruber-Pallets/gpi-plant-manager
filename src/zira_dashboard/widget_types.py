@@ -109,6 +109,28 @@ _REGISTRY: list[dict] = [
         "resolver": "_resolve_cumulative",
         "partial": "widgets/_widget_cumulative.html",
     },
+    {
+        "type": "kpi",
+        "label": "KPI Tile",
+        "data_params_schema": [
+            {"key": "metric", "label": "Metric", "input": "select",
+             "options": [
+                 {"value": "units_today_wc",     "label": "Units today (single WC)"},
+                 {"value": "units_today_group",  "label": "Units today (group sum)"},
+                 {"value": "downtime_minutes_wc", "label": "Downtime minutes (single WC)"},
+             ], "default": "units_today_wc", "required": True},
+            {"key": "wc_name", "label": "Work Center (for *_wc metrics)",
+             "input": "select", "options_from": "wcs"},
+            {"key": "group", "label": "Group (for *_group metrics)",
+             "input": "select", "options_from": "groups"},
+        ],
+        "visual_params_schema": [
+            {"key": "label", "label": "Display label (overrides default)", "input": "text"},
+            {"key": "color", "label": "Number color", "input": "color", "default": "#22c55e"},
+        ],
+        "resolver": "_resolve_kpi",
+        "partial": "widgets/_widget_kpi.html",
+    },
 ]
 
 

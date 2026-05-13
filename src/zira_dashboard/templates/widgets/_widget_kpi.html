@@ -1,0 +1,10 @@
+{# KPI tile — single big number with a label.
+   data = {label, value, suffix}
+   visual = {label (override), color}
+#}
+<div class="grid-stack-item-content kpi">
+  <div class="label">{{ visual.label or data.label }}</div>
+  <div class="val" style="color: {{ visual.color or 'var(--accent)' }}">
+    {{ data.value }}{{ data.suffix }}
+  </div>
+</div>

@@ -15,6 +15,8 @@
   {% include "widgets/_widget_daily_progress.html" %}
 {% elif placement.type == 'cumulative' %}
   {% include "widgets/_widget_cumulative.html" %}
+{% elif placement.type == 'kpi' %}
+  {% include "widgets/_widget_kpi.html" %}
 {% elif placement.type == 'goat_race' %}
   {% include "widgets/_widget_goat_race.html" %}
 {% elif placement.type == 'ribbons' %}

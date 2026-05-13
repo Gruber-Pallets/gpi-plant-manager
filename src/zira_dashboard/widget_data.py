@@ -163,3 +163,33 @@ def _resolve_cumulative(params: dict, day: date) -> dict:
     banner = wc_dashboard_data.pallets_banner(wc_name, day) or {}
     max_y = banner.get("target_full_day") or 0
     return {"points": points, "max_y": max_y}
+
+
+def _resolve_kpi(params: dict, day: date) -> dict:
+    """KPI tile — single big number with a label.
+
+    Returns: {label, value, suffix}. The widget partial concatenates
+    "{value}{suffix}" and renders `label` above it.
+    """
+    from . import wc_dashboard_data
+    params = params or {}
+    metric = params.get("metric") or "units_today_wc"
+    if metric == "units_today_wc":
+        wc = params.get("wc_name")
+        if not wc:
+            return {"label": "Units today", "value": 0, "suffix": ""}
+        units = wc_dashboard_data._units_today_for_wc(wc, day)
+        return {"label": f"Units · {wc}", "value": units, "suffix": ""}
+    if metric == "units_today_group":
+        group = params.get("group")
+        if not group:
+            return {"label": "Units today (group)", "value": 0, "suffix": ""}
+        units = _units_today_for_group(group, day)
+        return {"label": f"Units · {group}", "value": units, "suffix": ""}
+    if metric == "downtime_minutes_wc":
+        wc = params.get("wc_name")
+        if not wc:
+            return {"label": "Downtime today", "value": 0, "suffix": "m"}
+        report = wc_dashboard_data.downtime_report(wc, day) or {}
+        return {"label": f"Downtime · {wc}", "value": int(report.get("total_minutes", 0)), "suffix": "m"}
+    return {"label": f"Unknown metric: {metric}", "value": 0, "suffix": ""}

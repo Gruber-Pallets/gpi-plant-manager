@@ -181,3 +181,46 @@ def test_resolve_cumulative_missing_wc_returns_empty():
     from zira_dashboard import widget_data
     out = widget_data._resolve_cumulative({}, day=date(2026, 5, 13))
     assert out == {"points": [], "max_y": 0}
+
+
+def test_resolve_kpi_units_today_wc(monkeypatch):
+    from zira_dashboard import widget_data, wc_dashboard_data
+    monkeypatch.setattr(
+        wc_dashboard_data, "_units_today_for_wc",
+        lambda wc, d: 42 if wc == "Repair 1" else 0,
+    )
+    out = widget_data._resolve_kpi(
+        {"metric": "units_today_wc", "wc_name": "Repair 1"}, day=date(2026, 5, 13),
+    )
+    assert out["value"] == 42
+    assert out["label"] == "Units · Repair 1"
+
+
+def test_resolve_kpi_units_today_group(monkeypatch):
+    from zira_dashboard import widget_data
+    monkeypatch.setattr(widget_data, "_units_today_for_group", lambda g, d: 200)
+    out = widget_data._resolve_kpi(
+        {"metric": "units_today_group", "group": "Repairs"}, day=date(2026, 5, 13),
+    )
+    assert out["value"] == 200
+    assert out["label"] == "Units · Repairs"
+
+
+def test_resolve_kpi_downtime_minutes(monkeypatch):
+    from zira_dashboard import widget_data, wc_dashboard_data
+    monkeypatch.setattr(
+        wc_dashboard_data, "downtime_report",
+        lambda wc, d: {"events": [], "total_minutes": 17} if wc == "Repair 1" else {},
+    )
+    out = widget_data._resolve_kpi(
+        {"metric": "downtime_minutes_wc", "wc_name": "Repair 1"}, day=date(2026, 5, 13),
+    )
+    assert out["value"] == 17
+    assert out["suffix"] == "m"
+
+
+def test_resolve_kpi_unknown_metric_returns_placeholder():
+    from zira_dashboard import widget_data
+    out = widget_data._resolve_kpi({"metric": "garbage"}, day=date(2026, 5, 13))
+    assert out["value"] == 0
+    assert "garbage" in out["label"]
