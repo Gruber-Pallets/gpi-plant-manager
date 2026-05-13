@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-13
 
+### 2:35 PM
+
+- **Widget Workshop seeded with starters + Duplicate button + Edit-warning popup** — three workshop improvements plus one small fix. (1) **10 starter widgets** auto-seed on first boot mirroring the configs on `/recycling` (Pallets by WC + Total Pallets KPI, per group) and `/wc/{slug}` (Pallets Banner, Daily Progress, Cumulative, Downtime, GOAT Race, Monthly Ribbons — default to Repair 1, duplicate and swap WCs for others). Deleted seeds stay deleted across redeploys. (2) **Duplicate button** on every workshop row — POST `/api/widget-defs/{id}/duplicate` clones the row with name "<original> (copy)" / "(copy 2)" / etc., reloads the editor pre-filled on the new row. (3) **Edit-warning popup** fires when you click Edit on a widget that's placed on N dashboards — three buttons: Cancel / Edit anyway (changes affect all placements) / Duplicate and edit (clones the row, edits go to the copy). Rows with no placements skip the modal. (4) Settings → TVs panel: the per-row URL is now a clickable hyperlink that opens in a new tab; the separate Copy button is gone (right-click → copy on the link works).
+
 ### 2:12 PM
 
 - **Top-nav "My Dashboards" link + cleaner pallets-by-WC widget rendering** — two small follow-ons after the widget-workshop closeout. (1) The main top nav on every page (`/`, `/recycling`, `/new-vs`, `/staffing`, `/trophies`, `/settings`) gains a **My Dashboards** entry pointing at `/dashboards` so the custom-dashboards surface isn't buried under Settings. (2) The Pallets-by-Work-Center widgets render cleaner at any size: the name column scales with widget width (`clamp(6rem, 22cqw, 11rem)`) so longer WC names like "Hand Build #1" don't get squeezed, long names ellipsis-truncate instead of wrapping into the bar, and a small `margin-block` between rows gives a visible gap. Addresses the "too tight, names jumbled" issue end-to-end without needing to resize the widget manually.

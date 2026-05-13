@@ -47,8 +47,7 @@
                     data-theme="light">Light</button>
           </td>
           <td class="tv-url-cell">
-            <span class="tv-url">/tv/d/{{ d.slug }}</span>
-            <button type="button" class="tv-copy-btn">Copy</button>
+            <a class="tv-url" href="/tv/d/{{ d.slug }}" target="_blank" rel="noopener">/tv/d/{{ d.slug }}</a>
           </td>
           <td>
             <button type="button" class="tv-delete-btn" title="Delete">×</button>
@@ -197,7 +196,10 @@
       if (data.ok) {
         tr.dataset.slug = data.slug;
         const urlEl = tr.querySelector('.tv-url');
-        if (urlEl) urlEl.textContent = '/tv/d/' + data.slug;
+        if (urlEl) {
+          urlEl.textContent = '/tv/d/' + data.slug;
+          urlEl.setAttribute('href', '/tv/d/' + data.slug);
+        }
       }
       return data;
     });
@@ -220,17 +222,6 @@
         tr.querySelectorAll('.tv-theme-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         postJson('/api/tv-displays/' + tr.dataset.id + '/theme', {theme: btn.dataset.theme});
-      });
-    });
-
-    tr.querySelector('.tv-copy-btn').addEventListener('click', () => {
-      const slug = tr.dataset.slug;
-      const url = window.location.origin + '/tv/d/' + slug;
-      navigator.clipboard.writeText(url).then(() => {
-        const btn = tr.querySelector('.tv-copy-btn');
-        const orig = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => btn.textContent = orig, 1200);
       });
     });
 
