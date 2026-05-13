@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-13
 
+### 2:12 PM
+
+- **Top-nav "My Dashboards" link + cleaner pallets-by-WC widget rendering** — two small follow-ons after the widget-workshop closeout. (1) The main top nav on every page (`/`, `/recycling`, `/new-vs`, `/staffing`, `/trophies`, `/settings`) gains a **My Dashboards** entry pointing at `/dashboards` so the custom-dashboards surface isn't buried under Settings. (2) The Pallets-by-Work-Center widgets render cleaner at any size: the name column scales with widget width (`clamp(6rem, 22cqw, 11rem)`) so longer WC names like "Hand Build #1" don't get squeezed, long names ellipsis-truncate instead of wrapping into the bar, and a small `margin-block` between rows gives a visible gap. Addresses the "too tight, names jumbled" issue end-to-end without needing to resize the widget manually.
+
 ### 2:07 PM
 
 - **Widget Workshop Phase 3 — closeout** — three polish items finish off the workshop spec. (1) **Custom dashboards can be added as TVs**: the Settings → TVs panel gains a "Custom Dashboard" kind with a cascading picker; the resulting `/tv/d/{slug}` URL renders the chosen custom dashboard with the row's saved theme. Deleting a custom dashboard nulls out any TV displays that referenced it (FK ON DELETE SET NULL) and shows a "dashboard removed" page when visited. (2) **Per-placement edit popover** on the dashboard editor — a small ⋮ button on each widget opens a schema-driven form to override that placement's data scope; ✕ deletes the widget from the dashboard. (3) **"In use by N" badge** in the Widget Workshop list, with the Delete button disabled for widgets referenced by any dashboard so it's obvious why a delete would fail. The widget-workshop master spec (sub-project 5) is now fully shipped: Workshop + custom dashboards + 8 widget types + TVs integration + per-placement overrides.

@@ -115,12 +115,14 @@
     font-size: clamp(0.78rem, 10cqh, 1.25rem);
     flex: 0 0 auto;
   }
-  /* Bar rows expand vertically; tracks thicken to fill available height */
+  /* Bar rows expand vertically; tracks thicken to fill available height.
+     Small margin gives a visible gap between bars at any widget size. */
   .grid-stack-item-content .bar-row {
     align-items: center;
     flex: 1 1 0;
     min-height: 0;
     padding: 0;
+    margin-block: 2px;
   }
   .grid-stack-item-content .bar-track,
   .grid-stack-item-content .stacked-track {
@@ -131,6 +133,13 @@
   .grid-stack-item-content .bar-row .name,
   .grid-stack-item-content .bar-row .val {
     font-size: clamp(0.9rem, 3.9cqh, 1.25rem);
+  }
+  /* Name column doesn't overflow / wrap into the bar at small widget sizes. */
+  .grid-stack-item-content .bar-row .name { min-width: 0; overflow: hidden; }
+  .grid-stack-item-content .bar-row .name .name-primary,
+  .grid-stack-item-content .bar-row .name .name-secondary {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: block;
   }
   .grid-stack-item-content .bar-row .val .pct,
   .grid-stack-item-content .vbar-val .pct {
@@ -214,11 +223,13 @@
   .widget-edit button.danger  { color: var(--bad); border-color: var(--bad-bg); }
   .widget-edit button:hover { filter: brightness(1.1); }
 
-  /* Number placement in horizontal bars */
-  .grid-stack-item-content .bar-row.numpos-widget { grid-template-columns: 7rem 1fr 4rem; }
+  /* Number placement in horizontal bars. Name column scales with widget
+     width so longer WC names ("Hand Build #1") fit cleanly on a wide
+     widget but compress on a narrow one. */
+  .grid-stack-item-content .bar-row.numpos-widget { grid-template-columns: clamp(6rem, 22cqw, 11rem) 1fr 4rem; }
   .grid-stack-item-content .bar-row.numpos-bar,
   .grid-stack-item-content .bar-row.numpos-inside,
-  .grid-stack-item-content .bar-row.numpos-hidden { grid-template-columns: 7rem 1fr; }
+  .grid-stack-item-content .bar-row.numpos-hidden { grid-template-columns: clamp(6rem, 22cqw, 11rem) 1fr; }
   .grid-stack-item-content .bar-fill { position: relative; overflow: visible; display: flex; align-items: center; justify-content: flex-end; }
   .grid-stack-item-content .bar-fill .in {
     color: white; font-weight: 700; font-variant-numeric: tabular-nums;
