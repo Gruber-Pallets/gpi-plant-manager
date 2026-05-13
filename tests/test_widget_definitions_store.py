@@ -137,3 +137,100 @@ def test_list_definitions_includes_usage_count():
     rows = [r for r in widget_definitions_store.list_definitions() if r["name"] == "wt-usagelist"]
     assert rows[0]["usage_count"] == 1
     db.execute("DELETE FROM custom_dashboards WHERE slug LIKE 'wt-%'")
+
+
+def test_seed_defaults_if_empty_seeds_when_table_empty(monkeypatch):
+    from zira_dashboard import widget_definitions_store, work_centers_store, staffing, db
+
+    class _Loc:
+        def __init__(self, name): self.name = name
+
+    monkeypatch.setattr(
+        work_centers_store, "all_group_names",
+        lambda kind: ["Repair", "Dismantler"] if kind == "group" else [],
+    )
+    monkeypatch.setattr(staffing, "LOCATIONS", [_Loc("Repair 1")])
+
+    db.execute("DELETE FROM widget_definitions")
+    widget_definitions_store.seed_defaults_if_empty()
+    rows = widget_definitions_store.list_definitions()
+    names = {r["name"] for r in rows}
+    assert "Pallets by WC — Dismantlers" in names
+    assert "Pallets by WC — Repairs" in names
+    assert "Total Pallets — Dismantlers" in names
+    assert "Total Pallets — Repairs" in names
+    assert "Pallets Banner — Repair 1" in names
+    assert "Daily Progress — Repair 1" in names
+    assert "Cumulative Progress — Repair 1" in names
+    assert "Downtime Report — Repair 1" in names
+    assert "GOAT Race — Repairs" in names
+    assert "Monthly Ribbons — Repairs" in names
+    widget_definitions_store.seed_defaults_if_empty()
+    rows_again = widget_definitions_store.list_definitions()
+    assert len(rows_again) == len(rows)
+    db.execute("DELETE FROM widget_definitions WHERE name LIKE 'Pallets%' OR name LIKE 'Total%' OR name LIKE 'Daily%' OR name LIKE 'Cumulative%' OR name LIKE 'Downtime%' OR name LIKE 'GOAT%' OR name LIKE 'Monthly%'")
+
+
+def test_seed_skips_missing_group(monkeypatch, caplog):
+    from zira_dashboard import widget_definitions_store, work_centers_store, staffing, db
+    import logging
+
+    class _Loc:
+        def __init__(self, name): self.name = name
+
+    monkeypatch.setattr(
+        work_centers_store, "all_group_names",
+        lambda kind: ["Repair"] if kind == "group" else [],
+    )
+    monkeypatch.setattr(staffing, "LOCATIONS", [_Loc("Repair 1")])
+
+    db.execute("DELETE FROM widget_definitions")
+    with caplog.at_level(logging.WARNING):
+        widget_definitions_store.seed_defaults_if_empty()
+    rows = widget_definitions_store.list_definitions()
+    names = {r["name"] for r in rows}
+    assert "Pallets by WC — Repairs" in names
+    assert "Pallets by WC — Dismantlers" not in names
+    assert "Total Pallets — Dismantlers" not in names
+    db.execute("DELETE FROM widget_definitions WHERE name LIKE 'Pallets%' OR name LIKE 'Total%' OR name LIKE 'Daily%' OR name LIKE 'Cumulative%' OR name LIKE 'Downtime%' OR name LIKE 'GOAT%' OR name LIKE 'Monthly%'")
+
+
+def test_seed_skips_missing_wc(monkeypatch):
+    from zira_dashboard import widget_definitions_store, work_centers_store, staffing, db
+
+    monkeypatch.setattr(work_centers_store, "all_group_names", lambda kind: ["Repair", "Dismantler"])
+    monkeypatch.setattr(staffing, "LOCATIONS", [])
+
+    db.execute("DELETE FROM widget_definitions")
+    widget_definitions_store.seed_defaults_if_empty()
+    rows = widget_definitions_store.list_definitions()
+    names = {r["name"] for r in rows}
+    assert "Pallets by WC — Repairs" in names
+    assert "Pallets Banner — Repair 1" not in names
+    assert "Daily Progress — Repair 1" not in names
+    db.execute("DELETE FROM widget_definitions WHERE name LIKE 'Pallets%' OR name LIKE 'Total%' OR name LIKE 'Daily%' OR name LIKE 'Cumulative%' OR name LIKE 'Downtime%' OR name LIKE 'GOAT%' OR name LIKE 'Monthly%'")
+
+
+def test_duplicate_creates_copy_with_unique_name():
+    from zira_dashboard import widget_definitions_store, db
+    original = widget_definitions_store.save(
+        name="wt-dupe", type="ribbons", visual={"color": "#22c55e"},
+        default_data={"group": "Repairs"},
+    )
+    dup = widget_definitions_store.duplicate(original["id"])
+    assert dup["id"] != original["id"]
+    assert dup["name"] == "wt-dupe (copy)"
+    assert dup["type"] == "ribbons"
+    assert dup["visual"] == {"color": "#22c55e"}
+    assert dup["default_data"] == {"group": "Repairs"}
+    dup2 = widget_definitions_store.duplicate(original["id"])
+    assert dup2["name"] == "wt-dupe (copy 2)"
+    dup3 = widget_definitions_store.duplicate(original["id"])
+    assert dup3["name"] == "wt-dupe (copy 3)"
+    db.execute("DELETE FROM widget_definitions WHERE name LIKE 'wt-dupe%'")
+
+
+def test_duplicate_missing_id_raises():
+    from zira_dashboard import widget_definitions_store
+    with pytest.raises(LookupError):
+        widget_definitions_store.duplicate(999_999_999)
