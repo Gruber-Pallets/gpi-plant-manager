@@ -147,3 +147,19 @@ def _resolve_daily_progress(params: dict, day: date) -> dict:
     buckets = wc_dashboard_data.fifteen_min_increments(wc_name, day) or []
     target = buckets[0]["target"] if buckets else 0
     return {"buckets": buckets, "target": target}
+
+
+def _resolve_cumulative(params: dict, day: date) -> dict:
+    """Cumulative bucket data + the WC's full-day target for the goal line.
+
+    Wraps `wc_dashboard_data.daily_progress` (which returns cumulative
+    per bucket) and pulls the full-day goal from `pallets_banner`.
+    """
+    from . import wc_dashboard_data
+    wc_name = (params or {}).get("wc_name")
+    if not wc_name:
+        return {"points": [], "max_y": 0}
+    points = wc_dashboard_data.daily_progress(wc_name, day) or []
+    banner = wc_dashboard_data.pallets_banner(wc_name, day) or {}
+    max_y = banner.get("target_full_day") or 0
+    return {"points": points, "max_y": max_y}

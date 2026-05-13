@@ -92,6 +92,23 @@ _REGISTRY: list[dict] = [
         "resolver": "_resolve_daily_progress",
         "partial": "widgets/_widget_daily_progress.html",
     },
+    {
+        "type": "cumulative",
+        "label": "Cumulative Progress (line chart)",
+        "data_params_schema": [
+            {"key": "wc_name", "label": "Work Center", "input": "select",
+             "options_from": "wcs", "required": True},
+        ],
+        "visual_params_schema": [
+            {"key": "color", "label": "Line color", "input": "color", "default": "#22c55e"},
+            {"key": "show_target", "label": "Show goal line",
+             "input": "select", "options": [
+                 {"value": "true", "label": "Yes"}, {"value": "false", "label": "No"},
+             ], "default": "true"},
+        ],
+        "resolver": "_resolve_cumulative",
+        "partial": "widgets/_widget_cumulative.html",
+    },
 ]
 
 

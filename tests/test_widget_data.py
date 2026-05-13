@@ -154,3 +154,30 @@ def test_resolve_daily_progress_missing_wc_returns_empty():
     from zira_dashboard import widget_data
     out = widget_data._resolve_daily_progress({}, day=date(2026, 5, 13))
     assert out == {"buckets": [], "target": 0}
+
+
+def test_resolve_cumulative_combines_points_and_target(monkeypatch):
+    from zira_dashboard import widget_data, wc_dashboard_data
+
+    monkeypatch.setattr(
+        wc_dashboard_data, "daily_progress",
+        lambda wc, d: [
+            {"bucket_index": 0, "minute_offset": 0, "cumulative_units": 0},
+            {"bucket_index": 1, "minute_offset": 15, "cumulative_units": 5},
+            {"bucket_index": 2, "minute_offset": 30, "cumulative_units": 11},
+        ] if wc == "Repair 1" else [],
+    )
+    monkeypatch.setattr(
+        wc_dashboard_data, "pallets_banner",
+        lambda wc, d: {"target_full_day": 80} if wc == "Repair 1" else {},
+    )
+    out = widget_data._resolve_cumulative({"wc_name": "Repair 1"}, day=date(2026, 5, 13))
+    assert len(out["points"]) == 3
+    assert out["max_y"] == 80
+    assert out["points"][-1]["cumulative_units"] == 11
+
+
+def test_resolve_cumulative_missing_wc_returns_empty():
+    from zira_dashboard import widget_data
+    out = widget_data._resolve_cumulative({}, day=date(2026, 5, 13))
+    assert out == {"points": [], "max_y": 0}

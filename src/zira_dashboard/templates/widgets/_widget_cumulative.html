@@ -1,0 +1,26 @@
+{# Cumulative line chart (SVG). Expects:
+   data = {points: [{bucket_index, minute_offset, cumulative_units}, ...], max_y}
+   visual = {color, show_target}
+#}
+<div class="grid-stack-item-content">
+  <h3>{{ placement_title or 'Cumulative Progress' }}</h3>
+  {% if data.points %}
+    {%- set max_y = data.max_y or 1 -%}
+    {%- set n = data.points|length or 1 -%}
+    {%- set color = visual.color or 'var(--accent)' -%}
+    {%- set show_target = (visual.show_target|default('true')) != 'false' -%}
+    {%- set pts = [] -%}
+    {%- for p in data.points -%}
+      {%- set _ = pts.append("%.1f,%.1f"|format(loop.index0 / (n-1 if n>1 else 1) * 200, 80 - (p.cumulative_units / max_y) * 80 if max_y else 80)) -%}
+    {%- endfor -%}
+    <svg class="daily-progress-chart" viewBox="0 0 200 80" preserveAspectRatio="none">
+      <polyline fill="none" stroke="{{ color }}" stroke-width="1.5" points="{{ pts|join(' ') }}"/>
+      {% if show_target %}
+        <line x1="0" y1="0" x2="200" y2="0" stroke="var(--muted)" stroke-dasharray="3 3" stroke-width="0.5"/>
+        <text x="2" y="6" fill="var(--muted)" font-size="6">goal {{ max_y }}</text>
+      {% endif %}
+    </svg>
+  {% else %}
+    <div class="empty-state">No data yet.</div>
+  {% endif %}
+</div>

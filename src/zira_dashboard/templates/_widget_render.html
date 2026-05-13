@@ -13,6 +13,8 @@
   {% include "widgets/_widget_pallets_banner.html" %}
 {% elif placement.type == 'daily_progress' %}
   {% include "widgets/_widget_daily_progress.html" %}
+{% elif placement.type == 'cumulative' %}
+  {% include "widgets/_widget_cumulative.html" %}
 {% elif placement.type == 'goat_race' %}
   {% include "widgets/_widget_goat_race.html" %}
 {% elif placement.type == 'ribbons' %}
