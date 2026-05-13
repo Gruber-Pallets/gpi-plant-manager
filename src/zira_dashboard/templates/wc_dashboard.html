@@ -172,10 +172,8 @@
     margin: 8,
     float: false,
   });
-{% if tv_mode %}
-  grid.disable();
-{% else %}
-  // Autosave layout on drag/resize end.
+  // Autosave layout on drag/resize end. Runs in both editor and TV
+  // mode — TV pages are now editable too so the wall TV's resize sticks.
   function persistLayout() {
     const items = grid.save(false).map(it => ({
       id: it.id,
@@ -189,6 +187,7 @@
   }
   grid.on('change', persistLayout);
 
+{% if not tv_mode %}
   // ---- Template Save / Apply UI ----
   function templateLayout() {
     return grid.save(false).map(it => ({

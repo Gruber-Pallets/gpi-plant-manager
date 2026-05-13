@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-13
 
+### 12:33 PM
+
+- **TV dashboards are now fully editable, same as the screen versions** — open `/tv/recycling`, `/tv/wc/{slug}`, or any `/tv/d/{slug}` on the TV browser and drag/resize widgets right there. The per-widget edit button (⋮) is also visible on TV mode now, so axis / colors / numbers position can be tweaked without leaving the kiosk. Layout changes auto-save to the same `widget_layouts` row the editor URL uses, so the next 60 s refresh on every other TV showing the same dashboard picks up the new arrangement. Top nav, range chips, sub-nav, and the layout-save toolbar stay hidden on TV — only the edit chrome that's *useful at the kiosk* is back. Fixes the "Pallets by Work Center widget is too tight, names jumbled" issue by letting you make the widget bigger directly from the TV.
+
 ### 12:24 PM
 
 - **Settings → TVs section** — central registry for every TV in the plant. Each row is a friendly name + which dashboard it shows + a light/dark toggle + a bookmarkable URL (`/tv/d/{slug}`). The first deploy seeds 10 default rows (Recycling VS, New VS, Junior 2, Repair 1/2/3, Dismantler 1/2/3/4) all in dark mode — toggle any to light and the TV picks up the change on its next 60 s refresh. The seed only runs on an empty table, so deleting a seeded row stays deleted across redeploys. Renaming a row regenerates the slug; a small note under the table warns that old URLs will break on rename. Also adds a Layout Templates table below Displays with a delete button for cleanup of templates saved via the WC editor. The existing `/tv/recycling`, `/tv/new-vs`, and `/tv/wc/{wc_slug}` URLs continue to work as default-dark fallbacks — no bookmarks shipped earlier today break. This is the final sub-project (4 of 4) in the TV dashboards spec.

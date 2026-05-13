@@ -33,13 +33,15 @@ html[data-tv-theme="light"] {
   color-scheme: light;
 }
 
-/* ---- Chrome-hide: every TV theme ---- */
+/* ---- Chrome-hide: every TV theme ----
+ * Widgets stay editable on TV (drag, resize, per-widget config) so
+ * Dale can rearrange a wall TV in place. The non-editing chrome
+ * (top nav, range chips, sub-nav, "(no assignment)" workflow,
+ * the new-VS day form, empty-state CTAs) stays hidden. */
 html[data-tv-theme] header,
 html[data-tv-theme] .sub-nav,
 html[data-tv-theme] .rc-toolbar,
 html[data-tv-theme] .save-block,
-html[data-tv-theme] .widget-edit-btn,
-html[data-tv-theme] .widget-edit,
 html[data-tv-theme] .no-assign-btn,
 html[data-tv-theme] form[action="/new-vs"],
 html[data-tv-theme] .empty-state a {

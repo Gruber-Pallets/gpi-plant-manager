@@ -431,10 +431,6 @@
     float: false,
     handle: '.grid-stack-item-content > h3, .grid-stack-item-content > .label',
   });
-{% if tv_mode %}
-  grid.disable();  // TV mode — no drag, no resize, layout is locked.
-{% endif %}
-
   const indicator = document.getElementById('save-indicator');
   let saveTimer = null;
 
