@@ -26,6 +26,32 @@
     right=operators_display or "(unassigned)",
 ) }}
 
+{% if not tv_mode %}
+<div class="wc-template-bar">
+  <details class="wc-template-popover">
+    <summary class="wc-template-btn">Save as template…</summary>
+    <div class="wc-template-form">
+      <input type="text" id="wc-template-name" placeholder="Template name (e.g. Repairs)">
+      <button type="button" id="wc-template-save">Save</button>
+      <span class="wc-template-status" id="wc-template-save-status"></span>
+    </div>
+  </details>
+  <details class="wc-template-popover">
+    <summary class="wc-template-btn">Apply template…</summary>
+    <div class="wc-template-form">
+      <select id="wc-template-pick"><option value="">— pick a template —</option></select>
+      <select id="wc-template-target">
+        <option value="this">Apply to this WC only</option>
+        <option value="group">Apply to every WC in this group</option>
+        <option value="all">Apply to every WC</option>
+      </select>
+      <button type="button" id="wc-template-apply">Apply</button>
+      <span class="wc-template-status" id="wc-template-apply-status"></span>
+    </div>
+  </details>
+</div>
+{% endif %}
+
 <main>
 <div class="grid-stack">
 
@@ -162,6 +188,64 @@
     });
   }
   grid.on('change', persistLayout);
+
+  // ---- Template Save / Apply UI ----
+  function templateLayout() {
+    return grid.save(false).map(it => ({
+      id: it.id, x: it.x, y: it.y, w: it.w, h: it.h,
+    })).filter(it => it.id);
+  }
+
+  function refreshTemplateList() {
+    fetch('/api/tv-templates').then(r => r.json()).then(data => {
+      const sel = document.getElementById('wc-template-pick');
+      const current = sel.value;
+      sel.innerHTML = '<option value="">— pick a template —</option>'
+        + (data.templates || []).map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+      if (current) sel.value = current;
+    });
+  }
+
+  document.getElementById('wc-template-save').addEventListener('click', () => {
+    const name = document.getElementById('wc-template-name').value.trim();
+    const status = document.getElementById('wc-template-save-status');
+    if (!name) { status.textContent = 'name required'; return; }
+    status.textContent = 'Saving…';
+    fetch('/api/tv-templates', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, layout: templateLayout()}),
+    }).then(r => r.json()).then(data => {
+      status.textContent = data.ok ? `Saved "${name}"` : ('Error: ' + (data.error || 'unknown'));
+      if (data.ok) refreshTemplateList();
+    });
+  });
+
+  document.getElementById('wc-template-apply').addEventListener('click', () => {
+    const tid = document.getElementById('wc-template-pick').value;
+    const scope = document.getElementById('wc-template-target').value;
+    const status = document.getElementById('wc-template-apply-status');
+    if (!tid) { status.textContent = 'pick a template first'; return; }
+    let targets;
+    if (scope === 'this') targets = ['{{ layout_key }}'];
+    else if (scope === 'group') targets = '{{ ('group:' + wc_group) if wc_group else 'all' }}';
+    else targets = 'all';
+    status.textContent = 'Applying…';
+    fetch(`/api/tv-templates/${tid}/apply`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({targets: targets}),
+    }).then(r => r.json()).then(data => {
+      if (data.ok) {
+        status.textContent = `Applied to ${data.applied_count} WC${data.applied_count === 1 ? '' : 's'} · reloading…`;
+        setTimeout(() => location.reload(), 700);
+      } else {
+        status.textContent = 'Error: ' + (data.error || 'unknown');
+      }
+    });
+  });
+
+  refreshTemplateList();
 {% endif %}
 </script>
 {{ hover_tip_clamp_script() }}
