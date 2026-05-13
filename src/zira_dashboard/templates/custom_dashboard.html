@@ -35,6 +35,46 @@
   .palette .pal-row .name { font-size: 0.85rem; font-weight: 600; }
   .palette .pal-row .type { font-size: 0.7rem; color: var(--muted); }
   .palette .pal-add-btn { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent); border-radius: 5px; padding: 0.2rem 0.55rem; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
+  .placement-wrap { position: relative; height: 100%; }
+  .placement-edit-btn, .placement-delete-btn {
+    position: absolute; top: 4px; z-index: 5;
+    width: 20px; height: 20px; line-height: 16px;
+    background: rgba(255,255,255,0.9); border: 1px solid var(--border, #d8dee5);
+    border-radius: 999px; font-size: 13px; cursor: pointer; padding: 0;
+    display: grid; place-items: center; color: var(--muted, #6b7280);
+  }
+  html[data-tv-theme="dark"] .placement-edit-btn,
+  html[data-tv-theme="dark"] .placement-delete-btn {
+    background: rgba(30,41,59,0.9); color: var(--fg, #e2e8f0);
+  }
+  .placement-edit-btn { right: 28px; }
+  .placement-delete-btn { right: 4px; color: #ef4444; }
+  .placement-edit-btn:hover, .placement-delete-btn:hover { background: white; }
+  #placement-edit-popover {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: grid; place-items: center; z-index: 1000;
+  }
+  #placement-edit-popover[hidden] { display: none; }
+  #placement-edit-popover .popover-card {
+    background: var(--panel, white); border: 1px solid var(--border, #d8dee5);
+    border-radius: 12px; padding: 1rem 1.2rem;
+    min-width: 360px; max-width: 480px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+  }
+  #placement-edit-popover h3 { margin: 0 0 0.6rem; font-size: 0.95rem; font-weight: 600; }
+  #placement-edit-popover label { display: block; margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--muted, #6b7280); }
+  #placement-edit-popover input, #placement-edit-popover select {
+    background: var(--panel-2, #f1f4f7); color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5); border-radius: 6px;
+    padding: 0.3rem 0.5rem; font: inherit; font-size: 0.9rem; width: 100%;
+  }
+  #placement-edit-popover .popover-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.75rem; }
+  #placement-edit-popover button {
+    background: var(--panel-2, #f1f4f7); color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5); border-radius: 6px;
+    padding: 0.4rem 1rem; font-weight: 600; cursor: pointer;
+  }
+  #placement-edit-popover button.primary { background: var(--accent, #16a34a); color: white; border-color: var(--accent, #16a34a); }
 </style>
 </head>
 <body>
@@ -60,13 +100,35 @@
   {% for p in placements %}
     <div class="grid-stack-item"
          gs-id="{{ p.id }}" gs-x="{{ p.x }}" gs-y="{{ p.y }}" gs-w="{{ p.w }}" gs-h="{{ p.h }}">
-      {% with placement = p, data = p.data %}
-        {% include "_widget_render.html" %}
-      {% endwith %}
+      <div class="placement-wrap" data-placement-id="{{ p.id }}"
+           data-type="{{ p.type }}"
+           data-effective='{{ p.effective_data | tojson }}'
+           data-overrides='{{ p.data_overrides | tojson }}'>
+        {% if not tv_mode %}
+          <button type="button" class="placement-edit-btn" title="Edit data scope">⋮</button>
+          <button type="button" class="placement-delete-btn" title="Remove from dashboard">×</button>
+        {% endif %}
+        {% with placement = p, data = p.data %}
+          {% include "_widget_render.html" %}
+        {% endwith %}
+      </div>
     </div>
   {% endfor %}
 </div>
 </main>
+
+{% if not tv_mode %}
+<div id="placement-edit-popover" hidden>
+  <div class="popover-card">
+    <h3 id="ppop-title">Edit widget data</h3>
+    <div id="ppop-fields"></div>
+    <div class="popover-actions">
+      <button type="button" id="ppop-cancel">Cancel</button>
+      <button type="button" id="ppop-save" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 {% if not tv_mode %}
 <aside class="palette">
@@ -114,6 +176,139 @@
         if (d.ok) location.reload();
       });
     });
+  });
+
+  // ---- Per-placement edit popover ----
+  let TYPES_CACHE = null;
+  function loadTypes() {
+    if (TYPES_CACHE) return Promise.resolve(TYPES_CACHE);
+    return fetch('/api/widgets/types').then(r => r.json()).then(d => {
+      TYPES_CACHE = d.types || [];
+      return TYPES_CACHE;
+    });
+  }
+
+  function ppopFieldEl(field, currentValue) {
+    const label = document.createElement('label');
+    label.textContent = field.label;
+    let input;
+    if (field.input === 'select') {
+      input = document.createElement('select');
+      if (field.options) {
+        const blank = document.createElement('option');
+        blank.value = ''; blank.textContent = '— pick one —';
+        input.appendChild(blank);
+        for (const o of field.options) {
+          const opt = document.createElement('option');
+          opt.value = o.value; opt.textContent = o.label;
+          if (String(currentValue) === String(o.value)) opt.selected = true;
+          input.appendChild(opt);
+        }
+      }
+      if (field.options_from) {
+        const blank = document.createElement('option');
+        blank.value = ''; blank.textContent = 'loading…';
+        input.appendChild(blank);
+        fetch('/api/widgets/options/' + field.options_from).then(r => r.json()).then(data => {
+          input.innerHTML = '';
+          const b = document.createElement('option');
+          b.value = ''; b.textContent = '— pick one —';
+          input.appendChild(b);
+          for (const o of (data.options || [])) {
+            const opt = document.createElement('option');
+            opt.value = o.value; opt.textContent = o.label;
+            if (String(currentValue) === String(o.value)) opt.selected = true;
+            input.appendChild(opt);
+          }
+        });
+      }
+    } else if (field.input === 'color') {
+      input = document.createElement('input');
+      input.type = 'color';
+      input.value = currentValue || field.default || '#22c55e';
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+      if (currentValue !== undefined && currentValue !== null) input.value = currentValue;
+    }
+    input.dataset.key = field.key;
+    label.appendChild(input);
+    return label;
+  }
+
+  function openPlacementPopover(wrap) {
+    const placementId = wrap.dataset.placementId;
+    const type = wrap.dataset.type;
+    const effective = JSON.parse(wrap.dataset.effective || '{}');
+    loadTypes().then(types => {
+      const def = types.find(t => t.type === type);
+      const fieldsHost = document.getElementById('ppop-fields');
+      fieldsHost.innerHTML = '';
+      if (!def) {
+        fieldsHost.textContent = 'Unknown widget type: ' + type;
+      } else {
+        for (const f of def.data_params_schema) {
+          fieldsHost.appendChild(ppopFieldEl(f, effective[f.key]));
+        }
+      }
+      document.getElementById('ppop-title').textContent =
+        'Edit data scope · ' + (def ? def.label : type);
+      const pop = document.getElementById('placement-edit-popover');
+      pop.dataset.placementId = placementId;
+      pop.hidden = false;
+    });
+  }
+
+  document.querySelectorAll('.placement-edit-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPlacementPopover(btn.closest('.placement-wrap'));
+    });
+  });
+
+  document.querySelectorAll('.placement-delete-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wrap = btn.closest('.placement-wrap');
+      if (!confirm('Remove this widget from the dashboard?')) return;
+      fetch('/api/placements/' + wrap.dataset.placementId, {method: 'DELETE'})
+        .then(r => r.json()).then(d => {
+          if (d.ok) location.reload();
+        });
+    });
+  });
+
+  document.getElementById('ppop-cancel').addEventListener('click', () => {
+    document.getElementById('placement-edit-popover').hidden = true;
+  });
+
+  document.getElementById('ppop-save').addEventListener('click', () => {
+    const pop = document.getElementById('placement-edit-popover');
+    const placementId = pop.dataset.placementId;
+    const fieldsHost = document.getElementById('ppop-fields');
+    const overrides = {};
+    fieldsHost.querySelectorAll('input, select').forEach(el => {
+      const v = el.value;
+      if (v === '' || v === null || v === undefined) return;
+      overrides[el.dataset.key] = v;
+    });
+    fetch('/api/placements/' + placementId, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({data_overrides: overrides}),
+    }).then(r => r.json()).then(d => {
+      if (d.ok) {
+        pop.hidden = true;
+        location.reload();
+      }
+    });
+  });
+
+  // Click outside the card closes the popover.
+  document.getElementById('placement-edit-popover').addEventListener('click', (e) => {
+    if (e.target.id === 'placement-edit-popover') {
+      e.currentTarget.hidden = true;
+    }
   });
   {% endif %}
 </script>
