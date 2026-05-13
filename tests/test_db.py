@@ -219,3 +219,50 @@ def test_dashboard_widgets_columns_and_fks():
     rules = {f["delete_rule"] for f in fks}
     assert "CASCADE" in rules, "dashboard_widgets.dashboard_id should ON DELETE CASCADE"
     assert "RESTRICT" in rules, "dashboard_widgets.widget_def_id should ON DELETE RESTRICT"
+
+
+def test_tv_displays_kind_allows_custom():
+    db.init_pool()
+    db.bootstrap_schema()
+    db.execute("DELETE FROM tv_displays WHERE slug = 'p3-kind-test'")
+    db.execute(
+        "INSERT INTO tv_displays (name, slug, kind, custom_dashboard_id, theme) "
+        "VALUES ('p3 kind test', 'p3-kind-test', 'custom', NULL, 'dark')"
+    )
+    rows = db.query("SELECT kind FROM tv_displays WHERE slug = 'p3-kind-test'")
+    assert rows and rows[0]["kind"] == "custom"
+    db.execute("DELETE FROM tv_displays WHERE slug = 'p3-kind-test'")
+
+
+def test_tv_displays_has_custom_dashboard_id_column():
+    db.init_pool()
+    db.bootstrap_schema()
+    cols = db.query(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'tv_displays'"
+    )
+    names = {r["column_name"] for r in cols}
+    assert "custom_dashboard_id" in names
+
+
+def test_tv_displays_custom_dashboard_id_fk_on_delete_set_null():
+    """Deleting a custom dashboard should NULL the FK on any tv_displays row
+    that references it, not cascade-delete the row."""
+    db.init_pool()
+    db.bootstrap_schema()
+    db.execute("DELETE FROM tv_displays WHERE slug = 'p3-fk-test'")
+    db.execute("DELETE FROM custom_dashboards WHERE slug = 'p3-fk-dash'")
+    rows = db.query(
+        "INSERT INTO custom_dashboards (name, slug, scope_kind, scope_value) "
+        "VALUES ('p3 fk dash', 'p3-fk-dash', 'wc', 'Repair 1') RETURNING id"
+    )
+    dash_id = rows[0]["id"]
+    db.execute(
+        "INSERT INTO tv_displays (name, slug, kind, custom_dashboard_id, theme) "
+        "VALUES ('p3 fk test', 'p3-fk-test', 'custom', %s, 'dark')",
+        (dash_id,),
+    )
+    db.execute("DELETE FROM custom_dashboards WHERE id = %s", (dash_id,))
+    rows = db.query("SELECT custom_dashboard_id FROM tv_displays WHERE slug = 'p3-fk-test'")
+    assert rows and rows[0]["custom_dashboard_id"] is None
+    db.execute("DELETE FROM tv_displays WHERE slug = 'p3-fk-test'")

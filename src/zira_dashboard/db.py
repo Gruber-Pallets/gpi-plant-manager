@@ -532,15 +532,16 @@ CREATE TABLE IF NOT EXISTS tv_dashboard_templates (
 -- up the row and dispatches to the underlying dashboard with the row's
 -- theme. Seed list of 10 rows inserts on first boot only.
 CREATE TABLE IF NOT EXISTS tv_displays (
-  id          SERIAL PRIMARY KEY,
-  name        TEXT NOT NULL,
-  slug        TEXT NOT NULL UNIQUE,
-  kind        TEXT NOT NULL CHECK (kind IN ('vs_recycling', 'vs_new', 'wc')),
-  wc_name     TEXT,
-  theme       TEXT NOT NULL DEFAULT 'dark' CHECK (theme IN ('light', 'dark')),
-  sort_order  INTEGER NOT NULL DEFAULT 0,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                  SERIAL PRIMARY KEY,
+  name                TEXT NOT NULL,
+  slug                TEXT NOT NULL UNIQUE,
+  kind                TEXT NOT NULL CHECK (kind IN ('vs_recycling', 'vs_new', 'wc', 'custom')),
+  wc_name             TEXT,
+  custom_dashboard_id INTEGER,
+  theme               TEXT NOT NULL DEFAULT 'dark' CHECK (theme IN ('light', 'dark')),
+  sort_order          INTEGER NOT NULL DEFAULT 0,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Widget Workshop & Custom Dashboards (sub-project 5, phase 1) ---------
@@ -588,6 +589,26 @@ CREATE TABLE IF NOT EXISTS dashboard_widgets (
 );
 CREATE INDEX IF NOT EXISTS idx_dashboard_widgets_dashboard
   ON dashboard_widgets (dashboard_id);
+
+-- Phase 3 migrations for tv_displays (idempotent on fresh DBs too) ------
+-- Add the custom_dashboard_id column if missing.
+ALTER TABLE tv_displays ADD COLUMN IF NOT EXISTS custom_dashboard_id INTEGER;
+-- Add the FK separately (DO block makes it idempotent across reboots).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'tv_displays_custom_dashboard_id_fkey'
+  ) THEN
+    ALTER TABLE tv_displays
+      ADD CONSTRAINT tv_displays_custom_dashboard_id_fkey
+      FOREIGN KEY (custom_dashboard_id) REFERENCES custom_dashboards(id)
+      ON DELETE SET NULL;
+  END IF;
+END$$;
+-- Extend kind CHECK to allow 'custom'.
+ALTER TABLE tv_displays DROP CONSTRAINT IF EXISTS tv_displays_kind_check;
+ALTER TABLE tv_displays ADD CONSTRAINT tv_displays_kind_check
+  CHECK (kind IN ('vs_recycling', 'vs_new', 'wc', 'custom'));
 """
 
 
