@@ -142,3 +142,44 @@ def test_post_dashboard_layout_bulk_save():
     ])
     assert r.status_code == 200
     assert r.json()["ok"] is True
+
+
+def test_editor_renders_with_placements():
+    from zira_dashboard import widget_definitions_store
+    c = TestClient(app)
+    dash = c.post("/api/dashboards", json={
+        "name": "cdr-edit", "scope_kind": "wc", "scope_value": "Repair 1", "theme": "dark",
+    }).json()["dashboard"]
+    wd = widget_definitions_store.save(
+        name="cdr-edit-wd", type="ribbons", visual={}, default_data={"group": "Repairs"},
+    )
+    c.post(f"/api/dashboards/{dash['id']}/placements", json={
+        "widget_def_id": wd["id"], "x": 0, "y": 0, "w": 4, "h": 4, "data_overrides": {},
+    })
+    r = c.get(f"/dashboards/{dash['slug']}")
+    assert r.status_code == 200
+    assert "cdr-edit-wd" in r.text or "Monthly Ribbons" in r.text
+
+
+def test_tv_view_renders_with_tv_header():
+    from zira_dashboard import widget_definitions_store
+    c = TestClient(app)
+    dash = c.post("/api/dashboards", json={
+        "name": "cdr-tv", "scope_kind": "wc", "scope_value": "Repair 1", "theme": "light",
+    }).json()["dashboard"]
+    wd = widget_definitions_store.save(
+        name="cdr-tv-wd", type="ribbons", visual={}, default_data={"group": "Repairs"},
+    )
+    c.post(f"/api/dashboards/{dash['id']}/placements", json={
+        "widget_def_id": wd["id"], "x": 0, "y": 0, "w": 4, "h": 4, "data_overrides": {},
+    })
+    r = c.get(f"/tv/dashboards/{dash['slug']}")
+    assert r.status_code == 200
+    assert 'data-tv-theme="light"' in r.text
+    assert "Repair 1" in r.text
+
+
+def test_tv_view_404_for_unknown_slug():
+    c = TestClient(app)
+    r = c.get("/tv/dashboards/cdr-not-real")
+    assert r.status_code == 404

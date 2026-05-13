@@ -1,0 +1,121 @@
+{# Custom dashboard — editor + TV variant (gated on tv_mode).
+   Reuses /static/wc_dashboard.css for shared widget visuals and
+   /static/tv-mode.css for chrome-hide.
+#}
+{% from "_tv_header.html" import tv_header %}
+<!doctype html>
+<html lang="en"{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/static/gpi-logo.png">
+<title>{% if tv_mode %}TV · {% endif %}{{ dashboard.name }} — GPI Plant Manager</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
+<link rel="stylesheet" href="/static/wc_dashboard.css?v={{ static_v('wc_dashboard.css') }}">
+<link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
+{% if tv_mode %}
+<link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
+<meta http-equiv="refresh" content="60">
+{% endif %}
+<style>
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg, #f1f4f7); color: var(--fg, #1f2937); }
+  header.app { padding: 0.9rem 1.25rem; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; gap: 1rem; align-items: center; }
+  header.app h1 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+  header.app nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; padding: 0.25rem 0.6rem; border-radius: 6px; }
+  header.app nav a.active { color: var(--accent); background: var(--accent-dim); font-weight: 600; }
+  main { padding: 0.5rem 1rem; }
+  .palette {
+    position: fixed; right: 0; top: 60px; width: 240px; max-height: 70vh; overflow: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px 0 0 10px;
+    padding: 0.6rem; box-shadow: -2px 0 8px rgba(0,0,0,0.05); z-index: 50;
+  }
+  .palette h3 { margin: 0 0 0.4rem; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+  .palette .pal-row { display: grid; grid-template-columns: 1fr auto; gap: 0.4rem; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
+  .palette .pal-row:last-child { border-bottom: none; }
+  .palette .pal-row .name { font-size: 0.85rem; font-weight: 600; }
+  .palette .pal-row .type { font-size: 0.7rem; color: var(--muted); }
+  .palette .pal-add-btn { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent); border-radius: 5px; padding: 0.2rem 0.55rem; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
+</style>
+</head>
+<body>
+{% if tv_mode %}
+  {{ tv_header(
+      dashboard.scope_value,
+      crumb=dashboard.scope_kind|upper + " · " + dashboard.name|upper,
+      right=tv_header_right,
+  ) }}
+{% else %}
+  <header class="app">
+    <h1>{{ dashboard.name }}</h1>
+    <nav>
+      <a href="/widgets">Widgets</a>
+      <a href="/dashboards" class="active">My Dashboards</a>
+      <a href="/tv/dashboards/{{ dashboard.slug }}">Open as TV</a>
+    </nav>
+  </header>
+{% endif %}
+
+<main>
+<div class="grid-stack">
+  {% for p in placements %}
+    <div class="grid-stack-item"
+         gs-id="{{ p.id }}" gs-x="{{ p.x }}" gs-y="{{ p.y }}" gs-w="{{ p.w }}" gs-h="{{ p.h }}">
+      {% with placement = p, data = p.data %}
+        {% include "_widget_render.html" %}
+      {% endwith %}
+    </div>
+  {% endfor %}
+</div>
+</main>
+
+{% if not tv_mode %}
+<aside class="palette">
+  <h3>Widget palette</h3>
+  {% for d in definitions %}
+    <div class="pal-row" data-def-id="{{ d.id }}">
+      <div>
+        <div class="name">{{ d.name }}</div>
+        <div class="type">{{ d.type }}</div>
+      </div>
+      <button type="button" class="pal-add-btn">Add</button>
+    </div>
+  {% else %}
+    <div class="pal-row"><em>No widgets yet — <a href="/widgets">create one</a></em></div>
+  {% endfor %}
+</aside>
+{% endif %}
+
+<script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
+<script>
+  const grid = GridStack.init({ column: 12, cellHeight: 80, margin: 8, float: false });
+  const DASHBOARD_ID = {{ dashboard.id }};
+
+  function persistLayout() {
+    const items = grid.save(false).map(it => ({
+      id: parseInt(it.id, 10), x: it.x, y: it.y, w: it.w, h: it.h,
+    })).filter(it => Number.isFinite(it.id));
+    fetch('/api/dashboards/' + DASHBOARD_ID + '/layout', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(items),
+    });
+  }
+  grid.on('change', persistLayout);
+
+  {% if not tv_mode %}
+  document.querySelectorAll('.pal-add-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const defId = parseInt(btn.closest('.pal-row').dataset.defId, 10);
+      fetch('/api/dashboards/' + DASHBOARD_ID + '/placements', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          widget_def_id: defId, x: 0, y: 0, w: 4, h: 4, data_overrides: {},
+        }),
+      }).then(r => r.json()).then(d => {
+        if (d.ok) location.reload();
+      });
+    });
+  });
+  {% endif %}
+</script>
+</body>
+</html>
