@@ -1,0 +1,18 @@
+{# Pallets banner — single WC. Expects:
+   data = {units_today, target_today, target_full_day, pct_of_target}
+   visual = {color}
+#}
+<div class="grid-stack-item-content">
+  <h3>{{ placement_title or 'Pallets Banner' }}</h3>
+  <div class="pallets-banner">
+    <div class="pallets-numbers">
+      <span class="units">{{ data.units_today or 0 }}</span>
+      <span class="target">/ {{ data.target_today or 0 }} goal so far ({{ data.target_full_day or 0 }} full day)</span>
+    </div>
+    <div class="bar-track">
+      <div class="bar-fill"
+           style="width: {{ (data.pct_of_target|float)|round(0)|int if data.pct_of_target else 0 }}%;
+                  background: {{ visual.color or 'var(--accent)' }}"></div>
+    </div>
+  </div>
+</div>

@@ -109,3 +109,26 @@ def test_resolve_ribbons_missing_group_returns_empty():
     from zira_dashboard import widget_data
     out = widget_data._resolve_ribbons({}, day=date(2026, 5, 13))
     assert out == {"group": None, "entries": []}
+
+
+def test_resolve_pallets_banner_delegates(monkeypatch):
+    from zira_dashboard import widget_data, wc_dashboard_data
+
+    monkeypatch.setattr(
+        wc_dashboard_data, "pallets_banner",
+        lambda wc, d: {
+            "units_today": 42, "target_today": 30,
+            "target_full_day": 80, "pct_of_target": 140.0,
+        } if wc == "Repair 1" else None,
+    )
+    out = widget_data._resolve_pallets_banner({"wc_name": "Repair 1"}, day=date(2026, 5, 13))
+    assert out["units_today"] == 42
+    assert out["target_full_day"] == 80
+
+
+def test_resolve_pallets_banner_missing_wc_returns_empty():
+    from zira_dashboard import widget_data
+    out = widget_data._resolve_pallets_banner({}, day=date(2026, 5, 13))
+    assert out["units_today"] == 0
+    assert out["target_today"] == 0
+    assert out["pct_of_target"] is None

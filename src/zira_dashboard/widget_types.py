@@ -68,6 +68,19 @@ _REGISTRY: list[dict] = [
         "resolver": "_resolve_ribbons",
         "partial": "widgets/_widget_ribbons.html",
     },
+    {
+        "type": "pallets_banner",
+        "label": "Pallets Banner (single WC)",
+        "data_params_schema": [
+            {"key": "wc_name", "label": "Work Center", "input": "select",
+             "options_from": "wcs", "required": True},
+        ],
+        "visual_params_schema": [
+            {"key": "color", "label": "Bar color", "input": "color", "default": "#22c55e"},
+        ],
+        "resolver": "_resolve_pallets_banner",
+        "partial": "widgets/_widget_pallets_banner.html",
+    },
 ]
 
 

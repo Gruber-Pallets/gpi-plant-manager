@@ -118,3 +118,17 @@ def _resolve_ribbons(params: dict, day: date) -> dict:
         return {"group": None, "entries": []}
     entries = awards.monthly_badges(group, day.year, day.month) or []
     return {"group": group, "entries": entries}
+
+
+def _resolve_pallets_banner(params: dict, day: date) -> dict:
+    """Single-WC pallets banner: today's units vs prorated daily target.
+
+    Wraps `wc_dashboard_data.pallets_banner`. Returns the same dict
+    shape: {units_today, target_today, target_full_day, pct_of_target}.
+    """
+    from . import wc_dashboard_data
+    wc_name = (params or {}).get("wc_name")
+    if not wc_name:
+        return {"units_today": 0, "target_today": 0,
+                "target_full_day": 0, "pct_of_target": None}
+    return wc_dashboard_data.pallets_banner(wc_name, day)
