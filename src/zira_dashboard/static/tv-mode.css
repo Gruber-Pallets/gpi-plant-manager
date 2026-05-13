@@ -1,0 +1,85 @@
+/* TV-mode overrides. Loaded only on /tv/* routes via a conditional
+ * <link> in the page templates. The presence of `data-tv-theme` on
+ * <html> is the "we are in TV mode" indicator.
+ *
+ * Two jobs:
+ *   1. Hide every interactive / navigational chrome thing.
+ *   2. Swap the CSS variable palette between dark (default) and light
+ *      based on data-tv-theme. The screen-mode pages don't set the
+ *      attribute and are unaffected.
+ */
+
+/* ---- Palette: dark (default for TVs) ---- */
+html[data-tv-theme="dark"] {
+  --bg: #0b1220;
+  --panel: #111827;
+  --panel-2: #1e293b;
+  --panel-3: #334155;
+  --border: #334155;
+  --fg: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #22c55e;
+  --accent-dim: #14532d;
+  --warn: #f59e0b;
+  --warn-dim: #78350f;
+  --bad: #ef4444;
+  --bad-dim: #7f1d1d;
+  color-scheme: dark;
+}
+
+/* ---- Palette: light (explicit override) ---- */
+html[data-tv-theme="light"] {
+  /* Inherit the existing screen-mode defaults — no overrides needed. */
+  color-scheme: light;
+}
+
+/* ---- Chrome-hide: every TV theme ---- */
+html[data-tv-theme] header,
+html[data-tv-theme] .sub-nav,
+html[data-tv-theme] .rc-toolbar,
+html[data-tv-theme] .save-block,
+html[data-tv-theme] .widget-edit-btn,
+html[data-tv-theme] .widget-edit,
+html[data-tv-theme] .no-assign-btn,
+html[data-tv-theme] form[action="/new-vs"],
+html[data-tv-theme] .empty-state a {
+  display: none !important;
+}
+
+/* ---- Bigger everything for plant-floor viewing ---- */
+html[data-tv-theme] body {
+  font-size: 18px;
+  line-height: 1.4;
+}
+html[data-tv-theme] .kpi .label { font-size: 0.85rem; }
+html[data-tv-theme] .kpi .val { font-size: 3.4rem; font-weight: 800; }
+html[data-tv-theme] .bar-row .name-primary,
+html[data-tv-theme] .vbar-name .name-primary { font-size: 1.4rem; font-weight: 700; }
+html[data-tv-theme] .widget-total { font-size: 1.6rem; font-weight: 800; }
+html[data-tv-theme] table.sched,
+html[data-tv-theme] .panel h3 { font-size: 1.25rem; }
+
+/* ---- TV header layout ---- */
+html[data-tv-theme] .tv-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 1rem;
+  padding: 18px 28px 12px;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 10px;
+}
+html[data-tv-theme] .tv-header .crumb {
+  font-size: 12px;
+  letter-spacing: 2px;
+  opacity: 0.55;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+html[data-tv-theme] .tv-header .name {
+  font-size: 38px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -0.5px;
+}
+html[data-tv-theme] .tv-header .right { text-align: right; }
