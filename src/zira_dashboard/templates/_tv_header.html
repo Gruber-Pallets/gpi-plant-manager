@@ -1,0 +1,25 @@
+{# TV-mode header. Top-left: dashboard title + optional crumb above.
+   Top-right: optional secondary label (used in sub-project 2 to show
+   the operator's name on a per-WC dashboard; unused for VS variants).
+
+   Usage:
+     {% from "_tv_header.html" import tv_header %}
+     ...
+     {{ tv_header("Recycling VS", crumb="VALUE STREAMS") }}
+     {{ tv_header("REPAIR 1", crumb="RECYCLING · REPAIRS", right="CHRISTIAN · JOSE L") }}
+#}
+
+{% macro tv_header(name, crumb=None, right=None) -%}
+<div class="tv-header">
+  <div>
+    {%- if crumb %}<div class="crumb">{{ crumb }}</div>{% endif %}
+    <div class="name">{{ name }}</div>
+  </div>
+  {%- if right %}
+  <div class="right">
+    <div class="crumb">OPERATORS</div>
+    <div class="name">{{ right }}</div>
+  </div>
+  {%- endif %}
+</div>
+{%- endmacro %}
