@@ -112,3 +112,20 @@ def test_production_daily_pk_and_indexes():
         by_idx.setdefault(r["idx"], []).append(r["col"])
     assert by_idx["idx_production_daily_name_day"] == ["name", "day"]
     assert by_idx["idx_production_daily_wc_day"] == ["wc_name", "day"]
+
+
+def test_bootstrap_creates_tv_dashboard_templates_table():
+    db.init_pool()
+    db.bootstrap_schema()
+    rows = db.query(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name = 'tv_dashboard_templates'"
+    )
+    assert len(rows) == 1, "tv_dashboard_templates table missing"
+    cols = db.query(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'tv_dashboard_templates'"
+    )
+    names = {r["column_name"] for r in cols}
+    expected = {"id", "name", "layout_json", "theme", "created_at", "updated_at"}
+    assert expected.issubset(names), f"missing columns: {expected - names}"

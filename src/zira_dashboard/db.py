@@ -509,6 +509,21 @@ CREATE TABLE IF NOT EXISTS today_production_cache (
   payload      JSONB NOT NULL,
   refreshed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- TV dashboard layout templates ----------------------------------------
+-- Named snapshots of a widget-layout arrangement. The /wc/{slug}
+-- editor saves the current layout as a template; the apply endpoint
+-- fans it out to one WC, every WC in a group, or every WC at once.
+-- Theme is stored per template per the spec, but theme propagation
+-- to targets waits for sub-project 4 (tv_displays.theme).
+CREATE TABLE IF NOT EXISTS tv_dashboard_templates (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  layout_json JSONB NOT NULL,
+  theme       TEXT NOT NULL DEFAULT 'dark' CHECK (theme IN ('light', 'dark')),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
