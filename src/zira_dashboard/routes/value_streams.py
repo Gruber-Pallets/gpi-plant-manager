@@ -291,6 +291,31 @@ def recycling(
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
 ):
+    return _render_recycling(
+        request,
+        window=window,
+        start=start,
+        end=end,
+        tv_mode=False,
+        tv_theme="dark",
+    )
+
+
+def _render_recycling(
+    request: Request,
+    *,
+    window: str,
+    start: str | None,
+    end: str | None,
+    tv_mode: bool,
+    tv_theme: str,
+):
+    """Shared implementation for /recycling (screen) and /tv/recycling
+    (TV). Cache key includes tv_mode + tv_theme so screen and TV variants
+    have separate cache entries; otherwise a cached screen response would
+    be served to the TV route and vice-versa, both losing the per-variant
+    context.
+    """
     from ..deps import resolve_range
 
     today = datetime.now(timezone.utc).date()
@@ -302,7 +327,7 @@ def recycling(
 
     # Cache key includes both bounds.
     from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
-    cache_key = ("recycling", start_d.isoformat(), end_d.isoformat())
+    cache_key = ("recycling", start_d.isoformat(), end_d.isoformat(), tv_mode, tv_theme)
     cached = get_cached_response(cache_key, includes_today=range_includes_today)
     if cached is not None:
         return cached
@@ -536,6 +561,8 @@ def recycling(
             "now_label": now_label,
             "shift_start_label": shift_start_label,
             "refreshed_at": now.strftime("%H:%M:%S UTC"),
+            "tv_mode": tv_mode,
+            "tv_theme": tv_theme,
         },
     )
     set_cache_headers(response, includes_today=range_includes_today)
@@ -548,18 +575,17 @@ def tv_recycling(request: Request, theme: str | None = Query(default=None)):
     """Read-only TV variant of /recycling. No top nav, no range chips,
     no widget edit buttons, larger fonts. Always shows today.
 
-    Theme: 'dark' (default) or 'light' via ?theme=light. Persisted-config
-    theme arrives in sub-project 4 via tv_displays; for now URL-only.
+    Theme: 'dark' (default) or 'light' via ?theme=light.
     """
     tv_theme = "light" if theme == "light" else "dark"
-    resp = recycling(request, window="today", start=None, end=None)
-    # The screen handler returns a TemplateResponse with the full context.
-    # Patch its context to add tv_mode + tv_theme, then re-render with
-    # the same template.
-    ctx = dict(resp.context or {})
-    ctx["tv_mode"] = True
-    ctx["tv_theme"] = tv_theme
-    return templates.TemplateResponse(request, "recycling.html", ctx)
+    return _render_recycling(
+        request,
+        window="today",
+        start=None,
+        end=None,
+        tv_mode=True,
+        tv_theme=tv_theme,
+    )
 
 
 @router.get("/new-vs", response_class=HTMLResponse)
@@ -567,12 +593,31 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
     """Value Streams → New subtab. Shows only work centers whose Settings
     value_stream is "New" and that have a meter ID. Sparse data is the norm
     here today since most "New" stations aren't metered yet."""
+    return _render_new_vs(
+        request,
+        day=day,
+        tv_mode=False,
+        tv_theme="dark",
+    )
+
+
+def _render_new_vs(
+    request: Request,
+    *,
+    day: str | None,
+    tv_mode: bool,
+    tv_theme: str,
+):
+    """Shared implementation for /new-vs (screen) and /tv/new-vs (TV).
+    Cache key includes tv_mode + tv_theme so screen and TV variants have
+    separate cache entries.
+    """
     d = _parse_day(day)
     today = datetime.now(timezone.utc).date()
     is_today = d == today
     # Try cached HTML response.
     from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
-    cache_key = ("new_vs", d.isoformat())
+    cache_key = ("new_vs", d.isoformat(), tv_mode, tv_theme)
     cached = get_cached_response(cache_key, includes_today=is_today)
     if cached is not None:
         return cached
@@ -762,6 +807,8 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
                 for r in new_repairs
             ),
             "refreshed_at": now.strftime("%H:%M:%S UTC"),
+            "tv_mode": tv_mode,
+            "tv_theme": tv_theme,
         },
     )
     set_cache_headers(response, includes_today=is_today)
@@ -773,8 +820,9 @@ def new_vs(request: Request, day: str | None = Query(default=None)):
 def tv_new_vs(request: Request, theme: str | None = Query(default=None)):
     """Read-only TV variant of /new-vs. See tv_recycling for theme rules."""
     tv_theme = "light" if theme == "light" else "dark"
-    resp = new_vs(request, day=None)
-    ctx = dict(resp.context or {})
-    ctx["tv_mode"] = True
-    ctx["tv_theme"] = tv_theme
-    return templates.TemplateResponse(request, "new_vs.html", ctx)
+    return _render_new_vs(
+        request,
+        day=None,
+        tv_mode=True,
+        tv_theme=tv_theme,
+    )
