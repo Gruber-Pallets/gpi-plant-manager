@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 12:43 PM
+
+- **Pallets banner: "start · HH:MM" now sits at the actual bar's left edge** — the axis row was using recycling's `.bar-row.numpos-widget` grid template (`name | track | val` with the name column ~6-11rem wide), so the axis-track was offset rightward by the name-column width while the bar above it spanned the full banner. Result: "start · 07:00" rendered in the middle of the visible bar instead of at its left edge. Replaced with a plain `.pallets-axis > .axis-track` that spans the full banner width — start/now ticks now align with the bar above them.
+
 ### 12:26 PM
 
 - **TV dashboards: dead space at the bottom fixed** — the `maxRows` calculation in the fit-to-viewport JS initialized to the *fallback default* (30 for recycling, 25 for operator) and only ever raised the value as it iterated. So if the actual saved layout fit in 18 rows, `maxRows` stayed at 30 — cellHeight got computed for a 30-row layout, widgets filled only 18/30 of the screen, leaving 40% empty at the bottom. Fix is one line per file: initialize `maxRows = 0`, raise it from items, fall back to 30 only when the grid is empty. Now the widget grid expands to fill the full TV viewport regardless of saved layout extent.

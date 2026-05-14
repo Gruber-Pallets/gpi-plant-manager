@@ -124,13 +124,11 @@
           {% endif %}
         </div>
         {% if shift_start_label or now_label %}
-          <div class="bar-row axis-row numpos-widget pallets-axis">
-            <div></div>
+          <div class="pallets-axis">
             <div class="axis-track">
               {% if shift_start_label %}<div class="axis-tick axis-start" style="left: 0%">start · {{ shift_start_label }}</div>{% endif %}
               {% if now_label and banner_now_pct > 0 %}<div class="axis-tick" style="left: {{ banner_now_pct }}%">now · {{ now_label }}</div>{% endif %}
             </div>
-            <div></div>
           </div>
         {% endif %}
       </div>

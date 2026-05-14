@@ -213,6 +213,16 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .grid-stack-item[gs-id="pallets-banner"] .pallets-axis {
   margin-top: 0;
 }
+/* Axis track inside the pallets banner spans the full bar width so the
+   start (0%) and now (banner_now_pct) ticks align with the bar above.
+   Without this override the recycling .bar-row.numpos-widget grid
+   was leaving a 6-11rem name-column gap before the track, pushing
+   "start · HH:MM" into the middle of the visible bar. */
+.wc-dashboard .grid-stack-item[gs-id="pallets-banner"] .pallets-axis .axis-track {
+  position: relative;
+  height: 1.1em;
+  width: 100%;
+}
 
 /* GOAT race — redesigned 2026-05-14. Bar maxes at the GOAT's PACE-NOW
    (not their full-day record), so the operator can see immediately
