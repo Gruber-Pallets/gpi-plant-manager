@@ -95,3 +95,68 @@ main { padding: 12px 16px; }
   cursor: pointer;
 }
 .wc-template-status { color: var(--muted, #6b7280); font-size: 12px; min-width: 100px; }
+
+/* ---------------------------------------------------------------------- */
+/* Operator dashboard polish (2026-05-14)                                  */
+/* ---------------------------------------------------------------------- */
+
+/* Each widget content area becomes its own container so child font sizes
+   can scale with widget width via cqw units. */
+.wc-dashboard .grid-stack-item-content { container-type: inline-size; }
+
+/* Theme-aware KPI text color (black on light theme, white on dark theme).
+   Per-widget `color` customizations still win via inline style. */
+.wc-dashboard .kpi .val                              { color: #000; }
+html[data-tv-theme="dark"] .wc-dashboard .kpi .val   { color: #fff; }
+
+/* KPI tiles scale text with widget width. */
+.wc-dashboard .kpi .val   { font-size: clamp(1.8rem, 8cqw, 4rem); }
+.wc-dashboard .kpi .label { font-size: clamp(0.75rem, 2cqw, 1rem); }
+
+/* Pallets banner big number scales too. */
+.wc-dashboard .pallets-banner .units  { font-size: clamp(2rem, 9cqw, 5rem); }
+.wc-dashboard .pallets-banner .target { font-size: clamp(0.85rem, 2.4cqw, 1.3rem); }
+
+/* GOAT race text + status pill scale. */
+.wc-dashboard .goat-race .race-stats  { font-size: clamp(0.95rem, 4cqw, 2.2rem); }
+.wc-dashboard .goat-race .status-pill {
+  font-size: clamp(0.85rem, 3cqw, 1.6rem);
+  padding: clamp(2px, 0.6cqw, 8px) clamp(6px, 1.2cqw, 14px);
+}
+.wc-dashboard .goat-race .goat-meta   { font-size: clamp(0.8rem, 2.4cqw, 1.3rem); }
+
+/* Monthly ribbons row text + medals scale. */
+.wc-dashboard .ribbons-list li      { font-size: clamp(0.95rem, 3.5cqw, 2rem); gap: clamp(4px, 1cqw, 14px); }
+.wc-dashboard .ribbons-list .medal  { font-size: clamp(1.2rem, 5cqw, 3rem); }
+.wc-dashboard .ribbons-list .units  { font-size: clamp(1rem, 4cqw, 2.4rem); }
+
+/* Operator name band — page subtitle under the WC picker. */
+.wc-dashboard .operator-band {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem 1rem 0.8rem;
+  border-bottom: 1px solid var(--border, #d8dee5);
+  margin-bottom: 0.4rem;
+}
+.wc-dashboard .operator-band-wc {
+  font-size: 1.8rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--fg, #1f2937);
+}
+.wc-dashboard .operator-band-op {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--fg, #1f2937);
+}
+.wc-dashboard .operator-band-op .op-icon { margin-right: 0.25rem; opacity: 0.85; }
+.wc-dashboard .operator-band-op .op-unassigned {
+  color: var(--muted, #6b7280);
+  font-weight: 500;
+}
+
+/* Pallets banner axis row — borrows recycling's .axis-row layout. */
+.wc-dashboard .pallets-banner .pallets-axis {
+  margin-top: 0.35rem;
+}
