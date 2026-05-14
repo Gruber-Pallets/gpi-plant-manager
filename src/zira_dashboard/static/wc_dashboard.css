@@ -217,34 +217,100 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
   margin-top: 0;
 }
 
-/* GOAT race — make the inner content fill the widget vertically AND
-   scale much more aggressively so the body uses all the open space.
-   Slim padding so content reaches the widget edges. */
+/* GOAT race — redesigned 2026-05-14. Bar maxes at the GOAT's PACE-NOW
+   (not their full-day record), so the operator can see immediately
+   whether they're ahead/behind the pace at this moment. Three rows:
+   ratio + bar, big delta number, footer naming the record to beat.
+   Works at gs-w=3 (narrow). */
 .wc-dashboard .grid-stack-item[gs-id="goat-race"] .grid-stack-item-content {
   padding: 4px 10px;
   display: flex;
   flex-direction: column;
 }
-.wc-dashboard .grid-stack-item[gs-id="goat-race"] .goat-race {
+.wc-dashboard .goat-race-v2 {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
+  gap: clamp(0.3rem, 1cqh, 0.8rem);
+  padding-top: 0.2rem;
+}
+.wc-dashboard .gr-bar-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wc-dashboard .gr-ratio {
+  font-size: clamp(0.85rem, min(7cqh, 3cqw), 1.4rem);
+  color: var(--fg, #1f2937);
+  line-height: 1.1;
+}
+.wc-dashboard .gr-ratio b { font-weight: 800; }
+.wc-dashboard .gr-ratio .gr-of { color: var(--muted, #6b7280); font-weight: 500; }
+.wc-dashboard .gr-track {
+  height: clamp(14px, 9cqh, 40px);
+  background: var(--panel-2, #e3e8ee);
+  overflow: hidden;
+}
+.wc-dashboard .gr-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.wc-dashboard .gr-fill.ahead  { background: var(--accent, #16a34a); }
+.wc-dashboard .gr-fill.behind { background: var(--bad, #ef4444); }
+.wc-dashboard .gr-delta {
+  display: flex;
+  align-items: baseline;
   justify-content: center;
-  align-items: flex-start;
-  gap: clamp(0.4rem, 1.5cqh, 1.2rem);
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1;
 }
-.wc-dashboard .goat-race .race-stats  {
-  font-size: clamp(1.1rem, min(18cqh, 7cqw), 4.5rem);
-  line-height: 1.2;
-  font-weight: 600;
+.wc-dashboard .gr-num {
+  font-size: clamp(1.8rem, min(30cqh, 12cqw), 5.5rem);
+  line-height: 1;
 }
-.wc-dashboard .goat-race .race-stats b { font-weight: 800; }
-.wc-dashboard .goat-race .status-pill {
-  font-size: clamp(1rem,   min(13cqh, 4.5cqw), 3rem);
-  padding:   clamp(3px,    min(1.5cqh, 1cqw), 12px) clamp(8px, min(3cqh, 2cqw), 20px);
+.wc-dashboard .gr-label {
+  font-size: clamp(0.85rem, min(10cqh, 3.5cqw), 1.8rem);
+  letter-spacing: 1.2px;
 }
-.wc-dashboard .goat-race .goat-meta   { font-size: clamp(0.9rem, min(10cqh, 3.5cqw), 2rem); }
+.wc-dashboard .gr-delta.ahead  { color: var(--accent, #16a34a); }
+.wc-dashboard .gr-delta.behind { color: var(--bad, #ef4444); }
+.wc-dashboard .gr-delta.on-pace { color: var(--muted, #6b7280); }
+.wc-dashboard .gr-delta.on-pace .gr-onpace { font-size: clamp(1rem, min(15cqh, 4cqw), 2.2rem); }
+.wc-dashboard .gr-record {
+  font-size: clamp(0.72rem, min(5.5cqh, 2.6cqw), 1.05rem);
+  color: var(--muted, #6b7280);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wc-dashboard .gr-record b { color: var(--fg, #1f2937); font-weight: 800; }
+.wc-dashboard .gr-prelaunch,
+.wc-dashboard .gr-norec {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  text-align: center;
+}
+.wc-dashboard .gr-prelaunch .gr-num,
+.wc-dashboard .gr-norec     .gr-num {
+  font-size: clamp(2rem, min(40cqh, 14cqw), 6rem);
+  font-weight: 800;
+}
+.wc-dashboard .gr-prelaunch .gr-label,
+.wc-dashboard .gr-norec     .gr-label {
+  font-size: clamp(0.8rem, min(8cqh, 3cqw), 1.2rem);
+  color: var(--muted, #6b7280);
+  letter-spacing: 0.5px;
+}
 
 /* Monthly Ribbons — slim padding, content fills the widget. The
    three ribbon rows expand to fill vertical space; row text scales

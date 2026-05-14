@@ -229,19 +229,42 @@
       {% if not tv_mode %}{{ edit_controls('goat-race', goat_default, 'kpi') }}{% endif %}
       <h3>{{ widget_title('goat-race', goat_default) }}</h3>
       {% if goat_race %}
-        <div class="goat-race">
-          {% if goat_race.status %}
-            <div class="status-pill status-{{ goat_race.status|lower }}">{{ goat_race.status|replace('_', ' ') }}</div>
+        {% set pace_now = goat_race.goat_pace_today|round(0)|int %}
+        {% set units = goat_race.units_today %}
+        {% set delta = units - pace_now %}
+        <div class="goat-race-v2">
+          {% if goat_race.goat and pace_now > 0 %}
+            {%- set pct = ((units / pace_now * 100) if pace_now > 0 else 0) -%}
+            {%- if pct > 100 %}{% set pct = 100 %}{% endif -%}
+            <div class="gr-bar-block">
+              <div class="gr-ratio"><b>{{ units }}</b> <span class="gr-of">of</span> <b>{{ pace_now }}</b> <span class="gr-of">on pace</span></div>
+              <div class="gr-track">
+                <div class="gr-fill {{ 'ahead' if delta >= 0 else 'behind' }}" style="width: {{ pct }}%"></div>
+              </div>
+            </div>
+            <div class="gr-delta {{ 'ahead' if delta > 5 else ('behind' if delta < -5 else 'on-pace') }}">
+              {% if delta > 5 %}
+                <span class="gr-num">+{{ delta }}</span><span class="gr-label">AHEAD 🔥</span>
+              {% elif delta < -5 %}
+                <span class="gr-num">{{ delta }}</span><span class="gr-label">BEHIND</span>
+              {% else %}
+                <span class="gr-label gr-onpace">ON PACE</span>
+              {% endif %}
+            </div>
+            <div class="gr-record">🐐 Beat <b>{{ goat_race.goat.units }}</b> to top {{ goat_race.goat.name }}</div>
+          {% elif goat_race.goat %}
+            {# Pre-shift / shift not yet underway — just show the target. #}
+            <div class="gr-prelaunch">
+              <div class="gr-num">{{ units }}</div>
+              <div class="gr-label">today so far</div>
+              <div class="gr-record">🐐 Beat <b>{{ goat_race.goat.units }}</b> to top {{ goat_race.goat.name }}</div>
+            </div>
           {% else %}
-            <div class="status-pill status-none">no record yet</div>
+            <div class="gr-norec">
+              <div class="gr-num">{{ units }}</div>
+              <div class="gr-label">today · no record yet — set the bar!</div>
+            </div>
           {% endif %}
-          <div class="race-stats">
-            <div>Today: <b>{{ goat_race.units_today }}</b></div>
-            <div>GOAT pace now: <b>{{ goat_race.goat_pace_today|round(0)|int }}</b></div>
-            {% if goat_race.goat %}
-              <div class="goat-meta">🐐 {{ goat_race.goat.name }} · {{ goat_race.goat.units }} on {{ goat_race.goat.day }}</div>
-            {% endif %}
-          </div>
         </div>
       {% else %}
         <div class="empty-state" style="color:var(--muted);font-size:0.85rem">{{ wc_name }} isn't in a group.</div>

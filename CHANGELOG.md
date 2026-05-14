@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 10:11 AM
+
+- **Vs. GOAT Pace widget redesigned** — the old "Today: X / GOAT pace now: Y / 🐐 …" three-line list didn't communicate the race. New layout, three sections stacked top-to-bottom: (1) ratio line `<units> of <pace_now> on pace` plus a chunky horizontal bar that fills to `units / pace_now` and is green when ahead, red when behind. The bar's max IS the GOAT's prorated pace at this moment — *not* the full-day record — so you immediately see "am I keeping up?" at a glance. (2) Big delta number front and center: `+5 AHEAD 🔥` or `-3 BEHIND` (or `ON PACE` when within ±5 of pace) in matching green/red. (3) Footer names the record to beat: `🐐 Beat 180 to top Dale Smith`. Designed to read well at `gs-w=3` so the widget doesn't need to be wider than three tiles. Pre-shift fallback (pace_now=0) shows current units centered with the record line below. No-record-yet fallback shows units + "set the bar!".
+
 ### 10:04 AM
 
 - **Downtime widget bar spans the whole widget; both labels live inside it** — dropped the name column and the right-side val column (the operator-strip at the top of the dashboard already shows the WC + operator, so the name was redundant). The stacked working/down bar now fills the full widget width. Up-time % sits at the right edge of the green portion (without the word "up" — just `95.0%`); downtime minutes (`12m`) sit at the right edge of the red portion. Both labels are white, bold, and scale with widget size (`clamp(1.1rem, min(35cqh, 4cqw), 3.2rem)`). Bar height also grows with widget height — `clamp(40px, 55cqh, 220px)`.
