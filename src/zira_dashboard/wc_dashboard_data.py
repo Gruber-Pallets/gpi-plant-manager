@@ -437,6 +437,34 @@ def kpi_tiles(wc_name: str, day: date) -> dict:
     }
 
 
+def _elapsed_wall_clock_minutes(day: date) -> int:
+    """Wall-clock minutes since shift_start on `day`.
+
+    Used by the progress chart to decide which 15-min buckets are
+    past/current/future. Wall-clock (not productive) because bucket
+    offsets are `i * 15` minutes from shift_start in wall-clock — if
+    we used productive elapsed (which subtracts break time) the chart
+    appears frozen for `break_minutes` after every break.
+
+    Returns a large value for past days (so every bucket shows) and 0
+    for future days. Catches exceptions to keep the helper safe to
+    call without a configured shift.
+    """
+    from . import shift_config
+    try:
+        today_local = datetime.now(shift_config.SITE_TZ).date()
+        if day < today_local:
+            return 10_000
+        if day > today_local:
+            return 0
+        shift_start = shift_config.shift_start_for(day)
+        shift_start_dt = datetime.combine(day, shift_start, tzinfo=shift_config.SITE_TZ)
+        now_local = datetime.now(shift_config.SITE_TZ)
+        return max(0, int((now_local - shift_start_dt).total_seconds() / 60))
+    except Exception:
+        return 10_000
+
+
 def fifteen_min_progress_buckets(wc_name: str, day: date) -> dict:
     """Per-15-min progress buckets in the shape /recycling's progress_chart
     macro consumes:
@@ -447,14 +475,11 @@ def fifteen_min_progress_buckets(wc_name: str, day: date) -> dict:
     if not raw:
         return {"buckets": [], "bucket_target": 0}
     try:
-        full_minutes = shift_config.productive_minutes_per_day()
-    except Exception:
-        full_minutes = 480
-    elapsed = int(full_minutes * _shift_elapsed_fraction(day))
-    try:
         shift_start = shift_config.shift_start_for(day)
     except Exception:
         shift_start = None
+    elapsed = _elapsed_wall_clock_minutes(day)
+
     buckets: list[dict] = []
     for b in raw:
         offset = b["minute_offset"]
@@ -474,7 +499,7 @@ def fifteen_min_progress_buckets(wc_name: str, day: date) -> dict:
             "in_progress": offset <= elapsed < offset + 15,
         })
     # Drop future buckets so the chart stops at "now" (matches /recycling).
-    # On past days _shift_elapsed_fraction returns 1.0, so this is a no-op.
+    # On past days `elapsed` was set to `full_minutes` so this is a no-op.
     buckets = [b for b in buckets if b["offset"] <= elapsed]
     bucket_target = next((b["target"] for b in buckets if b["target"]), 0)
     return {"buckets": buckets, "bucket_target": bucket_target}

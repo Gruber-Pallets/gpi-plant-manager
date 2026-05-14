@@ -304,15 +304,13 @@ def test_fifteen_min_progress_buckets_truncates_at_now(monkeypatch):
     ]
     monkeypatch.setattr(wc_dashboard_data, "fifteen_min_increments",
                         lambda wc, d: fake_raw)
-    # Half the shift elapsed.
-    monkeypatch.setattr(wc_dashboard_data, "_shift_elapsed_fraction",
-                        lambda d: 0.5)
-    from zira_dashboard import shift_config
-    monkeypatch.setattr(shift_config, "productive_minutes_per_day", lambda: 480)
+    # 240 wall-clock minutes since shift start (half the shift).
+    monkeypatch.setattr(wc_dashboard_data, "_elapsed_wall_clock_minutes",
+                        lambda d: 240)
 
     result = wc_dashboard_data.fifteen_min_progress_buckets("Repair 1", date(2026, 5, 14))
     buckets = result["buckets"]
-    # 0.5 * 480 = 240 minutes elapsed -> offsets 0..240 inclusive => 17 buckets
+    # elapsed=240 -> offsets 0..240 inclusive => 17 buckets
     assert len(buckets) == 17, f"expected 17 buckets, got {len(buckets)}"
     assert all(b["offset"] <= 240 for b in buckets)
     assert buckets[-1]["offset"] == 240
@@ -323,7 +321,7 @@ def test_fifteen_min_progress_buckets_truncates_at_now(monkeypatch):
 
 
 def test_fifteen_min_progress_buckets_past_day_full_shift(monkeypatch):
-    """On past days, shift elapsed fraction is 1.0 — all buckets returned."""
+    """On past days, the helper returns a large elapsed so every bucket shows."""
     from datetime import date
     from zira_dashboard import wc_dashboard_data
 
@@ -333,12 +331,41 @@ def test_fifteen_min_progress_buckets_past_day_full_shift(monkeypatch):
     ]
     monkeypatch.setattr(wc_dashboard_data, "fifteen_min_increments",
                         lambda wc, d: fake_raw)
-    monkeypatch.setattr(wc_dashboard_data, "_shift_elapsed_fraction",
-                        lambda d: 1.0)
-    from zira_dashboard import shift_config
-    monkeypatch.setattr(shift_config, "productive_minutes_per_day", lambda: 480)
+    # Past-day behavior: helper returns a large number to keep every bucket.
+    monkeypatch.setattr(wc_dashboard_data, "_elapsed_wall_clock_minutes",
+                        lambda d: 10_000)
 
     result = wc_dashboard_data.fifteen_min_progress_buckets("Repair 1", date(2026, 5, 1))
     assert len(result["buckets"]) == 32
-    # No bucket should be flagged in_progress on a past day.
+    # No bucket should be flagged in_progress on a past day (elapsed huge).
     assert not any(b["in_progress"] for b in result["buckets"])
+
+
+def test_fifteen_min_progress_buckets_uses_wall_clock_not_productive(monkeypatch):
+    """Regression: wall-clock elapsed > productive elapsed when breaks have
+    happened. The chart filter must use wall-clock, otherwise it appears
+    frozen for break_minutes after every break.
+
+    Scenario: 8-hour shift, 30-min lunch taken. 5 hours into wall-clock
+    shift, productive-elapsed = 270 min but wall-elapsed = 300 min. The
+    bucket at offset 285 (the post-lunch one) should appear in the chart.
+    """
+    from datetime import date
+    from zira_dashboard import wc_dashboard_data
+
+    fake_raw = [
+        {"minute_offset": off, "units": 5, "target": 10}
+        for off in range(0, 480, 15)
+    ]
+    monkeypatch.setattr(wc_dashboard_data, "fifteen_min_increments",
+                        lambda wc, d: fake_raw)
+    # Wall-clock elapsed = 300 min (5 hours after shift start).
+    monkeypatch.setattr(wc_dashboard_data, "_elapsed_wall_clock_minutes",
+                        lambda d: 300)
+
+    result = wc_dashboard_data.fifteen_min_progress_buckets("Repair 1", date(2026, 5, 14))
+    offsets = [b["offset"] for b in result["buckets"]]
+    # Buckets 0..300 inclusive should appear (21 buckets).
+    assert offsets[-1] == 300
+    # The post-lunch bucket at 285 must be present (this was the bug).
+    assert 285 in offsets
