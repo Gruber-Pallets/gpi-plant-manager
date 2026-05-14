@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 9:30 AM
+
+- **Downtime widget: up-time % moves inside the green bar; right side shows just `Xm`** — the up-time percent now renders as a white label at the right edge of the green "working" portion of the stacked bar, sitting right where the bar transitions to red. The right-side value column drops the word "down" — just shows `Xm` (the bar's red color makes "down" redundant). If the green bar is too narrow to fit the label (very high downtime), the parent's `overflow: hidden` clips it cleanly.
+
 ### 9:27 AM
 
 - **Pallets banner no longer overflows or shows a scrollbar** — the big number was scaling by `9cqw` (9% of widget width) with no height cap, so on a full 12-col banner it tried to render at ~126px tall, overflowed the default `gs-h=2` widget, and triggered a scroll affordance. Switched to `min(40cqh, 8cqw)` scaling (whichever dimension is smaller wins), added `overflow: hidden` on the banner as a safety net, and capped the max at 3.6rem. The number now scales smoothly with widget size in both axes and never pushes content past the widget edge.

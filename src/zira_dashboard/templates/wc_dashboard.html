@@ -226,13 +226,12 @@
             {% endif %}
           </div>
           <div class="stacked-track">
-            <div class="good" style="width: {{ downtime_row.working_pct }}%" title="Working {{ downtime_row.working }}m"></div>
+            <div class="good" style="width: {{ downtime_row.working_pct }}%" title="Working {{ downtime_row.working }}m">
+              {% if downtime_row.working_pct > 0 %}<span class="up-label">{{ kpi.up_time_pct }}% up</span>{% endif %}
+            </div>
             <div class="bad"  style="width: {{ downtime_row.down_pct }}%"    title="Down {{ downtime_row.down }}m"></div>
           </div>
-          <div class="val downtime-val">
-            <div class="downtime-val-down">{{ downtime_row.down }}m down</div>
-            <div class="downtime-val-up">{{ kpi.up_time_pct }}% up</div>
-          </div>
+          <div class="val">{{ downtime_row.down }}m</div>
         </div>
       {% endif %}
     </div>

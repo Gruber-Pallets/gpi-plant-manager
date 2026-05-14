@@ -215,22 +215,22 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
   margin-top: 0.35rem;
 }
 
-/* Downtime widget — two-line val showing down minutes (primary) and
-   up-time % (secondary). Lays out vertically inside the existing .val
-   column from recycling.css. */
-.wc-dashboard .downtime-val {
+/* Downtime widget — up-time % rendered as a white label inside the
+   right edge of the green "working" bar, just before it transitions
+   to the red "down" portion. The .stacked-track parent already has
+   overflow: hidden so the label is clipped if the green bar is too
+   narrow to hold it (high-downtime case). */
+.wc-dashboard .stacked-track .good {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  line-height: 1.1;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: hidden;
 }
-.wc-dashboard .downtime-val .downtime-val-down {
-  font-weight: 800;
-  color: var(--bad, #ef4444);
-}
-.wc-dashboard .downtime-val .downtime-val-up {
-  font-size: 0.78em;
-  font-weight: 600;
-  color: var(--accent, #16a34a);
-  margin-top: 1px;
+.wc-dashboard .stacked-track .good .up-label {
+  color: #fff;
+  font-weight: 700;
+  font-size: clamp(0.7rem, 1.8cqw, 1.1rem);
+  white-space: nowrap;
+  padding: 0 6px;
+  line-height: 1;
 }
