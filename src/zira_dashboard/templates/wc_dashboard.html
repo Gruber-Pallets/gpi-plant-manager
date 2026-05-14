@@ -121,19 +121,33 @@
     </div>
   {% endfor %}
 
-  {# Pallets banner. Start/now ticks land in Task 8. #}
+  {# Pallets banner with start/now axis ticks. #}
   <div class="grid-stack-item" {{ widget_attrs('pallets-banner', 0, 2, 12, 2) }}>
     <div class="grid-stack-item-content">
       {% if not tv_mode %}{{ edit_controls('pallets-banner', 'Today · Pallets', 'kpi') }}{% endif %}
       <h3>{{ widget_title('pallets-banner', 'Today · Pallets') }}</h3>
       <div class="pallets-banner">
         <div class="pallets-numbers">
-          <span class="units">{{ pallets.units_today }}</span>
-          <span class="target">/ {{ pallets.target_today }} goal so far ({{ pallets.target_full_day }} full day)</span>
+          <span class="units" {{ widget_color_style('pallets-banner', 'color') }}>{{ pallets.units_today }}</span>
+          <span class="target">/ {{ pallets.target_full_day }} full day</span>
         </div>
+        {% set fill_pct = ((pallets.units_today / pallets.target_full_day * 100.0) if pallets.target_full_day else 0) %}
         <div class="bar-track">
-          <div class="bar-fill" style="width: {{ (pallets.pct_of_target|float)|round(0)|int if pallets.pct_of_target else 0 }}%"></div>
+          <div class="bar-fill" style="width: {{ [fill_pct, 100]|min }}%"></div>
+          {% if banner_now_pct and banner_now_pct > 0 %}
+            <div class="bar-target-line" style="left: {{ banner_now_pct }}%" title="On-pace target right now"></div>
+          {% endif %}
         </div>
+        {% if shift_start_label or now_label %}
+          <div class="bar-row axis-row numpos-widget pallets-axis">
+            <div></div>
+            <div class="axis-track">
+              {% if shift_start_label %}<div class="axis-tick axis-start" style="left: 0%">start · {{ shift_start_label }}</div>{% endif %}
+              {% if now_label and banner_now_pct > 0 %}<div class="axis-tick" style="left: {{ banner_now_pct }}%">now · {{ now_label }}</div>{% endif %}
+            </div>
+            <div></div>
+          </div>
+        {% endif %}
       </div>
     </div>
   </div>

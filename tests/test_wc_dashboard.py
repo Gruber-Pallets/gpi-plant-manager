@@ -286,3 +286,14 @@ def test_operator_dashboard_posts_widget_edits_to_operator_endpoint(monkeypatch)
     c = TestClient(app)
     r = c.get("/wc/repair-1")
     assert "/api/widget/operator/" in r.text
+
+
+def test_pallets_banner_renders_start_and_now_ticks(monkeypatch):
+    """Banner shows `start · HH:MM` and `now · HH:MM` axis labels."""
+    _stub_wc(monkeypatch)
+    c = TestClient(app)
+    r = c.get("/wc/repair-1")
+    assert r.status_code == 200
+    assert "start ·" in r.text
+    # `now ·` only renders on today's date; the test runs today by default.
+    assert "now ·" in r.text
