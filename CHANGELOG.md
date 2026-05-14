@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 1:57 PM
+
+- **Today Pallets banner bar now colors by goal status** — was hardcoded green. Now green when `units_today >= target_today` (ahead/on pace) and red when behind the prorated target at this moment. Template tags `.bar-fill` with `.ahead` or `.behind`; CSS applies `var(--accent)` / `var(--bad)` accordingly.
+
 ### 1:39 PM
 
 - **Recycling VS TV: tame the giant "Total X / Y" line; tighter bar-rows** — screenshot showed the `Total 940 / 1236 (76.1%)` summary rendering at ~34px (a hardcoded `1.6rem` in `tv-mode.css`) and dominating the Pallets-by-WC + Downtime widgets, which forced the bar-rows above it to collapse so tight their two-line operator names overflowed into the neighboring row's space and visually "stacked on top of each other". Two CSS tweaks: (1) `widget-total` font dropped from `1.6rem` to `clamp(0.7rem, 3cqh, 1.2rem)` — small base, scales gently with widget height instead of dominating. (2) bar-row name floor dropped from `0.5rem` to `0.35rem` and `line-height` tightened from `1.05` to `1` so names fit in their row slice even when the widget is tall and packed with 6+ work-centers.

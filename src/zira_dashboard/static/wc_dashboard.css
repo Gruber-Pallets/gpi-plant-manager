@@ -211,6 +211,11 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .grid-stack-item[gs-id="pallets-banner"] .bar-fill {
   border-radius: 0;
 }
+/* Color the fill by goal status: green when ahead/on-pace, red when
+   behind the prorated target. Server-side template tags the .bar-fill
+   with .ahead or .behind based on pallets.units_today vs target_today. */
+.wc-dashboard .grid-stack-item[gs-id="pallets-banner"] .bar-fill.ahead  { background: var(--accent, #16a34a); }
+.wc-dashboard .grid-stack-item[gs-id="pallets-banner"] .bar-fill.behind { background: var(--bad, #ef4444); }
 .wc-dashboard .grid-stack-item[gs-id="pallets-banner"] .pallets-axis {
   margin-top: 0;
 }

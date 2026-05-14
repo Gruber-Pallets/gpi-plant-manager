@@ -117,8 +117,9 @@
           <span class="target">/ {{ pallets.target_full_day }} full day</span>
         </div>
         {% set fill_pct = ((pallets.units_today / pallets.target_full_day * 100.0) if pallets.target_full_day else 0) %}
+        {% set behind = pallets.target_today and pallets.units_today < pallets.target_today %}
         <div class="bar-track">
-          <div class="bar-fill" style="width: {{ [fill_pct, 100]|min }}%"></div>
+          <div class="bar-fill {{ 'behind' if behind else 'ahead' }}" style="width: {{ [fill_pct, 100]|min }}%"></div>
           {% if banner_now_pct and banner_now_pct > 0 %}
             <div class="bar-target-line" style="left: {{ banner_now_pct }}%" title="On-pace target right now"></div>
           {% endif %}
