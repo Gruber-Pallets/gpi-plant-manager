@@ -307,6 +307,8 @@ def test_fifteen_min_progress_buckets_truncates_at_now(monkeypatch):
     # Half the shift elapsed.
     monkeypatch.setattr(wc_dashboard_data, "_shift_elapsed_fraction",
                         lambda d: 0.5)
+    from zira_dashboard import shift_config
+    monkeypatch.setattr(shift_config, "productive_minutes_per_day", lambda: 480)
 
     result = wc_dashboard_data.fifteen_min_progress_buckets("Repair 1", date(2026, 5, 14))
     buckets = result["buckets"]
@@ -333,6 +335,8 @@ def test_fifteen_min_progress_buckets_past_day_full_shift(monkeypatch):
                         lambda wc, d: fake_raw)
     monkeypatch.setattr(wc_dashboard_data, "_shift_elapsed_fraction",
                         lambda d: 1.0)
+    from zira_dashboard import shift_config
+    monkeypatch.setattr(shift_config, "productive_minutes_per_day", lambda: 480)
 
     result = wc_dashboard_data.fifteen_min_progress_buckets("Repair 1", date(2026, 5, 1))
     assert len(result["buckets"]) == 32
