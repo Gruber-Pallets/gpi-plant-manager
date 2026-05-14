@@ -186,7 +186,14 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 }
 .wc-dashboard .grid-stack-item[gs-id="pallets-banner"] .bar-track {
   margin-top: 0;
-  height: clamp(10px, 2.5cqh, 22px);
+  /* Bar scales with widget height — chunky 30px floor, up to ~120px on
+     tall widgets, ~30% of widget height in between. Pill shape via
+     full radius so it looks right at any height. */
+  height: clamp(30px, 30cqh, 120px);
+  border-radius: 9999px;
+}
+.wc-dashboard .grid-stack-item[gs-id="pallets-banner"] .bar-fill {
+  border-radius: 9999px;
 }
 .wc-dashboard .grid-stack-item[gs-id="pallets-banner"] .pallets-axis {
   margin-top: 0;

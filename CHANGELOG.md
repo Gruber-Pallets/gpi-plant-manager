@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 9:53 AM
+
+- **Pallets banner bar is chunkier and scales with widget height** — the progress bar was capped at 22px regardless of widget size. New rule: `clamp(30px, 30cqh, 120px)` — chunky 30px floor, scales at 30% of widget height, up to a 120px ceiling. Border-radius set to a full pill so the bar reads as a single thick stripe at any size. Drag the banner taller and the bar grows with it.
+
 ### 9:50 AM
 
 - **Operator dashboard top chrome collapsed into one strip** — the WC picker bar, the big operator-name band, and the edit-bar were three separate rows stacking ~150px of chrome above the widget grid. They're now one row: the work-center dropdown sits on the left as the page heading (the WC name *is* the dropdown trigger), the scheduled operator name(s) follow next to it, and the "auto-saves" indicator + Reset Layout button are pinned to the right. Widgets get ~150px more of vertical screen space. Function-equivalent — nothing hidden, just packed tighter. Tests renamed `operator-band` → `operator-strip` to match.
