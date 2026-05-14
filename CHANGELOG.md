@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 3:01 PM
+
+- **Recycling VS TV: bigger names on Pallets by WC; total moves to top-right** — two changes scoped to TV mode. (1) Bar-row name font floor raised from `0.35rem` to `0.75rem` (`clamp(0.75rem, 5cqh, 1.5rem)`), line-height `1.05`. Operator names like "Eulogio Mendez" / "Dismantler 1" now render at a comfortable ~16px instead of squinting-required ~7px. (2) `.widget-total` (the `Total X / Y (Z%)` line) moves from the bottom of the bar widget to the **top-right corner**, absolute-positioned. Frees the bottom of the widget for the bar-rows so the bars fill more vertical space. Title `h3` gets `padding-right: clamp(80px, 28%, 220px)` (scoped via `:has(.widget-total)`) so its text doesn't run under the relocated total.
+
 ### 2:04 PM
 
 - **Today Pallets banner: number color tracks bar color** — Dismantler 4 showed a green number above a red bar. Same `.ahead` / `.behind` class now also tags the big units number so the number color matches the bar (green ahead, red behind). User's custom widget color (via the `⋮` edit panel) still wins via inline-style specificity.

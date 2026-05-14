@@ -99,11 +99,31 @@ html[data-tv-theme] .grid-stack-item-content .bar-row .name,
 html[data-tv-theme] .grid-stack-item-content .bar-row .val,
 html[data-tv-theme] .grid-stack-item-content .bar-row .name .name-primary,
 html[data-tv-theme] .grid-stack-item-content .bar-row .name .name-secondary {
-  font-size: clamp(0.35rem, 3.5cqh, 1.25rem);
-  line-height: 1;
+  font-size: clamp(0.75rem, 5cqh, 1.5rem);
+  line-height: 1.05;
 }
 html[data-tv-theme] .grid-stack-item-content .bar-row {
   margin-block: 0;
+}
+
+/* Move widget-total to the top-right corner of its widget instead of
+   sitting at the bottom. Frees the bottom of the widget for the bar-
+   rows so the bars fill more vertical space. The h3 title gets right
+   padding so its text doesn't run under the widget-total. */
+html[data-tv-theme] .grid-stack-item-content { position: relative; }
+html[data-tv-theme] .grid-stack-item-content .widget-total {
+  position: absolute;
+  top: clamp(4px, 1.5cqh, 14px);
+  right: clamp(6px, 1.5cqw, 18px);
+  margin: 0;
+  text-align: right;
+  z-index: 1;
+}
+/* Reserve right space on the title so widget-total sits cleanly to its
+   right. Only applies to widgets that actually have a widget-total
+   (the Pallets-by-WC bar widgets via the bar_chart macro). */
+html[data-tv-theme] .grid-stack-item-content:has(.widget-total) > h3 {
+  padding-right: clamp(80px, 28%, 220px);
 }
 html[data-tv-theme] .kpi .label { font-size: 0.85rem; }
 html[data-tv-theme] .kpi .val { font-size: 3.4rem; font-weight: 800; }
