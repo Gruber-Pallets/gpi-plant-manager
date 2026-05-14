@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 9:19 AM
+
+- **KPI text now shrinks to fit instead of wrapping** — the operator dashboard's four KPI widgets had loose padding and a fixed font-size ceiling, so a long number like "1,234" would wrap onto two lines or get cut off when you shrunk the widget. Padding dropped to `4px 6px`, label and value both get `white-space: nowrap`, and the value font now scales by `min(40cqh, 16cqw)` — the smaller of widget height vs width — so the number stays on one line and uses the full widget area at any size. Aside: the prior `.wc-dashboard .kpi .val` CSS rules were dead code (the operator template doesn't wrap KPIs in a `.kpi` div) — removed.
+
 ### 9:11 AM
 
 - **Hotfix — / and /recycling were 500'ing** — the 9:07 AM "Operator dashboard polish" deploy broke every page that imports the shared `edit_controls` Jinja partial. Jinja's `{% from … import macro %}` does NOT pass the calling template's context to the imported macro by default, and the macro reads `customs.get(id, {})` — so every render raised `UndefinedError: 'customs' is undefined`. Fix: add `with context` to the import line on `recycling.html` and `wc_dashboard.html` so the macro sees the page's `customs` dict.
