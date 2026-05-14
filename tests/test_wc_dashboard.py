@@ -171,18 +171,18 @@ def test_operator_dashboard_has_four_split_kpi_widgets(monkeypatch):
         assert f'gs-id="{wid}"' in r.text, f"missing widget {wid}"
 
 
-def test_operator_dashboard_renders_operator_band(monkeypatch):
-    """The band shows WC name + operator names from the Plant Scheduler."""
+def test_operator_dashboard_renders_operator_strip(monkeypatch):
+    """The unified chrome strip shows operator names from the Plant Scheduler."""
     _stub_wc(monkeypatch)  # _stub_wc sets operators to ["Christian", "Jose L"]
     c = TestClient(app)
     r = c.get("/wc/repair-1")
     assert r.status_code == 200
-    assert "operator-band" in r.text
+    assert "operator-strip" in r.text
     assert "Christian" in r.text and "Jose L" in r.text
 
 
-def test_operator_dashboard_unassigned_band(monkeypatch):
-    """With no operators assigned, the band shows '(unassigned)'."""
+def test_operator_dashboard_unassigned_strip(monkeypatch):
+    """With no operators assigned, the strip shows '(unassigned)'."""
     _stub_wc(monkeypatch)
     from zira_dashboard import wc_dashboard_data
     monkeypatch.setattr(wc_dashboard_data, "assigned_operators_for_wc",
@@ -214,20 +214,20 @@ def test_operator_dashboard_body_has_wc_dashboard_class(monkeypatch):
     assert 'class="wc-dashboard"' in r.text
 
 
-def test_operator_dashboard_has_edit_bar(monkeypatch):
-    """The edit-bar with save-indicator + Reset Layout button is in screen mode."""
+def test_operator_dashboard_has_edit_chrome_in_strip(monkeypatch):
+    """The unified strip includes the save-indicator + Reset Layout button."""
     _stub_wc(monkeypatch)
     c = TestClient(app)
     r = c.get("/wc/repair-1")
     assert r.status_code == 200
-    assert 'class="edit-bar"' in r.text
+    assert 'operator-strip-right' in r.text
     assert 'id="save-indicator"' in r.text
     assert 'id="reset-layout"' in r.text
     assert "Drag / resize" in r.text
 
 
 def test_tv_wc_dashboard_omits_edit_bar(monkeypatch):
-    """TV view skips the edit-bar (read-only)."""
+    """TV view skips the chrome strip (read-only)."""
     _stub_wc(monkeypatch)
     c = TestClient(app)
     r = c.get("/tv/wc/repair-1")

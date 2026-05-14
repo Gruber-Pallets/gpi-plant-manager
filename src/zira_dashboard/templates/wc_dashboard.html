@@ -39,14 +39,6 @@
 {% endif %}
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 <style>{{ goat_badges_css() }}</style>
-<style>
-  .wc-picker-bar { display: flex; justify-content: flex-end; padding: 0.5rem 1rem 0; }
-  .wc-picker-bar select {
-    background: var(--panel-2, #f1f4f7); color: var(--fg, #1f2937);
-    border: 1px solid var(--border, #d8dee5); border-radius: 6px;
-    padding: 0.3rem 0.5rem; font: inherit; font-size: 0.9rem;
-  }
-</style>
 </head>
 <body class="wc-dashboard">
 {% if tv_mode %}
@@ -71,30 +63,30 @@
     </div>
   </header>
   {% include "_dashboards_subnav.html" %}
-  <div class="wc-picker-bar">
-    <label style="display:flex;gap:0.4rem;align-items:center;font-size:0.85rem;color:var(--muted)">
-      Work center:
-      <select id="wc-picker">
+  {# One unified chrome strip: WC picker (acts as the page title) +
+     scheduled operator(s) on the left; save indicator + Reset Layout
+     button on the right. Replaces the previous 3-row stack (wc-picker
+     bar, operator-band, edit-bar) to give the widgets more vertical
+     space. #}
+  <div class="operator-strip">
+    <div class="operator-strip-left">
+      <select id="wc-picker" class="wc-picker-select" aria-label="Work center">
         {% for w in wc_options %}
           <option value="{{ w.slug }}" {% if w.slug == slug %}selected{% endif %}>{{ w.name }}</option>
         {% endfor %}
       </select>
-    </label>
-  </div>
-  {# Operator name band — page subtitle showing WC + scheduled operator(s). #}
-  <div class="operator-band">
-    <div class="operator-band-wc">{{ wc_name }}</div>
-    <div class="operator-band-op">
-      {% if operators_display %}
-        <span class="op-icon" aria-hidden="true">👤</span> {{ operators_display }}
-      {% else %}
-        <em class="op-unassigned">(unassigned)</em>
-      {% endif %}
+      <span class="operator-strip-op">
+        {% if operators_display %}
+          <span class="op-icon" aria-hidden="true">👤</span> {{ operators_display }}
+        {% else %}
+          <em class="op-unassigned">(unassigned)</em>
+        {% endif %}
+      </span>
     </div>
-  </div>
-  <div class="edit-bar">
-    <span class="save-indicator" id="save-indicator">Drag / resize — layout auto-saves</span>
-    <button type="button" id="reset-layout">Reset Layout</button>
+    <div class="operator-strip-right">
+      <span class="save-indicator" id="save-indicator">Drag / resize — layout auto-saves</span>
+      <button type="button" id="reset-layout">Reset Layout</button>
+    </div>
   </div>
 {% endif %}
 

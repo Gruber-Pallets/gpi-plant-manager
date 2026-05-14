@@ -210,28 +210,79 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .ribbons-list .medal  { font-size: clamp(1.3rem, min(15cqh, 5.5cqw), 3rem); }
 .wc-dashboard .ribbons-list .units  { font-size: clamp(1rem,   min(12cqh, 4.5cqw), 2.6rem); }
 
-/* Operator name band — page subtitle under the WC picker. */
-.wc-dashboard .operator-band {
+/* Operator strip — one unified chrome row sitting between the dashboards
+   sub-nav and the widget grid. Left: WC picker (styled like a page
+   heading) + scheduled operator name(s). Right: save indicator + Reset
+   Layout button. Replaces the prior 3-row stack to give the widget
+   grid more vertical space. */
+.wc-dashboard .operator-strip {
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  padding: 0.4rem 1rem 0.8rem;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.35rem 1rem;
   border-bottom: 1px solid var(--border, #d8dee5);
-  margin-bottom: 0.4rem;
+  flex-wrap: wrap;
 }
-.wc-dashboard .operator-band-wc {
-  font-size: 1.8rem;
-  font-weight: 800;
-  line-height: 1.1;
+.wc-dashboard .operator-strip-left {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.wc-dashboard .operator-strip-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--muted, #6b7280);
+}
+.wc-dashboard .operator-strip-right .save-indicator { font-style: italic; opacity: 0.7; }
+.wc-dashboard .operator-strip-right button {
+  background: transparent;
+  color: var(--muted, #6b7280);
+  border: 1px solid var(--border, #d8dee5);
+  border-radius: 6px;
+  padding: 0.3rem 0.65rem;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.wc-dashboard .operator-strip-right button:hover {
   color: var(--fg, #1f2937);
+  border-color: var(--muted, #6b7280);
 }
-.wc-dashboard .operator-band-op {
-  font-size: 1.05rem;
+
+/* WC picker styled like a page heading (the work-center name IS the
+   dropdown trigger — native arrow keeps the affordance). */
+.wc-dashboard .wc-picker-select {
+  font-size: 1.4rem;
+  font-weight: 800;
+  background: transparent;
+  border: none;
+  color: var(--fg, #1f2937);
+  cursor: pointer;
+  padding: 0.1rem 0.3rem 0.1rem 0;
+  line-height: 1.1;
+  max-width: 100%;
+}
+.wc-dashboard .wc-picker-select:focus-visible {
+  outline: 2px solid var(--accent, #16a34a);
+  border-radius: 4px;
+}
+
+.wc-dashboard .operator-strip-op {
+  font-size: 1rem;
   font-weight: 600;
   color: var(--fg, #1f2937);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 0 1 auto;
 }
-.wc-dashboard .operator-band-op .op-icon { margin-right: 0.25rem; opacity: 0.85; }
-.wc-dashboard .operator-band-op .op-unassigned {
+.wc-dashboard .operator-strip-op .op-icon { margin-right: 0.25rem; opacity: 0.85; }
+.wc-dashboard .operator-strip-op .op-unassigned {
   color: var(--muted, #6b7280);
   font-weight: 500;
 }
