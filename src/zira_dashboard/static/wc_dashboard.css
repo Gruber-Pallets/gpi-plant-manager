@@ -138,9 +138,33 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .align-left   .val { justify-content: flex-start; }
 .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .align-right  .val { justify-content: flex-end; }
 
-/* Pallets banner big number scales too. */
-.wc-dashboard .pallets-banner .units  { font-size: clamp(2rem, 9cqw, 5rem); }
-.wc-dashboard .pallets-banner .target { font-size: clamp(0.85rem, 2.4cqw, 1.3rem); }
+/* Pallets banner: scale to the smaller of widget width/height so the
+   big number never exceeds the widget's vertical space (otherwise a
+   12-col banner at full width tries to render the number at ~9% of
+   1400px = 126px tall, which overflows the gs-h=2 default and shows
+   a scroll affordance). overflow:hidden on the inner banner div is a
+   safety net even if a future change pushes content over. */
+.wc-dashboard .pallets-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+  min-height: 0;
+}
+.wc-dashboard .pallets-banner .pallets-numbers {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1;
+}
+.wc-dashboard .pallets-banner .units  {
+  font-size: clamp(1.5rem, min(40cqh, 8cqw), 3.6rem);
+  font-weight: 800;
+  line-height: 1;
+}
+.wc-dashboard .pallets-banner .target {
+  font-size: clamp(0.8rem, min(12cqh, 2.4cqw), 1.4rem);
+}
 
 /* GOAT race text + status pill scale by the SMALLER of widget height
    or width so the content fills the widget at any size. Larger floor

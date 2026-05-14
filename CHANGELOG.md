@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 9:27 AM
+
+- **Pallets banner no longer overflows or shows a scrollbar** — the big number was scaling by `9cqw` (9% of widget width) with no height cap, so on a full 12-col banner it tried to render at ~126px tall, overflowed the default `gs-h=2` widget, and triggered a scroll affordance. Switched to `min(40cqh, 8cqw)` scaling (whichever dimension is smaller wins), added `overflow: hidden` on the banner as a safety net, and capped the max at 3.6rem. The number now scales smoothly with widget size in both axes and never pushes content past the widget edge.
+
 ### 9:24 AM
 
 - **Operator dashboard: 3 KPI tiles removed, Up Time % folded into Downtime widget** — `Units today` / `Up Time` / `Downtime` are gone as standalone widgets. Units is already prominent in the Pallets banner; Up Time + Downtime both live inside the Downtime widget now (red `Xm down` over green `Y% up` on the right side of the bar). Only `Pallets / hr` remains as a standalone KPI tile.
