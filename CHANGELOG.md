@@ -2,6 +2,12 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+## 2026-05-14
+
+### 7:41 AM
+
+- **Workshop tear-down + new Operator dashboard** — the widget workshop / custom dashboards / pinned dashboards / layout templates experiments are removed entirely. Roughly 30 files deleted, 5 DB tables dropped (`widget_definitions`, `custom_dashboards`, `dashboard_widgets`, `tv_dashboard_templates`, `pinned_dashboards`); any TV display rows with `kind = 'custom'` are also deleted. Sub-nav is now a fixed 4-tab strip: **Recycling VS · New VS · Operator · Work Centers**. The top-nav "My Dashboards" link is gone (page removed). The new **Operator dashboard** lives at `/wc/{slug}` (TV: `/tv/wc/{slug}`) and mirrors `/recycling`'s visual style scoped to a single work center: KPI tiles row (Units / Up Time / Downtime / Pallets/hr), Pallets banner, 15-min progress chart, Cumulative Daily Progress, Downtime stacked bar, Vs. GOAT Pace, Monthly Ribbons. A WC dropdown at the top lets you switch which work center the page shows. `/operator` redirects to the first WC. The Settings → TVs panel drops the Custom optgroup and the Layout Templates section.
+
 ## 2026-05-13
 
 ### 4:09 PM
