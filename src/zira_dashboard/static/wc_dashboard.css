@@ -231,10 +231,12 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
    ratio + bar, big delta number, footer naming the record to beat.
    Works at gs-w=3 (narrow). */
 .wc-dashboard .grid-stack-item[gs-id="goat-race"] .grid-stack-item-content {
-  padding: 4px 10px;
+  padding: 4px 0;          /* zero horizontal so content reaches edges */
   display: flex;
   flex-direction: column;
 }
+/* Title gets a small left/right inset so it doesn't touch the edges. */
+.wc-dashboard .grid-stack-item[gs-id="goat-race"] h3 { padding: 0 8px; }
 .wc-dashboard .goat-race-v2 {
   flex: 1 1 auto;
   min-height: 0;
@@ -246,13 +248,20 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .gr-delta {
   flex: 1 1 auto;          /* delta fills remaining vertical space */
   display: flex;
+  flex-direction: column;  /* +N AHEAD row on top, 🐐 below */
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  gap: clamp(0.2rem, 1.5cqh, 1rem);
   font-weight: 800;
   text-align: center;
   line-height: 1;
+}
+.wc-dashboard .gr-delta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 .wc-dashboard .gr-footer {
   flex: 0 0 auto;
@@ -269,11 +278,11 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .gr-ratio b { font-weight: 800; }
 .wc-dashboard .gr-ratio .gr-of { color: var(--muted, #6b7280); font-weight: 500; }
 .wc-dashboard .gr-num {
-  font-size: clamp(1.8rem, min(30cqh, 12cqw), 5.5rem);
+  font-size: clamp(2rem, min(38cqh, 18cqw), 7rem);
   line-height: 1;
 }
 .wc-dashboard .gr-icon {
-  font-size: clamp(1.8rem, min(30cqh, 12cqw), 5.5rem);
+  font-size: clamp(2rem, min(45cqh, 22cqw), 9rem);
   line-height: 1;
   filter: none;
 }

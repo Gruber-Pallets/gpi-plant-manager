@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 12:55 PM
+
+- **GOAT Race widget — goat stacks under the number, zero horizontal padding** — the delta line was `+5 AHEAD 🐐` on one row; widget didn't fill vertical space well. Now `+5 AHEAD` sits on top with the 🐐 stacked below, and both scale much bigger (`min(38cqh, 18cqw)` for the number, `min(45cqh, 22cqw)` for the goat). Widget padding zeroed on left/right (title gets a small 8px inset so it doesn't touch the edge). The goat now reads as the focal point of the widget at any height.
+
 ### 12:51 PM
 
 - **Progress charts now stay in sync with the Pallets banner** — the operator dashboard's 15-min progress chart and Cumulative Daily chart appeared "really behind" the live Pallets banner. Root cause: the truncation filter compared **wall-clock bucket offsets** (`i * 15` from shift start) against **productive elapsed minutes** (`shift_elapsed_minutes` subtracts breaks). After every break, the chart appeared frozen for `break_minutes` of wall-clock time because the productive elapsed lagged behind. Typical 30-min lunch → chart looks ~30 min behind for the rest of the day. Fix: new `_elapsed_wall_clock_minutes(day)` helper computes minutes since `shift_start_for(day)` directly from `datetime.now(SITE_TZ)`, no break subtraction. `fifteen_min_progress_buckets` now uses this for both the `in_progress` flag and the truncation filter. Pallets banner data path unchanged (still uses productive elapsed for GOAT-pace prorating). Added a regression test that pins the wall-clock semantics with a 30-min break scenario.
