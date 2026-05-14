@@ -21,6 +21,7 @@
 {% from "_tv_header.html" import tv_header %}
 {{ tv_header("Recycling VS", crumb="VALUE STREAMS · TODAY") }}
 {% endif %}
+{% if not tv_mode %}
 <header>
   <div style="display:flex;gap:1.25rem;align-items:center">
     <a href="/recycling" style="display:flex;align-items:center;gap:0.55rem;text-decoration:none;color:inherit">
@@ -59,6 +60,7 @@
   </form>
 </header>
 {% include "_dashboards_subnav.html" %}
+{% endif %}
 {% macro widget_attrs(id, dx, dy, dw, dh) -%}
   {%- set l = layout.get(id, {'x': dx, 'y': dy, 'w': dw, 'h': dh}) -%}
   gs-id="{{ id }}" gs-x="{{ l.x }}" gs-y="{{ l.y }}" gs-w="{{ l.w }}" gs-h="{{ l.h }}"
@@ -161,10 +163,12 @@
   {%- if c -%}style="--wc: {{ c }}; {{ role }}: {{ c }} !important"{%- endif -%}
 {%- endmacro %}
 
+{% if not tv_mode %}
 <div class="edit-bar">
   <span class="save-indicator" id="save-indicator">Drag / resize — layout auto-saves</span>
   <button type="button" id="reset-layout">Reset Layout</button>
 </div>
+{% endif %}
 
 <main>
   <div class="grid-stack">
@@ -181,7 +185,7 @@
       {% set align = customs.get(kid, {}).get('align', 'center') %}
       <div class="grid-stack-item" {{ widget_attrs(kid, kdef_x, 0, 3, 2) }}>
         <div class="grid-stack-item-content align-{{ align }}">
-          {{ edit_controls(kid, ktitle, 'kpi') }}
+          {% if not tv_mode %}{{ edit_controls(kid, ktitle, 'kpi') }}{% endif %}
           <div class="label">{{ widget_title(kid, ktitle) }}</div>
           <div class="val" {{ widget_color_style(kid, 'color') }}>{{ kval }}</div>
         </div>
@@ -190,7 +194,7 @@
 
     <div class="grid-stack-item" {{ widget_attrs('dismantler-bars', 0, 2, 6, 4) }}>
       <div class="grid-stack-item-content">
-        {{ edit_controls('dismantler-bars', 'Pallets by Work Center — Dismantlers', 'bars') }}
+        {% if not tv_mode %}{{ edit_controls('dismantler-bars', 'Pallets by Work Center — Dismantlers', 'bars') }}{% endif %}
         <h3>{{ widget_title('dismantler-bars', 'Pallets by Work Center — Dismantlers') }}</h3>
         <div class="widget-body">
           {{ bar_chart('dismantler-bars', dismantler_bars) }}
@@ -200,7 +204,7 @@
 
     <div class="grid-stack-item" {{ widget_attrs('repair-bars', 6, 2, 6, 4) }}>
       <div class="grid-stack-item-content">
-        {{ edit_controls('repair-bars', 'Pallets by Work Center — Repairs', 'bars') }}
+        {% if not tv_mode %}{{ edit_controls('repair-bars', 'Pallets by Work Center — Repairs', 'bars') }}{% endif %}
         <h3>{{ widget_title('repair-bars', 'Pallets by Work Center — Repairs') }}</h3>
         <div class="widget-body">
           {{ bar_chart('repair-bars', repair_bars) }}
@@ -252,7 +256,7 @@
 
     <div class="grid-stack-item" {{ widget_attrs('dismantler-progress', 0, 6, 12, 5) }}>
       <div class="grid-stack-item-content" {% set pc = customs.get('dismantler-progress', {}).get('color') %}{% if pc %}style="--hit: {{ pc }}"{% endif %}>
-        {{ edit_controls('dismantler-progress', 'All Dismantlers — 15-minute progress', 'progress') }}
+        {% if not tv_mode %}{{ edit_controls('dismantler-progress', 'All Dismantlers — 15-minute progress', 'progress') }}{% endif %}
         <h3>{{ widget_title('dismantler-progress', 'All Dismantlers — 15-minute progress') }}</h3>
         <div class="widget-body">
           {% if dismantler_progress %}
@@ -266,7 +270,7 @@
 
     <div class="grid-stack-item" {{ widget_attrs('repair-progress', 0, 11, 12, 5) }}>
       <div class="grid-stack-item-content" {% set pc = customs.get('repair-progress', {}).get('color') %}{% if pc %}style="--hit: {{ pc }}"{% endif %}>
-        {{ edit_controls('repair-progress', 'All Repairs — 15-minute progress', 'progress') }}
+        {% if not tv_mode %}{{ edit_controls('repair-progress', 'All Repairs — 15-minute progress', 'progress') }}{% endif %}
         <h3>{{ widget_title('repair-progress', 'All Repairs — 15-minute progress') }}</h3>
         <div class="widget-body">
           {% if repair_progress %}
@@ -280,7 +284,7 @@
 
     <div class="grid-stack-item" {{ widget_attrs('dismantler-cumulative', 0, 16, 12, 5) }}>
       <div class="grid-stack-item-content" {% set pc = customs.get('dismantler-cumulative', {}).get('color') %}{% if pc %}style="--good: {{ pc }}"{% endif %}>
-        {{ edit_controls('dismantler-cumulative', 'All Dismantlers — Daily Progress', 'progress') }}
+        {% if not tv_mode %}{{ edit_controls('dismantler-cumulative', 'All Dismantlers — Daily Progress', 'progress') }}{% endif %}
         <span class="people-count" title="{% if is_range %}Total person-days in this group across the range{% else %}People scheduled in this group{% endif %}">{{ dismantler_people }}{% if is_range %} pd{% endif %}</span>
         <h3>{{ widget_title('dismantler-cumulative', 'All Dismantlers — Daily Progress') }}</h3>
         <div class="widget-body">
@@ -295,7 +299,7 @@
 
     <div class="grid-stack-item" {{ widget_attrs('repair-cumulative', 0, 21, 12, 5) }}>
       <div class="grid-stack-item-content" {% set pc = customs.get('repair-cumulative', {}).get('color') %}{% if pc %}style="--good: {{ pc }}"{% endif %}>
-        {{ edit_controls('repair-cumulative', 'All Repairs — Daily Progress', 'progress') }}
+        {% if not tv_mode %}{{ edit_controls('repair-cumulative', 'All Repairs — Daily Progress', 'progress') }}{% endif %}
         <span class="people-count" title="{% if is_range %}Total person-days in this group across the range{% else %}People scheduled in this group{% endif %}">{{ repair_people }}{% if is_range %} pd{% endif %}</span>
         <h3>{{ widget_title('repair-cumulative', 'All Repairs — Daily Progress') }}</h3>
         <div class="widget-body">
@@ -310,7 +314,7 @@
 
     <div class="grid-stack-item" {{ widget_attrs('downtime-report', 0, 26, 12, 4) }}>
       <div class="grid-stack-item-content" {% set dc = customs.get('downtime-report', {}).get('color') %}{% if dc %}style="--good-color: {{ dc }}"{% endif %}>
-        {{ edit_controls('downtime-report', 'Downtime Report', 'downtime') }}
+        {% if not tv_mode %}{{ edit_controls('downtime-report', 'Downtime Report', 'downtime') }}{% endif %}
         <h3>{{ widget_title('downtime-report', 'Downtime Report — green = working, red = down (shift-scoped)') }}</h3>
         <div class="widget-body">
           {% if elapsed_minutes == 0 %}
@@ -366,7 +370,10 @@
     margin: 8,
     float: false,
     handle: '.grid-stack-item-content > h3, .grid-stack-item-content > .label',
+    staticGrid: {{ 'true' if tv_mode else 'false' }},
   });
+
+  {% if not tv_mode %}
   const indicator = document.getElementById('save-indicator');
   let saveTimer = null;
 
@@ -439,6 +446,7 @@
     el.addEventListener('mousedown', e => e.stopPropagation());
     el.addEventListener('touchstart', e => e.stopPropagation());
   });
+  {% endif %}
 
   // Inline-assign popover for "(no assignment)" bars.
   (function () {
