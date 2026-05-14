@@ -313,26 +313,25 @@
   });
 
   if (tvMode) {
-    // After init, query the actual layout extent (handles any saved
-    // layout, not just template defaults) and resize cellHeight so the
-    // whole grid fits the viewport without scrolling.
-    const items = grid.save(false);
-    let maxRows = 0;
-    for (const it of items) {
-      if (it.id) {
-        const bottom = (it.y || 0) + (it.h || 1);
-        if (bottom > maxRows) maxRows = bottom;
+    function fitGridToViewport() {
+      const items = grid.save(false);
+      let maxRows = 25;  // fallback matches operator defaults
+      for (const it of items) {
+        if (it.id) {
+          const bottom = (it.y || 0) + (it.h || 1);
+          if (bottom > maxRows) maxRows = bottom;
+        }
       }
+      const headerEl = document.querySelector('.tv-header');
+      const headerHeight = headerEl ? Math.ceil(headerEl.getBoundingClientRect().height) : 80;
+      const safety = 8;
+      const available = window.innerHeight - headerHeight - (maxRows - 1) * tvMargin - safety;
+      const target = Math.max(16, Math.floor(available / maxRows));
+      grid.cellHeight(target);
     }
-    if (maxRows < 1) maxRows = 25;
-    const headerReserve = 80;
-    const targetCellH = Math.max(
-      20,
-      Math.floor(
-        (window.innerHeight - headerReserve - (maxRows - 1) * tvMargin) / maxRows
-      )
-    );
-    grid.cellHeight(targetCellH);
+    fitGridToViewport();
+    requestAnimationFrame(fitGridToViewport);
+    window.addEventListener('resize', fitGridToViewport);
   }
 
   {% if not tv_mode %}

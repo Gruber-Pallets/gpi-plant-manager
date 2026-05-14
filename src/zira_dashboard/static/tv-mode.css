@@ -73,7 +73,18 @@ html[data-tv-theme] body {
 /* Belt-and-suspenders: grid items themselves clip content so a small
    miscalc on cellHeight doesn't let widget content bleed onto the
    widget below (which previously read as "doubled up"). */
-html[data-tv-theme] .grid-stack-item { overflow: hidden; }
+html[data-tv-theme] .grid-stack-item { overflow: hidden !important; }
+html[data-tv-theme] .grid-stack {
+  overflow: hidden !important;
+  position: relative;
+  max-height: 100vh;
+}
+html[data-tv-theme] main {
+  overflow: hidden;
+  max-height: 100vh;
+  padding: 0 !important;
+  margin: 0 !important;
+}
 html[data-tv-theme] .kpi .label { font-size: 0.85rem; }
 html[data-tv-theme] .kpi .val { font-size: 3.4rem; font-weight: 800; }
 html[data-tv-theme] .bar-row .name-primary,

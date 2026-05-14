@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 11:25 AM
+
+- **TV scaling — measure actual header, fit on every resize** — the prior cellHeight formula reserved a hardcoded 80px for the TV header, but the header scales with root font, so on a 1440p+ TV it's actually 100-120px and the layout still overflowed. The JS now `getBoundingClientRect`s the `.tv-header` element to get its real rendered height. The fit also runs twice (once on init + once on `requestAnimationFrame`) in case the first call mistimed against font loading, plus on every `resize` event. CSS strengthened: `html`, `body`, `main`, `.grid-stack`, and `.grid-stack-item` all get `overflow: hidden` (with `!important` on the latter two) so nothing can render outside its widget bounds. `.grid-stack` and `main` get `max-height: 100vh`. Body padding/margin zeroed in TV mode so chrome can't sneak in extra space.
+
 ### 11:16 AM
 
 - **TV scaling fixes — no more overflow or overlapping widgets** — the prior viewport-scaling pass left two problems on Recycling VS TVs: widgets ran off the bottom of the screen, and content from one widget appeared to "double up" onto the next. Two root causes, both fixed: (1) the cellHeight formula was based on a hardcoded `nRows=30` but didn't subtract the gridstack margin (8px × 29 gaps = 232px extra). Now the JS queries the *actual* rendered layout extent via `grid.save(false)` after init and computes `cellHeight = (innerHeight - 80 - (maxRows - 1) * 2) / maxRows`. Works correctly with any saved layout, not just the template defaults. (2) Gridstack `margin` is reduced to `2` in TV mode (from `8`) so margin overhead doesn't eat into available height. Plus `html` and `body` now get `height: 100%; overflow: hidden` in TV mode — TVs can't scroll anyway, and the hard-clip prevents any small miscalc from producing the "doubled" overlap effect. Belt-and-suspenders `.grid-stack-item { overflow: hidden }` so widget content can't bleed past its widget bounds. Operator dashboard (`/tv/wc/{slug}`) got the same fix.
