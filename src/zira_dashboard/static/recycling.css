@@ -438,6 +438,67 @@
   .stacked-track .good { background: var(--good-color, var(--good)); height: 100%; }
   .stacked-track .bad  { background: var(--bad);  height: 100%; }
 
+  /* Downtime Report vertical-bars layout. Each WC is a column with the
+     downtime minutes on top, a vertical stacked track (red down on top
+     of green working) in the middle, and the WC/operator name at the
+     bottom. Bars scale with widget height; column text scales by both
+     widget height (cqh) and widget width (cqw) so the widget fits any
+     gridstack size. */
+  .downtime-vbars {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    align-items: stretch;
+    gap: clamp(4px, 1.2cqw, 14px);
+    width: 100%;
+  }
+  .downtime-vbar-col {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: clamp(2px, 0.8cqh, 6px);
+  }
+  .downtime-vbar-val {
+    flex: 0 0 auto;
+    font-size: clamp(0.7rem, min(7cqh, 2.5cqw), 1.4rem);
+    font-weight: 700;
+    color: var(--bad);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .downtime-vbar-track {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;     /* red top, green bottom */
+    background: var(--panel-2);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .downtime-vbar-track .bad  { width: 100%; background: var(--bad); }
+  .downtime-vbar-track .good { width: 100%; background: var(--good-color, var(--good)); }
+  .downtime-vbar-name {
+    flex: 0 0 auto;
+    text-align: center;
+    line-height: 1.05;
+    font-size: clamp(0.6rem, min(5cqh, 2cqw), 1.1rem);
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+  .downtime-vbar-name .name-primary,
+  .downtime-vbar-name .name-secondary {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .downtime-vbar-name .name-primary { font-weight: 600; color: var(--fg); }
+  .downtime-vbar-name .name-secondary { color: var(--muted); font-size: 0.85em; }
+
   /* 15-min progress chart */
   .progress {
     margin-top: 0.5rem;

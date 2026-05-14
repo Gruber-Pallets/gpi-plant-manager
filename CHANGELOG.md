@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 3:08 PM
+
+- **Downtime Report rotated to vertical bars** — was horizontal rows (operator name on left, stacked working/down bar in middle, downtime minutes on right). Now each work-center is a vertical column: downtime minutes label on top, vertical stacked track in the middle (red on top of green so the red "down" portion is what you see growing), operator/WC name at the bottom. New `.downtime-vbars` flex layout in `recycling.css` with cqh/cqw-scaled fonts so columns adapt to widget size. Reads more like a bar chart and packs more WCs into the same widget width.
+
 ### 3:05 PM
 
 - **Recycling VS: Downtime Report shows total at top-right; standalone Total Downtime KPI dropped** — `recycling.html`'s downtime-report widget now sums `downtime_rows | sum(attribute='down')` and renders a `.widget-total` div ("Total Xm") that the TV-mode CSS from the prior commit pins to the top-right corner of the widget. In screen mode it falls through to the existing `.widget-total` styling at the bottom of `widget-body`. The redundant `kpi-downtime` ("Total Downtime") KPI tile is removed from `kpi_defs` since the same number now lives on the Downtime widget itself. Saved layouts referencing `kpi-downtime` become orphaned — Gridstack ignores them silently.
