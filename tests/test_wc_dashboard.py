@@ -243,3 +243,46 @@ def test_operator_dashboard_persists_to_operator_layout_endpoint(monkeypatch):
     r = c.get("/wc/repair-1")
     assert "/api/layout/operator" in r.text
     assert "/api/layout/wc:" not in r.text
+
+
+def test_operator_dashboard_has_widget_edit_buttons(monkeypatch):
+    """Every editable widget has a ⋮ button + a hidden edit panel."""
+    _stub_wc(monkeypatch)
+    c = TestClient(app)
+    r = c.get("/wc/repair-1")
+    assert r.status_code == 200
+    for wid in ("kpi-units", "kpi-uptime", "kpi-downtime", "kpi-pph",
+                "pallets-banner", "progress-15min", "cumulative-daily",
+                "downtime-row", "goat-race", "monthly-ribbons"):
+        assert f'data-widget="{wid}"' in r.text, f"missing edit btn for {wid}"
+
+
+def test_tv_wc_dashboard_omits_edit_buttons(monkeypatch):
+    """TV view skips edit chrome (no ⋮ buttons, no edit panels)."""
+    _stub_wc(monkeypatch)
+    c = TestClient(app)
+    r = c.get("/tv/wc/repair-1")
+    assert r.status_code == 200
+    assert 'widget-edit-btn' not in r.text
+    assert 'class="widget-edit"' not in r.text
+
+
+def test_operator_dashboard_applies_custom_titles(monkeypatch):
+    """A title saved via widget_customizer flows into the rendered HTML."""
+    _stub_wc(monkeypatch)
+    from zira_dashboard import widget_customizer
+    monkeypatch.setattr(
+        widget_customizer, "load_all",
+        lambda page: {"kpi-units": {"title": "Pallets Done"}} if page == "operator" else {},
+    )
+    c = TestClient(app)
+    r = c.get("/wc/repair-1")
+    assert "Pallets Done" in r.text
+
+
+def test_operator_dashboard_posts_widget_edits_to_operator_endpoint(monkeypatch):
+    """The JS save/reset handlers target /api/widget/operator/{id}."""
+    _stub_wc(monkeypatch)
+    c = TestClient(app)
+    r = c.get("/wc/repair-1")
+    assert "/api/widget/operator/" in r.text

@@ -7,6 +7,7 @@
 {% from "_tv_header.html" import tv_header %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 {% from "_cumulative_progress_chart.html" import cumulative_progress_chart %}
+{% from "_widget_edit_controls.html" import edit_controls %}
 
 {# Layout-aware grid-item attributes. customs/layout dicts come from the
    route. Falls back to (dx, dy, dw, dh) defaults if no user-saved layout
@@ -113,6 +114,7 @@
     {% set align = customs.get(kid, {}).get('align', 'center') %}
     <div class="grid-stack-item" {{ widget_attrs(kid, kdef_x, 0, 3, 2) }}>
       <div class="grid-stack-item-content align-{{ align }}">
+        {% if not tv_mode %}{{ edit_controls(kid, ktitle, 'kpi') }}{% endif %}
         <div class="label">{{ widget_title(kid, ktitle) }}</div>
         <div class="val" {{ widget_color_style(kid, 'color') }}>{{ kval }}</div>
       </div>
@@ -122,6 +124,7 @@
   {# Pallets banner. Start/now ticks land in Task 8. #}
   <div class="grid-stack-item" {{ widget_attrs('pallets-banner', 0, 2, 12, 2) }}>
     <div class="grid-stack-item-content">
+      {% if not tv_mode %}{{ edit_controls('pallets-banner', 'Today · Pallets', 'kpi') }}{% endif %}
       <h3>{{ widget_title('pallets-banner', 'Today · Pallets') }}</h3>
       <div class="pallets-banner">
         <div class="pallets-numbers">
@@ -138,6 +141,7 @@
   {# 15-min progress chart. #}
   <div class="grid-stack-item" {{ widget_attrs('progress-15min', 0, 4, 12, 5) }}>
     <div class="grid-stack-item-content">
+      {% if not tv_mode %}{{ edit_controls('progress-15min', '15-minute progress', 'progress') }}{% endif %}
       <h3>{{ widget_title('progress-15min', '15-minute progress') }}</h3>
       {% if progress_buckets %}
         {%- set max_val = namespace(v=progress_bucket_target) -%}
@@ -187,6 +191,7 @@
   {# Cumulative daily progress. #}
   <div class="grid-stack-item" {{ widget_attrs('cumulative-daily', 0, 9, 12, 5) }}>
     <div class="grid-stack-item-content">
+      {% if not tv_mode %}{{ edit_controls('cumulative-daily', 'Daily progress', 'progress') }}{% endif %}
       <h3>{{ widget_title('cumulative-daily', 'Daily progress') }}</h3>
       {% if progress_buckets %}
         {{ cumulative_progress_chart(progress_buckets) }}
@@ -199,6 +204,7 @@
   {# Downtime — single-row stacked working/down. #}
   <div class="grid-stack-item" {{ widget_attrs('downtime-row', 0, 14, 12, 3) }}>
     <div class="grid-stack-item-content">
+      {% if not tv_mode %}{{ edit_controls('downtime-row', 'Downtime · green = working, red = down', 'downtime') }}{% endif %}
       <h3>{{ widget_title('downtime-row', 'Downtime · green = working, red = down') }}</h3>
       {% if downtime_elapsed_minutes == 0 %}
         <div class="empty-state" style="color:var(--muted);font-size:0.85rem">No elapsed shift minutes on this day.</div>
@@ -218,6 +224,7 @@
   {# Vs. GOAT Pace. #}
   <div class="grid-stack-item" {{ widget_attrs('goat-race', 0, 17, 12, 4) }}>
     <div class="grid-stack-item-content">
+      {% if not tv_mode %}{{ edit_controls('goat-race', 'Vs. GOAT Pace', 'kpi') }}{% endif %}
       <h3>{{ widget_title('goat-race', 'Vs. GOAT Pace') }}{% if wc_group %} — {{ wc_group }}{% endif %}</h3>
       {% if goat_race %}
         <div class="goat-race">
@@ -243,6 +250,7 @@
   {# Monthly Ribbons. #}
   <div class="grid-stack-item" {{ widget_attrs('monthly-ribbons', 0, 21, 12, 4) }}>
     <div class="grid-stack-item-content">
+      {% if not tv_mode %}{{ edit_controls('monthly-ribbons', 'Monthly Ribbons', 'kpi') }}{% endif %}
       <h3>{{ widget_title('monthly-ribbons', 'Monthly Ribbons') }} — {{ month_name(month) }} {{ year }}{% if ribbons and ribbons.group %} · {{ ribbons.group }}{% endif %}</h3>
       {% if ribbons %}
         <ul class="ribbons-list">
@@ -319,6 +327,39 @@
       window.location.href = '/wc/' + e.target.value;
     });
   }
+
+  // Per-widget edit controls.
+  function openEdit(btn) {
+    const content = btn.closest('.grid-stack-item-content');
+    content.querySelector('.widget-edit').hidden = false;
+  }
+  function closeEdit(btn) {
+    const content = btn.closest('.grid-stack-item-content');
+    content.querySelector('.widget-edit').hidden = true;
+  }
+  function saveWidget(btn, id) {
+    const panel = btn.closest('.widget-edit');
+    const cfg = {};
+    panel.querySelectorAll('input[name], select[name]').forEach(el => {
+      const k = el.name;
+      if (el.type === 'checkbox') cfg[k] = el.checked;
+      else cfg[k] = el.value;
+    });
+    fetch('/api/widget/operator/' + encodeURIComponent(id), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(cfg),
+    }).then(r => { if (r.ok) location.reload(); });
+  }
+  function resetWidget(btn, id) {
+    fetch('/api/widget/operator/' + encodeURIComponent(id), {method: 'DELETE'})
+      .then(r => { if (r.ok) location.reload(); });
+  }
+  // Prevent Gridstack from starting a drag when interacting with the edit panel.
+  document.querySelectorAll('.widget-edit, .widget-edit-btn').forEach(el => {
+    el.addEventListener('mousedown', e => e.stopPropagation());
+    el.addEventListener('touchstart', e => e.stopPropagation());
+  });
   {% endif %}
 </script>
 {{ hover_tip_clamp_script() }}
