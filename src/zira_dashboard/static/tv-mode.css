@@ -48,9 +48,18 @@ html[data-tv-theme] .empty-state a {
   display: none !important;
 }
 
-/* ---- Bigger everything for plant-floor viewing ---- */
+/* ---- Viewport-relative root font-size for TV mode ----
+ * Every rem-based size in the dashboards scales proportionally with
+ * the TV's viewport width. Floor at 16px so tiny kiosk screens don't
+ * collapse; ceiling at 40px so 8K-class TVs don't go cartoonish.
+ * Around 1.1vw gives roughly: 1080p -> 21px, 1440p -> 28px, 4K -> 40px.
+ * Screen-mode pages don't set data-tv-theme, so this rule never
+ * affects the editor view — desktops/laptops keep their browser
+ * default ~16px root font-size. */
+html[data-tv-theme] {
+  font-size: clamp(16px, 1.1vw, 40px);
+}
 html[data-tv-theme] body {
-  font-size: 18px;
   line-height: 1.4;
 }
 html[data-tv-theme] .kpi .label { font-size: 0.85rem; }
@@ -61,27 +70,27 @@ html[data-tv-theme] .widget-total { font-size: 1.6rem; font-weight: 800; }
 html[data-tv-theme] table.sched,
 html[data-tv-theme] .panel h3 { font-size: 1.25rem; }
 
-/* ---- TV header layout ---- */
+/* ---- TV header layout — all rem so it scales with the root font ---- */
 html[data-tv-theme] .tv-header {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: end;
   gap: 1rem;
-  padding: 18px 28px 12px;
+  padding: 1rem 1.6rem 0.7rem;
   border-bottom: 2px solid var(--border);
-  margin-bottom: 10px;
+  margin-bottom: 0.6rem;
 }
 html[data-tv-theme] .tv-header .crumb {
-  font-size: 12px;
-  letter-spacing: 2px;
+  font-size: 0.7rem;
+  letter-spacing: 0.125rem;
   opacity: 0.55;
   font-weight: 600;
   text-transform: uppercase;
 }
 html[data-tv-theme] .tv-header .name {
-  font-size: 38px;
+  font-size: 2.1rem;
   font-weight: 900;
   line-height: 1;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.03em;
 }
 html[data-tv-theme] .tv-header .right { text-align: right; }

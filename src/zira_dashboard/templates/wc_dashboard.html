@@ -301,12 +301,20 @@
 
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script>
+  const tvMode = {{ 'true' if tv_mode else 'false' }};
+  // In TV mode, scale cellHeight to the viewport so the full operator
+  // layout (~25 rows tall by default) fits any TV without scrolling.
+  // Screen mode keeps the fixed 60px row height.
+  const cellHeight = tvMode
+    ? Math.max(28, Math.floor((window.innerHeight - 80) / 25))
+    : 60;
   const grid = GridStack.init({
     column: 12,
-    cellHeight: 60,
+    cellHeight,
     margin: 8,
     float: false,
     handle: '.grid-stack-item-content > h3, .grid-stack-item-content > .label',
+    staticGrid: tvMode,
   });
 
   {% if not tv_mode %}

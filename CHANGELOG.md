@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 11:07 AM
+
+- **TV dashboards now scale to any screen size** — root font-size and GridStack row height both scale with TV viewport, so a 1080p, 1440p, and 4K TV all render the same layout, just bigger/smaller proportionally. Three changes: (1) `tv-mode.css` now sets `html[data-tv-theme] { font-size: clamp(16px, 1.1vw, 40px) }` — every rem-based size (operator strip, widget titles, KPI labels, ribbons rows, GOAT stats) scales with viewport width. ~21px on 1080p, ~28px on 1440p, 40px on 4K. (2) The `_tv_header` element converted from px to rem so its title + crumb scale with the same root. (3) GridStack `cellHeight` is computed per page load from `window.innerHeight`: `/recycling` uses `(innerHeight - 80) / 30` (its layout is ~30 rows tall), `/wc/{slug}` uses `(innerHeight - 80) / 25`, both with a 28px floor — so the full layout fills the TV without scrolling regardless of screen size. Screen-mode pages (`/recycling`, `/wc/{slug}` on a desktop) are unchanged — `data-tv-theme` is only set in TV mode and `cellHeight` stays at the original 60px.
+
 ### 11:00 AM
 
 - **Recycling VS TV view is now chrome-free like the operator TV view** — `/tv/{slug}` for Recycling VS was still rendering the regular page header (logo + Dashboards / Trophy Case / Staffing / Settings nav), the date-range toolbar, the dashboards sub-nav tabs, the auto-save edit-bar, and the per-widget `⋮` edit buttons. Gated all that chrome behind `{% if not tv_mode %}` in `recycling.html` so the TV view shows just the `_tv_header` + the widget grid. Also passed `staticGrid: true` to `GridStack.init` in TV mode so touchscreen TVs can't accidentally drag widgets around.
