@@ -244,9 +244,9 @@
             </div>
             <div class="gr-delta {{ 'ahead' if delta > 5 else ('behind' if delta < -5 else 'on-pace') }}">
               {% if delta > 5 %}
-                <span class="gr-num">+{{ delta }}</span><span class="gr-label">AHEAD 🔥</span>
+                <span class="gr-num">+{{ delta }}</span><span class="gr-label">AHEAD</span><span class="gr-icon" aria-hidden="true">🐐</span>
               {% elif delta < -5 %}
-                <span class="gr-num">{{ delta }}</span><span class="gr-label">BEHIND</span>
+                <span class="gr-num">{{ delta }}</span><span class="gr-label">BEHIND</span><span class="gr-icon" aria-hidden="true">🐐</span>
               {% else %}
                 <span class="gr-label gr-onpace">ON PACE</span>
               {% endif %}

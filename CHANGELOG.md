@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 10:16 AM
+
+- **GOAT widget delta line gets a big 🐐 next to the counter** — added a goat emoji after the AHEAD / BEHIND label, sized to match the number itself (`clamp(1.8rem, min(30cqh, 12cqw), 5.5rem)`). The delta line now reads `+5 AHEAD 🐐` / `-3 BEHIND 🐐`, doubling down on the GOAT theme. Replaces the earlier 🔥. ON PACE case omits it.
+
 ### 10:11 AM
 
 - **Vs. GOAT Pace widget redesigned** — the old "Today: X / GOAT pace now: Y / 🐐 …" three-line list didn't communicate the race. New layout, three sections stacked top-to-bottom: (1) ratio line `<units> of <pace_now> on pace` plus a chunky horizontal bar that fills to `units / pace_now` and is green when ahead, red when behind. The bar's max IS the GOAT's prorated pace at this moment — *not* the full-day record — so you immediately see "am I keeping up?" at a glance. (2) Big delta number front and center: `+5 AHEAD 🔥` or `-3 BEHIND` (or `ON PACE` when within ±5 of pace) in matching green/red. (3) Footer names the record to beat: `🐐 Beat 180 to top Dale Smith`. Designed to read well at `gs-w=3` so the widget doesn't need to be wider than three tiles. Pre-shift fallback (pace_now=0) shows current units centered with the record line below. No-record-yet fallback shows units + "set the bar!".

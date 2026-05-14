@@ -273,6 +273,11 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
   font-size: clamp(1.8rem, min(30cqh, 12cqw), 5.5rem);
   line-height: 1;
 }
+.wc-dashboard .gr-icon {
+  font-size: clamp(1.8rem, min(30cqh, 12cqw), 5.5rem);
+  line-height: 1;
+  filter: none;
+}
 .wc-dashboard .gr-label {
   font-size: clamp(0.85rem, min(10cqh, 3.5cqw), 1.8rem);
   letter-spacing: 1.2px;
