@@ -314,14 +314,18 @@
 
   if (tvMode) {
     function fitGridToViewport() {
+      // Measure the TRUE max y+h from items, starting at 0. Initializing
+      // to 25 (the operator-defaults extent) made layouts smaller than
+      // the default leave dead space at the bottom.
       const items = grid.save(false);
-      let maxRows = 25;  // fallback matches operator defaults
+      let maxRows = 0;
       for (const it of items) {
         if (it.id) {
           const bottom = (it.y || 0) + (it.h || 1);
           if (bottom > maxRows) maxRows = bottom;
         }
       }
+      if (maxRows < 1) maxRows = 25;  // safety fallback only if grid is empty
       const headerEl = document.querySelector('.tv-header');
       const headerHeight = headerEl ? Math.ceil(headerEl.getBoundingClientRect().height) : 80;
       const safety = 8;

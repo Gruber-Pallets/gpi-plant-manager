@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 12:26 PM
+
+- **TV dashboards: dead space at the bottom fixed** — the `maxRows` calculation in the fit-to-viewport JS initialized to the *fallback default* (30 for recycling, 25 for operator) and only ever raised the value as it iterated. So if the actual saved layout fit in 18 rows, `maxRows` stayed at 30 — cellHeight got computed for a 30-row layout, widgets filled only 18/30 of the screen, leaving 40% empty at the bottom. Fix is one line per file: initialize `maxRows = 0`, raise it from items, fall back to 30 only when the grid is empty. Now the widget grid expands to fill the full TV viewport regardless of saved layout extent.
+
 ### 12:18 PM
 
 - **TV view: per-row labels actually fit, footer + resize handles hidden** — screenshot from a 1080p TV showed three concrete problems my prior scaling pass introduced: (1) bar-row labels (operator names) in the Pallets-by-WC and Downtime widgets were stacking on top of each other because the screen-mode CSS floor of `0.9rem` on `.bar-row .name` was bigger than the per-row pixel slice when a widget has 6 dismantlers and only ~100px of vertical space. (2) The in-page footer ("Refreshed … · What's new ↗") rendered at the bottom — that should be gated to screen mode only. (3) Gridstack's resize-handle chevrons still painted despite `staticGrid: true`. Fixes: TV-mode CSS drops the bar-row name font floor to `0.5rem`, hides every `.ui-resizable-*` handle, and stops the `What's new` + Refreshed footer from rendering in TV mode. Also removed the `max-height: 100vh` clamp on `.grid-stack` and `main` since it was clipping chart content visible at the bottom of the dashboard.
