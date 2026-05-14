@@ -7,7 +7,7 @@
 {% from "_tv_header.html" import tv_header %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 {% from "_cumulative_progress_chart.html" import cumulative_progress_chart %}
-{% from "_widget_edit_controls.html" import edit_controls %}
+{% from "_widget_edit_controls.html" import edit_controls with context %}
 
 {# Layout-aware grid-item attributes. customs/layout dicts come from the
    route. Falls back to (dx, dy, dw, dh) defaults if no user-saved layout

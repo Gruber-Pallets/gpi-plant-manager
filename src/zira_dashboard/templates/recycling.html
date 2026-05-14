@@ -12,7 +12,7 @@
 <meta http-equiv="refresh" content="60">
 {% endif %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
-{% from "_widget_edit_controls.html" import edit_controls %}
+{% from "_widget_edit_controls.html" import edit_controls with context %}
 <style>{{ goat_badges_css() }}</style>
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 </head>

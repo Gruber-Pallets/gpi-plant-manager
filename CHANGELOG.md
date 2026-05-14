@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 9:11 AM
+
+- **Hotfix — / and /recycling were 500'ing** — the 9:07 AM "Operator dashboard polish" deploy broke every page that imports the shared `edit_controls` Jinja partial. Jinja's `{% from … import macro %}` does NOT pass the calling template's context to the imported macro by default, and the macro reads `customs.get(id, {})` — so every render raised `UndefinedError: 'customs' is undefined`. Fix: add `with context` to the import line on `recycling.html` and `wc_dashboard.html` so the macro sees the page's `customs` dict.
+
 ### 9:07 AM
 
 - **Operator dashboard polish** — `/wc/{slug}` now mirrors `/recycling`'s editor features. The KPI row is split into four resizable widgets (`Units today`, `Up Time`, `Downtime`, `Pallets / hr`) so you can size each one to taste. Every widget gets a `⋮` edit panel — change the title, color, alignment, legend/target toggles where they apply. Layout **auto-saves on drag/resize** with a "Saved" indicator, plus a Reset Layout button to restore defaults. **Customize once → applies to every WC** — layout + widget customizations share a single `page="operator"` key in the database, so dragging KPIs around on Repair 1's dashboard reshapes Dismantler 2's too. A new band under the WC picker shows the work-center name and the scheduled operator(s) from the Plant Scheduler (falls back to `(unassigned)` when no one's assigned). The pallets banner now has the same **start/now axis ticks** `/recycling` uses on its bar rows — a tick where you should be right now plus `start · HH:MM` / `now · HH:MM` labels. GOAT Pace, Monthly Ribbons, KPI value text, and the pallets banner number all **scale with widget size** via CSS container queries — make the widget bigger, the text gets bigger. KPI text is **black on the light theme, white on the dark theme**. The 15-minute progress and cumulative daily charts now **stop at "now"** instead of running the whole shift. Legacy per-WC layout rows (`wc:repair-1`, …) are dropped on the next boot.
