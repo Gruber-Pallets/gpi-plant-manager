@@ -163,3 +163,28 @@ def test_tv_displays_custom_dashboard_id_column_dropped():
     )
     names = {r["column_name"] for r in cols}
     assert "custom_dashboard_id" not in names
+
+
+def test_bootstrap_drops_legacy_wc_layouts_and_customizations():
+    """The earlier per-WC operator dashboard saved rows under page='wc:{slug}'.
+    After the switch to a shared page='operator' key, those rows are
+    orphaned — bootstrap drops them on every boot."""
+    db.init_pool()
+    db.bootstrap_schema()
+    # Seed legacy rows the way the old code did.
+    db.execute(
+        "INSERT INTO widget_layouts (page, layout, updated_at) "
+        "VALUES ('wc:repair-1', '[]'::jsonb, now()) "
+        "ON CONFLICT (page) DO UPDATE SET layout = EXCLUDED.layout"
+    )
+    db.execute(
+        "INSERT INTO widget_customizations (page, widget_id, customizations) "
+        "VALUES ('wc:repair-1', 'kpi-units', '{}'::jsonb) "
+        "ON CONFLICT (page, widget_id) DO UPDATE SET customizations = EXCLUDED.customizations"
+    )
+    # Re-run bootstrap; cleanup should drop both.
+    db.bootstrap_schema()
+    layouts = db.query("SELECT page FROM widget_layouts WHERE page LIKE 'wc:%'")
+    customs = db.query("SELECT page FROM widget_customizations WHERE page LIKE 'wc:%'")
+    assert layouts == [], f"legacy widget_layouts rows still present: {layouts}"
+    assert customs == [], f"legacy widget_customizations rows still present: {customs}"

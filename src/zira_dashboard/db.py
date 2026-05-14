@@ -568,6 +568,13 @@ DELETE FROM tv_displays WHERE kind = 'custom';
 ALTER TABLE tv_displays DROP CONSTRAINT IF EXISTS tv_displays_kind_check;
 ALTER TABLE tv_displays ADD CONSTRAINT tv_displays_kind_check
   CHECK (kind IN ('vs_recycling', 'vs_new', 'wc'));
+
+-- Operator dashboard switch (2026-05-14): the per-WC widget layouts
+-- saved under page='wc:{slug}' are orphaned now that every /wc/{slug}
+-- reads/writes a single shared key 'operator'. Drop them so the table
+-- stays clean. Idempotent — once empty, this is a no-op.
+DELETE FROM widget_layouts        WHERE page LIKE 'wc:%';
+DELETE FROM widget_customizations WHERE page LIKE 'wc:%';
 """
 
 
