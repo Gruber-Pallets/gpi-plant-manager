@@ -23,7 +23,6 @@ from .routes import (
     admin,
     api_layout,
     changelog,
-    custom_dashboards,
     dashboard,
     late_report,
     leaderboards,
@@ -36,10 +35,8 @@ from .routes import (
     time_off,
     trophies,
     tv_displays,
-    tv_templates,
     value_streams,
     wc_dashboard,
-    widgets,
 )
 
 
@@ -169,10 +166,8 @@ async def lifespan(app: FastAPI):
     """
     db.init_pool()
     db.bootstrap_schema()
-    from . import tv_displays_store, widget_definitions_store, pinned_dashboards_store
+    from . import tv_displays_store
     tv_displays_store.seed_defaults_if_empty()
-    widget_definitions_store.seed_defaults_if_empty()
-    pinned_dashboards_store.seed_defaults_if_empty()
     _prewarm_stratustime()
     warmer_task = asyncio.create_task(_warm_zira_cache_loop())
     st_warmer_task = asyncio.create_task(_warm_stratustime_loop())
@@ -255,11 +250,8 @@ async def _static_cache_headers(request, call_next):
 
 # Mount each feature router. URL paths are owned by the routers themselves.
 app.include_router(dashboard.router)
-app.include_router(custom_dashboards.router)
 app.include_router(value_streams.router)
 app.include_router(wc_dashboard.router)
-app.include_router(widgets.router)
-app.include_router(tv_templates.router)
 app.include_router(tv_displays.router)
 app.include_router(staffing.router)
 app.include_router(late_report.router)

@@ -627,6 +627,16 @@ CREATE TABLE IF NOT EXISTS pinned_dashboards (
 ALTER TABLE pinned_dashboards DROP CONSTRAINT IF EXISTS pinned_dashboards_kind_check;
 ALTER TABLE pinned_dashboards ADD CONSTRAINT pinned_dashboards_kind_check
   CHECK (kind IN ('vs_recycling', 'vs_new', 'vs_work_centers', 'wc', 'custom'));
+
+-- Tear-down (2026-05-14): workshop + custom dashboards experiment is gone.
+-- DROP order respects FK references: dashboard_widgets first
+-- (it references both custom_dashboards and widget_definitions).
+DROP TABLE IF EXISTS dashboard_widgets;
+DROP TABLE IF EXISTS custom_dashboards;
+DROP TABLE IF EXISTS widget_definitions;
+DROP TABLE IF EXISTS tv_dashboard_templates;
+DROP TABLE IF EXISTS pinned_dashboards;
+DELETE FROM tv_displays WHERE kind = 'custom';
 """
 
 
