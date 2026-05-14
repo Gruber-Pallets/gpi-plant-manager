@@ -232,14 +232,6 @@
         {% set delta = units - pace_now %}
         <div class="goat-race-v2">
           {% if goat_race.goat and pace_now > 0 %}
-            {%- set pct = ((units / pace_now * 100) if pace_now > 0 else 0) -%}
-            {%- if pct > 100 %}{% set pct = 100 %}{% endif -%}
-            <div class="gr-bar-block">
-              <div class="gr-ratio"><b>{{ units }}</b> <span class="gr-of">of</span> <b>{{ pace_now }}</b> <span class="gr-of">on pace</span></div>
-              <div class="gr-track">
-                <div class="gr-fill {{ 'ahead' if delta >= 0 else 'behind' }}" style="width: {{ pct }}%"></div>
-              </div>
-            </div>
             <div class="gr-delta {{ 'ahead' if delta > 5 else ('behind' if delta < -5 else 'on-pace') }}">
               {% if delta > 5 %}
                 <span class="gr-num">+{{ delta }}</span><span class="gr-label">AHEAD</span><span class="gr-icon" aria-hidden="true">🐐</span>
@@ -249,7 +241,10 @@
                 <span class="gr-label gr-onpace">ON PACE</span>
               {% endif %}
             </div>
-            <div class="gr-record">🐐 Beat <b>{{ goat_race.goat.units }}</b> to top {{ goat_race.goat.name }}</div>
+            <div class="gr-footer">
+              <div class="gr-ratio"><b>{{ units }}</b> <span class="gr-of">of</span> <b>{{ pace_now }}</b> <span class="gr-of">on pace</span></div>
+              <div class="gr-record">🐐 Beat <b>{{ goat_race.goat.units }}</b> to top {{ goat_race.goat.name }}</div>
+            </div>
           {% elif goat_race.goat %}
             {# Pre-shift / shift not yet underway — just show the target. #}
             <div class="gr-prelaunch">

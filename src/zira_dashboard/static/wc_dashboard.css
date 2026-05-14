@@ -131,12 +131,13 @@ main { padding: 12px 16px; }
   flex-shrink: 0;
 }
 
-/* Titles for Pallets/hr, GOAT Pace, Monthly Ribbons — bigger and always
-   pinned top-left regardless of the widget's align-X class. */
+/* Titles for Pallets/hr, GOAT Race, Monthly Ribbons — match the
+   Downtime Report's h3 sizing (clamp scales with widget height via
+   cqh) so all four widget titles read at the same size on TV. */
 .wc-dashboard .grid-stack-item[gs-id="kpi-pph"] .label,
 .wc-dashboard .grid-stack-item[gs-id="goat-race"] h3,
 .wc-dashboard .grid-stack-item[gs-id="monthly-ribbons"] h3 {
-  font-size: 0.95rem;
+  font-size: clamp(0.9rem, 6.5cqh, 1.3rem);
   letter-spacing: 1px;
   text-align: left;
   align-self: flex-start;
@@ -239,14 +240,26 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
   min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   gap: clamp(0.3rem, 1cqh, 0.8rem);
   padding-top: 0.2rem;
 }
-.wc-dashboard .gr-bar-block {
+.wc-dashboard .gr-delta {
+  flex: 1 1 auto;          /* delta fills remaining vertical space */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1;
+}
+.wc-dashboard .gr-footer {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0.2rem;
+  text-align: center;
 }
 .wc-dashboard .gr-ratio {
   font-size: clamp(0.85rem, min(7cqh, 3cqw), 1.4rem);
@@ -255,27 +268,6 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 }
 .wc-dashboard .gr-ratio b { font-weight: 800; }
 .wc-dashboard .gr-ratio .gr-of { color: var(--muted, #6b7280); font-weight: 500; }
-.wc-dashboard .gr-track {
-  height: clamp(14px, 9cqh, 40px);
-  background: var(--panel-2, #e3e8ee);
-  overflow: hidden;
-}
-.wc-dashboard .gr-fill {
-  height: 100%;
-  transition: width 0.3s ease;
-}
-.wc-dashboard .gr-fill.ahead  { background: var(--accent, #16a34a); }
-.wc-dashboard .gr-fill.behind { background: var(--bad, #ef4444); }
-.wc-dashboard .gr-delta {
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  font-weight: 800;
-  text-align: center;
-  line-height: 1;
-}
 .wc-dashboard .gr-num {
   font-size: clamp(1.8rem, min(30cqh, 12cqw), 5.5rem);
   line-height: 1;

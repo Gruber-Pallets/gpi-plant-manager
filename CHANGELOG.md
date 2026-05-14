@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 12:45 PM
+
+- **GOAT Race widget cleanup; unified widget titles on operator dashboard** — three changes. (1) Removed the bar graph from the GOAT Race widget; just the big +/- delta number with `🐐` remains. (2) Moved the `<units> of <pace> on pace` ratio line down next to the `🐐 Beat N to top Name` footer line — both at the bottom of the widget. (3) Pallets/hr, GOAT Race, and Monthly Ribbons titles now use the same `clamp(0.9rem, 6.5cqh, 1.3rem)` formula the Downtime Report's h3 uses, so all four widget headers read at the same size and scale with widget height the same way.
+
 ### 12:43 PM
 
 - **Pallets banner: "start · HH:MM" now sits at the actual bar's left edge** — the axis row was using recycling's `.bar-row.numpos-widget` grid template (`name | track | val` with the name column ~6-11rem wide), so the axis-track was offset rightward by the name-column width while the bar above it spanned the full banner. Result: "start · 07:00" rendered in the middle of the visible bar instead of at its left edge. Replaced with a plain `.pallets-axis > .axis-track` that spans the full banner width — start/now ticks now align with the bar above them.
