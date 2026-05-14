@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 3:11 PM
+
+- **Up Time KPI: no decimals, never wraps** — `kpi-uptime` template now formats as `uptime_pct|round(0)|int ~ ' %'` so "76.3 %" becomes "76 %". CSS adds `white-space: nowrap` to `.grid-stack-item-content .val` so the value never breaks to a second line on narrow widget widths.
+
 ### 3:08 PM
 
 - **Downtime Report rotated to vertical bars** — was horizontal rows (operator name on left, stacked working/down bar in middle, downtime minutes on right). Now each work-center is a vertical column: downtime minutes label on top, vertical stacked track in the middle (red on top of green so the red "down" portion is what you see growing), operator/WC name at the bottom. New `.downtime-vbars` flex layout in `recycling.css` with cqh/cqw-scaled fonts so columns adapt to widget size. Reads more like a bar chart and packs more WCs into the same widget width.

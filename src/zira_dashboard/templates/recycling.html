@@ -177,7 +177,7 @@
        the top-right of the Downtime Report widget via .widget-total. #}
     {% set kpi_defs = [
       ('kpi-pallets',   'Total Pallets Processed', '{:,}'.format(total_units)),
-      ('kpi-uptime',    'Up Time',                 uptime_pct ~ ' %'),
+      ('kpi-uptime',    'Up Time',                 uptime_pct|round(0)|int ~ ' %'),
       ('kpi-palletshr', 'pallets/hr/person',       pph_per_person),
     ] %}
     {% for k in kpi_defs %}

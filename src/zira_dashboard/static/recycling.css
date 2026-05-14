@@ -110,6 +110,7 @@
     font-size: clamp(1.56rem, 49cqh, 8rem);
     line-height: 1.05;
     flex: 0 0 auto;
+    white-space: nowrap;  /* never wrap "76 %" onto a second line */
   }
   .grid-stack-item-content .label {
     font-size: clamp(0.78rem, 10cqh, 1.25rem);
