@@ -32,7 +32,7 @@ def slug_for_wc(name: str) -> str:
     return s.strip("-")
 
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 
 def _load_wc(name: str):
@@ -401,3 +401,76 @@ def downtime_report(wc_name: str, day: date) -> dict:
     total = _station_total_for_wc(wc_name, day)
     total_minutes = int(total.downtime_minutes) if total else 0
     return {"events": events, "total_minutes": total_minutes}
+
+
+def kpi_tiles(wc_name: str, day: date) -> dict:
+    """KPI tile values for the operator dashboard. Single-WC scope.
+
+    Returns:
+      units_today (int)
+      downtime_minutes (int)
+      hours_elapsed (float) — elapsed shift hours so far (0 on weekends/pre-shift)
+      up_time_pct (float) — 0..100; 0 if no shift has elapsed
+      pallets_per_hour (float, 1 decimal)
+    """
+    from . import shift_config
+    units = _units_today_for_wc(wc_name, day)
+    report = downtime_report(wc_name, day) or {}
+    down = int(report.get("total_minutes", 0))
+    try:
+        full_minutes = shift_config.productive_minutes_per_day()
+    except Exception:
+        full_minutes = 480
+    elapsed_minutes = int(full_minutes * _shift_elapsed_fraction(day))
+    hours_elapsed = elapsed_minutes / 60.0 if elapsed_minutes > 0 else 0.0
+    if elapsed_minutes > 0:
+        up_time_pct = max(0.0, (elapsed_minutes - down) / elapsed_minutes * 100.0)
+    else:
+        up_time_pct = 0.0
+    pallets_per_hour = round(units / hours_elapsed, 1) if hours_elapsed > 0 else 0.0
+    return {
+        "units_today": units,
+        "downtime_minutes": down,
+        "hours_elapsed": round(hours_elapsed, 2),
+        "up_time_pct": round(up_time_pct, 1),
+        "pallets_per_hour": pallets_per_hour,
+    }
+
+
+def fifteen_min_progress_buckets(wc_name: str, day: date) -> dict:
+    """Per-15-min progress buckets in the shape /recycling's progress_chart
+    macro consumes:
+      {buckets: [{label, actual, target, in_progress}, ...], bucket_target}
+    """
+    from . import shift_config
+    raw = fifteen_min_increments(wc_name, day) or []
+    if not raw:
+        return {"buckets": [], "bucket_target": 0}
+    try:
+        full_minutes = shift_config.productive_minutes_per_day()
+    except Exception:
+        full_minutes = 480
+    elapsed = int(full_minutes * _shift_elapsed_fraction(day))
+    try:
+        shift_start = shift_config.shift_start_for(day)
+    except Exception:
+        shift_start = None
+    buckets: list[dict] = []
+    for b in raw:
+        offset = b["minute_offset"]
+        if shift_start is not None:
+            bucket_dt = datetime.combine(day, shift_start) + timedelta(minutes=offset)
+            hour = bucket_dt.hour
+            am_pm = "a" if hour < 12 else "p"
+            hour_12 = hour % 12 or 12
+            label = f"{hour_12}:{bucket_dt.minute:02d}{am_pm}"
+        else:
+            label = f"+{offset}m"
+        buckets.append({
+            "label": label,
+            "actual": int(b.get("units") or 0),
+            "target": int(b.get("target") or 0),
+            "in_progress": offset <= elapsed < offset + 15,
+        })
+    bucket_target = next((b["target"] for b in buckets if b["target"]), 0)
+    return {"buckets": buckets, "bucket_target": bucket_target}
