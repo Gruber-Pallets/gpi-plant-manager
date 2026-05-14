@@ -1,32 +1,25 @@
-{# Dashboards sub-nav strip.
+{# Dashboards sub-nav. Fixed 4-tab strip — no pinning, no workshop.
 
    Context required:
-     pinned_dashboards    — list of {kind, ref, name, open_url, key} from
-                            dashboard_catalog.pinned_dashboards_for_subnav()
-     active_dashboard_key — '{kind}:{ref}' for the current page, or
-                            'meta:dashboards' / 'meta:widgets' for the
-                            management pages, or None.
-
-   Pinned dashboards appear left-aligned in pin order; "My Dashboards"
-   and "Workshop" are anchored on the right.
+     active_dashboard_key — one of 'vs_recycling', 'vs_new',
+                            'vs_work_centers', or a string starting with
+                            'wc:' (any WC = Operator tab active).
 #}
 <nav class="dash-subnav">
-  <div class="pinned-tabs">
-    {% for p in pinned_dashboards %}
-      <a href="{{ p.open_url }}"
-         class="subnav-item {% if active_dashboard_key == p.key %}active{% endif %}">
-        {{ p.name }}
-      </a>
-    {% endfor %}
-  </div>
-  <div class="meta-tabs">
-    <a href="/dashboards"
-       class="subnav-item {% if active_dashboard_key == 'meta:dashboards' %}active{% endif %}">
-      My Dashboards
-    </a>
-    <a href="/widgets"
-       class="subnav-item {% if active_dashboard_key == 'meta:widgets' %}active{% endif %}">
-      Workshop
-    </a>
-  </div>
+  <a href="/recycling"
+     class="subnav-item {% if active_dashboard_key == 'vs_recycling' %}active{% endif %}">
+    Recycling VS
+  </a>
+  <a href="/new-vs"
+     class="subnav-item {% if active_dashboard_key == 'vs_new' %}active{% endif %}">
+    New VS
+  </a>
+  <a href="/operator"
+     class="subnav-item {% if active_dashboard_key and active_dashboard_key.startswith('wc:') %}active{% endif %}">
+    Operator
+  </a>
+  <a href="/work-centers"
+     class="subnav-item {% if active_dashboard_key == 'vs_work_centers' %}active{% endif %}">
+    Work Centers
+  </a>
 </nav>
