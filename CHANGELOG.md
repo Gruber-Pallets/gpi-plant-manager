@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 2:04 PM
+
+- **Today Pallets banner: number color tracks bar color** — Dismantler 4 showed a green number above a red bar. Same `.ahead` / `.behind` class now also tags the big units number so the number color matches the bar (green ahead, red behind). User's custom widget color (via the `⋮` edit panel) still wins via inline-style specificity.
+
 ### 1:57 PM
 
 - **Today Pallets banner bar now colors by goal status** — was hardcoded green. Now green when `units_today >= target_today` (ahead/on pace) and red when behind the prorated target at this moment. Template tags `.bar-fill` with `.ahead` or `.behind`; CSS applies `var(--accent)` / `var(--bad)` accordingly.
