@@ -291,3 +291,50 @@ def test_downtime_report(monkeypatch):
     assert out["total_minutes"] == 11
     assert len(out["events"]) == 2
     assert "reason" not in out["events"][0]
+
+
+def test_fifteen_min_progress_buckets_truncates_at_now(monkeypatch):
+    """On today, buckets stop at the current 15-min slot — no future buckets."""
+    from datetime import date
+    from zira_dashboard import wc_dashboard_data
+
+    fake_raw = [
+        {"minute_offset": off, "units": 5, "target": 10}
+        for off in range(0, 480, 15)  # 32 buckets across an 8-hour shift
+    ]
+    monkeypatch.setattr(wc_dashboard_data, "fifteen_min_increments",
+                        lambda wc, d: fake_raw)
+    # Half the shift elapsed.
+    monkeypatch.setattr(wc_dashboard_data, "_shift_elapsed_fraction",
+                        lambda d: 0.5)
+
+    result = wc_dashboard_data.fifteen_min_progress_buckets("Repair 1", date(2026, 5, 14))
+    buckets = result["buckets"]
+    # 0.5 * 480 = 240 minutes elapsed -> offsets 0..240 inclusive => 17 buckets
+    assert len(buckets) == 17, f"expected 17 buckets, got {len(buckets)}"
+    assert all(b["offset"] <= 240 for b in buckets)
+    assert buckets[-1]["offset"] == 240
+    # Exactly one bucket marked in_progress.
+    in_progress = [b for b in buckets if b["in_progress"]]
+    assert len(in_progress) == 1
+    assert in_progress[0]["offset"] == 240
+
+
+def test_fifteen_min_progress_buckets_past_day_full_shift(monkeypatch):
+    """On past days, shift elapsed fraction is 1.0 — all buckets returned."""
+    from datetime import date
+    from zira_dashboard import wc_dashboard_data
+
+    fake_raw = [
+        {"minute_offset": off, "units": 7, "target": 10}
+        for off in range(0, 480, 15)
+    ]
+    monkeypatch.setattr(wc_dashboard_data, "fifteen_min_increments",
+                        lambda wc, d: fake_raw)
+    monkeypatch.setattr(wc_dashboard_data, "_shift_elapsed_fraction",
+                        lambda d: 1.0)
+
+    result = wc_dashboard_data.fifteen_min_progress_buckets("Repair 1", date(2026, 5, 1))
+    assert len(result["buckets"]) == 32
+    # No bucket should be flagged in_progress on a past day.
+    assert not any(b["in_progress"] for b in result["buckets"])

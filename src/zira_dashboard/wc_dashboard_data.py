@@ -468,9 +468,13 @@ def fifteen_min_progress_buckets(wc_name: str, day: date) -> dict:
             label = f"+{offset}m"
         buckets.append({
             "label": label,
+            "offset": offset,
             "actual": int(b.get("units") or 0),
             "target": int(b.get("target") or 0),
             "in_progress": offset <= elapsed < offset + 15,
         })
+    # Drop future buckets so the chart stops at "now" (matches /recycling).
+    # On past days _shift_elapsed_fraction returns 1.0, so this is a no-op.
+    buckets = [b for b in buckets if b["offset"] <= elapsed]
     bucket_target = next((b["target"] for b in buckets if b["target"]), 0)
     return {"buckets": buckets, "bucket_target": bucket_target}
