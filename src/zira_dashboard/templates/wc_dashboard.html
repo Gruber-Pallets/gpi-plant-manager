@@ -101,25 +101,18 @@
 <main>
 <div class="grid-stack">
 
-  {# KPI tiles — 4 separate widgets, each resizable. #}
-  {% set kpi_defs = [
-    ('kpi-units',    'Units today', '{:,}'.format(kpi.units_today)),
-    ('kpi-uptime',   'Up Time',     kpi.up_time_pct ~ ' %'),
-    ('kpi-downtime', 'Downtime',    kpi.downtime_minutes|string ~ 'm'),
-    ('kpi-pph',      'Pallets / hr', kpi.pallets_per_hour),
-  ] %}
-  {% for k in kpi_defs %}
-    {% set kid = k[0] %}{% set ktitle = k[1] %}{% set kval = k[2] %}
-    {% set kdef_x = loop.index0 * 3 %}
-    {% set align = customs.get(kid, {}).get('align', 'center') %}
-    <div class="grid-stack-item" {{ widget_attrs(kid, kdef_x, 0, 3, 2) }}>
-      <div class="grid-stack-item-content align-{{ align }}">
-        {% if not tv_mode %}{{ edit_controls(kid, ktitle, 'kpi') }}{% endif %}
-        <div class="label">{{ widget_title(kid, ktitle) }}</div>
-        <div class="val" {{ widget_color_style(kid, 'color') }}>{{ kval }}</div>
-      </div>
+  {# Pallets / hr KPI — the only standalone KPI now; Units / Up Time /
+     Downtime were folded into the Pallets banner + Downtime widget. #}
+  {% set kid = 'kpi-pph' %}
+  {% set ktitle = 'Pallets / hr' %}
+  {% set align = customs.get(kid, {}).get('align', 'center') %}
+  <div class="grid-stack-item" {{ widget_attrs(kid, 0, 0, 3, 2) }}>
+    <div class="grid-stack-item-content align-{{ align }}">
+      {% if not tv_mode %}{{ edit_controls(kid, ktitle, 'kpi') }}{% endif %}
+      <div class="label">{{ widget_title(kid, ktitle) }}</div>
+      <div class="val" {{ widget_color_style(kid, 'color') }}>{{ kpi.pallets_per_hour }}</div>
     </div>
-  {% endfor %}
+  </div>
 
   {# Pallets banner with start/now axis ticks. #}
   <div class="grid-stack-item" {{ widget_attrs('pallets-banner', 0, 2, 12, 2) }}>
@@ -236,7 +229,10 @@
             <div class="good" style="width: {{ downtime_row.working_pct }}%" title="Working {{ downtime_row.working }}m"></div>
             <div class="bad"  style="width: {{ downtime_row.down_pct }}%"    title="Down {{ downtime_row.down }}m"></div>
           </div>
-          <div class="val">{{ downtime_row.down }}m</div>
+          <div class="val downtime-val">
+            <div class="downtime-val-down">{{ downtime_row.down }}m down</div>
+            <div class="downtime-val-up">{{ kpi.up_time_pct }}% up</div>
+          </div>
         </div>
       {% endif %}
     </div>

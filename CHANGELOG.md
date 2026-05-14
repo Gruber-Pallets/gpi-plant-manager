@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 9:24 AM
+
+- **Operator dashboard: 3 KPI tiles removed, Up Time % folded into Downtime widget** — `Units today` / `Up Time` / `Downtime` are gone as standalone widgets. Units is already prominent in the Pallets banner; Up Time + Downtime both live inside the Downtime widget now (red `Xm down` over green `Y% up` on the right side of the bar). Only `Pallets / hr` remains as a standalone KPI tile.
+
 ### 9:22 AM
 
 - **Downtime row shows operator name like /recycling; GOAT + Ribbons titles fully customizable; body text scales aggressively on small widgets** — three operator-dashboard polish items: (1) the **downtime widget row** now puts the scheduled operator(s) as the primary label and the work-center name as the small secondary line below — matches how `/recycling`'s bar rows render. (2) The **Vs. GOAT Pace** and **Monthly Ribbons** widget titles no longer auto-append the group/month suffix after a custom title — the group name and month/year are now baked into the *default* title, so typing your own title in the `⋮` edit panel fully replaces what's shown (no more `Custom Title — Repairs · May 2026`). (3) The GOAT race and Monthly Ribbons **body text now scales by the smaller of widget height or width** (`min(cqh, cqw)`) with bigger floors, so the content fills the widget at small sizes instead of bottoming out at a tiny font that leaves the widget half-empty.

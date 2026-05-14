@@ -190,3 +190,23 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .pallets-banner .pallets-axis {
   margin-top: 0.35rem;
 }
+
+/* Downtime widget — two-line val showing down minutes (primary) and
+   up-time % (secondary). Lays out vertically inside the existing .val
+   column from recycling.css. */
+.wc-dashboard .downtime-val {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.1;
+}
+.wc-dashboard .downtime-val .downtime-val-down {
+  font-weight: 800;
+  color: var(--bad, #ef4444);
+}
+.wc-dashboard .downtime-val .downtime-val-up {
+  font-size: 0.78em;
+  font-weight: 600;
+  color: var(--accent, #16a34a);
+  margin-top: 1px;
+}
