@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 1:18 PM
+
+- **Monthly Ribbons text now scales down to fit — no cutoff** — the prior "tight name+number with width-shrinking gap" pass dropped the `cqw` component from the font formula, so narrowing the widget didn't shrink the text; long names overflowed the row and got clipped/cut off. Restored width-aware scaling with a much lower floor: `clamp(0.55rem, min(18cqh, 4.5cqw), 2.6rem)`. Text now shrinks with whichever widget dimension is smaller, so long names like "Christian Galindo Mendez" stay fully visible at any widget width by scaling down to fit. Medals and units use matching formulas (lower floor, cqh+cqw scaling). Removed the `text-overflow: ellipsis` since the aggressive scaling should prevent overflow at reasonable widget sizes; `overflow: hidden` stays as a silent fallback.
+
 ### 1:07 PM
 
 - **Daily Progress target now agrees with the Pallets banner — break buckets get target=0** — Pallets banner said "ahead of goal" while Daily Progress said "behind goal" on the same screen. Root cause: Pallets banner target = `goal_per_day × productive_elapsed/total_productive` (breaks excluded), but the cumulative-target line on the Daily Progress chart summed a constant per-bucket target across *every* 15-min bucket — *including* lunch-break buckets where no work is expected. That inflated the cumulative target by `break_minutes/15 × per_bucket_target` worth of "expected" output, so the chart said you're behind when the Pallets banner said you're ahead. Fix: `fifteen_min_increments` now looks up `shift_config.breaks_for(day)` and sets `target=0` for any bucket whose window overlaps a break. Cumulative target line now stays flat during break time and lines up with the Pallets banner's productive-elapsed math. Added a regression test that pins the lunch-break-target=0 behavior with a 7am/8hr/11:30-lunch scenario.

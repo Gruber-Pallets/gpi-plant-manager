@@ -335,25 +335,25 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
   justify-content: space-around;
 }
 .wc-dashboard .ribbons-list li      {
-  /* Font scales with HEIGHT only (no cqw) — narrowing the widget no
-     longer shrinks the text; instead, the empty space between name
-     and units (see .name + .units rules below) absorbs the width
-     change first. */
-  font-size: clamp(1.1rem, 20cqh, 3rem);
-  gap:       clamp(0px, 1.5cqw, 0.6rem);
+  /* Scale by the SMALLER of widget height or width. Low floor (0.55rem)
+     so long names can shrink to fit any reasonable widget size without
+     getting cut off. The cqw component is the important one — when the
+     widget narrows, font shrinks proportionally so names never need
+     to ellipsis. */
+  font-size: clamp(0.55rem, min(18cqh, 4.5cqw), 2.6rem);
+  gap:       clamp(0px, 1cqw, 0.5rem);
 }
-.wc-dashboard .ribbons-list .medal  { font-size: clamp(1.4rem, 25cqh, 4rem); }
-.wc-dashboard .ribbons-list .units  { font-size: clamp(1.1rem, 22cqh, 3.2rem); }
-/* Name sits at its natural width (override base CSS's flex: 1 which
-   pushed units to the far right of the row). Items now sit
-   left-aligned with the small flexible `gap` between them — that
-   gap shrinks to 0 as the widget narrows, eating the inter-item
-   spacing before any text starts to ellipsis. */
+.wc-dashboard .ribbons-list .medal  { font-size: clamp(0.7rem, min(22cqh, 5cqw), 3.4rem); }
+.wc-dashboard .ribbons-list .units  { font-size: clamp(0.6rem, min(20cqh, 4.5cqw), 2.8rem); }
+/* Name sits at its natural width (override base CSS's flex: 1).
+   The aggressive font scaling above keeps names within their natural
+   width — they shouldn't need to ellipsis at reasonable widget sizes,
+   but `overflow: hidden` is a safety net that clips silently if a
+   really long name still overflows at the font floor. */
 .wc-dashboard .ribbons-list .name {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
