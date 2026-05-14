@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 3:05 PM
+
+- **Recycling VS: Downtime Report shows total at top-right; standalone Total Downtime KPI dropped** — `recycling.html`'s downtime-report widget now sums `downtime_rows | sum(attribute='down')` and renders a `.widget-total` div ("Total Xm") that the TV-mode CSS from the prior commit pins to the top-right corner of the widget. In screen mode it falls through to the existing `.widget-total` styling at the bottom of `widget-body`. The redundant `kpi-downtime` ("Total Downtime") KPI tile is removed from `kpi_defs` since the same number now lives on the Downtime widget itself. Saved layouts referencing `kpi-downtime` become orphaned — Gridstack ignores them silently.
+
 ### 3:01 PM
 
 - **Recycling VS TV: bigger names on Pallets by WC; total moves to top-right** — two changes scoped to TV mode. (1) Bar-row name font floor raised from `0.35rem` to `0.75rem` (`clamp(0.75rem, 5cqh, 1.5rem)`), line-height `1.05`. Operator names like "Eulogio Mendez" / "Dismantler 1" now render at a comfortable ~16px instead of squinting-required ~7px. (2) `.widget-total` (the `Total X / Y (Z%)` line) moves from the bottom of the bar widget to the **top-right corner**, absolute-positioned. Frees the bottom of the widget for the bar-rows so the bars fill more vertical space. Title `h3` gets `padding-right: clamp(80px, 28%, 220px)` (scoped via `:has(.widget-total)`) so its text doesn't run under the relocated total.

@@ -173,10 +173,11 @@
 <main>
   <div class="grid-stack">
 
+    {# Total Downtime KPI dropped 2026-05-14 — the same number now sits at
+       the top-right of the Downtime Report widget via .widget-total. #}
     {% set kpi_defs = [
       ('kpi-pallets',   'Total Pallets Processed', '{:,}'.format(total_units)),
       ('kpi-uptime',    'Up Time',                 uptime_pct ~ ' %'),
-      ('kpi-downtime',  'Total Downtime',          total_downtime_display),
       ('kpi-palletshr', 'pallets/hr/person',       pph_per_person),
     ] %}
     {% for k in kpi_defs %}
@@ -316,6 +317,10 @@
       <div class="grid-stack-item-content" {% set dc = customs.get('downtime-report', {}).get('color') %}{% if dc %}style="--good-color: {{ dc }}"{% endif %}>
         {% if not tv_mode %}{{ edit_controls('downtime-report', 'Downtime Report', 'downtime') }}{% endif %}
         <h3>{{ widget_title('downtime-report', 'Downtime Report — green = working, red = down (shift-scoped)') }}</h3>
+        {% if elapsed_minutes > 0 and downtime_rows %}
+          {%- set total_down = downtime_rows | sum(attribute='down') -%}
+          <div class="widget-total">Total <b>{{ total_down }}m</b></div>
+        {% endif %}
         <div class="widget-body">
           {% if elapsed_minutes == 0 %}
             <div style="color:var(--muted);font-size:0.85rem">No elapsed shift minutes on this day (weekend or before 7:00 AM).</div>
