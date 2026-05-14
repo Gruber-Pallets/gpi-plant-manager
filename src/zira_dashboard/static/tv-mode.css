@@ -99,17 +99,23 @@ html[data-tv-theme] .grid-stack-item-content .bar-row .name,
 html[data-tv-theme] .grid-stack-item-content .bar-row .val,
 html[data-tv-theme] .grid-stack-item-content .bar-row .name .name-primary,
 html[data-tv-theme] .grid-stack-item-content .bar-row .name .name-secondary {
-  font-size: clamp(0.5rem, 3.9cqh, 1.25rem);
-  line-height: 1.05;
+  font-size: clamp(0.35rem, 3.5cqh, 1.25rem);
+  line-height: 1;
 }
 html[data-tv-theme] .grid-stack-item-content .bar-row {
-  margin-block: 1px;
+  margin-block: 0;
 }
 html[data-tv-theme] .kpi .label { font-size: 0.85rem; }
 html[data-tv-theme] .kpi .val { font-size: 3.4rem; font-weight: 800; }
-html[data-tv-theme] .bar-row .name-primary,
-html[data-tv-theme] .vbar-name .name-primary { font-size: 1.4rem; font-weight: 700; }
-html[data-tv-theme] .widget-total { font-size: 1.6rem; font-weight: 800; }
+/* widget-total is intentionally small in TV mode now — it sat hardcoded
+   at 1.6rem (~34px on 1080p root) which dominated the widget and forced
+   the bar-rows above it to collapse, stacking operator names on top of
+   each other. Scales with widget height instead. */
+html[data-tv-theme] .widget-total {
+  font-size: clamp(0.7rem, 3cqh, 1.2rem);
+  font-weight: 700;
+  margin-top: 0.2rem;
+}
 html[data-tv-theme] table.sched,
 html[data-tv-theme] .panel h3 { font-size: 1.25rem; }
 
