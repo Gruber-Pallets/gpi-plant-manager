@@ -161,13 +161,16 @@ Enable `container-type: inline-size` on `.grid-stack-item-content`. Each widget 
 
 `cqw` = 1 % of the widget's own width. Floors keep small widgets readable; ceilings keep full-width widgets from looking cartoonish. The 15-min progress chart, cumulative line, and downtime stacked bar are already percentage-driven so no extra work is needed beyond enabling `container-type`.
 
-### KPI text color (black) — operator only
+### KPI text color (theme-aware) — operator only
 
 ```css
-.wc-dashboard .kpi .val { color: #000; }
+.wc-dashboard .kpi .val                              { color: #000; }
+html[data-tv-theme="dark"] .wc-dashboard .kpi .val   { color: #fff; }
 ```
 
-Scoped via a `wc-dashboard` class added to `<body>` on the operator template only (`<body class="wc-dashboard">` in both `/wc/{slug}` and `/tv/wc/{slug}` renders). `/recycling`'s KPI tiles are untouched. The per-widget `color` customization still wins because `widget_color_style` writes inline `style="color: …"` which has higher specificity.
+Black on light theme, white on dark theme. Theme is signaled by the `data-tv-theme` attribute that `_tv_header` already sets on `<html>` in TV mode (`"dark"` or `"light"`); screen mode has no attribute and renders light, so it falls through to the black default.
+
+Scoped via a `wc-dashboard` class added to `<body>` on the operator template only (`<body class="wc-dashboard">` in both `/wc/{slug}` and `/tv/wc/{slug}` renders). `/recycling`'s KPI tiles are untouched. The per-widget `color` customization still wins because `widget_color_style` writes inline `style="color: …"` which has higher specificity than either rule above.
 
 ## Data flow
 
