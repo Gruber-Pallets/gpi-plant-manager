@@ -12,6 +12,7 @@
 <meta http-equiv="refresh" content="60">
 {% endif %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
+{% from "_widget_edit_controls.html" import edit_controls %}
 <style>{{ goat_badges_css() }}</style>
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 </head>
@@ -61,72 +62,6 @@
 {% macro widget_attrs(id, dx, dy, dw, dh) -%}
   {%- set l = layout.get(id, {'x': dx, 'y': dy, 'w': dw, 'h': dh}) -%}
   gs-id="{{ id }}" gs-x="{{ l.x }}" gs-y="{{ l.y }}" gs-w="{{ l.w }}" gs-h="{{ l.h }}"
-{%- endmacro %}
-
-{%- macro edit_controls(id, default_title, kind='kpi') -%}
-  {%- set c = customs.get(id, {}) -%}
-  {%- set cur_title = c.get('title', default_title) -%}
-  {%- set cur_color = c.get('color', '') -%}
-  {%- set cur_orient = c.get('orientation', 'horizontal') -%}
-  {%- set cur_numpos = c.get('number_position', 'widget') -%}
-  {%- set cur_sort = c.get('sort', 'preset') -%}
-  {%- set cur_align = c.get('align', 'center') -%}
-  {%- set cur_show_target = c.get('show_target', True) -%}
-  {%- set cur_show_legend = c.get('show_legend', True) -%}
-  <button type="button" class="widget-edit-btn" title="Edit widget" onclick="openEdit(this)" data-widget="{{ id }}">⋮</button>
-  <div class="widget-edit" hidden>
-    <h4>Edit — {{ default_title }}</h4>
-    <label>Title<input type="text" name="title" value="{{ cur_title }}" placeholder="{{ default_title }}"></label>
-    {% if kind != 'bars' %}
-      <label>Primary color<input type="color" name="color" value="{{ cur_color or '#4ade80' }}"></label>
-    {% else %}
-      <div style="font-size:0.78rem;color:var(--muted);font-style:italic;line-height:1.3">Color is auto-scaled by progress vs each work center's goal — green when meeting or above, red when below.</div>
-    {% endif %}
-    {% if kind in ('bars', 'downtime') %}
-      <label>Orientation
-        <select name="orientation">
-          <option value="horizontal" {% if cur_orient=='horizontal' %}selected{% endif %}>Horizontal</option>
-          <option value="vertical"   {% if cur_orient=='vertical'   %}selected{% endif %}>Vertical</option>
-        </select>
-      </label>
-      <label>Number position
-        <select name="number_position">
-          <option value="widget" {% if cur_numpos=='widget' %}selected{% endif %}>Edge of widget</option>
-          <option value="bar"    {% if cur_numpos=='bar'    %}selected{% endif %}>End of bar</option>
-          <option value="inside" {% if cur_numpos=='inside' %}selected{% endif %}>Inside bar</option>
-          <option value="hidden" {% if cur_numpos=='hidden' %}selected{% endif %}>Hidden</option>
-        </select>
-      </label>
-    {% endif %}
-    {% if kind == 'bars' %}
-      <label>Sort
-        <select name="sort">
-          <option value="preset" {% if cur_sort=='preset' %}selected{% endif %}>Default order</option>
-          <option value="desc"   {% if cur_sort=='desc'   %}selected{% endif %}>Units (high → low)</option>
-          <option value="asc"    {% if cur_sort=='asc'    %}selected{% endif %}>Units (low → high)</option>
-          <option value="alpha"  {% if cur_sort=='alpha'  %}selected{% endif %}>Alphabetical</option>
-        </select>
-      </label>
-    {% endif %}
-    {% if kind == 'kpi' %}
-      <label>Number alignment
-        <select name="align">
-          <option value="left"   {% if cur_align=='left'   %}selected{% endif %}>Left</option>
-          <option value="center" {% if cur_align=='center' %}selected{% endif %}>Center</option>
-          <option value="right"  {% if cur_align=='right'  %}selected{% endif %}>Right</option>
-        </select>
-      </label>
-    {% endif %}
-    {% if kind == 'progress' %}
-      <label><input type="checkbox" name="show_target" {% if cur_show_target %}checked{% endif %}> Show goal line</label>
-      <label><input type="checkbox" name="show_legend" {% if cur_show_legend %}checked{% endif %}> Show legend</label>
-    {% endif %}
-    <div class="row">
-      <button type="button" class="danger" onclick="resetWidget(this, '{{ id }}')">Reset</button>
-      <button type="button" onclick="closeEdit(this)">Cancel</button>
-      <button type="button" class="primary" onclick="saveWidget(this, '{{ id }}')">Save</button>
-    </div>
-  </div>
 {%- endmacro %}
 
 {%- macro bar_chart(widget_id, items) -%}

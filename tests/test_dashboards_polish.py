@@ -151,3 +151,14 @@ def test_all_three_dashboard_pages_render_200():
         assert ">Work Centers<" in resp.text
         # top nav rename
         assert ">Dashboards<" in resp.text
+
+
+def test_recycling_renders_edit_controls_after_partial_extraction():
+    """After moving edit_controls to a shared partial, /recycling
+    still renders the per-widget edit button on at least the KPI tiles."""
+    c = TestClient(app)
+    r = c.get("/recycling")
+    assert r.status_code == 200
+    assert 'data-widget="kpi-pallets"' in r.text
+    assert 'data-widget="kpi-uptime"' in r.text
+    assert 'class="widget-edit-btn"' in r.text
