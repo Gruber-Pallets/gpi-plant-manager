@@ -234,11 +234,9 @@
           {% if goat_race.goat and pace_now > 0 %}
             <div class="gr-delta {{ 'ahead' if delta > 5 else ('behind' if delta < -5 else 'on-pace') }}">
               {% if delta > 5 %}
-                <div class="gr-delta-row"><span class="gr-num">+{{ delta }}</span><span class="gr-label">AHEAD</span></div>
-                <span class="gr-icon" aria-hidden="true">🐐</span>
+                <span class="gr-num">+{{ delta }}</span><span class="gr-label">AHEAD</span><span class="gr-icon" aria-hidden="true">🐐</span>
               {% elif delta < -5 %}
-                <div class="gr-delta-row"><span class="gr-num">{{ delta }}</span><span class="gr-label">BEHIND</span></div>
-                <span class="gr-icon" aria-hidden="true">🐐</span>
+                <span class="gr-num">{{ delta }}</span><span class="gr-label">BEHIND</span><span class="gr-icon" aria-hidden="true">🐐</span>
               {% else %}
                 <span class="gr-label gr-onpace">ON PACE</span>
               {% endif %}

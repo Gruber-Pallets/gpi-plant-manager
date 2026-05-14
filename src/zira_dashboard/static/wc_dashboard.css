@@ -248,20 +248,13 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .gr-delta {
   flex: 1 1 auto;          /* delta fills remaining vertical space */
   display: flex;
-  flex-direction: column;  /* +N AHEAD row on top, 🐐 below */
-  align-items: center;
+  align-items: baseline;   /* number / label / 🐐 share a row */
   justify-content: center;
-  gap: clamp(0.2rem, 1.5cqh, 1rem);
+  gap: clamp(0.3rem, 1cqw, 0.8rem);
+  flex-wrap: wrap;
   font-weight: 800;
   text-align: center;
   line-height: 1;
-}
-.wc-dashboard .gr-delta-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
 }
 .wc-dashboard .gr-footer {
   flex: 0 0 auto;
@@ -278,11 +271,12 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .gr-ratio b { font-weight: 800; }
 .wc-dashboard .gr-ratio .gr-of { color: var(--muted, #6b7280); font-weight: 500; }
 .wc-dashboard .gr-num {
-  font-size: clamp(2rem, min(38cqh, 18cqw), 7rem);
+  font-size: clamp(1.8rem, min(35cqh, 14cqw), 6.5rem);
   line-height: 1;
 }
 .wc-dashboard .gr-icon {
-  font-size: clamp(2rem, min(45cqh, 22cqw), 9rem);
+  /* Same size as the number so they read as a single visual unit. */
+  font-size: clamp(1.8rem, min(35cqh, 14cqw), 6.5rem);
   line-height: 1;
   filter: none;
 }

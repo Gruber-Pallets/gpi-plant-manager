@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-14
 
+### 1:00 PM
+
+- **GOAT widget: 🐐 back on the same row as the number** — reverted the stacked layout. Delta line is `+5 AHEAD 🐐` on one row again. Both number and icon size matched at `clamp(1.8rem, min(35cqh, 14cqw), 6.5rem)`.
+
 ### 12:59 PM
 
 - **Monthly Ribbons: name and number sit tight; gap shrinks first when narrowing** — the base `.ribbons-list .name { flex: 1 }` was pushing the units to the far-right edge of every row, leaving a huge empty gap between (e.g.) "Jose Galindo" and "1462". On the operator dashboard the name now sits at its natural width with a small flexible `clamp(0px, 1.5cqw, 0.6rem)` gap between items. The font-size also dropped its `cqw` component (now `clamp(1.1rem, 20cqh, 3rem)`) so it doesn't shrink with widget width — narrowing the widget collapses the gap first and only starts to ellipsis the name once the gap is fully consumed.
