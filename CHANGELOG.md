@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-15
 
+### 1:36 PM
+
+- **Downtime Report now shows per-WC uptime % + total uptime moves into widget header; Up Time KPI tile dropped** — three changes on `/recycling`. (1) Each vertical column in the Downtime Report gets an uptime % rendered in green below the operator/WC name (e.g. "Eulogio Mendez / Dismantler 1 / **82% up**"). (2) The widget-total at the top-right of the Downtime widget now shows total uptime and downtime side by side ("76% up · 594m down" instead of just "594m"). (3) Removed the standalone `kpi-uptime` KPI tile since the same number now lives at the top-right of the Downtime widget. Three KPI tiles → two (Total Pallets Processed, pallets/hr/person).
+
 ### 1:01 PM
 
 - **Scheduler: removed placeholder example notes** — the "Notes for the day" textarea had a placeholder reading "e.g. Rush order on Bay 4. Isidro to train Jose O on Repair 1 after lunch." which was showing up on shared PDFs and Slack posts when the day's notes were empty (the PDF/Slack share renders the scheduler page directly). Cleared the placeholder. Empty notes now render as a blank textarea everywhere.

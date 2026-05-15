@@ -173,11 +173,10 @@
 <main>
   <div class="grid-stack">
 
-    {# Total Downtime KPI dropped 2026-05-14 — the same number now sits at
-       the top-right of the Downtime Report widget via .widget-total. #}
+    {# Total Downtime KPI dropped 2026-05-14 + Up Time KPI dropped 2026-05-15 —
+       both numbers now sit at the top-right of the Downtime Report widget. #}
     {% set kpi_defs = [
       ('kpi-pallets',   'Total Pallets Processed', '{:,}'.format(total_units)),
-      ('kpi-uptime',    'Up Time',                 uptime_pct|round(0)|int ~ ' %'),
       ('kpi-palletshr', 'pallets/hr/person',       pph_per_person),
     ] %}
     {% for k in kpi_defs %}
@@ -326,7 +325,7 @@
         <h3>{{ widget_title('downtime-report', 'Downtime Report — green = working, red = down (shift-scoped)') }}</h3>
         {% if elapsed_minutes > 0 and downtime_rows %}
           {%- set total_down = downtime_rows | sum(attribute='down') -%}
-          <div class="widget-total"><b>{{ total_down }}m</b></div>
+          <div class="widget-total"><b>{{ uptime_pct|round(0)|int }}%</b> up · <b>{{ total_down }}m</b> down</div>
         {% endif %}
         <div class="widget-body">
           {% if elapsed_minutes == 0 %}
@@ -349,6 +348,7 @@
                     {% else %}
                       <span class="name-primary">{{ d.name }}</span>
                     {% endif %}
+                    <span class="downtime-vbar-uptime">{{ d.working_pct|round(0)|int }}% up</span>
                   </div>
                 </div>
               {% endfor %}

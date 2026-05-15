@@ -521,6 +521,15 @@
   }
   .downtime-vbar-name .name-primary { font-weight: 600; color: var(--fg); }
   .downtime-vbar-name .name-secondary { color: var(--muted); font-size: 0.85em; }
+  /* Per-WC uptime % at the very bottom of each downtime column. */
+  .downtime-vbar-name .downtime-vbar-uptime {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.85em;
+    font-weight: 700;
+    color: var(--good-color, var(--good));
+    font-variant-numeric: tabular-nums;
+  }
 
   /* 15-min progress chart */
   .progress {
