@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-15
 
+### 2:01 PM
+
+- **GOAT Watch banner on Recycling VS** — surfaces operators on pace to beat their group's single-day GOAT record. Two stacked sections at the top of `/recycling`: (1) **Live contenders** show after the final break of the day, one row per group (Juniors / Repairs / Dismantlers) whose leading WC projects ≥ 98% of the group's all-time GOAT record at current pace — names the primary scheduled operator and their projected end-of-day total. (2) **NEW GOAT alerts** persist once someone actually beats the record (strict `>`), one card per group with trophy icon, prior-record context, and a Dismiss button. Alerts auto-clear after the next business day. New `goat_watch.py` module + `goat_alerts` table + `/api/goat-alerts/{id}/dismiss` endpoint. End-of-shift finalize is lazy and idempotent (in-process memo + DB UNIQUE on `(achieved_day, group_name, wc_name)`).
+
 ### 1:46 PM
 
 - **Downtime Report per-WC uptime label: drop "up", 50% bigger** — was "82% up" at `clamp(0.7rem, 3cqh, 1.05rem)`. Now just "82%" at `clamp(1.05rem, 4.5cqh, 1.6rem)` — same percentage info, bolder presence inside the green bar.

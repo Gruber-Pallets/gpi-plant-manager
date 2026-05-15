@@ -575,6 +575,26 @@ ALTER TABLE tv_displays ADD CONSTRAINT tv_displays_kind_check
 -- stays clean. Idempotent — once empty, this is a no-op.
 DELETE FROM widget_layouts        WHERE page LIKE 'wc:%';
 DELETE FROM widget_customizations WHERE page LIKE 'wc:%';
+
+-- GOAT Watch alerts (2026-05-15): finalized at shift-end whenever a
+-- person-day strictly beats the prior group GOAT record. Banner on the
+-- Recycling VS dashboard reads from this table — visible until
+-- next_business_day(achieved_day) or until manually dismissed.
+CREATE TABLE IF NOT EXISTS goat_alerts (
+  id                  SERIAL PRIMARY KEY,
+  achieved_day        DATE NOT NULL,
+  group_name          TEXT NOT NULL,
+  person              TEXT NOT NULL,
+  wc_name             TEXT NOT NULL,
+  units               INTEGER NOT NULL,
+  prior_record_units  INTEGER,
+  prior_record_holder TEXT,
+  prior_record_day    DATE,
+  dismissed_at        TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (achieved_day, group_name, wc_name)
+);
+CREATE INDEX IF NOT EXISTS idx_goat_alerts_day ON goat_alerts (achieved_day);
 """
 
 

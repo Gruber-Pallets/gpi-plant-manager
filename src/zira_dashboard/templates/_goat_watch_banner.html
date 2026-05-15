@@ -1,0 +1,59 @@
+{# GOAT Watch banner for /recycling.
+
+   Two stacked sections (either may be empty; banner hides entirely
+   when both are):
+
+   1. NEW GOAT alerts — persisted goat_alerts rows that haven't been
+      dismissed and are within their next-business-day window. One
+      row per group that broke its record. Each has a Dismiss button.
+
+   2. Live contenders — operators currently projecting >= 98 % of
+      their group's GOAT record. Only fires after the final break
+      of the day. One row per group.
+
+   Inputs (set in routes/value_streams.py):
+     goat_alerts_active  list[dict]  — see goat_watch.active_alerts
+     goat_contenders     list[Contender]  — see goat_watch.contenders_for_now
+#}
+{% if (goat_alerts_active and goat_alerts_active|length > 0) or (goat_contenders and goat_contenders|length > 0) %}
+<div class="goat-watch-banner" role="region" aria-label="GOAT watch">
+  {% if goat_alerts_active %}
+    {% for a in goat_alerts_active %}
+      <div class="goat-alert goat-alert-new" data-alert-id="{{ a.id }}">
+        <div class="goat-alert-head">
+          <span class="goat-alert-trophy" aria-hidden="true">🏆</span>
+          <span class="goat-alert-title">NEW GOAT — {{ a.group_name|upper }}</span>
+          <button type="button" class="goat-alert-dismiss" data-alert-id="{{ a.id }}" aria-label="Dismiss this alert">Dismiss ✕</button>
+        </div>
+        <div class="goat-alert-body">
+          <b>{{ a.person }}</b> · <b>{{ a.units }}</b> pallets at {{ a.wc_name }} · {{ a.achieved_day }}
+          {% if a.prior_record_units %}
+            <div class="goat-alert-prior">
+              Beat the previous {{ a.prior_record_units }}
+              {% if a.prior_record_holder %}({{ a.prior_record_holder }}{% if a.prior_record_day %}, {{ a.prior_record_day }}{% endif %}){% endif %}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  {% if goat_contenders %}
+    <div class="goat-watch-live">
+      <div class="goat-watch-live-head">
+        <span class="goat-watch-icon" aria-hidden="true">🐐</span>
+        <span class="goat-watch-title">GOAT WATCH</span>
+      </div>
+      {% for c in goat_contenders %}
+        <div class="goat-watch-row">
+          <span class="goat-watch-group">{{ c.group|upper }}</span>
+          <span class="goat-watch-person">{{ c.person }}</span>
+          <span class="goat-watch-wc">· {{ c.wc }} ·</span>
+          <span class="goat-watch-projection">projecting <b>{{ c.projected }}</b></span>
+          <span class="goat-watch-record">(record {{ c.record_units }} — {{ c.record_holder }}{% if c.record_day %}, {{ c.record_day }}{% endif %})</span>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>
+{% endif %}

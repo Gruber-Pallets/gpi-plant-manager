@@ -830,3 +830,78 @@
     cursor: pointer; filter: brightness(0.4);
   }
   .rc-custom-apply { align-self: flex-end; }
+
+
+  /* ---- GOAT Watch banner (Recycling VS) ---- */
+  .goat-watch-banner {
+    margin: 0.5rem 1rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  /* NEW GOAT alert — gold-tinted accent for celebration. */
+  .goat-alert-new {
+    background: linear-gradient(135deg, #fef9c3 0%, #fde68a 100%);
+    border: 1px solid #d97706;
+    border-radius: 10px;
+    padding: 0.65rem 0.85rem;
+    color: #422006;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  html[data-tv-theme="dark"] .goat-alert-new {
+    background: linear-gradient(135deg, #422006 0%, #78350f 100%);
+    color: #fef3c7;
+    border-color: #f59e0b;
+  }
+  .goat-alert-head {
+    display: flex; align-items: center; gap: 0.5rem;
+    font-weight: 800; font-size: 0.95rem; letter-spacing: 0.5px;
+  }
+  .goat-alert-trophy { font-size: 1.2rem; }
+  .goat-alert-title { flex: 1; }
+  .goat-alert-dismiss {
+    background: transparent;
+    border: 1px solid rgba(0,0,0,0.25);
+    color: inherit;
+    border-radius: 6px;
+    padding: 0.2rem 0.55rem;
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  html[data-tv-theme="dark"] .goat-alert-dismiss { border-color: rgba(255,255,255,0.35); }
+  .goat-alert-dismiss:hover { background: rgba(0,0,0,0.08); }
+  html[data-tv-theme="dark"] .goat-alert-dismiss:hover { background: rgba(255,255,255,0.12); }
+  .goat-alert-body { margin-top: 0.3rem; font-size: 0.95rem; line-height: 1.35; }
+  .goat-alert-prior { color: inherit; opacity: 0.75; font-size: 0.85rem; margin-top: 0.15rem; }
+
+  /* Live contender block — quieter than the NEW GOAT alert. */
+  .goat-watch-live {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    color: var(--fg);
+  }
+  .goat-watch-live-head {
+    display: flex; align-items: center; gap: 0.45rem;
+    font-weight: 700; font-size: 0.85rem; letter-spacing: 0.7px;
+    color: var(--muted);
+    margin-bottom: 0.25rem;
+  }
+  .goat-watch-row {
+    display: flex; align-items: baseline; gap: 0.45rem;
+    font-size: 0.92rem; line-height: 1.35;
+    flex-wrap: wrap;
+  }
+  .goat-watch-group {
+    font-weight: 800; letter-spacing: 0.5px;
+    color: var(--accent);
+    min-width: 6.5rem;
+  }
+  .goat-watch-person { font-weight: 700; }
+  .goat-watch-wc { color: var(--muted); }
+  .goat-watch-projection b { color: var(--accent); font-weight: 800; }
+  .goat-watch-record { color: var(--muted); font-size: 0.85rem; }

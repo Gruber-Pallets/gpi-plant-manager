@@ -170,6 +170,8 @@
 </div>
 {% endif %}
 
+{% include "_goat_watch_banner.html" %}
+
 <main>
   <div class="grid-stack">
 
@@ -489,6 +491,26 @@
     el.addEventListener('touchstart', e => e.stopPropagation());
   });
   {% endif %}
+
+  // GOAT Watch banner — dismiss button.
+  document.querySelectorAll('.goat-alert-dismiss').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.alertId;
+      const alertEl = btn.closest('.goat-alert');
+      if (alertEl) alertEl.style.opacity = '0.4';
+      btn.disabled = true;
+      fetch('/api/goat-alerts/' + encodeURIComponent(id) + '/dismiss', {method: 'POST'})
+        .then(r => {
+          if (r.ok && alertEl) alertEl.remove();
+          else if (alertEl) alertEl.style.opacity = '';
+          btn.disabled = false;
+        })
+        .catch(() => {
+          if (alertEl) alertEl.style.opacity = '';
+          btn.disabled = false;
+        });
+    });
+  });
 
   // Inline-assign popover for "(no assignment)" bars.
   (function () {

@@ -24,6 +24,7 @@ from .routes import (
     api_layout,
     changelog,
     dashboard,
+    goat_watch,
     late_report,
     leaderboards,
     past_schedules,
@@ -266,6 +267,7 @@ app.include_router(settings.router)
 app.include_router(api_layout.router)
 app.include_router(changelog.router)
 app.include_router(admin.router)
+app.include_router(goat_watch.router)
 
 
 def main() -> None:

@@ -565,11 +565,34 @@ def _render_recycling(
             "refreshed_at": now.strftime("%H:%M:%S UTC"),
             "tv_mode": tv_mode,
             "tv_theme": tv_theme,
+            # GOAT Watch banner data — live contenders (only on today)
+            # and persisted NEW GOAT alerts (visible through next
+            # business day).
+            "goat_contenders": (
+                _goat_watch_contenders(today, now) if is_today else []
+            ),
+            "goat_alerts_active": _goat_watch_active_alerts(today),
         },
     )
     set_cache_headers(response, includes_today=range_includes_today)
     store_cached_response(cache_key, includes_today=range_includes_today, response=response)
     return response
+
+
+def _goat_watch_contenders(day, now_utc):
+    try:
+        from .. import goat_watch
+        return goat_watch.contenders_for_now(day, now_utc)
+    except Exception:
+        return []
+
+
+def _goat_watch_active_alerts(today):
+    try:
+        from .. import goat_watch
+        return goat_watch.active_alerts(today)
+    except Exception:
+        return []
 
 
 @router.get("/tv/recycling", response_class=HTMLResponse)
