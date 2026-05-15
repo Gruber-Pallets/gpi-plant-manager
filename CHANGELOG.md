@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-15
 
+### 1:01 PM
+
+- **Scheduler: removed placeholder example notes** — the "Notes for the day" textarea had a placeholder reading "e.g. Rush order on Bay 4. Isidro to train Jose O on Repair 1 after lunch." which was showing up on shared PDFs and Slack posts when the day's notes were empty (the PDF/Slack share renders the scheduler page directly). Cleared the placeholder. Empty notes now render as a blank textarea everywhere.
+
 ### 12:37 PM
 
 - **StratusTime: log every `TimeGetPunchesByEmpIdentifier` request + response** — temporary diagnostic logging added at StratusTime's request to capture the exact request bodies we send. INFO-level logs go to Railway with the AuthToken redacted and the response status / first 200 bytes of body. Will remove once their dev team has the trace they need.
