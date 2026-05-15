@@ -541,7 +541,8 @@
     text-align: center;
     color: #fff;
     font-weight: 700;
-    font-size: clamp(0.7rem, 3cqh, 1.05rem);
+    /* 50% bigger than the prior clamp(0.7rem, 3cqh, 1.05rem). */
+    font-size: clamp(1.05rem, 4.5cqh, 1.6rem);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     line-height: 1;

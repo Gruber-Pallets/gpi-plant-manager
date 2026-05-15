@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-15
 
+### 1:46 PM
+
+- **Downtime Report per-WC uptime label: drop "up", 50% bigger** — was "82% up" at `clamp(0.7rem, 3cqh, 1.05rem)`. Now just "82%" at `clamp(1.05rem, 4.5cqh, 1.6rem)` — same percentage info, bolder presence inside the green bar.
+
 ### 1:42 PM
 
 - **Per-WC uptime % positioned absolute inside the green bar; widget-total slid left of ⋮ edit button** — two visual fixes. (1) The per-WC uptime label is now absolutely positioned inside `.good` at `bottom: 6px` so it sits unambiguously inside the green fill (instead of flex-bottom-anchored, which was rendering at the boundary between the green and the name section). (2) `.widget-total` was overlapping the `⋮` widget-edit-btn — moved its `right` offset from `clamp(6px, 1.5cqw, 18px)` to a fixed `2.5rem` (clears the 28px-wide edit button + a small gap). h3 right-padding bumped to `clamp(100px, 32%, 240px)` accordingly. Widgets with both a `.people-count` pill AND `.widget-total` (Daily Progress + 15-min progress) get `right: 7rem` so the total sits left of the pill, which is left of the edit button.
