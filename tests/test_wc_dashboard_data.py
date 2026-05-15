@@ -216,9 +216,12 @@ def test_daily_progress_cumulative(monkeypatch):
     from datetime import datetime, timezone
     from zira_dashboard.shift_config import SITE_TZ
     # Stub the schedule DB lookup that shift_start_for / productive_minutes_for need.
+    # custom_hours only override the global shift when the day is PUBLISHED
+    # (per the 2026-05-15 change). Use published=True so this test's
+    # custom hours are honored.
     monkeypatch.setattr(staffing, "load_schedule",
         lambda d: staffing.Schedule(
-            day=d, published=False,
+            day=d, published=True,
             custom_hours={"start": "07:00", "end": "15:30", "breaks": []},
         ))
     today = datetime.now(SITE_TZ).date()
@@ -245,9 +248,12 @@ def test_fifteen_min_increments_color_coded(monkeypatch):
     from zira_dashboard import wc_dashboard_data, staffing
     from datetime import datetime
     from zira_dashboard.shift_config import SITE_TZ
+    # custom_hours only override the global shift when the day is PUBLISHED
+    # (per the 2026-05-15 change). Use published=True so this test's
+    # custom hours are honored.
     monkeypatch.setattr(staffing, "load_schedule",
         lambda d: staffing.Schedule(
-            day=d, published=False,
+            day=d, published=True,
             custom_hours={"start": "07:00", "end": "15:30", "breaks": []},
         ))
     today = datetime.now(SITE_TZ).date()

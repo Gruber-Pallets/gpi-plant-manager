@@ -37,8 +37,11 @@ def test_progress_buckets_default_uses_per_day_shift_start(monkeypatch):
     A custom-hours day starting at 07:18 produces a first bucket labeled '07:18'.
     """
     d = date(2026, 4, 30)  # Thursday
+    # custom_hours only override the global shift when the day is PUBLISHED
+    # (per the 2026-05-15 change). Use published=True so this test's
+    # custom 07:18 start is honored.
     monkeypatch.setattr(staffing, "load_schedule", lambda day: staffing.Schedule(
-        day=day, published=False,
+        day=day, published=True,
         custom_hours={"start": "07:18", "end": "15:30", "breaks": []},
     ))
     monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset(range(7)))

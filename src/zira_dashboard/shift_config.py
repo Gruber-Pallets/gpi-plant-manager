@@ -60,14 +60,27 @@ def in_shift(local_dt: datetime) -> bool:
     return True
 
 
-def shift_start_for(day: date) -> time:
-    """Return the shift start for `day`, honoring per-day custom_hours
-    overrides set in the per-day schedule. Falls back to the global
-    schedule when no override is set."""
-    # Lazy import to avoid the shift_config → staffing → schedule_store cycle.
+def _published_custom_hours(day: date) -> dict | None:
+    """Return the per-day custom_hours override ONLY when the day's
+    schedule is published. Drafts (and days with no schedule row at all)
+    return None so callers fall back to the settings defaults.
+
+    Lazy import to avoid the shift_config → staffing → schedule_store cycle.
+    """
     from . import staffing
     sched = staffing.load_schedule(day)
+    if not getattr(sched, "published", False):
+        return None
     ch = sched.custom_hours
+    return ch if isinstance(ch, dict) else None
+
+
+def shift_start_for(day: date) -> time:
+    """Return the shift start for `day`, honoring per-day custom_hours
+    set on the PUBLISHED schedule for that day. Falls back to the global
+    settings default when no schedule is published yet (or when the
+    published schedule has no `start` override)."""
+    ch = _published_custom_hours(day)
     if ch and isinstance(ch.get("start"), str):
         try:
             return time.fromisoformat(ch["start"])
@@ -77,9 +90,7 @@ def shift_start_for(day: date) -> time:
 
 
 def shift_end_for(day: date) -> time:
-    from . import staffing
-    sched = staffing.load_schedule(day)
-    ch = sched.custom_hours
+    ch = _published_custom_hours(day)
     if ch and isinstance(ch.get("end"), str):
         try:
             return time.fromisoformat(ch["end"])
@@ -89,16 +100,16 @@ def shift_end_for(day: date) -> time:
 
 
 def breaks_for(day: date) -> tuple:
-    """Return the breaks tuple for `day`, honoring per-day custom_hours.
+    """Return the breaks tuple for `day`, honoring per-day custom_hours
+    on the PUBLISHED schedule.
 
-    A custom_hours override with an empty `breaks` list means "no breaks
-    today" — not "fall back to global." Only when custom_hours itself is
-    None (or omits the breaks key) do we use the global break list.
+    A published custom_hours with an empty `breaks` list means "no breaks
+    today" — not "fall back to global." Only when the day is unpublished
+    OR the published custom_hours omits the breaks key do we use the
+    global break list.
     """
-    from . import staffing
     from .schedule_store import Break
-    sched = staffing.load_schedule(day)
-    ch = sched.custom_hours
+    ch = _published_custom_hours(day)
     if ch and isinstance(ch.get("breaks"), list):
         out = []
         for b in ch["breaks"]:

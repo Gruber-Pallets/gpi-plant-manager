@@ -10,7 +10,7 @@ from typing import Any
 from zira_probe.client import ZiraClient
 
 from ._cache import TTLCache
-from .shift_config import SITE_TZ, in_shift_on, shift_end_for
+from .shift_config import SITE_TZ, breaks_for, in_shift_on, shift_end_for
 from .stations import Station
 
 PAGE_SIZE = 500
@@ -97,12 +97,53 @@ def _active_intervals(
     return intervals
 
 
+def _minutes_in_breaks(start_utc: datetime, end_utc: datetime) -> float:
+    """Sum minutes between [start_utc, end_utc] that fall inside a break
+    window on the local date(s) covered. Returns 0 when start >= end.
+
+    Used by `_adjusted_downtime` so the lunch/break portion of a downtime
+    event that bleeds into a break (or sits inside an active interval that
+    spans a break) is subtracted off — the report should only credit
+    productive minutes against downtime.
+    """
+    if end_utc <= start_utc:
+        return 0.0
+    s_local = start_utc.astimezone(SITE_TZ)
+    e_local = end_utc.astimezone(SITE_TZ)
+    total = 0.0
+    cur_day = s_local.date()
+    last_day = e_local.date()
+    while cur_day <= last_day:
+        try:
+            day_breaks = breaks_for(cur_day) or []
+        except Exception:
+            day_breaks = []
+        for b in day_breaks:
+            b_start = datetime.combine(cur_day, b.start, tzinfo=SITE_TZ)
+            b_end = datetime.combine(cur_day, b.end, tzinfo=SITE_TZ)
+            lo = max(b_start, s_local)
+            hi = min(b_end, e_local)
+            if hi > lo:
+                total += (hi - lo).total_seconds() / 60.0
+        cur_day += timedelta(days=1)
+    return total
+
+
 def _adjusted_downtime(
     downtime_rows: list[tuple[datetime, int]],
     samples: list[tuple[datetime, int]],
     end_of_day: datetime,
 ) -> int:
-    """Sum downtime that overlaps with active intervals; the rest is dropped."""
+    """Sum downtime that overlaps with active intervals; the rest is dropped.
+
+    Break/lunch time inside the overlap is subtracted — a downtime event that
+    starts pre-lunch and spans into lunch (and gets bracketed by an active
+    interval that itself spans lunch, because pallets bracketing lunch sit
+    within TRANSFER_GAP) would otherwise have its lunch portion incorrectly
+    counted as downtime. The leaderboard's `in_shift_on` filter only catches
+    events whose START is in a break — it doesn't help when the DURATION
+    bleeds into one.
+    """
     intervals = _active_intervals(samples, end_of_day)
     if not intervals:
         return 0
@@ -113,7 +154,9 @@ def _adjusted_downtime(
             overlap_start = max(event_start, ai_start)
             overlap_end = min(event_end, ai_end)
             if overlap_end > overlap_start:
-                total_minutes += (overlap_end - overlap_start).total_seconds() / 60.0
+                window_min = (overlap_end - overlap_start).total_seconds() / 60.0
+                break_min = _minutes_in_breaks(overlap_start, overlap_end)
+                total_minutes += max(0.0, window_min - break_min)
     return int(total_minutes)
 
 
