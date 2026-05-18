@@ -203,6 +203,8 @@ class RequireAuthMiddleware(BaseHTTPMiddleware):
         cookie = request.cookies.get(SESSION_COOKIE_NAME)
         payload = verify_session(cookie)
         if payload is not None:
+            request.state.user_upn = payload.get("upn")
+            request.state.user_name = payload.get("name")
             response = await call_next(request)
             # Sliding-window refresh: if cookie is close to expiry, re-issue.
             if needs_refresh(payload):
@@ -218,7 +220,12 @@ class RequireAuthMiddleware(BaseHTTPMiddleware):
         if path.startswith("/tv/"):
             from . import device_tokens as _dt
             signed = request.query_params.get("device")
-            if signed and _dt.lookup_active(signed) is not None:
+            row = _dt.lookup_active(signed) if signed else None
+            if row is not None:
+                # `device:` prefix marks the request as TV-not-human so any
+                # downstream audit can distinguish humans from TVs at a glance.
+                request.state.user_upn = f"device:{row['name']}"
+                request.state.user_name = row["name"]
                 return await call_next(request)
 
         # No valid auth — redirect to login.

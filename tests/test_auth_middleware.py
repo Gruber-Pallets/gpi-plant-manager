@@ -186,3 +186,45 @@ def test_tv_path_without_device_token_redirects(mini_app):
     c = TestClient(mini_app)
     r = c.get("/tv/baz", follow_redirects=False)
     assert r.status_code == 302
+
+
+def test_session_sets_request_state(mini_app, fixed_secret):
+    """Cookie-authed requests get user_upn + user_name on request.state."""
+    token = auth.mint_session(sub="x", upn="dale@gruberpallets.com", name="Dale")
+
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    @mini_app.get("/whoami")
+    async def _w(request: Request):
+        return JSONResponse({
+            "upn": getattr(request.state, "user_upn", None),
+            "name": getattr(request.state, "user_name", None),
+        })
+
+    c = TestClient(mini_app, cookies={auth.SESSION_COOKIE_NAME: token})
+    r = c.get("/whoami")
+    assert r.status_code == 200
+    assert r.json() == {"upn": "dale@gruberpallets.com", "name": "Dale"}
+
+
+def test_device_token_sets_request_state(mini_app, monkeypatch):
+    """Device-token-authed /tv/* requests get a `device:<name>` UPN so
+    downstream code can distinguish humans from TVs."""
+    from zira_dashboard import device_tokens as dt
+    monkeypatch.setattr(dt, "lookup_active",
+        lambda signed: {"id": 1, "name": "Bay 3 TV"} if signed == "fake.signed" else None,
+    )
+
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    @mini_app.get("/tv/whoami")
+    async def _w(request: Request):
+        return JSONResponse({
+            "upn": getattr(request.state, "user_upn", None),
+            "name": getattr(request.state, "user_name", None),
+        })
+
+    c = TestClient(mini_app)
+    r = c.get("/tv/whoami?device=fake.signed")
+    assert r.status_code == 200
+    assert r.json() == {"upn": "device:Bay 3 TV", "name": "Bay 3 TV"}
