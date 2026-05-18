@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Not authorized — GPI Plant Manager</title>
+<link rel="stylesheet" href="/static/dashboard.css?v={{ static_v('dashboard.css') }}">
+<style>
+  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--bg, #f5f7fa); }
+  .auth-card { background: var(--panel, #fff); padding: 2.5rem; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,.08); text-align: center; max-width: 26rem; }
+  .auth-card h1 { margin: 0 0 .5rem; font-size: 1.3rem; color: #b91c1c; }
+  .auth-card p  { color: var(--muted, #475569); margin: 0 0 1rem; font-size: .95rem; line-height: 1.4; }
+  .auth-card a  { color: #2563eb; }
+</style>
+</head>
+<body>
+<div class="auth-card">
+  <h1>{{ title or "Not authorized" }}</h1>
+  <p>{{ message or "This app is restricted to GPI employees with @gruberpallets.com Microsoft accounts." }}</p>
+  <p><a href="/auth/login">Try signing in again</a></p>
+</div>
+</body>
+</html>
