@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
 from . import db
 from .routes import (
@@ -198,6 +199,16 @@ app = FastAPI(
     openapi_url=None,
 )
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+# Authlib's OIDC flow stashes state nonce in request.session (Starlette's
+# session backend) for CSRF validation on the callback. Distinct from
+# our JWT user-session cookie — this one just carries the OIDC state.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("SESSION_SECRET", ""),
+    session_cookie="gpi_oidc_state",
+    same_site="lax",
+    https_only=True,
+)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")

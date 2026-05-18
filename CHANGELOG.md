@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-18
 
+### 2:30 PM
+
+- **Fix for Internal Server Error on `/auth/login`** — two missing pieces blocking the OIDC handshake from working in production. (1) `httpx` was an unpinned optional dep of Authlib's Starlette integration — `ModuleNotFoundError: httpx` fired the moment `/auth/login` tried to construct the OAuth client; pinned it explicitly in `requirements.txt` + `pyproject.toml`. (2) Added Starlette's `SessionMiddleware` to `app.py` — Authlib's `authorize_redirect()` stores the OIDC state nonce in `request.session` for CSRF validation on the callback, and without SessionMiddleware that access raises `AssertionError`. Re-uses `SESSION_SECRET` for cookie signing rather than introducing another env var.
+
 ### 2:21 PM
 
 - **Auth: production login fixes + minor hardening before Sub-phase 2C cutover** — three issues from final cross-task review. (1) **Critical**: Dockerfile uvicorn launch now passes `--proxy-headers --forwarded-allow-ips="*"` so the app trusts Railway's `X-Forwarded-Proto: https` header. Without this, `request.url_for("auth_callback")` returned `http://gpiplantmanager.com/auth/callback` (uvicorn sees plain HTTP from the proxy) and Microsoft rejected the redirect URI mismatch against the Entra ID app registration's `https://` URI — login would have 100%-failed on first attempt after the `AUTH_DISABLED` flip. (2) FastAPI's auto-mounted `/docs`, `/redoc`, `/openapi.json` are now disabled (`docs_url=None` etc.) — they'd 302 to login per the auth middleware once enforced, but disabling outright is cleaner than gating and removes the route-surface enumeration vector. (3) `/auth/logout` now clears `gpi_auth_next` alongside `gpi_session` — a lingering signed next-cookie from an abandoned login attempt could otherwise survive a logout/login cycle and redirect post-login. No test count change (274 passed).
