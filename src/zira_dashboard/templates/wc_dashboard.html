@@ -278,6 +278,7 @@
             <li>
               <span class="medal">{% if r.position == 1 %}🥇{% elif r.position == 2 %}🥈{% else %}🥉{% endif %}</span>
               <span class="name"><a href="/staffing/people/{{ r.name|urlencode }}">{{ r.name }}</a></span>
+              <span class="date">{{ r.day.strftime('%b') }} {{ r.day.day }}</span>
               <span class="units">{{ r.units|round(0)|int }}</span>
             </li>
           {% else %}

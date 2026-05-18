@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-18
 
+### 9:24 AM
+
+- **Operator dashboard Monthly Ribbons: each ribbon line now shows the date** — was "🥇 Carlos · 47" with no hint of when the medal was earned. Now "🥇 Carlos · May 12 · 47" — same medal/name/units, with the date sitting between name and units in muted gray. Uses `%b ` + `%d`-without-leading-zero so dates render as "May 2" / "May 12" cross-platform (Windows strftime doesn't support `%-d`). Sized one notch smaller than units in operator (TV) mode so long names don't get pushed off-screen on narrow widgets.
+
 ### 8:32 AM
 
 - **Recycling VS: per-WC goals now scale with scheduled people × shift hours** — was `target/hr × productive_minutes_from_meter_active_intervals`, which collapsed goals to single-digit hours on Saturday whenever meters were idle for chunks of the shift (Saturday Dismantler bars showed 72 expected vs. 241/251/341 actual = 335%+ "achievement"). New formula: `target/hr × scheduled_people × elapsed_shift_hours`. Past single-day views (e.g. Saturday) use the full shift; today midshift scales linearly via `shift_elapsed_minutes`. WCs that produced units without anyone scheduled get expected=0 (no target line) — those are the same WCs that prompt the "↪ assign" inline-attribute button. Pairs with the `shift_elapsed_minutes` fix below — without it, Saturday's new goal denominator would still be zero.
