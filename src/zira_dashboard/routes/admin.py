@@ -11,11 +11,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from threading import Lock
 
-from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Form, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import shift_config, staffing
-from ..deps import client
+from .. import device_tokens as _dt, shift_config, staffing
+from ..deps import client, templates
 from ..leaderboard import cached_leaderboard, leaderboard
 from ..stations import Station
 
@@ -506,3 +506,46 @@ def precompute_run(
         "duration_ms": int((time.time() - started) * 1000),
         "errors": errors,
     })
+
+
+# ---------- Device tokens admin ----------
+
+
+@router.get("/admin/devices", response_class=HTMLResponse)
+def admin_devices_list(request: Request):
+    return templates.TemplateResponse(
+        request, "admin_devices.html",
+        {
+            "tokens": _dt.list_all(),
+            "host": request.url.netloc,
+            "just_minted": None,
+            "active": "admin",
+        },
+    )
+
+
+@router.post("/admin/devices", response_class=HTMLResponse)
+def admin_devices_create(request: Request, name: str = Form(...)):
+    # The middleware stashes the authed user's UPN on request.state in
+    # Task 13 — until then, fall back to "admin" so this still works.
+    created_by = getattr(request.state, "user_upn", "admin")
+    new_id, signed = _dt.mint(name=name, created_by=created_by)
+    minted = next((t for t in _dt.list_all() if t["id"] == new_id), None)
+    return templates.TemplateResponse(
+        request, "admin_devices.html",
+        {
+            "tokens": _dt.list_all(),
+            "host": request.url.netloc,
+            "just_minted": {
+                "name": (minted or {}).get("name", name),
+                "signed": signed,
+            },
+            "active": "admin",
+        },
+    )
+
+
+@router.post("/admin/devices/{token_id}/revoke")
+def admin_devices_revoke(token_id: int):
+    _dt.revoke(token_id)
+    return RedirectResponse(url="/admin/devices", status_code=303)

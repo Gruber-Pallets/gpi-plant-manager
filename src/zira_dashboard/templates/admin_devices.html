@@ -1,0 +1,63 @@
+{% extends "_staffing_base.html" %}
+{% block title %}Devices{% endblock %}
+{% block content %}
+<main class="admin-devices">
+  <h1>Device tokens for TV displays</h1>
+  <p class="muted">
+    Each TV display gets a unique signed token. The token-bearing URL works
+    only on <code>/tv/*</code> paths. Revoke any token instantly below —
+    revoked tokens stop working on the next refresh.
+  </p>
+
+  <form method="post" action="/admin/devices" class="new-device-form">
+    <input type="text" name="name" placeholder="e.g. Bay 3 TV" required maxlength="120">
+    <button type="submit">Create device token</button>
+  </form>
+
+  {% if just_minted %}
+  <div class="just-minted">
+    <h2>New token created for "{{ just_minted.name }}"</h2>
+    <p>Copy this URL and open it once on the TV. <strong>This is the only time the URL is shown — it cannot be retrieved later.</strong></p>
+    <input type="text" value="https://{{ host }}/tv/recycling?device={{ just_minted.signed }}" readonly onclick="this.select()" class="device-url">
+    <p class="muted">For other dashboards, swap <code>/tv/recycling</code> for <code>/tv/wc/&lt;slug&gt;</code> or <code>/tv/new-vs</code>.</p>
+  </div>
+  {% endif %}
+
+  <table class="devices-table">
+    <thead><tr><th>Name</th><th>Created</th><th>By</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+      {% for t in tokens %}
+      <tr class="{% if t.revoked_at %}revoked{% endif %}">
+        <td>{{ t.name }}</td>
+        <td>{{ t.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>{{ t.created_by }}</td>
+        <td>{{ t.last_used_at.strftime('%Y-%m-%d %H:%M') if t.last_used_at else '—' }}</td>
+        <td>{{ 'revoked' if t.revoked_at else 'active' }}</td>
+        <td>
+          {% if not t.revoked_at %}
+          <form method="post" action="/admin/devices/{{ t.id }}/revoke" style="display:inline">
+            <button type="submit" onclick="return confirm('Revoke {{ t.name }}? The TV will stop loading on next refresh.')">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="muted">No tokens yet — create one above.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</main>
+<style>
+  .admin-devices { max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+  .new-device-form { display: flex; gap: .5rem; margin: 1.5rem 0; }
+  .new-device-form input { flex: 1; padding: .5rem .75rem; border: 1px solid var(--border, #d8dee5); border-radius: 6px; }
+  .new-device-form button { padding: .5rem 1rem; background: #0078d4; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+  .just-minted { background: #ecfdf5; border: 1px solid #10b981; border-radius: 8px; padding: 1rem; margin: 1.5rem 0; }
+  .just-minted h2 { margin: 0 0 .5rem; font-size: 1.1rem; color: #047857; }
+  .device-url { width: 100%; padding: .5rem; font-family: monospace; font-size: .85rem; }
+  .devices-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  .devices-table th, .devices-table td { padding: .5rem .75rem; border-bottom: 1px solid var(--border, #e3e8ee); text-align: left; }
+  .devices-table tr.revoked { color: var(--muted, #94a3b8); text-decoration: line-through; }
+  .muted { color: var(--muted, #64748b); font-size: .9rem; }
+</style>
+{% endblock %}
