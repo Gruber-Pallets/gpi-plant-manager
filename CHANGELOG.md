@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-18
 
+### 2:07 PM
+
+- **Auth Sub-phase 2A: Microsoft Entra ID OIDC plumbing landed (NOT YET ENFORCED)** — `/auth/login`, `/auth/callback`, `/auth/logout` routes wired up; `RequireAuthMiddleware` registered in `app.py`; session JWT cookies via `authlib.jose` (HS256, 7-day sliding refresh); `@gruberpallets.com` domain check; `tests/conftest.py` keeps the existing TestClient suite happy. While `AUTH_DISABLED=1` is set in Railway, every route still serves anonymously — users see zero change. The middleware re-logs at ERROR level every 500 requests when `AUTH_DISABLED` is on, so accidental production bypass is detectable from request logs (boot-time log alone would scroll out of the buffer within hours). Next: Sub-phase 2B adds device tokens for TV displays; Sub-phase 2C is the cutover where Dale unsets `AUTH_DISABLED` and the door closes.
+
 ### 12:15 PM
 
 - **Security: site is now marked non-indexable to search engines** — incident response for employee names + production data showing up in Google. Two changes: (1) every HTTP response now carries `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet` (the authoritative signal Google honors across header + meta tag) via the existing `_security_headers` middleware in `app.py`. (2) New `/robots.txt` route returns `User-agent: *\nDisallow: /` as the upstream backstop — crawlers fetch this BEFORE crawling, so they bounce off before requesting anything else. This is the bleeding-stop pass; full Microsoft Entra ID auth (the door-lock that stops direct-link access too) is being designed separately and will ship over the next 1-3 days. Dale's manual TODO: file URL-removal requests for already-indexed pages via Google Search Console (https://search.google.com/search-console).
