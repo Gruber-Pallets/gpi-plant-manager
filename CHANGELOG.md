@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-18
 
+### 12:15 PM
+
+- **Security: site is now marked non-indexable to search engines** — incident response for employee names + production data showing up in Google. Two changes: (1) every HTTP response now carries `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet` (the authoritative signal Google honors across header + meta tag) via the existing `_security_headers` middleware in `app.py`. (2) New `/robots.txt` route returns `User-agent: *\nDisallow: /` as the upstream backstop — crawlers fetch this BEFORE crawling, so they bounce off before requesting anything else. This is the bleeding-stop pass; full Microsoft Entra ID auth (the door-lock that stops direct-link access too) is being designed separately and will ship over the next 1-3 days. Dale's manual TODO: file URL-removal requests for already-indexed pages via Google Search Console (https://search.google.com/search-console).
+
 ### 10:00 AM
 
 - **Perf: parallelize the per-day loop on `/recycling` range views** — the per-day data computation (`_recycling_day_data`) ran sequentially over every day in the range, paying the full I/O cost (Zira leaderboard, schedule load, StratusTime absent-names) per day on a cold cache. A week view = 7 sequential round-trips, a month view = ~30, a quarter ≈ 90, a year ≈ 365. Now fanned out across a 4-worker `ThreadPoolExecutor` — cap chosen so we don't starve the DB pool (`maxconn=20`) or hammer the Zira API on long ranges. The helper is read-only and the caches it touches (leaderboard TTL, per-day schedule cache, `work_centers_store._EFFECTIVE_CACHE`, settings) are all thread-safe. Single-day views (the default `/recycling`) stay inline so we don't pay pool-spinup cost on the hot path. Order is preserved (pool.map returns in input order) so the downstream `zip(per_day, days)` aggregation is unchanged. Realistic impact: week views ~4×, month ~4×, quarter ~4× on cold renders (the 4-worker cap is the lower bound). Combined with the response cache shipped at 9:54 AM, warm-load impact is multiplicative.

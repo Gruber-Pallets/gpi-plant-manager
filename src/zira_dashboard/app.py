@@ -224,7 +224,15 @@ async def _security_headers(request, call_next):
     few common attack surfaces. The HSTS max-age is one year with
     includeSubDomains so www. and any future subdomains inherit. Do not
     add `preload` until this is verified on a stable apex + www setup —
-    HSTS preload is hard to undo."""
+    HSTS preload is hard to undo.
+
+    Also tells search engines: no indexing, no following links, no
+    archiving, no snippets. This site is an internal manufacturing tool
+    that surfaces employee names + production data — never appropriate
+    for public discovery. The X-Robots-Tag header is the authoritative
+    signal (Google obeys the most restrictive directive across header +
+    meta tag) and applies to every response, including non-HTML.
+    """
     response = await call_next(request)
     response.headers.setdefault(
         "Strict-Transport-Security",
@@ -232,7 +240,21 @@ async def _security_headers(request, call_next):
     )
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "X-Robots-Tag",
+        "noindex, nofollow, noarchive, nosnippet",
+    )
     return response
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def _robots_txt():
+    """Disallow every crawler from every path. Backstop to the
+    X-Robots-Tag header — search engines fetch /robots.txt before
+    crawling, and a Disallow rule here stops them before they ever
+    request the rest of the site."""
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
 
 @app.middleware("http")
