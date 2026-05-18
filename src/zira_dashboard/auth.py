@@ -168,6 +168,50 @@ def _is_bypass_path(path: str) -> bool:
     return any(path.startswith(p) for p in _BYPASS_PREFIXES)
 
 
+def _ip_allowlisted(request) -> bool:
+    """True when the request's client IP matches any entry in the
+    `TV_ALLOWED_IPS` env var (comma-separated single IPs and/or CIDR
+    ranges). Used to grant /tv/* paths zero-config access from the
+    shop floor — typing a device token URL on a TV remote is
+    impractical, but the shop's public IP is stable.
+
+    Honors `X-Forwarded-For` because uvicorn runs with `--proxy-headers`
+    (set in the Dockerfile), so `request.client.host` reflects the real
+    client IP, not Railway's proxy.
+
+    Returns False when the env var is unset (no IPs allowlisted) or
+    when the client IP can't be determined.
+    """
+    import ipaddress
+    import os
+    allowed_raw = os.environ.get("TV_ALLOWED_IPS", "").strip()
+    if not allowed_raw:
+        return False
+    client_ip = request.client.host if request.client else None
+    if not client_ip:
+        return False
+    try:
+        client_addr = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    for entry in allowed_raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            if "/" in entry:
+                if client_addr in ipaddress.ip_network(entry, strict=False):
+                    return True
+            else:
+                if client_addr == ipaddress.ip_address(entry):
+                    return True
+        except ValueError:
+            # Malformed env var entry — skip it, log nothing (env var is
+            # operator config, not user input; a typo here is a deploy issue).
+            continue
+    return False
+
+
 class RequireAuthMiddleware(BaseHTTPMiddleware):
     """Gate every request behind a valid session cookie.
 
@@ -218,6 +262,13 @@ class RequireAuthMiddleware(BaseHTTPMiddleware):
 
         # No session cookie — try a device token, but ONLY on /tv/* paths.
         if path.startswith("/tv/"):
+            # Path 1: IP allowlist — shop-floor TVs, zero typing.
+            if _ip_allowlisted(request):
+                client_ip = request.client.host if request.client else "unknown"
+                request.state.user_upn = f"ip:{client_ip}"
+                request.state.user_name = "TV (allowlisted IP)"
+                return await call_next(request)
+            # Path 2: device token — off-network TVs or one-off setups.
             from . import device_tokens as _dt
             signed = request.query_params.get("device")
             row = _dt.lookup_active(signed) if signed else None

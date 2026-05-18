@@ -228,3 +228,80 @@ def test_device_token_sets_request_state(mini_app, monkeypatch):
     r = c.get("/tv/whoami?device=fake.signed")
     assert r.status_code == 200
     assert r.json() == {"upn": "device:Bay 3 TV", "name": "Bay 3 TV"}
+
+
+def test_tv_path_with_ip_allowlist_passes(mini_app, monkeypatch):
+    """Shop-floor IP in TV_ALLOWED_IPS bypasses auth on /tv/* paths
+    without needing a device token."""
+    monkeypatch.setenv("TV_ALLOWED_IPS", "127.0.0.1")
+    from starlette.responses import PlainTextResponse
+    @mini_app.get("/tv/floor")
+    def _tv(): return PlainTextResponse("tv-ok")
+    # TestClient defaults client.host to "testclient" (not an IP), so
+    # override it to a real IP that matches the env var.
+    c = TestClient(mini_app, client=("127.0.0.1", 12345))
+    r = c.get("/tv/floor")
+    assert r.status_code == 200
+    assert r.text == "tv-ok"
+
+
+def test_tv_path_with_ip_allowlist_cidr_passes(mini_app, monkeypatch):
+    """CIDR ranges in TV_ALLOWED_IPS match correctly."""
+    monkeypatch.setenv("TV_ALLOWED_IPS", "10.0.0.0/8")
+    from starlette.responses import PlainTextResponse
+    @mini_app.get("/tv/cidr")
+    def _tv(): return PlainTextResponse("tv-ok")
+    c = TestClient(mini_app, client=("10.5.5.5", 12345))
+    r = c.get("/tv/cidr")
+    assert r.status_code == 200
+    assert r.text == "tv-ok"
+
+
+def test_tv_path_with_ip_allowlist_miss_redirects(mini_app, monkeypatch):
+    """IPs NOT in TV_ALLOWED_IPS still get bounced to login."""
+    monkeypatch.setenv("TV_ALLOWED_IPS", "10.20.30.40")
+    from starlette.responses import PlainTextResponse
+    @mini_app.get("/tv/miss")
+    def _tv(): return PlainTextResponse("tv-ok")
+    # client.host = "8.8.8.8" — not in the allowlist
+    c = TestClient(mini_app, client=("8.8.8.8", 12345))
+    r = c.get("/tv/miss", follow_redirects=False)
+    assert r.status_code == 302
+
+
+def test_ip_allowlist_does_not_grant_non_tv_paths(mini_app, monkeypatch):
+    """Allowlisted IP must NOT bypass auth on /recycling or other
+    non-/tv/* paths. The shop floor's IP is a TV-only convenience,
+    not a blanket auth bypass."""
+    monkeypatch.setenv("TV_ALLOWED_IPS", "127.0.0.1")
+    c = TestClient(mini_app, client=("127.0.0.1", 12345))
+    r = c.get("/recycling", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/auth/login" in r.headers["location"]
+
+
+def test_ip_allowlist_unset_env_no_op(mini_app, monkeypatch):
+    """When TV_ALLOWED_IPS is unset, /tv/* paths still require a token
+    (status quo behavior preserved)."""
+    monkeypatch.delenv("TV_ALLOWED_IPS", raising=False)
+    from starlette.responses import PlainTextResponse
+    @mini_app.get("/tv/none")
+    def _tv(): return PlainTextResponse("tv-ok")
+    c = TestClient(mini_app, client=("127.0.0.1", 12345))
+    r = c.get("/tv/none", follow_redirects=False)
+    assert r.status_code == 302
+
+
+def test_ip_allowlist_malformed_entry_falls_back(mini_app, monkeypatch):
+    """A typo in the env var (e.g. 'not-an-ip') doesn't break the
+    middleware — it just doesn't match anything, and the request falls
+    through to the device-token check."""
+    monkeypatch.setenv("TV_ALLOWED_IPS", "not-an-ip, 127.0.0.1")
+    from starlette.responses import PlainTextResponse
+    @mini_app.get("/tv/typo")
+    def _tv(): return PlainTextResponse("tv-ok")
+    c = TestClient(mini_app, client=("127.0.0.1", 12345))
+    r = c.get("/tv/typo")
+    # Should still pass because 127.0.0.1 is the valid match
+    assert r.status_code == 200
+    assert r.text == "tv-ok"

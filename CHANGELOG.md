@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-18
 
+### 2:45 PM
+
+- **Auth: IP allowlist for `/tv/*` paths so shop-floor TVs don't need typed tokens** — the original device-token-in-URL design was unworkable for TVs operated by remote control (typing a 100-char signed token is a non-starter). Added a `TV_ALLOWED_IPS` env var (comma-separated single IPs or CIDR ranges); requests from a matching IP bypass auth on `/tv/*` paths only — `/recycling` and other editor views still require Microsoft sign-in regardless. The shop's public IP is stable enough for this to be zero-config: set the env var once in Railway, every TV on the shop network just works. Device tokens are still supported as a fallback for off-network displays. Six new tests cover happy path, CIDR matching, non-tv paths NOT bypassed by IP, env-var unset, and malformed entries.
+
 ### 2:30 PM
 
 - **Fix for Internal Server Error on `/auth/login`** — two missing pieces blocking the OIDC handshake from working in production. (1) `httpx` was an unpinned optional dep of Authlib's Starlette integration — `ModuleNotFoundError: httpx` fired the moment `/auth/login` tried to construct the OAuth client; pinned it explicitly in `requirements.txt` + `pyproject.toml`. (2) Added Starlette's `SessionMiddleware` to `app.py` — Authlib's `authorize_redirect()` stores the OIDC state nonce in `request.session` for CSRF validation on the callback, and without SessionMiddleware that access raises `AssertionError`. Re-uses `SESSION_SECRET` for cookie signing rather than introducing another env var.
