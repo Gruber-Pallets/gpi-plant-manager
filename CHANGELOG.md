@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-18
 
+### 2:17 PM
+
+- **Auth Sub-phase 2B: device tokens for shop-floor TVs** — new Postgres `device_tokens` table (idempotently bootstrapped at boot); admin UI at `/admin/devices` to mint, list, and revoke tokens (revoke is instant — TVs stop loading on the next refresh); `RequireAuthMiddleware` now accepts a `?device=<signed-token>` URL param ONLY on `/tv/*` paths (a valid token on `/recycling` or any non-TV path still bounces to login). Tokens are 32-byte random + HMAC-SHA256 of `SESSION_SECRET`; the random half lives in Postgres for instant revocation, the signature is re-derived at validate time so a leaked DB column alone can't forge a working URL — and rotating `SESSION_SECRET` invalidates every token at once as a panic button. Authed requests now stash `user_upn` + `user_name` on `request.state` so route handlers can see who's signed in (device-token requests get `device:<name>` to distinguish TVs from humans). Still gated by `AUTH_DISABLED=1` in Railway — nothing user-visible changes until Sub-phase 2C flips the env var off.
+
 ### 2:07 PM
 
 - **Auth Sub-phase 2A: Microsoft Entra ID OIDC plumbing landed (NOT YET ENFORCED)** — `/auth/login`, `/auth/callback`, `/auth/logout` routes wired up; `RequireAuthMiddleware` registered in `app.py`; session JWT cookies via `authlib.jose` (HS256, 7-day sliding refresh); `@gruberpallets.com` domain check; `tests/conftest.py` keeps the existing TestClient suite happy. While `AUTH_DISABLED=1` is set in Railway, every route still serves anonymously — users see zero change. The middleware re-logs at ERROR level every 500 requests when `AUTH_DISABLED` is on, so accidental production bypass is detectable from request logs (boot-time log alone would scroll out of the buffer within hours). Next: Sub-phase 2B adds device tokens for TV displays; Sub-phase 2C is the cutover where Dale unsets `AUTH_DISABLED` and the door closes.
