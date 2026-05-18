@@ -352,7 +352,22 @@ def _render_recycling(
         days.append(cursor)
         cursor += timedelta(days=1)
 
-    per_day = [_recycling_day_data(d, now, d == today, align_to_standard=is_range) for d in days]
+    # Range views (week/month/quarter/year) used to walk days sequentially,
+    # paying full I/O cost per day on a cold cache. Fan out across a small
+    # pool — `_recycling_day_data` is read-only and the caches it touches
+    # (leaderboard TTL, per-day schedule cache, work_centers, settings) are
+    # thread-safe. Cap at 4 workers so we don't starve the DB pool (maxconn=20)
+    # or hammer the Zira API on multi-month ranges. Single-day stays inline
+    # so we don't pay pool-spinup cost on the most common case.
+    def _compute_day(d):
+        return _recycling_day_data(d, now, d == today, align_to_standard=is_range)
+
+    if len(days) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as _pool:
+            per_day = list(_pool.map(_compute_day, days))
+    else:
+        per_day = [_compute_day(d) for d in days]
 
     # Aggregate top-line stats.
     total_units = sum(p["total_units"] for p in per_day)
