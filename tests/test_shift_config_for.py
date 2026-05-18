@@ -134,3 +134,32 @@ def test_shift_elapsed_minutes_respects_custom_hours(monkeypatch):
     d = date(2026, 4, 28)
     now = datetime(2026, 4, 28, 12, 0, tzinfo=SITE_TZ)
     assert shift_config.shift_elapsed_minutes(d, now) == 150
+
+
+def test_shift_elapsed_minutes_honors_published_schedule_on_saturday(monkeypatch):
+    """Regression: A Saturday with a PUBLISHED schedule (with or without
+    custom_hours) should report elapsed shift minutes, not zero. Previously
+    the function returned 0 for any non-weekday, zeroing out goal
+    denominators and pacing math on Saturday recycling views."""
+    monkeypatch.setattr(staffing, "load_schedule",
+        lambda d: staffing.Schedule(
+            day=d, published=True,
+            custom_hours={"start": "06:00", "end": "10:00", "breaks": []},
+        ))
+    # Default Mon-Fri work week. Saturday 2026-05-16 is weekday 5 → outside.
+    monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
+    saturday = date(2026, 5, 16)
+    # End of the 4-hour custom shift, no breaks → 240 min elapsed.
+    now = datetime(2026, 5, 16, 10, 0, tzinfo=SITE_TZ)
+    assert shift_config.shift_elapsed_minutes(saturday, now) == 240
+
+
+def test_shift_elapsed_minutes_returns_zero_on_unpublished_saturday(monkeypatch):
+    """Symmetric check: an unpublished Saturday (no published schedule)
+    still returns 0. Only the published-schedule signal opens the gate."""
+    monkeypatch.setattr(staffing, "load_schedule",
+        lambda d: staffing.Schedule(day=d, published=False, assignments={}))
+    monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
+    saturday = date(2026, 5, 16)
+    now = datetime(2026, 5, 16, 10, 0, tzinfo=SITE_TZ)
+    assert shift_config.shift_elapsed_minutes(saturday, now) == 0

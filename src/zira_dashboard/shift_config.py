@@ -156,7 +156,17 @@ def shift_elapsed_minutes(day: date, now: datetime) -> int:
     """Productive shift minutes elapsed on `day` as of `now` (site-local).
     Honors per-day custom_hours."""
     if day.weekday() not in work_weekdays():
-        return 0
+        # A published schedule on a non-standard weekday (e.g. Saturday) is
+        # the explicit signal that the day IS a workday. Without this gate
+        # the function returns 0 on weekends, zeroing out elapsed/uptime
+        # math + goal denominators on every Saturday dashboard view.
+        try:
+            from . import staffing
+            sched = staffing.load_schedule(day)
+            if not getattr(sched, "published", False):
+                return 0
+        except Exception:
+            return 0
     s = shift_start_for(day)
     e = shift_end_for(day)
     start = datetime.combine(day, s, tzinfo=SITE_TZ)

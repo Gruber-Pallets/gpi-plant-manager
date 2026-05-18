@@ -253,8 +253,18 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     # Per-WC dicts the aggregator can sum.
     per_wc_units = {r.station.name: r.units for r in active_results}
     per_wc_downtime = {r.station.name: r.downtime_minutes for r in active_results}
+    # Per-WC expected pallets = scheduled_people × hourly_target × elapsed_shift_hours.
+    # Past days use the full shift (elapsed == productive_minutes_for(d)); today
+    # midshift scales linearly via shift_elapsed_minutes. Was previously
+    # `target × productive_intervals_from_meter`, which collapsed Saturday goals
+    # to single-digit hours whenever meters were idle for chunks of the shift.
+    elapsed_hours_d = elapsed / 60.0
     per_wc_expected = {
-        r.station.name: settings_store.station_target(r.station) * (_productive_minutes(r.station.name) / 60.0)
+        r.station.name: (
+            settings_store.station_target(r.station)
+            * people_by_wc.get(r.station.name, 0)
+            * elapsed_hours_d
+        )
         for r in active_results
     }
     per_wc_state = {r.station.name: _state(r, now, is_today_d) for r in active_results}
