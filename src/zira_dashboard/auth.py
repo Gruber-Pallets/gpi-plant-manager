@@ -202,20 +202,27 @@ class RequireAuthMiddleware(BaseHTTPMiddleware):
 
         cookie = request.cookies.get(SESSION_COOKIE_NAME)
         payload = verify_session(cookie)
-        if payload is None:
-            from urllib.parse import urlencode
-            qs = urlencode({"next": path}) if path != "/" else ""
-            target = "/auth/login" + (("?" + qs) if qs else "")
-            return RedirectResponse(url=target, status_code=302)
+        if payload is not None:
+            response = await call_next(request)
+            # Sliding-window refresh: if cookie is close to expiry, re-issue.
+            if needs_refresh(payload):
+                fresh = mint_session(sub=payload["sub"], upn=payload["upn"], name=payload["name"])
+                response.set_cookie(
+                    SESSION_COOKIE_NAME, fresh,
+                    max_age=int(SESSION_TTL.total_seconds()),
+                    httponly=True, secure=True, samesite="lax", path="/",
+                )
+            return response
 
-        response = await call_next(request)
+        # No session cookie — try a device token, but ONLY on /tv/* paths.
+        if path.startswith("/tv/"):
+            from . import device_tokens as _dt
+            signed = request.query_params.get("device")
+            if signed and _dt.lookup_active(signed) is not None:
+                return await call_next(request)
 
-        # Sliding-window refresh: if cookie is close to expiry, re-issue.
-        if needs_refresh(payload):
-            fresh = mint_session(sub=payload["sub"], upn=payload["upn"], name=payload["name"])
-            response.set_cookie(
-                SESSION_COOKIE_NAME, fresh,
-                max_age=int(SESSION_TTL.total_seconds()),
-                httponly=True, secure=True, samesite="lax", path="/",
-            )
-        return response
+        # No valid auth — redirect to login.
+        from urllib.parse import urlencode
+        qs = urlencode({"next": path}) if path != "/" else ""
+        target = "/auth/login" + (("?" + qs) if qs else "")
+        return RedirectResponse(url=target, status_code=302)

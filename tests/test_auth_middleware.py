@@ -133,3 +133,56 @@ def test_no_sliding_refresh_when_fresh(mini_app, fixed_secret, monkeypatch):
     r = c.get("/recycling")
     assert r.status_code == 200
     assert auth.SESSION_COOKIE_NAME not in r.headers.get("set-cookie", "")
+
+
+def test_tv_path_with_valid_device_token_passes(mini_app, monkeypatch):
+    """Valid device token on /tv/* path: pass through, no cookie set."""
+    from zira_dashboard import device_tokens as dt
+    monkeypatch.setattr(dt, "lookup_active",
+        lambda signed: {"id": 1, "name": "Bay 3"} if signed == "fake.signed" else None,
+    )
+    from starlette.responses import PlainTextResponse
+    @mini_app.get("/tv/foo")
+    def _tv(): return PlainTextResponse("tv-ok")
+    c = TestClient(mini_app)
+    r = c.get("/tv/foo?device=fake.signed")
+    assert r.status_code == 200
+    assert r.text == "tv-ok"
+
+
+def test_tv_path_with_invalid_device_token_redirects(mini_app, monkeypatch):
+    """Invalid (signature-bad or revoked) token: redirect to login."""
+    from zira_dashboard import device_tokens as dt
+    monkeypatch.setattr(dt, "lookup_active", lambda signed: None)
+    from starlette.responses import PlainTextResponse
+    @mini_app.get("/tv/bar")
+    def _tv(): return PlainTextResponse("tv-ok")
+    c = TestClient(mini_app)
+    r = c.get("/tv/bar?device=garbage", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/auth/login" in r.headers["location"]
+
+
+def test_non_tv_path_with_device_token_still_redirects(mini_app, monkeypatch):
+    """Token on a non-/tv/* path must NOT work — token is scoped strictly
+    to TV paths."""
+    from zira_dashboard import device_tokens as dt
+    monkeypatch.setattr(dt, "lookup_active",
+        lambda signed: {"id": 1, "name": "Bay 3"} if signed == "fake.signed" else None,
+    )
+    c = TestClient(mini_app)
+    # /recycling is NOT under /tv/, so the token must NOT work.
+    r = c.get("/recycling?device=fake.signed", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/auth/login" in r.headers["location"]
+
+
+def test_tv_path_without_device_token_redirects(mini_app):
+    """A bare /tv/foo without ?device= must also redirect — the path
+    being under /tv/ doesn't grant a free pass."""
+    from starlette.responses import PlainTextResponse
+    @mini_app.get("/tv/baz")
+    def _tv(): return PlainTextResponse("tv-ok")
+    c = TestClient(mini_app)
+    r = c.get("/tv/baz", follow_redirects=False)
+    assert r.status_code == 302
