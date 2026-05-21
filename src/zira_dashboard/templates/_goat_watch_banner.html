@@ -20,20 +20,17 @@
   {% if goat_alerts_active %}
     {% for a in goat_alerts_active %}
       <div class="goat-alert goat-alert-new" data-alert-id="{{ a.id }}">
-        <div class="goat-alert-head">
-          <span class="goat-alert-trophy" aria-hidden="true">🏆</span>
-          <span class="goat-alert-title">NEW GOAT — {{ a.group_name|upper }}</span>
-          <button type="button" class="goat-alert-dismiss" data-alert-id="{{ a.id }}" aria-label="Dismiss this alert">Dismiss ✕</button>
-        </div>
-        <div class="goat-alert-body">
+        <span class="goat-alert-trophy" aria-hidden="true">🏆</span>
+        <span class="goat-alert-title">NEW GOAT — {{ a.group_name|upper }}</span>
+        <span class="goat-alert-body">
           <b>{{ a.person }}</b> · <b>{{ a.units }}</b> pallets at {{ a.wc_name }} · {{ a.achieved_day }}
-          {% if a.prior_record_units %}
-            <div class="goat-alert-prior">
-              Beat the previous {{ a.prior_record_units }}
-              {% if a.prior_record_holder %}({{ a.prior_record_holder }}{% if a.prior_record_day %}, {{ a.prior_record_day }}{% endif %}){% endif %}
-            </div>
-          {% endif %}
-        </div>
+        </span>
+        {% if a.prior_record_units %}
+          <span class="goat-alert-prior">
+            Beat {{ a.prior_record_units }}{% if a.prior_record_holder %} ({{ a.prior_record_holder }}{% if a.prior_record_day %}, {{ a.prior_record_day }}{% endif %}){% endif %}
+          </span>
+        {% endif %}
+        <button type="button" class="goat-alert-dismiss" data-alert-id="{{ a.id }}" aria-label="Dismiss this alert">Dismiss ✕</button>
       </div>
     {% endfor %}
   {% endif %}

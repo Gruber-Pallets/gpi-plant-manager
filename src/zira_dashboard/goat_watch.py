@@ -70,20 +70,33 @@ class Contender:
 
 
 def _final_break_passed(day: date, now_utc: datetime) -> bool:
-    """True if the last break on `day` has already ended (in SITE_TZ).
+    """True if the last mid-shift break on `day` has already ended (in SITE_TZ).
 
     Used to gate the live banner — no contender alerts before the
-    final break wraps up.
+    final break wraps up. A "Cleanup" period scheduled to run right
+    up to shift end is excluded: it ends at shift_end, which would
+    otherwise gate the banner until end-of-shift and defeat the
+    point of a *live* contender alert.
     """
     from . import shift_config
     try:
         breaks = shift_config.breaks_for(day) or ()
     except Exception:
         breaks = ()
-    if not breaks:
-        # No breaks defined → treat as "always after" (no gate).
+    try:
+        s_end = shift_config.shift_end_for(day)
+    except Exception:
+        s_end = None
+    # Exclude end-of-shift wind-down "breaks" (e.g. Cleanup 15:15–15:30
+    # when shift_end=15:30). Those aren't breaks operators come back from.
+    if s_end is not None:
+        real_breaks = [b for b in breaks if b.end < s_end]
+    else:
+        real_breaks = list(breaks)
+    if not real_breaks:
+        # No mid-shift breaks → no gate; treat as always passed.
         return True
-    last_end: time = max(b.end for b in breaks)
+    last_end: time = max(b.end for b in real_breaks)
     now_local = now_utc.astimezone(shift_config.SITE_TZ)
     if now_local.date() != day:
         # Different calendar day in local TZ — banner is irrelevant.

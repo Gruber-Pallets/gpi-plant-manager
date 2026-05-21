@@ -2,6 +2,16 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+## 2026-05-21
+
+### 4:25 PM
+
+- **GOAT Watch — fix gate timing + flatten NEW GOAT banner** — two fixes to last week's GOAT Watch banner on `/recycling`. (1) **Live contenders now appear after the *real* final break (~13:45), not at end-of-shift.** The previous logic took `max(b.end for b in breaks)` which picked the Cleanup window (15:15–15:30) — and Cleanup ends *at* shift_end (15:30), so the banner was gated until shift was already over. Cleanup is wind-down, not a break operators come back from, so `_final_break_passed()` now ignores breaks whose end equals shift_end. (2) **NEW GOAT alert collapsed to a single horizontal row.** Trophy, "NEW GOAT — GROUP", `Person · Units pallets at WC · Date`, the "Beat 318 (prior holder, date)" subtext, and Dismiss button all sit inline on one line via `display: flex; flex-wrap: wrap`. Was 3 stacked rows eating ~80px of vertical space; now ~24px on a wide viewport. Wraps gracefully on narrow widths.
+
+### 4:00 PM
+
+- **Plant kiosk — Phase 0 (Dale-only pilot)** — new `/kiosk` route ships a touch-first clock in/out + work-center transfer flow that writes directly to Odoo `hr.attendance`. **Replaces StratusTime for the pilot user only** (Dale); the rest of the plant continues on StratusTime until pilot validates. **Auth = name-pick only** — no PIN. The home screen is an alphabetical scrollable list with sticky search; tapping a name mints a 60-second HMAC session token and bounces straight to the dashboard. Scheduler-aware: at clock-in the kiosk surfaces today's scheduled WC ("Today you're on Repair 1 — Confirm?") with a smaller "I'm somewhere else" override; overrides log to `kiosk_schedule_variances` for later supervisor review. Mid-shift transfers split into 2 `hr.attendance` records via close-then-reopen. Offline-tolerant: every punch writes to `kiosk_punches_log` first then attempts the Odoo write; a 60s background worker (`kiosk_sync.py`) retries unsynced rows so an Odoo outage never blocks the kiosk. Branded header on every kiosk screen (Gruber Pallets, Inc. logo + wordmark). New tables: `kiosk_punches_log`, `kiosk_schedule_variances`. **Odoo prerequisites before this can actually punch**: (1) write-capable Odoo API user on `hr.attendance`, (2) custom `x_kiosk_workcenter_name` Char field added to `hr.attendance` (via Studio or a small module) — when present, set `ODOO_KIOSK_WC_FIELD=x_kiosk_workcenter_name`; without it the kiosk still writes attendance, just without the WC attribution. Phase 1 (plant-wide cutover, variance review UI) and Phase 2 (time-off requests via kiosk) ship later. The `people.pin_hash` / `failed_pin_count` / `pin_locked_until` columns are added by the schema bootstrap but unused — left in place so PIN auth can be re-enabled later without a migration.
+
 ## 2026-05-20
 
 ### 7:29 AM
