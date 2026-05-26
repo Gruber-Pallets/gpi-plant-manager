@@ -1,0 +1,67 @@
+{% extends "kiosk_base.html" %}
+{% block title %}{{ person.name }} — Kiosk{% endblock %}
+{% block content %}
+<div class="k-header">
+  <a href="/kiosk" class="k-back">‹ Done</a>
+  <span>{{ person.name }}</span>
+  {% include "_kiosk_brand.html" %}
+</div>
+<div class="k-main" style="align-items: center; justify-content: center;">
+  {% if odoo_error %}
+    <div class="k-warning">
+      Odoo unreachable — your punch will sync when it's back.
+    </div>
+  {% endif %}
+
+  {% if is_clocked_in %}
+    <h2>You're clocked in{% if current_wc %} on{% endif %}</h2>
+    {% if current_wc %}
+      <h1 style="font-size: 3rem; color: #ea580c;">{{ current_wc }}</h1>
+    {% endif %}
+    {% if current_attendance and current_attendance.check_in %}
+      <p style="font-size: 1.25rem; color: #64748b; margin-bottom: 2rem;">
+        Since {{ current_attendance.check_in }} UTC
+      </p>
+    {% endif %}
+    <div style="display: flex; gap: 2rem; flex-wrap: wrap; justify-content: center;">
+      <form method="post" action="/kiosk/clock-out/{{ token }}" style="margin: 0;">
+        <button type="submit" class="k-btn danger">Clock Out</button>
+      </form>
+      <a href="/kiosk/pick-wc/{{ token }}?purpose=transfer"
+         class="k-btn secondary" style="text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">
+        Transfer
+      </a>
+    </div>
+  {% else %}
+    {% if scheduled_wc %}
+      <h2>Today you're scheduled on</h2>
+      <h1 style="font-size: 3rem; color: #ea580c;">{{ scheduled_wc }}</h1>
+      <form method="post" action="/kiosk/clock-in/{{ token }}"
+            style="margin-bottom: 1.5rem;">
+        <input type="hidden" name="wc_name" value="{{ scheduled_wc }}" />
+        <input type="hidden" name="scheduled_wc_name" value="{{ scheduled_wc }}" />
+        <button type="submit" class="k-btn success">
+          Confirm — Clock In
+        </button>
+      </form>
+      <a href="/kiosk/pick-wc/{{ token }}?purpose=clock_in&scheduled={{ scheduled_wc|urlencode }}"
+         class="k-btn secondary"
+         style="text-decoration: none; min-height: 64px; padding: 1rem 1.5rem;
+                font-size: 1.25rem; min-width: unset;
+                display: inline-flex; align-items: center; justify-content: center;">
+        I'm somewhere else
+      </a>
+    {% else %}
+      <h2>You're not scheduled today</h2>
+      <p style="font-size: 1.5rem; color: #64748b; margin-bottom: 2rem;">
+        Pick the work center you're on.
+      </p>
+      <a href="/kiosk/pick-wc/{{ token }}?purpose=clock_in"
+         class="k-btn success"
+         style="text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">
+        Pick Work Center
+      </a>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

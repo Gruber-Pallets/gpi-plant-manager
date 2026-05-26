@@ -1,0 +1,21 @@
+{% extends "kiosk_base.html" %}
+{% block title %}Done{% endblock %}
+{% block content %}
+<div class="k-main" style="align-items: center; justify-content: center;">
+  <div style="font-size: 7rem; color: #16a34a; line-height: 1;">✓</div>
+  <h1 style="font-size: 3rem; margin-top: 1rem;">{{ message }}</h1>
+  <p style="font-size: 1.75rem; color: #64748b; margin: 0.5rem 0 0 0;">{{ time }}</p>
+  <p style="font-size: 1.25rem; color: #64748b; margin-top: 2rem;">{{ person.name }}</p>
+  {% if sync_error %}
+    <div class="k-warning" style="margin-top: 2rem; max-width: 600px;">
+      Punch saved locally — will sync to Odoo when it's reachable.
+    </div>
+  {% endif %}
+  <p style="font-size: 1rem; color: #64748b; margin-top: 2rem;">
+    Returning home…
+  </p>
+</div>
+<script>
+  setTimeout(function(){ location.href = '/kiosk'; }, 3000);
+</script>
+{% endblock %}

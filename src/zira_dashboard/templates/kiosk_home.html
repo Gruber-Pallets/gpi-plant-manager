@@ -1,0 +1,47 @@
+{% extends "kiosk_base.html" %}
+{% block title %}Clock In / Out{% endblock %}
+{% block content %}
+<div class="k-header">
+  <span>Tap your name to clock in or out</span>
+  {% include "_kiosk_brand.html" %}
+</div>
+<div class="k-main" style="padding-top: 0;">
+  <input
+    type="text" id="filter" placeholder="Search your name…"
+    autocomplete="off" autofocus
+    style="font-size: 2rem; padding: 1rem 1.5rem; border-radius: 0.75rem;
+           border: 2px solid #cbd5e1; background: #ffffff; color: #0f172a;
+           width: 100%; position: sticky; top: 0; z-index: 10;
+           margin-top: 2rem; margin-bottom: 1rem;
+           box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);"
+  />
+  {# Names are already sorted alphabetically (case-insensitive) by the
+     route's SQL ORDER BY lower(name). #}
+  <div id="grid" style="
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+  ">
+    {% for p in people %}
+    <a href="/kiosk/start/{{ p.id }}" class="k-btn secondary person-btn"
+       data-name="{{ p.name|lower }}"
+       style="text-decoration: none; text-align: center;
+              padding: 1.5rem 1rem; font-size: 1.4rem; font-weight: 600;
+              min-height: 100px; min-width: unset; width: 100%;
+              display: flex; align-items: center; justify-content: center;
+              line-height: 1.2;">
+      {{ p.name }}
+    </a>
+    {% endfor %}
+  </div>
+</div>
+<script>
+  document.getElementById('filter').addEventListener('input', function(e) {
+    var q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll('.person-btn').forEach(function(btn) {
+      var name = btn.getAttribute('data-name');
+      btn.style.display = (!q || name.indexOf(q) >= 0) ? '' : 'none';
+    });
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "kiosk_base.html" %}
+{% block title %}Pick Work Center{% endblock %}
+{% block content %}
+<div class="k-header">
+  <a href="/kiosk/dashboard/{{ token }}" class="k-back">‹ Back</a>
+  <span>{{ person.name }}</span>
+  {% include "_kiosk_brand.html" %}
+</div>
+<div class="k-main">
+  <h1>
+    {% if purpose == 'clock_in' %}Pick where you're working
+    {% else %}Transfer to…
+    {% endif %}
+  </h1>
+  <div style="
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+  ">
+    {% for wc in work_centers %}
+      {% if purpose == 'clock_in' %}
+        <form method="post" action="/kiosk/clock-in/{{ token }}" style="margin: 0;">
+          <input type="hidden" name="wc_name" value="{{ wc.name }}" />
+          <input type="hidden" name="scheduled_wc_name" value="{{ scheduled }}" />
+          <button type="submit" class="k-btn secondary" style="
+            width: 100%; padding: 1.5rem 1rem;
+            font-size: 1.4rem; min-height: 100px; min-width: unset;
+            text-align: center; line-height: 1.2;">
+            <div style="font-weight: 600;">{{ wc.name }}</div>
+            <div style="font-size: 0.9rem; color: #64748b; margin-top: 0.4rem;">
+              {{ wc.bay }} · {{ wc.department }}
+            </div>
+          </button>
+        </form>
+      {% else %}
+        <form method="post" action="/kiosk/transfer/{{ token }}" style="margin: 0;">
+          <input type="hidden" name="new_wc_name" value="{{ wc.name }}" />
+          <button type="submit" class="k-btn secondary" style="
+            width: 100%; padding: 1.5rem 1rem;
+            font-size: 1.4rem; min-height: 100px; min-width: unset;
+            text-align: center; line-height: 1.2;">
+            <div style="font-weight: 600;">{{ wc.name }}</div>
+            <div style="font-size: 0.9rem; color: #64748b; margin-top: 0.4rem;">
+              {{ wc.bay }} · {{ wc.department }}
+            </div>
+          </button>
+        </form>
+      {% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

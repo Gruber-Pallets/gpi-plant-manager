@@ -27,6 +27,7 @@ from .routes import (
     changelog,
     dashboard,
     goat_watch,
+    kiosk,
     late_report,
     leaderboards,
     past_schedules,
@@ -88,6 +89,20 @@ async def _warm_live_cache_loop():
         except Exception as e:  # noqa: BLE001 — warmer must never die
             _log.warning("live_cache warmer tick failed: %s", e)
         await asyncio.sleep(45)
+
+
+async def _warm_kiosk_sync_loop():
+    """Reconcile any kiosk_punches_log rows still flagged unsynced
+    against Odoo. Routes write to Odoo synchronously on each punch; this
+    loop catches anything that failed during a transient Odoo outage.
+    Runs every 60s. Errors are logged and swallowed."""
+    from . import kiosk_sync
+    while True:
+        try:
+            await asyncio.to_thread(kiosk_sync.retry_unsynced_punches)
+        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
+            _log.warning("Kiosk sync warmer tick failed: %s", e)
+        await asyncio.sleep(60)
 
 
 async def _warm_zira_cache_loop():
@@ -175,10 +190,11 @@ async def lifespan(app: FastAPI):
     warmer_task = asyncio.create_task(_warm_zira_cache_loop())
     st_warmer_task = asyncio.create_task(_warm_stratustime_loop())
     live_cache_task = asyncio.create_task(_warm_live_cache_loop())
+    kiosk_sync_task = asyncio.create_task(_warm_kiosk_sync_loop())
     try:
         yield
     finally:
-        for t in (warmer_task, st_warmer_task, live_cache_task):
+        for t in (warmer_task, st_warmer_task, live_cache_task, kiosk_sync_task):
             t.cancel()
             try:
                 await t
@@ -327,6 +343,7 @@ app.include_router(api_layout.router)
 app.include_router(changelog.router)
 app.include_router(admin.router)
 app.include_router(goat_watch.router)
+app.include_router(kiosk.router)
 
 
 def main() -> None:

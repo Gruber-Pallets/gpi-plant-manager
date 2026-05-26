@@ -519,6 +519,10 @@
        class="settings-nav-item {% if active_section == 'tvs' %}active{% endif %}">
       TVs
     </a>
+    <a href="?section=kiosk"
+       class="settings-nav-item {% if active_section == 'kiosk' %}active{% endif %}">
+      Plant Kiosk
+    </a>
   </aside>
 
   <div class="settings-content">
@@ -807,6 +811,116 @@
   </section>
 
   {% include "_settings_tvs.html" %}
+
+  <!-- Plant Kiosk -->
+  <section class="panel" id="kiosk-panel"
+           {% if active_section != 'kiosk' %}style="display:none"{% endif %}>
+    <h2>Plant Kiosk</h2>
+    <p style="color:var(--muted);margin:0 0 0.8rem 0">
+      Clock in/out + work-center transfers. Writes to Odoo
+      <code>hr.attendance</code>. Auth is name-pick only — no PIN.
+    </p>
+
+    <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin:0.4rem 0 1.4rem 0">
+      <a href="/kiosk" target="_blank" rel="noopener"
+         style="display:inline-block;padding:0.7rem 1.1rem;background:#16a34a;color:#fff;
+                text-decoration:none;border-radius:0.4rem;font-weight:600">
+        Open Kiosk Portal ↗
+      </a>
+      <a href="/kiosk"
+         style="display:inline-block;padding:0.7rem 1.1rem;background:#0f172a;color:#fff;
+                text-decoration:none;border-radius:0.4rem;font-weight:500">
+        Open here
+      </a>
+    </div>
+
+    <h3 style="margin-top:1rem">Sync status (last 7 days)</h3>
+    {% if kiosk_sync_status is none or kiosk_sync_status.total_7d == 0 %}
+      <p style="color:var(--muted);font-style:italic">No punches in the last 7 days.</p>
+    {% else %}
+      <ul style="font-size:0.9rem;line-height:1.55;margin:0.4rem 0 0 1.2rem">
+        <li>Total punches: <strong>{{ kiosk_sync_status.total_7d }}</strong></li>
+        <li>Unsynced to Odoo:
+          {% if kiosk_sync_status.unsynced and kiosk_sync_status.unsynced > 0 %}
+            <strong style="color:var(--bad)">{{ kiosk_sync_status.unsynced }}</strong>
+            (background worker retries every 60s)
+          {% else %}
+            <strong style="color:var(--good)">0</strong> ✓
+          {% endif %}
+        </li>
+        <li>Last successful sync:
+          {% if kiosk_sync_status.last_sync_at %}
+            <code>{{ kiosk_sync_status.last_sync_at }}</code>
+          {% else %}
+            <span style="color:var(--muted)">never</span>
+          {% endif %}
+        </li>
+        {% if kiosk_sync_status.error_count and kiosk_sync_status.error_count > 0 %}
+          <li><strong style="color:var(--bad)">{{ kiosk_sync_status.error_count }}</strong> rows with errors</li>
+        {% endif %}
+      </ul>
+    {% endif %}
+
+    <h3 style="margin-top:1.6rem">Recent punches</h3>
+    {% if not kiosk_recent_punches %}
+      <p style="color:var(--muted);font-style:italic">No punches yet.</p>
+    {% else %}
+      <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+        <thead>
+          <tr style="text-align:left;border-bottom:1px solid var(--border)">
+            <th style="padding:0.4rem 0.5rem">When</th>
+            <th style="padding:0.4rem 0.5rem">Person</th>
+            <th style="padding:0.4rem 0.5rem">Action</th>
+            <th style="padding:0.4rem 0.5rem">Work Center</th>
+            <th style="padding:0.4rem 0.5rem">Synced</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in kiosk_recent_punches %}
+            <tr style="border-bottom:1px solid var(--border-soft, #eee)">
+              <td style="padding:0.35rem 0.5rem;font-variant-numeric:tabular-nums">{{ p.occurred_at.strftime('%Y-%m-%d %H:%M') }}</td>
+              <td style="padding:0.35rem 0.5rem">{{ p.person_name or ('Odoo #' ~ p.person_odoo_id) }}</td>
+              <td style="padding:0.35rem 0.5rem">{{ p.action }}</td>
+              <td style="padding:0.35rem 0.5rem">{{ p.wc_name or '—' }}</td>
+              <td style="padding:0.35rem 0.5rem">
+                {% if p.synced_to_odoo %}
+                  <span style="color:var(--good)" title="Odoo attendance #{{ p.odoo_attendance_id }}">✓</span>
+                {% else %}
+                  <span style="color:var(--bad)" title="{{ p.sync_error or 'pending' }}">⏳</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <h3 style="margin-top:1.6rem">Schedule variances <small style="color:var(--muted);font-weight:400">— "I'm somewhere else" overrides</small></h3>
+    {% if not kiosk_recent_variances %}
+      <p style="color:var(--muted);font-style:italic">No variances logged yet.</p>
+    {% else %}
+      <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+        <thead>
+          <tr style="text-align:left;border-bottom:1px solid var(--border)">
+            <th style="padding:0.4rem 0.5rem">When</th>
+            <th style="padding:0.4rem 0.5rem">Person</th>
+            <th style="padding:0.4rem 0.5rem">Scheduled</th>
+            <th style="padding:0.4rem 0.5rem">Actual</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for v in kiosk_recent_variances %}
+            <tr style="border-bottom:1px solid var(--border-soft, #eee)">
+              <td style="padding:0.35rem 0.5rem;font-variant-numeric:tabular-nums">{{ v.occurred_at.strftime('%Y-%m-%d %H:%M') }}</td>
+              <td style="padding:0.35rem 0.5rem">{{ v.person_name or ('Odoo #' ~ v.person_odoo_id) }}</td>
+              <td style="padding:0.35rem 0.5rem">{{ v.scheduled_wc_name or '—' }}</td>
+              <td style="padding:0.35rem 0.5rem">{{ v.actual_wc_name }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
   </div>
 </div>
 </main>

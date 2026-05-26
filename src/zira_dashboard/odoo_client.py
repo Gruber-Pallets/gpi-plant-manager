@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import xmlrpc.client
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -172,3 +173,83 @@ def fetch_skills_for(employee_ids: list[int]) -> dict[int, list[dict]]:
         sname = r["skill_id"][1] if isinstance(r["skill_id"], list) else ""
         out.setdefault(eid, []).append({"skill_id": sid, "skill_name": sname, "level_id": lid})
     return out
+
+
+# ---------- Kiosk attendance writes (Phase 0 pilot) ----------
+#
+# These are the first WRITE methods on the Odoo client — everything above
+# is read-only sync. The Odoo API user backing ODOO_API_KEY must have
+# write permission on `hr.attendance` for these to succeed.
+
+
+def _kiosk_wc_field() -> str | None:
+    """Custom field on hr.attendance where the kiosk records the work
+    center the employee is punched into. The field has to exist in Odoo
+    (added via Studio or a custom module — recommended:
+    `x_kiosk_workcenter_name` as a Char). Set the env var when the field
+    is in place; leave unset to skip it entirely (early dev / pre-Odoo-setup
+    testing). Without the field, attendance rows are still written, just
+    without the WC attribution."""
+    return os.environ.get("ODOO_KIOSK_WC_FIELD") or None
+
+
+def _to_odoo_dt(ts: datetime) -> str:
+    """Odoo expects naive UTC strings in 'YYYY-MM-DD HH:MM:SS' format.
+    Accepts aware or naive datetimes; aware ones are converted to UTC."""
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+    return ts.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_current_attendance(employee_odoo_id: int) -> dict | None:
+    """Return the open hr.attendance row for this employee (check_out IS
+    NULL), or None if they're already clocked out. Most recent open
+    attendance wins if there's somehow more than one."""
+    rows = execute(
+        "hr.attendance", "search_read",
+        [("employee_id", "=", employee_odoo_id), ("check_out", "=", False)],
+        fields=["id", "employee_id", "check_in"],
+        limit=1,
+    )
+    return rows[0] if rows else None
+
+
+def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
+    """Create a new hr.attendance with check_in=ts. Returns the new id.
+    Writes the WC name into the custom field named by ODOO_KIOSK_WC_FIELD
+    when that env var is set and wc_name is non-empty; otherwise the field
+    is omitted."""
+    payload: dict[str, Any] = {
+        "employee_id": employee_odoo_id,
+        "check_in": _to_odoo_dt(ts),
+    }
+    field = _kiosk_wc_field()
+    if field and wc_name:
+        payload[field] = wc_name
+    return execute("hr.attendance", "create", payload)
+
+
+def clock_out(attendance_id: int, ts: datetime) -> None:
+    """Set check_out on an existing hr.attendance. Safe to call on an
+    already-closed record — Odoo just overwrites the timestamp."""
+    execute(
+        "hr.attendance", "write",
+        [attendance_id],
+        {"check_out": _to_odoo_dt(ts)},
+    )
+
+
+def transfer(
+    employee_odoo_id: int, new_wc_name: str | None, ts: datetime
+) -> tuple[int | None, int]:
+    """Close the employee's current open hr.attendance and open a new one
+    at the new WC. Returns (closed_id, new_id). If the employee has no
+    open attendance, closed_id is None — the new one is still opened so
+    the kiosk fails gracefully when local state and Odoo state disagree."""
+    current = get_current_attendance(employee_odoo_id)
+    closed_id: int | None = None
+    if current:
+        clock_out(current["id"], ts)
+        closed_id = current["id"]
+    new_id = clock_in(employee_odoo_id, new_wc_name, ts)
+    return closed_id, new_id

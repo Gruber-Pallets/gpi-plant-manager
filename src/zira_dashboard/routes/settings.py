@@ -47,7 +47,7 @@ def settings_page(
     saved: int = Query(default=0),
     section: str = Query(default="work_centers"),
 ):
-    if section not in ("work_centers", "schedule", "integrations", "roster_filter", "tvs"):
+    if section not in ("work_centers", "schedule", "integrations", "roster_filter", "tvs", "kiosk"):
         section = "work_centers"
     roster_filter_rows: list[dict] = []
     if section == "roster_filter":
@@ -62,6 +62,37 @@ def settings_page(
     if section == "integrations":
         from .. import stratustime_client
         integration_status = stratustime_client.health_check()
+    kiosk_recent_punches: list[dict] = []
+    kiosk_recent_variances: list[dict] = []
+    kiosk_sync_status: dict | None = None
+    if section == "kiosk":
+        from .. import db
+        kiosk_recent_punches = db.query(
+            "SELECT kpl.id, kpl.person_odoo_id, p.name AS person_name, "
+            "kpl.action, kpl.wc_name, kpl.occurred_at, kpl.synced_to_odoo, "
+            "kpl.sync_error, kpl.synced_at, kpl.odoo_attendance_id "
+            "FROM kiosk_punches_log kpl "
+            "LEFT JOIN people p ON p.odoo_id = kpl.person_odoo_id "
+            "ORDER BY kpl.occurred_at DESC LIMIT 50"
+        )
+        kiosk_recent_variances = db.query(
+            "SELECT ksv.id, ksv.person_odoo_id, p.name AS person_name, "
+            "ksv.scheduled_wc_name, ksv.actual_wc_name, ksv.occurred_at, "
+            "ksv.reviewed_at "
+            "FROM kiosk_schedule_variances ksv "
+            "LEFT JOIN people p ON p.odoo_id = ksv.person_odoo_id "
+            "ORDER BY ksv.occurred_at DESC LIMIT 50"
+        )
+        status_rows = db.query(
+            "SELECT "
+            "COUNT(*) FILTER (WHERE synced_to_odoo = FALSE) AS unsynced, "
+            "COUNT(*) AS total_7d, "
+            "MAX(synced_at) AS last_sync_at, "
+            "COUNT(*) FILTER (WHERE sync_error IS NOT NULL AND synced_to_odoo = FALSE) AS error_count "
+            "FROM kiosk_punches_log "
+            "WHERE occurred_at > now() - interval '7 days'"
+        )
+        kiosk_sync_status = status_rows[0] if status_rows else None
     tv_displays_rows: list[dict] = []
     all_dashboards_for_picker: list[dict] = []
     if section == "tvs":
@@ -186,6 +217,9 @@ def settings_page(
             "tv_displays_rows": tv_displays_rows,
             "all_dashboards_for_picker": all_dashboards_for_picker,
             "wc_locations_for_picker": [{"name": loc.name} for loc in staffing.LOCATIONS],
+            "kiosk_recent_punches": kiosk_recent_punches,
+            "kiosk_recent_variances": kiosk_recent_variances,
+            "kiosk_sync_status": kiosk_sync_status,
         },
     )
 

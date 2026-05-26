@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-26
 
+### 4:00 PM
+
+- **Plant Kiosk admin panel in Settings** — new sidebar entry `Settings → Plant Kiosk` that's the operator entry point for the kiosk pilot: a prominent "Open Kiosk Portal" button (opens `/kiosk` in a new tab) plus a live status panel: 7-day sync status (total punches, unsynced count, last successful sync timestamp, error count), recent punches table (last 50 with synced ✓ / pending ⏳ status), and schedule variances table showing every "I'm somewhere else" override (scheduled WC vs actual WC). Also lands the missing DB schema from Thursday's session — `kiosk_punches_log` and `kiosk_schedule_variances` tables — which were referenced by the kiosk routes but never made it into `db.py`, so the kiosk would have crashed on first punch. The PIN columns from that earlier stash were intentionally dropped: **the kiosk is name-pick only, no PIN, by design** (Dale's call — PINs add friction without meaningfully changing the trust model on the shop floor, and `/kiosk` is already gated behind the plant-manager session login). Kiosk source-file docstring and project memory both updated to remove the "PIN deferred to Phase 1" language.
+
 ### 11:41 AM
 
 - **`(N-D4)` side-metric drops to the baseline + fades more** — was vertically centered against the headline number (looked like it was floating), now uses `vertical-align: baseline` so the small "(52.3-D4)" sits flush with the bottom of the big number. Also bumped `opacity: 0.55` to make it more clearly a footnote.

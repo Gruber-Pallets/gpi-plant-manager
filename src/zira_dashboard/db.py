@@ -611,6 +611,48 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 );
 CREATE INDEX IF NOT EXISTS device_tokens_active_idx
   ON device_tokens (token) WHERE revoked_at IS NULL;
+
+-- Kiosk pilot (2026-05-21): plant kiosk for clock in/out + WC transfers,
+-- replacing StratusTime in stages. Phase 0 = Dale-only pilot writing to
+-- Odoo hr.attendance; Phase 1 = plant-wide cutover. Auth is name-pick
+-- only — no PIN, by design.
+
+-- Local mirror of every kiosk punch action. NOT the source of truth —
+-- Odoo hr.attendance is. This table is for audit + offline-tolerant retry:
+-- rows are written with synced_to_odoo=FALSE first, then flipped to TRUE
+-- once the Odoo write succeeds. The background sync worker reconciles
+-- rows still at FALSE every 60s.
+CREATE TABLE IF NOT EXISTS kiosk_punches_log (
+  id                  BIGSERIAL PRIMARY KEY,
+  person_odoo_id      INTEGER NOT NULL,
+  action              TEXT NOT NULL CHECK (action IN ('clock_in','clock_out','transfer_out','transfer_in')),
+  wc_name             TEXT,
+  odoo_attendance_id  INTEGER,
+  occurred_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  synced_to_odoo      BOOLEAN NOT NULL DEFAULT FALSE,
+  sync_error          TEXT,
+  synced_at           TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_kiosk_punches_log_unsynced
+  ON kiosk_punches_log (occurred_at) WHERE synced_to_odoo = FALSE;
+CREATE INDEX IF NOT EXISTS idx_kiosk_punches_log_person
+  ON kiosk_punches_log (person_odoo_id, occurred_at DESC);
+
+-- Variance log: every time an employee picks a WC different from what
+-- the scheduler said for today. reviewed_by/at let supervisors triage
+-- (Phase 1 UI). For Phase 0 (Dale-only), variances still get logged so
+-- we have data to design the review UI against.
+CREATE TABLE IF NOT EXISTS kiosk_schedule_variances (
+  id                  BIGSERIAL PRIMARY KEY,
+  person_odoo_id      INTEGER NOT NULL,
+  scheduled_wc_name   TEXT,
+  actual_wc_name      TEXT NOT NULL,
+  occurred_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reviewed_by         TEXT,
+  reviewed_at         TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_kiosk_schedule_variances_day
+  ON kiosk_schedule_variances (occurred_at);
 """
 
 
