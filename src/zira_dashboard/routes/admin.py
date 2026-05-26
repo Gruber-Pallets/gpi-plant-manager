@@ -67,6 +67,109 @@ def person_state(name: str = Query(...)):
     })
 
 
+@router.get("/admin/zira-readings-dump")
+def zira_readings_dump(
+    day: str = Query(...),
+    meter: str | None = Query(default=None),
+):
+    """Diagnostic: dump per-meter Zira reading summaries for a single day.
+
+    For each meter (or just the one passed via `meter`), counts production
+    rows (units > 0) vs status rows (status != Working with duration). Lets
+    us compare Friday vs Saturday and confirm whether Zira returned
+    downtime events at all, or whether they got filtered downstream.
+
+    Also reports the filter outcomes: how many production/downtime rows
+    pass `in_shift_on`, and how many would-be-downtime rows fall outside
+    the published shift window.
+    """
+    from ..leaderboard import WORKING_STATUS, _parse_event_date, day_window_utc
+    from ..shift_config import SITE_TZ, in_shift_on
+
+    try:
+        d = date.fromisoformat(day)
+    except ValueError:
+        return JSONResponse({"error": "day must be YYYY-MM-DD"}, status_code=400)
+
+    stations = _metered_stations()
+    if meter:
+        stations = [s for s in stations if s.meter_id == meter or s.name == meter]
+        if not stations:
+            return JSONResponse({"error": f"no meter matches {meter!r}"}, status_code=404)
+
+    start_iso, end_iso = day_window_utc(d)
+    out: list[dict] = []
+    for st in stations:
+        prod_in = prod_out = 0
+        down_in = down_out_shift = down_no_dur = 0
+        sample_down_rows: list[dict] = []
+        last_value: str | None = None
+        page_count = 0
+        for _ in range(20):
+            payload = client.get_readings(
+                meter_id=st.meter_id,
+                end_time=end_iso,
+                start_time=start_iso,
+                limit=500,
+                last_value=last_value,
+            )
+            rows = payload.get("data") if isinstance(payload, dict) else (payload or [])
+            cursor = payload.get("lastValue") if isinstance(payload, dict) else None
+            if not rows:
+                break
+            page_count += 1
+            for r in rows:
+                u = r.get("units")
+                u_int = int(u) if isinstance(u, (int, float)) else 0
+                status = r.get("status")
+                duration = r.get("duration")
+                event_dt = _parse_event_date(r.get("event_date"))
+                event_local = event_dt.astimezone(SITE_TZ) if event_dt else None
+                ish = event_local is not None and in_shift_on(event_local)
+                if u_int > 0:
+                    if ish:
+                        prod_in += 1
+                    else:
+                        prod_out += 1
+                if status and status != WORKING_STATUS:
+                    if not isinstance(duration, (int, float)):
+                        down_no_dur += 1
+                    elif not ish:
+                        down_out_shift += 1
+                        if len(sample_down_rows) < 10:
+                            sample_down_rows.append({
+                                "event_date_local": event_local.isoformat() if event_local else None,
+                                "status": status,
+                                "duration": duration,
+                                "reason": "out-of-shift",
+                            })
+                    else:
+                        down_in += 1
+                        if len(sample_down_rows) < 10:
+                            sample_down_rows.append({
+                                "event_date_local": event_local.isoformat() if event_local else None,
+                                "status": status,
+                                "duration": duration,
+                                "reason": "in-shift",
+                            })
+            if not cursor or len(rows) < 500:
+                break
+            last_value = cursor
+        out.append({
+            "meter_id": st.meter_id,
+            "name": st.name,
+            "category": st.category,
+            "pages_fetched": page_count,
+            "production_in_shift": prod_in,
+            "production_out_of_shift": prod_out,
+            "downtime_in_shift": down_in,
+            "downtime_out_of_shift": down_out_shift,
+            "downtime_no_duration": down_no_dur,
+            "sample_downtime_rows": sample_down_rows,
+        })
+    return JSONResponse({"day": d.isoformat(), "stations": out})
+
+
 @router.get("/admin/data-status")
 def data_status(
     start: str = Query(default="2024-01-01"),
