@@ -193,6 +193,65 @@ def _kiosk_wc_field() -> str | None:
     return os.environ.get("ODOO_KIOSK_WC_FIELD") or None
 
 
+def _kiosk_department_field() -> str | None:
+    """Field on hr.attendance to write the kiosk's resolved department_id
+    into. Odoo 17+ has a native writable `department_id`; older versions
+    or installs with `department_id` as a related/computed read-only
+    field need a custom Many2one field (recommended:
+    `x_kiosk_department_id` → hr.department, added via Studio).
+
+    Default unset (None) → no department write; attendance rows still
+    create successfully, they just won't be tagged by department for
+    reports. Set the env var to enable.
+
+    Required for reports that group hours by department to pick up
+    kiosk-created attendance, since the kiosk lets people transfer
+    mid-shift across departments and the employee's home department
+    on hr.employee won't reflect that."""
+    return os.environ.get("ODOO_KIOSK_DEPARTMENT_FIELD") or None
+
+
+# WC name → Odoo hr.department.id. Populated lazily by _department_id_for_wc.
+# None is cached too (means "looked up, not found in Odoo") so we don't keep
+# searching for a misconfigured department on every punch. Cleared on process
+# restart, which is fine — department list rarely changes and a restart is
+# cheap (Railway redeploy).
+_wc_dept_id_cache: dict[str, int | None] = {}
+
+
+def _department_id_for_wc(wc_name: str | None) -> int | None:
+    """Resolve a kiosk WC name (e.g. "Repair 1") to an Odoo
+    hr.department.id, going via the WC's `department` attribute in
+    staffing.LOCATIONS (e.g. "Recycled") and a case-insensitive
+    substring match against hr.department.name in Odoo (so "Recycled"
+    matches "01 Recycled").
+
+    Returns None if the WC is unknown, the WC has no department, or no
+    matching Odoo department exists."""
+    if not wc_name:
+        return None
+    if wc_name in _wc_dept_id_cache:
+        return _wc_dept_id_cache[wc_name]
+    from . import staffing
+    dept_name: str | None = None
+    for loc in staffing.LOCATIONS:
+        if loc.name == wc_name:
+            dept_name = loc.department
+            break
+    if not dept_name:
+        _wc_dept_id_cache[wc_name] = None
+        return None
+    rows = execute(
+        "hr.department", "search_read",
+        [("name", "ilike", dept_name)],
+        fields=["id"],
+        limit=1,
+    )
+    dept_id = rows[0]["id"] if rows else None
+    _wc_dept_id_cache[wc_name] = dept_id
+    return dept_id
+
+
 def _to_odoo_dt(ts: datetime) -> str:
     """Odoo expects naive UTC strings in 'YYYY-MM-DD HH:MM:SS' format.
     Accepts aware or naive datetimes; aware ones are converted to UTC."""
@@ -216,16 +275,24 @@ def get_current_attendance(employee_odoo_id: int) -> dict | None:
 
 def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
     """Create a new hr.attendance with check_in=ts. Returns the new id.
-    Writes the WC name into the custom field named by ODOO_KIOSK_WC_FIELD
-    when that env var is set and wc_name is non-empty; otherwise the field
-    is omitted."""
+
+    Writes the WC name into ODOO_KIOSK_WC_FIELD when configured (Char).
+    Writes the WC's resolved Odoo department into ODOO_KIOSK_DEPARTMENT_FIELD
+    when configured (Many2one to hr.department), so reports that group
+    hours by department attribute kiosk-created attendance correctly
+    even when an employee transfers between departments mid-shift."""
     payload: dict[str, Any] = {
         "employee_id": employee_odoo_id,
         "check_in": _to_odoo_dt(ts),
     }
-    field = _kiosk_wc_field()
-    if field and wc_name:
-        payload[field] = wc_name
+    wc_field = _kiosk_wc_field()
+    if wc_field and wc_name:
+        payload[wc_field] = wc_name
+    dept_field = _kiosk_department_field()
+    if dept_field:
+        dept_id = _department_id_for_wc(wc_name)
+        if dept_id:
+            payload[dept_field] = dept_id
     return execute("hr.attendance", "create", payload)
 
 
