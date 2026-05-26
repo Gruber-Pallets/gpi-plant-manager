@@ -46,7 +46,6 @@ def test_progress_buckets_default_uses_per_day_shift_start(monkeypatch):
     ))
     monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset(range(7)))
     # progress.py imports these symbols at module load — patch the bound names there too.
-    monkeypatch.setattr(progress_mod, "work_weekdays", lambda: frozenset(range(7)))
     monkeypatch.setattr(progress_mod, "station_target", lambda station: 0)
     st = _station()
     samples = [(_utc(d, 7, 25), 5)]
@@ -68,7 +67,6 @@ def test_progress_buckets_align_to_standard_uses_global_shift_start(monkeypatch)
         custom_hours={"start": "07:18", "end": "15:30", "breaks": []},
     ))
     monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset(range(7)))
-    monkeypatch.setattr(progress_mod, "work_weekdays", lambda: frozenset(range(7)))
     monkeypatch.setattr(progress_mod, "station_target", lambda station: 0)
     monkeypatch.setattr(shift_config, "shift_start", lambda: time(7, 0))
     monkeypatch.setattr(shift_config, "shift_end", lambda: time(15, 30))
@@ -92,7 +90,6 @@ def test_progress_buckets_align_to_standard_sample_at_0720_lands_in_0715_bucket(
         custom_hours={"start": "07:18", "end": "15:30", "breaks": []},
     ))
     monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset(range(7)))
-    monkeypatch.setattr(progress_mod, "work_weekdays", lambda: frozenset(range(7)))
     monkeypatch.setattr(progress_mod, "station_target", lambda station: 0)
     monkeypatch.setattr(shift_config, "shift_start", lambda: time(7, 0))
     monkeypatch.setattr(shift_config, "shift_end", lambda: time(15, 30))
@@ -121,7 +118,6 @@ def test_progress_buckets_honors_published_schedule_on_saturday(monkeypatch):
     # Keep the GLOBAL work_weekdays as the default Mon-Fri; only the
     # published-schedule gate should open the day.
     monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
-    monkeypatch.setattr(progress_mod, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
     monkeypatch.setattr(progress_mod, "station_target", lambda station: 0)
     st = _station()
     samples = [(_utc(saturday, 6, 10), 5), (_utc(saturday, 6, 25), 5)]
@@ -140,7 +136,6 @@ def test_progress_buckets_returns_empty_on_unpublished_saturday(monkeypatch):
         day=d, published=False, assignments={},
     ))
     monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
-    monkeypatch.setattr(progress_mod, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
     monkeypatch.setattr(progress_mod, "station_target", lambda station: 0)
     st = _station()
     samples = [(_utc(saturday, 6, 10), 5)]

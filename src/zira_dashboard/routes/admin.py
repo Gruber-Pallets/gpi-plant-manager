@@ -368,11 +368,15 @@ def zira_backfill(
     if not stations:
         return JSONResponse({"error": "no metered stations configured"}, status_code=500)
 
-    work_days = shift_config.work_weekdays()
     target_days: list[date] = []
     cursor = start_d
     while cursor <= end_d:
-        if cursor.weekday() in work_days and cursor < today:
+        # shift_config.is_workday() opens the gate for published Saturdays
+        # (and any other non-standard published weekday). Critical for the
+        # case this endpoint typically gets called: refreshing a Saturday
+        # row that the leaderboard cached with empty samples before the
+        # in_shift_on Saturday fix landed.
+        if shift_config.is_workday(cursor) and cursor < today:
             target_days.append(cursor)
         cursor += timedelta(days=1)
 
@@ -382,7 +386,7 @@ def zira_backfill(
             "with_units": 0,
             "no_units": [],
             "errors": [],
-            "note": "no work-days in range (weekends + today are always skipped)",
+            "note": "no work-days in range (unpublished weekends + today are always skipped)",
         })
 
     counts_lock = Lock()

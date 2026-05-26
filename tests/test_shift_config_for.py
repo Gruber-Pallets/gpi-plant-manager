@@ -165,6 +165,36 @@ def test_shift_elapsed_minutes_returns_zero_on_unpublished_saturday(monkeypatch)
     assert shift_config.shift_elapsed_minutes(saturday, now) == 0
 
 
+def test_is_workday_true_for_weekday(monkeypatch):
+    """A standard weekday is always a workday regardless of schedule
+    publication status."""
+    monkeypatch.setattr(staffing, "load_schedule",
+        lambda d: staffing.Schedule(day=d, published=False, assignments={}))
+    monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
+    thursday = date(2026, 5, 21)
+    assert shift_config.is_workday(thursday) is True
+
+
+def test_is_workday_true_for_published_saturday(monkeypatch):
+    """A Saturday with a published schedule counts as a workday — the
+    escape hatch that prevents Saturday data from being dropped on the
+    floor by every "is this in shift?" gate."""
+    monkeypatch.setattr(staffing, "load_schedule",
+        lambda d: staffing.Schedule(day=d, published=True, assignments={}))
+    monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
+    saturday = date(2026, 5, 23)
+    assert shift_config.is_workday(saturday) is True
+
+
+def test_is_workday_false_for_unpublished_saturday(monkeypatch):
+    """A Saturday with no published schedule is still a weekend."""
+    monkeypatch.setattr(staffing, "load_schedule",
+        lambda d: staffing.Schedule(day=d, published=False, assignments={}))
+    monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
+    saturday = date(2026, 5, 23)
+    assert shift_config.is_workday(saturday) is False
+
+
 def test_in_shift_on_honors_published_schedule_on_saturday(monkeypatch):
     """Regression: A Saturday with a PUBLISHED schedule must let readings
     inside the shift window count as in-shift. Without this, the leaderboard

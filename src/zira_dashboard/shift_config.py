@@ -75,6 +75,31 @@ def _published_custom_hours(day: date) -> dict | None:
     return ch if isinstance(ch, dict) else None
 
 
+def is_workday(day: date) -> bool:
+    """True if `day` should be treated as a workday.
+
+    A day counts as a workday if either:
+      (a) its weekday is in the global `work_weekdays()` set, OR
+      (b) a PUBLISHED schedule exists for that day — the explicit signal
+          that an otherwise non-standard weekday (e.g. Saturday) is being
+          worked.
+
+    Shared by every "is this in shift?" gate (shift_elapsed_minutes,
+    in_shift_on, progress_buckets, admin backfill) so the published-Saturday
+    escape hatch stays consistent. A drift between these gates is what
+    caused the recycling VS dashboard to show empty progress reports and
+    100% uptime on Saturdays before this helper existed.
+    """
+    if day.weekday() in work_weekdays():
+        return True
+    try:
+        from . import staffing
+        sched = staffing.load_schedule(day)
+        return bool(getattr(sched, "published", False))
+    except Exception:
+        return False
+
+
 def shift_start_for(day: date) -> time:
     """Return the shift start for `day`, honoring per-day custom_hours
     set on the PUBLISHED schedule for that day. Falls back to the global
@@ -139,22 +164,11 @@ def productive_minutes_for(day: date) -> int:
 
 def in_shift_on(local_dt: datetime) -> bool:
     """Day-aware twin of in_shift(): derives the day from local_dt and
-    consults per-day custom_hours."""
+    consults per-day custom_hours. Honors published Saturdays via
+    is_workday()."""
     day = local_dt.date()
-    if local_dt.weekday() not in work_weekdays():
-        # Same exception as shift_elapsed_minutes(): a published schedule
-        # on a non-standard weekday (e.g. Saturday) is the explicit signal
-        # that the day IS a workday. Without this gate every Saturday
-        # reading gets dropped by the leaderboard — emptying samples,
-        # zeroing downtime_minutes (so every WC reads 100% uptime), and
-        # blanking the progress charts on the recycling VS dashboard.
-        try:
-            from . import staffing
-            sched = staffing.load_schedule(day)
-            if not getattr(sched, "published", False):
-                return False
-        except Exception:
-            return False
+    if not is_workday(day):
+        return False
     t = local_dt.time()
     if t < shift_start_for(day) or t >= shift_end_for(day):
         return False
@@ -166,19 +180,9 @@ def in_shift_on(local_dt: datetime) -> bool:
 
 def shift_elapsed_minutes(day: date, now: datetime) -> int:
     """Productive shift minutes elapsed on `day` as of `now` (site-local).
-    Honors per-day custom_hours."""
-    if day.weekday() not in work_weekdays():
-        # A published schedule on a non-standard weekday (e.g. Saturday) is
-        # the explicit signal that the day IS a workday. Without this gate
-        # the function returns 0 on weekends, zeroing out elapsed/uptime
-        # math + goal denominators on every Saturday dashboard view.
-        try:
-            from . import staffing
-            sched = staffing.load_schedule(day)
-            if not getattr(sched, "published", False):
-                return 0
-        except Exception:
-            return 0
+    Honors per-day custom_hours and published Saturdays via is_workday()."""
+    if not is_workday(day):
+        return 0
     s = shift_start_for(day)
     e = shift_end_for(day)
     start = datetime.combine(day, s, tzinfo=SITE_TZ)
