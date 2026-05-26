@@ -7,6 +7,20 @@
   {% include "_kiosk_brand.html" %}
 </div>
 <div class="k-main" style="align-items: center; justify-content: center;">
+  {% if sync_warning %}
+    <div class="k-warning" style="max-width: 720px; text-align: left;">
+      <strong>Heads up — {{ sync_warning.count }} of your recent
+      {% if sync_warning.count > 1 %}punches haven't{% else %}punch hasn't{% endif %}
+      synced to Odoo.</strong>
+      <div style="font-size: 0.95rem; margin-top: 0.4rem; color: #92400e;">
+        Latest error: <code>{{ sync_warning.latest_error }}</code>
+        — last attempt {{ sync_warning.latest_at_display }}.
+        The background worker retries every 60s. If this persists,
+        check Settings &rarr; Plant Kiosk on the manager dashboard.
+      </div>
+    </div>
+  {% endif %}
+
   {% if is_clocked_in %}
     <h2>You're clocked in{% if current_wc %} on{% endif %}</h2>
     {% if current_wc %}

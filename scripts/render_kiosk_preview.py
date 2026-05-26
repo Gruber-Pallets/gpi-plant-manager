@@ -147,7 +147,23 @@ screens = [
         },
     },
     {
-        "title": "7. Success — with Odoo sync warning",
+        "title": "7. Dashboard — with persistent Odoo sync error",
+        "subtitle": "Banner appears when there are person-specific punches that already failed to sync at least once. Pending-sync (not yet attempted) is intentionally not warned about.",
+        "template": "kiosk_dashboard.html",
+        "context": {
+            "person": dale,
+            "token": mock_token,
+            "is_clocked_in": False,
+            "scheduled_wc": "Repair 1",
+            "sync_warning": {
+                "count": 2,
+                "latest_error": "401 Unauthorized — check ODOO_API_KEY",
+                "latest_at_display": "5/26 2:14 PM",
+            },
+        },
+    },
+    {
+        "title": "8. Success — with Odoo sync warning",
         "subtitle": "When Odoo was unreachable: punch saved locally, kiosk worker retries every 60s.",
         "template": "kiosk_success.html",
         "context": {

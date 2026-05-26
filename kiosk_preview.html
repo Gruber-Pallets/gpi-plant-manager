@@ -425,6 +425,8 @@ renders exactly what FastAPI would serve at the live endpoint.</p>
 &lt;/div&gt;
 &lt;div class=&quot;k-main&quot; style=&quot;align-items: center; justify-content: center;&quot;&gt;
   
+
+  
     
       &lt;h2&gt;Today you&#x27;re scheduled on&lt;/h2&gt;
       &lt;h1 style=&quot;font-size: 3rem; color: #ea580c;&quot;&gt;Repair 1&lt;/h1&gt;
@@ -600,6 +602,8 @@ renders exactly what FastAPI would serve at the live endpoint.</p>
 &lt;/div&gt;
 &lt;div class=&quot;k-main&quot; style=&quot;align-items: center; justify-content: center;&quot;&gt;
   
+
+  
     
       &lt;h2&gt;You&#x27;re not scheduled today&lt;/h2&gt;
       &lt;p style=&quot;font-size: 1.5rem; color: #64748b; margin-bottom: 2rem;&quot;&gt;
@@ -766,6 +770,8 @@ renders exactly what FastAPI would serve at the live endpoint.</p>
 &lt;/div&gt;
 &lt;/div&gt;
 &lt;div class=&quot;k-main&quot; style=&quot;align-items: center; justify-content: center;&quot;&gt;
+  
+
   
     &lt;h2&gt;You&#x27;re clocked in on&lt;/h2&gt;
     
@@ -1461,7 +1467,196 @@ renders exactly what FastAPI would serve at the live endpoint.</p>
 &lt;/script&gt;
 &lt;/body&gt;
 &lt;/html&gt;"></iframe>
-<div class='sep'>7. Success — with Odoo sync warning<small>When Odoo was unreachable: punch saved locally, kiosk worker retries every 60s.</small></div>
+<div class='sep'>7. Dashboard — with persistent Odoo sync error<small>Banner appears when there are person-specific punches that already failed to sync at least once. Pending-sync (not yet attempted) is intentionally not warned about.</small></div>
+<iframe srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1, user-scalable=no&quot;&gt;
+&lt;meta name=&quot;apple-mobile-web-app-capable&quot; content=&quot;yes&quot;&gt;
+&lt;title&gt;Dale Gruber — Kiosk&lt;/title&gt;
+&lt;style&gt;
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%; width: 100%;
+    font-family: system-ui, -apple-system, &quot;Segoe UI&quot;, sans-serif;
+    background: #f8fafc; color: #0f172a;
+    user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
+  }
+  body { display: flex; flex-direction: column; }
+  a { color: inherit; }
+
+  .k-header {
+    flex: 0 0 auto;
+    padding: 1rem 1.5rem;
+    background: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+    color: #0f172a;
+    font-size: 1.5rem; font-weight: 600;
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 1rem;
+  }
+  .k-header &gt; span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .k-back {
+    background: #e2e8f0; color: #0f172a;
+    border: none; border-radius: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    font-size: 1.25rem; font-weight: 500;
+    min-height: 64px; min-width: 100px;
+    cursor: pointer;
+    text-decoration: none; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .k-back:active { background: #cbd5e1; }
+
+  .k-brand { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
+  .k-brand img { height: 38px; width: auto; display: block; }
+  .k-brand-text { line-height: 1; }
+  .k-brand-name {
+    font-weight: 700; letter-spacing: 0.04em; font-size: 1rem;
+    color: #0f172a;
+  }
+  .k-brand-sub {
+    font-size: 0.65rem; letter-spacing: 0.2em;
+    color: #64748b; margin-top: 3px;
+  }
+
+  .k-main {
+    flex: 1 1 auto;
+    padding: 2rem;
+    overflow: auto;
+    display: flex; flex-direction: column;
+  }
+
+  .k-btn {
+    background: #2563eb; color: white;
+    border: none; border-radius: 0.75rem;
+    padding: 1.5rem 2rem;
+    font-size: 2rem; font-weight: 600;
+    min-height: 96px; min-width: 200px;
+    cursor: pointer;
+    transition: transform 0.05s, background 0.1s;
+    font-family: inherit;
+    line-height: 1.1;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  }
+  .k-btn:active { transform: scale(0.97); background: #1d4ed8; }
+  .k-btn.secondary {
+    background: #ffffff; color: #0f172a;
+    border: 1px solid #e2e8f0;
+  }
+  .k-btn.secondary:active { background: #f1f5f9; }
+  .k-btn.danger { background: #dc2626; color: white; }
+  .k-btn.danger:active { background: #b91c1c; }
+  .k-btn.success { background: #16a34a; color: white; }
+  .k-btn.success:active { background: #15803d; }
+
+  h1 { font-size: 2.5rem; margin: 0 0 1.5rem 0; font-weight: 700; line-height: 1.1; color: #0f172a; }
+  h2 { font-size: 1.75rem; margin: 0 0 1rem 0; font-weight: 500; color: #475569; }
+
+  .k-error {
+    background: #fee2e2; color: #991b1b;
+    padding: 1rem 1.5rem; border-radius: 0.5rem;
+    font-size: 1.25rem; margin-bottom: 1.5rem;
+    border: 1px solid #fecaca;
+  }
+  .k-warning {
+    background: #fef3c7; color: #92400e;
+    padding: 1rem 1.5rem; border-radius: 0.5rem;
+    font-size: 1.25rem; margin-bottom: 1.5rem;
+    border: 1px solid #fde68a;
+  }
+
+  /* htmx fragment swap: subtle fade so screen-to-screen transitions
+     don&#x27;t strobe. ~120ms is fast enough that the kiosk still feels
+     snappy but smooths the perceived swap. */
+  #kiosk-screen { opacity: 1; transition: opacity 120ms ease; }
+  #kiosk-screen.htmx-swapping { opacity: 0; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body hx-boost=&quot;true&quot;
+      hx-target=&quot;#kiosk-screen&quot;
+      hx-select=&quot;#kiosk-screen&quot;
+      hx-swap=&quot;outerHTML swap:120ms&quot;&gt;
+&lt;div id=&quot;kiosk-screen&quot;&gt;
+
+&lt;div class=&quot;k-header&quot;&gt;
+  &lt;a href=&quot;/kiosk&quot; class=&quot;k-back&quot;&gt;‹ Done&lt;/a&gt;
+  &lt;span&gt;Dale Gruber&lt;/span&gt;
+  &lt;div class=&quot;k-brand&quot;&gt;
+  &lt;img src=&quot;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgwAAAGjCAYAAABAJE2pAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAZdEVYdFNvZnR3YXJlAEFkb2JlIEltYWdlUmVhZHlxyWU8AAAAIXRFWHRDcmVhdGlvbiBUaW1lADIwMTU6MTE6MDUgMjI6MDc6MjCQNxPPAAAbHUlEQVR4Xu3d7ZnkRJZA4TEBEzABEzABE8YETMADTMAETBgTMGFNwIRdBTnaqlarUlJ8KK4i3vM85w80UKW8ceNQXZX9LwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAQPyw+Nvin4s/p78AAACwsobC34v/+8n/LAoHAAAm56tQ2CocAACYkLOhsFU4AAAwAbmhsFU4AAAwILVCYatwAABgAFqFwlbhAADAA7krFLYKBwAAHkCvUNgqHAAACEiUUNgqHAAACEDUUNgqHAAA6MBTQmGrcAAA4AaeGgpbhQMAAA0YJRS2CgcAACowaihsFQ4AAGQwSyhsFQ4AAJxg1lDYKhwAANhBKOwrHAAAWBAK5xQOAIAp+XHx90WhcE3hAACYghQKfyzuXYY8r3AAAAyJUGijcAAADIFQuEfhAAB4JEKhj8IBAPAIhEIMhQMAICRCIZ7p9Ug/tgoAQHeEQjzT65FeFwAAuiMUYpnezyK9r4VQAACEQCjEMoVCeqdMv/UAAAiBUIilUAAAhEIoxFIoAABCIRRiKRQAAKEQCrEUCgCAUAiFWAoFAEAohEIshQIAIBRCIZZCAQAQCqEQy/9ZFAoAgDAIhVimUPj3IgAAIRAKsRQKAIBQCIVYCgUAQCiEQiyFAgAgFEIhlkIBABAKoRBLoQAACIVQiKVQAACEQijEUigAAEIhFGIpFAAAoRAKsfzP4i+LqEuKr/RsveslAFxEKMQyXWY/L6IuKRTSV2s+P2t/rgYAnEAoxFIotGEvFLamcPDbPgCwIV1KQiGOQqENZ0Jhq+8XAYCFdCmly2lvUfJ+hUIbckJhq3AAMCVCIZZCoQ01QmGrcAAwBUIhlkKhDS1CYatwADAkQiGWQqENd4TCVuEAYAiEQiyFQht6hMJW4QDgkQiFWP65KBTqEyEUtqaPx5trAQiPUIhl+lHV9N4WqEvEUNjqq0kAQiIUYikU2vCEUNgqHACEQCjEUii04YmhsFU4AOiCUIilUGjDCKGwVTgAuAWhEEuh0IYRQ2GrcADQBKEQS6HQhhlCYatwAFAFoRBLodCGGUNhq3AAkIVQiKVQaINQ+F6zBuAUQiGWlncbhMKxZg/ALkIhjn8v/rb4wyLqIhSuKxwA/INQiKNQaIdQKFc4AJMiFOIoFNohFOorHIBJEApxFArtEArtFQ7AoAiFOAqFdgiF+xUOwCAIhTgKhXYIhf7+vmi2gQciFOIoFNohFGJp1oEHIRTiaHm2QyjE1uwDgREKcbQs2yEUnqWzAARCKMQxXWS/LlqO9REKz1Y4AB0RCnFMF1m60FAfoTCWwgG4EaEQR6HQDqEwtsIBaIhQiKNQaIdQmEvhAFREKMRRKLRDKMytswUU8MuiUIihZdYOocDPOmvABSzQOFpe7TDnfKezB7zBAo2jZdUOc84rOovAJyzQOFpO7TDnLNHZxNRYoHH8a9EyaoM5Z02FA6bCAo1j+qbS9FMoqI85Z0uFA4bGAo2jUGiHOeedpllzljEMFmgchUI7zDl76mzj0VigcbRM2mHOGUlnHY/CAo2j5dEOc87IOvsIjQUaR8uiHeacT9IuQCgs0DhaDu0w53yydgO6YoHG0TJohznnSNoVuBULNI4OfzvMOUfW7kBTLNA4/rH40yLqY845k2mX/LgIVMECjaPD3Q5zzpm1W1CEBRpHh7kd5pz80K7BJSzQODq87TDn5NfaPXiLBRpHh7Ud5jyead5/WUzfiLf399lPuwjfYIHG0eFshzmP5968p+/cFw7xtJsmxwKNo8PYDnMezzPznn4KKP26vX+e/bSrJsMCjaPD14YfFn9b/Htx77mzjznznn69cIjn74vpnGFQhEIchUIbhEJMa8y7cIhnOmfpvAmHgRAKMUyHSyi0QSjEtMW8C4d4CocBEAoxdJjaIRRiekcYC4d42nUPRCjE0OFph1CIaY+voAmHeNp9D0AoxNBhaYdQiGmPUNgiHOJpFwZEKMTQ4WiHUIhphFDYIhziaTcGQCjE0GFoh1CIZ3ot0o/URQuFLcIhnnZlB4RCDA1/O4RCPJ8678Ihnun+SvcYGpEOqVCIoVBoh1CI5yjzLhziKRwqY4HGUSi0w5zHc9R5Fw7xFA6FWKBxFArtMOfxnGXe13Awe3EUDhexQONoeNthzuM5SyhsMYvxtHsPMLRxNKztMOfxnDUUtpjNeNrFGwxpHA1nO8x5PIXCPmY1ntPvZkMZR6HQDnMeT6FwDrMbz7Srf16cBkMYR6HQDnMeT6GQh1mO538Whw4HQxdHodAOcx5PoVAHsx3P4cLBkMVRKLTDnMdTKLTBrMdzmHBIw+VNQmKYXof0s9eoh+UZT6FwD2Y/nsOEg3cXi6NwKMeyjKdQ6IOzEE/hwOoKh+tYjvEUCjFIz//Pxb3XiH38ZXEIhEMchcMxQiGeQiEO6f9m0//V7r1OvN9hd7pwiKNw+B6hEE+hEAehEMtpdrhwiKNwePHrolCIo1CIg1CI5bQ7WzjEcfZwMIsxFApxEAqx9D93/8WyjqNwMIs9FApxSN88JxTiKBS+wLKOo3Awi3e4vsGYUOhPeh3S67H3OvF+hcJJfCksjsJBOLTQO5HGQSjEUihkIhziKByEQw2FQhyEQiyFQiWEQxyFg3DIUSjEQSjEUig0QjjEUTgIhzMKhTgIhVgKhZsQDnEUDsJhT6EQB6EQS6HQCeEQR+EgHJJCIQ5CIZZCIQjCIY7CYc5wEApxEAqxFApBEQ5xFA5zhINQiINQiKVQeAjCIY7p0Py0OCujhoNQiEF6w6v0DplCIY5C4aEIhzim1yG9HrMySjgIhRisoeAPTIujUBgEX6qLo3B4ZjgIhRgIhXgKhUERDnEUDs8IB6EQA6EQT6EwCcIhjsIhZjgIhRgIhXgKhUkRDnEUDjHCQSjEQCjEUyjgH4RDHIVDn3AQCjEQCvEUCthFOMRRONwTDkIhBkIhnkIBpxAOcRQObcJBKMRAKMRTKCAL4RBH4VAnHIRCDNLrKRRiKRRQBeEQR+GQFw5CIQa1wo/1FApognCI4+zhkN5uOz2DvWfz2fRrfllEX4RCPP9cFApoit9zjOXs4ZA+971wmP25REEoxNPZwO0Ih1gKh9czsAxjIBTi6WygO8IhlpYCeiIU4mknIBzCIZaWBO5EKMTTDkB4hEMsLQ20RCjE05nH4xAOsbREUBOhEE9nHI9HOMTSUkEJQiGezjSGQzjE0pLBFdKspJ/b35sl9tEZxvAIh1haOnhHmo00I3uzwz46sw8jvWDpy3Lpy3PIYw2HvQPB+7WE8BmhEE9n9KF8Pki/L6bLD3n4PdFYWkpzIxTi6UzW5fZnuT1Q6cvr6f+WhUM+wiGWltRcCIV4OoP1WL+inf4spPRcb+WrgyUcyhEOsbS0xkYoxNOZq8caCp+/Zy5MMKwKh3KEQywtsbEQCvF0xuqxFwqfn/OtnD1owqEc4RBLS+3ZCIV4OlP1eBcKq2GDYVU4lCMcYmnJPQuhEE9nqB5nQmE1fDCsCodyhEMsLb3YCIV4OjP1uBIKq48JhlXhUI5wiGX67uN/LyIG6bVIr8nea8U+CoV65ITC6uOCYVU4lCMcYikc+iIU4ikU6lESCquPDYZV4VBOCgfvdR9H4XAvQiGeQqEeNUJh9fHBsCocyvF7trEUDm0RCvEUCvWoGQqrwwTDqnAoRzjEUjjURSjEUyjUo0UorA4XDKvCoRzhEEvhUIZQiKdQqEfLUFgdNhhWhUM5wiGWwuEaQiGeQqEed4TC6vDBsCocyhEOsRQO7xEK8RQK9bgzFFanCYZV4VCOcIilcPgWoRBPoVCPHqGwOl0wrAqHcoRDLGcOh3SOf10UCrEUCvXoGQqr0wbDqnAoRzjEcqZwiLBE+b1CoR6RZnz6YFgVDuUIh1iOHA5CIaZCoR4R34lXMGwUDuWkhfHX4t7z5f2OFA5CIaZCoR6R37JfMHyhcCjHN5/F8snhIBRiKhTq8YQ/20cwHCgcyhEOsXxSOAiFmAqFejzpDwEUDCcVDuUIh1hGDgehEFOhUI8nhcKqYLiocChHOMQyUjgIhZgKhXo8MRRWBUOmaaE95cu6UREOsewZDkIhpkKhHk8OhVXBUGjkL+s+BeEQyztnWijEVCjUY4RQWBUMlRQO5QiHWLac6ZGW6EgKhXqMOOOCobLCoRzhEMuaMy0UYioU6jHyjAuGRgqHcoRDLEtmWijEVCjUY4YZFwyNFQ7lpOfn97jjeGWmhUJMhUI9ZppxwXCTwqEM3xwXz3czLRRiKhTqMeOMC4abFQ5lCId4fp5poRBToVCPmWdcMHRSOJQhHOKZZnrvr7Of9kw9xLBg6K4DXYZwIL/XXqmHUPhQMATRAS9DOJD2SE1+WhQK3yoYgunAlyEcOKP2Rj3S93q4p/YVDEG1AMoQDpxBe6IeQuFYwRBcC6EM4cARtRfqIRTOKxgeogVRhnDgCNoD9RAK1xUMD9PCKGMNh71nS0bVua+HUMhXMDxUC6QMPyrFJ+ic10MolCsYHq6FUoZwYESd63oIhXoKhkG0YMoQDoygc1wPoVBfwTCYFk4ZwoE9dG7rIRTaKRgG1QIqQzjwDp3TegiF9gqGwbWQyhAObKFzWQ+hcJ+CYRItqDKEA2voHNZDKNyvYJhMC6sM4cAcnbt6CIV+CoZJ/WsxHTzkIRx4RqFQD6HQX8Ewuen1EA75pHAw09wqFOohFOIoGPiPwqEMS41JoVAPZyqegoHfKBzKsOTmVCjUIz1HZyimgoG7CocyhMMcCoV6pOeYnufec2YMBQPfKhzKEA5jKhTqIRSeo2BY/Hvnr/FbhUMZwmEMhUI9hMJ7I95LgmHxh8XfFoXDscKhDOHwTIVCPYTCe9M9lO6jdC/t/f2eCobFFeFwXuFQhnB4hkKhHkLhvZ9DYWXv1/VUMCxuEQ7nFQ5lCIeYCoV6CIX37oXCyt6v76lgWPwK4XBe4VCGcIihUKiHUHjvu1BY2fvneioYFo8QDucVDmWkZ2fJ3q9QqIdQeO+ZUFjZ++d7KhgWzyIcziscyrB071Eo1MPMvvdKKKzs/Xt6KhgWryIcziscyrCE2ygU6mFG35sTCit7/76eCobFXITDeYVDGZZyHYVCPczke0tCYWXv39tTwbBYinA4r3Aow5LOUyjUwwy+t0YorOz9+3sqGBZrIRzOKxzKsLTPKRTqYebeWzMUVvb+Oz0VDIu1EQ7nFQ5lWOL7CoV6mLH3tgiFlb3/Xk8Fw2IrhMN5hUMZlvpLoVAPM/XelqGwsvff7algWGyNcDivcChj1iUvFOohFN57Ryis7P33eyoYFu9COJxXOJQxy9IXCnVYd5NQ+No7Q2Fl7+PoqWBYvBvhcF7hUMaviyPOmVCog110bI9QWNn7eHoqGBZ74bCeVzjkM9KcCYU62D3H9gyFlb2Pq6eCYbE3Du95hUM+T54zoVAHu+bYCKGwsvfx9VQwLEbBYT7vn4s/LuI6T5ozoVAHu+XYSKGwsvdx9lQwLEbD4T7vH4vCIY/IcyYU6mCXHBsxFFb2Pt6eCobFqDjs5xUO+USas3V5owy749jIobCy93H3VDAsRsfhP69wyKfnnD1heT8Bu+LYJ83a3sffU8Gw+BQsg/MKh3zunDOhUAe74dgnztre59FTwbD4NCyH8wqHfFrOmVCog11w7JNnbe/z6algWHwqlsV5hUM+NedMKNTB2T92hFnb+7x6KhgWn47lcV7hkE+as98X957rkUKhDs76sSPN2t7n11PBsDgKlsl5hUM+6bml57f3XLcKhTo428eOOGt7n2dPBcPiaFgu5xUO+bwLB6FQB2f52JFnbe/z7algWBwVy+a8wiGfz+EgFOrg7B47w6ztfd49FQyLo2P5nFc45JOem1Aow1k9dqYo3fv8eyoYFmfBMjqvcMCdOJvHzhQKK3vPoaeCYXE2LKfzCge05PNv53DfGUNhZe959FQwLM6KcDivcEBNhMKxM4fCyt5z6algWJyddCB/XUx/QuDe8+GHwgElCIVjhcIHe8+np4JhER+kP1JYOBwrHHAFoXCsUPievefUU8GwiO8RDucUDniHUDhWKHzN3vPqqWBYxNcIh3MKB3xGKBwrFI7Ze249FQyLOEY4nFM4zI1QOFYonGfv+fVUMCziPMLhnMJhLoTCsULhOnvPsaeCYRHXEQ7nFA5jIxSOFQr57D3PngqGReQjHM4pHMZCKBwrFMrZe649FQyL6WP6eRH5CIdzCodnIxSOFQrlRJ0zwfBJ4VCOcDjWQn0eQuFYc11O9DkTDDsKh3KEw7EWbHyEwrHmuJynzJlgeKNwKEc4HGvhxkMoHGtuy3nanAmGE6aPOb2wyEc4HGsB90coHGtOy3nqnAmGC6YXWDiUIRyOtZDvRygcay7LefqcCYYMhUM5wuFYC7o9Py0Khfeaw3JGCVLBUKBwKEc4HGth1yd9b9JIu6iF5q6c0b5yJRgqKBzKEQ7HWuDlCIVjzVk5o4XCqmCoqHAoRzgca6FfRygca67KGTUUVgVDA4VDOcLhWAv+GKFwrDkqZ/RQWBUMDRUO5QiHYy387xEKx5qbcmYJhVXBcIPCoRzhcKwLQCic0ZyUM1sorAqGGxUO5QiHY2e8EITCsUKhnFlDYVUwdFA4lCMcjp3hghAKxwqFcmYPhVXB0FHhUI5wOHbEC0MoHCsUyhEK3yoYAigcyhEOx45wgQiFY4VCOUJhX8EQSOFQjnA49okXilA4ViiUIxTeKxgCKhzKEQ7HPuGCEQrHCoVy0rNLzzA9y71nzJeCIbDCoRzhcGzEC0coHCsUyhEK1xQMD1A4lCMcjo1wAQmFY4VCOUIhz/TMbsULla9wKEc4HNvjQhIKxwqFctw/eXa/e7xw+QqHcoTDsXdcUELhWKFQjvsmz3B3jRcyX+FQjnA4tsWFlZ67UHivUCjH/ZJn+LvFC5uvcChHOBxb4wLznI8VCuW4T/J83F3ihc5XOJTjQjs2PZ/0nK7guR4rFMpxf+T5+LvDC5+vcCjHBXfsmXDwHI8VCuW4L/Ic7q4wCPkKh3JceMfuhYPndqxQKMf9kOfwd4PByFc4lOMCPDY9n3RGPaf3CoVy3Ad5pm80/mlxGgxKvsKhHOHAXIVCOfZ/nikU0o8wT4vByVc4lCMceFahUI59n+f0obDFIOUrHMoRDvxKoVCO/Z6nUDjAYOUrHMoRDlwVCuXY53kKhYsYtHwtuXKEw7wKhXLs7zyFQiEGL09Lrw7CYR6dmXLs6zyFQmUMYp6WYB2Ew7g6I+XYz3kKhcYYzDwtxToIh3F0Jsqxj/MUCjdjUPO0JOsgHJ6rM1CO/ZunUOiMwc3T0qyDcHiOZr4c+zZPoRAMg5ynJVoH4RBXM16O/ZqnUAiOwc7TUq2DcIijmS7HPs1TKDwMg56nJVsH4dBPM1yO/ZmnUHg4Bj9PS7cOwuE+zWw59mWeQmEwHIQ8LeE6CId2mtFy7Mc8hcLgOBh5Wsp1EA71NJPl2Id5CoXJcFDytKTrIBzyNYPl2H95CoXJcXDytLTrIBzOa+bq8OuifXdNoYBvEA55WuJ1EA5fa8bqYMauKxTwFuGQp6Veh7TUzd6HZqocoXBdoYBLCIc8hUM5aVntPdsZRT5C4bpCAUUIhzyFQz6C4UNcRyhcVyigKsIhT+FwHcHwIc4jFK4rFNAU4ZCncDiPYPgQxwiF6woF3IpwyFM4HCMYPsTXCIXrCgV0RTjkKRy+RjB8iO8RCtcVCgiFcMhTOHyPYPgQHwiF6woFhEY45CkcPhAMH0Io5CgU8CiEQ57CQTB8dmaEwnWFAh6NcMhz5nAQDC//WpwRoXBdoYChEA55zhgOguFleg4zIRSuKxQwNMIhz5nCQTC8nCUYhMJ1hQKmQjjkuYbDyAiGl6MHg1C4rlDA1AiHPNOiTQt3RATDy1GDQShcVygAnxAOeY4YDoLh5WjBIBSuKxSANwiHPEcKB8HwcpRgEArXFQrABYRDniOEg2B4+fRgEArXTc9LKACZCIc8nxwOguHlU4NBKFx3hNAHwiAc8nziIhIML58WDELhukIBaIhwyPNJi0kwvHxKMAiF6woF4EaEQ55PWFSC4WX0YBAK1xUKQEeEQ56RF5dgeBk1GITCdYUCEAjhkGfERSYYXkYLBqFwXaEABEY45BlpsQmGl1GCQShcVygAD0I45Blh0QmGl72DQShcVygAD0Y45Nlz8QmGl72CQShcVygAAyEc8uyxCAXDy7uDIb3DoGd/TaEADIxwyPPOxejSenlXMAiF6woFYCKEQ553LEqX18vWwSAUrisUgIkRDnm2XJwusZetgkEoXFcoAPh/hEOeLRapy+xl7WAQCtcVCgC+RDjkWXOxutRe1goGoXBdoQDgNMIhzxqL1uX2sjQYhMJ1hQKAbIRDniWL1yX3MjcYhMJ1hQKAagiHPHMWscvu5dVgEArXFQoAmiEc8ryymF16L88Gg1C4rlAAcBvCIc8zi9rl9/IoGITCdYUCgG4IhzzfLW6X4MuvgkEoXFcoAAiDcMhzb5G7DF9ug0EoXFcoAAiLcMjz82J3Kb5cg0EoXFcoAHgMwiHPtOiTe39vNtNzEArXFAoAHotwINsrFAAMg3Ag6ysUAAyLcCDLFQoApkE4kNcVCgCmRTiQxwoFAPgvwoH8XqEAAF8gHEihAACnEQ6cUaEAAJkIB86gUACASggHjqhQAIBGCAeOoFAAgJsQDnyiQgEAOiEc+ATTfAoFAAiAcGBE0zymuUzzCQAIhHBgBIUCADwE4cAeCgUAeCjCgXcoFABgEIQDWygUAGBQhANrKBQAYBKEA3MUCgAwKcKBZxQKAIB/EA7cUygAAHYRDkwKBQDAKYTDnAoFAEAWwmEOhQIAoArCYUyFAgCgCcJhDIUCAOAWhMMzFQoAgC4Ih2coFAAAIRAOMRUKAICQCIcYCgUAwCMQDn0UCgCARyIc7lEoAACGQDi0USgAAIZEONRRKAAApkA45CkUAABTIhzOKRQAAFgQDvsKBQAAdhAOL4UCAAAnmDUchAIAABnMEg5CAQCACowaDkIBAIAGjBIOQgEAgBt4ajgIBQAAOvCUcBAKAAAEIGo4CAUAAAISJRyEAgAAD6BXOAgFAAAeyF3hIBQAABiAVuEgFAAAGJCa4fDHolAAAGBgSsIhhcKPiwAAYBKuhINQAABgct6Fg1AAAADf8DkchAIAAAAAAAAAAAAAAAAAAAAAAAAAAACAufjXv/4PkjfTo0JTdQAAAAAASUVORK5CYII=&quot; alt=&quot;&quot;&gt;
+  &lt;div class=&quot;k-brand-text&quot;&gt;
+    &lt;div class=&quot;k-brand-name&quot;&gt;GRUBER PALLETS&lt;/div&gt;
+    &lt;div class=&quot;k-brand-sub&quot;&gt;INC.&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class=&quot;k-main&quot; style=&quot;align-items: center; justify-content: center;&quot;&gt;
+  
+    &lt;div class=&quot;k-warning&quot; style=&quot;max-width: 720px; text-align: left;&quot;&gt;
+      &lt;strong&gt;Heads up — 2 of your recent
+      punches haven&#x27;t
+      synced to Odoo.&lt;/strong&gt;
+      &lt;div style=&quot;font-size: 0.95rem; margin-top: 0.4rem; color: #92400e;&quot;&gt;
+        Latest error: &lt;code&gt;401 Unauthorized — check ODOO_API_KEY&lt;/code&gt;
+        — last attempt 5/26 2:14 PM.
+        The background worker retries every 60s. If this persists,
+        check Settings &amp;rarr; Plant Kiosk on the manager dashboard.
+      &lt;/div&gt;
+    &lt;/div&gt;
+  
+
+  
+    
+      &lt;h2&gt;Today you&#x27;re scheduled on&lt;/h2&gt;
+      &lt;h1 style=&quot;font-size: 3rem; color: #ea580c;&quot;&gt;Repair 1&lt;/h1&gt;
+      &lt;form method=&quot;post&quot; action=&quot;/kiosk/clock-in/1:1234567890:abcdef0123456789&quot;
+            style=&quot;margin-bottom: 1.5rem;&quot;&gt;
+        &lt;input type=&quot;hidden&quot; name=&quot;wc_name&quot; value=&quot;Repair 1&quot; /&gt;
+        &lt;input type=&quot;hidden&quot; name=&quot;scheduled_wc_name&quot; value=&quot;Repair 1&quot; /&gt;
+        &lt;button type=&quot;submit&quot; class=&quot;k-btn success&quot;&gt;
+          Confirm — Clock In
+        &lt;/button&gt;
+      &lt;/form&gt;
+      &lt;a href=&quot;/kiosk/pick-wc/1:1234567890:abcdef0123456789?purpose=clock_in&amp;scheduled=Repair%201&quot;
+         class=&quot;k-btn secondary&quot;
+         style=&quot;text-decoration: none; min-height: 64px; padding: 1rem 1.5rem;
+                font-size: 1.25rem; min-width: unset;
+                display: inline-flex; align-items: center; justify-content: center;&quot;&gt;
+        I&#x27;m somewhere else
+      &lt;/a&gt;
+    
+  
+&lt;/div&gt;
+
+
+&lt;/div&gt;
+&lt;script&gt;
+  // Idle timeout: return to home after 30s of no input. Skipped on the
+  // home page itself so it doesn&#x27;t constantly self-reload.
+  // Sits OUTSIDE #kiosk-screen so htmx swaps don&#x27;t tear down/rebind it.
+  (function() {
+    var TIMEOUT_MS = 30000;
+    var timer;
+    function reset() {
+      clearTimeout(timer);
+      if (location.pathname === &#x27;/kiosk&#x27; || location.pathname === &#x27;/kiosk/&#x27;) return;
+      timer = setTimeout(function() { console.log(&#x27;preview: would navigate to /kiosk&#x27;); }, TIMEOUT_MS);
+    }
+    [&#x27;touchstart&#x27;,&#x27;mousedown&#x27;,&#x27;keydown&#x27;,&#x27;pointerdown&#x27;].forEach(function(evt) {
+      document.addEventListener(evt, reset, { passive: true });
+    });
+    reset();
+    // Re-arm the timer on every htmx-driven screen change too.
+    document.body.addEventListener(&#x27;htmx:afterSwap&#x27;, reset);
+  })();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;"></iframe>
+<div class='sep'>8. Success — with Odoo sync warning<small>When Odoo was unreachable: punch saved locally, kiosk worker retries every 60s.</small></div>
 <iframe srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;en&quot;&gt;
 &lt;head&gt;

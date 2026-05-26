@@ -142,6 +142,40 @@ def _current_state(person_odoo_id: int) -> dict:
     }
 
 
+def _fmt_short_dt(dt: datetime) -> str:
+    """Format as 'M/D h:MM AM/PM' (no leading zeros). Windows needs
+    `%#` where POSIX uses `%-`."""
+    fmt = "%#m/%#d %#I:%M %p" if os.name == "nt" else "%-m/%-d %-I:%M %p"
+    return dt.astimezone().strftime(fmt)
+
+
+def _sync_error_warning(person_odoo_id: int) -> dict | None:
+    """Return a warning summary if this person has punches that tried to
+    sync to Odoo and failed (synced_to_odoo=FALSE AND sync_error IS NOT
+    NULL). Returns None if everything synced cleanly.
+
+    "Pending sync" (synced=FALSE, error=NULL) is intentionally excluded —
+    those resolve within a second of the next request via the immediate
+    background task, so warning about them would be noise. Only persistent
+    failures surface here."""
+    rows = db.query(
+        "SELECT COUNT(*) AS n, MAX(sync_error) AS latest_error, "
+        "MAX(occurred_at) AS latest_at "
+        "FROM kiosk_punches_log "
+        "WHERE person_odoo_id = %s "
+        "AND synced_to_odoo = FALSE "
+        "AND sync_error IS NOT NULL",
+        (person_odoo_id,),
+    )
+    if not rows or not rows[0]["n"]:
+        return None
+    return {
+        "count": rows[0]["n"],
+        "latest_error": rows[0]["latest_error"],
+        "latest_at_display": _fmt_short_dt(rows[0]["latest_at"]),
+    }
+
+
 def _scheduled_wc_for(person_name: str) -> str | None:
     """Today's scheduled WC for `person_name`, or None if unscheduled.
     Returns the first match if scheduled on multiple."""
@@ -231,6 +265,7 @@ def kiosk_dashboard(request: Request, token: str):
 
     # Local-DB read — no Odoo XML-RPC on the hot path. See _current_state.
     state = _current_state(p["odoo_id"]) if p.get("odoo_id") else _current_state(-1)
+    sync_warning = _sync_error_warning(p["odoo_id"]) if p.get("odoo_id") else None
     scheduled_wc = _scheduled_wc_for(p["name"])
 
     # Refresh the token so a slow user (reading the scheduled WC, picking
@@ -247,6 +282,7 @@ def kiosk_dashboard(request: Request, token: str):
             "current_wc": state["current_wc"],
             "check_in_display": _fmt_time(state["check_in_ts"]) if state["check_in_ts"] else None,
             "scheduled_wc": scheduled_wc,
+            "sync_warning": sync_warning,
         },
     )
 
