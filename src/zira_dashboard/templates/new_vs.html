@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
-<title>{% if tv_mode %}TV · {% endif %}Value Streams — New — GPI Plant Manager</title>
+<title>{% if tv_mode %}TV · {% endif %}Departments — New — GPI Plant Manager</title>
 <link rel="stylesheet" href="/static/new_vs.css?v={{ static_v('new_vs.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
 {% if tv_mode %}
@@ -18,7 +18,7 @@
 <body>
 {% if tv_mode %}
 {% from "_tv_header.html" import tv_header %}
-{{ tv_header("New VS", crumb="VALUE STREAMS · TODAY") }}
+{{ tv_header("New VS", crumb="DEPARTMENTS · TODAY") }}
 {% endif %}
 {% from "_cumulative_progress_chart.html" import cumulative_progress_chart %}
 <header>
@@ -65,7 +65,7 @@
   </div>
 
   <div class="panel">
-    <h3>Pallets by Work Center — New value stream</h3>
+    <h3>Pallets by Work Center — New department</h3>
     {% if bars %}
       {% for b in bars %}
         <div class="bar-row" title="{{ b.who if b.who else b.name }} — {{ b.units }}{% if b.expected %} / {{ b.expected }} expected{% endif %}{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
@@ -91,7 +91,7 @@
       {% endfor %}
     {% else %}
       <div class="empty-state">
-        No work centers in the &ldquo;New&rdquo; value stream have telemetry meters configured.
+        No work centers in the &ldquo;New&rdquo; department have telemetry meters configured.
         Tag work centers as <em>New</em> in <a href="/settings">Settings</a> and assign their meter IDs.
       </div>
     {% endif %}

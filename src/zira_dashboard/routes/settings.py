@@ -203,7 +203,7 @@ def settings_page(
         {
             "wc_rows": wc_rows,
             "skills_all": skills_all,
-            "value_streams": list(work_centers_store.VALUE_STREAMS),
+            "value_streams": work_centers_store.synced_value_streams(),
             "groups_all": work_centers_store.registered_groups(),
             "group_rows": group_rows,
             "vs_rows": vs_rows,

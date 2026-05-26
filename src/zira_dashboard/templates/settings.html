@@ -215,7 +215,7 @@
   /* Save toast (top-center) — shared with skills + staffing. */
   {% include "_save_toast.html" %}
 
-  /* External × button next to a native <select> (Group + Value Stream).
+  /* External × button next to a native <select> (Group + Department).
      Pickers (Required Skills + Default People) get an internal × in their
      summary instead — see .dd-clear below. Both fade in on cell hover. */
   .picker-wrap { display: flex; align-items: center; gap: 0.3rem; }
@@ -579,7 +579,7 @@
           <tr>
             <th>Work Center</th>
             <th>Bay</th>
-            <th>Value Stream</th>
+            <th>Department</th>
             <th>Group</th>
             <th>Required skills</th>
             <th>Default people</th>
@@ -707,11 +707,11 @@
       <div class="note">Max blank = unlimited. Required skills gate who shows up in the scheduler dropdown (training mode bypasses). Default people are pre-loaded into the Scheduled column whenever a brand-new day is opened, and on click of "Reset to defaults" in the scheduler.</div>
 
       <div class="group-summaries">
-        <!-- LEFT: Value Streams — fixed list, only goal editable -->
+        <!-- LEFT: Departments — synced from Odoo hr.department, only goal editable -->
         <section class="group-col">
-          <h3 class="section-title">Value Streams <span class="section-sub">fixed · pallets / day</span></h3>
+          <h3 class="section-title">Departments <span class="section-sub">synced from Odoo · pallets / day</span></h3>
           <table>
-            <thead><tr><th>Value Stream</th><th class="num hint">WCs</th><th class="num">Auto</th><th class="num">Override</th></tr></thead>
+            <thead><tr><th>Department</th><th class="num hint">WCs</th><th class="num">Auto</th><th class="num">Override</th></tr></thead>
             <tbody>
               {% for v in vs_rows %}
               <tr>
@@ -723,7 +723,7 @@
               {% endfor %}
             </tbody>
           </table>
-          <div class="note">Value Streams are fixed (New / Recycled / Transportation). Set a goal override, else the sum of member work center goals is used.</div>
+          <div class="note">Departments are synced from Odoo (<code>hr.department</code>, refreshed hourly). Set a goal override, else the sum of member work-center goals is used.</div>
         </section>
 
         <!-- RIGHT: Groups — user-managed, rename/delete/add + goal -->
@@ -1184,7 +1184,7 @@
   function refreshPickerSummary(picker) {
     const text = picker.querySelector(':scope > summary > .dd-summary-text');
     if (!text) return;
-    // Single-select pickers (radio inputs) — Group + Value Stream.
+    // Single-select pickers (radio inputs) — Group + Department.
     if (picker.classList.contains('single-picker')) {
       const checked = picker.querySelector('input[type=radio]:checked');
       if (!checked || !checked.value) {
@@ -1212,7 +1212,7 @@
   }
 
   // × inside picker summary — clears the picker. For single-select pickers
-  // (Group + Value Stream), this means selecting the empty radio. For
+  // (Group + Department), this means selecting the empty radio. For
   // multi-select pickers, all checkboxes are unchecked.
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('.skills-picker > summary > .dd-clear');

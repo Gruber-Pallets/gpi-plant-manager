@@ -142,6 +142,43 @@ def fetch_skill_level_buckets() -> dict[int, int]:
     return out
 
 
+def fetch_departments() -> list[str]:
+    """Return sorted hr.department names with leading numeric/code prefix
+    stripped. Odoo conventionally numbers departments for sort order
+    ("00 Supervisor", "01 Recycled", "02 New", "06 Transportation", ...)
+    and the digits are noise in the app's dropdowns and dashboards.
+
+    The cleaned names round-trip cleanly with `_department_id_for_wc()`
+    above (its ILIKE search matches "Recycled" against "01 Recycled" in
+    Odoo). Sorting is alphabetical on the cleaned name.
+
+    Inactive (archived) departments are skipped."""
+    import re
+    rows = execute(
+        "hr.department", "search_read",
+        [("active", "=", True)],
+        fields=["id", "name"],
+    )
+    cleaned: list[str] = []
+    for r in rows:
+        raw = (r.get("name") or "").strip()
+        if not raw:
+            continue
+        # Strip leading digits + whitespace ("01 Recycled" → "Recycled",
+        # "00 Supervisor" → "Supervisor"). Numeric-only prefix only —
+        # leave names like "R&D Recycled" alone.
+        cleaned.append(re.sub(r"^\d+\s+", "", raw))
+    # De-dup while preserving order, then sort case-insensitive.
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in cleaned:
+        if n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+    out.sort(key=str.lower)
+    return out
+
+
 def fetch_employees() -> list[dict]:
     """All active hr.employee records with the fields we need.
 

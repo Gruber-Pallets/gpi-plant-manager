@@ -13,7 +13,25 @@ from .shift_config import TARGET_PER_DAY, productive_minutes_per_day
 from .staffing import LOCATIONS, Location, required_skills_for
 
 GROUP_KINDS = ("group", "value_stream")
+
+# Bootstrap fallback for the value_streams (a.k.a. "departments" in the
+# UI) registry. Used on a fresh deploy before Odoo sync has populated
+# the `value_streams` table for the first time. After sync, the live
+# list comes from the DB via `synced_value_streams()`.
 VALUE_STREAMS: tuple[str, ...] = ("New", "Recycled", "Transportation")
+
+
+def synced_value_streams() -> list[str]:
+    """Live list of registered value streams (UI: "Departments"). Reads
+    from the `value_streams` table, which `odoo_sync.sync()` populates
+    from `hr.department` (numeric prefixes stripped). Falls back to the
+    hardcoded `VALUE_STREAMS` bootstrap on a fresh DB. Sorted
+    case-insensitive."""
+    from . import db
+    rows = db.query("SELECT name FROM value_streams ORDER BY lower(name)")
+    if not rows:
+        return list(VALUE_STREAMS)
+    return [r["name"] for r in rows]
 
 from ._cache import TTLCache
 
@@ -208,7 +226,7 @@ def save_one(loc: Location, updates: dict) -> dict:
         direct["note"] = updates["note"].strip()[:200]
     if "value_stream" in updates and isinstance(updates["value_stream"], str):
         v = updates["value_stream"].strip()
-        if v == "" or v in VALUE_STREAMS:
+        if v == "" or v in synced_value_streams():
             direct["value_stream"] = v or None
     if "groups" in updates and isinstance(updates["groups"], list):
         direct["group_name"] = next(

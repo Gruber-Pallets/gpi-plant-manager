@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
-<title>{% if tv_mode %}TV · {% endif %}Value Streams — Recycling — GPI Plant Manager</title>
+<title>{% if tv_mode %}TV · {% endif %}Departments — Recycling — GPI Plant Manager</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
@@ -20,7 +20,7 @@
 <body>
 {% if tv_mode %}
 {% from "_tv_header.html" import tv_header %}
-{{ tv_header("Recycling VS", crumb="VALUE STREAMS · TODAY") }}
+{{ tv_header("Recycling VS", crumb="DEPARTMENTS · TODAY") }}
 {% endif %}
 {% if not tv_mode %}
 <header>

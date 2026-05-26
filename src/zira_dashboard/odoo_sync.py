@@ -78,6 +78,7 @@ def sync(force: bool = False) -> SyncResult:
         emp_skills = odoo_client.fetch_skills_for(emp_ids)
         columns_meta = odoo_client.fetch_skill_columns_with_types()
         buckets = odoo_client.fetch_skill_level_buckets()
+        departments = odoo_client.fetch_departments()
     except Exception as e:
         return SyncResult(
             ok=False, refreshed=False, employee_count=0,
@@ -155,6 +156,21 @@ def sync(force: bool = False) -> SyncResult:
                     "ON CONFLICT (person_id, skill_id) DO UPDATE SET "
                     "  level = EXCLUDED.level, last_pulled_at = EXCLUDED.last_pulled_at",
                     (level, pulled_at, emp["id"], s["skill_name"]),
+                )
+
+    # Departments: upsert into the value_streams registry table (kept
+    # under that name internally for backward compat — UI calls it
+    # "Department"). Additive only — never delete existing rows so any
+    # WC.value_stream column value that references a now-archived Odoo
+    # department still resolves in the dropdown. Goal-override column
+    # is preserved by the ON CONFLICT DO NOTHING.
+    if departments:
+        with db.cursor() as cur:
+            for name in departments:
+                cur.execute(
+                    "INSERT INTO value_streams (name) VALUES (%s) "
+                    "ON CONFLICT (name) DO NOTHING",
+                    (name,),
                 )
 
     _write_last_sync(pulled_at)
