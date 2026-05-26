@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-26
 
+### 10:20 AM
+
+- **Time-off people stop appearing in Unscheduled (and stop being scheduleable)** — when you removed Jose Luis from a station today, his name showed up in BOTH the Time Off list AND the Unscheduled list. Two underlying issues, both fixed: (1) the JS time-off check (`removeFromCorrectList` and friends) was querying `.section.timeoff .pill[data-name="…"]`, but modern StratusTime-driven Time Off rows render as `<li class="time-off-row">` without a reliable `data-name`, so the selector always missed and the person fell through into Unscheduled. (2) `refreshPickerVisibility` only marked someone as taken-elsewhere when they were already in another WC's checked checkboxes or in the legacy `loc____time_off` form inputs (which we no longer write), so PTO people stayed visible in every WC's dropdown and could be re-checked. New `__timeOffNames` Set is rendered into the page from the existing `time_off_names` template var and is now the single source of truth for "is this person on time off today?" — used by `addBackToCorrectList` (belt-and-suspenders), both broken selectors, and `refreshPickerVisibility` (which now hides time-off people from every dropdown except a WC where they're currently selected, so you can still uncheck them).
+
 ### 9:48 AM
 
 - **× on the Testing Day pill — clear the flag without rebuilding the schedule** — once `testing_day` got flipped to `1` (via the "Override (Training + Testing Day)" or "Override (Testing Day)" buttons on overstaffed/understaffed warnings) there was no UI to flip it back. The regular save path on a Posted schedule goes through `save_notes`, which deliberately preserves `testing_day`. Now the pill has a small × inside it that hits a dedicated `POST /api/staffing/clear-testing-day` endpoint — JSON-only, idempotent, doesn't touch assignments, notes, published state, or `custom_hours`. The handler also syncs the hidden form input so the next autosave doesn't re-add the flag.

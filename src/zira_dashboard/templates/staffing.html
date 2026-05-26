@@ -741,10 +741,14 @@
   // off today, or in two Defaults pickers. Items stay visible in the picker that
   // already owns them (so the user can unselect there).
   function refreshPickerVisibility() {
-    // Scheduled side: taken = scheduled anywhere ∪ time off
+    // Scheduled side: taken = scheduled anywhere ∪ legacy time-off form ∪
+    // StratusTime-driven time off. The legacy `loc____time_off` hidden
+    // inputs are only present for back-compat; `__timeOffNames` is the
+    // current source of truth for who is off today.
     const schedTaken = new Set();
     document.querySelectorAll('details.sched-dd input[name^="loc__"]:checked').forEach(cb => schedTaken.add(cb.value));
     document.querySelectorAll('input[name="loc____time_off"]').forEach(inp => schedTaken.add(inp.value));
+    __timeOffNames.forEach(n => schedTaken.add(n));
     document.querySelectorAll('details.sched-dd').forEach(dd => {
       const own = new Set();
       dd.querySelectorAll('.dd-item.selected').forEach(it => own.add(it.dataset.name));
@@ -873,6 +877,13 @@
   // Per-person metadata (reserve flag) for routing add-backs to the right list.
   const __peopleMeta = {{ people_meta | tojson }};
 
+  // Names of people on time off today. Single source of truth for client-side
+  // "is this person on time off?" checks — the Time Off section in the DOM is
+  // rendered as <li.time-off-row> without a reliable data-name on every row,
+  // so DOM selectors against `.section.timeoff` are brittle. This Set is
+  // server-rendered from `time_off_names` and stays static for the page life.
+  const __timeOffNames = new Set({{ time_off_names | tojson }});
+
   function _insertSorted(ul, name) {
     const li = document.createElement('li');
     li.dataset.name = name;
@@ -919,9 +930,12 @@
   }
 
   /** Decide where this person belongs when removed from a WC or Time Off,
-   * based on the per-person reserve flag rendered into __peopleMeta. */
+   * based on the per-person reserve flag rendered into __peopleMeta.
+   * Belt-and-suspenders: people currently on time off must not appear in
+   * Unscheduled or Reserves either — they belong only in the Time Off list. */
   function addBackToCorrectList(name) {
     if (!name) return;
+    if (__timeOffNames.has(name)) return;
     const meta = __peopleMeta[name];
     if (!meta) return;  // unknown person (e.g., old-name reference); silently noop
     if (meta.reserve) {
@@ -1080,13 +1094,13 @@
         removeFromReserves(personName);
       } else {
         // Unchecking from a WC — unless they're scheduled elsewhere or in
-        // time off, return them to the right left-rail list.
+        // time off, return them to the right left-rail list. (Modern
+        // time-off rows aren't .pill elements, so we use __timeOffNames
+        // rather than a DOM selector against the Time Off section.)
         const stillScheduled = !!document.querySelector(
           'details.sched-dd input[type=checkbox]:checked[value="' + CSS.escape(personName) + '"]'
         );
-        const inTimeOff = !!document.querySelector(
-          '.section.timeoff .pill[data-name="' + CSS.escape(personName) + '"]'
-        );
+        const inTimeOff = __timeOffNames.has(personName);
         if (!stillScheduled && !inTimeOff) addBackToCorrectList(personName);
       }
     }
@@ -1119,14 +1133,14 @@
     updateDdSummary(dd);
     __prevSel.set(dd, []);
     // Send each cleared person back to the left rail unless they're still
-    // scheduled at another WC or in Time Off.
+    // scheduled at another WC or in Time Off. (See note above re: modern
+    // Time Off rows aren't .pill elements — __timeOffNames is the
+    // authoritative source.)
     cleared.forEach(name => {
       const stillScheduled = !!document.querySelector(
         'details.sched-dd input[type=checkbox]:checked[value="' + CSS.escape(name) + '"]'
       );
-      const inTimeOff = !!document.querySelector(
-        '.section.timeoff .pill[data-name="' + CSS.escape(name) + '"]'
-      );
+      const inTimeOff = __timeOffNames.has(name);
       if (!stillScheduled && !inTimeOff) addBackToCorrectList(name);
     });
     refreshPickerVisibility();
