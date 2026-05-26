@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-26
 
+### 11:32 AM
+
+- **pallets/hr/person KPI tweaks** — three small visual changes to the recycling KPI: (1) the main number now renders in the page's standard text color (`var(--fg)`) instead of green, so it stops fighting the colored progress bars below it; (2) the side-metric shrunk from `0.42em` → `0.32em` so it reads more clearly as a footnote next to the headline; (3) format changed from "(52.3 ex D4)" to the more compact "(52.3-D4)". Tooltip on the side-metric still explains what it means on hover.
+
 ### 11:18 AM
 
 - **Widget title edits actually take effect on save** — editing a KPI/bar/progress widget's title (or color / alignment / etc.) wrote to Postgres correctly, but the reload that fires right after saving was getting served from the HTTP response cache (15s TTL on today, 5min on past ranges). The page came back with the old title and looked like the edit had been swallowed. `widget_customizer.save_one` invalidates its own per-page cache but didn't know about the response-bytes cache one layer up. New `_http_cache.invalidate_all_cache()` clears both today and past response buckets in one shot, and the `/api/widget/{page}/{widget_id}` save + delete handlers call it. Title/color/alignment edits and Resets now reflect immediately on the next reload.

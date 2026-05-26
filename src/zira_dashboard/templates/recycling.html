@@ -190,7 +190,7 @@
         <div class="grid-stack-item-content align-{{ align }}">
           {% if not tv_mode %}{{ edit_controls(kid, ktitle, 'kpi') }}{% endif %}
           <div class="label">{{ widget_title(kid, ktitle) }}</div>
-          <div class="val" {{ widget_color_style(kid, 'color') }}>{{ kval }}{% if kid == 'kpi-palletshr' %}<span class="val-secondary" title="Same metric but Dismantler 4's pallets are excluded from the numerator (their man-hours are still in the denominator). D4 reprocesses reject material that the ERP doesn't count as new throughput.">({{ pph_per_person_ex_d4 }} ex D4)</span>{% endif %}</div>
+          <div class="val"{% if kid == 'kpi-palletshr' %} style="color: var(--fg) !important"{% else %} {{ widget_color_style(kid, 'color') }}{% endif %}>{{ kval }}{% if kid == 'kpi-palletshr' %}<span class="val-secondary" title="Same metric but Dismantler 4's pallets are excluded from the numerator (their man-hours are still in the denominator). D4 reprocesses reject material that the ERP doesn't count as new throughput.">({{ pph_per_person_ex_d4 }}-D4)</span>{% endif %}</div>
         </div>
       </div>
     {% endfor %}

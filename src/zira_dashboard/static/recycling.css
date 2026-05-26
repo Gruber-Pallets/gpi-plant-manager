@@ -113,14 +113,14 @@
     white-space: nowrap;  /* never wrap "76 %" onto a second line */
   }
   /* Smaller, dimmer parenthesized side-metric inside a .val (e.g. the
-     "(52.3 ex D4)" next to pallets/hr/person on the recycling dashboard).
-     Sits inline to the right of the main number, ~40% of its size. */
+     "(52.3-D4)" next to pallets/hr/person on the recycling dashboard).
+     Sits inline to the right of the main number, ~32% of its size. */
   .grid-stack-item-content .val .val-secondary {
-    font-size: 0.42em;
+    font-size: 0.32em;
     font-weight: 500;
     color: var(--muted);
     margin-left: 0.4em;
-    vertical-align: 0.35em;
+    vertical-align: 0.55em;
     letter-spacing: 0.02em;
   }
   .grid-stack-item-content .label {
