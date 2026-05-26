@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-26
 
+### 6:50 PM
+
+- **Truck Driver WC now requires the "CDL (Automatics) Certified" certification from Odoo** — was requiring a "Truck Driver" skill that didn't exist anywhere. Switched to an existing Odoo certification name so the staffing scheduler finds anyone with the cert and offers them as assignable. The `Odoo Certifications` skill type is already synced by `odoo_client.fetch_skill_columns_with_types()` alongside Production + Supervisor skills, so no new sync wiring needed. Make sure your drivers have the "CDL (Automatics) Certified" cert in Odoo Employees → their Skills tab, then run an Odoo sync (or wait for the hourly tick).
+
 ### 6:45 PM
 
 - **New work center: "Truck Driver"** — added a 23rd WC (was 22) under a new "Transportation" bay, in the "Transportation" department. No Zira meter (drivers don't have per-pallet telemetry). `min_ops=1`, `max_ops=None` (unlimited drivers). The kiosk's WC→Odoo-department resolver matches "Transportation" against Odoo's "06 Transportation" via the existing ILIKE substring search, so drivers who punch in via the kiosk land in the right department bucket on Dale's hours-by-department report. `DEPARTMENT_ORDER` extended to include "Transportation" so it sorts correctly across staffing screens. **One follow-up if you want drivers assignable from the scheduler:** the WC's default required-skill is "Truck Driver" — that skill doesn't exist in Odoo yet, so the staffing/scheduler view won't find any operators with the skill. Either (1) add a "Truck Driver" skill in Odoo Settings → Employees → Skills → New Skill (under Production Skills) and assign it to your drivers, then sync; or (2) edit the WC in Settings → Work Centers and clear the required-skills checkbox so anyone can be assigned. The kiosk itself doesn't care — drivers can tap their name and pick Truck Driver regardless of skill assignment.
