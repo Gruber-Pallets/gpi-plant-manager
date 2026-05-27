@@ -203,7 +203,7 @@ def render_screen(template_name: str, context: dict) -> str:
 def build_combined() -> str:
     parts = [
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>",
-        "<title>Plant Kiosk Preview — All Screens</title>",
+        "<title>Timeclock Preview — All Screens</title>",
         "<style>",
         "body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;",
         "  margin:0;background:#f1f5f9;color:#0f172a;}",
@@ -217,7 +217,7 @@ def build_combined() -> str:
         "iframe{width:100%;height:780px;border:0;display:block;background:#0f172a;}",
         "</style></head><body>",
         "<div class='hdr'>",
-        "<h1>Plant Kiosk — All Screens</h1>",
+        "<h1>Timeclock — All Screens</h1>",
         "<p>Static preview: forms and links don't navigate. Each iframe ",
         "renders exactly what FastAPI would serve at the live endpoint.</p>",
         "</div>",

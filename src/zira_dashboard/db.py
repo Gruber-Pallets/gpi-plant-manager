@@ -635,7 +635,7 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 CREATE INDEX IF NOT EXISTS device_tokens_active_idx
   ON device_tokens (token) WHERE revoked_at IS NULL;
 
--- Kiosk pilot (2026-05-21): plant kiosk for clock in/out + WC transfers,
+-- Kiosk pilot (2026-05-21): timeclock for clock in/out + WC transfers,
 -- replacing StratusTime in stages. Phase 0 = Dale-only pilot writing to
 -- Odoo hr.attendance; Phase 1 = plant-wide cutover. Auth is name-pick
 -- only — no PIN, by design.

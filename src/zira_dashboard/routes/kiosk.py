@@ -1,4 +1,4 @@
-"""Plant kiosk — Phase 0 (Dale-only pilot).
+"""Timeclock — Phase 0 (Dale-only pilot).
 
 Replaces StratusTime for clock-in/out and adds mid-shift work-center
 transfers. Punches write to Odoo `hr.attendance` (sole system of record

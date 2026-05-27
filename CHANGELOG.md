@@ -2,6 +2,12 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+## 2026-05-27
+
+### 8:30 AM
+
+- **Timeclock rename — remaining files** — yesterday's 7:15 PM entry announced the Plant Kiosk → Timeclock rename, but only `settings.html` got pushed at the time (it rode along with the CSS-extraction commit). The other user-visible spots — the kiosk's browser tab title (`kiosk_base.html`), the "your punches haven't synced" warning pointer on the kiosk dashboard (`kiosk_dashboard.html`), the module docstring in `routes/kiosk.py`, the schema comment in `db.py`, and the standalone `kiosk_preview.html` + its generator script — are now in HEAD too. Pure label change, no behavior. Internal naming (`/kiosk` route, `kiosk_punches_log` table, `kiosk_*.html` templates) still untouched on purpose.
+
 ## 2026-05-26
 
 ### 8:00 PM
