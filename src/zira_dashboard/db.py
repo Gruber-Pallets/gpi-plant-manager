@@ -676,6 +676,27 @@ CREATE TABLE IF NOT EXISTS kiosk_schedule_variances (
 );
 CREATE INDEX IF NOT EXISTS idx_kiosk_schedule_variances_day
   ON kiosk_schedule_variances (occurred_at);
+
+-- Rounding settings (2026-05-27): plant-wide timeclock punch rounding,
+-- modeled on StratusTime's "Round To Schedule" feature. Singleton row
+-- (id=1) holds four integers — the four window edges. Zero on all four
+-- = no rounding (ships disabled).
+CREATE TABLE IF NOT EXISTS rounding_settings (
+  id              INT PRIMARY KEY DEFAULT 1,
+  in_before_min   INT NOT NULL DEFAULT 0,
+  in_after_min    INT NOT NULL DEFAULT 0,
+  out_before_min  INT NOT NULL DEFAULT 0,
+  out_after_min   INT NOT NULL DEFAULT 0,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT rounding_settings_singleton CHECK (id = 1)
+);
+INSERT INTO rounding_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+-- Store both raw and rounded timestamps so historical audit is preserved.
+-- Columns added separately (not in the CREATE TABLE above) because
+-- kiosk_punches_log already exists in production.
+ALTER TABLE kiosk_punches_log
+  ADD COLUMN IF NOT EXISTS rounded_at TIMESTAMPTZ;
 """
 
 
