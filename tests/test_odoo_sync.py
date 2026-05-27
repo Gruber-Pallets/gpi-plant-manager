@@ -213,3 +213,61 @@ def test_sync_deactivation_skips_when_no_employees_returned(monkeypatch):
 
     # Cleanup.
     db.execute("DELETE FROM people WHERE odoo_id = %s", (99200,))
+
+
+def test_sync_inserts_certification_at_level_3_regardless_of_bucket(monkeypatch):
+    """Odoo skill types with a single level bucket to 0 (see
+    fetch_skill_level_buckets). Certifications must override that
+    and insert at level=3 so cert_lookup finds them and staffing
+    colors CDL drivers green."""
+    from zira_dashboard import db
+    db.execute("DELETE FROM skills WHERE name = 'TestDOTCert'")
+    _stub_client(
+        monkeypatch,
+        employees=[{"id": 99010, "name": "TestCDLDriver", "active": True, "work_email": False}],
+        skills_for={99010: [{"skill_id": 50, "skill_name": "TestDOTCert", "level_id": 500}]},
+        columns_meta=[
+            {"name": "TestDOTCert", "type": "Certifications"},
+        ],
+        buckets={500: 0},  # single-level cert type buckets to 0
+    )
+    result = odoo_sync.sync(force=True)
+    assert result.refreshed is True
+    rows = db.query(
+        "SELECT pe.name, ps.level, sk.name AS skill_name, sk.skill_type "
+        "FROM people pe JOIN person_skills ps ON ps.person_id = pe.id "
+        "JOIN skills sk ON sk.id = ps.skill_id WHERE pe.odoo_id = 99010"
+    )
+    assert rows == [{
+        "name": "TestCDLDriver", "level": 3,
+        "skill_name": "TestDOTCert", "skill_type": "Certifications",
+    }]
+    db.execute("DELETE FROM person_skills WHERE person_id IN (SELECT id FROM people WHERE odoo_id = 99010)")
+    db.execute("DELETE FROM people WHERE odoo_id = 99010")
+    db.execute("DELETE FROM skills WHERE name = 'TestDOTCert'")
+
+
+def test_sync_production_skill_still_skips_when_level_0(monkeypatch):
+    """Sanity: the cert override must NOT change the existing behavior
+    for non-cert skill types. A production skill with level<=0 still
+    gets skipped."""
+    from zira_dashboard import db
+    db.execute("DELETE FROM skills WHERE name = 'TestProdSkillSkip'")
+    _stub_client(
+        monkeypatch,
+        employees=[{"id": 99011, "name": "TestProdPerson", "active": True, "work_email": False}],
+        skills_for={99011: [{"skill_id": 51, "skill_name": "TestProdSkillSkip", "level_id": 501}]},
+        columns_meta=[
+            {"name": "TestProdSkillSkip", "type": "Production Skills"},
+        ],
+        buckets={501: 0},
+    )
+    odoo_sync.sync(force=True)
+    rows = db.query(
+        "SELECT * FROM person_skills ps "
+        "JOIN people pe ON pe.id = ps.person_id "
+        "WHERE pe.odoo_id = 99011"
+    )
+    assert rows == []
+    db.execute("DELETE FROM people WHERE odoo_id = 99011")
+    db.execute("DELETE FROM skills WHERE name = 'TestProdSkillSkip'")

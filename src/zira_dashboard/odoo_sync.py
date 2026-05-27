@@ -87,6 +87,7 @@ def sync(force: bool = False) -> SyncResult:
 
     from . import db
     columns = [c["name"] for c in columns_meta]
+    type_by_skill = {c["name"]: c.get("type", "") for c in columns_meta}
     pulled_at = now
 
     def _short_name(full: str) -> str:
@@ -146,9 +147,14 @@ def sync(force: bool = False) -> SyncResult:
             for s in emp_skills.get(emp["id"], []):
                 if s["skill_name"] not in columns:
                     continue
-                level = buckets.get(s["level_id"], 0)
-                if level <= 0:
-                    continue
+                if type_by_skill.get(s["skill_name"]) == "Certifications":
+                    # Binary semantics: any synced cert link counts as having it.
+                    # cert_lookup ignores level; staffing color uses 3 = green.
+                    level = 3
+                else:
+                    level = buckets.get(s["level_id"], 0)
+                    if level <= 0:
+                        continue
                 cur.execute(
                     "INSERT INTO person_skills (person_id, skill_id, level, last_pulled_at) "
                     "SELECT pe.id, sk.id, %s, %s FROM people pe, skills sk "
