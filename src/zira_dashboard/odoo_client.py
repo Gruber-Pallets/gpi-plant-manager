@@ -1,7 +1,8 @@
 """Odoo XML-RPC client.
 
 Reads: hr.employee, hr.skill*, hr.department, hr.leave.type (time-off types),
-hr.leave (time-off requests).
+hr.leave (time-off requests), resource.calendar + resource.calendar.attendance
+(employee working hours).
 Writes: hr.attendance (kiosk clock-in/out/transfer). The Odoo API user backing
 ODOO_API_KEY needs write permission on hr.attendance.
 
@@ -414,3 +415,48 @@ def fetch_leaves_for_range(start_d, end_d) -> list[dict]:
             "number_of_days", "number_of_hours_display", "name",
         ],
     )
+
+
+def fetch_resource_calendar(employee_odoo_id: int) -> dict | None:
+    """Returns {hour_from, hour_to, lunch_from, lunch_to, tz} or None.
+
+    Derives hour_from/hour_to from min/max of resource.calendar.attendance
+    rows (excluding lunch periods). If lunch periods are configured on the
+    calendar, returns them as well. Tz comes from resource.calendar.
+    """
+    emp_rows = execute(
+        "hr.employee", "search_read",
+        [("id", "=", employee_odoo_id)],
+        fields=["id", "resource_calendar_id"],
+    )
+    if not emp_rows or not emp_rows[0].get("resource_calendar_id"):
+        return None
+    cal_field = emp_rows[0]["resource_calendar_id"]
+    cal_id = cal_field[0] if isinstance(cal_field, list) else cal_field
+    cal_rows = execute(
+        "resource.calendar", "read",
+        [cal_id], ["id", "tz"],
+    )
+    tz = cal_rows[0]["tz"] if cal_rows else None
+
+    att_rows = execute(
+        "resource.calendar.attendance", "search_read",
+        [("calendar_id", "=", cal_id)],
+        fields=["hour_from", "hour_to", "dayofweek", "day_period"],
+    )
+    # Filter to non-lunch periods for the work-window bounds.
+    work = [a for a in att_rows if a.get("day_period") != "lunch"]
+    lunches = [a for a in att_rows if a.get("day_period") == "lunch"]
+    if not work:
+        return None
+    hour_from = min(float(a["hour_from"]) for a in work)
+    hour_to = max(float(a["hour_to"]) for a in work)
+    lunch_from = min((float(a["hour_from"]) for a in lunches), default=None)
+    lunch_to = max((float(a["hour_to"]) for a in lunches), default=None)
+    return {
+        "hour_from": hour_from,
+        "hour_to": hour_to,
+        "lunch_from": lunch_from,
+        "lunch_to": lunch_to,
+        "tz": tz,
+    }

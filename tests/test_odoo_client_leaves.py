@@ -113,3 +113,36 @@ def test_fetch_leaves_for_range_extracts_id_from_many2one(monkeypatch):
     # Many2one fields come as [id, name] tuples from Odoo
     assert leaves[0]["employee_id"] == [5, "Bob"]
     assert leaves[0]["holiday_status_id"] == [1, "PTO"]
+
+
+def test_fetch_resource_calendar_returns_shape(monkeypatch):
+    responses = {
+        ("hr.employee", "search_read"): [
+            {"id": 5, "resource_calendar_id": [3, "Standard 40h"]},
+        ],
+        ("resource.calendar", "read"): [
+            {"id": 3, "tz": "America/Chicago"},
+        ],
+        ("resource.calendar.attendance", "search_read"): [
+            {"hour_from": 6.0, "hour_to": 14.5, "dayofweek": "0",
+             "day_period": "morning"},
+            {"hour_from": 6.0, "hour_to": 14.5, "dayofweek": "1",
+             "day_period": "morning"},
+        ],
+    }
+    _stub_execute(monkeypatch, responses)
+    cal = odoo_client.fetch_resource_calendar(5)
+    assert cal is not None
+    assert cal["hour_from"] == 6.0
+    assert cal["hour_to"] == 14.5
+    assert cal["tz"] == "America/Chicago"
+
+
+def test_fetch_resource_calendar_returns_none_when_unset(monkeypatch):
+    responses = {
+        ("hr.employee", "search_read"): [
+            {"id": 5, "resource_calendar_id": False},
+        ],
+    }
+    _stub_execute(monkeypatch, responses)
+    assert odoo_client.fetch_resource_calendar(5) is None
