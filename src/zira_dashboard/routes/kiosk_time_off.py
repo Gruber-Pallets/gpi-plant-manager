@@ -20,17 +20,21 @@ dashboard for stuck punches — so an employee whose request hasn't made
 it to Odoo isn't left wondering why HR hasn't seen it.
 
 Routes:
-  GET /kiosk/time-off/{token}                              Landing with 3 buttons
-  GET /kiosk/time-off/request/{token}                      Wizard step 1 — shape picker
-  GET /kiosk/time-off/request/{token}/details?shape=…      Wizard step 2 — details form
+  GET  /kiosk/time-off/{token}                              Landing with 3 buttons
+  GET  /kiosk/time-off/request/{token}                      Wizard step 1 — shape picker
+  GET  /kiosk/time-off/request/{token}/details?shape=…      Wizard step 2 — details form
+  POST /kiosk/time-off/request/{token}/submit               Wizard step 3 — submit + queue sync
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+import json as _json
+from datetime import date as _date
+
+from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import db, odoo_client, settings_store, time_off_balances
+from .. import db, odoo_client, settings_store, time_off_balances, time_off_sync
 from ..deps import templates
 from .kiosk import _mint_token, _person_by_id, _verify_token
 
@@ -249,7 +253,6 @@ def request_details(request: Request, token: str, shape: str = "full_day"):
             url=f"/kiosk/time-off/request/{_mint_token(person_id)}",
             status_code=303,
         )
-    from datetime import date as _date
     fresh = _mint_token(person_id)
     types = _fetch_visible_leave_types(shape)
     balances = _refresh_and_load_balances(p["odoo_id"])
@@ -278,5 +281,274 @@ def request_details(request: Request, token: str, shape: str = "full_day"):
             "shift_from": shift_from,
             "shift_to": shift_to,
             "today_iso": _date.today().isoformat(),
+        },
+    )
+
+
+# ----- Wizard step 3 — submit handler (Task 18) -----
+
+
+def _parse_time_to_float(s: str | None) -> float | None:
+    """Convert a "HH:MM" string from an HTML ``<input type="time">`` into a
+    decimal-hour float so it can be compared against shift bounds.
+
+    Returns None on missing or malformed input — callers treat None as
+    "no time provided" and either skip validation (full-day shape) or
+    return a user-facing error (partial-day shapes that need the value)."""
+    if not s:
+        return None
+    try:
+        hh, mm = s.split(":")
+        return int(hh) + int(mm) / 60.0
+    except (ValueError, AttributeError):
+        return None
+
+
+def _shape_to_hour_bounds(
+    shape: str,
+    time_a: str,
+    time_b: str,
+    shift_from: float,
+    shift_to: float,
+) -> tuple[float | None, float | None, str | None]:
+    """Validate user-supplied times against the shape and shift window.
+
+    Returns ``(hour_from, hour_to, error)``:
+      - full_day → ``(None, None, None)``: no hours stored
+      - late_arrival → arrival ``time_b`` must be inside the shift and
+        after the start; hours span ``(shift_from, arrival)``
+      - early_leave → leave ``time_a`` must be inside the shift and
+        before the end; hours span ``(leave, shift_to)``
+      - midday_gap → both ``time_a`` and ``time_b`` inside the shift,
+        with ``time_b > time_a``; hours span ``(time_a, time_b)``
+
+    Returning the (None, None, msg) tuple instead of raising lets the
+    submit handler re-render the details form with the error string in
+    the existing ``k-error`` banner, matching the same UX as the rest of
+    the kiosk forms."""
+    if shape == "full_day":
+        return (None, None, None)
+    a = _parse_time_to_float(time_a)
+    b = _parse_time_to_float(time_b)
+    if shape == "late_arrival":
+        if b is None:
+            return (None, None, "Arrival time required")
+        if b <= shift_from:
+            return (None, None, "Arrival time must be after shift start")
+        if b > shift_to:
+            return (None, None, "Arrival time must be within your shift")
+        return (shift_from, b, None)
+    if shape == "early_leave":
+        if a is None:
+            return (None, None, "Leave time required")
+        if a < shift_from:
+            return (None, None, "Leave time must be after shift start")
+        if a >= shift_to:
+            return (None, None, "Leave time must be before shift end")
+        return (a, shift_to, None)
+    if shape == "midday_gap":
+        if a is None or b is None:
+            return (None, None, "Both times required")
+        if a < shift_from or b > shift_to or b <= a:
+            return (None, None, "Times must be within your shift, end > start")
+        return (a, b, None)
+    return (None, None, f"Unknown shape: {shape}")
+
+
+def _compute_working_hours_json(
+    shape: str,
+    hour_from: float | None,
+    hour_to: float | None,
+    shift_from: float,
+    shift_to: float,
+) -> list[dict] | None:
+    """Return the COMPLEMENT of the leave window — the ranges the employee
+    is still working — as a list of ``{from, to}`` dicts.
+
+    For ``full_day`` we return ``None`` (whole shift is off, no working
+    complement exists). For partial-day shapes, we return up to two
+    ranges: the morning window before the leave and the afternoon window
+    after it. If the leave somehow covers the whole shift (shouldn't
+    happen post-validation), we fall back to a single range covering the
+    whole shift so the column doesn't end up empty.
+
+    Stored in the ``working_hours_json`` JSONB column so the scheduler
+    cascade and the kiosk calendar can render partial-day leaves with
+    the actual hours-worked breakdown without re-deriving from times."""
+    if shape == "full_day":
+        return None
+    if hour_from is None or hour_to is None:
+        return None
+    out: list[dict] = []
+    if hour_from > shift_from:
+        out.append({"from": shift_from, "to": hour_from})
+    if hour_to < shift_to:
+        out.append({"from": hour_to, "to": shift_to})
+    return out or [{"from": shift_from, "to": shift_to}]
+
+
+def _insert_request_row(
+    *,
+    person_odoo_id: int,
+    shape: str,
+    holiday_status_id: int,
+    date_from: _date,
+    date_to: _date,
+    hour_from: float | None,
+    hour_to: float | None,
+    working_hours_json: list[dict] | None,
+    note: str | None,
+) -> int:
+    """Insert a draft ``time_off_requests`` row and return its id.
+
+    Uses ``db.cursor()`` so the INSERT and the RETURNING id fetch share
+    a single transaction — the row is either committed with a real id
+    or rolled back entirely. New rows always start ``state='draft'`` /
+    ``synced_to_odoo=FALSE`` so the sync sweep picks them up if the
+    immediate ``push_one`` call fails."""
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO time_off_requests "
+            "(person_odoo_id, originating_kiosk_user, shape, "
+            " holiday_status_id, date_from, date_to, hour_from, hour_to, "
+            " working_hours_json, note, state, synced_to_odoo) "
+            "VALUES (%s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', FALSE) "
+            "RETURNING id",
+            (
+                person_odoo_id, shape, holiday_status_id, date_from, date_to,
+                hour_from, hour_to,
+                _json.dumps(working_hours_json) if working_hours_json else None,
+                note,
+            ),
+        )
+        return cur.fetchone()["id"]
+
+
+def _queue_push(request_id: int) -> None:
+    """Run the push synchronously from the background-task slot.
+
+    Exists as a standalone module function (not an inline lambda inside
+    the route) so tests can monkeypatch it to capture which request_id
+    was queued without having to monkeypatch the sync engine itself."""
+    time_off_sync.push_one(request_id)
+
+
+@router.post(
+    "/kiosk/time-off/request/{token}/submit",
+    response_class=HTMLResponse,
+)
+def request_submit(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    token: str,
+    shape: str = Form(...),
+    holiday_status_id: int = Form(...),
+    date_from: str = Form(...),
+    date_to: str = Form(...),
+    time_a: str = Form(default=""),
+    time_b: str = Form(default=""),
+    note: str = Form(default=""),
+):
+    """Wizard step 3 — server-side validation, persist a draft row, queue
+    the Odoo push, render the success page.
+
+    Validation cascade (bail out at the first failure):
+      1. Token + person check (same gate as the other routes)
+      2. Shape in the known set
+      3. Dates parse as ISO and end >= start (we silently swap if not)
+      4. Times pass ``_shape_to_hour_bounds`` against the shift window
+
+    On any time-validation failure we re-render the details form with a
+    422 status + the ``error`` message in the existing ``k-error`` banner,
+    so the user sees what to fix without losing their place in the wizard.
+
+    On success we insert the row in ``state='draft'`` /
+    ``synced_to_odoo=FALSE`` and schedule a background ``push_one`` —
+    that's the immediate first sync attempt. If it fails, the 60s sweep
+    in ``time_off_sync.retry_unsynced_requests`` will keep retrying."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return RedirectResponse(url="/kiosk", status_code=303)
+    p = _person_by_id(person_id)
+    if not p or not p.get("odoo_id"):
+        return RedirectResponse(url="/kiosk", status_code=303)
+    if shape not in _VALID_SHAPES:
+        return RedirectResponse(
+            url=f"/kiosk/time-off/request/{_mint_token(person_id)}",
+            status_code=303,
+        )
+    try:
+        df = _date.fromisoformat(date_from)
+        dt = _date.fromisoformat(date_to)
+    except ValueError:
+        return RedirectResponse(
+            url=f"/kiosk/time-off/request/{_mint_token(person_id)}",
+            status_code=303,
+        )
+    # Swap on accidental inverted range — friendlier than rejecting it.
+    if dt < df:
+        df, dt = dt, df
+
+    shift_from, shift_to = _shift_window_for(p["odoo_id"])
+    hour_from, hour_to, err = _shape_to_hour_bounds(
+        shape, time_a, time_b, shift_from, shift_to,
+    )
+    if err:
+        # Re-render the details form with the error in the existing
+        # k-error banner. balances_by_type matches the shape that
+        # `request_details` builds so the form's JS payload stays valid.
+        balances = time_off_balances.get_for_employee(p["odoo_id"])
+        balances_by_type = {
+            b["holiday_status_id"]: {
+                "unit": b["unit"],
+                "available": float(b["available"]),
+                "available_practical": float(b["available_practical"]),
+                "pending": float(b["pending"]),
+            }
+            for b in balances
+        }
+        return templates.TemplateResponse(
+            request,
+            "kiosk_time_off_request_details.html",
+            {
+                "person": p,
+                "token": _mint_token(person_id),
+                "shape": shape,
+                "leave_types": _fetch_visible_leave_types(shape),
+                "balances_by_type": balances_by_type,
+                "shift_from": shift_from,
+                "shift_to": shift_to,
+                "today_iso": _date.today().isoformat(),
+                "error": err,
+            },
+            status_code=422,
+        )
+
+    working_hours = _compute_working_hours_json(
+        shape, hour_from, hour_to, shift_from, shift_to,
+    )
+
+    request_id = _insert_request_row(
+        person_odoo_id=p["odoo_id"],
+        shape=shape,
+        holiday_status_id=holiday_status_id,
+        date_from=df,
+        date_to=dt,
+        hour_from=hour_from,
+        hour_to=hour_to,
+        working_hours_json=working_hours,
+        note=note.strip() or None,
+    )
+    background_tasks.add_task(_queue_push, request_id)
+
+    return templates.TemplateResponse(
+        request,
+        "kiosk_time_off_success.html",
+        {
+            "person": p,
+            "token": _mint_token(person_id),
+            "shape": shape,
+            "date_from": df.isoformat(),
+            "date_to": dt.isoformat(),
         },
     )

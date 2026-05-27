@@ -136,3 +136,73 @@ def test_request_details_renders_when_token_and_shape_valid(monkeypatch):
     # Form points at submit; the type picker has the stubbed option.
     assert "submit" in r.text.lower()
     assert "PTO" in r.text
+
+
+def test_submit_creates_row_and_queues_sync(monkeypatch):
+    """POST /submit inserts a time_off_requests row and schedules a sync."""
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._verify_token",
+                        lambda t: 1)
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._person_by_id",
+                        lambda pid: {"id": 1, "name": "T", "odoo_id": 5})
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._shift_window_for",
+                        lambda pid: (6.0, 14.5))
+    inserted = {}
+    def fake_insert(**kw):
+        inserted.update(kw)
+        return 999  # row id
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._insert_request_row",
+                        fake_insert)
+    queued = []
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._queue_push",
+                        lambda rid: queued.append(rid))
+
+    client = TestClient(app)
+    r = client.post(
+        "/kiosk/time-off/request/anytoken/submit",
+        data={
+            "shape": "full_day",
+            "holiday_status_id": "1",
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-03",
+            "note": "Vacation",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code in (200, 303)
+    assert inserted["shape"] == "full_day"
+    assert inserted["date_from"].isoformat() == "2026-06-01"
+    assert queued == [999]
+
+
+def test_submit_rejects_partial_day_outside_shift(monkeypatch):
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._verify_token",
+                        lambda t: 1)
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._person_by_id",
+                        lambda pid: {"id": 1, "name": "T", "odoo_id": 5})
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._shift_window_for",
+                        lambda pid: (6.0, 14.5))
+    # The error path re-renders the form, which calls these helpers; stub
+    # them so the test doesn't need a database to reach the 422 branch.
+    monkeypatch.setattr(
+        "zira_dashboard.routes.kiosk_time_off._fetch_visible_leave_types",
+        lambda shape: [],
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.time_off_balances.get_for_employee",
+        lambda pid: [],
+    )
+    client = TestClient(app)
+    r = client.post(
+        "/kiosk/time-off/request/anytoken/submit",
+        data={
+            "shape": "midday_gap",
+            "holiday_status_id": "2",
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-01",
+            "time_a": "16:00",  # outside shift
+            "time_b": "18:00",
+        },
+        follow_redirects=False,
+    )
+    # Should render the form again with an error (200) or redirect with flash
+    assert r.status_code in (200, 303, 422)

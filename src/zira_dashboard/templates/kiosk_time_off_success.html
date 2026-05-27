@@ -1,0 +1,48 @@
+{% extends "kiosk_base.html" %}
+{% block title %}Request Submitted — {{ person.name }}{% endblock %}
+{% block content %}
+<div class="k-header">
+  <a href="/kiosk/time-off/{{ token }}" class="k-back">‹ Back</a>
+  <span>Request Submitted</span>
+  {% include "_kiosk_brand.html" %}
+</div>
+
+<div class="k-main" style="align-items: center; justify-content: center;">
+  <div style="font-size: 6rem; color: #16a34a; line-height: 1;">✓</div>
+  <h1 style="font-size: 2.5rem; margin-top: 1rem; text-align: center;">
+    Request Submitted
+  </h1>
+  <p style="font-size: 1.5rem; color: #475569;
+            margin: 1rem 0 0 0; text-align: center; max-width: 600px;">
+    Your time-off request from
+    <strong>{{ date_from }}</strong>
+    to
+    <strong>{{ date_to }}</strong>
+    is pending approval.
+  </p>
+  <p style="font-size: 1.15rem; color: #64748b;
+            margin: 1.5rem 0 0 0; text-align: center;">
+    You'll see it under
+    <a href="/kiosk/time-off/mine/{{ token }}"
+       style="color: #2563eb; text-decoration: underline;">
+      My Requests
+    </a>.
+  </p>
+
+  <div style="display: flex; gap: 1rem; margin-top: 2.5rem;
+              flex-wrap: wrap; justify-content: center;">
+    <a class="k-btn" href="/kiosk/time-off/{{ token }}"
+       style="text-decoration: none; min-width: 200px;
+              display: inline-flex; align-items: center;
+              justify-content: center;">
+      Done
+    </a>
+    <a class="k-btn secondary" href="/kiosk/time-off/mine/{{ token }}"
+       style="text-decoration: none; min-width: 200px;
+              display: inline-flex; align-items: center;
+              justify-content: center;">
+      My Requests
+    </a>
+  </div>
+</div>
+{% endblock %}
