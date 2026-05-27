@@ -105,6 +105,50 @@ async def _warm_kiosk_sync_loop():
         await asyncio.sleep(60)
 
 
+async def _time_off_sync_loop():
+    """Reconcile any time_off_requests rows still flagged unsynced
+    against Odoo `hr.leave`. Mirrors `_warm_kiosk_sync_loop` — routes
+    write to Odoo synchronously on submit; this loop catches anything
+    that failed during a transient Odoo outage. Runs every 60s.
+    Errors are logged and swallowed."""
+    from . import time_off_sync
+    while True:
+        try:
+            await asyncio.to_thread(time_off_sync.retry_unsynced_requests)
+        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
+            _log.warning("Time-off sync retry sweep failed: %s", e)
+        await asyncio.sleep(60)
+
+
+async def _time_off_poll_loop():
+    """Pull `hr.leave` state changes back from Odoo every 60s so the
+    local mirror picks up manager approvals/refusals and cascades them
+    into the staffing scheduler. Errors are logged and swallowed."""
+    from . import time_off_sync
+    while True:
+        try:
+            await asyncio.to_thread(time_off_sync.poll_odoo_leaves)
+        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
+            _log.warning("Time-off poll loop failed: %s", e)
+        await asyncio.sleep(60)
+
+
+async def _time_off_balance_sweep_loop():
+    """Refresh stale `time_off_balances` rows from Odoo every 10 min so
+    available balances stay current without each kiosk-balance read
+    paying a per-employee Odoo round-trip. Errors are logged and
+    swallowed."""
+    from . import time_off_balances
+    while True:
+        try:
+            await asyncio.to_thread(
+                time_off_balances.refresh_stale, 600
+            )
+        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
+            _log.warning("Time-off balance sweep failed: %s", e)
+        await asyncio.sleep(600)
+
+
 async def _warm_zira_cache_loop():
     """Periodically warm today's Zira leaderboard cache so user
     requests on /recycling never pay the cold-cache penalty.
@@ -191,10 +235,21 @@ async def lifespan(app: FastAPI):
     st_warmer_task = asyncio.create_task(_warm_stratustime_loop())
     live_cache_task = asyncio.create_task(_warm_live_cache_loop())
     kiosk_sync_task = asyncio.create_task(_warm_kiosk_sync_loop())
+    time_off_sync_task = asyncio.create_task(_time_off_sync_loop())
+    time_off_poll_task = asyncio.create_task(_time_off_poll_loop())
+    time_off_balance_task = asyncio.create_task(_time_off_balance_sweep_loop())
     try:
         yield
     finally:
-        for t in (warmer_task, st_warmer_task, live_cache_task, kiosk_sync_task):
+        for t in (
+            warmer_task,
+            st_warmer_task,
+            live_cache_task,
+            kiosk_sync_task,
+            time_off_sync_task,
+            time_off_poll_task,
+            time_off_balance_task,
+        ):
             t.cancel()
             try:
                 await t
