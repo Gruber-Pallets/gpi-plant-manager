@@ -105,3 +105,83 @@ def snapshot() -> dict:
         "station_targets": _read("station_targets"),
         "group_targets": _read("group_targets"),
     }
+
+
+# ---- Time-off settings (2026-05-27) ----
+
+import json as _json
+
+
+def _read_raw(key: str):
+    """Return the raw value from app_settings, or None if missing.
+
+    Unlike the legacy ``_read`` above (which coerces values to ``dict[str, int]``),
+    this returns whatever JSON shape was stored — scalar, list, or dict — for
+    callers that need arbitrary payloads (e.g. time-off settings).
+    """
+    from . import db
+    rows = db.query("SELECT value FROM app_settings WHERE key = %s", (key,))
+    if not rows:
+        return None
+    raw = rows[0]["value"]
+    if isinstance(raw, str):
+        try:
+            return _json.loads(raw)
+        except _json.JSONDecodeError:
+            return None
+    return raw
+
+
+def _write_raw(key: str, value) -> None:
+    """Upsert key -> value (JSON-encoded) into app_settings.
+
+    Matches the ``::jsonb`` + ``updated_at = now()`` convention used by the
+    legacy ``_write`` above and by ``odoo_sync`` / migration scripts.
+    """
+    from . import db
+    db.execute(
+        "INSERT INTO app_settings (key, value, updated_at) "
+        "VALUES (%s, %s::jsonb, now()) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+        (key, _json.dumps(value)),
+    )
+
+
+# hidden_leave_type_ids -> list[int]
+def get_hidden_leave_type_ids() -> list[int]:
+    v = _read_raw("time_off.hidden_leave_type_ids")
+    if not isinstance(v, list):
+        return []
+    return [int(x) for x in v if isinstance(x, (int, str)) and str(x).lstrip("-").isdigit()]
+
+
+def set_hidden_leave_type_ids(ids: list[int]) -> None:
+    _write_raw("time_off.hidden_leave_type_ids", [int(x) for x in ids])
+
+
+# show_stratustime_overlay -> bool (default True)
+def get_show_stratustime_overlay() -> bool:
+    v = _read_raw("time_off.show_stratustime_overlay")
+    if v is None:
+        return True
+    return bool(v)
+
+
+def set_show_stratustime_overlay(on: bool) -> None:
+    _write_raw("time_off.show_stratustime_overlay", bool(on))
+
+
+# default_shift_hours -> (start, end) tuple of floats
+def get_default_shift_hours() -> tuple[float, float]:
+    v = _read_raw("time_off.default_shift_hours")
+    if not isinstance(v, dict):
+        return (6.0, 14.5)
+    try:
+        return (float(v.get("start", 6.0)), float(v.get("end", 14.5)))
+    except (TypeError, ValueError):
+        return (6.0, 14.5)
+
+
+def set_default_shift_hours(start: float, end: float) -> None:
+    _write_raw("time_off.default_shift_hours",
+               {"start": float(start), "end": float(end)})
