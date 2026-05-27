@@ -207,3 +207,68 @@ def test_fetch_balances_no_balance_for_no_allocation_types(monkeypatch):
     assert custom["allocated_total"] == 0
     assert custom["available"] == 0
     assert custom["unit"] == "hours"
+
+
+def test_create_leave_full_day_no_hours(monkeypatch):
+    responses = {("hr.leave", "create"): 999}
+    calls = _stub_execute(monkeypatch, responses)
+    leave_id = odoo_client.create_leave(
+        employee_odoo_id=5, holiday_status_id=1,
+        date_from=date(2026, 6, 1), date_to=date(2026, 6, 3),
+        hour_from=None, hour_to=None, note="Vacation",
+    )
+    assert leave_id == 999
+    payload = calls[0][2][0]
+    assert payload["employee_id"] == 5
+    assert payload["holiday_status_id"] == 1
+    assert payload["request_date_from"] == "2026-06-01"
+    assert payload["request_date_to"] == "2026-06-03"
+    assert "request_unit_hours" not in payload or payload["request_unit_hours"] is False
+    assert payload["name"] == "Vacation"
+
+
+def test_create_leave_partial_day_with_hours(monkeypatch):
+    responses = {("hr.leave", "create"): 1000}
+    calls = _stub_execute(monkeypatch, responses)
+    odoo_client.create_leave(
+        employee_odoo_id=5, holiday_status_id=2,
+        date_from=date(2026, 6, 1), date_to=date(2026, 6, 1),
+        hour_from=10.0, hour_to=12.0, note="Doctor appointment",
+    )
+    payload = calls[0][2][0]
+    assert payload["request_unit_hours"] is True
+    assert payload["request_hour_from"] == 10.0
+    assert payload["request_hour_to"] == 12.0
+
+
+def test_write_leave_passes_fields(monkeypatch):
+    responses = {("hr.leave", "write"): True}
+    calls = _stub_execute(monkeypatch, responses)
+    odoo_client.write_leave(999, name="Updated", request_hour_to=14.0)
+    assert calls[0][2][0] == [999]
+    assert calls[0][2][1] == {"name": "Updated", "request_hour_to": 14.0}
+
+
+def test_refuse_leave_calls_action(monkeypatch):
+    responses = {("hr.leave", "action_refuse"): True}
+    calls = _stub_execute(monkeypatch, responses)
+    odoo_client.refuse_leave(999)
+    assert calls[0][0:2] == ("hr.leave", "action_refuse")
+    assert calls[0][2][0] == [999]
+
+
+def test_find_duplicate_leave_finds_match(monkeypatch):
+    responses = {("hr.leave", "search_read"): [{"id": 555}]}
+    _stub_execute(monkeypatch, responses)
+    found = odoo_client.find_duplicate_leave(
+        employee_odoo_id=5, holiday_status_id=1,
+        date_from=date(2026, 6, 1), date_to=date(2026, 6, 3),
+    )
+    assert found == 555
+
+
+def test_find_duplicate_leave_none_when_no_match(monkeypatch):
+    responses = {("hr.leave", "search_read"): []}
+    _stub_execute(monkeypatch, responses)
+    assert odoo_client.find_duplicate_leave(5, 1,
+        date(2026, 6, 1), date(2026, 6, 3)) is None

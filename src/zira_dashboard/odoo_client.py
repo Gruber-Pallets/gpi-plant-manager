@@ -3,8 +3,9 @@
 Reads: hr.employee, hr.skill*, hr.department, hr.leave.type (time-off types),
 hr.leave (time-off requests), hr.leave.allocation (time-off balances),
 resource.calendar + resource.calendar.attendance (employee working hours).
-Writes: hr.attendance (kiosk clock-in/out/transfer). The Odoo API user backing
-ODOO_API_KEY needs write permission on hr.attendance.
+Writes: hr.attendance (kiosk clock-in/out/transfer); hr.leave (kiosk time-off
+create / edit / refuse). The Odoo API user backing ODOO_API_KEY needs write
+permission on hr.attendance and hr.leave.
 
 Configuration comes from environment variables:
 - ODOO_URL  — base URL, e.g. https://gruber-pallets.odoo.com (no trailing /odoo)
@@ -535,3 +536,66 @@ def fetch_balances_for(employee_odoo_id: int) -> list[dict]:
             "available_practical": practical,
         })
     return out
+
+
+# ---------- Time-off writes (2026-05-27) ----------
+
+
+def create_leave(
+    employee_odoo_id: int,
+    holiday_status_id: int,
+    date_from,
+    date_to,
+    hour_from: float | None = None,
+    hour_to: float | None = None,
+    note: str | None = None,
+) -> int:
+    """Create an hr.leave in 'confirm' state. Returns the new leave id.
+
+    Sets request_unit_hours=True with float hour_from/hour_to when given;
+    otherwise creates a day-unit leave for the date range.
+    """
+    payload: dict[str, Any] = {
+        "employee_id": employee_odoo_id,
+        "holiday_status_id": holiday_status_id,
+        "request_date_from": date_from.isoformat(),
+        "request_date_to": date_to.isoformat(),
+    }
+    if hour_from is not None and hour_to is not None:
+        payload["request_unit_hours"] = True
+        payload["request_hour_from"] = float(hour_from)
+        payload["request_hour_to"] = float(hour_to)
+    if note:
+        payload["name"] = note
+    return execute("hr.leave", "create", payload)
+
+
+def write_leave(leave_id: int, **fields: Any) -> None:
+    """Update fields on an existing hr.leave."""
+    execute("hr.leave", "write", [leave_id], fields)
+
+
+def refuse_leave(leave_id: int) -> None:
+    """Call hr.leave.action_refuse — handles pending-cancel and
+    approved-cancel via the same workflow."""
+    execute("hr.leave", "action_refuse", [leave_id])
+
+
+def find_duplicate_leave(
+    employee_odoo_id: int,
+    holiday_status_id: int,
+    date_from,
+    date_to,
+) -> int | None:
+    """Return id of an existing hr.leave matching this employee+type+range
+    in non-rejected state, else None. Retry-dedupe guard."""
+    rows = execute(
+        "hr.leave", "search_read",
+        [("employee_id", "=", employee_odoo_id),
+         ("holiday_status_id", "=", holiday_status_id),
+         ("request_date_from", "=", date_from.isoformat()),
+         ("request_date_to", "=", date_to.isoformat()),
+         ("state", "in", list(_LEAVE_STATES_OPEN))],
+        fields=["id"], limit=1,
+    )
+    return rows[0]["id"] if rows else None
