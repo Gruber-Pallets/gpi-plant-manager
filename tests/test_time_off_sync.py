@@ -346,3 +346,18 @@ def test_invalidate_balance_swallows_missing_table(monkeypatch, fake_db):
     monkeypatch.setattr(time_off_sync.db, "execute", boom)
     # Should not raise.
     time_off_sync._invalidate_balance(5)
+
+
+def test_poll_refreshes_leave_types_cache(monkeypatch, fake_db):
+    monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leaves_for_range",
+                        lambda s, e: [])
+    monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leave_types",
+                        lambda: [
+                            {"id": 1, "name": "PTO", "request_unit": "day",
+                             "requires_allocation": "yes", "color": 1,
+                             "active": True},
+                        ])
+    time_off_sync.poll_odoo_leaves()
+    upserts = [e for e in fake_db["executes"]
+               if "leave_types_cache" in e[0]]
+    assert upserts

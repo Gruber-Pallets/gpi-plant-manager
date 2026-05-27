@@ -228,6 +228,26 @@ def poll_odoo_leaves() -> int:
     longer returned by Odoo are marked ``state='cancel'`` (Odoo-side
     deletion).
     """
+    # Refresh leave-types cache first so the kiosk picker stays current.
+    try:
+        types = odoo_client.fetch_leave_types()
+        for t in types:
+            db.execute(
+                "INSERT INTO leave_types_cache "
+                "(holiday_status_id, name, request_unit, requires_allocation, "
+                " color, active, last_pulled_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, now()) "
+                "ON CONFLICT (holiday_status_id) DO UPDATE SET "
+                "name = EXCLUDED.name, request_unit = EXCLUDED.request_unit, "
+                "requires_allocation = EXCLUDED.requires_allocation, "
+                "color = EXCLUDED.color, active = EXCLUDED.active, "
+                "last_pulled_at = now()",
+                (t["id"], t["name"], t["request_unit"],
+                 t["requires_allocation"], t.get("color"), t.get("active", True)),
+            )
+    except Exception as e:  # noqa: BLE001
+        _log.info("leave_types_cache refresh failed: %s", e)
+
     today = date.today()
     start_d = today - timedelta(days=_POLL_PAST_DAYS)
     end_d = today + timedelta(days=_POLL_FUTURE_DAYS)
