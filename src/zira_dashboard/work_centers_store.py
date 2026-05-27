@@ -79,8 +79,12 @@ def _effective_uncached(loc: Location) -> dict:
     )
     if req_rows:
         req = [r["name"] for r in req_rows]
-    else:
+    elif not rec:
+        # No work_centers row at all → true bootstrap. Use hardcoded default.
         req = list(required_skills_for(loc))
+    else:
+        # Row exists but no required-skill rows → user explicitly cleared.
+        req = []
     def_rows = db.query(
         "SELECT pe.name FROM work_center_default_people wcdp "
         "JOIN work_centers wc ON wc.id = wcdp.wc_id "
