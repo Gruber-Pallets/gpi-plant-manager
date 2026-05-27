@@ -127,12 +127,13 @@ def settings_page(
         required_skills = eff["required_skills"]
         # Pool for the Default People picker, color-coded by min skill level
         # across the WC's required skills (mirrors the scheduler's logic).
+        # When required_skills is empty, render at neutral lvl-2 (no scale).
         default_pool: list[dict] = []
         for p in active_people_objs:
             if required_skills:
                 lvl = min((p.level(s) for s in required_skills), default=0)
             else:
-                lvl = 0
+                lvl = 2
             default_pool.append({"name": p.name, "level": lvl, "reserve": p.reserve})
         default_pool.sort(key=lambda r: (r["reserve"], -r["level"], r["name"].lower()))
         wc_rows.append(

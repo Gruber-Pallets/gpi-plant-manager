@@ -484,13 +484,21 @@ def staffing_page(
             return cached
         rows = []
         for p in active_people:
-            levels = [p.level(s) for s in required] if required else []
-            min_lvl = min(levels) if levels else 0
-            trained = bool(levels) and all(l >= 1 for l in levels)
+            if required:
+                levels = [p.level(s) for s in required]
+                min_lvl = min(levels)
+                trained = all(l >= 1 for l in levels)
+                color = staffing.skill_color(min_lvl)
+            else:
+                # No required skills → don't color-code; everyone is a
+                # valid option. lvl-2 CSS class renders as a neutral pill.
+                min_lvl = 2
+                trained = True
+                color = "neutral"
             rows.append({
                 "name": p.name,
                 "level": min_lvl,
-                "color": staffing.skill_color(min_lvl),
+                "color": color,
                 "trained": trained,
                 "reserve": p.reserve,
             })
@@ -508,9 +516,17 @@ def staffing_page(
         assigned = []
         for n in assigned_names:
             p = all_by_name.get(n)
-            # Color by the lowest level across required skills.
-            lvl = min((p.level(s) for s in required), default=0) if p else 0
-            assigned.append({"name": n, "level": lvl, "color": staffing.skill_color(lvl)})
+            if not required:
+                # Blank required → render at neutral lvl-2, no color scale.
+                lvl = 2
+                color = "neutral"
+            elif p:
+                lvl = min(p.level(s) for s in required)
+                color = staffing.skill_color(lvl)
+            else:
+                lvl = 0
+                color = staffing.skill_color(0)
+            assigned.append({"name": n, "level": lvl, "color": color})
         # Filter out anyone in Time Off — they shouldn't appear in any WC's
         # picker. The "currently-assigned safety net" below re-adds anyone
         # already historically assigned to this WC, so dirty data won't be
