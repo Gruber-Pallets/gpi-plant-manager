@@ -19,8 +19,9 @@ sync_error IS NOT NULL), mirroring the same UX pattern used on the kiosk
 dashboard for stuck punches — so an employee whose request hasn't made
 it to Odoo isn't left wondering why HR hasn't seen it.
 
-Routes (this task only):
-  GET /kiosk/time-off/{token}    Landing with 3 buttons
+Routes:
+  GET /kiosk/time-off/{token}              Landing with 3 buttons
+  GET /kiosk/time-off/request/{token}      Wizard step 1 — shape picker
 """
 
 from __future__ import annotations
@@ -113,4 +114,27 @@ def time_off_landing(request: Request, token: str):
             "all_count": _all_count(odoo_id),
             "sync_warning": _sync_error_warning(odoo_id),
         },
+    )
+
+
+@router.get("/kiosk/time-off/request/{token}", response_class=HTMLResponse)
+def request_shape(request: Request, token: str):
+    """Wizard step 1 — four big-touch cards that each link to step 2
+    with a `shape=` query param. Same HMAC gate as the landing; invalid
+    token bounces to /kiosk.
+
+    Mints a fresh token before render so the user has the full TTL to
+    pick a shape; the next page picks up that token and mints again.
+    """
+    person_id = _verify_token(token)
+    if person_id is None:
+        return RedirectResponse(url="/kiosk", status_code=303)
+    p = _person_by_id(person_id)
+    if not p:
+        return RedirectResponse(url="/kiosk", status_code=303)
+    fresh = _mint_token(person_id)
+    return templates.TemplateResponse(
+        request,
+        "kiosk_time_off_request_shape.html",
+        {"person": p, "token": fresh},
     )

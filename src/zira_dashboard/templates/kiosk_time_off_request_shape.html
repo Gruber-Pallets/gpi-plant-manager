@@ -1,0 +1,71 @@
+{% extends "kiosk_base.html" %}
+{% block title %}Request Time Off — {{ person.name }}{% endblock %}
+{% block content %}
+<div class="k-header">
+  <a href="/kiosk/time-off/{{ token }}" class="k-back">‹ Cancel</a>
+  <span>What kind of time off?</span>
+  {% include "_kiosk_brand.html" %}
+</div>
+<div class="k-main" style="align-items: center;">
+  <div style="
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    width: 100%;
+    max-width: 960px;
+    margin-top: 1rem;">
+
+    <a href="/kiosk/time-off/request/{{ token }}/details?shape=full_day"
+       class="k-btn"
+       style="text-decoration: none;
+              padding: 2rem 1.5rem; min-height: 180px; min-width: unset;
+              display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 0.6rem; line-height: 1.2;
+              text-align: center;">
+      <span style="font-size: 1.6rem;">Full Day(s) Off</span>
+      <span style="font-size: 1rem; font-weight: 400; opacity: 0.9;">
+        Out for one or more whole days
+      </span>
+    </a>
+
+    <a href="/kiosk/time-off/request/{{ token }}/details?shape=late_arrival"
+       class="k-btn secondary"
+       style="text-decoration: none;
+              padding: 2rem 1.5rem; min-height: 180px; min-width: unset;
+              display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 0.6rem; line-height: 1.2;
+              text-align: center;">
+      <span style="font-size: 1.6rem;">Arriving Late</span>
+      <span style="font-size: 1rem; font-weight: 400; color: #64748b;">
+        Tell us what time you'll arrive
+      </span>
+    </a>
+
+    <a href="/kiosk/time-off/request/{{ token }}/details?shape=early_leave"
+       class="k-btn secondary"
+       style="text-decoration: none;
+              padding: 2rem 1.5rem; min-height: 180px; min-width: unset;
+              display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 0.6rem; line-height: 1.2;
+              text-align: center;">
+      <span style="font-size: 1.6rem;">Leaving Early</span>
+      <span style="font-size: 1rem; font-weight: 400; color: #64748b;">
+        Tell us what time you'll leave
+      </span>
+    </a>
+
+    <a href="/kiosk/time-off/request/{{ token }}/details?shape=midday_gap"
+       class="k-btn secondary"
+       style="text-decoration: none;
+              padding: 2rem 1.5rem; min-height: 180px; min-width: unset;
+              display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 0.6rem; line-height: 1.2;
+              text-align: center;">
+      <span style="font-size: 1.6rem;">Out for Part of the Day</span>
+      <span style="font-size: 1rem; font-weight: 400; color: #64748b;">
+        Leave + return on the same day
+      </span>
+    </a>
+  </div>
+</div>
+{% endblock %}

@@ -42,3 +42,11 @@ def test_landing_route_renders_when_token_valid(monkeypatch):
     # assert r.status_code == 200
     # assert "Request Time Off" in r.text
     pytest.skip("Needs test fixture for seeded person row")
+
+
+def test_request_shape_picker_redirects_on_bad_token():
+    """Bogus token on the shape picker should bounce to /kiosk — same
+    HMAC gate as the rest of the kiosk."""
+    client = TestClient(app)
+    r = client.get("/kiosk/time-off/request/bogus", follow_redirects=False)
+    assert r.status_code in (302, 303, 307)
