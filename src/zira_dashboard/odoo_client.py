@@ -1,8 +1,8 @@
 """Odoo XML-RPC client.
 
 Reads: hr.employee, hr.skill*, hr.department, hr.leave.type (time-off types),
-hr.leave (time-off requests), resource.calendar + resource.calendar.attendance
-(employee working hours).
+hr.leave (time-off requests), hr.leave.allocation (time-off balances),
+resource.calendar + resource.calendar.attendance (employee working hours).
 Writes: hr.attendance (kiosk clock-in/out/transfer). The Odoo API user backing
 ODOO_API_KEY needs write permission on hr.attendance.
 
@@ -460,3 +460,78 @@ def fetch_resource_calendar(employee_odoo_id: int) -> dict | None:
         "lunch_to": lunch_to,
         "tz": tz,
     }
+
+
+# hr.leave.allocation states that contribute to allocated_total.
+_ALLOCATION_STATE_VALIDATED = "validate"
+# hr.leave states pulled together; "validate" is taken, others are pending.
+_LEAVE_STATES_OPEN = ("confirm", "validate1", "validate")
+_LEAVE_STATE_TAKEN = "validate"
+
+
+def fetch_balances_for(employee_odoo_id: int) -> list[dict]:
+    """Per-leave-type balance for one employee, via direct aggregation.
+
+    Algorithm: for each leave type, sum allocations in state='validate' minus
+    leaves in state='validate' (taken) and state IN ('confirm','validate1')
+    (pending). Returns one row per type, including types with zero allocation.
+
+    The `unit` field is 'days' when type.request_unit == 'day' or 'half_day',
+    and 'hours' when type.request_unit == 'hour'. Numeric fields use the
+    matching unit (days_display vs hours_display from Odoo).
+    """
+    types = fetch_leave_types()
+    allocations = execute(
+        "hr.leave.allocation", "search_read",
+        [("employee_id", "=", employee_odoo_id),
+         ("state", "=", _ALLOCATION_STATE_VALIDATED)],
+        fields=["holiday_status_id", "number_of_days_display",
+                "number_of_hours_display"],
+    )
+    leaves = execute(
+        "hr.leave", "search_read",
+        [("employee_id", "=", employee_odoo_id),
+         ("state", "in", list(_LEAVE_STATES_OPEN))],
+        fields=["holiday_status_id", "state",
+                "number_of_days", "number_of_hours_display"],
+    )
+
+    def _hsid(row: dict) -> int:
+        """Many2one fields come as [id, name] from Odoo — unwrap to id."""
+        v = row["holiday_status_id"]
+        return v[0] if isinstance(v, list) else v
+
+    out: list[dict] = []
+    for t in types:
+        tid = t["id"]
+        unit = "hours" if t["request_unit"] == "hour" else "days"
+        alloc_field = ("number_of_hours_display" if unit == "hours"
+                       else "number_of_days_display")
+        leave_field = ("number_of_hours_display" if unit == "hours"
+                       else "number_of_days")
+        alloc = 0.0
+        for a in allocations:
+            if _hsid(a) == tid:
+                alloc += float(a.get(alloc_field) or 0)
+        taken = 0.0
+        pending = 0.0
+        for lv in leaves:
+            if _hsid(lv) != tid:
+                continue
+            val = float(lv.get(leave_field) or 0)
+            if lv["state"] == _LEAVE_STATE_TAKEN:
+                taken += val
+            else:
+                pending += val
+        available = alloc - taken
+        practical = alloc - taken - pending
+        out.append({
+            "holiday_status_id": tid,
+            "unit": unit,
+            "allocated_total": alloc,
+            "taken": taken,
+            "pending": pending,
+            "available": available,
+            "available_practical": practical,
+        })
+    return out

@@ -146,3 +146,64 @@ def test_fetch_resource_calendar_returns_none_when_unset(monkeypatch):
     }
     _stub_execute(monkeypatch, responses)
     assert odoo_client.fetch_resource_calendar(5) is None
+
+
+def test_fetch_balances_uses_direct_aggregation(monkeypatch):
+    """Use the version-robust aggregation path:
+    allocations summed by type minus validated leaves."""
+    responses = {
+        ("hr.leave.allocation", "search_read"): [
+            {"id": 1, "employee_id": [5, "Bob"],
+             "holiday_status_id": [1, "PTO"],
+             "number_of_days_display": 15.0,
+             "number_of_hours_display": 120.0,
+             "state": "validate"},
+        ],
+        ("hr.leave", "search_read"): [
+            {"id": 10, "employee_id": [5, "Bob"],
+             "holiday_status_id": [1, "PTO"],
+             "state": "validate",
+             "number_of_days": 3.0,
+             "number_of_hours_display": 24.0},
+            {"id": 11, "employee_id": [5, "Bob"],
+             "holiday_status_id": [1, "PTO"],
+             "state": "confirm",
+             "number_of_days": 2.0,
+             "number_of_hours_display": 16.0},
+        ],
+        ("hr.leave.type", "search_read"): [
+            {"id": 1, "name": "PTO", "request_unit": "day",
+             "requires_allocation": "yes", "color": 1, "active": True},
+            {"id": 2, "name": "Custom Hours", "request_unit": "hour",
+             "requires_allocation": "no", "color": 4, "active": True},
+        ],
+    }
+    _stub_execute(monkeypatch, responses)
+    odoo_client._leave_types_cache = None
+    balances = odoo_client.fetch_balances_for(5)
+    pto = next(b for b in balances if b["holiday_status_id"] == 1)
+    assert pto["allocated_total"] == 15.0
+    assert pto["taken"] == 3.0       # only validate counts as taken
+    assert pto["pending"] == 2.0     # confirm/validate1 counts as pending
+    assert pto["available"] == 12.0  # 15 - 3
+    assert pto["available_practical"] == 10.0  # 15 - 3 - 2
+    assert pto["unit"] == "days"
+
+
+def test_fetch_balances_no_balance_for_no_allocation_types(monkeypatch):
+    """requires_allocation='no' types still appear with zero allocated."""
+    responses = {
+        ("hr.leave.allocation", "search_read"): [],
+        ("hr.leave", "search_read"): [],
+        ("hr.leave.type", "search_read"): [
+            {"id": 2, "name": "Custom Hours", "request_unit": "hour",
+             "requires_allocation": "no", "color": 4, "active": True},
+        ],
+    }
+    _stub_execute(monkeypatch, responses)
+    odoo_client._leave_types_cache = None
+    balances = odoo_client.fetch_balances_for(5)
+    custom = next(b for b in balances if b["holiday_status_id"] == 2)
+    assert custom["allocated_total"] == 0
+    assert custom["available"] == 0
+    assert custom["unit"] == "hours"
