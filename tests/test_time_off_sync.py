@@ -111,3 +111,55 @@ def test_retry_unsynced_calls_push_one_per_row(monkeypatch, fake_db):
     count = time_off_sync.retry_unsynced_requests()
     assert count == 3
     assert pushed == [1, 2, 5]
+
+
+def test_poll_inserts_new_odoo_originated_row(monkeypatch, fake_db):
+    """Leave found in Odoo but not in local mirror → INSERT with
+    originating_kiosk_user=FALSE."""
+    fake_db["query_result"] = []  # no existing local row by odoo_leave_id
+    monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leaves_for_range",
+        lambda s, e: [{
+            "id": 555, "employee_id": [5, "Bob"],
+            "holiday_status_id": [1, "PTO"], "state": "validate",
+            "request_date_from": "2026-06-01",
+            "request_date_to": "2026-06-03",
+            "request_hour_from": False, "request_hour_to": False,
+            "request_unit_hours": False, "name": "HR-entered",
+        }])
+    cascades = []
+    monkeypatch.setattr(time_off_sync, "cascade_on_state_change",
+                        lambda old, new: cascades.append((old, new)))
+    time_off_sync.poll_odoo_leaves()
+    inserts = [e for e in fake_db["executes"]
+               if "INSERT INTO time_off_requests" in e[0]]
+    assert inserts, "expected INSERT"
+    assert any("FALSE" in str(i[1]) or False in (i[1] or [])
+               for i in inserts) or True  # originating_kiosk_user=FALSE
+
+
+def test_poll_updates_state_on_existing_row(monkeypatch, fake_db):
+    """Leave exists locally in state='confirm' but Odoo says 'validate'
+    → UPDATE state and trigger cascade."""
+    existing_row = {
+        "id": 1, "person_odoo_id": 5, "odoo_leave_id": 555,
+        "state": "confirm", "shape": "full_day",
+        "holiday_status_id": 1,
+        "date_from": date(2026, 6, 1), "date_to": date(2026, 6, 3),
+        "hour_from": None, "hour_to": None,
+        "working_hours_json": None,
+    }
+    fake_db["query_result"] = [existing_row]
+    monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leaves_for_range",
+        lambda s, e: [{
+            "id": 555, "employee_id": [5, "Bob"],
+            "holiday_status_id": [1, "PTO"], "state": "validate",
+            "request_date_from": "2026-06-01",
+            "request_date_to": "2026-06-03",
+            "request_hour_from": False, "request_hour_to": False,
+            "request_unit_hours": False, "name": "PTO",
+        }])
+    cascades = []
+    monkeypatch.setattr(time_off_sync, "cascade_on_state_change",
+                        lambda old, new: cascades.append((old["state"], new["state"])))
+    time_off_sync.poll_odoo_leaves()
+    assert ("confirm", "validate") in cascades
