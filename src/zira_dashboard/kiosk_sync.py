@@ -38,7 +38,8 @@ def retry_unsynced_punches() -> int:
     Order: chronological by occurred_at, then by id (so a transfer's
     transfer_out is retried before its transfer_in)."""
     rows = db.query(
-        "SELECT id, person_odoo_id, action, wc_name, occurred_at "
+        "SELECT id, person_odoo_id, action, wc_name, "
+        "COALESCE(rounded_at, occurred_at) AS occurred_at "
         "FROM kiosk_punches_log "
         "WHERE synced_to_odoo = FALSE "
         "ORDER BY occurred_at ASC, id ASC "
@@ -114,7 +115,8 @@ def sync_one_by_id(log_id: int) -> None:
     next tick. So this function is "best-effort fast path" — the safety
     net always runs."""
     rows = db.query(
-        "SELECT id, person_odoo_id, action, wc_name, occurred_at "
+        "SELECT id, person_odoo_id, action, wc_name, "
+        "COALESCE(rounded_at, occurred_at) AS occurred_at "
         "FROM kiosk_punches_log WHERE id = %s",
         (log_id,),
     )
