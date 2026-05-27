@@ -28,6 +28,7 @@ from .routes import (
     dashboard,
     goat_watch,
     kiosk,
+    kiosk_time_off,
     late_report,
     leaderboards,
     past_schedules,
@@ -399,6 +400,7 @@ app.include_router(changelog.router)
 app.include_router(admin.router)
 app.include_router(goat_watch.router)
 app.include_router(kiosk.router)
+app.include_router(kiosk_time_off.router)
 
 
 def main() -> None:

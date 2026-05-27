@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-27
 
+### 10:01 AM
+
+- **Timeclock Time Off: landing route (Task 15)** — kiosk Time Off tile now lands somewhere. `GET /kiosk/time-off/{token}` (gated by the same 60s HMAC token as the rest of `/kiosk`) renders a touch-friendly page with three big actions: **Request Time Off**, **My Requests** (with an orange pill badge of total request count), and **Who's Out**. If any of this employee's recent submissions are stuck (`synced_to_odoo=FALSE AND sync_error IS NOT NULL`), a yellow `k-warning` banner explains and points at the 60s retry sweep. Reuses `_mint_token` / `_verify_token` / `_person_by_id` from `routes/kiosk.py` (no auth-helper drift). Subsequent links (`/kiosk/time-off/request/…`, `…/mine/…`, `…/calendar/…`) are placeholders today — the request wizard, mine list/detail, and calendar pages get appended by subsequent plan tasks. New file: `routes/kiosk_time_off.py`. New template: `templates/kiosk_time_off_landing.html`. Tests: `tests/test_time_off_routes.py` — bad-token redirect test passes; happy-path test stays skipped until the kiosk route suite gets a seeded-person fixture (Task 16 in the plan promises to wire it).
+
 ### 9:31 AM
 
 - **Settings: Company Schedule folded into Timeclock too** — same move as the rounding regroup five minutes ago, now for the schedule form. Shift start/end, work days, breaks/cleanup all live inside the Timeclock section, between the "Open Kiosk Portal" buttons and the Rounding inputs. Sidebar no longer has a separate "Company Schedule" item. Autosave still works (the form keeps its `data-section="schedule"` attribute so it saves on every edit without a button). Save endpoint redirects to `?section=kiosk` for the no-JS fallback. Roster Filter and Integrations stay in the sidebar — they're used by other features too, not just the timeclock.

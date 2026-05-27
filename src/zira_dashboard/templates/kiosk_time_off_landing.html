@@ -1,0 +1,68 @@
+{% extends "kiosk_base.html" %}
+{% block title %}Time Off — {{ person.name }}{% endblock %}
+{% block content %}
+<div class="k-header">
+  <a href="/kiosk/dashboard/{{ token }}" class="k-back">‹ Back</a>
+  <span>Time Off — {{ person.name }}</span>
+  {% include "_kiosk_brand.html" %}
+</div>
+<div class="k-main" style="align-items: center;">
+  {% if sync_warning %}
+    <div class="k-warning" style="max-width: 720px; text-align: left;">
+      <strong>Heads up — {{ sync_warning.count }} of your recent
+      {% if sync_warning.count > 1 %}requests haven't{% else %}request hasn't{% endif %}
+      synced to Odoo.</strong>
+      <div style="font-size: 0.95rem; margin-top: 0.4rem; color: #92400e;">
+        Latest error: <code>{{ sync_warning.latest_error }}</code>.
+        The background worker retries every 60s.
+      </div>
+    </div>
+  {% endif %}
+
+  <div style="
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    width: 100%;
+    max-width: 960px;
+    margin-top: 2rem;">
+
+    <a href="/kiosk/time-off/request/{{ token }}"
+       class="k-btn"
+       style="text-decoration: none;
+              padding: 2rem 1.5rem; min-height: 160px; min-width: unset;
+              display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 0.5rem; line-height: 1.2;">
+      <span>Request Time Off</span>
+    </a>
+
+    <a href="/kiosk/time-off/mine/{{ token }}"
+       class="k-btn secondary"
+       style="text-decoration: none;
+              padding: 2rem 1.5rem; min-height: 160px; min-width: unset;
+              display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 0.5rem; line-height: 1.2;
+              position: relative;">
+      <span>My Requests</span>
+      {% if all_count > 0 %}
+        <span style="background: #ea580c; color: white;
+                     border-radius: 999px;
+                     padding: 0.25rem 0.85rem;
+                     font-size: 1.15rem; font-weight: 700;
+                     line-height: 1.2;">
+          {{ all_count }}
+        </span>
+      {% endif %}
+    </a>
+
+    <a href="/kiosk/time-off/calendar/{{ token }}"
+       class="k-btn secondary"
+       style="text-decoration: none;
+              padding: 2rem 1.5rem; min-height: 160px; min-width: unset;
+              display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 0.5rem; line-height: 1.2;">
+      <span>Who's Out</span>
+    </a>
+  </div>
+</div>
+{% endblock %}
