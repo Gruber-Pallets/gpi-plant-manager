@@ -201,7 +201,13 @@ def _open_log_row(
     timestamp using current rounding settings, write it back to the row,
     and return (id, rounded_at). Both occurred_at (raw) and rounded_at
     are persisted; everything downstream reads COALESCE(rounded_at,
-    occurred_at)."""
+    occurred_at).
+
+    If rounding fails for any reason (config corruption, unexpected
+    timezone edge case, etc.), the INSERT is preserved — rounded_at
+    stays NULL and downstream falls back to occurred_at via COALESCE.
+    Better to record the raw punch than lose it entirely.
+    """
     from .. import rounding, rounding_store, shift_config
     with db.cursor() as cur:
         cur.execute(
@@ -211,19 +217,29 @@ def _open_log_row(
             (person_odoo_id, action, wc_name),
         )
         row = cur.fetchone()
-        local_date = row["occurred_at"].astimezone(shift_config.SITE_TZ).date()
+    log_id = row["id"]
+    occurred_at = row["occurred_at"]
+
+    try:
+        local_date = occurred_at.astimezone(shift_config.SITE_TZ).date()
         rounded = rounding.apply_rounding(
             action,
-            row["occurred_at"],
+            occurred_at,
             shift_config.shift_start_for(local_date),
             shift_config.shift_end_for(local_date),
             rounding_store.current(),
         )
-        cur.execute(
+        db.execute(
             "UPDATE kiosk_punches_log SET rounded_at = %s WHERE id = %s",
-            (rounded, row["id"]),
+            (rounded, log_id),
         )
-        return row["id"], rounded
+        return log_id, rounded
+    except Exception:
+        _log.exception(
+            "Rounding failed for kiosk_punches_log id=%s; leaving rounded_at NULL",
+            log_id,
+        )
+        return log_id, occurred_at
 
 
 def _log_variance(person_odoo_id: int, scheduled: str | None, actual: str) -> None:
@@ -352,7 +368,6 @@ def kiosk_clock_in(
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/kiosk", status_code=303)
     odoo_id = p["odoo_id"]
-    now = datetime.now(timezone.utc)
     log_id, rounded_at = _open_log_row(odoo_id, "clock_in", wc_name)
     # Odoo write runs after the response is sent. FastAPI runs sync `def`
     # background tasks in a threadpool, so the XML-RPC call doesn't block
@@ -385,7 +400,6 @@ def kiosk_clock_out(
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/kiosk", status_code=303)
     odoo_id = p["odoo_id"]
-    now = datetime.now(timezone.utc)
     log_id, rounded_at = _open_log_row(odoo_id, "clock_out", None)
     background_tasks.add_task(kiosk_sync.sync_one_by_id, log_id)
     return templates.TemplateResponse(
@@ -413,7 +427,6 @@ def kiosk_transfer(
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/kiosk", status_code=303)
     odoo_id = p["odoo_id"]
-    now = datetime.now(timezone.utc)
     out_log, _ = _open_log_row(odoo_id, "transfer_out", None)
     in_log, in_rounded = _open_log_row(odoo_id, "transfer_in", new_wc_name)
     # FastAPI runs BackgroundTasks in the order they're added, so
