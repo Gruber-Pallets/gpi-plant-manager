@@ -1,6 +1,7 @@
 """Odoo XML-RPC client.
 
-Reads: hr.employee, hr.skill*, hr.department, hr.leave.type (time-off types).
+Reads: hr.employee, hr.skill*, hr.department, hr.leave.type (time-off types),
+hr.leave (time-off requests).
 Writes: hr.attendance (kiosk clock-in/out/transfer). The Odoo API user backing
 ODOO_API_KEY needs write permission on hr.attendance.
 
@@ -389,3 +390,27 @@ def fetch_leave_types() -> list[dict]:
     )
     _leave_types_cache = (rows, now + _LEAVE_TYPES_TTL_SECONDS)
     return rows
+
+
+def fetch_leaves_for_range(start_d, end_d) -> list[dict]:
+    """All hr.leave records overlapping [start_d, end_d] for active employees.
+
+    Overlap rule: request_date_to >= start_d AND request_date_from <= end_d.
+    Returns raw search_read dicts; caller normalizes Many2one fields.
+    """
+    domain = [
+        ("request_date_to", ">=", start_d.isoformat()),
+        ("request_date_from", "<=", end_d.isoformat()),
+        ("employee_id.active", "=", True),
+    ]
+    return execute(
+        "hr.leave", "search_read",
+        domain,
+        fields=[
+            "id", "employee_id", "holiday_status_id", "state",
+            "date_from", "date_to",
+            "request_date_from", "request_date_to",
+            "request_hour_from", "request_hour_to", "request_unit_hours",
+            "number_of_days", "number_of_hours_display", "name",
+        ],
+    )

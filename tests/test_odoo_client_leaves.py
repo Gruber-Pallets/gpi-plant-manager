@@ -1,4 +1,6 @@
 import time
+from datetime import date
+
 import pytest
 from unittest.mock import patch
 
@@ -63,3 +65,51 @@ def test_fetch_leave_types_refreshes_after_ttl(monkeypatch):
     )
     odoo_client.fetch_leave_types()
     assert len(calls) == 2
+
+
+def test_fetch_leaves_for_range_passes_domain(monkeypatch):
+    responses = {
+        ("hr.leave", "search_read"): [
+            {"id": 100, "employee_id": [5, "Bob"],
+             "holiday_status_id": [1, "PTO"], "state": "validate",
+             "date_from": "2026-06-01 06:00:00",
+             "date_to": "2026-06-03 14:30:00",
+             "request_date_from": "2026-06-01",
+             "request_date_to": "2026-06-03",
+             "request_hour_from": False, "request_hour_to": False,
+             "request_unit_hours": False,
+             "number_of_days": 3.0,
+             "number_of_hours_display": 24.0,
+             "name": "Vacation"},
+        ],
+    }
+    calls = _stub_execute(monkeypatch, responses)
+    leaves = odoo_client.fetch_leaves_for_range(date(2026, 5, 1), date(2026, 7, 1))
+    assert len(leaves) == 1
+    assert leaves[0]["id"] == 100
+    # Verify domain spans the range
+    domain = calls[0][2][0]
+    assert any("date_from" in str(c) or "date_to" in str(c) for c in domain)
+
+
+def test_fetch_leaves_for_range_extracts_id_from_many2one(monkeypatch):
+    responses = {
+        ("hr.leave", "search_read"): [
+            {"id": 100, "employee_id": [5, "Bob"],
+             "holiday_status_id": [1, "PTO"], "state": "confirm",
+             "date_from": "2026-06-01 00:00:00",
+             "date_to": "2026-06-01 23:59:59",
+             "request_date_from": "2026-06-01",
+             "request_date_to": "2026-06-01",
+             "request_hour_from": False, "request_hour_to": False,
+             "request_unit_hours": False,
+             "number_of_days": 1.0,
+             "number_of_hours_display": 8.0,
+             "name": False},
+        ],
+    }
+    _stub_execute(monkeypatch, responses)
+    leaves = odoo_client.fetch_leaves_for_range(date(2026, 6, 1), date(2026, 6, 1))
+    # Many2one fields come as [id, name] tuples from Odoo
+    assert leaves[0]["employee_id"] == [5, "Bob"]
+    assert leaves[0]["holiday_status_id"] == [1, "PTO"]
