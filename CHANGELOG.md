@@ -4,6 +4,11 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-27
 
+### 9:11 AM
+
+- **Timeclock: configurable punch rounding** — new "Rounding" section on `/settings` lets Dale set four window values (IN-before, IN-after, OUT-before, OUT-after, each clamped 0..60 minutes), modeled on StratusTime's "Round To Schedule" UI. Clock-in / clock-out punches that fall inside the window round to the scheduled `shift_start` / `shift_end` before being written to Odoo `hr.attendance`. Raw and rounded timestamps are both persisted on `kiosk_punches_log` for audit (new `rounded_at` column, idempotent ALTER at boot; rounding settings live in a new `rounding_settings` singleton table). Transfers are never rounded — only true day-boundary in/out punches. Ships disabled (all four values = 0, which is a no-op). Plumbing: pure `rounding.apply_rounding(...)` + `RoundingSettings` dataclass (14 unit tests covering DST + naive-datetime guard), `rounding_store` singleton with in-process cache (4 DB-gated tests), kiosk write path `_open_log_row` computes + persists `rounded_at` (wrapped in try/except so a rounding failure can never lose a punch), kiosk dashboard reads `COALESCE(rounded_at, occurred_at)` so "Clocked in at HH:MM" matches what Odoo shows, and `kiosk_sync` ships the rounded value through to `hr.attendance`. Server-side clamping in the settings POST handler ensures out-of-range values are coerced to 0..60 even if the client tries something silly.
+- **Deferred:** late-report integration with rounded time. Today's `late_report.late_people_for_day` operates on a StratusTime-sourced attendance dict that doesn't know about kiosk punches. Plumbing rounded values through that path requires deciding whether to merge `kiosk_punches_log` into the attendance dict — that's a separate design conversation, to revisit closer to the StratusTime cutover.
+
 ### 8:54 AM
 
 - fix(sync): treat Odoo Certifications as binary — single-level cert types in Odoo were bucketing to 0 and getting dropped by the sync, so cert lookups returned nothing. DOT mechanics now get the wrench badge; CDL drivers scheduled to Truck Driver now color green.
