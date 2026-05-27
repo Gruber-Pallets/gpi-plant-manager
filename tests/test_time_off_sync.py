@@ -99,3 +99,15 @@ def test_push_one_records_sync_error_on_xmlrpc_failure(monkeypatch, fake_db):
     err_updates = [e for e in fake_db["executes"]
                    if "sync_error" in e[0]]
     assert err_updates, "expected sync_error UPDATE"
+
+
+def test_retry_unsynced_calls_push_one_per_row(monkeypatch, fake_db):
+    fake_db["query_result"] = [
+        {"id": 1}, {"id": 2}, {"id": 5},
+    ]
+    pushed = []
+    monkeypatch.setattr(time_off_sync, "push_one",
+                        lambda rid: pushed.append(rid))
+    count = time_off_sync.retry_unsynced_requests()
+    assert count == 3
+    assert pushed == [1, 2, 5]

@@ -177,3 +177,24 @@ def _classify_error(e: Exception) -> str:
     name = type(e).__name__
     msg = str(e)[:_SYNC_ERROR_MSG_LIMIT]
     return f"{name}: {msg}"
+
+
+# Cap on how many unsynced rows we attempt per sweep tick. Bounds the
+# blast radius if Odoo is down and the backlog has grown: one tick will
+# only fire 50 XML-RPC calls instead of hammering an unbounded queue.
+_SWEEP_BATCH_SIZE = 50
+
+
+def retry_unsynced_requests() -> int:
+    """Retry up to ``_SWEEP_BATCH_SIZE`` unsynced rows. Returns the count
+    of rows attempted (success or failure recorded per row by
+    ``push_one``)."""
+    rows = db.query(
+        "SELECT id FROM time_off_requests "
+        "WHERE synced_to_odoo = FALSE "
+        "ORDER BY created_at ASC, id ASC LIMIT %s",
+        (_SWEEP_BATCH_SIZE,),
+    )
+    for r in rows:
+        push_one(r["id"])
+    return len(rows)
