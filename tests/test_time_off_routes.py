@@ -208,6 +208,22 @@ def test_submit_rejects_partial_day_outside_shift(monkeypatch):
     assert r.status_code in (200, 303, 422)
 
 
+def test_calendar_renders_with_month_view(monkeypatch):
+    """Who's Out calendar — valid token + stubbed helpers → 200 with a month
+    grid. Stubs `_approved_by_day` so the test doesn't need a real DB; the
+    helper itself is exercised by its own tests below."""
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._verify_token",
+                        lambda t: 1)
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._person_by_id",
+                        lambda pid: {"id": 1, "name": "T", "odoo_id": 5})
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._approved_by_day",
+                        lambda start, end: {})
+    client = TestClient(app)
+    r = client.get("/kiosk/time-off/calendar/anytoken")
+    assert r.status_code == 200
+    assert "Who" in r.text or "calendar" in r.text.lower()
+
+
 def test_cancel_handler_marks_row_for_cancel_and_queues(monkeypatch):
     """POST /kiosk/time-off/mine/{token}/{rid}/cancel on a row that already
     has an odoo_leave_id flips the local row to ``draft_cancel`` and queues

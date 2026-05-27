@@ -31,8 +31,9 @@ Routes:
 
 from __future__ import annotations
 
+import calendar as _cal
 import json as _json
-from datetime import date as _date
+from datetime import date as _date, timedelta as _td
 
 from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -728,4 +729,133 @@ def mine_cancel(
     return RedirectResponse(
         url=f"/kiosk/time-off/mine/{_mint_token(person_id)}",
         status_code=303,
+    )
+
+
+# ----- Who's Out calendar (Task 20) -----
+
+
+def _fmt_hf(h: float) -> str:
+    """Format a decimal-hour float as a 12-hour clock string.
+
+    ``6.5 -> "6:30am"``, ``14.0 -> "2:00pm"``, ``12.0 -> "12:00pm"``,
+    ``0.0 -> "12:00am"``. Used by the calendar labels so the timing
+    shows up in a glanceable form on the kiosk; matches how the rest
+    of the punch UI prints clock times."""
+    hh = int(h)
+    mm = int(round((h - hh) * 60))
+    suffix = "am" if hh < 12 else "pm"
+    disp = hh if hh <= 12 else hh - 12
+    if disp == 0:
+        disp = 12
+    return f"{disp}:{mm:02d}{suffix}"
+
+
+def _label_for(r: dict) -> str:
+    """Render a privacy-safe timing label for one approved leave row.
+
+    Deliberately omits the leave-type name — coworkers should see that
+    someone is out and when, but not why. The four shapes map to:
+      - ``full_day``   -> ``"full day"``
+      - ``late_arrival`` -> ``"arrives 9:00am"`` (arrival = hour_to)
+      - ``early_leave``  -> ``"leaves 2:00pm"`` (leave = hour_from)
+      - ``midday_gap``   -> ``"10:00am–12:00pm"`` (gap = hour_from..hour_to)
+    """
+    if r["shape"] == "full_day":
+        return "full day"
+    hf = float(r["hour_from"] or 0)
+    ht = float(r["hour_to"] or 0)
+    if r["shape"] == "late_arrival":
+        return f"arrives {_fmt_hf(ht)}"
+    if r["shape"] == "early_leave":
+        return f"leaves {_fmt_hf(hf)}"
+    return f"{_fmt_hf(hf)}–{_fmt_hf(ht)}"
+
+
+def _approved_by_day(start_d: _date, end_d: _date) -> dict:
+    """Return ``{date: [{name, label}, ...]}`` for approved leaves
+    overlapping ``[start_d, end_d]``.
+
+    Only reads ``state='validate'`` — the kiosk calendar shouldn't
+    surface pending requests because HR may still refuse them; once
+    approved, every overlapping day in the request range is fanned out
+    so the cell-by-cell template loop doesn't have to do its own date
+    math. Names come from the local ``people`` table joined on
+    ``odoo_id`` so we never need an Odoo round-trip on render."""
+    rows = db.query(
+        "SELECT r.shape, r.date_from, r.date_to, r.hour_from, r.hour_to, "
+        "p.name AS person_name "
+        "FROM time_off_requests r "
+        "JOIN people p ON p.odoo_id = r.person_odoo_id "
+        "WHERE r.state = 'validate' "
+        "AND r.date_to >= %s AND r.date_from <= %s "
+        "ORDER BY p.name",
+        (start_d, end_d),
+    )
+    by_day: dict = {}
+    for r in rows:
+        label = _label_for(r)
+        cur = max(r["date_from"], start_d)
+        end = min(r["date_to"], end_d)
+        while cur <= end:
+            by_day.setdefault(cur, []).append({
+                "name": r["person_name"], "label": label,
+            })
+            cur = cur + _td(days=1)
+    return by_day
+
+
+@router.get("/kiosk/time-off/calendar/{token}", response_class=HTMLResponse)
+def time_off_calendar(request: Request, token: str):
+    """Who's Out — a month-grid calendar of approved leaves.
+
+    Builds a standard Mon-first month-datescalendar for the current
+    month, padded to full weeks (leading/trailing days from adjacent
+    months are flagged ``outside`` so the template can fade them).
+    Each cell carries the list of people out that day plus a timing
+    label (no leave type — privacy). Token bounces to ``/kiosk`` on
+    failure, identical to the other routes in this module."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return RedirectResponse(url="/kiosk", status_code=303)
+    p = _person_by_id(person_id)
+    if not p:
+        return RedirectResponse(url="/kiosk", status_code=303)
+    today = _date.today()
+    first = today.replace(day=1)
+    if first.month == 12:
+        next_first = first.replace(year=first.year + 1, month=1)
+    else:
+        next_first = first.replace(month=first.month + 1)
+    last = next_first - _td(days=1)
+    range_start = first - _td(days=first.weekday())
+    range_end = last + _td(days=(6 - last.weekday()))
+    off_map = _approved_by_day(range_start, range_end)
+
+    weeks = _cal.Calendar(firstweekday=0).monthdatescalendar(
+        today.year, today.month,
+    )
+    week_cells = []
+    for week in weeks:
+        w = []
+        for d in week:
+            w.append({
+                "num": d.day,
+                "outside": d.month != today.month,
+                "is_today": d == today,
+                "weekend": d.weekday() >= 5,
+                "names": off_map.get(d, []),
+            })
+        week_cells.append(w)
+
+    fresh = _mint_token(person_id)
+    return templates.TemplateResponse(
+        request,
+        "kiosk_time_off_calendar.html",
+        {
+            "person": p,
+            "token": fresh,
+            "heading": today.strftime("%B %Y"),
+            "weeks": week_cells,
+        },
     )

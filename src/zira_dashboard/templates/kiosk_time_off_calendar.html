@@ -1,0 +1,92 @@
+{% extends "kiosk_base.html" %}
+{% block title %}Who's Out — {{ heading }}{% endblock %}
+{% block content %}
+<div class="k-header">
+  <a href="/kiosk/time-off/{{ token }}" class="k-back">‹ Back</a>
+  <span>Who's Out — {{ heading }}</span>
+  {% include "_kiosk_brand.html" %}
+</div>
+
+<div class="k-main" style="align-items: center;">
+  <table style="
+    width: 100%;
+    max-width: 1100px;
+    border-collapse: collapse;
+    table-layout: fixed;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);">
+    <thead>
+      <tr style="background: #f1f5f9; color: #475569;">
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Mon</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Tue</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Wed</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Thu</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Fri</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Sat</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Sun</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for week in weeks %}
+        <tr>
+          {% for d in week %}
+            <td style="
+              vertical-align: top;
+              height: 110px;
+              padding: 0.4rem;
+              border-top: 1px solid #e2e8f0;
+              border-right: 1px solid #e2e8f0;
+              {% if d.outside %}background: #f8fafc; color: #94a3b8;{% endif %}
+              {% if d.weekend and not d.outside %}background: #f8fafc;{% endif %}
+              {% if d.is_today %}background: #dbeafe; outline: 2px solid #2563eb; outline-offset: -2px;{% endif %}
+            ">
+              <div style="
+                font-size: 1.1rem;
+                font-weight: 600;
+                margin-bottom: 0.25rem;
+                {% if d.is_today %}color: #1d4ed8;{% endif %}">
+                {{ d.num }}
+              </div>
+              {% if d.names %}
+                <ul style="
+                  list-style: none;
+                  margin: 0;
+                  padding: 0;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 0.2rem;">
+                  {% for n in d.names[:4] %}
+                    <li style="
+                      font-size: 0.85rem;
+                      line-height: 1.2;
+                      color: #0f172a;
+                      background: #fef3c7;
+                      border-radius: 0.25rem;
+                      padding: 0.15rem 0.35rem;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;">
+                      <strong>{{ n.name }}</strong> — {{ n.label }}
+                    </li>
+                  {% endfor %}
+                  {% if d.names|length > 4 %}
+                    <li style="
+                      font-size: 0.8rem;
+                      color: #64748b;
+                      padding: 0.15rem 0.35rem;">
+                      +{{ d.names|length - 4 }} more
+                    </li>
+                  {% endif %}
+                </ul>
+              {% endif %}
+            </td>
+          {% endfor %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
