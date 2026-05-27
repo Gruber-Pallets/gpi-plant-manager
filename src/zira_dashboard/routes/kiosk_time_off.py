@@ -24,6 +24,9 @@ Routes:
   GET  /kiosk/time-off/request/{token}                      Wizard step 1 — shape picker
   GET  /kiosk/time-off/request/{token}/details?shape=…      Wizard step 2 — details form
   POST /kiosk/time-off/request/{token}/submit               Wizard step 3 — submit + queue sync
+  GET  /kiosk/time-off/mine/{token}                         My Requests list
+  GET  /kiosk/time-off/mine/{token}/{rid}                   My Requests detail (with Cancel)
+  POST /kiosk/time-off/mine/{token}/{rid}/cancel            Cancel a pending or approved request
 """
 
 from __future__ import annotations
@@ -551,4 +554,178 @@ def request_submit(
             "date_from": df.isoformat(),
             "date_to": dt.isoformat(),
         },
+    )
+
+
+# ----- My Requests list, detail, and cancel handler (Task 19) -----
+
+
+def _load_request(rid: int, person_odoo_id: int) -> dict | None:
+    """Fetch one ``time_off_requests`` row scoped to the caller's
+    ``person_odoo_id`` so a leaked URL with a different employee's
+    request id can't fall through to a render. Returns the row dict
+    on a hit, ``None`` on miss — callers redirect on None."""
+    rows = db.query(
+        "SELECT id, person_odoo_id, originating_kiosk_user, shape, "
+        "holiday_status_id, date_from, date_to, hour_from, hour_to, "
+        "note, state, odoo_leave_id, sync_error "
+        "FROM time_off_requests WHERE id = %s AND person_odoo_id = %s",
+        (rid, person_odoo_id),
+    )
+    return rows[0] if rows else None
+
+
+def _set_row_state(rid: int, state: str) -> None:
+    """Flip a row to a new state and mark it unsynced so the next sweep
+    picks it up. Used by the cancel handler to drive a row from
+    ``confirm``/``validate`` to ``draft_cancel`` before queuing the push
+    that translates ``draft_cancel`` into ``refuse_leave`` on Odoo."""
+    db.execute(
+        "UPDATE time_off_requests SET state = %s, synced_to_odoo = FALSE, "
+        "updated_at = now() WHERE id = %s",
+        (state, rid),
+    )
+
+
+def _list_my_requests(person_odoo_id: int) -> list[dict]:
+    """All of one person's requests, newest first, joined to the local
+    leave-types cache so the list can show the friendly type name
+    instead of a numeric id. Capped at 100 because the kiosk is a
+    glanceable surface — older requests still exist in the DB if HR
+    needs them, but a worker doesn't need to scroll past a year of
+    history on a touchscreen."""
+    rows = db.query(
+        "SELECT r.id, r.shape, r.date_from, r.date_to, r.hour_from, "
+        "r.hour_to, r.state, r.note, r.holiday_status_id, "
+        "r.originating_kiosk_user, t.name AS type_name "
+        "FROM time_off_requests r "
+        "LEFT JOIN leave_types_cache t "
+        "ON t.holiday_status_id = r.holiday_status_id "
+        "WHERE r.person_odoo_id = %s "
+        "ORDER BY r.created_at DESC LIMIT 100",
+        (person_odoo_id,),
+    )
+    return rows
+
+
+def _state_to_bucket(state: str) -> str:
+    """Map the raw ``hr.leave.state`` value (plus our local draft_*
+    states) to a one-word bucket the kiosk UI can color-code. Keeps
+    the template branch-free; new Odoo states fall through to the
+    raw value so a sync change doesn't crash render."""
+    if state in ("confirm", "validate1", "draft", "draft_edit"):
+        return "Pending"
+    if state == "validate":
+        return "Approved"
+    if state in ("refuse", "cancel", "draft_cancel"):
+        return "Rejected"
+    return state
+
+
+@router.get("/kiosk/time-off/mine/{token}", response_class=HTMLResponse)
+def mine_list(request: Request, token: str):
+    """My Requests — newest 100 requests for the calling employee.
+
+    Mints a fresh token on render so a user reading the list (or
+    pausing to think about which one to tap) has the full TTL before
+    they navigate into a detail page. Each row links to the detail
+    view with the fresh token already baked into the href."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return RedirectResponse(url="/kiosk", status_code=303)
+    p = _person_by_id(person_id)
+    if not p or not p.get("odoo_id"):
+        return RedirectResponse(url="/kiosk", status_code=303)
+    fresh = _mint_token(person_id)
+    rows = _list_my_requests(p["odoo_id"])
+    for r in rows:
+        r["bucket"] = _state_to_bucket(r["state"])
+    return templates.TemplateResponse(
+        request,
+        "kiosk_time_off_mine.html",
+        {"person": p, "token": fresh, "requests": rows},
+    )
+
+
+@router.get("/kiosk/time-off/mine/{token}/{rid}",
+            response_class=HTMLResponse)
+def mine_detail(request: Request, token: str, rid: int):
+    """My Requests detail — the row + a Cancel button when applicable.
+
+    The Cancel button only renders for kiosk-originated, non-terminal
+    rows; HR-entered rows (originating_kiosk_user=FALSE) shouldn't be
+    cancellable from the employee's surface, and refused/cancelled
+    rows have nothing left to do. A row id that doesn't exist (or
+    belongs to a different person) bounces back to the list, never
+    leaks data, never crashes."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return RedirectResponse(url="/kiosk", status_code=303)
+    p = _person_by_id(person_id)
+    if not p or not p.get("odoo_id"):
+        return RedirectResponse(url="/kiosk", status_code=303)
+    row = _load_request(rid, p["odoo_id"])
+    if not row:
+        return RedirectResponse(
+            url=f"/kiosk/time-off/mine/{_mint_token(person_id)}",
+            status_code=303,
+        )
+    row["bucket"] = _state_to_bucket(row["state"])
+    fresh = _mint_token(person_id)
+    return templates.TemplateResponse(
+        request,
+        "kiosk_time_off_mine_detail.html",
+        {"person": p, "token": fresh, "request_row": row},
+    )
+
+
+@router.post("/kiosk/time-off/mine/{token}/{rid}/cancel",
+             response_class=HTMLResponse)
+def mine_cancel(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    token: str,
+    rid: int,
+):
+    """Cancel a request. Two branches:
+
+      - ``odoo_leave_id IS NULL`` — the row never made it to Odoo
+        (still in the initial draft/retry queue). DELETE the local
+        row outright; there's nothing on the Odoo side to refuse, and
+        keeping a stale draft around would just be noise in the list.
+      - ``odoo_leave_id`` is set — flip the local state to
+        ``draft_cancel`` and queue a background push. The push routes
+        through ``time_off_sync._push_cancel`` which calls
+        ``odoo_client.refuse_leave`` (the same action Odoo uses for
+        both pending-cancel and approved-cancel). The local row stays
+        in place so the sweep can retry on failure and the user sees
+        the row land in the Rejected bucket once the push completes.
+
+    Auth gate is the standard token + person check; missing row
+    bounces to the list with a fresh token rather than 404-ing on the
+    employee."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return RedirectResponse(url="/kiosk", status_code=303)
+    p = _person_by_id(person_id)
+    if not p or not p.get("odoo_id"):
+        return RedirectResponse(url="/kiosk", status_code=303)
+    row = _load_request(rid, p["odoo_id"])
+    if not row:
+        return RedirectResponse(
+            url=f"/kiosk/time-off/mine/{_mint_token(person_id)}",
+            status_code=303,
+        )
+    if row["odoo_leave_id"] is None:
+        # Never made it to Odoo — just delete locally.
+        db.execute(
+            "DELETE FROM time_off_requests WHERE id = %s",
+            (rid,),
+        )
+    else:
+        _set_row_state(rid, "draft_cancel")
+        background_tasks.add_task(_queue_push, rid)
+    return RedirectResponse(
+        url=f"/kiosk/time-off/mine/{_mint_token(person_id)}",
+        status_code=303,
     )

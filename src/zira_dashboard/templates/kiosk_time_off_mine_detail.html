@@ -1,0 +1,94 @@
+{% extends "kiosk_base.html" %}
+{% block title %}Request Details — {{ person.name }}{% endblock %}
+{% block content %}
+<div class="k-header">
+  <a href="/kiosk/time-off/mine/{{ token }}" class="k-back">‹ Back</a>
+  <span>Request Details</span>
+  {% include "_kiosk_brand.html" %}
+</div>
+
+<div class="k-main" style="align-items: center;">
+  <div style="
+    width: 100%;
+    max-width: 720px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    padding: 1.75rem 2rem;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);">
+
+    <div style="
+      display: inline-block;
+      padding: 0.45rem 1rem;
+      border-radius: 999px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 1.25rem;
+      {% if request_row.bucket == 'Approved' %}
+        background: #dcfce7; color: #166534;
+      {% elif request_row.bucket == 'Rejected' %}
+        background: #fee2e2; color: #991b1b;
+      {% else %}
+        background: #fef3c7; color: #92400e;
+      {% endif %}">
+      {{ request_row.bucket }}
+    </div>
+
+    <dl style="
+      display: grid;
+      grid-template-columns: 9rem 1fr;
+      gap: 0.75rem 1.5rem;
+      margin: 0;
+      font-size: 1.15rem;
+      line-height: 1.4;">
+      <dt style="color: #64748b; font-weight: 500;">Dates</dt>
+      <dd style="margin: 0; color: #0f172a;">
+        {{ request_row.date_from }}{% if request_row.date_to and request_row.date_to != request_row.date_from %} – {{ request_row.date_to }}{% endif %}
+      </dd>
+
+      {% if request_row.hour_from is not none %}
+        <dt style="color: #64748b; font-weight: 500;">Hours</dt>
+        <dd style="margin: 0; color: #0f172a;">
+          {{ "%.2f"|format(request_row.hour_from) }} – {{ "%.2f"|format(request_row.hour_to) }}
+        </dd>
+      {% endif %}
+
+      <dt style="color: #64748b; font-weight: 500;">Shape</dt>
+      <dd style="margin: 0; color: #0f172a;">{{ request_row.shape.replace("_", " ") }}</dd>
+
+      {% if request_row.note %}
+        <dt style="color: #64748b; font-weight: 500;">Note</dt>
+        <dd style="margin: 0; color: #0f172a;">{{ request_row.note }}</dd>
+      {% endif %}
+
+      {% if request_row.sync_error %}
+        <dt style="color: #64748b; font-weight: 500;">Sync error</dt>
+        <dd style="margin: 0; color: #991b1b;">
+          <code style="background: #fee2e2; padding: 0.15rem 0.4rem;
+                       border-radius: 0.25rem; font-size: 0.95rem;">
+            {{ request_row.sync_error }}
+          </code>
+        </dd>
+      {% endif %}
+    </dl>
+
+    {% if request_row.originating_kiosk_user
+          and request_row.state not in ("cancel", "refuse", "draft_cancel") %}
+      <form method="post"
+            action="/kiosk/time-off/mine/{{ token }}/{{ request_row.id }}/cancel"
+            style="margin-top: 2rem;">
+        {% if request_row.state == "validate" %}
+          <div class="k-warning" style="margin-bottom: 1.25rem;">
+            Canceling an approved request will need approval again
+            if you change your mind.
+          </div>
+        {% endif %}
+        <button type="submit" class="k-btn danger"
+                style="min-width: 280px; width: 100%;">
+          Cancel This Request
+        </button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

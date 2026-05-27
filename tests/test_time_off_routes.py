@@ -206,3 +206,35 @@ def test_submit_rejects_partial_day_outside_shift(monkeypatch):
     )
     # Should render the form again with an error (200) or redirect with flash
     assert r.status_code in (200, 303, 422)
+
+
+def test_cancel_handler_marks_row_for_cancel_and_queues(monkeypatch):
+    """POST /kiosk/time-off/mine/{token}/{rid}/cancel on a row that already
+    has an odoo_leave_id flips the local row to ``draft_cancel`` and queues
+    a background push — the push routes through ``_push_cancel`` which
+    calls ``refuse_leave`` in Odoo. The local row is NOT deleted; we keep
+    it so the sweep can retry on failure and the user can see the request
+    in My Requests with its terminal state once the push completes."""
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._verify_token",
+                        lambda t: 1)
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._person_by_id",
+                        lambda pid: {"id": 1, "name": "T", "odoo_id": 5})
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._load_request",
+                        lambda rid, pid: {
+                            "id": rid, "person_odoo_id": pid,
+                            "state": "confirm", "odoo_leave_id": 999,
+                        })
+    updates = []
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._set_row_state",
+                        lambda rid, state: updates.append((rid, state)))
+    queued = []
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._queue_push",
+                        lambda rid: queued.append(rid))
+    client = TestClient(app)
+    r = client.post(
+        "/kiosk/time-off/mine/anytoken/42/cancel",
+        follow_redirects=False,
+    )
+    assert r.status_code in (200, 303)
+    assert (42, "draft_cancel") in updates
+    assert queued == [42]
