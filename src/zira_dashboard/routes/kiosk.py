@@ -66,6 +66,15 @@ _SESSION_SECRET = os.environ.get("KIOSK_SESSION_SECRET") or secrets.token_hex(32
 _TOKEN_TTL_SECONDS = 60
 
 
+def _time_off_enabled() -> bool:
+    """Whether the kiosk Time Off feature is exposed in the UI.
+
+    Gated by env var so the schema + sync engine can ship dark while
+    the user-facing tile stays hidden until we're ready to flip it on.
+    """
+    return os.environ.get("KIOSK_TIME_OFF_ENABLED", "").strip() == "1"
+
+
 def _mint_token(person_id: int) -> str:
     issued = int(time.time())
     payload = f"{person_id}:{issued}"
@@ -176,6 +185,24 @@ def _sync_error_warning(person_odoo_id: int) -> dict | None:
         "latest_error": rows[0]["latest_error"],
         "latest_at_display": _fmt_short_dt(rows[0]["latest_at"]),
     }
+
+
+def _pending_time_off_count(person_odoo_id: int) -> int:
+    """Count of this person's time-off requests still awaiting approval.
+
+    "Pending" means the request is somewhere in the approval workflow but
+    not yet validated or refused/cancelled — states ``draft``, ``confirm``,
+    and ``validate1``. The badge on the kiosk Time Off tile uses this so
+    employees see at a glance how many of their requests are still in
+    flight without having to drill into the My Requests list.
+    """
+    rows = db.query(
+        "SELECT COUNT(*) AS n FROM time_off_requests "
+        "WHERE person_odoo_id = %s "
+        "AND state IN ('draft', 'confirm', 'validate1')",
+        (person_odoo_id,),
+    )
+    return rows[0]["n"] if rows else 0
 
 
 def _scheduled_wc_for(person_name: str) -> str | None:
@@ -309,6 +336,16 @@ def kiosk_dashboard(request: Request, token: str):
     # WCs) doesn't time out mid-action.
     fresh_token = _mint_token(person_id)
 
+    # Time Off tile is flag-gated. Only run the count query when the flag
+    # is on AND we have an Odoo person id to count against — saves a query
+    # for the (currently common) flag-off case.
+    time_off_on = _time_off_enabled()
+    pending_time_off = (
+        _pending_time_off_count(p["odoo_id"])
+        if time_off_on and p.get("odoo_id")
+        else 0
+    )
+
     return templates.TemplateResponse(
         request,
         "kiosk_dashboard.html",
@@ -320,6 +357,8 @@ def kiosk_dashboard(request: Request, token: str):
             "check_in_display": _fmt_time(state["check_in_ts"]) if state["check_in_ts"] else None,
             "scheduled_wc": scheduled_wc,
             "sync_warning": sync_warning,
+            "time_off_enabled": time_off_on,
+            "pending_time_off_count": pending_time_off,
         },
     )
 

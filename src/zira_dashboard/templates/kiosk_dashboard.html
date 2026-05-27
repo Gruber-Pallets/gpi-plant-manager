@@ -71,5 +71,26 @@
       </a>
     {% endif %}
   {% endif %}
+
+  {% if time_off_enabled %}
+    <a href="/kiosk/time-off/{{ token }}"
+       class="k-btn secondary"
+       style="text-decoration: none; margin-top: 2rem;
+              min-height: 64px; padding: 1rem 1.5rem;
+              font-size: 1.25rem; min-width: unset;
+              display: inline-flex; align-items: center; justify-content: center;
+              gap: 0.75rem; position: relative;">
+      <span>Time Off</span>
+      {% if pending_time_off_count > 0 %}
+        <span style="background: #ea580c; color: white;
+                     border-radius: 999px;
+                     padding: 0.15rem 0.65rem;
+                     font-size: 1rem; font-weight: 700;
+                     line-height: 1.2;">
+          {{ pending_time_off_count }}
+        </span>
+      {% endif %}
+    </a>
+  {% endif %}
 </div>
 {% endblock %}
