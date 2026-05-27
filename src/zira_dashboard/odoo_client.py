@@ -1,4 +1,8 @@
-"""Odoo XML-RPC client. Read-only access to hr.employee + hr_skills.
+"""Odoo XML-RPC client.
+
+Reads: hr.employee, hr.skill*, hr.department, hr.leave.type (time-off types).
+Writes: hr.attendance (kiosk clock-in/out/transfer). The Odoo API user backing
+ODOO_API_KEY needs write permission on hr.attendance.
 
 Configuration comes from environment variables:
 - ODOO_URL  — base URL, e.g. https://gruber-pallets.odoo.com (no trailing /odoo)
@@ -357,3 +361,31 @@ def transfer(
         closed_id = current["id"]
     new_id = clock_in(employee_odoo_id, new_wc_name, ts)
     return closed_id, new_id
+
+
+# ---------- Time-off reads (2026-05-27) ----------
+
+import time as _time
+
+_LEAVE_TYPES_TTL_SECONDS = 10 * 60
+# (types_list, expires_at_epoch). Module-level so a process restart clears it.
+_leave_types_cache: tuple[list[dict], float] | None = None
+
+
+def fetch_leave_types() -> list[dict]:
+    """All active hr.leave.type, cached in-process for 10 minutes.
+
+    Returns [{id, name, request_unit, requires_allocation, color, active}, ...].
+    """
+    global _leave_types_cache
+    now = _time.time()
+    if _leave_types_cache and _leave_types_cache[1] > now:
+        return _leave_types_cache[0]
+    rows = execute(
+        "hr.leave.type", "search_read",
+        [("active", "=", True)],
+        fields=["id", "name", "request_unit",
+                "requires_allocation", "color", "active"],
+    )
+    _leave_types_cache = (rows, now + _LEAVE_TYPES_TTL_SECONDS)
+    return rows
