@@ -54,7 +54,7 @@ import logging
 from datetime import date, timedelta
 from typing import Any
 
-from . import db, odoo_client
+from . import db, odoo_client, time_off_balances
 from .staffing import TIME_OFF_KEY
 
 _log = logging.getLogger(__name__)
@@ -486,18 +486,15 @@ def _invalidate_balance(person_odoo_id: int) -> None:
     """Drop cached balance rows for this person so the next kiosk
     wizard refetches from Odoo.
 
-    Wrapped in try/except so the cascade doesn't fail if the
-    ``time_off_balances`` table hasn't been provisioned yet (Phase 1
-    deployment ordering: cascade is wired before the balance refresher
-    in some environments). A swallowed error here is acceptable — the
-    worst case is a stale cached balance, which the periodic refresh
-    will correct.
+    Delegates to ``time_off_balances.invalidate``. Wrapped in try/except
+    so the cascade doesn't fail if the ``time_off_balances`` table
+    hasn't been provisioned yet (Phase 1 deployment ordering: cascade
+    is wired before the balance refresher in some environments). A
+    swallowed error here is acceptable — the worst case is a stale
+    cached balance, which the periodic refresh will correct.
     """
     try:
-        db.execute(
-            "DELETE FROM time_off_balances WHERE person_odoo_id = %s",
-            (person_odoo_id,),
-        )
+        time_off_balances.invalidate(person_odoo_id)
     except Exception as e:  # noqa: BLE001
         _log.info(
             "balance cache invalidation skipped for person %s: %s",

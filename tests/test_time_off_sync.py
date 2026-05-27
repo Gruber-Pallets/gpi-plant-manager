@@ -348,6 +348,24 @@ def test_invalidate_balance_swallows_missing_table(monkeypatch, fake_db):
     time_off_sync._invalidate_balance(5)
 
 
+def test_cascade_invalidates_balances(monkeypatch, fake_db):
+    """Any state transition triggers balance invalidate for the person.
+
+    After Task 24 refactor, ``_invalidate_balance`` delegates to
+    ``time_off_balances.invalidate`` — this test pins that contract so
+    a future refactor that bypasses the balance module gets caught.
+    """
+    invalidated = []
+    monkeypatch.setattr(time_off_sync.time_off_balances, "invalidate",
+                        lambda pid: invalidated.append(pid))
+    old = {"state": "confirm"}
+    new = {"state": "validate", "person_odoo_id": 5, "shape": "full_day",
+           "date_from": date(2026, 6, 1), "date_to": date(2026, 6, 1),
+           "working_hours_json": None}
+    time_off_sync.cascade_on_state_change(old, new)
+    assert 5 in invalidated
+
+
 def test_poll_refreshes_leave_types_cache(monkeypatch, fake_db):
     monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leaves_for_range",
                         lambda s, e: [])
