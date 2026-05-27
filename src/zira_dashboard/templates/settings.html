@@ -35,10 +35,6 @@
        class="settings-nav-item {% if active_section == 'roster_filter' %}active{% endif %}">
       Roster Filter
     </a>
-    <a href="?section=schedule"
-       class="settings-nav-item {% if active_section == 'schedule' %}active{% endif %}">
-      Company Schedule
-    </a>
     <a href="?section=integrations"
        class="settings-nav-item {% if active_section == 'integrations' %}active{% endif %}">
       Integrations
@@ -54,47 +50,6 @@
   </aside>
 
   <div class="settings-content">
-  <!-- Company Schedule -->
-  <form method="post" action="/settings/schedule" id="schedule-form"
-        data-section="schedule"
-        {% if active_section != 'schedule' %}style="display:none"{% endif %}>
-    <section class="panel">
-      <h2>Company Schedule</h2>
-
-      <div class="sched-grid">
-        <label for="shift_start">Shift start</label>
-        <input id="shift_start" type="time" name="shift_start" value="{{ schedule.shift_start }}" step="300" required>
-
-        <label for="shift_end">Shift end</label>
-        <input id="shift_end" type="time" name="shift_end" value="{{ schedule.shift_end }}" step="300" required>
-
-        <label>Work days</label>
-        <div class="weekdays">
-          {% for i in range(7) %}
-            <label>
-              <input type="checkbox" name="weekday_{{ i }}" {% if i in schedule.work_weekdays %}checked{% endif %}>
-              {{ schedule.weekday_names[i] }}
-            </label>
-          {% endfor %}
-        </div>
-
-        <label>Breaks &amp; cleanup</label>
-        <div id="breaks-list">
-          {% for b in schedule.breaks %}
-            <div class="break-row">
-              <input type="time" name="break_start_{{ loop.index0 }}" value="{{ b.start }}" step="300" required>
-              <input type="time" name="break_end_{{ loop.index0 }}" value="{{ b.end }}" step="300" required>
-              <input type="text" name="break_name_{{ loop.index0 }}" value="{{ b.name }}" placeholder="name (e.g. Lunch, Cleanup)">
-              <button type="button" class="remove-btn" title="Remove">×</button>
-            </div>
-          {% endfor %}
-        </div>
-        <button type="button" class="add-break-btn" id="add-break">+ Add break</button>
-      </div>
-
-    </section>
-  </form>
-
   <!-- Unified Work Centers & Goals -->
   <form method="post" action="/settings/work_centers" id="wc-form"
         data-section="work_centers"
@@ -363,8 +318,44 @@
       </a>
     </div>
 
+    <form method="post" action="/settings/schedule" id="schedule-form"
+          data-section="schedule">
+      <h3 style="margin-top:1rem">Company Schedule</h3>
+
+      <div class="sched-grid">
+        <label for="shift_start">Shift start</label>
+        <input id="shift_start" type="time" name="shift_start" value="{{ schedule.shift_start }}" step="300" required>
+
+        <label for="shift_end">Shift end</label>
+        <input id="shift_end" type="time" name="shift_end" value="{{ schedule.shift_end }}" step="300" required>
+
+        <label>Work days</label>
+        <div class="weekdays">
+          {% for i in range(7) %}
+            <label>
+              <input type="checkbox" name="weekday_{{ i }}" {% if i in schedule.work_weekdays %}checked{% endif %}>
+              {{ schedule.weekday_names[i] }}
+            </label>
+          {% endfor %}
+        </div>
+
+        <label>Breaks &amp; cleanup</label>
+        <div id="breaks-list">
+          {% for b in schedule.breaks %}
+            <div class="break-row">
+              <input type="time" name="break_start_{{ loop.index0 }}" value="{{ b.start }}" step="300" required>
+              <input type="time" name="break_end_{{ loop.index0 }}" value="{{ b.end }}" step="300" required>
+              <input type="text" name="break_name_{{ loop.index0 }}" value="{{ b.name }}" placeholder="name (e.g. Lunch, Cleanup)">
+              <button type="button" class="remove-btn" title="Remove">×</button>
+            </div>
+          {% endfor %}
+        </div>
+        <button type="button" class="add-break-btn" id="add-break">+ Add break</button>
+      </div>
+    </form>
+
     <form method="post" action="/settings/rounding" id="rounding-form">
-      <h3 style="margin-top:1rem">Rounding</h3>
+      <h3 style="margin-top:1.6rem">Rounding</h3>
       <p class="note">
         Note: Some jurisdictions may limit or prohibit rounding.
       </p>

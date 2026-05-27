@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-27
 
+### 9:31 AM
+
+- **Settings: Company Schedule folded into Timeclock too** — same move as the rounding regroup five minutes ago, now for the schedule form. Shift start/end, work days, breaks/cleanup all live inside the Timeclock section, between the "Open Kiosk Portal" buttons and the Rounding inputs. Sidebar no longer has a separate "Company Schedule" item. Autosave still works (the form keeps its `data-section="schedule"` attribute so it saves on every edit without a button). Save endpoint redirects to `?section=kiosk` for the no-JS fallback. Roster Filter and Integrations stay in the sidebar — they're used by other features too, not just the timeclock.
+
 ### 9:26 AM
 
 - **Settings: rounding now lives under Timeclock** — moved the four rounding window inputs (IN-before/after, OUT-before/after) into the existing Timeclock section on `/settings` instead of being its own top-level sidebar item. Same form, same `POST /settings/rounding`, same behavior — Save Rounding now bounces back to `?section=kiosk&saved=1` and the "Saved." flash appears next to the button. Cleaner sidebar; rounding is a Timeclock setting so it belongs there.

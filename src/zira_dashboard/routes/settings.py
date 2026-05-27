@@ -47,7 +47,7 @@ def settings_page(
     saved: int = Query(default=0),
     section: str = Query(default="work_centers"),
 ):
-    if section not in ("work_centers", "schedule", "integrations", "roster_filter", "tvs", "kiosk"):
+    if section not in ("work_centers", "integrations", "roster_filter", "tvs", "kiosk"):
         section = "work_centers"
     roster_filter_rows: list[dict] = []
     if section == "roster_filter":
@@ -277,7 +277,7 @@ async def settings_save_schedule(request: Request):
     ))
     if (request.headers.get("accept") or "").startswith("application/json"):
         return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1&section=schedule", status_code=303)
+    return RedirectResponse(url="/settings?saved=1&section=kiosk", status_code=303)
 
 
 @router.post("/settings/rounding")
