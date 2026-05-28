@@ -124,7 +124,13 @@
 
     if (hasBalancePanel) {
       if (!requiresAlloc) {
-        availEl.textContent = "Unpaid · no balance required";
+        // The type has `requires_allocation=no` in Odoo. That can mean
+        // either (a) genuinely unpaid (Custom Hours) or (b) paid but
+        // unlimited (e.g. "Paid Time Off" with no allocation cap). The
+        // panel doesn't know which without the work_entry_type, so use
+        // copy that's accurate in both cases. The user already sees the
+        // type name in the dropdown above.
+        availEl.textContent = "No allocation tracked";
       } else if (bal) {
         availEl.textContent = bal.available.toFixed(2) + " " + bal.unit +
           " (" + bal.pending.toFixed(2) + " pending)";
