@@ -56,8 +56,13 @@
 
   .k-main {
     flex: 1 1 auto;
+    min-height: 0;            /* lets flex child shrink past content size so overflow:auto actually engages */
     padding: 2rem;
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;   /* legacy iOS momentum scroll */
+    touch-action: pan-y;                 /* explicit: allow vertical swipe to scroll */
+    overscroll-behavior: contain;        /* don't bubble scroll to the locked body */
     display: flex; flex-direction: column;
   }
 

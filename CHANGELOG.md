@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-28
 
+### 9:15 AM
+
+- **Kiosk: name-pick screen + every other kiosk page now scrolls properly** — the classic flex+overflow bug. `.k-main` already had `overflow: auto` set, but because `body { display: flex; flex-direction: column }` was its parent and `.k-main` didn't have `min-height: 0`, the flex child's computed height grew to fit its content instead of being clamped to the available viewport — so the content overflowed the viewport without ever engaging the inner scroll. Fix is 5 lines in `kiosk_base.html`: `min-height: 0` (the actual fix); `overflow-y: auto` + `overflow-x: hidden` (more explicit than just `overflow: auto`); `-webkit-overflow-scrolling: touch` (legacy iOS momentum scroll); `touch-action: pan-y` (explicit vertical-swipe affordance on touch devices); `overscroll-behavior: contain` (don't bubble the scroll up to the locked body). Affects every kiosk page since they all extend `kiosk_base.html`: name-pick grid (`/kiosk`), pick-WC screen, dashboard, time-off landing/wizard/mine/calendar. No template changes needed elsewhere.
+
 ### 9:00 AM
 
 - **Kiosk dashboard polish — Time Off button label + employee name banner** — three small UX tweaks Dale requested after seeing the live kiosk: (1) "Time Off" button is now "Time Off Request" — clearer what tapping it does. (2) Added two icons to the left of the label: 🏖️ (beach umbrella, for "vacation") + 📅 (calendar), so people can scan-recognize the button without reading. Icons are 1.5rem (24px) and sit inside the existing button, no layout shift. (3) Employee name in the top banner went from 1.5rem to 2.25rem (50% bigger) so it's actually readable across a workshop floor — matches Dale's note that the name should anchor the screen visually. All three are pure template tweaks to `kiosk_dashboard.html`; no route or test changes.
