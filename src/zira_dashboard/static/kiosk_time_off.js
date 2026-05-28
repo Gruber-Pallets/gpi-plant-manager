@@ -56,10 +56,20 @@
   function recalc() {
     var hsid = typeSel.value;
     var bal = balances[hsid];
-    var selectedOpt = typeSel.options[typeSel.selectedIndex];
-    var requiresAlloc = selectedOpt
-      ? (selectedOpt.dataset.requiresAlloc === "yes")
-      : true;
+    // typeSel is a <select> for full_day, or a hidden <input> for the
+    // three partial-day shapes (which always use the unpaid Custom Hours
+    // type — no user picker). Read requires-alloc from the selected
+    // option on the SELECT path, or directly from the input's dataset
+    // on the hidden-input path. Hidden inputs don't expose `.options`.
+    var requiresAlloc;
+    if (typeSel.tagName === "SELECT") {
+      var selectedOpt = typeSel.options[typeSel.selectedIndex];
+      requiresAlloc = selectedOpt
+        ? (selectedOpt.dataset.requiresAlloc === "yes")
+        : true;
+    } else {
+      requiresAlloc = (typeSel.dataset.requiresAlloc === "yes");
+    }
 
     if (!requiresAlloc) {
       availEl.textContent = "Unpaid · no balance required";

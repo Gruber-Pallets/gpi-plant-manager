@@ -341,6 +341,12 @@ def request_details(request: Request, token: str, shape: str = "full_day"):
         for b in balances
     }
     shift_from, shift_to = _shift_window_for(p["odoo_id"])
+    # For partial-day shapes, the type is fixed (always the unpaid
+    # hour-unit type — typically "Custom Hours" in Odoo). The user
+    # doesn't pick; we send the first available hour-unit type id
+    # automatically. `types` is already filtered to hour-unit-only
+    # for those shapes by `_fetch_visible_leave_types`.
+    partial_day_type = types[0] if (shape != "full_day" and types) else None
     return templates.TemplateResponse(
         request,
         "kiosk_time_off_request_details.html",
@@ -349,6 +355,7 @@ def request_details(request: Request, token: str, shape: str = "full_day"):
             "token": fresh,
             "shape": shape,
             "leave_types": types,
+            "partial_day_type": partial_day_type,
             "balances_by_type": balances_by_type,
             "shift_from": shift_from,
             "shift_to": shift_to,
@@ -579,6 +586,10 @@ def request_submit(
             }
             for b in balances
         }
+        rerender_types = _fetch_visible_leave_types(shape)
+        rerender_partial = (
+            rerender_types[0] if (shape != "full_day" and rerender_types) else None
+        )
         return templates.TemplateResponse(
             request,
             "kiosk_time_off_request_details.html",
@@ -586,7 +597,8 @@ def request_submit(
                 "person": p,
                 "token": _mint_token(person_id),
                 "shape": shape,
-                "leave_types": _fetch_visible_leave_types(shape),
+                "leave_types": rerender_types,
+                "partial_day_type": rerender_partial,
                 "balances_by_type": balances_by_type,
                 "shift_from": shift_from,
                 "shift_to": shift_to,
@@ -882,6 +894,9 @@ def mine_edit(request: Request, token: str, rid: int):
         for b in balances
     }
     shift_from, shift_to = _shift_window_for(p["odoo_id"])
+    partial_day_type = (
+        types[0] if (row["shape"] != "full_day" and types) else None
+    )
 
     return templates.TemplateResponse(
         request,
@@ -891,6 +906,7 @@ def mine_edit(request: Request, token: str, rid: int):
             "token": fresh,
             "shape": row["shape"],
             "leave_types": types,
+            "partial_day_type": partial_day_type,
             "balances_by_type": balances_by_type,
             "shift_from": shift_from,
             "shift_to": shift_to,
@@ -994,6 +1010,9 @@ def mine_edit_submit(
             }
             for b in balances
         }
+        partial_day_type = (
+            types[0] if (shape != "full_day" and types) else None
+        )
         return templates.TemplateResponse(
             request,
             "kiosk_time_off_request_details.html",
@@ -1002,6 +1021,7 @@ def mine_edit_submit(
                 "token": _mint_token(person_id),
                 "shape": shape,
                 "leave_types": types,
+                "partial_day_type": partial_day_type,
                 "balances_by_type": balances_by_type,
                 "shift_from": shift_from,
                 "shift_to": shift_to,

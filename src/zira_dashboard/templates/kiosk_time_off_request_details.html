@@ -30,12 +30,17 @@
       <div class="k-error">{{ error }}</div>
     {% endif %}
 
-    {% if not leave_types %}
+    {% if shape == "full_day" and not leave_types %}
       <div class="k-warning">
-        No
-        {% if shape == "full_day" %}day-unit{% else %}hour-unit{% endif %}
-        leave types available yet. If you just turned on Time Off, the
-        background poller refreshes the type list every 10 minutes.
+        No day-unit leave types available yet. If you just turned on Time
+        Off, the background poller refreshes the type list every 10 minutes.
+      </div>
+    {% elif shape != "full_day" and not partial_day_type %}
+      <div class="k-warning">
+        No hour-unit (unpaid) leave type configured in Odoo. Set up a
+        leave type with Duration Type = Hours and "Requires allocation" =
+        No (e.g., "Custom Hours") so partial-day requests have somewhere
+        to land.
       </div>
     {% endif %}
 
@@ -47,25 +52,44 @@
                  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);">
       <input type="hidden" name="shape" value="{{ shape }}">
 
-      <label style="display: flex; flex-direction: column; gap: 0.4rem;">
-        <span style="font-size: 1.1rem; font-weight: 600; color: #475569;">
-          Type
-        </span>
-        <select name="holiday_status_id" id="holiday-status-select" required
-                style="padding: 0.85rem 1rem; font-size: 1.25rem;
-                       border: 1px solid #cbd5e1; border-radius: 0.5rem;
-                       background: #f8fafc; min-height: 56px;
-                       font-family: inherit;">
-          {% for t in leave_types %}
-            <option value="{{ t.id }}"
-                    data-unit="{{ t.request_unit }}"
-                    data-requires-alloc="{{ t.requires_allocation }}"
-                    {% if edit_mode and prefill and t.id == prefill.holiday_status_id %}selected{% endif %}>
-              {{ t.name }}
-            </option>
-          {% endfor %}
-        </select>
-      </label>
+      {% if shape == "full_day" %}
+        <label style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <span style="font-size: 1.1rem; font-weight: 600; color: #475569;">
+            Type
+          </span>
+          <select name="holiday_status_id" id="holiday-status-select" required
+                  style="padding: 0.85rem 1rem; font-size: 1.25rem;
+                         border: 1px solid #cbd5e1; border-radius: 0.5rem;
+                         background: #f8fafc; min-height: 56px;
+                         font-family: inherit;">
+            {% for t in leave_types %}
+              <option value="{{ t.id }}"
+                      data-unit="{{ t.request_unit }}"
+                      data-requires-alloc="{{ t.requires_allocation }}"
+                      {% if edit_mode and prefill and t.id == prefill.holiday_status_id %}selected{% endif %}>
+                {{ t.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+      {% else %}
+        {# Partial-day shapes always use the unpaid hour-unit type
+           ("Custom Hours" in Odoo). No user choice — auto-selected. #}
+        {% if partial_day_type %}
+          <input type="hidden" name="holiday_status_id"
+                 id="holiday-status-select"
+                 value="{{ partial_day_type.id }}"
+                 data-unit="{{ partial_day_type.request_unit }}"
+                 data-requires-alloc="{{ partial_day_type.requires_allocation }}">
+          <div style="background: #f1f5f9; border-radius: 0.5rem;
+                      padding: 0.75rem 1rem; font-size: 1rem;
+                      color: #475569;">
+            <span style="font-weight: 600;">Type:</span>
+            {{ partial_day_type.name }}
+            <span style="color: #64748b;">&middot; Unpaid</span>
+          </div>
+        {% endif %}
+      {% endif %}
 
       <div id="balance-panel"
            style="background: #f1f5f9; border-radius: 0.5rem;
@@ -197,7 +221,8 @@
       <button type="submit" id="submit-btn" class="k-btn success"
               style="width: 100%; font-size: 1.5rem; padding: 1.25rem;
                      min-height: 80px;"
-              {% if not leave_types %}disabled{% endif %}>
+              {% if shape == "full_day" and not leave_types %}disabled{% endif %}
+              {% if shape != "full_day" and not partial_day_type %}disabled{% endif %}>
         {% if edit_mode %}Save Changes{% else %}Submit Request{% endif %}
       </button>
     </form>
