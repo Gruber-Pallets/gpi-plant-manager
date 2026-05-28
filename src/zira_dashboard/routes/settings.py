@@ -150,13 +150,10 @@ def settings_page(
                 odoo_error = f"{type(e).__name__}: {e}"
                 odoo_error_class = type(e).__name__
                 leave_types = []
-        default_start, default_end = settings_store.get_default_shift_hours()
         time_off_settings = {
             "leave_types": leave_types,
             "hidden_ids": settings_store.get_hidden_leave_type_ids(),
             "show_stratustime_overlay": settings_store.get_show_stratustime_overlay(),
-            "default_shift_start": default_start,
-            "default_shift_end": default_end,
             "odoo_configured": _odoo_configured(),
             "odoo_error": odoo_error,
             "odoo_error_class": odoo_error_class,
@@ -541,25 +538,6 @@ async def time_off_set_overlay(request: Request,
     posts `enabled=on` when checked and omits the field entirely when
     unchecked, which Form(default='off') turns into off."""
     settings_store.set_show_stratustime_overlay(enabled == "on")
-    if _wants_json(request):
-        return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1&section=time_off",
-                            status_code=303)
-
-
-@router.post("/api/settings/time-off/default-shift")
-async def time_off_set_default_shift(
-    request: Request,
-    start: float = Form(...),
-    end: float = Form(...),
-):
-    """Default shift window in decimal hours used to seed late-arrival /
-    early-leave / midday-gap requests when the employee has no
-    resource calendar on Odoo. Clamps to a valid 0-24 range and
-    requires end > start; on validation failure, keeps the existing
-    values."""
-    if 0.0 <= start <= 24.0 and 0.0 <= end <= 24.0 and end > start:
-        settings_store.set_default_shift_hours(start, end)
     if _wants_json(request):
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1&section=time_off",

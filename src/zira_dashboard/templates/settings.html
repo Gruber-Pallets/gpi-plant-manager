@@ -589,34 +589,6 @@
       </div>
     </form>
 
-    <form method="post" action="/api/settings/time-off/default-shift"
-          data-section="time_off_shift" style="margin-top:1.6rem">
-      <h3 style="margin-top:0">Default shift window</h3>
-      <p class="note" style="color:var(--muted);font-size:0.85rem;margin:0 0 0.6rem 0">
-        Used as a fallback for late-arrival / early-leave / midday-gap
-        requests when the employee has no resource calendar configured
-        on Odoo. Decimal hours (e.g. <code>6.0</code> = 6 AM,
-        <code>14.5</code> = 2:30 PM).
-      </p>
-      <div style="display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;margin:0.4rem 0 0.8rem 0">
-        <label style="display:flex;align-items:center;gap:0.4rem">
-          Start
-          <input type="number" step="0.25" min="0" max="24" name="start"
-                 value="{% if time_off_settings %}{{ time_off_settings.default_shift_start }}{% else %}6.0{% endif %}"
-                 style="width:6rem">
-        </label>
-        <label style="display:flex;align-items:center;gap:0.4rem">
-          End
-          <input type="number" step="0.25" min="0" max="24" name="end"
-                 value="{% if time_off_settings %}{{ time_off_settings.default_shift_end }}{% else %}14.5{% endif %}"
-                 style="width:6rem">
-        </label>
-      </div>
-      <div style="display:flex;gap:0.6rem;align-items:center">
-        <button type="submit">Save default shift</button>
-      </div>
-    </form>
-
     <form method="post" action="/api/settings/time-off/refresh-now"
           style="margin-top:1.6rem">
       <h3 style="margin-top:0">Refresh from Odoo</h3>

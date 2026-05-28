@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-28
 
+### 11:15 AM
+
+- **Removed the redundant "Default shift window" panel from Settings -> Time Off** — the Company Schedule (Settings -> Timeclock -> Company Schedule) already stores shift_start / shift_end / work_weekdays / breaks for the whole plant; having a second, partially-overlapping shift window in the Time Off panel was just two places to keep in sync. `_shift_window_for(person_odoo_id)` in `routes/kiosk_time_off.py` now falls back to `schedule_store.current()` instead of `settings_store.get_default_shift_hours()` — same lookup the schedule-warning JS already uses for `work_weekdays`. Removed the form block from `templates/settings.html`, dropped the `/api/settings/time-off/default-shift` POST handler, and dropped the `default_shift_start` / `default_shift_end` from the panel's render context. `settings_store.get_default_shift_hours()` / `set_default_shift_hours()` themselves stay defined (still tested) — they're now dead code but cheap to keep around if a per-feature override is ever wanted again. All 16 route + settings tests still pass; if you change the Company Schedule's shift_start/shift_end, the partial-day request validation picks it up immediately.
+
 ### 11:00 AM
 
 - **Kiosk dashboard: content pinned to the top, no more vertical-center gap** — `.k-main` on `kiosk_dashboard.html` had `justify-content: center` which floated the status heading + buttons into the vertical middle of the viewport. On taller screens that left a big empty band between the name banner and the first thing you could tap. Switched to `justify-content: flex-start` + `padding-top: 2rem` so the action area sits right under the header, close to the thumb. Other kiosk pages (landing, mine, calendar) already used `flex-start`-style layouts so this brings the dashboard in line.

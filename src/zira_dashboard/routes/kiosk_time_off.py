@@ -307,20 +307,26 @@ def _shift_window_for(person_odoo_id: int) -> tuple[float, float]:
     """Return (hour_from, hour_to) for the employee's shift.
 
     Tries Odoo `resource.calendar` first (a per-employee shift); falls
-    back to the company-wide default in `app_settings`
-    (`time_off.default_shift_hours`). The three partial-day shapes
-    (late_arrival, early_leave, midday_gap) need these bounds to
-    validate the user's chosen time(s) and to drive the live-calc
-    request-size math in the JS."""
+    back to the global Company Schedule (Settings → Timeclock → Company
+    Schedule) which already stores shift_start / shift_end. The three
+    partial-day shapes (late_arrival, early_leave, midday_gap) need
+    these bounds to validate the user's chosen time(s) and to drive the
+    live-calc request-size math in the JS."""
     try:
         cal = odoo_client.fetch_resource_calendar(person_odoo_id)
-    except Exception:  # noqa: BLE001 — fall back to default rather than crash
+    except Exception:  # noqa: BLE001 — fall back to global schedule rather than crash
         cal = None
     if (cal
             and cal.get("hour_from") is not None
             and cal.get("hour_to") is not None):
         return (float(cal["hour_from"]), float(cal["hour_to"]))
-    return settings_store.get_default_shift_hours()
+    # Convert the global Company Schedule's datetime.time fields into
+    # decimal-hour floats (e.g. time(6, 0) → 6.0, time(14, 30) → 14.5).
+    sched = schedule_store.current()
+    return (
+        sched.shift_start.hour + sched.shift_start.minute / 60.0,
+        sched.shift_end.hour + sched.shift_end.minute / 60.0,
+    )
 
 
 @router.get("/kiosk/time-off/request/{token}/details",
