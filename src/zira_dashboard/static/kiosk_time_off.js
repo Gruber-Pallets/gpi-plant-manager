@@ -80,11 +80,33 @@
       availEl.textContent = "—";
     }
 
+    // Pick the unit to display. For full_day with an hour-unit type
+    // (e.g., "Unpaid Time Off"), the type's unit wins — we display
+    // hours, not days, even though the shape is full_day.
+    var typeUnit;
+    if (typeSel.tagName === "SELECT") {
+      var optForUnit = typeSel.options[typeSel.selectedIndex];
+      typeUnit = optForUnit ? optForUnit.dataset.unit : null;
+    } else {
+      typeUnit = typeSel.dataset.unit;
+    }
     var requestSize = 0;
-    var unit = bal ? bal.unit : (shape === "full_day" ? "days" : "hours");
+    var unit = bal
+      ? bal.unit
+      : (shape === "full_day"
+          ? (typeUnit === "hour" ? "hours" : "days")
+          : "hours");
     if (shape === "full_day") {
       if (dateFrom && dateTo && dateFrom.value && dateTo.value) {
-        requestSize = businessDaysBetween(dateFrom.value, dateTo.value);
+        var days = businessDaysBetween(dateFrom.value, dateTo.value);
+        // Hour-unit type used for full-day: convert days → hours
+        // (business days × shift hours) so the "This request" panel
+        // shows the same unit as the type's allocation.
+        if (typeUnit === "hour") {
+          requestSize = days * (shiftTo - shiftFrom);
+        } else {
+          requestSize = days;
+        }
       }
     } else {
       var a, b;

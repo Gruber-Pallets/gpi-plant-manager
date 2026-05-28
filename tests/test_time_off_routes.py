@@ -146,6 +146,11 @@ def test_submit_creates_row_and_queues_sync(monkeypatch):
                         lambda pid: {"id": 1, "name": "T", "odoo_id": 5})
     monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._shift_window_for",
                         lambda pid: (6.0, 14.5))
+    # Stub the type-unit lookup so the test doesn't hit Postgres. Returning
+    # "day" means the submit handler skips the full-shift-hour-bound
+    # injection (which only fires for hour-unit types used as full_day).
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._type_request_unit",
+                        lambda hsid: "day")
     inserted = {}
     def fake_insert(**kw):
         inserted.update(kw)
@@ -274,6 +279,9 @@ def test_edit_post_updates_row_and_queues_sync(monkeypatch):
                         })
     monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._shift_window_for",
                         lambda pid: (6.0, 14.5))
+    # Same type-unit lookup stub as the new-request submit test.
+    monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._type_request_unit",
+                        lambda hsid: "day")
     updates = []
     monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._update_request_row",
                         lambda **kw: updates.append(kw))

@@ -188,9 +188,13 @@ def _fetch_visible_leave_types(shape: str) -> list[dict]:
         if r["holiday_status_id"] in hidden:
             continue
         if shape == "full_day":
-            if r["request_unit"] not in ("day", "half_day"):
-                continue
+            # No unit filter: full-day shape works with day-unit,
+            # half-day-unit, and hour-unit types alike. Hour-unit types
+            # (e.g., "Unpaid Time Off") get submitted with full-shift
+            # hour bounds — see `_type_request_unit` + submit handlers.
+            pass
         else:
+            # Partial-day shapes only make sense against hour-unit types.
             if r["request_unit"] != "hour":
                 continue
         out.append({
@@ -200,6 +204,19 @@ def _fetch_visible_leave_types(shape: str) -> list[dict]:
             "requires_allocation": r["requires_allocation"],
         })
     return out
+
+
+def _type_request_unit(holiday_status_id: int) -> str | None:
+    """Return the ``request_unit`` ('day' | 'half_day' | 'hour') for a
+    given leave type, looked up from `leave_types_cache`. Returns None
+    if the type isn't in the cache (caller treats as day-unit fallback
+    so an unknown type doesn't accidentally inject hour bounds)."""
+    rows = db.query(
+        "SELECT request_unit FROM leave_types_cache "
+        "WHERE holiday_status_id = %s",
+        (holiday_status_id,),
+    )
+    return rows[0]["request_unit"] if rows else None
 
 
 def _fallback_fetch_and_cache_leave_types() -> list[dict]:
@@ -607,6 +624,13 @@ def request_submit(
             },
             status_code=422,
         )
+
+    # Full-day shape against an hour-unit type (e.g., "Unpaid Time Off")
+    # needs hour bounds covering the full shift each day, otherwise Odoo
+    # won't compute a duration. Day-unit types stay at None bounds.
+    if shape == "full_day" and _type_request_unit(holiday_status_id) == "hour":
+        hour_from = shift_from
+        hour_to = shift_to
 
     working_hours = _compute_working_hours_json(
         shape, hour_from, hour_to, shift_from, shift_to,
@@ -1032,6 +1056,12 @@ def mine_edit_submit(
             },
             status_code=422,
         )
+
+    # Same hour-bound injection as request_submit so edits to a
+    # full-day request against an hour-unit type stay consistent.
+    if shape == "full_day" and _type_request_unit(holiday_status_id) == "hour":
+        hour_from = shift_from
+        hour_to = shift_to
 
     working_hours = _compute_working_hours_json(
         shape, hour_from, hour_to, shift_from, shift_to,
