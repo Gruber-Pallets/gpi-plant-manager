@@ -528,10 +528,23 @@
         <strong>Odoo returned an error fetching leave types:</strong>
         <code style="background:transparent;color:inherit">{{ time_off_settings.odoo_error }}</code>
         <br>
-        Common cause: the API user lacks read permission on
-        <code>hr.leave.type</code>. In Odoo, give that user the
-        <em>Time Off → Officer</em> (or <em>User</em>) group, then click
-        Refresh from Odoo now below.
+        {% if time_off_settings.odoo_error_class == "OdooConfigError" %}
+          Missing or empty env var: check <code>ODOO_URL</code>,
+          <code>ODOO_DB</code>, <code>ODOO_LOGIN</code>,
+          <code>ODOO_API_KEY</code> in Railway.
+        {% elif time_off_settings.odoo_error_class == "OdooAuthError" %}
+          Verify <code>ODOO_API_KEY</code> in Railway matches a current,
+          non-revoked key in Odoo (Settings &rarr; Users &rarr; [your user]
+          &rarr; Account Security tab). Also verify <code>ODOO_LOGIN</code>
+          and <code>ODOO_DB</code> are correct.
+        {% elif time_off_settings.odoo_error_class == "Fault" %}
+          Odoo responded but rejected the call. Likely a permission issue
+          &mdash; give the API user the <em>Time Off &rarr; Officer</em>
+          (or <em>User</em>) group.
+        {% else %}
+          Unexpected error type. Check Railway logs for the full
+          traceback.
+        {% endif %}
       </p>
     {% endif %}
 

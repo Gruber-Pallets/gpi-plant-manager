@@ -132,18 +132,23 @@ def settings_page(
         # fresh box) AND Odoo is wired up, hit Odoo directly so the
         # panel isn't blank on first load.
         odoo_error: str | None = None
+        odoo_error_class: str | None = None
         if not leave_types and _odoo_configured():
             try:
                 leave_types = odoo_client.fetch_leave_types()
             except Exception as e:  # noqa: BLE001
                 # Surface the error to the template so the user can
-                # see *why* the panel is empty (e.g., XML-RPC auth
-                # failure, missing read perm on hr.leave.type).
+                # see *why* the panel is empty. We capture the exception
+                # class name so the template can pick a class-specific
+                # hint (config vs auth vs permission vs unknown) instead
+                # of the old one-size-fits-all "lacks hr.leave.type read
+                # permission" hint, which is misleading for auth failures.
                 _settings_log.warning(
                     "Settings: Odoo fetch_leave_types failed: %s",
                     e, exc_info=True,
                 )
                 odoo_error = f"{type(e).__name__}: {e}"
+                odoo_error_class = type(e).__name__
                 leave_types = []
         default_start, default_end = settings_store.get_default_shift_hours()
         time_off_settings = {
@@ -154,6 +159,7 @@ def settings_page(
             "default_shift_end": default_end,
             "odoo_configured": _odoo_configured(),
             "odoo_error": odoo_error,
+            "odoo_error_class": odoo_error_class,
         }
     tv_displays_rows: list[dict] = []
     all_dashboards_for_picker: list[dict] = []
