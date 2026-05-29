@@ -34,6 +34,7 @@
   var timeA = document.getElementById("time-a");
   var timeB = document.getElementById("time-b");
   var availEl = document.getElementById("balance-available");
+  var pendingEl = document.getElementById("balance-pending");
   var sizeEl = document.getElementById("request-size");
   var remainEl = document.getElementById("balance-remaining");
   var submitBtn = document.getElementById("submit-btn");
@@ -48,6 +49,13 @@
     if (!s) return null;
     var parts = s.split(":");
     return parseInt(parts[0], 10) + parseInt(parts[1] || "0", 10) / 60.0;
+  }
+
+  // Format a day/hour count: drop a trailing ".00" so whole numbers read as
+  // integers (15 days, not 15.00 days), but keep real fractions like an
+  // accrued 4.17 or a half day 4.5.
+  function fmt(n) {
+    return (Math.round(n * 100) / 100).toFixed(2).replace(/\.?0+$/, "");
   }
 
   function businessDaysBetween(a, b) {
@@ -131,11 +139,13 @@
         // copy that's accurate in both cases. The user already sees the
         // type name in the dropdown above.
         availEl.textContent = "No allocation tracked";
+        if (pendingEl) pendingEl.textContent = "";
       } else if (bal) {
-        availEl.textContent = bal.available.toFixed(2) + " " + bal.unit +
-          " (" + bal.pending.toFixed(2) + " pending)";
+        availEl.textContent = fmt(bal.available) + " " + bal.unit;
+        if (pendingEl) pendingEl.textContent = fmt(bal.pending) + " pending";
       } else {
         availEl.textContent = "—";
+        if (pendingEl) pendingEl.textContent = "";
       }
     }
 
@@ -185,7 +195,7 @@
     }
     if (hasBalancePanel) {
       sizeEl.textContent = requestSize > 0
-        ? requestSize.toFixed(2) + " " + unit
+        ? fmt(requestSize) + " " + unit
         : "—";
 
       if (!requiresAlloc) {
@@ -193,7 +203,7 @@
         submitBtn.disabled = false;
       } else if (bal) {
         var remaining = bal.available_practical - requestSize;
-        remainEl.textContent = remaining.toFixed(2) + " " + bal.unit;
+        remainEl.textContent = fmt(remaining) + " " + bal.unit;
         submitBtn.disabled = (requestSize > bal.available_practical);
       } else {
         remainEl.textContent = "—";
