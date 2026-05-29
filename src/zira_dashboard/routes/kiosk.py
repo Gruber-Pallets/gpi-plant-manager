@@ -75,6 +75,35 @@ def _time_off_enabled() -> bool:
     return os.environ.get("KIOSK_TIME_OFF_ENABLED", "").strip() == "1"
 
 
+def _is_time_off_only(p: dict | None) -> bool:
+    """True for fixed-wage (salaried) staff, who use the kiosk only to
+    request time off — they never clock in/out. Odoo's hr.employee
+    wage_type 'monthly' is "Fixed Wage" (vs 'hourly'); anyone not
+    explicitly 'monthly' (hourly, or wage type unset) keeps the normal
+    punch flow, so a mis-tagged hourly worker is never locked out of
+    clocking in.
+
+    Gated on the Time Off feature being live — with it dark there's no
+    screen to divert them to, so they fall back to the punch dashboard.
+    """
+    return _time_off_enabled() and bool(p) and p.get("wage_type") == "monthly"
+
+
+def _time_off_redirect_if_salaried(
+    p: dict | None, person_id: int
+) -> RedirectResponse | None:
+    """Redirect salaried staff into the time-off flow (with a fresh
+    token), or None for hourly staff so the caller proceeds normally.
+    Applied on every punch screen/action so fixed-wage employees can't
+    reach clock-in/out by any path (start, dashboard, Back link, or a
+    stale form POST)."""
+    if _is_time_off_only(p):
+        return RedirectResponse(
+            url=f"/kiosk/time-off/{_mint_token(person_id)}", status_code=303
+        )
+    return None
+
+
 def _mint_token(person_id: int) -> str:
     issued = int(time.time())
     payload = f"{person_id}:{issued}"
@@ -107,7 +136,8 @@ def _verify_token(token: str) -> int | None:
 
 def _person_by_id(person_id: int) -> dict | None:
     rows = db.query(
-        "SELECT id, name, odoo_id FROM people WHERE id = %s AND active = TRUE",
+        "SELECT id, name, odoo_id, wage_type FROM people "
+        "WHERE id = %s AND active = TRUE",
         (person_id,),
     )
     return rows[0] if rows else None
@@ -296,7 +326,7 @@ def kiosk_home(request: Request):
     name navigates to the PIN screen."""
     rows = db.query(
         "SELECT id, name FROM people "
-        "WHERE active = TRUE AND NOT excluded AND wage_type = 'hourly' "
+        "WHERE active = TRUE AND NOT excluded "
         "ORDER BY lower(name)"
     )
     return templates.TemplateResponse(
@@ -312,6 +342,9 @@ def kiosk_start(person_id: int):
     p = _person_by_id(person_id)
     if not p:
         return RedirectResponse(url="/kiosk", status_code=303)
+    salaried = _time_off_redirect_if_salaried(p, person_id)
+    if salaried:
+        return salaried
     token = _mint_token(person_id)
     return RedirectResponse(
         url=f"/kiosk/dashboard/{token}", status_code=303
@@ -326,6 +359,11 @@ def kiosk_dashboard(request: Request, token: str):
     p = _person_by_id(person_id)
     if not p:
         return RedirectResponse(url="/kiosk", status_code=303)
+    # Fixed-wage staff have no punch screen — bounce to the time-off flow.
+    # Covers the time-off landing's "Back" link, which points here.
+    salaried = _time_off_redirect_if_salaried(p, person_id)
+    if salaried:
+        return salaried
 
     # Local-DB read — no Odoo XML-RPC on the hot path. See _current_state.
     state = _current_state(p["odoo_id"]) if p.get("odoo_id") else _current_state(-1)
@@ -378,6 +416,9 @@ def kiosk_pick_wc(
     p = _person_by_id(person_id)
     if not p:
         return RedirectResponse(url="/kiosk", status_code=303)
+    salaried = _time_off_redirect_if_salaried(p, person_id)
+    if salaried:
+        return salaried
     if purpose not in {"clock_in", "transfer"}:
         purpose = "transfer"
     fresh_token = _mint_token(person_id)
@@ -408,6 +449,9 @@ def kiosk_clock_in(
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/kiosk", status_code=303)
+    salaried = _time_off_redirect_if_salaried(p, person_id)
+    if salaried:
+        return salaried
     odoo_id = p["odoo_id"]
     log_id, rounded_at = _open_log_row(odoo_id, "clock_in", wc_name)
     # Odoo write runs after the response is sent. FastAPI runs sync `def`
@@ -440,6 +484,9 @@ def kiosk_clock_out(
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/kiosk", status_code=303)
+    salaried = _time_off_redirect_if_salaried(p, person_id)
+    if salaried:
+        return salaried
     odoo_id = p["odoo_id"]
     log_id, rounded_at = _open_log_row(odoo_id, "clock_out", None)
     background_tasks.add_task(kiosk_sync.sync_one_by_id, log_id)
@@ -467,6 +514,9 @@ def kiosk_transfer(
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/kiosk", status_code=303)
+    salaried = _time_off_redirect_if_salaried(p, person_id)
+    if salaried:
+        return salaried
     odoo_id = p["odoo_id"]
     out_log, _ = _open_log_row(odoo_id, "transfer_out", None)
     in_log, in_rounded = _open_log_row(odoo_id, "transfer_in", new_wc_name)

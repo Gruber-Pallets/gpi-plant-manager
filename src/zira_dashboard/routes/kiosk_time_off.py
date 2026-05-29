@@ -49,7 +49,12 @@ from .. import (
     time_off_sync,
 )
 from ..deps import templates
-from .kiosk import _mint_token, _person_by_id, _verify_token
+from .kiosk import (
+    _is_time_off_only,
+    _mint_token,
+    _person_by_id,
+    _verify_token,
+)
 
 router = APIRouter()
 
@@ -132,6 +137,9 @@ def time_off_landing(request: Request, token: str):
             "pending_count": _pending_count(odoo_id),
             "all_count": _all_count(odoo_id),
             "sync_warning": _sync_error_warning(odoo_id),
+            # Salaried staff land here directly (no punch dashboard), so
+            # their "Back" should exit to the home roster, not /dashboard.
+            "time_off_only": _is_time_off_only(p),
         },
     )
 

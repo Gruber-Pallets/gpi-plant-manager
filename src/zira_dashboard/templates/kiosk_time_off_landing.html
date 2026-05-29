@@ -2,7 +2,11 @@
 {% block title %}Time Off — {{ person.name }}{% endblock %}
 {% block content %}
 <div class="k-header">
+  {% if time_off_only %}
+  <a href="/kiosk" class="k-back">‹ Done</a>
+  {% else %}
   <a href="/kiosk/dashboard/{{ token }}" class="k-back">‹ Back</a>
+  {% endif %}
   <span>Time Off — {{ person.name }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
