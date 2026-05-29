@@ -62,33 +62,14 @@ def _live_or_fallback(day, *, read, refresh, fallback, transform):
     return transform(payload)
 
 
-def _timeoff_entries_with_fallback(day):
-    """Return today's full time-off entries list via the live cache.
-
-    Only used for today — historical days bypass this and hit StratusTime
-    directly via _safe_time_off_entries below.
-    """
-    from .. import live_cache, stratustime_client
-    return _live_or_fallback(
-        day,
-        read=live_cache.read_timeoff,
-        refresh=live_cache.refresh_timeoff,
-        fallback=lambda: stratustime_client.time_off_entries_for_day(day),
-        transform=list,
-    )
-
-
 def _safe_time_off_entries(d):
-    """Wrap stratustime_client.time_off_entries_for_day so a StratusTime
-    outage never breaks /staffing rendering. For today, reads from the
-    live cache (45 s warmer tick) instead of blocking on StratusTime.
-    """
+    """Time-off entries for the scheduler, sourced from the Odoo-backed
+    time_off_requests mirror (approved + pending). Never raises — a query
+    failure degrades to an empty panel rather than a 500."""
+    from .. import scheduler_time_off
     try:
-        today_utc = datetime.now(timezone.utc).date()
-        if d == today_utc:
-            return _timeoff_entries_with_fallback(d)
-        return stratustime_client.time_off_entries_for_day(d)
-    except Exception:
+        return scheduler_time_off.time_off_entries_for_day(d)
+    except Exception:  # noqa: BLE001 — empty panel beats a broken scheduler
         return []
 
 
@@ -112,15 +93,20 @@ def _attendance_with_fallback(day, emp_ids):
 
 
 def _timeoff_names_with_fallback(day):
-    """Return set of names off today (via the cached time-off entries)."""
-    from .. import live_cache, stratustime_client
-    return _live_or_fallback(
-        day,
-        read=live_cache.read_timeoff,
-        refresh=live_cache.refresh_timeoff,
-        fallback=lambda: set(stratustime_client.time_off_names_for_day(day)),
-        transform=lambda entries: {e.get("name") for e in entries if e.get("name")},
-    )
+    """Set of names off on ``day`` (full-day OR partial), from the Odoo-backed
+    time_off_requests mirror. Used by _safe_attendance to excuse these people
+    from the late/absence report — a partial (e.g. an approved late arrival)
+    must still count as excused, so this returns ALL off names, not just the
+    full-day ones the scheduler pool excludes."""
+    from .. import scheduler_time_off
+    try:
+        return {
+            e["name"]
+            for e in scheduler_time_off.time_off_entries_for_day(day)
+            if e.get("name")
+        }
+    except Exception:  # noqa: BLE001 — degrade to "nobody excused" rather than 500
+        return set()
 
 
 def _safe_attendance(d, sched, today):
@@ -339,7 +325,11 @@ def staffing_page(
     late_names_set = {id_to_name[e] for e in late_emp_ids if e in id_to_name}
 
     time_off_names = [e["name"] for e in time_off_entries]
-    time_off_set = set(time_off_names)
+    # Roster-availability exclusion uses FULL-DAY absences only — partial-day
+    # people stay in the assignable pool (badged) so they can be scheduled
+    # around their partial. Full-day entries have hours=None; partials carry a
+    # numeric off-span (see scheduler_time_off).
+    time_off_set = {e["name"] for e in time_off_entries if e.get("hours") is None}
 
     active_people = [p for p in roster if p.active]
     all_by_name = {p.name: p for p in roster}
