@@ -32,6 +32,10 @@ _base_url = os.environ.get("ZIRA_BASE_URL", "https://api.zira.us/public/")
 client = ZiraClient(api_key=_api_key, base_url=_base_url)
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# Kiosk bilingual helper: templates call {{ t("...") }}; renders English-only
+# unless the render context sets bilingual=True. See kiosk_i18n.
+from . import kiosk_i18n  # noqa: E402
+templates.env.globals["t"] = kiosk_i18n.t
 
 RUNNING_STALENESS = timedelta(minutes=10)
 
