@@ -36,6 +36,30 @@ def test_fetch_leave_types_returns_active_types(monkeypatch):
     assert types[1]["request_unit"] == "hour"
 
 
+def test_fetch_leave_types_normalizes_boolean_requires_allocation(monkeypatch):
+    """Odoo 19+ returns hr.leave.type.requires_allocation as a BOOLEAN
+    instead of the 'yes'/'no' Selection that <=18 used. fetch_leave_types
+    must normalize it to the 'yes'/'no' strings the cache CHECK column and
+    the kiosk's `data-requires-alloc === "yes"` comparison depend on —
+    otherwise a fully-configured PTO type shows "No allocation tracked"."""
+    odoo_client._leave_types_cache = None  # reset
+    responses = {
+        ("hr.leave.type", "search_read"): [
+            {"id": 1, "name": "Paid Time Off", "request_unit": "day",
+             "requires_allocation": True, "color": 2, "active": True},
+            {"id": 2, "name": "Unpaid Time Off", "request_unit": "hour",
+             "requires_allocation": False, "color": 5, "active": True},
+        ],
+    }
+    _stub_execute(monkeypatch, responses)
+    types = odoo_client.fetch_leave_types()
+    by_name = {t["name"]: t for t in types}
+    assert by_name["Paid Time Off"]["requires_allocation"] == "yes"
+    assert by_name["Unpaid Time Off"]["requires_allocation"] == "no"
+    # All values must be the canonical strings, never raw booleans.
+    assert all(t["requires_allocation"] in ("yes", "no") for t in types)
+
+
 def test_fetch_leave_types_uses_cache_within_ttl(monkeypatch):
     odoo_client._leave_types_cache = None
     responses = {

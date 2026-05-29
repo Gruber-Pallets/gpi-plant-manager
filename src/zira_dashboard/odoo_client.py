@@ -404,10 +404,32 @@ _LEAVE_TYPES_TTL_SECONDS = 10 * 60
 _leave_types_cache: tuple[list[dict], float] | None = None
 
 
+def _norm_requires_allocation(value) -> str:
+    """Canonicalize hr.leave.type.requires_allocation to 'yes' / 'no'.
+
+    Odoo <=18 exposes this as a Selection ('yes'/'no'); Odoo 19+ changed it
+    to a Boolean, so XML-RPC returns a Python bool. The rest of the app —
+    the leave_types_cache TEXT/CHECK('yes','no') column and the kiosk's
+    `data-requires-alloc` attribute compared against the literal "yes" —
+    assumes the string form. Normalizing here, at the Odoo boundary, keeps
+    every downstream consumer working regardless of Odoo version.
+
+    A raw boolean True both fails the cache CHECK *and* renders into the
+    kiosk option as "True" (!= "yes"), which is what made a fully-configured
+    Paid Time Off type show "No allocation tracked".
+    """
+    if isinstance(value, str):
+        return "yes" if value.strip().lower() in ("yes", "true", "1") else "no"
+    return "yes" if value else "no"
+
+
 def fetch_leave_types() -> list[dict]:
     """All active hr.leave.type, cached in-process for 10 minutes.
 
-    Returns [{id, name, request_unit, requires_allocation, color, active}, ...].
+    Returns [{id, name, request_unit, requires_allocation, color, active}, ...]
+    with ``requires_allocation`` normalized to the 'yes'/'no' strings the rest
+    of the app expects (Odoo 19+ returns it as a boolean — see
+    ``_norm_requires_allocation``).
     """
     global _leave_types_cache
     now = time.time()
@@ -419,6 +441,9 @@ def fetch_leave_types() -> list[dict]:
         fields=["id", "name", "request_unit",
                 "requires_allocation", "color", "active"],
     )
+    for r in rows:
+        r["requires_allocation"] = _norm_requires_allocation(
+            r.get("requires_allocation"))
     _leave_types_cache = (rows, now + _LEAVE_TYPES_TTL_SECONDS)
     return rows
 
