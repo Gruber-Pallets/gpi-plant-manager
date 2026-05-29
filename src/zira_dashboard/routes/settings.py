@@ -569,3 +569,104 @@ def time_off_refresh_now(request: Request):
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1&section=time_off",
                             status_code=303)
+
+
+@router.get("/api/settings/time-off/diagnostics")
+def time_off_diagnostics(request: Request):
+    """Read-only diagnostic for the kiosk balance panel.
+
+    Compares the local ``leave_types_cache`` against a *live* Odoo pull so
+    we can see exactly which ``requires_allocation`` / ``request_unit`` the
+    app holds vs. what Odoo reports. Built to diagnose the kiosk showing
+    "No allocation tracked" while Odoo itself has correct balances — the
+    smoking gun is a cached ``requires_allocation='no'`` for a type that is
+    ``'yes'`` in Odoo, plus any row that would fail the cache CHECK
+    constraint (which is what aborts the poller's refresh).
+
+    No writes except busting the in-process leave-types cache so the live
+    pull is genuinely live.
+    """
+    from .. import db, odoo_client
+
+    allowed_units = {"day", "half_day", "hour"}
+    allowed_req = {"yes", "no"}
+
+    cache_rows = db.query(
+        "SELECT holiday_status_id, name, request_unit, requires_allocation, "
+        "active, last_pulled_at FROM leave_types_cache ORDER BY name"
+    )
+    cache = [
+        {
+            "id": r["holiday_status_id"],
+            "name": r["name"],
+            "request_unit": r["request_unit"],
+            "requires_allocation": r["requires_allocation"],
+            "active": r["active"],
+            "last_pulled_at": str(r["last_pulled_at"]),
+        }
+        for r in cache_rows
+    ]
+
+    live = None
+    live_error = None
+    would_fail_check = []
+    if _odoo_configured():
+        try:
+            odoo_client._leave_types_cache = None  # force a real Odoo round-trip
+            raw = odoo_client.fetch_leave_types()
+            live = []
+            for t in raw:
+                live.append({
+                    "id": t.get("id"),
+                    "name": t.get("name"),
+                    "request_unit": t.get("request_unit"),
+                    "requires_allocation": t.get("requires_allocation"),
+                    "active": t.get("active"),
+                    "color": t.get("color"),
+                })
+                reasons = []
+                if t.get("request_unit") not in allowed_units:
+                    reasons.append(
+                        f"request_unit={t.get('request_unit')!r} not in "
+                        f"{sorted(allowed_units)}")
+                if t.get("requires_allocation") not in allowed_req:
+                    reasons.append(
+                        f"requires_allocation={t.get('requires_allocation')!r} "
+                        f"not in {sorted(allowed_req)}")
+                color = t.get("color")
+                if isinstance(color, bool) or not isinstance(color, (int, type(None))):
+                    reasons.append(f"color={color!r} not int/None")
+                if reasons:
+                    would_fail_check.append(
+                        {"id": t.get("id"), "name": t.get("name"),
+                         "reasons": reasons})
+        except Exception as e:  # noqa: BLE001
+            live_error = repr(e)
+    else:
+        live_error = "Odoo env not configured on this host"
+
+    mismatches = []
+    if live is not None:
+        cache_by_id = {c["id"]: c for c in cache}
+        for lt in live:
+            ct = cache_by_id.get(lt["id"])
+            if ct is None:
+                mismatches.append(
+                    {"id": lt["id"], "name": lt["name"],
+                     "issue": "present in Odoo, missing from local cache"})
+                continue
+            for f in ("requires_allocation", "request_unit", "active"):
+                if str(ct.get(f)) != str(lt.get(f)):
+                    mismatches.append(
+                        {"id": lt["id"], "name": lt["name"], "field": f,
+                         "cache": ct.get(f), "odoo": lt.get(f)})
+
+    return JSONResponse({
+        "ok": True,
+        "odoo_configured": _odoo_configured(),
+        "cache": cache,
+        "live": live,
+        "live_error": live_error,
+        "rows_that_would_fail_cache_check": would_fail_check,
+        "cache_vs_odoo_mismatches": mismatches,
+    })

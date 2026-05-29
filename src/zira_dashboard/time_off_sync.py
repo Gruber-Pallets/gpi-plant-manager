@@ -231,7 +231,24 @@ def poll_odoo_leaves() -> int:
     # Refresh leave-types cache first so the kiosk picker stays current.
     try:
         types = odoo_client.fetch_leave_types()
-        for t in types:
+    except Exception as e:  # noqa: BLE001
+        # Bumped from info -> warning + exc_info so the Railway logs
+        # actually show *why* the leave-types pull failed (e.g. the
+        # Odoo API user lacks read perm on hr.leave.type). Without the
+        # traceback, the Settings panel "no leave types" message had
+        # no breadcrumb back to the root cause.
+        _log.warning(
+            "leave_types fetch for cache refresh failed: %s", e, exc_info=True,
+        )
+        types = []
+    # Per-row upsert with per-row error isolation. A single bad row (e.g. a
+    # type whose request_unit isn't in the cache CHECK set) must NOT abort
+    # the whole refresh — that would silently freeze every *other* type's
+    # cached attributes (this is exactly how a stale `requires_allocation`
+    # left the kiosk showing "No allocation tracked" while Odoo was correct).
+    # Mirrors the per-row tolerance in `_fallback_fetch_and_cache_leave_types`.
+    for t in types:
+        try:
             db.execute(
                 "INSERT INTO leave_types_cache "
                 "(holiday_status_id, name, request_unit, requires_allocation, "
@@ -245,15 +262,14 @@ def poll_odoo_leaves() -> int:
                 (t["id"], t["name"], t["request_unit"],
                  t["requires_allocation"], t.get("color"), t.get("active", True)),
             )
-    except Exception as e:  # noqa: BLE001
-        # Bumped from info -> warning + exc_info so the Railway logs
-        # actually show *why* the leave-types pull failed (e.g. the
-        # Odoo API user lacks read perm on hr.leave.type). Without the
-        # traceback, the Settings panel "no leave types" message had
-        # no breadcrumb back to the root cause.
-        _log.warning(
-            "leave_types_cache refresh failed: %s", e, exc_info=True,
-        )
+        except Exception as e:  # noqa: BLE001
+            _log.warning(
+                "leave_types_cache upsert failed for type id=%s name=%r "
+                "(request_unit=%r requires_allocation=%r color=%r): %s",
+                t.get("id"), t.get("name"), t.get("request_unit"),
+                t.get("requires_allocation"), t.get("color"), e,
+                exc_info=True,
+            )
 
     today = date.today()
     start_d = today - timedelta(days=_POLL_PAST_DAYS)
