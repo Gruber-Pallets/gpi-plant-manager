@@ -3,11 +3,11 @@
 {% block content %}
 <div class="k-header">
   {% if time_off_only %}
-  <a href="/kiosk" class="k-back">‹ Done</a>
+  <a href="/kiosk" class="k-back">{{ t("‹ Done") }}</a>
   {% else %}
-  <a href="/kiosk/dashboard/{{ token }}" class="k-back">‹ Back</a>
+  <a href="/kiosk/dashboard/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
   {% endif %}
-  <span>Time Off — {{ person.name }}</span>
+  <span>{{ t("Time Off — {name}", name=person.name) }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
 <div class="k-main" style="align-items: center;">
@@ -26,7 +26,7 @@
   {# ===== Top — Request Time Off (shape picker) ===== #}
   <div style="width: 100%; max-width: 960px; margin-top: 1rem;">
     <h2 style="font-size: 1.5rem; font-weight: 700; color: #0f172a;
-               margin: 0 0 1rem 0;">Request Time Off</h2>
+               margin: 0 0 1rem 0;">{{ t("Request Time Off") }}</h2>
 
     <div style="
       display: grid;
@@ -43,9 +43,9 @@
                 display: flex; flex-direction: column; align-items: center;
                 justify-content: center; gap: 0.6rem; line-height: 1.2;
                 text-align: center;">
-        <span style="font-size: 1.6rem;">Full Day(s) Off</span>
+        <span style="font-size: 1.6rem;">{{ t("Full Day(s) Off") }}</span>
         <span style="font-size: 1rem; font-weight: 400; opacity: 0.9;">
-          Out for one or more whole days
+          {{ t("Out for one or more whole days") }}
         </span>
       </a>
 
@@ -58,9 +58,9 @@
                 display: flex; flex-direction: column; align-items: center;
                 justify-content: center; gap: 0.6rem; line-height: 1.2;
                 text-align: center;">
-        <span style="font-size: 1.6rem;">Arriving Late</span>
+        <span style="font-size: 1.6rem;">{{ t("Arriving Late") }}</span>
         <span style="font-size: 1rem; font-weight: 400; color: #64748b;">
-          Tell us what time you'll arrive
+          {{ t("Tell us what time you'll arrive") }}
         </span>
       </a>
 
@@ -71,9 +71,9 @@
                 display: flex; flex-direction: column; align-items: center;
                 justify-content: center; gap: 0.6rem; line-height: 1.2;
                 text-align: center;">
-        <span style="font-size: 1.6rem;">Out for Part of the Day</span>
+        <span style="font-size: 1.6rem;">{{ t("Out for Part of the Day") }}</span>
         <span style="font-size: 1rem; font-weight: 400; color: #64748b;">
-          Leave + return on the same day
+          {{ t("Leave + return on the same day") }}
         </span>
       </a>
 
@@ -84,9 +84,9 @@
                 display: flex; flex-direction: column; align-items: center;
                 justify-content: center; gap: 0.6rem; line-height: 1.2;
                 text-align: center;">
-        <span style="font-size: 1.6rem;">Leaving Early</span>
+        <span style="font-size: 1.6rem;">{{ t("Leaving Early") }}</span>
         <span style="font-size: 1rem; font-weight: 400; color: #64748b;">
-          Tell us what time you'll leave
+          {{ t("Tell us what time you'll leave") }}
         </span>
       </a>
     </div>
@@ -111,7 +111,7 @@
               display: flex; flex-direction: column; align-items: center;
               justify-content: center; gap: 0.5rem; line-height: 1.2;
               position: relative;">
-      <span>My Requests</span>
+      <span>{{ t("My Requests") }}</span>
       {% if all_count > 0 %}
         <span style="background: #ea580c; color: white;
                      border-radius: 999px;
@@ -129,7 +129,7 @@
               padding: 2rem 1.5rem; min-height: 140px; min-width: unset;
               display: flex; flex-direction: column; align-items: center;
               justify-content: center; gap: 0.5rem; line-height: 1.2;">
-      <span>Who's Out</span>
+      <span>{{ t("Who's Out") }}</span>
     </a>
   </div>
 </div>
