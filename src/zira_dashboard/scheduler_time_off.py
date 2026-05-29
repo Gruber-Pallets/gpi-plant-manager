@@ -47,8 +47,25 @@ def _rows_for_day(day: _date) -> list[dict]:
     )
 
 
+def _cleared_partial_names(day: _date) -> set[str]:
+    """Names whose partial for ``day`` a supervisor has 'cleared' (marked as
+    actually worked). Shared name+day store with the StratusTime path's undo
+    (``cleared_partials_by_name``). Never raises — a store hiccup just means
+    nothing is filtered."""
+    from . import late_report
+    try:
+        return late_report.cleared_partial_names_for_day(day)
+    except Exception:  # noqa: BLE001 — degrade to "nothing cleared"
+        return set()
+
+
 def time_off_entries_for_day(day: _date) -> list[dict]:
-    """List of scheduler time-off entries for ``day`` (approved + pending)."""
+    """List of scheduler time-off entries for ``day`` (approved + pending).
+
+    Partial entries a supervisor has cleared for the day (× "they actually
+    worked through it") are dropped — same name-based clear the StratusTime
+    path used. Full-day absences are never affected by a partial clear.
+    """
     out: list[dict] = []
     for r in _rows_for_day(day):
         is_full = r["shape"] == "full_day"
@@ -69,6 +86,12 @@ def time_off_entries_for_day(day: _date) -> list[dict]:
             "manual_absent": False,
             "pending": r["state"] != _APPROVED,
         })
+    cleared = _cleared_partial_names(day)
+    if cleared:
+        out = [
+            e for e in out
+            if not (0 < (e["hours"] or 0) < 8 and e["name"] in cleared)
+        ]
     return out
 
 

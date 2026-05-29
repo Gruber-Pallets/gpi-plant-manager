@@ -64,3 +64,26 @@ def test_entries_have_keys_the_template_reads(monkeypatch):
         assert key in e
     assert e["hours"] == 2.0
     assert e["time_range"] == "10:00am–12:00pm"
+
+
+def test_cleared_partial_is_filtered_out(monkeypatch):
+    """A partial a supervisor cleared for the day (× 'actually worked') is
+    dropped; a non-cleared partial stays; a full-day absence is never affected
+    by a partial clear even if the name happens to be in the cleared set."""
+    _fake_db(monkeypatch, [
+        {"name": "Cleared P", "shape": "late_arrival", "hour_from": 6.0,
+         "hour_to": 9.0, "state": "validate", "pay_type": "PTO"},
+        {"name": "Kept P", "shape": "early_leave", "hour_from": 12.0,
+         "hour_to": 14.5, "state": "validate", "pay_type": "PTO"},
+        {"name": "Full P", "shape": "full_day", "hour_from": None,
+         "hour_to": None, "state": "validate", "pay_type": "PTO"},
+    ])
+    import zira_dashboard.late_report as lr
+    monkeypatch.setattr(
+        lr, "cleared_partial_names_for_day",
+        lambda day: {"Cleared P", "Full P"},
+    )
+    names = [e["name"] for e in sto.time_off_entries_for_day(date(2026, 6, 1))]
+    assert "Cleared P" not in names   # partial + cleared -> dropped
+    assert "Kept P" in names          # partial, not cleared -> kept
+    assert "Full P" in names          # full-day -> unaffected by partial clear
