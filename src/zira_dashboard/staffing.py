@@ -140,11 +140,14 @@ def _default_assignments_from_plant_scheduler() -> dict[str, list[str]]:
 
 # ---------- roster ----------
 
-# In-process cache. Roster doesn't change between Odoo syncs, so a 60 s
-# TTL is plenty fresh and saves a JOIN-heavy query on every page render.
+# In-process cache. The roster only changes on save_roster() and Odoo sync,
+# both of which call _invalidate_roster_cache() — so a short TTL buys no
+# freshness, it just forces cold JOIN-heavy reloads on long-tail pages
+# (player cards, unusual leaderboard ranges) that aren't covered by the page
+# warmer. 1 hour TTL minimizes cache misses without sacrificing freshness.
 _ROSTER_CACHE: tuple[list[Person], float] | None = None
 _ROSTER_CACHE_LOCK = RLock()
-_ROSTER_CACHE_TTL_SECONDS = 60.0
+_ROSTER_CACHE_TTL_SECONDS = 3600.0
 
 
 def _invalidate_roster_cache() -> None:
