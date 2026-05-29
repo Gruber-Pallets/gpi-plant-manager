@@ -1244,7 +1244,7 @@ def _approved_by_day(start_d: _date, end_d: _date) -> dict:
 
 
 @router.get("/kiosk/time-off/calendar/{token}", response_class=HTMLResponse)
-def time_off_calendar(request: Request, token: str):
+def time_off_calendar(request: Request, token: str, month: str | None = None):
     """Who's Out — a month-grid calendar of approved leaves.
 
     Builds a standard Mon-first month-datescalendar for the current
@@ -1260,7 +1260,16 @@ def time_off_calendar(request: Request, token: str):
     if not p:
         return RedirectResponse(url="/kiosk", status_code=303)
     today = _date.today()
+    # Which month to render. `month` ("YYYY-MM") comes from the prev/next nav
+    # links; anything missing or malformed falls back to the current month so
+    # a stale/typo'd URL never 500s the kiosk.
     first = today.replace(day=1)
+    if month:
+        try:
+            y, m = str(month).split("-")
+            first = _date(int(y), int(m), 1)
+        except (ValueError, TypeError):
+            first = today.replace(day=1)
     if first.month == 12:
         next_first = first.replace(year=first.year + 1, month=1)
     else:
@@ -1271,7 +1280,7 @@ def time_off_calendar(request: Request, token: str):
     off_map = _approved_by_day(range_start, range_end)
 
     weeks = _cal.Calendar(firstweekday=0).monthdatescalendar(
-        today.year, today.month,
+        first.year, first.month,
     )
     week_cells = []
     for week in weeks:
@@ -1279,13 +1288,15 @@ def time_off_calendar(request: Request, token: str):
         for d in week:
             w.append({
                 "num": d.day,
-                "outside": d.month != today.month,
+                "outside": d.month != first.month,
                 "is_today": d == today,
                 "weekend": d.weekday() >= 5,
                 "names": off_map.get(d, []),
             })
         week_cells.append(w)
 
+    # Prev/next month anchors (YYYY-MM) for the nav links.
+    prev_first = (first - _td(days=1)).replace(day=1)
     fresh = _mint_token(person_id)
     return templates.TemplateResponse(
         request,
@@ -1293,8 +1304,11 @@ def time_off_calendar(request: Request, token: str):
         {
             "person": p,
             "token": fresh,
-            "heading": today.strftime("%B %Y"),
+            "heading": first.strftime("%B %Y"),
             "weeks": week_cells,
+            "prev_month": prev_first.strftime("%Y-%m"),
+            "next_month": next_first.strftime("%Y-%m"),
+            "is_current_month": first == today.replace(day=1),
             "bilingual": bool(p.get("spanish_speaker")),
         },
     )

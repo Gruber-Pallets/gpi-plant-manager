@@ -8,6 +8,25 @@
 </div>
 
 <div class="k-main" style="align-items: center;">
+  {# Month navigation — page to any month, past or future. #}
+  <div style="display: flex; align-items: center; justify-content: center;
+              gap: 0.75rem; width: 100%; max-width: 1100px;
+              margin-bottom: 1rem; flex-wrap: wrap;">
+    <a href="/kiosk/time-off/calendar/{{ token }}?month={{ prev_month }}"
+       class="k-btn secondary"
+       style="text-decoration: none; min-width: unset; min-height: unset;
+              padding: 0.6rem 1.3rem; font-size: 1.1rem;">‹ {{ t("Prev") }}</a>
+    {% if not is_current_month %}
+    <a href="/kiosk/time-off/calendar/{{ token }}"
+       class="k-btn secondary"
+       style="text-decoration: none; min-width: unset; min-height: unset;
+              padding: 0.6rem 1.3rem; font-size: 1.1rem;">{{ t("Today") }}</a>
+    {% endif %}
+    <a href="/kiosk/time-off/calendar/{{ token }}?month={{ next_month }}"
+       class="k-btn secondary"
+       style="text-decoration: none; min-width: unset; min-height: unset;
+              padding: 0.6rem 1.3rem; font-size: 1.1rem;">{{ t("Next") }} ›</a>
+  </div>
   <table style="
     width: 100%;
     max-width: 1100px;

@@ -86,6 +86,9 @@ TRANSLATIONS: dict[str, str] = {
     "Sat": "Sáb",
     "Sun": "Dom",
     "more": "más",
+    "Prev": "Anterior",
+    "Next": "Siguiente",
+    "Today": "Hoy",
     # --- time off: my requests + detail ---
     "My Requests — {name}": "Mis solicitudes — {name}",
     "Time Off": "Tiempo libre",
