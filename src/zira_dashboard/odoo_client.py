@@ -220,6 +220,36 @@ def fetch_skills_for(employee_ids: list[int]) -> dict[int, list[dict]]:
     return out
 
 
+def fetch_spanish_speaker_ids() -> set[int]:
+    """Odoo employee ids who have a 'Spanish' skill (Languages type) at a
+    non-zero level — i.e. level 1-3 in Odoo's Languages rating.
+
+    Matches the skill by name (ilike 'Spanish') so it works regardless of
+    skill-type wiring, and filters on hr.employee.skill.level_progress > 0
+    so a level-0 / unrated entry doesn't count. Used to flag bilingual
+    kiosk users; deliberately separate from fetch_skills_for so it never
+    adds Languages columns to the production skills matrix.
+    """
+    skills = execute(
+        "hr.skill", "search_read",
+        [("name", "ilike", "Spanish")],
+        fields=["id", "name"],
+    )
+    skill_ids = [s["id"] for s in skills]
+    if not skill_ids:
+        return set()
+    rows = execute(
+        "hr.employee.skill", "search_read",
+        [("skill_id", "in", skill_ids), ("level_progress", ">", 0)],
+        fields=["employee_id"],
+    )
+    out: set[int] = set()
+    for r in rows:
+        eid = r["employee_id"]
+        out.add(eid[0] if isinstance(eid, list) else eid)
+    return out
+
+
 # ---------- Kiosk attendance writes (Phase 0 pilot) ----------
 #
 # These are the first WRITE methods on the Odoo client — everything above
