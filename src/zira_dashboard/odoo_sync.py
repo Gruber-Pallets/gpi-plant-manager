@@ -76,6 +76,7 @@ def sync(force: bool = False) -> SyncResult:
         employees = odoo_client.fetch_employees()
         emp_ids = [e["id"] for e in employees]
         emp_skills = odoo_client.fetch_skills_for(emp_ids)
+        spanish_ids = odoo_client.fetch_spanish_speaker_ids()
         columns_meta = odoo_client.fetch_skill_columns_with_types()
         buckets = odoo_client.fetch_skill_level_buckets()
         departments = odoo_client.fetch_departments()
@@ -113,13 +114,16 @@ def sync(force: bool = False) -> SyncResult:
             seen_employee_ids.add(emp["id"])
             # Odoo selection fields return False when unset; normalize to None.
             wage_type = emp.get("wage_type") or None
+            spanish_speaker = emp["id"] in spanish_ids
             cur.execute(
-                "INSERT INTO people (odoo_id, name, active, wage_type, last_pulled_at) "
-                "VALUES (%s, %s, %s, %s, %s) "
+                "INSERT INTO people (odoo_id, name, active, wage_type, spanish_speaker, last_pulled_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
                 "active = EXCLUDED.active, wage_type = EXCLUDED.wage_type, "
+                "spanish_speaker = EXCLUDED.spanish_speaker, "
                 "last_pulled_at = EXCLUDED.last_pulled_at",
-                (emp["id"], _short_name(emp["name"]), bool(emp.get("active", True)), wage_type, pulled_at),
+                (emp["id"], _short_name(emp["name"]), bool(emp.get("active", True)),
+                 wage_type, spanish_speaker, pulled_at),
             )
         # Deactivate Odoo-mapped people who disappeared from the response —
         # i.e., archived (or deleted) in Odoo. fetch_employees() searches

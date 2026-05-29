@@ -136,7 +136,7 @@ def _verify_token(token: str) -> int | None:
 
 def _person_by_id(person_id: int) -> dict | None:
     rows = db.query(
-        "SELECT id, name, odoo_id, wage_type FROM people "
+        "SELECT id, name, odoo_id, wage_type, spanish_speaker FROM people "
         "WHERE id = %s AND active = TRUE",
         (person_id,),
     )
