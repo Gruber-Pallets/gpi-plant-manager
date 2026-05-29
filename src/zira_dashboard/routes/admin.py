@@ -502,6 +502,13 @@ def precompute_run(
         days_processed += 1
         cursor += timedelta(days=1)
 
+    # Past production_daily rows changed → bust the response cache so
+    # corrected leaderboards / player cards (past + today buckets) refresh
+    # immediately instead of waiting out the 5-min past-bucket TTL.
+    if rows_written > 0:
+        from .. import _http_cache
+        _http_cache.invalidate_all_cache()
+
     return JSONResponse({
         "from": start_d.isoformat(),
         "to": end_d.isoformat(),

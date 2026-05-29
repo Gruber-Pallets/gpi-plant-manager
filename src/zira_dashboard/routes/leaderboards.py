@@ -387,6 +387,8 @@ async def leaderboards_set_order(request: Request, kind: str = Query(default="wc
     if not isinstance(order, list):
         return JSONResponse({"ok": False, "error": "order must be a list"}, status_code=400)
     lstore.set_order(kind, [str(x) for x in order if isinstance(x, str)])
+    from .. import _http_cache
+    _http_cache.invalidate_all_cache()
     return JSONResponse({"ok": True})
 
 
@@ -396,6 +398,8 @@ def leaderboards_set_inactive(name: str, kind: str = Query(default="wc")):
     if kind not in ("wc", "group", "wc-avg", "group-avg"):
         return JSONResponse({"ok": False, "error": "invalid kind"}, status_code=400)
     lstore.set_inactive(kind, name, True)
+    from .. import _http_cache
+    _http_cache.invalidate_all_cache()
     return JSONResponse({"ok": True})
 
 
@@ -405,6 +409,8 @@ def leaderboards_set_active(name: str, kind: str = Query(default="wc")):
     if kind not in ("wc", "group", "wc-avg", "group-avg"):
         return JSONResponse({"ok": False, "error": "invalid kind"}, status_code=400)
     lstore.set_inactive(kind, name, False)
+    from .. import _http_cache
+    _http_cache.invalidate_all_cache()
     return JSONResponse({"ok": True})
 
 
