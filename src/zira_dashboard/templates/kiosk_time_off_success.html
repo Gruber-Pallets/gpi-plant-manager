@@ -2,23 +2,19 @@
 {% block title %}Request Submitted — {{ person.name }}{% endblock %}
 {% block content %}
 <div class="k-header">
-  <a href="/kiosk/time-off/{{ token }}" class="k-back">‹ Back</a>
-  <span>Request Submitted</span>
+  <a href="/kiosk/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <span>{{ t("Request Submitted") }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
 
 <div class="k-main" style="align-items: center; justify-content: center;">
   <div style="font-size: 6rem; color: #16a34a; line-height: 1;">✓</div>
   <h1 style="font-size: 2.5rem; margin-top: 1rem; text-align: center;">
-    Request Submitted
+    {{ t("Request Submitted") }}
   </h1>
   <p style="font-size: 1.5rem; color: #475569;
             margin: 1rem 0 0 0; text-align: center; max-width: 600px;">
-    Your time-off request from
-    <strong>{{ date_from }}</strong>
-    to
-    <strong>{{ date_to }}</strong>
-    is pending approval.
+    {{ t("Your time-off request from {start} to {end} is pending approval.", start=date_from, end=date_to) }}
   </p>
   <p style="font-size: 1.15rem; color: #64748b;
             margin: 1.5rem 0 0 0; text-align: center;">
@@ -35,13 +31,13 @@
        style="text-decoration: none; min-width: 200px;
               display: inline-flex; align-items: center;
               justify-content: center;">
-      Done
+      {{ t("Done") }}
     </a>
     <a class="k-btn secondary" href="/kiosk/time-off/mine/{{ token }}"
        style="text-decoration: none; min-width: 200px;
               display: inline-flex; align-items: center;
               justify-content: center;">
-      My Requests
+      {{ t("My Requests") }}
     </a>
   </div>
 </div>

@@ -2,8 +2,8 @@
 {% block title %}Who's Out — {{ heading }}{% endblock %}
 {% block content %}
 <div class="k-header">
-  <a href="/kiosk/time-off/{{ token }}" class="k-back">‹ Back</a>
-  <span>Who's Out — {{ heading }}</span>
+  <a href="/kiosk/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <span>{{ t("Who's Out — {heading}", heading=heading) }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
 
@@ -20,13 +20,13 @@
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);">
     <thead>
       <tr style="background: #f1f5f9; color: #475569;">
-        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Mon</th>
-        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Tue</th>
-        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Wed</th>
-        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Thu</th>
-        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Fri</th>
-        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Sat</th>
-        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">Sun</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">{{ t("Mon") }}</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">{{ t("Tue") }}</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">{{ t("Wed") }}</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">{{ t("Thu") }}</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">{{ t("Fri") }}</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">{{ t("Sat") }}</th>
+        <th style="padding: 0.75rem 0.5rem; font-size: 1rem; font-weight: 600; text-align: center;">{{ t("Sun") }}</th>
       </tr>
     </thead>
     <tbody>
@@ -93,7 +93,7 @@
                       font-size: 0.8rem;
                       color: #64748b;
                       padding: 0.15rem 0.35rem;">
-                      +{{ d.names|length - 4 }} more
+                      +{{ d.names|length - 4 }} {{ t("more") }}
                     </li>
                   {% endif %}
                 </ul>

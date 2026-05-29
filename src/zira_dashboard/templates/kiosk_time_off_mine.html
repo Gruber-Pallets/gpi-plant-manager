@@ -2,8 +2,8 @@
 {% block title %}My Requests — {{ person.name }}{% endblock %}
 {% block content %}
 <div class="k-header">
-  <a href="/kiosk/time-off/{{ token }}" class="k-back">‹ Back</a>
-  <span>My Requests — {{ person.name }}</span>
+  <a href="/kiosk/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <span>{{ t("My Requests — {name}", name=person.name) }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
 
@@ -37,7 +37,7 @@
                color: #0f172a;
                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);">
             <div style="font-size: 1.4rem; font-weight: 600; line-height: 1.2;">
-              {{ r.type_name or "Time Off" }}
+              {{ r.type_name or t("Time Off") }}
             </div>
             <span style="
               grid-row: 1 / span 2;
@@ -69,13 +69,13 @@
   {% else %}
     <p style="font-size: 1.5rem; color: #475569;
               margin-top: 4rem; text-align: center;">
-      No requests yet.
+      {{ t("No requests yet.") }}
     </p>
     <a href="/kiosk/time-off/request/{{ token }}"
        class="k-btn"
        style="text-decoration: none; margin-top: 2rem; min-width: 280px;
               display: inline-flex; align-items: center; justify-content: center;">
-      Request Time Off
+      {{ t("Request Time Off") }}
     </a>
   {% endif %}
 </div>
