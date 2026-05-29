@@ -661,6 +661,64 @@ def time_off_diagnostics(request: Request):
                         {"id": lt["id"], "name": lt["name"], "field": f,
                          "cache": ct.get(f), "odoo": lt.get(f)})
 
+    # Optional per-employee balance probe. Pass ?person=<name substr> or
+    # ?employee_odoo_id=<n> to see (a) what's cached in time_off_balances and
+    # (b) a LIVE fetch_balances_for() with any Odoo error surfaced — this is
+    # how we catch a renamed/changed Odoo field that throws and leaves the
+    # balance cache empty (kiosk then shows "—").
+    balances_probe = None
+    person_q = request.query_params.get("person")
+    emp_id_q = request.query_params.get("employee_odoo_id")
+    odoo_id = None
+    matched_name = None
+    if emp_id_q:
+        try:
+            odoo_id = int(emp_id_q)
+        except ValueError:
+            odoo_id = None
+    elif person_q:
+        prow = db.query(
+            "SELECT odoo_id, name FROM people WHERE name ILIKE %s "
+            "AND odoo_id IS NOT NULL ORDER BY name LIMIT 1",
+            (f"%{person_q}%",),
+        )
+        if prow:
+            odoo_id = prow[0]["odoo_id"]
+            matched_name = prow[0]["name"]
+    if odoo_id is not None:
+        cached = db.query(
+            "SELECT holiday_status_id, unit, allocated_total, taken, pending, "
+            "available, available_practical, last_pulled_at "
+            "FROM time_off_balances WHERE person_odoo_id = %s "
+            "ORDER BY holiday_status_id",
+            (odoo_id,),
+        )
+        live_bal = None
+        live_bal_error = None
+        try:
+            live_bal = odoo_client.fetch_balances_for(odoo_id)
+        except Exception as e:  # noqa: BLE001
+            live_bal_error = repr(e)
+        balances_probe = {
+            "employee_odoo_id": odoo_id,
+            "matched_name": matched_name,
+            "cached_balances": [
+                {
+                    "holiday_status_id": r["holiday_status_id"],
+                    "unit": r["unit"],
+                    "allocated_total": float(r["allocated_total"]),
+                    "taken": float(r["taken"]),
+                    "pending": float(r["pending"]),
+                    "available": float(r["available"]),
+                    "available_practical": float(r["available_practical"]),
+                    "last_pulled_at": str(r["last_pulled_at"]),
+                }
+                for r in cached
+            ],
+            "live_fetch_balances_for": live_bal,
+            "live_fetch_balances_error": live_bal_error,
+        }
+
     return JSONResponse({
         "ok": True,
         "odoo_configured": _odoo_configured(),
@@ -669,4 +727,5 @@ def time_off_diagnostics(request: Request):
         "live_error": live_error,
         "rows_that_would_fail_cache_check": would_fail_check,
         "cache_vs_odoo_mismatches": mismatches,
+        "balances_probe": balances_probe,
     })

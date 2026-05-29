@@ -66,7 +66,7 @@
               <option value="{{ lt.id }}"
                       data-unit="{{ lt.request_unit }}"
                       data-requires-alloc="{{ lt.requires_allocation }}"
-                      {% if edit_mode and prefill and lt.id == prefill.holiday_status_id %}selected{% endif %}>
+                      {% if edit_mode and prefill %}{% if lt.id == prefill.holiday_status_id %}selected{% endif %}{% elif lt.name|lower == "paid time off" %}selected{% endif %}>
                 {{ lt.name }}
               </option>
             {% endfor %}
