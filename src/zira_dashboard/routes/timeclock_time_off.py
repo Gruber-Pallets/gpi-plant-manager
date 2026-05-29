@@ -185,8 +185,7 @@ def _fetch_visible_leave_types(shape: str) -> list[dict]:
     opportunistically populates the cache so the next read is fast.
     """
     rows = db.query(
-        "SELECT holiday_status_id, name, request_unit, requires_allocation, "
-        "negative_cap "
+        "SELECT holiday_status_id, name, request_unit, requires_allocation "
         "FROM leave_types_cache WHERE active = TRUE "
         "ORDER BY name"
     )
@@ -216,7 +215,6 @@ def _fetch_visible_leave_types(shape: str) -> list[dict]:
             "name": r["name"],
             "request_unit": r["request_unit"],
             "requires_allocation": r["requires_allocation"],
-            "negative_cap": float(r.get("negative_cap") or 0),
         })
     return out
 
@@ -263,20 +261,18 @@ def _fallback_fetch_and_cache_leave_types() -> list[dict]:
             db.execute(
                 "INSERT INTO leave_types_cache "
                 "(holiday_status_id, name, request_unit, "
-                "requires_allocation, negative_cap, color, active, "
-                "last_pulled_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, now()) "
+                "requires_allocation, color, active, last_pulled_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, now()) "
                 "ON CONFLICT (holiday_status_id) DO UPDATE SET "
                 "name = EXCLUDED.name, "
                 "request_unit = EXCLUDED.request_unit, "
                 "requires_allocation = EXCLUDED.requires_allocation, "
-                "negative_cap = EXCLUDED.negative_cap, "
                 "color = EXCLUDED.color, "
                 "active = EXCLUDED.active, "
                 "last_pulled_at = now()",
                 (t["id"], t["name"], t["request_unit"],
-                 t["requires_allocation"], t.get("negative_cap", 0),
-                 t.get("color"), t.get("active", True)),
+                 t["requires_allocation"], t.get("color"),
+                 t.get("active", True)),
             )
         except Exception as e:  # noqa: BLE001
             _log.warning(
@@ -285,14 +281,13 @@ def _fallback_fetch_and_cache_leave_types() -> list[dict]:
             )
 
     # Return rows in the same shape the caller expects from the cache
-    # table — only the fields that get filtered/displayed.
+    # table — only the four fields that get filtered/displayed.
     return [
         {
             "holiday_status_id": t["id"],
             "name": t["name"],
             "request_unit": t["request_unit"],
             "requires_allocation": t["requires_allocation"],
-            "negative_cap": t.get("negative_cap", 0.0),
         }
         for t in types
     ]

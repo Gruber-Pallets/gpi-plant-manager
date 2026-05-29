@@ -1,14 +1,11 @@
 // Live balance + in-flight calc for the time-off request wizard.
 //
 // Updates the balance panel as type, date(s), and time(s) change.
-// Disables submit if the request exceeds available_practical plus the
-// type's negative cap (only for types that require allocation;
-// Custom-Hours-style types skip the check). The negative cap lets an
-// allowance type (e.g. Birthday Pay configured to "go negative by one
-// day") be requested past a zero balance; it's 0 for ordinary types, so
-// they keep the strict balance check. The balance numbers themselves come
-// pre-rendered from the server into window.__TIME_OFF_BALANCES__; this
-// file only does math and DOM updates — no network calls.
+// Disables submit if the request exceeds available_practical (only for
+// types that require allocation; Custom-Hours-style types skip the
+// check). The balance numbers themselves come pre-rendered from the
+// server into window.__TIME_OFF_BALANCES__; this file only does math
+// and DOM updates — no network calls.
 //
 // Also raises a non-blocking yellow warning when the user picks a date
 // outside the global plant schedule (e.g., Saturday for a Mon-Fri
@@ -133,19 +130,6 @@
       requiresAlloc = (typeSel.dataset.requiresAlloc === "yes");
     }
 
-    // How far this type may overdraw its balance (Odoo "Allow Negative
-    // Cap"). 0 for ordinary types; a positive number for allowance types
-    // like Birthday Pay configured to "go negative by one day". Read from
-    // the same place as requires-alloc (selected option vs hidden input).
-    var negativeCap;
-    if (typeSel.tagName === "SELECT") {
-      var negOpt = typeSel.options[typeSel.selectedIndex];
-      negativeCap = negOpt ? parseFloat(negOpt.dataset.negativeCap) : 0;
-    } else {
-      negativeCap = parseFloat(typeSel.dataset.negativeCap);
-    }
-    if (isNaN(negativeCap)) negativeCap = 0;
-
     if (hasBalancePanel) {
       if (!requiresAlloc) {
         // The type has `requires_allocation=no` in Odoo. That can mean
@@ -220,11 +204,7 @@
       } else if (bal) {
         var remaining = bal.available_practical - requestSize;
         remainEl.textContent = fmt(remaining) + " " + bal.unit;
-        // Allow the request to dip up to negativeCap below the available
-        // balance, so an allowance type (e.g. Birthday Pay, one day
-        // negative) can be requested past a zero balance. Ordinary types
-        // have negativeCap=0, so this stays the strict balance check.
-        submitBtn.disabled = (requestSize > bal.available_practical + negativeCap);
+        submitBtn.disabled = (requestSize > bal.available_practical);
       } else {
         remainEl.textContent = "—";
         submitBtn.disabled = true;

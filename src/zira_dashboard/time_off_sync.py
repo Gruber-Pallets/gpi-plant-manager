@@ -252,17 +252,15 @@ def poll_odoo_leaves() -> int:
             db.execute(
                 "INSERT INTO leave_types_cache "
                 "(holiday_status_id, name, request_unit, requires_allocation, "
-                " negative_cap, color, active, last_pulled_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, now()) "
+                " color, active, last_pulled_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, now()) "
                 "ON CONFLICT (holiday_status_id) DO UPDATE SET "
                 "name = EXCLUDED.name, request_unit = EXCLUDED.request_unit, "
                 "requires_allocation = EXCLUDED.requires_allocation, "
-                "negative_cap = EXCLUDED.negative_cap, "
                 "color = EXCLUDED.color, active = EXCLUDED.active, "
                 "last_pulled_at = now()",
                 (t["id"], t["name"], t["request_unit"],
-                 t["requires_allocation"], t.get("negative_cap", 0),
-                 t.get("color"), t.get("active", True)),
+                 t["requires_allocation"], t.get("color"), t.get("active", True)),
             )
         except Exception as e:  # noqa: BLE001
             _log.warning(
