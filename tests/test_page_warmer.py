@@ -64,3 +64,30 @@ def test_app_defines_staffing_pages_loop():
     from zira_dashboard import app as app_module
     assert hasattr(app_module, "_warm_staffing_pages_loop")
     assert asyncio.iscoroutinefunction(app_module._warm_staffing_pages_loop)
+
+
+def test_warm_skills_once_calls_handler(monkeypatch):
+    calls = []
+
+    def fake_skills(request):
+        calls.append("skills")
+        return object()
+
+    monkeypatch.setattr("zira_dashboard.routes.skills.staffing_skills", fake_skills)
+    from zira_dashboard import page_warmer
+    page_warmer.warm_skills_once()
+    assert calls == ["skills"]
+
+
+def test_warm_skills_once_swallows_exception(monkeypatch):
+    def boom(request):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("zira_dashboard.routes.skills.staffing_skills", boom)
+    from zira_dashboard import page_warmer
+    page_warmer.warm_skills_once()  # must not raise
+
+
+def test_app_defines_staffing_stable_loop():
+    from zira_dashboard import app as app_module
+    assert asyncio.iscoroutinefunction(app_module._warm_staffing_stable_loop)

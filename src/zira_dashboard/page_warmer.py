@@ -78,3 +78,15 @@ def warm_once() -> None:
         )
     except Exception as e:  # noqa: BLE001 — warmer must never bubble
         _log.warning("page_warmer: leaderboards warm failed: %s", e)
+
+
+def warm_skills_once() -> None:
+    """Warm the skills matrix. Separate from warm_once() because roster /
+    skill data changes rarely (and writes invalidate the cache directly),
+    so this runs on a relaxed cadence — and warming it triggers
+    odoo_sync.sync(force=False), which we don't want to fire every 45s."""
+    try:
+        from .routes.skills import staffing_skills
+        staffing_skills(_synthetic_get_request("/staffing/skills"))
+    except Exception as e:  # noqa: BLE001 — warmer must never bubble
+        _log.warning("page_warmer: skills warm failed: %s", e)

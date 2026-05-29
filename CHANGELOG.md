@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-05-29
 
+### 3:07 PM
+
+- **Skills matrix + player cards now cached (and the matrix pre-warmed)** — these were the two staffing pages with no response cache, so they re-rendered from scratch on every load (the skills matrix is a 40 KB person×skill grid). The skills matrix now caches its render (invalidated on every roster/skill/view write and Odoo force-sync) and is pre-warmed every 5 min by a background loop. Player cards cache per person+range — today-inclusive ranges in the 60s bucket (busted by attribution/attendance/award edits), past-only ranges for 5 min. Second views are now instant; cold first views are cheaper thanks to the 1-hour roster cache.
+
 ### 2:43 PM
 
 - **Staffing first-load is now warm, not cold** — the day-view and leaderboards already cache their rendered HTML, but the cache was populated lazily by the first visitor, who paid the full ~1.9s render (and again after every deploy / TTL expiry). A new background loop (`page_warmer.warm_once`, ticking every 45s and on boot) now pre-renders today's `/staffing` and default `/staffing/leaderboards` straight into the response cache, and the today cache TTL was raised 15s → 60s so it stays warm between ticks. First load — including the first after a Railway redeploy — now serves cached bytes in <1ms instead of re-rendering. Mutations still call `invalidate_today_cache()`, so saves appear immediately. The warmer calls the handlers directly (bypassing auth/middleware) via a minimal synthetic request and can never crash the app.

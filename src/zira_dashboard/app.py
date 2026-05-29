@@ -234,6 +234,20 @@ async def _warm_staffing_pages_loop():
         await asyncio.sleep(45)
 
 
+async def _warm_staffing_stable_loop():
+    """Warm the slow-changing staffing pages (the skills matrix) every
+    5 min. Roster/skill data rarely changes and writes invalidate the
+    cache directly, so 5 min is plenty — and it avoids triggering
+    odoo_sync.sync(force=False) every 45s. First iteration runs on boot."""
+    from . import page_warmer
+    while True:
+        try:
+            await asyncio.to_thread(page_warmer.warm_skills_once)
+        except Exception as e:  # noqa: BLE001 — warmer must never die
+            _log.warning("staffing stable warmer tick failed: %s", e)
+        await asyncio.sleep(300)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialise the Postgres pool, start the Zira cache warmer,
@@ -256,6 +270,7 @@ async def lifespan(app: FastAPI):
     time_off_poll_task = asyncio.create_task(_time_off_poll_loop())
     time_off_balance_task = asyncio.create_task(_time_off_balance_sweep_loop())
     staffing_pages_task = asyncio.create_task(_warm_staffing_pages_loop())
+    staffing_stable_task = asyncio.create_task(_warm_staffing_stable_loop())
     try:
         yield
     finally:
@@ -268,6 +283,7 @@ async def lifespan(app: FastAPI):
             time_off_poll_task,
             time_off_balance_task,
             staffing_pages_task,
+            staffing_stable_task,
         ):
             t.cancel()
             try:
