@@ -123,15 +123,25 @@
   }
   #kiosk-screen.htmx-swapping { opacity: 0; }
 
-  /* Bilingual stacked text: English on top, Spanish beneath (muted). */
-  .k-en { display: block; }
+  /* Bilingual text: one inline-flex column so English always sits directly
+     above Spanish in ANY parent — headings, buttons, and flex-row links
+     alike. Emitting two bare sibling spans would split side-by-side when the
+     parent is a flex row; wrapping them in k-bi keeps them a single unit. */
+  .k-bi {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    vertical-align: middle;
+    line-height: 1.15;
+  }
   .k-es {
-    display: block;
-    font-size: 0.7em;
+    font-size: 0.6em;
     font-weight: 400;
     font-style: italic;
     color: #64748b;
-    line-height: 1.15;
+    line-height: 1.2;
+    margin-top: 0.2em;
+    opacity: 0.9;
   }
 </style>
 <script src="/static/htmx-1.9.12.min.js?v={{ static_v('htmx-1.9.12.min.js') }}"

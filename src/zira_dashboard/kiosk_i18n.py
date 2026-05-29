@@ -127,6 +127,7 @@ def t(ctx, text: str, **kwargs) -> str | Markup:
     if not spanish_tmpl:
         return english  # graceful fallback — never blank
     spanish = _fill(spanish_tmpl, kwargs)
-    return Markup('<span class="k-en">{}</span><span class="k-es">{}</span>').format(
-        english, spanish
-    )
+    return Markup(
+        '<span class="k-bi"><span class="k-en">{}</span>'
+        '<span class="k-es">{}</span></span>'
+    ).format(english, spanish)

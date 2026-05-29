@@ -21,9 +21,13 @@ def test_english_only_passthrough():
 
 def test_bilingual_stacks_english_then_spanish():
     out = str(_render("Clock Out", True))
+    # Both lines live inside a single k-bi wrapper so they stack as one unit
+    # regardless of the parent's layout (a flex row would otherwise split two
+    # bare spans side-by-side).
+    assert '<span class="k-bi">' in out
     assert '<span class="k-en">Clock Out</span>' in out
     assert '<span class="k-es">Marcar salida</span>' in out
-    assert out.index("k-en") < out.index("k-es")
+    assert out.index("k-bi") < out.index("k-en") < out.index("k-es")
 
 
 def test_unknown_string_falls_back_to_english():
