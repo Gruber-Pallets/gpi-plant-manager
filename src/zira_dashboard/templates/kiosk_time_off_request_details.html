@@ -62,12 +62,12 @@
                          border: 1px solid #cbd5e1; border-radius: 0.5rem;
                          background: #f8fafc; min-height: 56px;
                          font-family: inherit;">
-            {% for t in leave_types %}
-              <option value="{{ t.id }}"
-                      data-unit="{{ t.request_unit }}"
-                      data-requires-alloc="{{ t.requires_allocation }}"
-                      {% if edit_mode and prefill and t.id == prefill.holiday_status_id %}selected{% endif %}>
-                {{ t.name }}
+            {% for lt in leave_types %}
+              <option value="{{ lt.id }}"
+                      data-unit="{{ lt.request_unit }}"
+                      data-requires-alloc="{{ lt.requires_allocation }}"
+                      {% if edit_mode and prefill and lt.id == prefill.holiday_status_id %}selected{% endif %}>
+                {{ lt.name }}
               </option>
             {% endfor %}
           </select>
