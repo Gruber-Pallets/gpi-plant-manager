@@ -49,11 +49,13 @@ from starlette.responses import HTMLResponse, Response
 from ._cache import TTLCache
 
 # Server-side response cache. Keyed by route + query state.
-# Today's pages: 15s — matches the existing browser Cache-Control short
-# window so we never serve content older than what the browser would
-# fetch on its own. Past pages: 5 minutes (server-side; the browser side
-# caches longer via Cache-Control).
-_RESPONSE_CACHE_TODAY = TTLCache(ttl_seconds=15.0, max_entries=64)
+# 60s, not 15s: the staffing page-warmer re-renders today's hot pages
+# every 45s, so a 60s TTL keeps a comfortable margin and the cache never
+# goes cold between ticks. Mutations still call invalidate_today_cache()
+# so saves appear immediately regardless of TTL. (Browser-side
+# Cache-Control stays at _TODAY_MAX_AGE=15s — the browser revalidates
+# every 15s and hits this warm server cache, so revalidation is ~free.)
+_RESPONSE_CACHE_TODAY = TTLCache(ttl_seconds=60.0, max_entries=64)
 _RESPONSE_CACHE_PAST = TTLCache(ttl_seconds=300.0, max_entries=128)
 
 
