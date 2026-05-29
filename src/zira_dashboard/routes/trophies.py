@@ -125,6 +125,8 @@ async def award_override(request: Request):
             "  AND position = %s",
             (scope, group_name, wc_name, year, month, position),
         )
+        from .. import _http_cache
+        _http_cache.invalidate_all_cache()
         return JSONResponse({"ok": True})
 
     name = body.get("name")
@@ -142,4 +144,6 @@ async def award_override(request: Request):
         "              created_at = NOW()",
         (scope, group_name, wc_name, year, month, position, action, name, note),
     )
+    from .. import _http_cache
+    _http_cache.invalidate_all_cache()
     return JSONResponse({"ok": True})
