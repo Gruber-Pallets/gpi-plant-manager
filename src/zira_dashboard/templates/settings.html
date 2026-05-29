@@ -310,12 +310,12 @@
     </p>
 
     <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin:0.4rem 0 1.4rem 0">
-      <a href="/kiosk" target="_blank" rel="noopener"
+      <a href="/timeclock" target="_blank" rel="noopener"
          style="display:inline-block;padding:0.7rem 1.1rem;background:#16a34a;color:#fff;
                 text-decoration:none;border-radius:0.4rem;font-weight:600">
-        Open Kiosk Portal ↗
+        Open Timeclock ↗
       </a>
-      <a href="/kiosk"
+      <a href="/timeclock"
          style="display:inline-block;padding:0.7rem 1.1rem;background:#0f172a;color:#fff;
                 text-decoration:none;border-radius:0.4rem;font-weight:500">
         Open here
@@ -508,7 +508,7 @@
            {% if active_section != 'time_off' %}style="display:none"{% endif %}>
     <h2>Time Off</h2>
     <p style="color:var(--muted);margin:0 0 0.8rem 0">
-      Kiosk time-off requests + admin calendar. Writes to Odoo
+      Timeclock time-off requests + admin calendar. Writes to Odoo
       <code>hr.leave</code>. Toggle the StratusTime overlay during
       parallel run; turn it off once Odoo is the system of record.
     </p>
@@ -550,9 +550,9 @@
 
     <form method="post" action="/api/settings/time-off/hidden-types"
           data-section="time_off_hidden">
-      <h3 style="margin-top:1rem">Leave types visible in the kiosk</h3>
+      <h3 style="margin-top:1rem">Leave types visible in the timeclock</h3>
       <p class="note" style="color:var(--muted);font-size:0.85rem;margin:0 0 0.6rem 0">
-        Check a type to <strong>hide</strong> it from the kiosk picker.
+        Check a type to <strong>hide</strong> it from the timeclock picker.
         Hidden types are unaffected on the admin calendar.
       </p>
       {% if time_off_settings and time_off_settings.leave_types %}

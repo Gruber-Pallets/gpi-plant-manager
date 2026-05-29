@@ -170,8 +170,8 @@
     var timer;
     function reset() {
       clearTimeout(timer);
-      if (location.pathname === '/kiosk' || location.pathname === '/kiosk/') return;
-      timer = setTimeout(function() { location.href = '/kiosk'; }, TIMEOUT_MS);
+      if (location.pathname === '/timeclock' || location.pathname === '/timeclock/') return;
+      timer = setTimeout(function() { location.href = '/timeclock'; }, TIMEOUT_MS);
     }
     ['touchstart','mousedown','keydown','pointerdown'].forEach(function(evt) {
       document.addEventListener(evt, reset, { passive: true });

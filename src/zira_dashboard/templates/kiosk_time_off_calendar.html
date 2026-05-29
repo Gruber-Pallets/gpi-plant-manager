@@ -2,7 +2,7 @@
 {% block title %}Who's Out — {{ heading }}{% endblock %}
 {% block content %}
 <div class="k-header">
-  <a href="/kiosk/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <a href="/timeclock/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
   <span>{{ t("Who's Out — {heading}", heading=heading) }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
@@ -12,17 +12,17 @@
   <div style="display: flex; align-items: center; justify-content: center;
               gap: 0.75rem; width: 100%; max-width: 1100px;
               margin-bottom: 1rem; flex-wrap: wrap;">
-    <a href="/kiosk/time-off/calendar/{{ token }}?month={{ prev_month }}"
+    <a href="/timeclock/time-off/calendar/{{ token }}?month={{ prev_month }}"
        class="k-btn secondary"
        style="text-decoration: none; min-width: unset; min-height: unset;
               padding: 0.6rem 1.3rem; font-size: 1.1rem;">‹ {{ t("Prev") }}</a>
     {% if not is_current_month %}
-    <a href="/kiosk/time-off/calendar/{{ token }}"
+    <a href="/timeclock/time-off/calendar/{{ token }}"
        class="k-btn secondary"
        style="text-decoration: none; min-width: unset; min-height: unset;
               padding: 0.6rem 1.3rem; font-size: 1.1rem;">{{ t("Today") }}</a>
     {% endif %}
-    <a href="/kiosk/time-off/calendar/{{ token }}?month={{ next_month }}"
+    <a href="/timeclock/time-off/calendar/{{ token }}?month={{ next_month }}"
        class="k-btn secondary"
        style="text-decoration: none; min-width: unset; min-height: unset;
               padding: 0.6rem 1.3rem; font-size: 1.1rem;">{{ t("Next") }} ›</a>

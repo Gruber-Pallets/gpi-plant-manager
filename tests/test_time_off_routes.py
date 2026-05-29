@@ -25,7 +25,7 @@ def _token_for(person_id: int) -> str:
 def test_landing_route_redirects_when_token_invalid(monkeypatch):
     monkeypatch.setenv("KIOSK_TIME_OFF_ENABLED", "1")
     client = TestClient(app)
-    r = client.get("/kiosk/time-off/bogus.token", follow_redirects=False)
+    r = client.get("/timeclock/time-off/bogus.token", follow_redirects=False)
     assert r.status_code in (302, 303, 307)
 
 
@@ -38,26 +38,26 @@ def test_landing_route_renders_when_token_valid(monkeypatch):
     # Implementer: insert a test person, then:
     # token = _token_for(<person_id>)
     # client = TestClient(app)
-    # r = client.get(f"/kiosk/time-off/{token}")
+    # r = client.get(f"/timeclock/time-off/{token}")
     # assert r.status_code == 200
     # assert "Request Time Off" in r.text
     pytest.skip("Needs test fixture for seeded person row")
 
 
 def test_request_shape_picker_redirects_on_bad_token():
-    """Bogus token on the shape picker should bounce to /kiosk — same
+    """Bogus token on the shape picker should bounce to /timeclock — same
     HMAC gate as the rest of the kiosk."""
     client = TestClient(app)
-    r = client.get("/kiosk/time-off/request/bogus", follow_redirects=False)
+    r = client.get("/timeclock/time-off/request/bogus", follow_redirects=False)
     assert r.status_code in (302, 303, 307)
 
 
 def test_request_details_redirects_on_bad_token():
-    """Bad token on the details page bounces back to /kiosk before any
+    """Bad token on the details page bounces back to /timeclock before any
     of the helper paths run — same auth gate as everything else."""
     client = TestClient(app)
     r = client.get(
-        "/kiosk/time-off/request/bogus/details?shape=full_day",
+        "/timeclock/time-off/request/bogus/details?shape=full_day",
         follow_redirects=False,
     )
     assert r.status_code in (302, 303, 307)
@@ -91,7 +91,7 @@ def test_request_details_redirects_on_bad_shape(monkeypatch):
     )
     client = TestClient(app)
     r = client.get(
-        "/kiosk/time-off/request/anytoken/details?shape=bogus",
+        "/timeclock/time-off/request/anytoken/details?shape=bogus",
         follow_redirects=False,
     )
     assert r.status_code in (302, 303, 307)
@@ -135,7 +135,7 @@ def test_request_details_renders_when_token_and_shape_valid(monkeypatch):
     )
     client = TestClient(app)
     r = client.get(
-        "/kiosk/time-off/request/anytoken/details?shape=full_day",
+        "/timeclock/time-off/request/anytoken/details?shape=full_day",
         follow_redirects=False,
     )
     assert r.status_code == 200
@@ -169,7 +169,7 @@ def test_submit_creates_row_and_queues_sync(monkeypatch):
 
     client = TestClient(app)
     r = client.post(
-        "/kiosk/time-off/request/anytoken/submit",
+        "/timeclock/time-off/request/anytoken/submit",
         data={
             "shape": "full_day",
             "holiday_status_id": "1",
@@ -210,7 +210,7 @@ def test_submit_rejects_partial_day_outside_shift(monkeypatch):
     )
     client = TestClient(app)
     r = client.post(
-        "/kiosk/time-off/request/anytoken/submit",
+        "/timeclock/time-off/request/anytoken/submit",
         data={
             "shape": "midday_gap",
             "holiday_status_id": "2",
@@ -251,7 +251,7 @@ def test_submit_partial_day_uses_selected_date_for_both_ends(monkeypatch):
 
     client = TestClient(app)
     r = client.post(
-        "/kiosk/time-off/request/anytoken/submit",
+        "/timeclock/time-off/request/anytoken/submit",
         data={
             "shape": "late_arrival",
             "holiday_status_id": "4",
@@ -277,13 +277,13 @@ def test_calendar_renders_with_month_view(monkeypatch):
     monkeypatch.setattr("zira_dashboard.routes.kiosk_time_off._approved_by_day",
                         lambda start, end: {})
     client = TestClient(app)
-    r = client.get("/kiosk/time-off/calendar/anytoken")
+    r = client.get("/timeclock/time-off/calendar/anytoken")
     assert r.status_code == 200
     assert "Who" in r.text or "calendar" in r.text.lower()
 
 
 def test_cancel_handler_marks_row_for_cancel_and_queues(monkeypatch):
-    """POST /kiosk/time-off/mine/{token}/{rid}/cancel on a row that already
+    """POST /timeclock/time-off/mine/{token}/{rid}/cancel on a row that already
     has an odoo_leave_id flips the local row to ``draft_cancel`` and queues
     a background push — the push routes through ``_push_cancel`` which
     calls ``refuse_leave`` in Odoo. The local row is NOT deleted; we keep
@@ -306,7 +306,7 @@ def test_cancel_handler_marks_row_for_cancel_and_queues(monkeypatch):
                         lambda rid: queued.append(rid))
     client = TestClient(app)
     r = client.post(
-        "/kiosk/time-off/mine/anytoken/42/cancel",
+        "/timeclock/time-off/mine/anytoken/42/cancel",
         follow_redirects=False,
     )
     assert r.status_code in (200, 303)
@@ -315,7 +315,7 @@ def test_cancel_handler_marks_row_for_cancel_and_queues(monkeypatch):
 
 
 def test_edit_post_updates_row_and_queues_sync(monkeypatch):
-    """POST /kiosk/time-off/mine/{token}/{rid}/edit on an existing row
+    """POST /timeclock/time-off/mine/{token}/{rid}/edit on an existing row
     UPDATEs the row (via ``_update_request_row``) and queues a background
     push that will route through ``time_off_sync._push_edit`` to write
     the changed fields to the same ``hr.leave`` record on Odoo."""
@@ -344,7 +344,7 @@ def test_edit_post_updates_row_and_queues_sync(monkeypatch):
 
     client = TestClient(app)
     r = client.post(
-        "/kiosk/time-off/mine/anytoken/42/edit",
+        "/timeclock/time-off/mine/anytoken/42/edit",
         data={
             "shape": "full_day",
             "holiday_status_id": "1",

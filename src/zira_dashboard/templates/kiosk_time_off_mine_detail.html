@@ -2,7 +2,7 @@
 {% block title %}Request Details — {{ person.name }}{% endblock %}
 {% block content %}
 <div class="k-header">
-  <a href="/kiosk/time-off/mine/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <a href="/timeclock/time-off/mine/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
   <span>{{ t("Request Details") }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
@@ -74,14 +74,14 @@
 
     {% if request_row.originating_kiosk_user
           and request_row.state not in ("cancel", "refuse", "draft_cancel") %}
-      <a href="/kiosk/time-off/mine/{{ token }}/{{ request_row.id }}/edit"
+      <a href="/timeclock/time-off/mine/{{ token }}/{{ request_row.id }}/edit"
          class="k-btn"
          style="display: block; text-align: center; margin-top: 2rem;
                 min-width: 280px; width: 100%; text-decoration: none;">
         {{ t("Edit Request") }}
       </a>
       <form method="post"
-            action="/kiosk/time-off/mine/{{ token }}/{{ request_row.id }}/cancel"
+            action="/timeclock/time-off/mine/{{ token }}/{{ request_row.id }}/cancel"
             style="margin-top: 1rem;">
         {% if request_row.state == "validate" %}
           <div class="k-warning" style="margin-bottom: 1.25rem;">

@@ -2,7 +2,7 @@
 {% block title %}My Requests — {{ person.name }}{% endblock %}
 {% block content %}
 <div class="k-header">
-  <a href="/kiosk/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <a href="/timeclock/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
   <span>{{ t("My Requests — {name}", name=person.name) }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
@@ -20,7 +20,7 @@
       gap: 0.75rem;">
       {% for r in requests %}
         <li>
-          <a href="/kiosk/time-off/mine/{{ token }}/{{ r.id }}"
+          <a href="/timeclock/time-off/mine/{{ token }}/{{ r.id }}"
              style="
                display: grid;
                grid-template-columns: 1fr auto;
@@ -71,7 +71,7 @@
               margin-top: 4rem; text-align: center;">
       {{ t("No requests yet.") }}
     </p>
-    <a href="/kiosk/time-off/request/{{ token }}"
+    <a href="/timeclock/time-off/request/{{ token }}"
        class="k-btn"
        style="text-decoration: none; margin-top: 2rem; min-width: 280px;
               display: inline-flex; align-items: center; justify-content: center;">

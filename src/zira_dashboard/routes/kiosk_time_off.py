@@ -7,7 +7,7 @@ currently only owns the landing route; the request wizard, mine, and
 calendar pages get appended by subsequent tasks in the plan.
 
 Auth is identical to `routes/kiosk.py`: every URL takes a 60s HMAC token
-in the path, and an invalid/expired token bounces back to `/kiosk` so a
+in the path, and an invalid/expired token bounces back to `/timeclock` so a
 shared device never leaks one user's data to the next. The helpers
 ``_mint_token`` / ``_verify_token`` / ``_person_by_id`` live in
 `routes/kiosk.py` and are reused here verbatim — duplicating them would
@@ -20,15 +20,15 @@ dashboard for stuck punches — so an employee whose request hasn't made
 it to Odoo isn't left wondering why HR hasn't seen it.
 
 Routes:
-  GET  /kiosk/time-off/{token}                              Landing — shape picker + My Requests + Who's Out
-  GET  /kiosk/time-off/request/{token}                      Legacy — redirects to landing
-  GET  /kiosk/time-off/request/{token}/details?shape=…      Wizard step 2 — details form
-  POST /kiosk/time-off/request/{token}/submit               Wizard step 3 — submit + queue sync
-  GET  /kiosk/time-off/mine/{token}                         My Requests list
-  GET  /kiosk/time-off/mine/{token}/{rid}                   My Requests detail (with Cancel)
-  POST /kiosk/time-off/mine/{token}/{rid}/cancel            Cancel a pending or approved request
-  GET  /kiosk/time-off/mine/{token}/{rid}/edit              Edit form pre-filled with current values
-  POST /kiosk/time-off/mine/{token}/{rid}/edit              Persist edits + queue Odoo write
+  GET  /timeclock/time-off/{token}                              Landing — shape picker + My Requests + Who's Out
+  GET  /timeclock/time-off/request/{token}                      Legacy — redirects to landing
+  GET  /timeclock/time-off/request/{token}/details?shape=…      Wizard step 2 — details form
+  POST /timeclock/time-off/request/{token}/submit               Wizard step 3 — submit + queue sync
+  GET  /timeclock/time-off/mine/{token}                         My Requests list
+  GET  /timeclock/time-off/mine/{token}/{rid}                   My Requests detail (with Cancel)
+  POST /timeclock/time-off/mine/{token}/{rid}/cancel            Cancel a pending or approved request
+  GET  /timeclock/time-off/mine/{token}/{rid}/edit              Edit form pre-filled with current values
+  POST /timeclock/time-off/mine/{token}/{rid}/edit              Persist edits + queue Odoo write
 """
 
 from __future__ import annotations
@@ -104,12 +104,12 @@ def _sync_error_warning(person_odoo_id: int) -> dict | None:
     return {"count": rows[0]["n"], "latest_error": rows[0]["latest"]}
 
 
-@router.get("/kiosk/time-off/{token}", response_class=HTMLResponse)
+@router.get("/timeclock/time-off/{token}", response_class=HTMLResponse)
 def time_off_landing(request: Request, token: str):
     """Landing page: the time-off-shape picker (Full Day + three
     partial-day cards) up top, then My Requests and Who's Out below a
-    divider. Same HMAC gate as the rest of /kiosk — an
-    invalid or expired token bounces to /kiosk so a stale URL on a shared
+    divider. Same HMAC gate as the rest of /timeclock — an
+    invalid or expired token bounces to /timeclock so a stale URL on a shared
     device never lets the next user act as the previous one.
 
     Mints a fresh token before render so a user reading the screen (or
@@ -119,10 +119,10 @@ def time_off_landing(request: Request, token: str):
     """
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     fresh = _mint_token(person_id)
     # If a person has no Odoo id mapped, fall back to a sentinel that
     # matches nothing in time_off_requests rather than returning early —
@@ -145,21 +145,21 @@ def time_off_landing(request: Request, token: str):
     )
 
 
-@router.get("/kiosk/time-off/request/{token}", response_class=HTMLResponse)
+@router.get("/timeclock/time-off/request/{token}", response_class=HTMLResponse)
 def request_shape(request: Request, token: str):
     """Legacy shape-picker route. The shape cards now live on the landing
     page (`kiosk_time_off_landing.html`), so this just redirects there —
     kept so old bookmarks and the wizard's bad-input fallbacks still land
-    somewhere sensible. Same HMAC gate; invalid token bounces to /kiosk.
+    somewhere sensible. Same HMAC gate; invalid token bounces to /timeclock.
     """
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     return RedirectResponse(
-        url=f"/kiosk/time-off/{_mint_token(person_id)}",
+        url=f"/timeclock/time-off/{_mint_token(person_id)}",
         status_code=303,
     )
 
@@ -335,7 +335,7 @@ def _shift_window_for(person_odoo_id: int) -> tuple[float, float]:
     )
 
 
-@router.get("/kiosk/time-off/request/{token}/details",
+@router.get("/timeclock/time-off/request/{token}/details",
             response_class=HTMLResponse)
 def request_details(request: Request, token: str, shape: str = "full_day"):
     """Wizard step 2 — the details form.
@@ -348,17 +348,17 @@ def request_details(request: Request, token: str, shape: str = "full_day"):
 
     Shows a balance panel that the client-side JS keeps up to date as
     the user changes inputs; the JS lives in `static/kiosk_time_off.js`.
-    Bad token → /kiosk; bad shape → back to the shape picker (never
+    Bad token → /timeclock; bad shape → back to the shape picker (never
     render the form with an invalid shape value)."""
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     if shape not in _VALID_SHAPES:
         return RedirectResponse(
-            url=f"/kiosk/time-off/{_mint_token(person_id)}",
+            url=f"/timeclock/time-off/{_mint_token(person_id)}",
             status_code=303,
         )
     fresh = _mint_token(person_id)
@@ -552,7 +552,7 @@ def _queue_push(request_id: int) -> None:
 
 
 @router.post(
-    "/kiosk/time-off/request/{token}/submit",
+    "/timeclock/time-off/request/{token}/submit",
     response_class=HTMLResponse,
 )
 def request_submit(
@@ -586,13 +586,13 @@ def request_submit(
     in ``time_off_sync.retry_unsynced_requests`` will keep retrying."""
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     if shape not in _VALID_SHAPES:
         return RedirectResponse(
-            url=f"/kiosk/time-off/{_mint_token(person_id)}",
+            url=f"/timeclock/time-off/{_mint_token(person_id)}",
             status_code=303,
         )
     try:
@@ -600,7 +600,7 @@ def request_submit(
         dt = _date.fromisoformat(date_to)
     except ValueError:
         return RedirectResponse(
-            url=f"/kiosk/time-off/{_mint_token(person_id)}",
+            url=f"/timeclock/time-off/{_mint_token(person_id)}",
             status_code=303,
         )
     # Partial-day shapes (arrive late / leave early / mid-day gap) are always
@@ -758,7 +758,7 @@ def _state_to_bucket(state: str) -> str:
     return state
 
 
-@router.get("/kiosk/time-off/mine/{token}", response_class=HTMLResponse)
+@router.get("/timeclock/time-off/mine/{token}", response_class=HTMLResponse)
 def mine_list(request: Request, token: str):
     """My Requests — newest 100 requests for the calling employee.
 
@@ -768,10 +768,10 @@ def mine_list(request: Request, token: str):
     view with the fresh token already baked into the href."""
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     fresh = _mint_token(person_id)
     rows = _list_my_requests(p["odoo_id"])
     for r in rows:
@@ -783,7 +783,7 @@ def mine_list(request: Request, token: str):
     )
 
 
-@router.get("/kiosk/time-off/mine/{token}/{rid}",
+@router.get("/timeclock/time-off/mine/{token}/{rid}",
             response_class=HTMLResponse)
 def mine_detail(request: Request, token: str, rid: int):
     """My Requests detail — the row + a Cancel button when applicable.
@@ -796,14 +796,14 @@ def mine_detail(request: Request, token: str, rid: int):
     leaks data, never crashes."""
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     row = _load_request(rid, p["odoo_id"])
     if not row:
         return RedirectResponse(
-            url=f"/kiosk/time-off/mine/{_mint_token(person_id)}",
+            url=f"/timeclock/time-off/mine/{_mint_token(person_id)}",
             status_code=303,
         )
     row["bucket"] = _state_to_bucket(row["state"])
@@ -815,7 +815,7 @@ def mine_detail(request: Request, token: str, rid: int):
     )
 
 
-@router.post("/kiosk/time-off/mine/{token}/{rid}/cancel",
+@router.post("/timeclock/time-off/mine/{token}/{rid}/cancel",
              response_class=HTMLResponse)
 def mine_cancel(
     request: Request,
@@ -842,14 +842,14 @@ def mine_cancel(
     employee."""
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     row = _load_request(rid, p["odoo_id"])
     if not row:
         return RedirectResponse(
-            url=f"/kiosk/time-off/mine/{_mint_token(person_id)}",
+            url=f"/timeclock/time-off/mine/{_mint_token(person_id)}",
             status_code=303,
         )
     if row["odoo_leave_id"] is None:
@@ -862,7 +862,7 @@ def mine_cancel(
         _set_row_state(rid, "draft_cancel")
         background_tasks.add_task(_queue_push, rid)
     return RedirectResponse(
-        url=f"/kiosk/time-off/mine/{_mint_token(person_id)}",
+        url=f"/timeclock/time-off/mine/{_mint_token(person_id)}",
         status_code=303,
     )
 
@@ -907,7 +907,7 @@ def _update_request_row(
     )
 
 
-@router.get("/kiosk/time-off/mine/{token}/{rid}/edit",
+@router.get("/timeclock/time-off/mine/{token}/{rid}/edit",
             response_class=HTMLResponse)
 def mine_edit(request: Request, token: str, rid: int):
     """Re-open the details form pre-filled with this row's current values.
@@ -924,14 +924,14 @@ def mine_edit(request: Request, token: str, rid: int):
     different shape)."""
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     row = _load_request(rid, p["odoo_id"])
     if not row:
         return RedirectResponse(
-            url=f"/kiosk/time-off/mine/{_mint_token(person_id)}",
+            url=f"/timeclock/time-off/mine/{_mint_token(person_id)}",
             status_code=303,
         )
     fresh = _mint_token(person_id)
@@ -992,7 +992,7 @@ def mine_edit(request: Request, token: str, rid: int):
     )
 
 
-@router.post("/kiosk/time-off/mine/{token}/{rid}/edit",
+@router.post("/timeclock/time-off/mine/{token}/{rid}/edit",
              response_class=HTMLResponse)
 def mine_edit_submit(
     request: Request,
@@ -1010,7 +1010,7 @@ def mine_edit_submit(
     """Persist edits to an existing request + queue the Odoo write.
 
     Validation cascade mirrors ``request_submit`` (Task 18) exactly — bad
-    token → /kiosk, bad row → list, bad shape/date → back to the detail
+    token → /timeclock, bad row → list, bad shape/date → back to the detail
     page, bad time → re-render the form in edit_mode with the error. On
     success we UPDATE the row to ``draft_edit`` (not ``draft`` — the row
     already exists on Odoo) and schedule a background ``push_one`` that
@@ -1021,19 +1021,19 @@ def mine_edit_submit(
     retrying if the immediate push fails, same as the new-request flow."""
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     row = _load_request(rid, p["odoo_id"])
     if not row:
         return RedirectResponse(
-            url=f"/kiosk/time-off/mine/{_mint_token(person_id)}",
+            url=f"/timeclock/time-off/mine/{_mint_token(person_id)}",
             status_code=303,
         )
     if shape not in _VALID_SHAPES:
         return RedirectResponse(
-            url=f"/kiosk/time-off/mine/{_mint_token(person_id)}/{rid}",
+            url=f"/timeclock/time-off/mine/{_mint_token(person_id)}/{rid}",
             status_code=303,
         )
     try:
@@ -1041,7 +1041,7 @@ def mine_edit_submit(
         dt = _date.fromisoformat(date_to)
     except ValueError:
         return RedirectResponse(
-            url=f"/kiosk/time-off/mine/{_mint_token(person_id)}/{rid}",
+            url=f"/timeclock/time-off/mine/{_mint_token(person_id)}/{rid}",
             status_code=303,
         )
     # Partial-day shapes are single-day; force end = start (see request_submit).
@@ -1118,7 +1118,7 @@ def mine_edit_submit(
     )
     background_tasks.add_task(_queue_push, rid)
     return RedirectResponse(
-        url=f"/kiosk/time-off/mine/{_mint_token(person_id)}/{rid}",
+        url=f"/timeclock/time-off/mine/{_mint_token(person_id)}/{rid}",
         status_code=303,
     )
 
@@ -1243,7 +1243,7 @@ def _approved_by_day(start_d: _date, end_d: _date) -> dict:
     return by_day
 
 
-@router.get("/kiosk/time-off/calendar/{token}", response_class=HTMLResponse)
+@router.get("/timeclock/time-off/calendar/{token}", response_class=HTMLResponse)
 def time_off_calendar(request: Request, token: str, month: str | None = None):
     """Who's Out — a month-grid calendar of approved leaves.
 
@@ -1251,14 +1251,14 @@ def time_off_calendar(request: Request, token: str, month: str | None = None):
     month, padded to full weeks (leading/trailing days from adjacent
     months are flagged ``outside`` so the template can fade them).
     Each cell carries the list of people out that day plus a timing
-    label (no leave type — privacy). Token bounces to ``/kiosk`` on
+    label (no leave type — privacy). Token bounces to ``/timeclock`` on
     failure, identical to the other routes in this module."""
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     today = _date.today()
     # Which month to render. `month` ("YYYY-MM") comes from the prev/next nav
     # links; anything missing or malformed falls back to the current month so

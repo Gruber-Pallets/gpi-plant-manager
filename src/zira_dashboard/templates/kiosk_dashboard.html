@@ -2,7 +2,7 @@
 {% block title %}{{ person.name }} — Kiosk{% endblock %}
 {% block content %}
 <div class="k-header" style="position: relative;">
-  <a href="/kiosk" class="k-back">{{ t("‹ Done") }}</a>
+  <a href="/timeclock" class="k-back">{{ t("‹ Done") }}</a>
   <span style="position: absolute; left: 50%; top: 50%;
                transform: translate(-50%, -50%);
                font-size: 2.25rem; white-space: nowrap;
@@ -35,10 +35,10 @@
       </p>
     {% endif %}
     <div style="display: flex; gap: 2rem; flex-wrap: wrap; justify-content: center;">
-      <form method="post" action="/kiosk/clock-out/{{ token }}" style="margin: 0;">
+      <form method="post" action="/timeclock/clock-out/{{ token }}" style="margin: 0;">
         <button type="submit" class="k-btn danger">{{ t("Clock Out") }}</button>
       </form>
-      <a href="/kiosk/pick-wc/{{ token }}?purpose=transfer"
+      <a href="/timeclock/pick-wc/{{ token }}?purpose=transfer"
          class="k-btn secondary" style="text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">
         {{ t("Transfer") }}
       </a>
@@ -47,7 +47,7 @@
     {% if scheduled_wc %}
       <h2>{{ t("Today you're scheduled on") }}</h2>
       <h1 style="font-size: 3rem; color: #ea580c;">{{ scheduled_wc }}</h1>
-      <form method="post" action="/kiosk/clock-in/{{ token }}"
+      <form method="post" action="/timeclock/clock-in/{{ token }}"
             style="margin-bottom: 1.5rem;">
         <input type="hidden" name="wc_name" value="{{ scheduled_wc }}" />
         <input type="hidden" name="scheduled_wc_name" value="{{ scheduled_wc }}" />
@@ -55,7 +55,7 @@
           {{ t("Confirm — Clock In") }}
         </button>
       </form>
-      <a href="/kiosk/pick-wc/{{ token }}?purpose=clock_in&scheduled={{ scheduled_wc|urlencode }}"
+      <a href="/timeclock/pick-wc/{{ token }}?purpose=clock_in&scheduled={{ scheduled_wc|urlencode }}"
          class="k-btn secondary"
          style="text-decoration: none; min-height: 64px; padding: 1rem 1.5rem;
                 font-size: 1.25rem; min-width: unset;
@@ -67,7 +67,7 @@
       <p style="font-size: 1.5rem; color: #64748b; margin-bottom: 2rem;">
         {{ t("Pick the work center you're on.") }}
       </p>
-      <a href="/kiosk/pick-wc/{{ token }}?purpose=clock_in"
+      <a href="/timeclock/pick-wc/{{ token }}?purpose=clock_in"
          class="k-btn success"
          style="text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">
         {{ t("Pick Work Center") }}
@@ -76,7 +76,7 @@
   {% endif %}
 
   {% if time_off_enabled %}
-    <a href="/kiosk/time-off/{{ token }}"
+    <a href="/timeclock/time-off/{{ token }}"
        class="k-btn secondary"
        style="text-decoration: none; margin-top: 2rem;
               min-height: 64px; padding: 1rem 1.5rem;

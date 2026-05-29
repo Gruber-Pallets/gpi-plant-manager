@@ -2,7 +2,7 @@
 {% block title %}Request Time Off — {{ person.name }}{% endblock %}
 {% block content %}
 <div class="k-header">
-  <a href="/kiosk/time-off/request/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <a href="/timeclock/time-off/request/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
   <span>
     {% if shape == "full_day" %}{{ t("Full Day(s) Off") }}
     {% elif shape == "late_arrival" %}{{ t("Arriving Late") }}
@@ -45,7 +45,7 @@
     {% endif %}
 
     <form method="post"
-          action="{% if edit_mode %}/kiosk/time-off/mine/{{ token }}/{{ edit_rid }}/edit{% else %}/kiosk/time-off/request/{{ token }}/submit{% endif %}"
+          action="{% if edit_mode %}/timeclock/time-off/mine/{{ token }}/{{ edit_rid }}/edit{% else %}/timeclock/time-off/request/{{ token }}/submit{% endif %}"
           style="display: flex; flex-direction: column; gap: 1.25rem;
                  background: #ffffff; border: 1px solid #e2e8f0;
                  border-radius: 0.75rem; padding: 1.5rem;

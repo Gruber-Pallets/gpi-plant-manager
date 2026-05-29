@@ -2,7 +2,7 @@
 {% block title %}Request Submitted — {{ person.name }}{% endblock %}
 {% block content %}
 <div class="k-header">
-  <a href="/kiosk/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <a href="/timeclock/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
   <span>{{ t("Request Submitted") }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
@@ -19,7 +19,7 @@
   <p style="font-size: 1.15rem; color: #64748b;
             margin: 1.5rem 0 0 0; text-align: center;">
     You'll see it under
-    <a href="/kiosk/time-off/mine/{{ token }}"
+    <a href="/timeclock/time-off/mine/{{ token }}"
        style="color: #2563eb; text-decoration: underline;">
       My Requests
     </a>.
@@ -27,13 +27,13 @@
 
   <div style="display: flex; gap: 1rem; margin-top: 2.5rem;
               flex-wrap: wrap; justify-content: center;">
-    <a class="k-btn" href="/kiosk/time-off/{{ token }}"
+    <a class="k-btn" href="/timeclock/time-off/{{ token }}"
        style="text-decoration: none; min-width: 200px;
               display: inline-flex; align-items: center;
               justify-content: center;">
       {{ t("Done") }}
     </a>
-    <a class="k-btn secondary" href="/kiosk/time-off/mine/{{ token }}"
+    <a class="k-btn secondary" href="/timeclock/time-off/mine/{{ token }}"
        style="text-decoration: none; min-width: 200px;
               display: inline-flex; align-items: center;
               justify-content: center;">

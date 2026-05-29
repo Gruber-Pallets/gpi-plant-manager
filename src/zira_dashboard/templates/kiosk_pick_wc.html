@@ -2,7 +2,7 @@
 {% block title %}Pick Work Center{% endblock %}
 {% block content %}
 <div class="k-header">
-  <a href="/kiosk/dashboard/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <a href="/timeclock/dashboard/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
   <span>{{ person.name }}</span>
   {% include "_kiosk_brand.html" %}
 </div>
@@ -19,7 +19,7 @@
   ">
     {% for wc in work_centers %}
       {% if purpose == 'clock_in' %}
-        <form method="post" action="/kiosk/clock-in/{{ token }}" style="margin: 0;">
+        <form method="post" action="/timeclock/clock-in/{{ token }}" style="margin: 0;">
           <input type="hidden" name="wc_name" value="{{ wc.name }}" />
           <input type="hidden" name="scheduled_wc_name" value="{{ scheduled }}" />
           <button type="submit" class="k-btn secondary" style="
@@ -33,7 +33,7 @@
           </button>
         </form>
       {% else %}
-        <form method="post" action="/kiosk/transfer/{{ token }}" style="margin: 0;">
+        <form method="post" action="/timeclock/transfer/{{ token }}" style="margin: 0;">
           <input type="hidden" name="new_wc_name" value="{{ wc.name }}" />
           <button type="submit" class="k-btn secondary" style="
             width: 100%; padding: 1.5rem 1rem;

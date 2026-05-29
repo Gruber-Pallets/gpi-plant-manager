@@ -7,18 +7,18 @@ and audit. The kiosk is designed for touch devices in fullscreen browser
 mode; the templates use big-touch / no-scroll layout.
 
 Flow:
-  1. GET  /kiosk                       — searchable / scrollable name list
-  2. GET  /kiosk/start/{person_id}     — mint a token, redirect to dashboard
-  3. GET  /kiosk/dashboard/{token}     — clocked-in state + actions
-  4. GET  /kiosk/pick-wc/{token}       — WC picker (for override / transfer)
-  5. POST /kiosk/clock-in/{token}      — open hr.attendance with WC
-  6. POST /kiosk/clock-out/{token}     — close hr.attendance
-  7. POST /kiosk/transfer/{token}      — close + reopen at new WC
+  1. GET  /timeclock                       — searchable / scrollable name list
+  2. GET  /timeclock/start/{person_id}     — mint a token, redirect to dashboard
+  3. GET  /timeclock/dashboard/{token}     — clocked-in state + actions
+  4. GET  /timeclock/pick-wc/{token}       — WC picker (for override / transfer)
+  5. POST /timeclock/clock-in/{token}      — open hr.attendance with WC
+  6. POST /timeclock/clock-out/{token}     — close hr.attendance
+  7. POST /timeclock/transfer/{token}      — close + reopen at new WC
 
 Auth: name-pick only — no PIN, by design. Dale's call: PINs add friction
 without meaningfully reducing the trust assumption (anyone on the shop
 floor who could guess a PIN could also stand at the kiosk and tap a
-name). The /kiosk route itself is gated behind the plant-manager session
+name). The /timeclock route itself is gated behind the plant-manager session
 login (RequireAuthMiddleware), so unauthenticated reach is impossible
 from the public internet.
 
@@ -60,6 +60,26 @@ router = APIRouter()
 _log = logging.getLogger(__name__)
 
 
+# ---------- back-compat: /kiosk → /timeclock ----------
+# The timeclock app moved from /kiosk to /timeclock. These redirects keep
+# old bookmarks working — most importantly the plant tablet pinned to
+# /kiosk — and catch any internal link that still points at the old path.
+@router.get("/kiosk")
+def _legacy_kiosk_root(request: Request):
+    q = request.url.query
+    return RedirectResponse(
+        url="/timeclock" + (f"?{q}" if q else ""), status_code=307
+    )
+
+
+@router.get("/kiosk/{rest:path}")
+def _legacy_kiosk_deep(request: Request, rest: str):
+    q = request.url.query
+    return RedirectResponse(
+        url=f"/timeclock/{rest}" + (f"?{q}" if q else ""), status_code=307
+    )
+
+
 # ---------- session tokens ----------
 
 _SESSION_SECRET = os.environ.get("KIOSK_SESSION_SECRET") or secrets.token_hex(32)
@@ -99,7 +119,7 @@ def _time_off_redirect_if_salaried(
     stale form POST)."""
     if _is_time_off_only(p):
         return RedirectResponse(
-            url=f"/kiosk/time-off/{_mint_token(person_id)}", status_code=303
+            url=f"/timeclock/time-off/{_mint_token(person_id)}", status_code=303
         )
     return None
 
@@ -320,7 +340,7 @@ def _wc_list() -> list[dict]:
 
 # ---------- routes ----------
 
-@router.get("/kiosk", response_class=HTMLResponse)
+@router.get("/timeclock", response_class=HTMLResponse)
 def kiosk_home(request: Request):
     """Searchable employee list. JS filters as the user types; tapping a
     name navigates to the PIN screen."""
@@ -334,31 +354,31 @@ def kiosk_home(request: Request):
     )
 
 
-@router.get("/kiosk/start/{person_id}")
+@router.get("/timeclock/start/{person_id}")
 def kiosk_start(person_id: int):
     """Mint a fresh session token for `person_id` and bounce to the
     dashboard. No PIN check — picking your name from the home list is
     the auth (intentional design, not a Phase-0 shortcut)."""
     p = _person_by_id(person_id)
     if not p:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
     token = _mint_token(person_id)
     return RedirectResponse(
-        url=f"/kiosk/dashboard/{token}", status_code=303
+        url=f"/timeclock/dashboard/{token}", status_code=303
     )
 
 
-@router.get("/kiosk/dashboard/{token}", response_class=HTMLResponse)
+@router.get("/timeclock/dashboard/{token}", response_class=HTMLResponse)
 def kiosk_dashboard(request: Request, token: str):
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     # Fixed-wage staff have no punch screen — bounce to the time-off flow.
     # Covers the time-off landing's "Back" link, which points here.
     salaried = _time_off_redirect_if_salaried(p, person_id)
@@ -402,7 +422,7 @@ def kiosk_dashboard(request: Request, token: str):
     )
 
 
-@router.get("/kiosk/pick-wc/{token}", response_class=HTMLResponse)
+@router.get("/timeclock/pick-wc/{token}", response_class=HTMLResponse)
 def kiosk_pick_wc(
     request: Request,
     token: str,
@@ -413,10 +433,10 @@ def kiosk_pick_wc(
     URL the form submits to (clock-in vs transfer)."""
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
@@ -437,7 +457,7 @@ def kiosk_pick_wc(
     )
 
 
-@router.post("/kiosk/clock-in/{token}", response_class=HTMLResponse)
+@router.post("/timeclock/clock-in/{token}", response_class=HTMLResponse)
 def kiosk_clock_in(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -447,10 +467,10 @@ def kiosk_clock_in(
 ):
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
@@ -475,7 +495,7 @@ def kiosk_clock_in(
     )
 
 
-@router.post("/kiosk/clock-out/{token}", response_class=HTMLResponse)
+@router.post("/timeclock/clock-out/{token}", response_class=HTMLResponse)
 def kiosk_clock_out(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -483,10 +503,10 @@ def kiosk_clock_out(
 ):
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
@@ -505,7 +525,7 @@ def kiosk_clock_out(
     )
 
 
-@router.post("/kiosk/transfer/{token}", response_class=HTMLResponse)
+@router.post("/timeclock/transfer/{token}", response_class=HTMLResponse)
 def kiosk_transfer(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -514,10 +534,10 @@ def kiosk_transfer(
 ):
     person_id = _verify_token(token)
     if person_id is None:
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
-        return RedirectResponse(url="/kiosk", status_code=303)
+        return RedirectResponse(url="/timeclock", status_code=303)
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried

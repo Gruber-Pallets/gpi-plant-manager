@@ -3,9 +3,9 @@
 {% block content %}
 <div class="k-header">
   {% if time_off_only %}
-  <a href="/kiosk" class="k-back">{{ t("‹ Done") }}</a>
+  <a href="/timeclock" class="k-back">{{ t("‹ Done") }}</a>
   {% else %}
-  <a href="/kiosk/dashboard/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <a href="/timeclock/dashboard/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
   {% endif %}
   <span>{{ t("Time Off — {name}", name=person.name) }}</span>
   {% include "_kiosk_brand.html" %}
@@ -35,7 +35,7 @@
       width: 100%;">
 
       {# Full Day(s) Off spans all 3 columns — the common case. #}
-      <a href="/kiosk/time-off/request/{{ token }}/details?shape=full_day"
+      <a href="/timeclock/time-off/request/{{ token }}/details?shape=full_day"
          class="k-btn"
          style="grid-column: 1 / -1;
                 text-decoration: none;
@@ -51,7 +51,7 @@
 
       {# Partial-day options, ordered chronologically:
          arrive late (morning) → midday gap → leave early (afternoon). #}
-      <a href="/kiosk/time-off/request/{{ token }}/details?shape=late_arrival"
+      <a href="/timeclock/time-off/request/{{ token }}/details?shape=late_arrival"
          class="k-btn secondary"
          style="text-decoration: none;
                 padding: 2rem 1.5rem; min-height: 160px; min-width: unset;
@@ -64,7 +64,7 @@
         </span>
       </a>
 
-      <a href="/kiosk/time-off/request/{{ token }}/details?shape=midday_gap"
+      <a href="/timeclock/time-off/request/{{ token }}/details?shape=midday_gap"
          class="k-btn secondary"
          style="text-decoration: none;
                 padding: 2rem 1.5rem; min-height: 160px; min-width: unset;
@@ -77,7 +77,7 @@
         </span>
       </a>
 
-      <a href="/kiosk/time-off/request/{{ token }}/details?shape=early_leave"
+      <a href="/timeclock/time-off/request/{{ token }}/details?shape=early_leave"
          class="k-btn secondary"
          style="text-decoration: none;
                 padding: 2rem 1.5rem; min-height: 160px; min-width: unset;
@@ -104,7 +104,7 @@
     width: 100%;
     max-width: 960px;">
 
-    <a href="/kiosk/time-off/mine/{{ token }}"
+    <a href="/timeclock/time-off/mine/{{ token }}"
        class="k-btn secondary"
        style="text-decoration: none;
               padding: 2rem 1.5rem; min-height: 140px; min-width: unset;
@@ -123,7 +123,7 @@
       {% endif %}
     </a>
 
-    <a href="/kiosk/time-off/calendar/{{ token }}"
+    <a href="/timeclock/time-off/calendar/{{ token }}"
        class="k-btn secondary"
        style="text-decoration: none;
               padding: 2rem 1.5rem; min-height: 140px; min-width: unset;
