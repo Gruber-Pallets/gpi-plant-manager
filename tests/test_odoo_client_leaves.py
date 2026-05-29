@@ -370,3 +370,47 @@ def test_find_duplicate_leave_none_when_no_match(monkeypatch):
     _stub_execute(monkeypatch, responses)
     assert odoo_client.find_duplicate_leave(5, 1,
         date(2026, 6, 1), date(2026, 6, 3)) is None
+
+
+# ---- confirm_leave: submit a draft leave into the approval workflow ----
+
+
+def test_confirm_leave_submits_a_draft(monkeypatch):
+    """A freshly created leave sits in Odoo 'draft' ("To Submit").
+    confirm_leave must call action_confirm to push it into the approval
+    queue."""
+    calls = []
+
+    def fake(model, method, *args, **kwargs):
+        calls.append((model, method, args))
+        if method == "read":
+            return [{"id": 1, "state": "draft"}]
+        return True
+
+    monkeypatch.setattr(odoo_client, "execute", fake)
+    odoo_client.confirm_leave(1)
+    methods = [c[1] for c in calls]
+    assert "read" in methods
+    assert "action_confirm" in methods
+    # action_confirm targeted the right leave id
+    confirm_call = next(c for c in calls if c[1] == "action_confirm")
+    assert confirm_call[2][0] == [1]
+
+
+def test_confirm_leave_skips_when_already_past_draft(monkeypatch):
+    """Odoo's action_confirm raises on non-draft records, so confirm_leave
+    must NOT call it when the leave is already confirmed/validated — keeps
+    sync retries and the dedupe path idempotent."""
+    calls = []
+
+    def fake(model, method, *args, **kwargs):
+        calls.append((model, method, args))
+        if method == "read":
+            return [{"id": 1, "state": "validate"}]
+        return True
+
+    monkeypatch.setattr(odoo_client, "execute", fake)
+    odoo_client.confirm_leave(1)
+    methods = [c[1] for c in calls]
+    assert "read" in methods
+    assert "action_confirm" not in methods

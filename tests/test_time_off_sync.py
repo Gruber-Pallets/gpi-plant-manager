@@ -46,8 +46,10 @@ def test_push_one_creates_new_odoo_leave_when_no_odoo_id(monkeypatch, fake_db):
     }]
     mock_create = MagicMock(return_value=777)
     mock_find = MagicMock(return_value=None)
+    mock_confirm = MagicMock()
     monkeypatch.setattr(time_off_sync.odoo_client, "create_leave", mock_create)
     monkeypatch.setattr(time_off_sync.odoo_client, "find_duplicate_leave", mock_find)
+    monkeypatch.setattr(time_off_sync.odoo_client, "confirm_leave", mock_confirm)
 
     time_off_sync.push_one(1)
 
@@ -56,6 +58,9 @@ def test_push_one_creates_new_odoo_leave_when_no_odoo_id(monkeypatch, fake_db):
         date_from=date(2026, 6, 1), date_to=date(2026, 6, 3),
         hour_from=None, hour_to=None, note="PTO",
     )
+    # New leaves must be submitted into Odoo's approval workflow, not left in
+    # "To Submit" (draft) — otherwise they never reach the approval queue.
+    mock_confirm.assert_called_once_with(777)
     # Should have UPDATEd row with odoo_leave_id, synced=TRUE, state='confirm'
     update_sql = [e for e in fake_db["executes"] if "UPDATE time_off_requests" in e[0]]
     assert update_sql, "expected UPDATE on time_off_requests"
@@ -74,10 +79,16 @@ def test_push_one_dedups_via_search_before_create(monkeypatch, fake_db):
                         MagicMock(return_value=888))
     mock_create = MagicMock()
     monkeypatch.setattr(time_off_sync.odoo_client, "create_leave", mock_create)
+    mock_confirm = MagicMock()
+    monkeypatch.setattr(time_off_sync.odoo_client, "confirm_leave", mock_confirm)
 
     time_off_sync.push_one(1)
 
     mock_create.assert_not_called()
+    # Even on the dedupe path we confirm the found leave — heals a duplicate
+    # that a prior run created but left stuck in draft. confirm_leave is a
+    # no-op if it's already past draft.
+    mock_confirm.assert_called_once_with(888)
     update_sql = [e for e in fake_db["executes"] if "UPDATE time_off_requests" in e[0]]
     assert any("888" in str(e[1]) or 888 in (e[1] or []) for e in update_sql)
 

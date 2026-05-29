@@ -132,6 +132,20 @@ def _push_create(row: dict[str, Any]) -> None:
             hour_from=hour_from, hour_to=hour_to,
             note=row["note"],
         )
+    # Submit the leave into Odoo's approval workflow. A bare create sits in
+    # "To Submit" (draft) — invisible to the manager's approval queue and not
+    # deducted from balances — so confirm it into a real pending request.
+    # Best-effort: if confirm fails (e.g. Odoo rejects on a balance check),
+    # the leave still exists as a draft, so we keep the row synced rather than
+    # looping on sync_error; the 60s poller reconciles the real state. Worst
+    # case is the pre-fix behaviour (a draft in Odoo), never worse.
+    try:
+        odoo_client.confirm_leave(leave_id)
+    except Exception as e:  # noqa: BLE001 — leave exists; log and let poll reconcile
+        _log.warning(
+            "confirm_leave failed for leave %s (row %s, left in draft): %s",
+            leave_id, row["id"], e, exc_info=True,
+        )
     db.execute(
         "UPDATE time_off_requests SET odoo_leave_id = %s, "
         "state = 'confirm', synced_to_odoo = TRUE, sync_error = NULL, "

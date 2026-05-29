@@ -613,7 +613,13 @@ def create_leave(
     hour_to: float | None = None,
     note: str | None = None,
 ) -> int:
-    """Create an hr.leave in 'confirm' state. Returns the new leave id.
+    """Create an hr.leave and return the new leave id.
+
+    A bare ``create`` lands in Odoo's ``'draft'`` ("To Submit") state — it
+    does NOT enter the approval workflow on its own (it won't show in the
+    manager's "Waiting for Approval" queue and won't be deducted from the
+    balance). Callers that want the request to become a real pending approval
+    must follow with ``confirm_leave`` (see ``time_off_sync._push_create``).
 
     Sets request_unit_hours=True with float hour_from/hour_to when given;
     otherwise creates a day-unit leave for the date range.
@@ -631,6 +637,21 @@ def create_leave(
     if note:
         payload["name"] = note
     return execute("hr.leave", "create", payload)
+
+
+def confirm_leave(leave_id: int) -> None:
+    """Submit a draft hr.leave into the approval workflow.
+
+    Calls ``action_confirm`` (the "Submit" / "Confirm Request" button),
+    moving a ``'draft'`` ("To Submit") leave to ``'confirm'`` ("To Approve")
+    — or straight to validated for no-validation types. Reads the current
+    state first and only confirms drafts, because Odoo's ``action_confirm``
+    raises on records already past draft; this keeps the call idempotent
+    across sync retries and the duplicate-leave path.
+    """
+    rows = execute("hr.leave", "read", [leave_id], ["state"])
+    if rows and rows[0].get("state") == "draft":
+        execute("hr.leave", "action_confirm", [leave_id])
 
 
 def write_leave(leave_id: int, **fields: Any) -> None:
