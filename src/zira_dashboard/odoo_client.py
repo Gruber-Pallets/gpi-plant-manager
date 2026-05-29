@@ -426,24 +426,49 @@ def _norm_requires_allocation(value) -> str:
 def fetch_leave_types() -> list[dict]:
     """All active hr.leave.type, cached in-process for 10 minutes.
 
-    Returns [{id, name, request_unit, requires_allocation, color, active}, ...]
-    with ``requires_allocation`` normalized to the 'yes'/'no' strings the rest
-    of the app expects (Odoo 19+ returns it as a boolean — see
-    ``_norm_requires_allocation``).
+    Returns [{id, name, request_unit, requires_allocation, negative_cap,
+    color, active}, ...] with ``requires_allocation`` normalized to the
+    'yes'/'no' strings the rest of the app expects (Odoo 19+ returns it as a
+    boolean — see ``_norm_requires_allocation``).
+
+    ``negative_cap`` is how many units a request may dip *below* the available
+    balance for this type, derived from Odoo's per-type "Allow Negative Cap"
+    settings (``allows_negative`` + ``max_allowed_negative``). It's 0 unless an
+    admin flagged the type to allow an overdraw — e.g. a Birthday Pay type set
+    to "go negative by one day" yields 1. The timeclock picker adds it to the
+    available balance when deciding whether to enable Submit, so an allowance
+    type can be requested past a zero balance.
     """
     global _leave_types_cache
     now = time.time()
     if _leave_types_cache and _leave_types_cache[1] > now:
         return _leave_types_cache[0]
-    rows = execute(
-        "hr.leave.type", "search_read",
-        [("active", "=", True)],
-        fields=["id", "name", "request_unit",
-                "requires_allocation", "color", "active"],
-    )
+    base_fields = ["id", "name", "request_unit",
+                   "requires_allocation", "color", "active"]
+    # allows_negative / max_allowed_negative are standard hr.leave.type fields
+    # in modern Odoo, but request them defensively: if an instance/edition
+    # doesn't expose them, search_read raises a Fault on the unknown field —
+    # retry without them rather than break the whole leave-type picker. Missing
+    # values then default to negative_cap=0 (no overdraw allowed).
+    try:
+        rows = execute(
+            "hr.leave.type", "search_read",
+            [("active", "=", True)],
+            fields=base_fields + ["allows_negative", "max_allowed_negative"],
+        )
+    except xmlrpc.client.Fault:
+        rows = execute(
+            "hr.leave.type", "search_read",
+            [("active", "=", True)],
+            fields=base_fields,
+        )
     for r in rows:
         r["requires_allocation"] = _norm_requires_allocation(
             r.get("requires_allocation"))
+        r["negative_cap"] = (
+            float(r.get("max_allowed_negative") or 0.0)
+            if r.get("allows_negative") else 0.0
+        )
     _leave_types_cache = (rows, now + _LEAVE_TYPES_TTL_SECONDS)
     return rows
 

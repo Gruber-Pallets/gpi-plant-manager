@@ -812,10 +812,16 @@ CREATE TABLE IF NOT EXISTS leave_types_cache (
   name                 TEXT NOT NULL,
   request_unit         TEXT NOT NULL CHECK (request_unit IN ('day','half_day','hour')),
   requires_allocation  TEXT NOT NULL CHECK (requires_allocation IN ('yes','no')),
+  negative_cap         NUMERIC(8,2) NOT NULL DEFAULT 0,
   color                INTEGER,
   active               BOOLEAN NOT NULL DEFAULT TRUE,
   last_pulled_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 2026-05-29: how many units a request may overdraw the balance for this type
+-- (Odoo "Allow Negative Cap"; e.g. a Birthday Pay day allowed one day negative).
+-- ADD COLUMN IF NOT EXISTS migrates prod tables created before the column.
+ALTER TABLE leave_types_cache
+  ADD COLUMN IF NOT EXISTS negative_cap NUMERIC(8,2) NOT NULL DEFAULT 0;
 """
 
 

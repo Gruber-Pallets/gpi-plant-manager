@@ -66,6 +66,7 @@
               <option value="{{ lt.id }}"
                       data-unit="{{ lt.request_unit }}"
                       data-requires-alloc="{{ lt.requires_allocation }}"
+                      data-negative-cap="{{ lt.negative_cap | default(0) }}"
                       {% if edit_mode and prefill %}{% if lt.id == prefill.holiday_status_id %}selected{% endif %}{% elif lt.name|lower == "paid time off" %}selected{% endif %}>
                 {{ lt.name }}
               </option>
@@ -80,7 +81,8 @@
                  id="holiday-status-select"
                  value="{{ partial_day_type.id }}"
                  data-unit="{{ partial_day_type.request_unit }}"
-                 data-requires-alloc="{{ partial_day_type.requires_allocation }}">
+                 data-requires-alloc="{{ partial_day_type.requires_allocation }}"
+                 data-negative-cap="{{ partial_day_type.negative_cap | default(0) }}">
           <div style="background: #f1f5f9; border-radius: 0.5rem;
                       padding: 0.75rem 1rem; font-size: 1rem;
                       color: #475569;">
