@@ -390,3 +390,72 @@ def test_poll_refreshes_leave_types_cache(monkeypatch, fake_db):
     upserts = [e for e in fake_db["executes"]
                if "leave_types_cache" in e[0]]
     assert upserts
+
+
+def test_delete_missing_hard_deletes_and_reverse_cascades(monkeypatch, fake_db):
+    """An approved leave gone from Odoo → reverse scheduler_moves still fire,
+    balance invalidated, and the row is DELETEd (not soft-cancelled)."""
+    fake_db["query_result"] = [{
+        "id": 1, "state": "validate", "person_odoo_id": 5, "shape": "full_day",
+        "holiday_status_id": 1, "date_from": date(2026, 6, 1),
+        "date_to": date(2026, 6, 1), "hour_from": None, "hour_to": None,
+        "working_hours_json": None, "odoo_leave_id": 555,
+    }]
+    invalidated = []
+    monkeypatch.setattr(time_off_sync, "_invalidate_balance",
+                        lambda pid: invalidated.append(pid))
+
+    time_off_sync._delete_missing_from_odoo(set(), date(2026, 5, 1),
+                                            date(2026, 12, 31))
+
+    # Reverse audit row logged (validate → cancel).
+    moves = [e for e in fake_db["executes"]
+             if "INSERT INTO scheduler_moves" in e[0]]
+    assert len(moves) == 1 and moves[0][1][4] == "time_off_canceled"
+    # Row hard-deleted, not soft-cancelled.
+    deletes = [e for e in fake_db["executes"]
+               if "DELETE FROM time_off_requests" in e[0]]
+    assert deletes and deletes[0][1] == (1,)
+    assert not any("state = 'cancel'" in e[0] for e in fake_db["executes"])
+    assert 5 in invalidated
+
+
+def test_delete_missing_pending_row_deletes_no_scheduler_move(monkeypatch, fake_db):
+    """A pending leave gone from Odoo → deleted + balance freed, but no
+    scheduler_moves row (it was never approved)."""
+    fake_db["query_result"] = [{
+        "id": 2, "state": "confirm", "person_odoo_id": 7, "shape": "full_day",
+        "holiday_status_id": 1, "date_from": date(2026, 6, 1),
+        "date_to": date(2026, 6, 1), "hour_from": None, "hour_to": None,
+        "working_hours_json": None, "odoo_leave_id": 777,
+    }]
+    invalidated = []
+    monkeypatch.setattr(time_off_sync, "_invalidate_balance",
+                        lambda pid: invalidated.append(pid))
+
+    time_off_sync._delete_missing_from_odoo(set(), date(2026, 5, 1),
+                                            date(2026, 12, 31))
+
+    assert not any("INSERT INTO scheduler_moves" in e[0]
+                   for e in fake_db["executes"])
+    deletes = [e for e in fake_db["executes"]
+               if "DELETE FROM time_off_requests" in e[0]]
+    assert deletes and deletes[0][1] == (2,)
+    assert invalidated == [7]
+
+
+def test_delete_missing_skips_rows_still_in_odoo(monkeypatch, fake_db):
+    """A leave still present in Odoo (its id is in seen_ids) is left alone."""
+    fake_db["query_result"] = [{
+        "id": 3, "state": "validate", "person_odoo_id": 5, "shape": "full_day",
+        "holiday_status_id": 1, "date_from": date(2026, 6, 1),
+        "date_to": date(2026, 6, 1), "hour_from": None, "hour_to": None,
+        "working_hours_json": None, "odoo_leave_id": 555,
+    }]
+    monkeypatch.setattr(time_off_sync, "_invalidate_balance", lambda pid: None)
+
+    time_off_sync._delete_missing_from_odoo({555}, date(2026, 5, 1),
+                                            date(2026, 12, 31))
+
+    assert not any("DELETE FROM time_off_requests" in e[0]
+                   for e in fake_db["executes"])

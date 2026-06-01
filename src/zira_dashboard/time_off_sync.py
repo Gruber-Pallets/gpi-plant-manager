@@ -15,7 +15,7 @@ This module implements two sides of the sync:
   - **Pull** (``poll_odoo_leaves``): fetches all hr.leave in a rolling
     window from Odoo and upserts each into the local mirror. Existing
     rows whose state changed trigger ``cascade_on_state_change``; local
-    rows missing from Odoo are marked ``state='cancel'``.
+    rows missing from Odoo are HARD DELETED (reverse cascade fires first).
 
 State routing
 -------------
@@ -239,8 +239,8 @@ def poll_odoo_leaves() -> int:
       - If not: INSERT a new row with ``originating_kiosk_user=FALSE``.
 
     Local rows in non-terminal state whose ``odoo_leave_id`` is no
-    longer returned by Odoo are marked ``state='cancel'`` (Odoo-side
-    deletion).
+    longer returned by Odoo are hard-deleted (Odoo-side deletion), after
+    firing the reverse cascade.
     """
     # Refresh leave-types cache first so the kiosk picker stays current.
     try:
@@ -293,7 +293,7 @@ def poll_odoo_leaves() -> int:
     for leave in leaves:
         seen_ids.add(leave["id"])
         _upsert_one(leave)
-    _mark_missing_as_cancel(seen_ids, start_d, end_d)
+    _delete_missing_from_odoo(seen_ids, start_d, end_d)
     return len(leaves)
 
 
@@ -378,12 +378,23 @@ def _upsert_one(leave: dict[str, Any]) -> None:
                 cascade_on_state_change({"state": "draft"}, new_rows[0])
 
 
-def _mark_missing_as_cancel(
+def _delete_missing_from_odoo(
     seen_ids: set[int], start_d: date, end_d: date,
 ) -> None:
-    """Rows in ``[start_d..end_d]`` with ``odoo_leave_id`` not in
-    ``seen_ids`` and state not already terminal → mark as cancel +
-    cascade-reverse."""
+    """Rows in ``[start_d..end_d]`` with an ``odoo_leave_id`` no longer
+    returned by Odoo (not in ``seen_ids``) and not already terminal →
+    HARD DELETE. Odoo is the source of truth: if the leave is gone there,
+    the local mirror row is removed.
+
+    Before deleting we fire ``cascade_on_state_change`` with a synthetic
+    ``state='cancel'`` so an approved leave still logs its reverse
+    ``scheduler_moves`` audit row (the breadcrumb survives the row's
+    deletion) and invalidates the balance. We then invalidate the balance
+    unconditionally so a deleted *pending* leave frees its in-flight
+    allocation immediately rather than waiting for the 10-min balance sweep.
+
+    Unsynced kiosk drafts (``odoo_leave_id IS NULL``) are never touched —
+    the WHERE clause excludes them."""
     rows = db.query(
         "SELECT id, state, person_odoo_id, shape, holiday_status_id, "
         "date_from, date_to, hour_from, hour_to, working_hours_json, "
@@ -399,12 +410,12 @@ def _mark_missing_as_cancel(
             continue
         new_r = dict(r)
         new_r["state"] = "cancel"
+        cascade_on_state_change(r, new_r)   # reverse audit + balance (if approved)
+        _invalidate_balance(r["person_odoo_id"])  # also free pending allocations
         db.execute(
-            "UPDATE time_off_requests SET state = 'cancel', "
-            "last_pulled_at = now(), updated_at = now() WHERE id = %s",
+            "DELETE FROM time_off_requests WHERE id = %s",
             (r["id"],),
         )
-        cascade_on_state_change(r, new_r)
 
 
 def _parse_date(value: Any) -> date | None:
