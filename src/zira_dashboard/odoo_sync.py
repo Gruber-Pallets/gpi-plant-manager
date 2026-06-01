@@ -12,12 +12,41 @@ Last-sync timestamp is stored in app_settings under key 'odoo_last_sync'.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from . import odoo_client
 
+log = logging.getLogger(__name__)
+
 TTL = timedelta(hours=1)
+
+
+def _m2o_id(val):
+    """Odoo many2one fields come back as [id, name] or False. Return the
+    id, or None."""
+    if isinstance(val, (list, tuple)) and val:
+        return val[0]
+    return None
+
+
+def refresh_work_schedule_hours(only_ids=None) -> None:
+    """Refresh the Odoo-owned name + per-weekday hours for the configured
+    work_schedules overrides. Leaves the app-owned rounding windows alone.
+    Best-effort: callers wrap in try/except so an Odoo hiccup never breaks
+    the rest of the sync."""
+    from . import work_schedule_store, odoo_client
+    ids = [o.resource_calendar_id for o in work_schedule_store.all_overrides()]
+    if only_ids is not None:
+        wanted = {int(i) for i in only_ids}
+        ids = [i for i in ids if i in wanted]
+    if not ids:
+        return
+    names = {c["id"]: c.get("name") or "" for c in odoo_client.fetch_work_schedules()}
+    hours = odoo_client.fetch_calendar_hours(ids)
+    for cid in ids:
+        work_schedule_store.refresh_synced(cid, names.get(cid, ""), hours.get(cid, {}))
 
 
 @dataclass(frozen=True)
@@ -116,14 +145,17 @@ def sync(force: bool = False) -> SyncResult:
             wage_type = emp.get("wage_type") or None
             spanish_speaker = emp["id"] in spanish_ids
             cur.execute(
-                "INSERT INTO people (odoo_id, name, active, wage_type, spanish_speaker, last_pulled_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "INSERT INTO people (odoo_id, name, active, wage_type, spanish_speaker, "
+                "resource_calendar_id, last_pulled_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
                 "active = EXCLUDED.active, wage_type = EXCLUDED.wage_type, "
                 "spanish_speaker = EXCLUDED.spanish_speaker, "
+                "resource_calendar_id = EXCLUDED.resource_calendar_id, "
                 "last_pulled_at = EXCLUDED.last_pulled_at",
                 (emp["id"], _short_name(emp["name"]), bool(emp.get("active", True)),
-                 wage_type, spanish_speaker, pulled_at),
+                 wage_type, spanish_speaker, _m2o_id(emp.get("resource_calendar_id")),
+                 pulled_at),
             )
         # Deactivate Odoo-mapped people who disappeared from the response —
         # i.e., archived (or deleted) in Odoo. fetch_employees() searches
@@ -189,6 +221,13 @@ def sync(force: bool = False) -> SyncResult:
     from . import cert_lookup, staffing
     cert_lookup.invalidate_cache()
     staffing._invalidate_roster_cache()
+
+    # Best-effort: refresh per-schedule rounding overrides' hours from Odoo.
+    # A failure here must not fail the (already-committed) employee sync.
+    try:
+        refresh_work_schedule_hours()
+    except Exception:
+        log.exception("refresh_work_schedule_hours failed during sync")
 
     return SyncResult(
         ok=True, refreshed=True, employee_count=len(employees),
