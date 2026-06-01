@@ -53,7 +53,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import db, timeclock_sync, shift_config, staffing
+from .. import db, timeclock_sync, shift_config, staffing, live_cache
 from ..deps import templates
 
 router = APIRouter()
@@ -163,43 +163,86 @@ def _person_by_id(person_id: int) -> dict | None:
     return rows[0] if rows else None
 
 
-def _current_state(person_odoo_id: int) -> dict:
-    """Return the kiosk's local view of an employee's current attendance
-    state. Sourced from timeclock_punches_log — no Odoo round trip on the
-    read path (was ~200-500ms XML-RPC, now ~5ms local SELECT).
-
-    The most recent punch row determines the state. If the last action
-    was clock_in or transfer_in, they're clocked in at that wc_name; if
-    it was clock_out / transfer_out / no rows, they're clocked out. The
-    Odoo attendance id, when known, lets the background writer close the
-    right row on clock_out / transfer.
-
-    Local DB as source of truth is safe for the Phase 0 pilot (Dale only,
-    all his punches go through this kiosk) and Phase 1 (plant cutover,
-    StratusTime is gone). It is NOT safe during a mixed transition where
-    employees punch via both systems — revisit before mixing them.
-    """
+def _latest_punch(person_odoo_id: int) -> dict | None:
+    """Most-recent local punch row for this person, or None. Carries the
+    sync bookkeeping (synced_to_odoo, synced_at) the reconciliation rule
+    needs to decide whether the cache could have seen it yet."""
     rows = db.query(
         "SELECT action, wc_name, "
         "COALESCE(rounded_at, occurred_at) AS occurred_at, "
-        "odoo_attendance_id "
+        "odoo_attendance_id, synced_to_odoo, synced_at "
         "FROM timeclock_punches_log WHERE person_odoo_id = %s "
         "ORDER BY occurred_at DESC, id DESC LIMIT 1",
         (person_odoo_id,),
     )
-    if not rows or rows[0]["action"] in ("clock_out", "transfer_out"):
+    return rows[0] if rows else None
+
+
+def _trust_local(latest: dict | None, refreshed_at) -> bool:
+    """True when the local log holds a punch the Odoo cache can't have
+    reflected yet — i.e. the latest punch is unsynced, or the cache was
+    last refreshed before that punch finished syncing to Odoo. This is the
+    race-guard that stops a lagging cache from flashing the wrong screen
+    right after a kiosk punch."""
+    if latest is None:
+        return False
+    if not latest.get("synced_to_odoo"):
+        return True
+    synced_at = latest.get("synced_at")
+    if synced_at is None:
+        return True
+    return refreshed_at <= synced_at
+
+
+def _state_from_log(latest: dict | None) -> dict:
+    """The pre-reconciliation behavior: derive state purely from the most
+    recent local punch. Used as the safe fallback (cold/stale cache) and
+    whenever the local log wins."""
+    if latest is None or latest["action"] in ("clock_out", "transfer_out"):
         return {
-            "is_clocked_in": False,
-            "current_wc": None,
-            "check_in_ts": None,
-            "open_odoo_attendance_id": None,
+            "is_clocked_in": False, "current_wc": None,
+            "check_in_ts": None, "open_odoo_attendance_id": None,
         }
-    r = rows[0]
     return {
         "is_clocked_in": True,
-        "current_wc": r["wc_name"],
-        "check_in_ts": r["occurred_at"],
-        "open_odoo_attendance_id": r["odoo_attendance_id"],
+        "current_wc": latest["wc_name"],
+        "check_in_ts": latest["occurred_at"],
+        "open_odoo_attendance_id": latest["odoo_attendance_id"],
+    }
+
+
+def _current_state(person_odoo_id: int) -> dict:
+    """The kiosk's view of an employee's current attendance state, reconciled
+    against Odoo. Still a fast all-local read — no XML-RPC on the hot path.
+
+    Sources: the Odoo open-attendance snapshot (live_cache, refreshed ~30s by
+    the warmer) and the latest timeclock_punches_log row. Odoo is authoritative
+    EXCEPT for very-recent local punches the snapshot can't have seen yet (see
+    _trust_local). If the snapshot is missing or stale, we degrade to the local
+    log so an Odoo/warmer outage never blanks everyone to 'clocked out'.
+
+    See docs/superpowers/specs/2026-06-01-timeclock-odoo-state-reconciliation-design.md.
+    """
+    snapshot, refreshed_at = live_cache.read_open_attendance()
+    latest = _latest_punch(person_odoo_id)
+
+    if snapshot is None or live_cache.is_stale(refreshed_at):
+        return _state_from_log(latest)
+    if _trust_local(latest, refreshed_at):
+        return _state_from_log(latest)
+
+    entry = snapshot.get(str(person_odoo_id))
+    if not entry:
+        return {
+            "is_clocked_in": False, "current_wc": None,
+            "check_in_ts": None, "open_odoo_attendance_id": None,
+        }
+    check_in = entry.get("check_in")
+    return {
+        "is_clocked_in": True,
+        "current_wc": entry.get("wc_name"),
+        "check_in_ts": datetime.fromisoformat(check_in) if check_in else None,
+        "open_odoo_attendance_id": entry.get("att_id"),
     }
 
 
