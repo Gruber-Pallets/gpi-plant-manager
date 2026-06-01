@@ -115,6 +115,30 @@ def test_toggle_endpoint_400_when_excluded_not_bool():
     assert r.status_code == 400
 
 
+def test_roster_filter_lists_queries_active_and_splits(monkeypatch):
+    """_roster_filter_lists() selects the `active` column and returns the
+    rows split into (active, inactive)."""
+    from zira_dashboard import db
+    from zira_dashboard.routes import settings as settings_route
+
+    captured = {}
+
+    def fake_query(sql, *args):
+        captured["sql"] = sql
+        return [
+            {"odoo_id": 1, "name": "Ana", "excluded": False, "active": True},
+            {"odoo_id": 2, "name": "Zed", "excluded": False, "active": False},
+        ]
+
+    monkeypatch.setattr(db, "query", fake_query)
+    active, inactive = settings_route._roster_filter_lists()
+
+    assert "active" in captured["sql"].lower()
+    assert "where odoo_id is not null" in captured["sql"].lower()
+    assert [r["name"] for r in active] == ["Ana"]
+    assert [r["name"] for r in inactive] == ["Zed"]
+
+
 def test_toggle_endpoint_writes_excluded_flag(monkeypatch):
     """Mock db.execute and assert it gets called with (excluded, odoo_id).
     Verifies the SQL shape without needing DATABASE_URL."""
