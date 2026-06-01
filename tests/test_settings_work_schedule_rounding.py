@@ -69,3 +69,40 @@ def test_remove_deletes_override():
     assert r.status_code == 303
     work_schedule_store.reload()
     assert work_schedule_store.get(CAL_ID) is None
+
+
+def test_timeclock_settings_render_when_odoo_unavailable(monkeypatch):
+    # Headline requirement: the Add-dropdown's fetch_work_schedules() is
+    # guarded, so the settings page still renders (200) if Odoo is down.
+    def _boom():
+        raise RuntimeError("odoo unavailable")
+    monkeypatch.setattr(odoo_client, "fetch_work_schedules", _boom)
+    r = client.get("/settings?section=timeclock")
+    assert r.status_code == 200
+
+
+def test_save_bad_id_returns_400():
+    r = client.post(
+        "/settings/work_schedule_rounding",
+        data={"resource_calendar_id": "notanint", "in_before_min": "5"},
+        headers={"accept": "application/json"},
+    )
+    assert r.status_code == 400
+
+
+def test_add_bad_id_returns_400():
+    r = client.post(
+        "/settings/work_schedule_rounding/add",
+        data={"resource_calendar_id": ""},
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
+
+
+def test_remove_bad_id_returns_400():
+    r = client.post(
+        "/settings/work_schedule_rounding/remove",
+        data={"resource_calendar_id": "x"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
