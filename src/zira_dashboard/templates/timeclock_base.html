@@ -42,6 +42,16 @@
   }
   .k-back:active { background: #cbd5e1; }
 
+  /* Square icon button (e.g. the Who's Out shortcut in the home header). */
+  .k-icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 56px; height: 56px; flex-shrink: 0;
+    border: 1px solid #e2e8f0; border-radius: 0.6rem;
+    background: #ffffff; color: #475569;
+    text-decoration: none; cursor: pointer;
+  }
+  .k-icon-btn:active { background: #f1f5f9; transform: scale(0.97); }
+
   .k-brand { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
   .k-brand img { height: 38px; width: auto; display: block; }
   .k-brand-text { line-height: 1; }
@@ -162,16 +172,26 @@
 {% block scripts %}{% endblock %}
 </div>
 <script>
-  // Idle timeout: return to home after 30s of no input. Skipped on the
-  // home page itself so it doesn't constantly self-reload.
+  // Idle timeout: return to the home screen after a period of no input.
+  // The delay is recomputed from the URL on every reset (never cached) so it
+  // can't leak across htmx screen swaps:
+  //   - home itself        -> no auto-return (already there; would self-reload)
+  //   - Who's Out glance    -> 10s (unattended public glance from the home icon)
+  //   - every other screen  -> 30s
   // Sits OUTSIDE #timeclock-screen so htmx swaps don't tear down/rebind it.
   (function() {
-    var TIMEOUT_MS = 30000;
     var timer;
+    function idleMs() {
+      var p = location.pathname;
+      if (p === '/timeclock' || p === '/timeclock/') return 0;
+      if (p === '/timeclock/whos-out') return 10000;
+      return 30000;
+    }
     function reset() {
       clearTimeout(timer);
-      if (location.pathname === '/timeclock' || location.pathname === '/timeclock/') return;
-      timer = setTimeout(function() { location.href = '/timeclock'; }, TIMEOUT_MS);
+      var ms = idleMs();
+      if (!ms) return;
+      timer = setTimeout(function() { location.href = '/timeclock'; }, ms);
     }
     ['touchstart','mousedown','keydown','pointerdown'].forEach(function(evt) {
       document.addEventListener(evt, reset, { passive: true });

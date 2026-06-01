@@ -17,8 +17,12 @@
   .wo-list.show-all .wo-more-count { display: none; }
   .wo-list.show-all .wo-more-less { display: inline; }
 </style>
+{# One page, two entry points: the per-person time-off menu (token URLs) and
+   the public kiosk-home glance (tokenless /whos-out URLs, 10s idle-return). #}
+{% set cal_base = "/timeclock/whos-out" if public else "/timeclock/time-off/calendar/" ~ token %}
+{% set back_href = "/timeclock" if public else "/timeclock/time-off/" ~ token %}
 <div class="k-header">
-  <a href="/timeclock/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <a href="{{ back_href }}" class="k-back">{{ t("‹ Back") }}</a>
   <span>{{ t("Who's Out — {heading}", heading=heading) }}</span>
   {% include "_timeclock_brand.html" %}
 </div>
@@ -28,17 +32,17 @@
   <div style="display: flex; align-items: center; justify-content: center;
               gap: 0.75rem; width: 100%; max-width: 1280px;
               margin-bottom: 1rem; flex-wrap: wrap;">
-    <a href="/timeclock/time-off/calendar/{{ token }}?month={{ prev_month }}"
+    <a href="{{ cal_base }}?month={{ prev_month }}"
        class="k-btn secondary"
        style="text-decoration: none; min-width: unset; min-height: unset;
               padding: 0.6rem 1.3rem; font-size: 1.1rem;">‹ {{ t("Prev") }}</a>
     {% if not is_current_month %}
-    <a href="/timeclock/time-off/calendar/{{ token }}"
+    <a href="{{ cal_base }}"
        class="k-btn secondary"
        style="text-decoration: none; min-width: unset; min-height: unset;
               padding: 0.6rem 1.3rem; font-size: 1.1rem;">{{ t("Today") }}</a>
     {% endif %}
-    <a href="/timeclock/time-off/calendar/{{ token }}?month={{ next_month }}"
+    <a href="{{ cal_base }}?month={{ next_month }}"
        class="k-btn secondary"
        style="text-decoration: none; min-width: unset; min-height: unset;
               padding: 0.6rem 1.3rem; font-size: 1.1rem;">{{ t("Next") }} ›</a>

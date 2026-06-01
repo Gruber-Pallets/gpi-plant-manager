@@ -282,6 +282,22 @@ def test_calendar_renders_with_month_view(monkeypatch):
     assert "Who" in r.text or "calendar" in r.text.lower()
 
 
+def test_whos_out_public_renders_without_token(monkeypatch):
+    """Public Who's Out glance — the kiosk-home shortcut opens this with no
+    token. Stubs `_approved_by_day` so the test needs no DB; confirms the
+    tokenless route renders and emits public-mode URLs (tokenless month nav,
+    Back to the home screen)."""
+    monkeypatch.setattr("zira_dashboard.routes.timeclock_time_off._approved_by_day",
+                        lambda start, end: {})
+    client = TestClient(app)
+    r = client.get("/timeclock/whos-out")
+    assert r.status_code == 200
+    assert "Who" in r.text or "calendar" in r.text.lower()
+    # public mode: month nav is tokenless and Back returns to the kiosk home
+    assert "/timeclock/whos-out?month=" in r.text
+    assert 'href="/timeclock"' in r.text
+
+
 def test_cancel_handler_marks_row_for_cancel_and_queues(monkeypatch):
     """POST /timeclock/time-off/mine/{token}/{rid}/cancel on a row that already
     has an odoo_leave_id flips the local row to ``draft_cancel`` and queues

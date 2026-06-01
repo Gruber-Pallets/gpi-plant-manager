@@ -1244,26 +1244,20 @@ def _approved_by_day(start_d: _date, end_d: _date) -> dict:
     return by_day
 
 
-@router.get("/timeclock/time-off/calendar/{token}", response_class=HTMLResponse)
-def time_off_calendar(request: Request, token: str, month: str | None = None):
-    """Who's Out — a month-grid calendar of approved leaves.
+def _build_calendar_context(month: str | None) -> dict:
+    """Shared month-grid builder for the Who's Out calendar.
 
-    Builds a standard Mon-first month-datescalendar for the current
-    month, padded to full weeks (leading/trailing days from adjacent
-    months are flagged ``outside`` so the template can fade them).
-    Each cell carries the list of people out that day plus a timing
-    label (no leave type — privacy). Token bounces to ``/timeclock`` on
-    failure, identical to the other routes in this module."""
-    person_id = _verify_token(token)
-    if person_id is None:
-        return RedirectResponse(url="/timeclock", status_code=303)
-    p = _person_by_id(person_id)
-    if not p:
-        return RedirectResponse(url="/timeclock", status_code=303)
+    Returns the template fields common to both entry points — the
+    token-gated per-person route (reached from the time-off menu) and
+    the public glance route (reached from the kiosk home): the heading,
+    the Mon–Sat week cells (Sundays dropped, since the plant is closed),
+    and the prev/next month anchors. Callers layer on ``token``/``public``
+    and ``bilingual`` themselves.
+
+    ``month`` ("YYYY-MM") comes from the prev/next nav links; anything
+    missing or malformed falls back to the current month so a stale or
+    typo'd URL never 500s the kiosk."""
     today = _date.today()
-    # Which month to render. `month` ("YYYY-MM") comes from the prev/next nav
-    # links; anything missing or malformed falls back to the current month so
-    # a stale/typo'd URL never 500s the kiosk.
     first = today.replace(day=1)
     if month:
         try:
@@ -1302,18 +1296,58 @@ def time_off_calendar(request: Request, token: str, month: str | None = None):
 
     # Prev/next month anchors (YYYY-MM) for the nav links.
     prev_first = (first - _td(days=1)).replace(day=1)
-    fresh = _mint_token(person_id)
+    return {
+        "heading": first.strftime("%B %Y"),
+        "weeks": week_cells,
+        "prev_month": prev_first.strftime("%Y-%m"),
+        "next_month": next_first.strftime("%Y-%m"),
+        "is_current_month": first == today.replace(day=1),
+    }
+
+
+@router.get("/timeclock/time-off/calendar/{token}", response_class=HTMLResponse)
+def time_off_calendar(request: Request, token: str, month: str | None = None):
+    """Who's Out — a month-grid calendar of approved leaves.
+
+    Each cell carries the list of people out that day plus a timing label
+    (no leave type — privacy). Token bounces to ``/timeclock`` on failure,
+    identical to the other routes in this module."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return RedirectResponse(url="/timeclock", status_code=303)
+    p = _person_by_id(person_id)
+    if not p:
+        return RedirectResponse(url="/timeclock", status_code=303)
+    ctx = _build_calendar_context(month)
+    ctx.update({
+        "person": p,
+        "token": _mint_token(person_id),
+        "public": False,
+        "bilingual": bool(p.get("spanish_speaker")),
+    })
     return templates.TemplateResponse(
-        request,
-        "timeclock_time_off_calendar.html",
-        {
-            "person": p,
-            "token": fresh,
-            "heading": first.strftime("%B %Y"),
-            "weeks": week_cells,
-            "prev_month": prev_first.strftime("%Y-%m"),
-            "next_month": next_first.strftime("%Y-%m"),
-            "is_current_month": first == today.replace(day=1),
-            "bilingual": bool(p.get("spanish_speaker")),
-        },
+        request, "timeclock_time_off_calendar.html", ctx,
+    )
+
+
+@router.get("/timeclock/whos-out", response_class=HTMLResponse)
+def whos_out_public(request: Request, month: str | None = None):
+    """Public 'Who's Out' glance, reachable from the kiosk home without
+    picking a name.
+
+    Renders the same month grid as the token route but needs no
+    per-person token — the whole ``/timeclock`` namespace already sits
+    behind the plant-manager session, and the view is read-only and
+    privacy-trimmed (no leave types). The base template gives this exact
+    path a short 10s idle-return to the home screen, so an unattended
+    glance doesn't linger."""
+    ctx = _build_calendar_context(month)
+    ctx.update({
+        "person": None,
+        "token": None,
+        "public": True,
+        "bilingual": False,
+    })
+    return templates.TemplateResponse(
+        request, "timeclock_time_off_calendar.html", ctx,
     )
