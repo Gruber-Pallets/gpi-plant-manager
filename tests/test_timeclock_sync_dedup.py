@@ -73,3 +73,9 @@ def test_transfer_in_also_self_corrects(monkeypatch, fake_db):
 
     timeclock_sync._retry_one(_row(action="transfer_in"))
     create.assert_not_called()
+
+
+def test_odoo_attendance_warmer_is_coroutine():
+    import inspect
+    from zira_dashboard import app as app_module
+    assert inspect.iscoroutinefunction(app_module._warm_odoo_attendance_loop)

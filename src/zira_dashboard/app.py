@@ -106,6 +106,20 @@ async def _warm_timeclock_sync_loop():
         await asyncio.sleep(60)
 
 
+async def _warm_odoo_attendance_loop():
+    """Mirror Odoo's open hr.attendance into odoo_open_attendance_cache every
+    ~30s so the timeclock punch screen reflects out-of-band Odoo edits
+    (manual add/close/delete/time-edit) without an XML-RPC call on the tap.
+    Errors are logged and swallowed so the warmer can't kill itself."""
+    from . import live_cache
+    while True:
+        try:
+            await asyncio.to_thread(live_cache.refresh_odoo_open_attendance)
+        except Exception as e:  # noqa: BLE001 — never let the warmer die
+            _log.warning("Odoo open-attendance warmer failed: %s", e)
+        await asyncio.sleep(30)
+
+
 async def _time_off_sync_loop():
     """Reconcile any time_off_requests rows still flagged unsynced
     against Odoo `hr.leave`. Mirrors `_warm_timeclock_sync_loop` — routes
@@ -266,6 +280,7 @@ async def lifespan(app: FastAPI):
     st_warmer_task = asyncio.create_task(_warm_stratustime_loop())
     live_cache_task = asyncio.create_task(_warm_live_cache_loop())
     timeclock_sync_task = asyncio.create_task(_warm_timeclock_sync_loop())
+    odoo_attendance_task = asyncio.create_task(_warm_odoo_attendance_loop())
     time_off_sync_task = asyncio.create_task(_time_off_sync_loop())
     time_off_poll_task = asyncio.create_task(_time_off_poll_loop())
     time_off_balance_task = asyncio.create_task(_time_off_balance_sweep_loop())
@@ -279,6 +294,7 @@ async def lifespan(app: FastAPI):
             st_warmer_task,
             live_cache_task,
             timeclock_sync_task,
+            odoo_attendance_task,
             time_off_sync_task,
             time_off_poll_task,
             time_off_balance_task,
