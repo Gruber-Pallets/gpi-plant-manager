@@ -562,6 +562,21 @@ CREATE TABLE IF NOT EXISTS today_production_cache (
   refreshed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Odoo open-attendance snapshot (2026-06-01) ---------------------------
+-- Single-row mirror of every currently-open hr.attendance (check_out IS
+-- NULL), keyed by person_odoo_id inside the JSONB snapshot. The ~30s
+-- warmer (_warm_odoo_attendance_loop in app.py) overwrites it; the
+-- timeclock punch screen reconciles it against timeclock_punches_log so
+-- punches added/closed/deleted directly in Odoo show up without an
+-- XML-RPC call on the tap. Forced single row (id=1) so refreshed_at is a
+-- GLOBAL freshness marker: "person absent from snapshot" only means
+-- clocked-out when the snapshot is known-fresh.
+CREATE TABLE IF NOT EXISTS odoo_open_attendance_cache (
+  id           INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  snapshot     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  refreshed_at TIMESTAMPTZ
+);
+
 -- TV dashboard layout templates ----------------------------------------
 -- Named snapshots of a widget-layout arrangement. The /wc/{slug}
 -- editor saves the current layout as a template; the apply endpoint
