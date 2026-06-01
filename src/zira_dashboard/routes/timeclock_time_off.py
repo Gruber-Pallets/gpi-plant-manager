@@ -1026,6 +1026,17 @@ def mine_edit_submit(
     elif dt < df:
         df, dt = dt, df
 
+    # Same overlap guard as the new-request submit, excluding this row so an
+    # edit never conflicts with itself.
+    if time_off_sync.find_conflicting_request(
+            p["odoo_id"], df, dt, exclude_rid=rid) is not None:
+        ctx = _details_context(p, _mint_token(person_id), shape)
+        ctx.update({"edit_mode": True, "edit_rid": rid, "conflict": True})
+        return templates.TemplateResponse(
+            request, "timeclock_time_off_request_details.html", ctx,
+            status_code=409,
+        )
+
     shift_from, shift_to = _shift_window_for(p["odoo_id"])
     hour_from, hour_to, err = _shape_to_hour_bounds(
         shape, time_a, time_b, shift_from, shift_to,
