@@ -59,6 +59,19 @@ def _split_roster_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     return active, inactive
 
 
+def _roster_filter_lists() -> tuple[list[dict], list[dict]]:
+    """Load Odoo-synced people for the Settings roster filter, split into
+    (active, inactive). Active and inactive are each alphabetical by name."""
+    from .. import db
+    rows = db.query(
+        "SELECT odoo_id, name, excluded, active "
+        "FROM people "
+        "WHERE odoo_id IS NOT NULL "
+        "ORDER BY lower(name)"
+    )
+    return _split_roster_rows(rows)
+
+
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(
     request: Request,
@@ -67,15 +80,10 @@ def settings_page(
 ):
     if section not in ("work_centers", "integrations", "roster_filter", "tvs", "timeclock", "time_off"):
         section = "work_centers"
-    roster_filter_rows: list[dict] = []
+    roster_filter_active: list[dict] = []
+    roster_filter_inactive: list[dict] = []
     if section == "roster_filter":
-        from .. import db
-        roster_filter_rows = db.query(
-            "SELECT odoo_id, name, excluded "
-            "FROM people "
-            "WHERE odoo_id IS NOT NULL "
-            "ORDER BY lower(name)"
-        )
+        roster_filter_active, roster_filter_inactive = _roster_filter_lists()
     integration_status = None
     if section == "integrations":
         from .. import stratustime_client
@@ -292,7 +300,8 @@ def settings_page(
             "active_people": active_people,
             "saved": bool(saved),
             "active_section": section,
-            "roster_filter_rows": roster_filter_rows,
+            "roster_filter_active": roster_filter_active,
+            "roster_filter_inactive": roster_filter_inactive,
             "productive_minutes": productive_min,
             "schedule": schedule_ctx,
             "rounding": rounding_ctx,
