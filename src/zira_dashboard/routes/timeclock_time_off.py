@@ -337,6 +337,9 @@ def _details_context(
     if balances is None:
         balances = time_off_balances.get_for_employee(odoo_id)
     types = _fetch_visible_leave_types(shape)
+    # Cast numeric Decimals to floats so the JSON-embedded JS payload in the
+    # template gets plain numbers instead of "Decimal('15.00')" repr (Jinja's
+    # `{{ x }}` would print the Decimal verbatim).
     balances_by_type = {
         b["holiday_status_id"]: {
             "unit": b["unit"],
