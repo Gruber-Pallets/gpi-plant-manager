@@ -152,6 +152,10 @@ def test_submit_creates_row_and_queues_sync(monkeypatch):
                         lambda pid: {"id": 1, "name": "T", "odoo_id": 5})
     monkeypatch.setattr("zira_dashboard.routes.timeclock_time_off._shift_window_for",
                         lambda pid: (6.0, 14.5))
+    # No pre-existing overlap on the happy path — stub the guard added by the
+    # overlapping-request block so this DB-free test reaches the insert.
+    monkeypatch.setattr("zira_dashboard.time_off_sync.find_conflicting_request",
+                        lambda *a, **k: None)
     # Stub the type-unit lookup so the test doesn't hit Postgres. Returning
     # "day" means the submit handler skips the full-shift-hour-bound
     # injection (which only fires for hour-unit types used as full_day).
@@ -192,6 +196,10 @@ def test_submit_rejects_partial_day_outside_shift(monkeypatch):
                         lambda pid: {"id": 1, "name": "T", "odoo_id": 5})
     monkeypatch.setattr("zira_dashboard.routes.timeclock_time_off._shift_window_for",
                         lambda pid: (6.0, 14.5))
+    # No overlap — stub the guard so the test reaches the time-validation
+    # (422) branch rather than short-circuiting on the conflict (409) branch.
+    monkeypatch.setattr("zira_dashboard.time_off_sync.find_conflicting_request",
+                        lambda *a, **k: None)
     # The error path re-renders the form, which calls these helpers; stub
     # them so the test doesn't need a database to reach the 422 branch.
     monkeypatch.setattr(
@@ -236,6 +244,9 @@ def test_submit_partial_day_uses_selected_date_for_both_ends(monkeypatch):
                         lambda pid: {"id": 1, "name": "T", "odoo_id": 5})
     monkeypatch.setattr("zira_dashboard.routes.timeclock_time_off._shift_window_for",
                         lambda pid: (6.0, 14.5))
+    # No pre-existing overlap — stub the guard so this DB-free test proceeds.
+    monkeypatch.setattr("zira_dashboard.time_off_sync.find_conflicting_request",
+                        lambda *a, **k: None)
     monkeypatch.setattr("zira_dashboard.routes.timeclock_time_off._shape_to_hour_bounds",
                         lambda *a, **k: (6.0, 9.0, None))
     monkeypatch.setattr("zira_dashboard.routes.timeclock_time_off._type_request_unit",
