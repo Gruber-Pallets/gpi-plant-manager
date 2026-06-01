@@ -341,7 +341,7 @@
         Note: Some jurisdictions may limit or prohibit rounding.
       </p>
 
-      <h4 class="rounding-subhead">Round To Schedule</h4>
+      <h4 class="rounding-subhead">Round To Schedule (default)</h4>
       <p class="rounding-blurb">
         When clocking in or out, the employee's time can be rounded to the
         plant shift if the entry falls within an acceptable
@@ -391,6 +391,71 @@
         <button type="submit">Save Rounding</button>
       </div>
     </form>
+
+    <div class="per-schedule-rounding" style="margin-top:1.6rem">
+      <h4 class="rounding-subhead">Per-schedule rounding</h4>
+      <p class="rounding-blurb">
+        Give a specific Odoo work schedule its own rounding windows. The
+        hours come from Odoo; the windows behave exactly like the default
+        above. Anyone not on a listed schedule uses the default.
+      </p>
+
+      {% for ws in work_schedules %}
+      <div class="ws-rounding-card"
+           style="border:1px solid var(--border);border-radius:8px;padding:0.8rem;margin:0.6rem 0">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
+          <strong>{{ ws.name }}</strong>
+          <span class="note">{{ ws.hours_display }} &middot; from Odoo</span>
+        </div>
+        <form method="post" action="/settings/work_schedule_rounding">
+          <input type="hidden" name="resource_calendar_id" value="{{ ws.resource_calendar_id }}">
+          <div class="rounding-grid">
+            <div class="rounding-col">
+              <h4>IN</h4>
+              <label>Up to
+                <input type="number" name="in_before_min" min="0" max="60" value="{{ ws.in_before_min }}">
+                minute(s) before the schedule clock-in time.</label>
+              <label>Up to
+                <input type="number" name="in_after_min" min="0" max="60" value="{{ ws.in_after_min }}">
+                minute(s) after the schedule clock-in time.</label>
+            </div>
+            <div class="rounding-col">
+              <h4>OUT</h4>
+              <label>Up to
+                <input type="number" name="out_before_min" min="0" max="60" value="{{ ws.out_before_min }}">
+                minute(s) before the schedule clock-out time.</label>
+              <label>Up to
+                <input type="number" name="out_after_min" min="0" max="60" value="{{ ws.out_after_min }}">
+                minute(s) after the schedule clock-out time.</label>
+            </div>
+          </div>
+          <button type="submit">Save</button>
+        </form>
+        <form method="post" action="/settings/work_schedule_rounding/remove" style="margin-top:0.4rem">
+          <input type="hidden" name="resource_calendar_id" value="{{ ws.resource_calendar_id }}">
+          <button type="submit"
+                  onclick="return confirm('Remove this schedule override? Its employees revert to the default rounding.')">
+            Remove
+          </button>
+        </form>
+      </div>
+      {% else %}
+      <p class="note">No per-schedule overrides yet.</p>
+      {% endfor %}
+
+      {% if available_schedules %}
+      <form method="post" action="/settings/work_schedule_rounding/add" style="margin-top:0.8rem">
+        <label>Add a schedule:
+          <select name="resource_calendar_id">
+            {% for s in available_schedules %}
+            <option value="{{ s.id }}">{{ s.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Add</button>
+      </form>
+      {% endif %}
+    </div>
 
     <h3 style="margin-top:1.6rem">Sync status (last 7 days)</h3>
     {% if timeclock_sync_status is none or timeclock_sync_status.total_7d == 0 %}

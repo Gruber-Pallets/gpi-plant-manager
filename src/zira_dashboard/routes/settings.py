@@ -43,6 +43,25 @@ def _parse_hhmm(raw: str | None) -> _time | None:
         return None
 
 
+def _hours_display(work_hours: dict) -> str:
+    """Short, human label for a schedule's synced hours, e.g. '5:45 AM –
+    2:30 PM'. Collapses to a single range when every configured weekday
+    shares it; 'varies by day' otherwise."""
+    if not work_hours:
+        return "— not synced from Odoo yet —"
+
+    def fmt(t) -> str:
+        h = t.hour % 12 or 12
+        ap = "AM" if t.hour < 12 else "PM"
+        return f"{h}:{t.minute:02d} {ap}"
+
+    ranges = {(s, e) for (s, e) in work_hours.values()}
+    if len(ranges) == 1:
+        s, e = next(iter(ranges))
+        return f"{fmt(s)} – {fmt(e)}"
+    return "varies by day"
+
+
 def _loc_by_key(key: str):
     for loc in staffing.LOCATIONS:
         if (loc.meter_id or f"name:{loc.name}") == key:
@@ -91,6 +110,7 @@ def settings_page(
     kiosk_recent_punches: list[dict] = []
     kiosk_recent_variances: list[dict] = []
     timeclock_sync_status: dict | None = None
+    available_schedules: list[dict] = []
     if section == "timeclock":
         from .. import db
         kiosk_recent_punches = db.query(
@@ -119,6 +139,16 @@ def settings_page(
             "WHERE occurred_at > now() - interval '7 days'"
         )
         timeclock_sync_status = status_rows[0] if status_rows else None
+        from .. import odoo_client as _oc, work_schedule_store
+        try:
+            _configured = {o.resource_calendar_id for o in work_schedule_store.all_overrides()}
+            available_schedules = [
+                {"id": c["id"], "name": c.get("name") or f"Schedule {c['id']}"}
+                for c in _oc.fetch_work_schedules()
+                if c["id"] not in _configured
+            ]
+        except Exception:
+            available_schedules = []
     time_off_settings: dict | None = None
     if section == "time_off":
         from .. import db, odoo_client
@@ -277,6 +307,19 @@ def settings_page(
         "out_before_min": rounding_settings.out_before_min,
         "out_after_min": rounding_settings.out_after_min,
     }
+    from .. import work_schedule_store
+    work_schedules_ctx = [
+        {
+            "resource_calendar_id": o.resource_calendar_id,
+            "name": o.name or f"Schedule {o.resource_calendar_id}",
+            "hours_display": _hours_display(o.work_hours),
+            "in_before_min": o.rounding.in_before_min,
+            "in_after_min": o.rounding.in_after_min,
+            "out_before_min": o.rounding.out_before_min,
+            "out_after_min": o.rounding.out_after_min,
+        }
+        for o in work_schedule_store.all_overrides()
+    ]
     # Skill list comes directly from the `skills` table — Odoo's
     # Production + Supervisor skill types. Production first (alphabetical),
     # then Supervisor.
@@ -305,6 +348,8 @@ def settings_page(
             "productive_minutes": productive_min,
             "schedule": schedule_ctx,
             "rounding": rounding_ctx,
+            "work_schedules": work_schedules_ctx,
+            "available_schedules": available_schedules,
             "integration_status": integration_status,
             "tv_displays_rows": tv_displays_rows,
             "all_dashboards_for_picker": all_dashboards_for_picker,
@@ -392,6 +437,68 @@ async def settings_save_rounding(request: Request):
     rounding_store.save(settings)
     if (request.headers.get("accept") or "").startswith("application/json"):
         return JSONResponse({"ok": True})
+    return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+
+@router.post("/settings/work_schedule_rounding")
+async def settings_save_work_schedule_rounding(request: Request):
+    """Save the four rounding windows for ONE Odoo work schedule (by
+    resource_calendar_id). Same 0..60 clamp as /settings/rounding; leaves the
+    schedule's synced hours untouched."""
+    from .. import work_schedule_store
+    from ..rounding import RoundingSettings
+    form = await request.form()
+
+    def _clamp(raw) -> int:
+        try:
+            v = int(raw)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(60, v))
+
+    try:
+        cal_id = int(form.get("resource_calendar_id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
+    work_schedule_store.save_rounding(cal_id, RoundingSettings(
+        in_before_min=_clamp(form.get("in_before_min")),
+        in_after_min=_clamp(form.get("in_after_min")),
+        out_before_min=_clamp(form.get("out_before_min")),
+        out_after_min=_clamp(form.get("out_after_min")),
+    ))
+    if (request.headers.get("accept") or "").startswith("application/json"):
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+
+@router.post("/settings/work_schedule_rounding/add")
+async def settings_add_work_schedule(request: Request):
+    """Configure a new per-schedule override for an Odoo work schedule and
+    immediately sync its hours (best-effort)."""
+    from .. import work_schedule_store, odoo_sync
+    form = await request.form()
+    try:
+        cal_id = int(form.get("resource_calendar_id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
+    work_schedule_store.create(cal_id)
+    try:
+        odoo_sync.refresh_work_schedule_hours(only_ids=[cal_id])
+    except Exception:
+        pass  # row exists; hours fill in on the next periodic sync
+    return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+
+@router.post("/settings/work_schedule_rounding/remove")
+async def settings_remove_work_schedule(request: Request):
+    """Drop a per-schedule override. Its employees revert to plant default."""
+    from .. import work_schedule_store
+    form = await request.form()
+    try:
+        cal_id = int(form.get("resource_calendar_id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
+    work_schedule_store.delete(cal_id)
     return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
 
 
