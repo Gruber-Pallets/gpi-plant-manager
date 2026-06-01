@@ -36,7 +36,7 @@ def refresh_work_schedule_hours(only_ids=None) -> None:
     work_schedules overrides. Leaves the app-owned rounding windows alone.
     Best-effort: callers wrap in try/except so an Odoo hiccup never breaks
     the rest of the sync."""
-    from . import work_schedule_store, odoo_client
+    from . import work_schedule_store, odoo_client  # local import: avoids import cycle + lets tests monkeypatch odoo_client.fetch_*
     ids = [o.resource_calendar_id for o in work_schedule_store.all_overrides()]
     if only_ids is not None:
         wanted = {int(i) for i in only_ids}
