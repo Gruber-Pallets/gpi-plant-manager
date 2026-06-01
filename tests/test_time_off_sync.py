@@ -459,3 +459,49 @@ def test_delete_missing_skips_rows_still_in_odoo(monkeypatch, fake_db):
 
     assert not any("DELETE FROM time_off_requests" in e[0]
                    for e in fake_db["executes"])
+
+
+def test_delete_candidate_query_does_not_exclude_terminal_states(monkeypatch, fake_db):
+    """Regression: a denied ('refuse') or 'cancel' row whose Odoo leave was
+    DELETED must still be eligible for hard-delete. Whether a leave still
+    exists in Odoo is decided by ``seen_ids`` (the poller's fetch pulls every
+    state), NOT by the local row's state — so the delete-candidate SELECT must
+    not filter on state. The fake_db can't honor a SQL WHERE, so we assert on
+    the query text (same pattern as the roster loader's ORDER BY test)."""
+    fake_db["query_result"] = []
+    monkeypatch.setattr(time_off_sync, "_invalidate_balance", lambda pid: None)
+
+    time_off_sync._delete_missing_from_odoo(set(), date(2026, 5, 1),
+                                            date(2026, 12, 31))
+
+    candidate_selects = [
+        q for (q, _p) in fake_db["queries"]
+        if "FROM time_off_requests" in q and "date_to >=" in q
+    ]
+    assert candidate_selects, "expected the delete-candidate SELECT to run"
+    assert "state NOT IN" not in candidate_selects[0], (
+        "delete-candidate query must not exclude terminal ('refuse'/'cancel') "
+        "rows — a denied request deleted in Odoo lingered because of this filter"
+    )
+
+
+def test_delete_missing_hard_deletes_a_denied_row_gone_from_odoo(monkeypatch, fake_db):
+    """A refused ('denied') leave deleted in Odoo is hard-deleted locally, with
+    no reverse scheduler_moves row (a refused leave never counted as approved,
+    so there's nothing to reverse)."""
+    fake_db["query_result"] = [{
+        "id": 9, "state": "refuse", "person_odoo_id": 5, "shape": "full_day",
+        "holiday_status_id": 1, "date_from": date(2026, 6, 1),
+        "date_to": date(2026, 6, 1), "hour_from": None, "hour_to": None,
+        "working_hours_json": None, "odoo_leave_id": 888,
+    }]
+    monkeypatch.setattr(time_off_sync, "_invalidate_balance", lambda pid: None)
+
+    time_off_sync._delete_missing_from_odoo(set(), date(2026, 5, 1),
+                                            date(2026, 12, 31))
+
+    deletes = [e for e in fake_db["executes"]
+               if "DELETE FROM time_off_requests" in e[0]]
+    assert deletes and deletes[0][1] == (9,)
+    assert not any("INSERT INTO scheduler_moves" in e[0]
+                   for e in fake_db["executes"])

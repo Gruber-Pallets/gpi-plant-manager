@@ -238,9 +238,10 @@ def poll_odoo_leaves() -> int:
         state differs; trigger ``cascade_on_state_change``.
       - If not: INSERT a new row with ``originating_kiosk_user=FALSE``.
 
-    Local rows in non-terminal state whose ``odoo_leave_id`` is no
-    longer returned by Odoo are hard-deleted (Odoo-side deletion), after
-    firing the reverse cascade.
+    Local rows whose ``odoo_leave_id`` is no longer returned by Odoo are
+    hard-deleted (Odoo-side deletion), after firing the reverse cascade —
+    regardless of local state, so a refused/cancelled ("denied") row also
+    disappears once its leave is deleted in Odoo.
     """
     # Refresh leave-types cache first so the kiosk picker stays current.
     try:
@@ -382,9 +383,14 @@ def _delete_missing_from_odoo(
     seen_ids: set[int], start_d: date, end_d: date,
 ) -> None:
     """Rows in ``[start_d..end_d]`` with an ``odoo_leave_id`` no longer
-    returned by Odoo (not in ``seen_ids``) and not already terminal →
-    HARD DELETE. Odoo is the source of truth: if the leave is gone there,
-    the local mirror row is removed.
+    returned by Odoo (not in ``seen_ids``) → HARD DELETE, regardless of
+    local state. Odoo is the source of truth: if the leave is gone there,
+    the local mirror row is removed — including a terminal ``'refuse'`` /
+    ``'cancel'`` ("denied"/cancelled) row, which must also disappear once
+    its leave is deleted in Odoo. ``seen_ids`` is the sole authority on
+    whether a leave still exists: ``fetch_leaves_for_range`` pulls every
+    state, so a leave still present in any state is in ``seen_ids`` and is
+    skipped below.
 
     Before deleting we fire ``cascade_on_state_change`` with a synthetic
     ``state='cancel'`` so an approved leave still logs its reverse
@@ -401,7 +407,6 @@ def _delete_missing_from_odoo(
         "odoo_leave_id "
         "FROM time_off_requests "
         "WHERE odoo_leave_id IS NOT NULL "
-        "AND state NOT IN ('cancel', 'refuse') "
         "AND date_to >= %s AND date_from <= %s",
         (start_d, end_d),
     )
