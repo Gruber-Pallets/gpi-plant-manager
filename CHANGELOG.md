@@ -2,6 +2,33 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+## 2026-06-01
+
+### 12:15 PM
+
+- **Different work schedules can now have their own time-clock rounding** — punch rounding used to be a single plant-wide rule (the "Round To Schedule" window in Settings → Timeclock). Now a specific Odoo work schedule can carry its own rounding windows. Two-step setup: in Odoo, create/confirm the work schedule (e.g. a "Drivers" schedule at 5:45–2:30) and set it as those employees' Working Hours; then in **Settings → Timeclock → Per-schedule rounding**, add that schedule and enter its four windows. The hours come from Odoo (shown read-only); the rounding numbers are yours and behave exactly like the default. Drivers' example — 20 minutes before the start, nothing after, nothing at the end — means a 5:30 clock-in counts as 5:45, a 5:52 clock-in stays 5:52, and clock-out is always as-punched. Anyone not on a configured schedule keeps the plant default, so the rest of the floor is untouched, and the match is automatic from each person's Odoo Working Hours — move someone onto the drivers schedule in Odoo and they pick up the right rounding with no extra step here.
+
+### 9:11 AM
+
+- **"Who's Out" is now one tap from the kiosk home** — added a Who's Out shortcut on the main kiosk screen that opens the month calendar of approved time off without having to pick your name first. It's a public glance (just who's out and when, no personal details), served from a new `/timeclock/whos-out` route that reuses the same month grid as the per-person calendar.
+
+### 9:10 AM
+
+- **Settings → Roster Filter now separates Active and Inactive employees** — the roster filter used to be one flat list. It's now split into an **Active** section and a read-only **Inactive** section sourced automatically from Odoo's archived (`active = false`) flag — so people who've left the company are clearly separated, stay out of every live picker (scheduler, kiosk, assignment dropdowns), but keep all their historical stats and trophies. Every name in both sections now links to that person's employee card.
+
+### 8:49 AM
+
+- **Time clock now reconciles against Odoo's real attendance state — no more duplicate clock-ins** — the kiosk decides "clock-in vs clock-out" from its local punch log, which left a blind spot when attendance was edited directly in Odoo. If someone forgot to punch in and you added it by hand in Odoo, the kiosk used to still show "clock in" — and tapping it created a second open attendance (or a sync error). Now a background process (~every 30s) mirrors every open Odoo attendance into a local cache, and the punch screen reconciles against it, so the screen reflects punches added, closed, deleted, or edited in Odoo — all without adding any Odoo call to the tap, so the screen stays instant. Clock-in is now self-correcting: it adopts an already-open Odoo attendance instead of creating a duplicate.
+- **Time off removed in Odoo now disappears here too** — when a leave is deleted in Odoo, the 60-second poller now hard-deletes the local mirror row (it used to soft-cancel and leave a lingering entry), so "My Requests" and the Who's Out calendar stay in step with Odoo.
+
+### 8:22 AM
+
+- **Who's Out calendar is easier to scan — color-coded and tap-to-expand** — entries are now color-coded by type: full-day off shows in blue, partial-day in amber. On a touchscreen you can tap a name to expand its full text in place (tap again to collapse), and days with more than four people out get a "Show all / Show less" toggle so a busy day doesn't overflow the cell.
+
+### 8:18 AM
+
+- **Time-off requests: the end date can't fall behind the start** — in the kiosk time-off wizard the end date now defaults to the start date you pick and is prevented from being set earlier than it, so a multi-day request can't be entered backwards.
+
 ## 2026-05-29
 
 ### 3:07 PM
