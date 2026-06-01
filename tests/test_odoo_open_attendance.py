@@ -80,3 +80,44 @@ def test_set_attendance_wc_noop_without_field(monkeypatch):
     odoo_client.set_attendance_wc(88, None)  # also no-op
 
     fake.assert_not_called()
+
+
+def test_refresh_builds_keyed_snapshot(monkeypatch):
+    from zira_dashboard import live_cache
+    monkeypatch.setattr(
+        "zira_dashboard.odoo_client.fetch_open_attendances",
+        lambda: [
+            {"att_id": 88, "employee_odoo_id": 5,
+             "check_in": "2026-06-01T11:02:00+00:00", "wc_name": "Bay 3"},
+            {"att_id": 90, "employee_odoo_id": 7,
+             "check_in": "2026-06-01T12:15:00+00:00", "wc_name": None},
+        ],
+    )
+    written = {}
+    monkeypatch.setattr(live_cache, "write_open_attendance",
+                        lambda snap: written.update(snap))
+
+    live_cache.refresh_odoo_open_attendance()
+
+    assert written == {
+        "5": {"att_id": 88, "check_in": "2026-06-01T11:02:00+00:00",
+              "wc_name": "Bay 3"},
+        "7": {"att_id": 90, "check_in": "2026-06-01T12:15:00+00:00",
+              "wc_name": None},
+    }
+
+
+def test_refresh_swallows_errors(monkeypatch):
+    from zira_dashboard import live_cache
+
+    def boom():
+        raise RuntimeError("odoo down")
+
+    monkeypatch.setattr("zira_dashboard.odoo_client.fetch_open_attendances", boom)
+    wrote = []
+    monkeypatch.setattr(live_cache, "write_open_attendance",
+                        lambda snap: wrote.append(snap))
+
+    # Must not raise — the warmer relies on this.
+    live_cache.refresh_odoo_open_attendance()
+    assert wrote == []  # nothing written on failure

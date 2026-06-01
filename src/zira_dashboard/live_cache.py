@@ -70,6 +70,60 @@ def read_production(day: date) -> tuple[Any | None, datetime | None]:
     return _read("today_production_cache", day)
 
 
+# ---- Odoo open-attendance snapshot (single-row, keyed by person id) ----
+
+
+def write_open_attendance(snapshot: dict) -> None:
+    """Overwrite the single-row Odoo open-attendance snapshot and stamp
+    refreshed_at. `snapshot` is {str(person_odoo_id): {att_id, check_in,
+    wc_name}}."""
+    from . import db
+    db.execute(
+        """
+        INSERT INTO odoo_open_attendance_cache (id, snapshot, refreshed_at)
+        VALUES (1, %s::jsonb, now())
+        ON CONFLICT (id) DO UPDATE SET
+          snapshot = EXCLUDED.snapshot,
+          refreshed_at = now()
+        """,
+        (json.dumps(snapshot, default=str),),
+    )
+
+
+def read_open_attendance() -> tuple[dict | None, datetime | None]:
+    """Return (snapshot, refreshed_at). (None, None) if the warmer has
+    never run. An empty dict snapshot means 'Odoo shows nobody clocked in'
+    — distinct from None, which means 'no data yet, fall back to local'."""
+    from . import db
+    rows = db.query(
+        "SELECT snapshot, refreshed_at FROM odoo_open_attendance_cache "
+        "WHERE id = 1"
+    )
+    if not rows:
+        return (None, None)
+    return (rows[0]["snapshot"], rows[0]["refreshed_at"])
+
+
+def refresh_odoo_open_attendance() -> None:
+    """Pull every open hr.attendance from Odoo and overwrite the keyed
+    snapshot. Errors are logged and swallowed — the previous good snapshot
+    stays in place, then falls back to local once it crosses is_stale."""
+    try:
+        from . import odoo_client
+        rows = odoo_client.fetch_open_attendances()
+        snapshot = {
+            str(r["employee_odoo_id"]): {
+                "att_id": r["att_id"],
+                "check_in": r["check_in"],
+                "wc_name": r["wc_name"],
+            }
+            for r in rows
+        }
+        write_open_attendance(snapshot)
+    except Exception as e:  # noqa: BLE001 — warmer must never die
+        _log.warning("refresh_odoo_open_attendance failed: %s", e)
+
+
 def is_stale(refreshed_at: datetime | None) -> bool:
     """True if the row is missing or older than STALE_THRESHOLD."""
     if refreshed_at is None:

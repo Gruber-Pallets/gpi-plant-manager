@@ -280,7 +280,7 @@ Append to `tests/test_odoo_open_attendance.py`:
 def test_refresh_builds_keyed_snapshot(monkeypatch):
     from zira_dashboard import live_cache
     monkeypatch.setattr(
-        live_cache.odoo_client, "fetch_open_attendances",
+        "zira_dashboard.odoo_client.fetch_open_attendances",
         lambda: [
             {"att_id": 88, "employee_odoo_id": 5,
              "check_in": "2026-06-01T11:02:00+00:00", "wc_name": "Bay 3"},
@@ -308,7 +308,7 @@ def test_refresh_swallows_errors(monkeypatch):
     def boom():
         raise RuntimeError("odoo down")
 
-    monkeypatch.setattr(live_cache.odoo_client, "fetch_open_attendances", boom)
+    monkeypatch.setattr("zira_dashboard.odoo_client.fetch_open_attendances", boom)
     wrote = []
     monkeypatch.setattr(live_cache, "write_open_attendance",
                         lambda snap: wrote.append(snap))
@@ -318,7 +318,7 @@ def test_refresh_swallows_errors(monkeypatch):
     assert wrote == []  # nothing written on failure
 ```
 
-Note: `refresh_odoo_open_attendance` does `from . import odoo_client` at call time, so `live_cache.odoo_client` resolves to the shared module; monkeypatching `live_cache.odoo_client.fetch_open_attendances` works.
+Note: `refresh_odoo_open_attendance` imports `odoo_client` *inside* the function (matching the existing `live_cache` pattern), so patch the source module by string path — `"zira_dashboard.odoo_client.fetch_open_attendances"` — exactly as the existing `test_refresh_attendance_*` tests do. `write_open_attendance` is a module-level function, so `monkeypatch.setattr(live_cache, "write_open_attendance", ...)` works directly.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
