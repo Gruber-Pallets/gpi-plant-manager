@@ -140,6 +140,83 @@ def test_roster_filter_lists_queries_active_and_splits(monkeypatch):
     assert [r["name"] for r in inactive] == ["Zed"]
 
 
+def _render_roster_filter(active, inactive):
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    env = Environment(
+        loader=FileSystemLoader("src/zira_dashboard/templates"),
+        autoescape=select_autoescape(["html"]),
+    )
+    return env.get_template("_roster_filter.html").render(
+        roster_filter_active=active,
+        roster_filter_inactive=inactive,
+    )
+
+
+def test_roster_filter_partial_active_checkbox_inactive_readonly_and_links():
+    html = _render_roster_filter(
+        [
+            {"odoo_id": 1, "name": "Ana", "excluded": False, "active": True},
+            {"odoo_id": 3, "name": "Cara", "excluded": True, "active": True},
+        ],
+        [{"odoo_id": 2, "name": "Zed", "excluded": False, "active": False}],
+    )
+    # one toggle per ACTIVE row only — inactive rows are read-only (no checkbox)
+    assert html.count("roster-filter-toggle") == 2
+    # only the not-excluded active row is pre-checked. Match the rendered
+    # checkbox attribute ("checked>") specifically, not the bare substring —
+    # the intro prose contains the word "unchecked".
+    assert html.count("checked>") == 1
+    # every name links to its employee card
+    assert 'href="/staffing/people/Ana"' in html
+    assert 'href="/staffing/people/Cara"' in html
+    assert 'href="/staffing/people/Zed"' in html
+    # both section headings present, with counts
+    assert 'id="roster-filter-active-heading"' in html
+    assert 'id="roster-filter-inactive-heading"' in html
+
+
+def test_roster_filter_partial_hides_inactive_heading_when_none():
+    html = _render_roster_filter(
+        [{"odoo_id": 1, "name": "Ana", "excluded": False, "active": True}],
+        [],
+    )
+    assert 'id="roster-filter-inactive-heading"' not in html
+    assert html.count("roster-filter-toggle") == 1
+
+
+def test_roster_filter_partial_empty_state():
+    html = _render_roster_filter([], [])
+    assert "No Odoo-synced people yet" in html
+    assert 'id="roster-filter-active-heading"' not in html
+    assert 'id="roster-filter-inactive-heading"' not in html
+
+
+def test_roster_filter_partial_all_inactive_shows_zero_active_section():
+    """All employees archived: the Active heading still renders with a 0 count
+    and the 'no active' message, while the Inactive section lists everyone."""
+    html = _render_roster_filter(
+        [],
+        [{"odoo_id": 2, "name": "Zed", "excluded": False, "active": False}],
+    )
+    assert 'id="roster-filter-active-heading"' in html
+    assert "(0)" in html
+    assert "No active employees." in html
+    assert 'id="roster-filter-inactive-heading"' in html
+    assert 'href="/staffing/people/Zed"' in html
+    # no active rows -> no checkboxes rendered anywhere
+    assert html.count("roster-filter-toggle") == 0
+    assert html.count("checked>") == 0
+
+
+def test_roster_filter_partial_urlencodes_names_with_spaces():
+    """Names with spaces are percent-encoded into the card link path."""
+    html = _render_roster_filter(
+        [{"odoo_id": 5, "name": "Jose M.", "excluded": False, "active": True}],
+        [],
+    )
+    assert 'href="/staffing/people/Jose%20M."' in html
+
+
 def test_toggle_endpoint_writes_excluded_flag(monkeypatch):
     """Mock db.execute and assert it gets called with (excluded, odoo_id).
     Verifies the SQL shape without needing DATABASE_URL."""

@@ -1,0 +1,52 @@
+<p class="note" style="margin-bottom:0.8rem">
+  <strong>Active</strong> employees can be unchecked to hide them from live roster
+  views (People Matrix, scheduler dropdowns, late/absence report).
+  <strong>Inactive</strong> employees are archived in Odoo — already hidden from
+  scheduling and pickers, and shown here read-only. Click any name to open their
+  card. Historical data (past schedules, leaderboards, trophies) stays intact for
+  everyone.
+</p>
+
+{% if roster_filter_active or roster_filter_inactive %}
+  <h3 id="roster-filter-active-heading" style="margin:0.6rem 0 0.4rem;font-size:0.95rem">
+    Active <span style="color:var(--muted);font-weight:normal">({{ roster_filter_active | length }})</span>
+  </h3>
+  {% if roster_filter_active %}
+  <ul class="roster-filter-list" style="list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill, minmax(20rem, 1fr));gap:0.4rem 1rem">
+    {% for p in roster_filter_active %}
+    <li class="roster-filter-row" data-odoo-id="{{ p.odoo_id }}"
+        style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0.5rem;border-radius:6px">
+      <label style="display:inline-flex;align-items:center;cursor:pointer;margin:0">
+        <input type="checkbox" class="roster-filter-toggle"
+               {% if not p.excluded %}checked{% endif %}>
+      </label>
+      <a class="roster-filter-name" href="/staffing/people/{{ p.name | urlencode }}"
+         style="flex:1;text-decoration:none;color:inherit">{{ p.name }}</a>
+      <span class="roster-filter-meta" style="color:var(--muted);font-size:0.78rem">Odoo #{{ p.odoo_id }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p style="color:var(--muted);font-style:italic;margin:0.2rem 0 0">No active employees.</p>
+  {% endif %}
+
+  {% if roster_filter_inactive %}
+  <h3 id="roster-filter-inactive-heading" style="margin:1rem 0 0.4rem;font-size:0.95rem">
+    Inactive <span style="color:var(--muted);font-weight:normal">({{ roster_filter_inactive | length }})</span>
+  </h3>
+  <ul class="roster-filter-list" style="list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill, minmax(20rem, 1fr));gap:0.4rem 1rem">
+    {# Read-only rows: no checkbox and no data-odoo-id, so the page-level
+       .roster-filter-toggle script naturally skips them. #}
+    {% for p in roster_filter_inactive %}
+    <li class="roster-filter-row roster-filter-inactive"
+        style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0.5rem;border-radius:6px;opacity:0.6">
+      <a class="roster-filter-name" href="/staffing/people/{{ p.name | urlencode }}"
+         style="flex:1;text-decoration:none;color:inherit">{{ p.name }}</a>
+      <span class="roster-filter-meta" style="color:var(--muted);font-size:0.78rem">Odoo #{{ p.odoo_id }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+{% else %}
+  <p style="color:var(--muted);font-style:italic">No Odoo-synced people yet. Run an Odoo sync first.</p>
+{% endif %}
