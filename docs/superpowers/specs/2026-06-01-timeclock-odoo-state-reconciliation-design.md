@@ -1,7 +1,7 @@
 # Timeclock ↔ Odoo State Reconciliation — Design
 
 **Date:** 2026-06-01
-**Status:** Approved (brainstorming → implementation planning)
+**Status:** Implemented — all 8 tasks coded & committed, `py_compile` + `ast` clean. Authoritative `pytest` run happens in CI; the manual Railway checks (below) are pending the push to `main`.
 
 ## Context
 
@@ -309,6 +309,8 @@ Per the local constraint (Python 3.9, suite runs in CI/Railway, local verify via
   row is deleted. Employee-initiated cancel/refuse cascade tests are unaffected.
 
 ## Done criteria
+
+_Code for every item is implemented and committed (`py_compile`/`ast` clean). Checkboxes get ticked once the CI test run is green and the manual Railway checks pass — both gated on the push to `main`._
 
 - ☐ `odoo_open_attendance_cache` table + warmer loop shipping; one Odoo query
   per ~30s tick.
