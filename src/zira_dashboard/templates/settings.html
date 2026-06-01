@@ -335,6 +335,34 @@
       </div>
     </form>
 
+    <form method="post" action="/settings/saturday_schedule" id="saturday-schedule-form"
+          data-section="saturday_schedule">
+      <h3 style="margin-top:1.6rem">Saturday Default</h3>
+      <p class="note">Applied to Saturdays in the scheduler. Any individual
+        Saturday can still be customized from its Hours pill. Punches on a
+        published Saturday round to these hours.</p>
+      <div class="sched-grid">
+        <label for="sat_shift_start">Shift start</label>
+        <input id="sat_shift_start" type="time" name="shift_start" value="{{ saturday_schedule.shift_start }}" step="300" required>
+
+        <label for="sat_shift_end">Shift end</label>
+        <input id="sat_shift_end" type="time" name="shift_end" value="{{ saturday_schedule.shift_end }}" step="300" required>
+
+        <label>Breaks &amp; lunch</label>
+        <div id="sat-breaks-list">
+          {% for b in saturday_schedule.breaks %}
+            <div class="break-row">
+              <input type="time" name="break_start_{{ loop.index0 }}" value="{{ b.start }}" step="300" required>
+              <input type="time" name="break_end_{{ loop.index0 }}" value="{{ b.end }}" step="300" required>
+              <input type="text" name="break_name_{{ loop.index0 }}" value="{{ b.name }}" placeholder="name (e.g. Lunch)">
+              <button type="button" class="remove-btn" title="Remove">×</button>
+            </div>
+          {% endfor %}
+        </div>
+        <button type="button" class="add-break-btn" id="sat-add-break">+ Add break</button>
+      </div>
+    </form>
+
     <form method="post" action="/settings/rounding" id="rounding-form">
       <h3 style="margin-top:1.6rem">Rounding</h3>
       <p class="note">
@@ -732,6 +760,35 @@
     });
   })();
 
+  (function () {
+    const list = document.getElementById('sat-breaks-list');
+    if (!list) return;
+    function reindex() {
+      [...list.querySelectorAll('.break-row')].forEach((row, i) => {
+        row.querySelectorAll('input').forEach(inp => {
+          inp.name = inp.name.replace(/_\d+$/, '_' + i);
+        });
+      });
+    }
+    list.addEventListener('click', e => {
+      if (e.target.classList.contains('remove-btn')) {
+        e.target.closest('.break-row').remove();
+        reindex();
+      }
+    });
+    document.getElementById('sat-add-break').addEventListener('click', () => {
+      const i = list.querySelectorAll('.break-row').length;
+      const row = document.createElement('div');
+      row.className = 'break-row';
+      row.innerHTML =
+        '<input type="time" name="break_start_' + i + '" step="300" required>'
+      + '<input type="time" name="break_end_'   + i + '" step="300" required>'
+      + '<input type="text" name="break_name_'  + i + '" placeholder="name (e.g. Lunch)">'
+      + '<button type="button" class="remove-btn" title="Remove">×</button>';
+      list.appendChild(row);
+    });
+  })();
+
   // ---------- Autosave + Undo/Redo + top-center toast ----------
   // Same pattern as the People Matrix and Plant Scheduler. One factory wires
   // up each form independently — they post to different endpoints and have
@@ -889,6 +946,7 @@
   }
 
   attachAutosaver(document.getElementById('schedule-form'), '/settings/schedule');
+  attachAutosaver(document.getElementById('saturday-schedule-form'), '/settings/saturday_schedule');
   attachAutosaver(document.getElementById('wc-form'), '/settings/work_centers');
 
   // ---------- Picker helpers: summary refresh, × clear, max/min guards ----------
