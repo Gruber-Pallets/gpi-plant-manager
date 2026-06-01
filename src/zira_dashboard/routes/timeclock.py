@@ -316,6 +316,38 @@ def _fmt_time(dt: datetime) -> str:
     return dt.astimezone(shift_config.SITE_TZ).strftime(fmt)
 
 
+def _shift_for_punch(person_odoo_id: int, local_date):
+    """Resolve (shift_start, shift_end, RoundingSettings) for a punch.
+
+    An employee on an Odoo work schedule that has a configured override
+    (with hours for this weekday) gets that schedule's boundaries + windows;
+    everyone else — and any misconfiguration (no calendar, no override, or
+    an override missing this weekday's hours) — falls back to the plant
+    default. We never guess a boundary."""
+    from .. import rounding_store, work_schedule_store
+    rows = db.query(
+        "SELECT resource_calendar_id FROM people WHERE odoo_id = %s",
+        (person_odoo_id,),
+    )
+    cal_id = rows[0]["resource_calendar_id"] if rows else None
+    if cal_id is not None:
+        ws = work_schedule_store.get(cal_id)
+        if ws is not None:
+            hours = ws.work_hours.get(local_date.weekday())
+            if hours is not None:
+                return hours[0], hours[1], ws.rounding
+            _log.warning(
+                "Work schedule override %s has no hours for weekday %s "
+                "(person %s); using plant default rounding",
+                cal_id, local_date.weekday(), person_odoo_id,
+            )
+    return (
+        shift_config.shift_start_for(local_date),
+        shift_config.shift_end_for(local_date),
+        rounding_store.current(),
+    )
+
+
 def _open_log_row(
     person_odoo_id: int, action: str, wc_name: str | None
 ) -> tuple[int, datetime]:
@@ -330,7 +362,7 @@ def _open_log_row(
     stays NULL and downstream falls back to occurred_at via COALESCE.
     Better to record the raw punch than lose it entirely.
     """
-    from .. import rounding, rounding_store
+    from .. import rounding
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO timeclock_punches_log "
@@ -344,12 +376,9 @@ def _open_log_row(
 
     try:
         local_date = occurred_at.astimezone(shift_config.SITE_TZ).date()
+        shift_start, shift_end, windows = _shift_for_punch(person_odoo_id, local_date)
         rounded = rounding.apply_rounding(
-            action,
-            occurred_at,
-            shift_config.shift_start_for(local_date),
-            shift_config.shift_end_for(local_date),
-            rounding_store.current(),
+            action, occurred_at, shift_start, shift_end, windows,
         )
         db.execute(
             "UPDATE timeclock_punches_log SET rounded_at = %s WHERE id = %s",
