@@ -607,15 +607,15 @@ def staffing_page(
     ]
     reserves = [p.name for p in active_people if p.reserve and p.name not in time_off_set]
 
-    eff_start = shift_config.shift_start_for(d)
-    eff_end   = shift_config.shift_end_for(d)
+    eff_start = shift_config.configured_shift_start_for(d)
+    eff_end   = shift_config.configured_shift_end_for(d)
     eff_breaks = [
         {"start": b.start.strftime("%H:%M"),
          "end":   b.end.strftime("%H:%M"),
          "name":  b.name}
-        for b in shift_config.breaks_for(d)
+        for b in shift_config.configured_breaks_for(d)
     ]
-    has_custom_hours = sched.custom_hours is not None
+    hours_source = shift_config.scheduler_hours_source(d, sched.custom_hours is not None)
     eff_hours_label = f"{eff_start.strftime('%H:%M')}–{eff_end.strftime('%H:%M')}"
 
     with _Phase(phases, "render"):
@@ -659,7 +659,7 @@ def staffing_page(
                 "eff_hours_start": eff_start.strftime("%H:%M"),
                 "eff_hours_end": eff_end.strftime("%H:%M"),
                 "eff_breaks": eff_breaks,
-                "has_custom_hours": has_custom_hours,
+                "hours_source": hours_source,
                 "eff_hours_label": eff_hours_label,
                 "person_certs": person_certs,
                 "assignments_todo": assignments_todo,

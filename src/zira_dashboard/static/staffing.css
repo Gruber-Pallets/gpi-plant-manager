@@ -704,6 +704,7 @@
   }
   .hours-pill:hover { color: var(--fg); border-color: var(--muted); }
   .hours-pill.custom { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+  .hours-pill.saturday-default { border-color: #3b82f6; color: #3b82f6; }
   .hours-pill .label { text-transform: uppercase; letter-spacing: 0.5px; font-size: 0.65rem; }
 
   /* Hours editor — modal popover. */

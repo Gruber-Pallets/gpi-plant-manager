@@ -20,7 +20,7 @@
 <div class="print-header">
   <div class="title">Plant Scheduler</div>
   <div class="date">{{ day_pretty }}</div>
-  {% if has_custom_hours %}<div class="hours">Custom Hours: {{ eff_hours_label }}</div>{% endif %}
+  {% if hours_source != 'weekday_default' %}<div class="hours">{% if hours_source == 'saturday_default' %}Saturday Hours{% else %}Custom Hours{% endif %}: {{ eff_hours_label }}</div>{% endif %}
 </div>
 <header class="app">
   <div style="display:flex;gap:1.25rem;align-items:center">
@@ -132,11 +132,11 @@
       <input type="date" id="day-picker" value="{{ day }}" class="date-input" title="Jump to another day">
       <a href="/staffing?day={{ today }}" class="day-hot {% if day == today %}active{% endif %}" title="Jump to today">Today</a>
       <a href="/staffing?day={{ tomorrow }}" class="day-hot {% if day == tomorrow %}active{% endif %}" title="Jump to the next working day">Next Day</a>
-      <button type="button" class="hours-pill {% if has_custom_hours %}custom{% endif %}" id="hours-pill"
+      <button type="button" class="hours-pill {% if hours_source == 'custom' %}custom{% elif hours_source == 'saturday_default' %}saturday-default{% endif %}" id="hours-pill"
               title="Click to edit shift hours for this day">
         <span class="label">Hours</span>
         <span>{{ eff_hours_label }}</span>
-        {% if has_custom_hours %}<span>· {{ eff_breaks|length }} break{{ eff_breaks|length != 1 and 's' or '' }}</span>{% endif %}
+        {% if hours_source != 'weekday_default' %}<span>· {{ eff_breaks|length }} break{{ eff_breaks|length != 1 and 's' or '' }}</span>{% endif %}{% if hours_source == 'saturday_default' %}<span>· Saturday default</span>{% endif %}
       </button>
 
       <div id="hours-editor" class="hours-editor" hidden>
@@ -312,9 +312,9 @@
   <!-- RIGHT: Notes for the day + custom-hours banner -->
   <aside class="day-context">
     <div class="day-notes">
-      {% if has_custom_hours %}
+      {% if hours_source != 'weekday_default' %}
       <div class="custom-hours-banner">
-        <b>Custom hours today:</b> {{ eff_hours_start }}–{{ eff_hours_end }}
+        <b>{% if hours_source == 'saturday_default' %}Saturday hours:{% else %}Custom hours today:{% endif %}</b> {{ eff_hours_start }}–{{ eff_hours_end }}
         {% if eff_breaks %}· {{ eff_breaks|length }} break{{ eff_breaks|length != 1 and 's' or '' }}:
         {% for b in eff_breaks %}{{ b.name }} ({{ b.start }}–{{ b.end }}){% if not loop.last %}, {% endif %}{% endfor %}
         {% endif %}
