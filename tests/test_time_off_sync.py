@@ -505,3 +505,47 @@ def test_delete_missing_hard_deletes_a_denied_row_gone_from_odoo(monkeypatch, fa
     assert deletes and deletes[0][1] == (9,)
     assert not any("INSERT INTO scheduler_moves" in e[0]
                    for e in fake_db["executes"])
+
+
+# --------------------------------------------------------------------------
+# Task 1: find_conflicting_request — overlap helper
+# --------------------------------------------------------------------------
+
+
+def test_find_conflicting_request_returns_none_when_empty(fake_db):
+    fake_db["query_result"] = []
+    out = time_off_sync.find_conflicting_request(
+        5, date(2026, 6, 1), date(2026, 6, 3))
+    assert out is None
+    sql, params = fake_db["queries"][-1]
+    assert params[0] == 5
+    assert date(2026, 6, 1) in params and date(2026, 6, 3) in params
+    assert "state IN" in sql
+
+
+def test_find_conflicting_request_returns_first_row(fake_db):
+    fake_db["query_result"] = [{
+        "id": 9, "state": "validate", "synced_to_odoo": True,
+        "date_from": date(2026, 6, 2), "date_to": date(2026, 6, 2),
+    }]
+    out = time_off_sync.find_conflicting_request(
+        5, date(2026, 6, 1), date(2026, 6, 3))
+    assert out["id"] == 9
+
+
+def test_find_conflicting_request_exclude_rid_in_sql_and_params(fake_db):
+    fake_db["query_result"] = []
+    time_off_sync.find_conflicting_request(
+        5, date(2026, 6, 1), date(2026, 6, 3), exclude_rid=42)
+    sql, params = fake_db["queries"][-1]
+    assert "id <> %s" in sql
+    assert 42 in params
+
+
+def test_find_conflicting_request_established_only_clause(fake_db):
+    fake_db["query_result"] = []
+    time_off_sync.find_conflicting_request(
+        5, date(2026, 6, 1), date(2026, 6, 3),
+        exclude_rid=42, established_only=True)
+    sql, params = fake_db["queries"][-1]
+    assert "synced_to_odoo = TRUE OR id < %s" in sql

@@ -65,6 +65,48 @@ _log = logging.getLogger(__name__)
 _SYNC_ERROR_MSG_LIMIT = 480
 
 
+def find_conflicting_request(
+    person_odoo_id: int,
+    date_from: date,
+    date_to: date,
+    exclude_rid: int | None = None,
+    established_only: bool = False,
+) -> dict | None:
+    """First non-rejected ``time_off_requests`` row for ``person_odoo_id``
+    whose ``[date_from, date_to]`` overlaps the given range, else None.
+
+    Date-level, type-agnostic overlap — mirrors Odoo's own "no two leaves on
+    the same day for one employee" constraint, but caught locally *before* we
+    post so an overlap never sticks in the errored state. Scoped to the same
+    person only; never blocks against a coworker's time off.
+
+    ``exclude_rid``      skip this row id (an edit can't conflict with itself).
+    ``established_only``  push-path mode: only count a row as a conflict if it
+                          is already synced (``synced_to_odoo = TRUE``) OR was
+                          created earlier (``id < exclude_rid``). Stops two
+                          simultaneous duplicate drafts from deleting each
+                          other — the earlier/established one wins.
+    """
+    sql = (
+        "SELECT id, state, synced_to_odoo, date_from, date_to "
+        "FROM time_off_requests "
+        "WHERE person_odoo_id = %s "
+        "AND state IN ('draft','draft_edit','confirm','validate1','validate') "
+        "AND date_to >= %s AND date_from <= %s"
+    )
+    params: list[Any] = [person_odoo_id, date_from, date_to]
+    if exclude_rid is not None:
+        sql += " AND id <> %s"
+        params.append(exclude_rid)
+    if established_only:
+        # exclude_rid is always supplied in this mode (the row being pushed).
+        sql += " AND (synced_to_odoo = TRUE OR id < %s)"
+        params.append(exclude_rid)
+    sql += " ORDER BY id LIMIT 1"
+    rows = db.query(sql, tuple(params))
+    return rows[0] if rows else None
+
+
 def push_one(request_id: int) -> None:
     """Sync one local row to Odoo. Called from BackgroundTasks and the sweep.
 
