@@ -102,10 +102,12 @@ def _all_cached() -> dict[int, WorkScheduleOverride]:
 
 def get(resource_calendar_id: int) -> WorkScheduleOverride | None:
     """Override for an Odoo calendar id, or None. Cache read — safe on the
-    punch hot path."""
-    if resource_calendar_id is None:
+    punch hot path; never raises on a bad/non-numeric id."""
+    try:
+        key = int(resource_calendar_id)
+    except (TypeError, ValueError):
         return None
-    return _all_cached().get(int(resource_calendar_id))
+    return _all_cached().get(key)
 
 
 def all_overrides() -> list[WorkScheduleOverride]:
@@ -120,7 +122,7 @@ def create(resource_calendar_id: int, name: str = "") -> None:
     db.execute(
         "INSERT INTO work_schedules (resource_calendar_id, name) "
         "VALUES (%s, %s) ON CONFLICT (resource_calendar_id) DO NOTHING",
-        (int(resource_calendar_id), (name or "")[:200]),
+        (int(resource_calendar_id), (name or "")[:200]),  # defensive cap
     )
     reload()
 
@@ -155,7 +157,7 @@ def refresh_synced(resource_calendar_id: int, name: str, work_hours: dict) -> No
     db.execute(
         "UPDATE work_schedules SET name = %s, work_hours = %s::jsonb, "
         "last_synced_at = now() WHERE resource_calendar_id = %s",
-        ((name or "")[:200], json.dumps(work_hours or {}), int(resource_calendar_id)),
+        ((name or "")[:200], json.dumps(work_hours or {}), int(resource_calendar_id)),  # defensive cap
     )
     reload()
 
