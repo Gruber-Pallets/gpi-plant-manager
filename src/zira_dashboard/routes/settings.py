@@ -50,6 +50,15 @@ def _loc_by_key(key: str):
     return None
 
 
+def _split_roster_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split roster-filter rows into (active, inactive) by the `active`
+    flag. Input order is preserved within each list (the query already
+    sorts by name)."""
+    active = [r for r in rows if r.get("active")]
+    inactive = [r for r in rows if not r.get("active")]
+    return active, inactive
+
+
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(
     request: Request,

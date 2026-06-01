@@ -68,6 +68,20 @@ def test_load_roster_includes_inactive_but_not_excluded():
     staffing._invalidate_roster_cache()
 
 
+def test_split_roster_rows_separates_active_and_inactive():
+    """Active rows (active truthy) and inactive rows are split, order preserved."""
+    from zira_dashboard.routes.settings import _split_roster_rows
+
+    rows = [
+        {"odoo_id": 1, "name": "Ana", "excluded": False, "active": True},
+        {"odoo_id": 2, "name": "Zed", "excluded": False, "active": False},
+        {"odoo_id": 3, "name": "Cara", "excluded": True, "active": True},
+    ]
+    active, inactive = _split_roster_rows(rows)
+    assert [r["name"] for r in active] == ["Ana", "Cara"]
+    assert [r["name"] for r in inactive] == ["Zed"]
+
+
 def test_toggle_endpoint_400_when_odoo_id_missing():
     from fastapi.testclient import TestClient
     from zira_dashboard.app import app
