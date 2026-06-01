@@ -104,6 +104,11 @@ TRANSLATIONS: dict[str, str] = {
     "Canceling an approved request will need approval again if you change your mind.":
         "Cancelar una solicitud aprobada requerirá aprobación nuevamente si cambias de opinión.",
     "Cancel This Request": "Cancelar esta solicitud",
+    # --- time off: overlap conflict modal ---
+    "You already have time off for this time so we can't add a second. Either cancel your request via the My Requests button or contact management for help.":
+        "Ya tienes tiempo libre para estas fechas, así que no podemos agregar otro. Cancela tu solicitud con el botón Mis solicitudes o comunícate con la gerencia para obtener ayuda.",
+    "Go to My Requests": "Ir a Mis solicitudes",
+    "OK": "Aceptar",
     # --- time off: submitted ---
     "Request Submitted": "Solicitud enviada",
     "Your time-off request from {start} to {end} is pending approval.":

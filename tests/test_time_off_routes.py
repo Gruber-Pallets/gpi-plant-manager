@@ -512,3 +512,46 @@ def test_edit_blocks_overlapping_request(monkeypatch):
     assert seen_exclude["rid"] == 42
     assert updated == []
     assert queued == []
+
+
+def test_submit_conflict_renders_modal(monkeypatch):
+    """Real-render path: the conflict response contains the modal message and
+    a My Requests link."""
+    monkeypatch.setattr(
+        "zira_dashboard.routes.timeclock_time_off._verify_token", lambda t: 1)
+    monkeypatch.setattr(
+        "zira_dashboard.routes.timeclock_time_off._person_by_id",
+        lambda pid: {"id": 1, "name": "T", "odoo_id": 5, "spanish_speaker": False})
+    monkeypatch.setattr(
+        "zira_dashboard.time_off_sync.find_conflicting_request",
+        lambda *a, **k: {"id": 99})
+    monkeypatch.setattr(
+        "zira_dashboard.routes.timeclock_time_off._shift_window_for",
+        lambda pid: (6.0, 14.5))
+    monkeypatch.setattr(
+        "zira_dashboard.routes.timeclock_time_off._fetch_visible_leave_types",
+        lambda shape: [{"id": 1, "name": "PTO",
+                        "request_unit": "day", "requires_allocation": "no"}])
+    monkeypatch.setattr(
+        "zira_dashboard.routes.timeclock_time_off.time_off_balances.get_for_employee",
+        lambda pid: [])
+    import types as _types
+    monkeypatch.setattr(
+        "zira_dashboard.routes.timeclock_time_off.schedule_store.current",
+        lambda: _types.SimpleNamespace(work_weekdays=[0, 1, 2, 3, 4]))
+    monkeypatch.setattr(
+        "zira_dashboard.routes.timeclock_time_off._insert_request_row",
+        lambda **kw: 1)
+    monkeypatch.setattr(
+        "zira_dashboard.routes.timeclock_time_off._queue_push", lambda rid: None)
+
+    client = TestClient(app)
+    r = client.post(
+        "/timeclock/time-off/request/anytoken/submit",
+        data={"shape": "full_day", "holiday_status_id": "1",
+              "date_from": "2026-06-01", "date_to": "2026-06-03", "note": ""},
+        follow_redirects=False,
+    )
+    assert r.status_code == 409
+    assert "You already have time off for this time" in r.text
+    assert "/timeclock/time-off/mine/" in r.text

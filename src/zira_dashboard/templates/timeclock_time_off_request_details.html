@@ -30,6 +30,21 @@
       <div class="k-error">{{ error }}</div>
     {% endif %}
 
+    {% if conflict %}
+      <div class="k-modal-overlay" id="conflict-modal">
+        <div class="k-modal-card">
+          <p>{{ t("You already have time off for this time so we can't add a second. Either cancel your request via the My Requests button or contact management for help.") }}</p>
+          <div class="k-modal-actions">
+            <a class="k-btn" href="/timeclock/time-off/mine/{{ token }}">{{ t("Go to My Requests") }}</a>
+            <button type="button" class="k-btn secondary"
+                    onclick="document.getElementById('conflict-modal').style.display='none'">
+              {{ t("OK") }}
+            </button>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
     {% if shape == "full_day" and not leave_types %}
       <div class="k-warning">
         No day-unit leave types available yet. If you just turned on Time
