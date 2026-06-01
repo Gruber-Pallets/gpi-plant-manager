@@ -247,30 +247,7 @@
   <section class="panel" id="roster-filter-panel"
            {% if active_section != 'roster_filter' %}style="display:none"{% endif %}>
     <h2>Roster Filter</h2>
-    <p class="note" style="margin-bottom:0.8rem">
-      Uncheck to hide a person from active roster views (People Matrix,
-      scheduler dropdowns, late/absence report, etc.). Historical data
-      stays intact — past schedules, leaderboards, and attendance
-      records still show them.
-    </p>
-    {% if roster_filter_rows %}
-    <ul class="roster-filter-list" style="list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill, minmax(20rem, 1fr));gap:0.4rem 1rem">
-      {% for p in roster_filter_rows %}
-      <li class="roster-filter-row" data-odoo-id="{{ p.odoo_id }}"
-          style="padding:0.3rem 0.5rem;border-radius:6px">
-        <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
-          <input type="checkbox"
-                 class="roster-filter-toggle"
-                 {% if not p.excluded %}checked{% endif %}>
-          <span class="roster-filter-name" style="flex:1">{{ p.name }}</span>
-          <span class="roster-filter-meta" style="color:var(--muted);font-size:0.78rem">Odoo #{{ p.odoo_id }}</span>
-        </label>
-      </li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p style="color:var(--muted);font-style:italic">No Odoo-synced people yet. Run an Odoo sync first.</p>
-    {% endif %}
+    {% include "_roster_filter.html" %}
   </section>
 
   <!-- Integrations -->
