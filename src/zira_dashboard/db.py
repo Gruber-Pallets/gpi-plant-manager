@@ -399,6 +399,14 @@ CREATE TABLE IF NOT EXISTS global_schedule (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS saturday_schedule (
+  id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  shift_start     TIME NOT NULL,
+  shift_end       TIME NOT NULL,
+  breaks          JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS widget_layouts (
   page            TEXT PRIMARY KEY,
   layout          JSONB NOT NULL,
