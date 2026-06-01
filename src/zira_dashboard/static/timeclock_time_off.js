@@ -214,29 +214,41 @@
     checkSchedule();
   }
 
-  // Recalc the balance panel when the type, end date, or times change.
-  [typeSel, dateTo, timeA, timeB].forEach(function (el) {
+  // The end date must never fall behind the start date. Whenever either
+  // date changes, snap the end up to the start if it's behind — this
+  // collapses an inverted range to a single day, while a multi-day end the
+  // user set on purpose stays put as long as it's still on/after the start.
+  // Picking a future start when the end is still at today therefore pulls
+  // the end along (the one-tap single-day flow). Also point the end-date
+  // picker's `min` at the start so earlier days grey out in the calendar
+  // popup — a hint; the value clamp below is the real enforcement.
+  //
+  // Only the full_day form has a real end-date input; the partial shapes
+  // use a hidden, server-forced single date (id "date-to-hidden"), so
+  // dateTo is null there and this is a harmless no-op.
+  function clampEndToStart() {
+    if (dateTo && dateFrom && dateFrom.value) {
+      dateTo.min = dateFrom.value;
+      if (dateTo.value && dateTo.value < dateFrom.value) {
+        dateTo.value = dateFrom.value;
+      }
+    }
+  }
+
+  // Keep the end date valid and the balance panel current on any change to
+  // the type, either date, or the times.
+  function onDateOrTimeChange() {
+    clampEndToStart();
+    recalc();
+  }
+
+  [typeSel, dateFrom, dateTo, timeA, timeB].forEach(function (el) {
     if (el) {
-      el.addEventListener("change", recalc);
-      el.addEventListener("input", recalc);
+      el.addEventListener("change", onDateOrTimeChange);
+      el.addEventListener("input", onDateOrTimeChange);
     }
   });
 
-  // Picking a start date defaults the end date to match it, so a single-day
-  // request is one tap (the user can still push the end date out afterward
-  // for a multi-day request). Only the full_day form has an end-date input;
-  // the partial shapes use a server-forced single date, so dateTo is null
-  // there and this is a harmless no-op. Recalc after syncing.
-  function onStartDateChange() {
-    if (dateTo && dateFrom.value) {
-      dateTo.value = dateFrom.value;
-    }
-    recalc();
-  }
-  if (dateFrom) {
-    dateFrom.addEventListener("change", onStartDateChange);
-    dateFrom.addEventListener("input", onStartDateChange);
-  }
-
+  clampEndToStart();
   recalc();
 })();
