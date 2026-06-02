@@ -121,6 +121,7 @@ async def late_report_snooze(request: Request):
         late_report.snooze(today, emp_id, name, minutes)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    _bust_caches()
     return JSONResponse({"ok": True, "minutes": minutes})
 
 
