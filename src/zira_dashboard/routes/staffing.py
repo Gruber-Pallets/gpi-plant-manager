@@ -881,7 +881,7 @@ async def staffing_attribute(request: Request):
       wc_name:     work center name
       person_name: person to credit
       start_utc:   ISO datetime (UTC)
-      end_utc:     ISO datetime (UTC)
+      end_utc:     ISO datetime (UTC), optional -- omit/empty => open-ended
     """
     from datetime import date as _date, datetime as _dt
     from .. import wc_attributions
@@ -891,11 +891,14 @@ async def staffing_attribute(request: Request):
         wc = str(body["wc_name"]).strip()
         person = str(body["person_name"]).strip()
         start_utc = _dt.fromisoformat(body["start_utc"])
-        end_utc = _dt.fromisoformat(body["end_utc"])
+        raw_end = body.get("end_utc")
+        end_utc = _dt.fromisoformat(raw_end) if raw_end else None  # None/"" => open
     except (KeyError, TypeError, ValueError) as e:
         return JSONResponse({"ok": False, "error": f"bad body: {e}"}, status_code=400)
-    if not (wc and person and end_utc > start_utc):
+    if not (wc and person):
         return JSONResponse({"ok": False, "error": "missing/invalid fields"}, status_code=400)
+    if end_utc is not None and end_utc <= start_utc:
+        return JSONResponse({"ok": False, "error": "end must be after start"}, status_code=400)
     new_id = wc_attributions.add(day, wc, person, start_utc, end_utc)
     # Drop cached dashboard responses so the next load reflects the change.
     from .._http_cache import invalidate_today_cache
