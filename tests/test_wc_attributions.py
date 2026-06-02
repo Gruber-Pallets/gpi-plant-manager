@@ -37,3 +37,18 @@ def test_attribute_for_day_no_extras_argument_unchanged():
     wc_totals = {"Forklift": (8, 0)}
     out = attribute_for_day(assignments, wc_totals, 480)
     assert out["Lauro"]["Forklift"]["units"] == 8
+
+
+def test_creditable_for_day_excludes_testing_rows(monkeypatch):
+    """creditable_for_day drops source='testing' rows so a no-credit testing
+    window never feeds a credited operator OR a dashboard goal."""
+    from zira_dashboard import wc_attributions
+    rows = [
+        {"id": 1, "wc_name": "Dismantler 4", "person_name": "Eulogio",
+         "start_utc": None, "end_utc": None, "source": "manual"},
+        {"id": 2, "wc_name": "Dismantler 4", "person_name": wc_attributions.TESTING_PERSON,
+         "start_utc": None, "end_utc": None, "source": wc_attributions.TESTING_SOURCE},
+    ]
+    monkeypatch.setattr(wc_attributions, "for_day", lambda day: rows)
+    out = wc_attributions.creditable_for_day("2026-06-02")
+    assert [r["person_name"] for r in out] == ["Eulogio"]

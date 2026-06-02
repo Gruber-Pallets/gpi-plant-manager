@@ -85,6 +85,14 @@ def testing_windows_for_day(day: date) -> dict[str, list[tuple]]:
     return out
 
 
+def creditable_for_day(day: date) -> list[dict]:
+    """Attributions for ``day`` EXCLUDING no-credit testing rows (``source ==
+    TESTING_SOURCE``). This is the set that should drive both credited operators
+    and dashboard GOALS -- a testing window credits no one and must not inflate
+    a goal. Mirrors the testing filter in ``people_by_wc``."""
+    return [r for r in for_day(day) if r.get("source") != TESTING_SOURCE]
+
+
 def delete(attribution_id: int) -> None:
     from . import db
     db.execute("DELETE FROM wc_time_attributions WHERE id = %s", (attribution_id,))

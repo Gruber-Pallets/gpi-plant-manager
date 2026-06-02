@@ -375,15 +375,19 @@ def staffing_page(
     try:
         for r in (f_assignments_done.result() or []):
             s_local = r["start_utc"].astimezone(site_tz)
-            e_local = r["end_utc"].astimezone(site_tz)
+            e_raw = r["end_utc"]
+            e_local = e_raw.astimezone(site_tz) if e_raw is not None else None
             entry = {
                 "id": r["id"],
                 "wc_name": r["wc_name"],
                 "person_name": r["person_name"],
                 "first_label": s_local.strftime("%I:%M %p").lstrip("0"),
-                "last_label": e_local.strftime("%I:%M %p").lstrip("0"),
-                "time_range": time_format.fmt_time_range(
-                    s_local.isoformat(), e_local.isoformat()
+                "last_label": (e_local.strftime("%I:%M %p").lstrip("0")
+                               if e_local is not None else "open"),
+                "time_range": (
+                    time_format.fmt_time_range(s_local.isoformat(), e_local.isoformat())
+                    if e_local is not None
+                    else s_local.strftime("%I:%M %p").lstrip("0") + " – open"
                 ),
             }
             assignments_done.append(entry)
@@ -1017,13 +1021,15 @@ def assignments_todo_json():
             })
         for r in wc_attributions.for_day(today):
             s_local = r["start_utc"].astimezone(site_tz)
-            e_local = r["end_utc"].astimezone(site_tz)
+            e_raw = r["end_utc"]
+            e_local = e_raw.astimezone(site_tz) if e_raw is not None else None
             out["saved"].append({
                 "id": r["id"],
                 "wc_name": r["wc_name"],
                 "person_name": r["person_name"],
                 "first_label": s_local.strftime("%I:%M %p").lstrip("0"),
-                "last_label": e_local.strftime("%I:%M %p").lstrip("0"),
+                "last_label": (e_local.strftime("%I:%M %p").lstrip("0")
+                               if e_local is not None else "open"),
             })
         roster = _staffing.load_roster()
         out["people"] = sorted((p.name for p in roster if p.active), key=str.lower)

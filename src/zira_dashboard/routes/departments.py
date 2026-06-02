@@ -105,7 +105,7 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     from .. import assignment_windows, timeclock_windows, wc_attributions
     segments = assignment_windows.resolve_segments(
         assignments=sched.assignments,
-        attributions=wc_attributions.for_day(d),
+        attributions=wc_attributions.creditable_for_day(d),
         punch_windows=timeclock_windows.punch_windows_for_day(d),
         shift_start_utc=window_start_utc,
         cap_utc=window_end_utc,
