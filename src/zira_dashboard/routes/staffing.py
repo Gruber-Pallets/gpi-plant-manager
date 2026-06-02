@@ -956,13 +956,12 @@ async def staffing_attribute_with_testing(request: Request):
             rem_end = _dt.fromisoformat(body["sensed_end_utc"])
         except (KeyError, TypeError, ValueError):
             rem_end = t_end
-        if rem_end <= t_end:
-            rem_end = t_end
-        ids.append(wc_attributions.add(day, wc, remainder, t_end, rem_end))
-        try:
-            transfer = staffing_transfer.decide_and_apply(remainder, wc, t_end)
-        except Exception as e:  # noqa: BLE001
-            transfer = {"transfer": "error", "error": str(e)}
+        if rem_end > t_end:
+            ids.append(wc_attributions.add(day, wc, remainder, t_end, rem_end))
+            try:
+                transfer = staffing_transfer.decide_and_apply(remainder, wc, t_end)
+            except Exception as e:  # noqa: BLE001
+                transfer = {"transfer": "error", "error": str(e)}
 
     invalidate_today_cache()
     return JSONResponse({"ok": True, "ids": ids, "transfer": transfer})
@@ -976,10 +975,10 @@ async def staffing_transfer_undo(request: Request):
     body = await request.json()
     try:
         new_id = int(body["new_id"])
+        raw_closed = body.get("closed_id")
+        closed_id = int(raw_closed) if raw_closed else None
     except (KeyError, TypeError, ValueError) as e:
         return JSONResponse({"ok": False, "error": f"bad body: {e}"}, status_code=400)
-    closed_id = body.get("closed_id")
-    closed_id = int(closed_id) if closed_id else None
     try:
         odoo_client.undo_transfer(closed_id, new_id)
     except Exception as e:  # noqa: BLE001
