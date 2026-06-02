@@ -118,8 +118,8 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     # no-punch). Scheduled-but-absent people shouldn't count toward
     # man-hours — otherwise pph/hr/person collapses by the absent share.
     try:
-        from .. import stratustime_client
-        _absent_today = stratustime_client.full_day_absent_names_for_day(d)
+        from .. import attendance
+        _absent_today = attendance.full_day_absent_names(d)
     except Exception:
         _absent_today = set()
 
@@ -744,8 +744,8 @@ def _render_new_dept(
     # Full-day absences excluded from man-hours — see _recycling_day_data
     # for the full rationale.
     try:
-        from .. import stratustime_client
-        _absent_today = stratustime_client.full_day_absent_names_for_day(d)
+        from .. import attendance
+        _absent_today = attendance.full_day_absent_names(d)
     except Exception:
         _absent_today = set()
 

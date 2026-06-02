@@ -138,7 +138,7 @@ def pph_debug(day: str | None = Query(default=None)):
 
 
 def _pph_debug_impl(day: str | None):
-    from .. import staffing, stratustime_client, work_centers_store
+    from .. import staffing, work_centers_store, attendance
 
     today = datetime.now(timezone.utc).date()
     try:
@@ -158,7 +158,7 @@ def _pph_debug_impl(day: str | None):
     window_end_utc = window_end_local.astimezone(timezone.utc)
 
     try:
-        absent_today = sorted(stratustime_client.full_day_absent_names_for_day(d))
+        absent_today = sorted(attendance.full_day_absent_names(d))
     except Exception as e:
         absent_today = [f"<error: {e}>"]
 
