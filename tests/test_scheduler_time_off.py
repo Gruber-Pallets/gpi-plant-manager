@@ -4,6 +4,13 @@ from zira_dashboard import scheduler_time_off as sto
 
 def _fake_db(monkeypatch, rows):
     monkeypatch.setattr(sto.db, "query", lambda sql, params=None: rows)
+    # time_off_entries_for_day also queries cleared_partials_by_name (via
+    # late_report). With the broad db.query stub above, that query would
+    # return `rows` too — misreading the time-off names as "cleared" and
+    # filtering the partial entries out. Default to "nothing cleared"; the
+    # clear-specific test re-stubs this afterward (monkeypatch last wins).
+    from zira_dashboard import late_report
+    monkeypatch.setattr(late_report, "cleared_partial_names_for_day", lambda day: set())
 
 
 def test_full_day_entry_is_not_partial(monkeypatch):

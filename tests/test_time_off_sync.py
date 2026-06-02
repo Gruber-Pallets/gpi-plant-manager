@@ -50,6 +50,10 @@ def test_push_one_creates_new_odoo_leave_when_no_odoo_id(monkeypatch, fake_db):
     monkeypatch.setattr(time_off_sync.odoo_client, "create_leave", mock_create)
     monkeypatch.setattr(time_off_sync.odoo_client, "find_duplicate_leave", mock_find)
     monkeypatch.setattr(time_off_sync.odoo_client, "confirm_leave", mock_confirm)
+    # No established overlap — let _push_create proceed. (The broad db.query
+    # stub would otherwise feed this same row into find_conflicting_request
+    # and read it as its own conflict, deleting it before create.)
+    monkeypatch.setattr(time_off_sync, "find_conflicting_request", lambda *a, **k: None)
 
     time_off_sync.push_one(1)
 
@@ -81,6 +85,7 @@ def test_push_one_dedups_via_search_before_create(monkeypatch, fake_db):
     monkeypatch.setattr(time_off_sync.odoo_client, "create_leave", mock_create)
     mock_confirm = MagicMock()
     monkeypatch.setattr(time_off_sync.odoo_client, "confirm_leave", mock_confirm)
+    monkeypatch.setattr(time_off_sync, "find_conflicting_request", lambda *a, **k: None)
 
     time_off_sync.push_one(1)
 
@@ -105,6 +110,7 @@ def test_push_one_records_sync_error_on_xmlrpc_failure(monkeypatch, fake_db):
                         MagicMock(return_value=None))
     monkeypatch.setattr(time_off_sync.odoo_client, "create_leave",
                         MagicMock(side_effect=RuntimeError("Odoo down")))
+    monkeypatch.setattr(time_off_sync, "find_conflicting_request", lambda *a, **k: None)
 
     time_off_sync.push_one(1)
 
