@@ -87,3 +87,13 @@ def test_timeclock_panel_renders_subtabs():
                 'id="tc-tab-rules"',
                 'id="tc-tab-activity"'):
         assert pid in html, pid
+
+
+def test_rules_tab_orders_autolunch_after_per_schedule():
+    r = client.get("/settings?section=timeclock")
+    assert r.status_code == 200
+    html = r.text
+    assert "Per-schedule rounding" in html
+    assert "Auto-Lunch" in html
+    assert html.index("Per-schedule rounding") < html.index("Auto-Lunch"), \
+        "Auto-Lunch should sit below the rounding block"
