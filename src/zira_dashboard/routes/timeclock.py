@@ -384,6 +384,21 @@ def timeclock_dashboard(request: Request, token: str):
 
     # Local-DB read — no Odoo XML-RPC on the hot path. See _current_state.
     state = _current_state(p["odoo_id"]) if p.get("odoo_id") else _current_state(-1)
+
+    # Auto-lunch overlay: during the lunch gap the employee is still "on shift"
+    # from their point of view (the auto sign-out is invisible payroll), so keep
+    # showing the sign-out action. A sign-out during the gap ends their day
+    # (handled in kiosk_clock_out).
+    on_lunch = False
+    if p.get("odoo_id"):
+        from .. import auto_lunch
+        now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+        lunch_run = auto_lunch.active_lunch_run(p["odoo_id"], now_local)
+        if lunch_run is not None:
+            state = {**state, "is_clocked_in": True,
+                     "current_wc": lunch_run.get("wc_name")}
+            on_lunch = True
+
     sync_warning = _sync_error_warning(p["odoo_id"]) if p.get("odoo_id") else None
     scheduled_wc = _scheduled_wc_for(p["name"])
 
@@ -409,6 +424,7 @@ def timeclock_dashboard(request: Request, token: str):
             "token": fresh_token,
             "is_clocked_in": state["is_clocked_in"],
             "current_wc": state["current_wc"],
+            "on_lunch": on_lunch,
             "check_in_display": _fmt_time(state["check_in_ts"]) if state["check_in_ts"] else None,
             "scheduled_wc": scheduled_wc,
             "sync_warning": sync_warning,
