@@ -529,6 +529,11 @@ def kiosk_clock_out(
         return salaried
     odoo_id = p["odoo_id"]
     log_id, rounded_at = _open_log_row(odoo_id, "clock_out", None)
+    # If they're signing out mid auto-lunch, end the day here: cancel the
+    # pending auto sign-in. The morning attendance is already closed at lunch
+    # start, so the Odoo sync of this clock_out is a safe no-op.
+    from .. import auto_lunch
+    auto_lunch.note_employee_clock_out(odoo_id)
     background_tasks.add_task(timeclock_sync.sync_one_by_id, log_id)
     return templates.TemplateResponse(
         request,
