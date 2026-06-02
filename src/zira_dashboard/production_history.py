@@ -122,6 +122,48 @@ def _fetch_wc_totals(client, day: date) -> dict[str, tuple[int, int]]:
     return {r.station.name: (r.units, r.downtime_minutes) for r in results}
 
 
+def _fetch_wc_samples(client, day: date) -> dict[str, list[tuple]]:
+    """``{wc_name: [(event_dt_utc, units), ...]}`` for metered WCs on ``day``.
+    Reuses the cached leaderboard (same call _fetch_wc_totals makes), so this
+    is cheap when both run for the same day."""
+    from . import staffing
+    from .leaderboard import cached_leaderboard as leaderboard
+    from .stations import Station
+
+    metered = [loc for loc in staffing.LOCATIONS if loc.meter_id]
+    if not metered:
+        return {}
+    stations = [
+        Station(meter_id=loc.meter_id, name=loc.name, category=loc.skill, cell=loc.bay)
+        for loc in metered
+    ]
+    results = leaderboard(client, stations, day)
+    return {r.station.name: list(r.samples) for r in results}
+
+
+def _apply_testing_offsets(
+    wc_totals: dict[str, tuple[int, int]],
+    samples_by_wc: dict[str, list[tuple]],
+    testing_windows: dict[str, list[tuple]],
+) -> dict[str, tuple[int, int]]:
+    """Subtract units produced inside testing windows from each WC's total so
+    they're credited to no one. Downtime is left untouched. Floors at 0."""
+    if not testing_windows:
+        return wc_totals
+    out = dict(wc_totals)
+    for wc, windows in testing_windows.items():
+        if wc not in out:
+            continue
+        samples = samples_by_wc.get(wc, [])
+        testing_units = sum(
+            u for (t, u) in samples
+            if any(s <= t < e for (s, e) in windows)
+        )
+        units, downtime = out[wc]
+        out[wc] = (max(0, units - testing_units), downtime)
+    return out
+
+
 def _elapsed_minutes_for(d: date) -> int:
     """Productive minutes available on day d, evaluated as of right now."""
     from datetime import datetime, timezone
@@ -151,6 +193,10 @@ def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
     wc_totals = _fetch_wc_totals(client, d)
     elapsed = _elapsed_minutes_for(d)
     extra = wc_attributions.people_by_wc(d)
+    testing = wc_attributions.testing_windows_for_day(d)
+    if testing:
+        samples_by_wc = _fetch_wc_samples(client, d)
+        wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)
     return attribute_for_day(
         sched.assignments, wc_totals, elapsed, extra_assignments=extra
     )
