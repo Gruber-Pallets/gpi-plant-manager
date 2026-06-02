@@ -98,6 +98,25 @@ def _first_clock_in(person_odoo_id: int, day: date) -> datetime | None:
     return rows[0]["first_in"] if rows and rows[0]["first_in"] else None
 
 
+def _latest_in_wc(person_odoo_id: int, day: date) -> str | None:
+    """Work center on the employee's most recent clock_in/transfer_in punch
+    today, from the local log. Fallback for the sign-out WC capture when the
+    reconciled state carries no work center (e.g. the open-attendance cache
+    doesn't surface it) — so the auto sign-in still restores the WC and its
+    Kiosk Department, matching the regular timeclock."""
+    start, end = _day_bounds(day)
+    rows = db.query(
+        "SELECT wc_name FROM timeclock_punches_log "
+        "WHERE person_odoo_id = %s AND action IN ('clock_in', 'transfer_in') "
+        "AND wc_name IS NOT NULL "
+        "AND COALESCE(rounded_at, occurred_at) >= %s "
+        "AND COALESCE(rounded_at, occurred_at) < %s "
+        "ORDER BY COALESCE(rounded_at, occurred_at) DESC, id DESC LIMIT 1",
+        (person_odoo_id, start, end),
+    )
+    return rows[0]["wc_name"] if rows and rows[0]["wc_name"] else None
+
+
 def _get_run(person_odoo_id: int, day: date) -> dict | None:
     rows = db.query(
         "SELECT person_odoo_id, day, kind, state, target_out_at, target_in_at, "
@@ -162,7 +181,11 @@ def _window_for(person_odoo_id, kind, today, fixed_window, settings) -> Window |
 
 def _apply(person_odoo_id, today, kind, run, t, state, window, settings) -> None:
     if t.action == "clock_out":
-        wc_name = state["current_wc"]
+        # Capture the WC to restore at sign-in. Prefer the reconciled current
+        # WC; fall back to the WC on the employee's own latest in-punch so the
+        # afternoon record still carries the work center (and its Kiosk
+        # Department) even when the open-attendance cache doesn't surface it.
+        wc_name = state["current_wc"] or _latest_in_wc(person_odoo_id, today)
         _log.info("auto-lunch %s: person %s clock_out @ %s (wc=%s)",
                   "OBSERVE" if settings.observe_only else "LIVE",
                   person_odoo_id, t.at, wc_name)

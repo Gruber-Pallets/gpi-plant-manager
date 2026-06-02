@@ -115,3 +115,35 @@ def test_active_lunch_run_only_inside_window():
                (PID, day, out_at, in_at))
     assert al.active_lunch_run(PID, out_at + timedelta(minutes=5)) is not None
     assert al.active_lunch_run(PID, in_at + timedelta(minutes=1)) is None
+
+
+def test_signout_wc_falls_back_to_local_punch_when_cache_lacks_it(monkeypatch):
+    """Regression: the afternoon record was getting a blank Kiosk Department
+    because the WC captured at sign-out was empty whenever the open-attendance
+    cache didn't carry it. The sign-out must fall back to the WC on the
+    employee's own morning punch so the auto sign-in restores WC + department."""
+    day = datetime.now(shift_config.SITE_TZ).date()
+    lunch_out = datetime.combine(day, time(11, 0), tzinfo=shift_config.SITE_TZ)
+    from zira_dashboard.schedule_store import Break
+    monkeypatch.setattr(shift_config, "is_workday", lambda d: True)
+    monkeypatch.setattr(shift_config, "breaks_for",
+                        lambda d: (Break(time(11, 0), time(11, 30), "Lunch"),))
+    # Cache shows them clocked in but with NO work center (the bug condition).
+    now_ref = datetime.now(timezone.utc)
+    monkeypatch.setattr(live_cache, "read_open_attendance",
+                        lambda: ({str(PID): {"att_id": 1, "check_in": None,
+                                             "wc_name": None}}, now_ref))
+    monkeypatch.setattr(live_cache, "is_stale", lambda _r: False)
+    # But their morning kiosk clock-in DID record a work center locally.
+    morning = datetime.combine(day, time(7, 0), tzinfo=shift_config.SITE_TZ)
+    db.execute(
+        "INSERT INTO timeclock_punches_log (person_odoo_id, action, wc_name, "
+        "occurred_at, rounded_at, synced_to_odoo, synced_at, source) "
+        "VALUES (%s,'clock_in','Repair 1',%s,%s,TRUE,%s,'employee')",
+        (PID, morning, morning, morning))
+
+    al.run_tick(now=lunch_out)
+
+    run = db.query("SELECT wc_name FROM auto_lunch_runs WHERE person_odoo_id=%s",
+                   (PID,))[0]
+    assert run["wc_name"] == "Repair 1"  # captured from the local punch, not lost
