@@ -39,6 +39,7 @@ def _stub_client(monkeypatch, employees, skills_for, columns_meta, buckets):
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skills_for", lambda ids: skills_for)
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_columns_with_types", lambda: columns_meta)
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_level_buckets", lambda: buckets)
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_work_schedules", lambda: [])
 
 
 def test_sync_skips_when_within_ttl(monkeypatch):

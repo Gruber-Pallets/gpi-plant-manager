@@ -109,6 +109,7 @@ def sync(force: bool = False) -> SyncResult:
         columns_meta = odoo_client.fetch_skill_columns_with_types()
         buckets = odoo_client.fetch_skill_level_buckets()
         departments = odoo_client.fetch_departments()
+        work_schedules_meta = odoo_client.fetch_work_schedules()
     except Exception as e:
         return SyncResult(
             ok=False, refreshed=False, employee_count=0,
@@ -118,6 +119,7 @@ def sync(force: bool = False) -> SyncResult:
     from . import db
     columns = [c["name"] for c in columns_meta]
     type_by_skill = {c["name"]: c.get("type", "") for c in columns_meta}
+    flex_cal_ids = {c["id"] for c in work_schedules_meta if c.get("is_flexible")}
     pulled_at = now
 
     def _short_name(full: str) -> str:
@@ -144,18 +146,20 @@ def sync(force: bool = False) -> SyncResult:
             # Odoo selection fields return False when unset; normalize to None.
             wage_type = emp.get("wage_type") or None
             spanish_speaker = emp["id"] in spanish_ids
+            is_flex = _m2o_id(emp.get("resource_calendar_id")) in flex_cal_ids
             cur.execute(
                 "INSERT INTO people (odoo_id, name, active, wage_type, spanish_speaker, "
-                "resource_calendar_id, last_pulled_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "resource_calendar_id, is_flexible, last_pulled_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
                 "active = EXCLUDED.active, wage_type = EXCLUDED.wage_type, "
                 "spanish_speaker = EXCLUDED.spanish_speaker, "
                 "resource_calendar_id = EXCLUDED.resource_calendar_id, "
+                "is_flexible = EXCLUDED.is_flexible, "
                 "last_pulled_at = EXCLUDED.last_pulled_at",
                 (emp["id"], _short_name(emp["name"]), bool(emp.get("active", True)),
                  wage_type, spanish_speaker, _m2o_id(emp.get("resource_calendar_id")),
-                 pulled_at),
+                 is_flex, pulled_at),
             )
         # Deactivate Odoo-mapped people who disappeared from the response —
         # i.e., archived (or deleted) in Odoo. fetch_employees() searches

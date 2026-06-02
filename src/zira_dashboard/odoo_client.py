@@ -232,13 +232,35 @@ def _calendar_hours_from_lines(rows) -> dict:
     return out
 
 
+# Odoo "Schedule Type" on resource.calendar. Confirmed against live Odoo
+# (Task 6 Step 1). Odoo 18 exposes flexible scheduling as the boolean
+# `flexible_hours`; if your instance uses a selection, change this name —
+# _is_flexible() already accepts both a bool and the string 'flexible'.
+SCHEDULE_TYPE_FIELD = "flexible_hours"
+
+
+def _is_flexible(value) -> bool:
+    """Interpret the resource.calendar Schedule Type value as a flex flag.
+    Accepts a boolean (Odoo 18 `flexible_hours`) or a selection string."""
+    if isinstance(value, str):
+        return value.strip().lower() == "flexible"
+    return bool(value)
+
+
 def fetch_work_schedules() -> list[dict]:
-    """Active working schedules (resource.calendar): [{id, name}, ...]."""
-    return execute(
+    """Active working schedules (resource.calendar):
+    [{id, name, is_flexible}, ...]. is_flexible drives the auto-lunch
+    elapsed-time trigger for flexible-schedule employees."""
+    rows = execute(
         "resource.calendar", "search_read",
         [("active", "=", True)],
-        fields=["id", "name"],
+        fields=["id", "name", SCHEDULE_TYPE_FIELD],
     )
+    return [
+        {"id": r["id"], "name": r.get("name") or "",
+         "is_flexible": _is_flexible(r.get(SCHEDULE_TYPE_FIELD))}
+        for r in rows
+    ]
 
 
 def fetch_calendar_hours(calendar_ids) -> dict:
