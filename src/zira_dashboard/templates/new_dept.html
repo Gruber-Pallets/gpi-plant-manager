@@ -9,7 +9,6 @@
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
 {% if tv_mode %}
 <link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
-<meta http-equiv="refresh" content="60">
 {% endif %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 <style>{{ goat_badges_css() }}</style>
@@ -18,7 +17,7 @@
 <body>
 {% if tv_mode %}
 {% from "_tv_header.html" import tv_header %}
-{{ tv_header("New", crumb="DEPARTMENTS · TODAY") }}
+{% call tv_header("New", crumb="DEPARTMENTS · TODAY") %}{% include "_goat_watch_banner.html" %}{% endcall %}
 {% endif %}
 {% from "_cumulative_progress_chart.html" import cumulative_progress_chart %}
 <header>
@@ -42,7 +41,9 @@
 </header>
 {% include "_dashboards_subnav.html" %}
 
-{% include "_goat_watch_banner.html" %}
+{# TV mode seats the banner in the header center (tv_header {% call %}
+   above); screen mode keeps it here below the sub-nav. #}
+{% if not tv_mode %}{% include "_goat_watch_banner.html" %}{% endif %}
 
 <main>
   <div class="kpi-row">
@@ -233,8 +234,8 @@
   })();
 </script>
 
-{% if is_today %}
-<script>setTimeout(() => location.reload(), 60000);</script>
+{% if tv_mode or is_today %}
+<script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>
 {% endif %}
 {% include '_footer.html' %}
 {{ hover_tip_clamp_script() }}

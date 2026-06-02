@@ -125,7 +125,8 @@ html[data-tv-theme] .panel h3 { font-size: 1.25rem; }
 /* ---- TV header layout — all rem so it scales with the root font ---- */
 html[data-tv-theme] .tv-header {
   display: grid;
-  grid-template-columns: 1fr auto;
+  /* title | center (GOAT banner) | operator names */
+  grid-template-columns: auto 1fr auto;
   align-items: end;
   gap: 1rem;
   padding: 1rem 1.6rem 0.7rem;
@@ -146,3 +147,39 @@ html[data-tv-theme] .tv-header .name {
   letter-spacing: -0.03em;
 }
 html[data-tv-theme] .tv-header .right { text-align: right; }
+
+/* Center slot holds the GOAT watch banner (passed in via the tv_header
+   {% call %} block). Vertically centered against the tall title/operator
+   names; the banner shrinks to its content and centers in the gap rather
+   than stretching edge to edge. */
+html[data-tv-theme] .tv-header .tv-header-center {
+  align-self: center;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+html[data-tv-theme] .tv-header .tv-header-center .goat-watch-banner {
+  margin: 0;
+  max-width: 100%;
+}
+/* The NEW GOAT alert is a full-width strip in its normal (below-header)
+   home. In the header center the slot is much narrower (it shares the row
+   with the title + operator names), so pin the alert to a single tight
+   band instead of letting it wrap several lines tall. The lower-priority
+   "record it beat" detail ellipsizes first when the gap is narrow. */
+html[data-tv-theme] .tv-header-center .goat-alert-new {
+  flex-wrap: nowrap;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.6rem;
+  gap: 0.45rem;
+  max-width: 100%;
+  overflow: hidden;
+}
+html[data-tv-theme] .tv-header-center .goat-alert-dismiss { margin-left: 0.45rem; }
+html[data-tv-theme] .tv-header-center .goat-alert-body,
+html[data-tv-theme] .tv-header-center .goat-alert-prior {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

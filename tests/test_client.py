@@ -143,3 +143,28 @@ def test_request_passes_through_json_body(client):
     import json as _json
     sent = responses.calls[0].request
     assert _json.loads(sent.body) == {"hello": "world"}
+
+
+def test_session_is_thread_local(client):
+    """Each thread gets its OWN requests.Session.
+
+    requests.Session is not safe for concurrent use, and leaderboard() fans
+    get_readings() across a ThreadPoolExecutor — a single shared session lets
+    threads interleave on one pooled connection and corrupt it. Per-thread
+    sessions avoid that while keeping the X-API-Key header on every one.
+    """
+    import threading
+
+    seen: dict[str, object] = {}
+
+    def grab(name):
+        seen[name] = client.session
+
+    for name in ("A", "B"):
+        t = threading.Thread(target=grab, args=(name,))
+        t.start()
+        t.join()
+
+    assert seen["A"] is not seen["B"]
+    assert seen["A"].headers["X-API-Key"] == "test-key-1234"
+    assert seen["B"].headers["X-API-Key"] == "test-key-1234"

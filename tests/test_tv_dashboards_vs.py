@@ -43,8 +43,11 @@ def test_tv_recycling_renders_with_default_dark_theme(monkeypatch):
     # TV header rendered with the dashboard title.
     assert 'class="tv-header"' in r.text
     assert "Recycling VS" in r.text
-    # Auto-refresh meta in place.
-    assert 'http-equiv="refresh"' in r.text
+    # Resilient auto-refresh: the hard meta-refresh (which paints the edge's
+    # "upstream error" page on any blip) is gone, replaced by the guarded
+    # tv-refresh.js that reloads only when the backend answers OK.
+    assert 'http-equiv="refresh"' not in r.text
+    assert "tv-refresh.js" in r.text
 
 
 def test_tv_recycling_supports_light_theme_via_query(monkeypatch):

@@ -135,3 +135,44 @@ def test_fetch_skills_for_groups_by_employee_id(monkeypatch):
             {"skill_id": 10, "skill_name": "Repair", "level_id": 102},
         ],
     }
+
+
+def test_object_proxy_is_thread_local(monkeypatch):
+    """Each thread must get its OWN xmlrpc ServerProxy for the object endpoint.
+
+    xmlrpc.client.ServerProxy keeps a single persistent http.client connection
+    and is NOT thread-safe — two threads sharing one proxy interleave on the
+    same connection and corrupt its state machine, which surfaces as
+    CannotSendRequest('Request-sent') / ResponseNotReady('Idle'). The background
+    warmers (asyncio.to_thread) and request handlers call execute() concurrently,
+    so a shared module-level proxy is the bug behind the 'Request-sent' / 'Idle'
+    errors in the logs.
+    """
+    import threading
+
+    monkeypatch.setenv("ODOO_URL", "https://example.odoo.com")
+    monkeypatch.setenv("ODOO_DB", "Production")
+    monkeypatch.setenv("ODOO_LOGIN", "dale@example.com")
+    monkeypatch.setenv("ODOO_API_KEY", "secret-key")
+
+    def make_proxy(url):
+        m = MagicMock(name=url)
+        m.authenticate.return_value = 7   # /common auth
+        m.execute_kw.return_value = []    # /object call
+        return m
+
+    monkeypatch.setattr("xmlrpc.client.ServerProxy", make_proxy)
+    odoo_client._reset_cache_for_tests()
+
+    seen: dict[str, object] = {}
+
+    def worker(name):
+        odoo_client.execute("hr.employee", "search_read", [])
+        seen[name] = odoo_client._object_proxy_for_thread()
+
+    for name in ("A", "B"):
+        t = threading.Thread(target=worker, args=(name,))
+        t.start()
+        t.join()
+
+    assert seen["A"] is not seen["B"]

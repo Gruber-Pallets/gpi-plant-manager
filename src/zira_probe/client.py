@@ -6,6 +6,7 @@ used by the undocumented-probing suite.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import requests
@@ -21,8 +22,21 @@ class ZiraClient:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/") + "/"
         self.timeout_seconds = timeout_seconds
-        self.session = requests.Session()
-        self.session.headers.update({"X-API-Key": api_key})
+        # requests.Session is not safe for concurrent use, and leaderboard()
+        # fans get_readings() across a ThreadPoolExecutor. Give each thread its
+        # own Session (carrying the API-key header) so they never share one
+        # pooled connection and corrupt it.
+        self._local = threading.local()
+
+    @property
+    def session(self) -> requests.Session:
+        """Per-thread requests.Session, created on first use per thread."""
+        s = getattr(self._local, "session", None)
+        if s is None:
+            s = requests.Session()
+            s.headers.update({"X-API-Key": self.api_key})
+            self._local.session = s
+        return s
 
     def _url(self, path: str) -> str:
         return self.base_url + path.lstrip("/")

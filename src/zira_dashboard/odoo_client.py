@@ -19,6 +19,7 @@ Never log or echo these values.
 from __future__ import annotations
 
 import os
+import threading
 import time
 import xmlrpc.client
 from datetime import datetime, timezone
@@ -34,14 +35,35 @@ class OdooAuthError(RuntimeError):
 
 
 _uid_cache: int | None = None
-_object_proxy: xmlrpc.client.ServerProxy | None = None
+# xmlrpc.client.ServerProxy holds ONE persistent http.client connection and is
+# NOT thread-safe: two threads sharing a proxy interleave on the same connection
+# and corrupt its state machine (CannotSendRequest 'Request-sent' /
+# ResponseNotReady 'Idle'). The warmers (asyncio.to_thread) and request handlers
+# call execute() concurrently, so the object proxy is kept per-thread. _uid_cache
+# stays a plain int — it's set-once and a benign re-auth race is harmless.
+_thread_local = threading.local()
 
 
 def _reset_cache_for_tests() -> None:
-    """Clear cached uid + object proxy; tests call this between cases."""
-    global _uid_cache, _object_proxy
+    """Clear cached uid + per-thread object proxy; tests call this between cases."""
+    global _uid_cache
     _uid_cache = None
-    _object_proxy = None
+    if hasattr(_thread_local, "object_proxy"):
+        del _thread_local.object_proxy
+
+
+def _object_proxy_for_thread() -> xmlrpc.client.ServerProxy:
+    """Return this thread's object-endpoint ServerProxy, creating it once.
+
+    Thread-local so concurrent callers never share one ServerProxy (and its
+    single underlying connection) — see the note on _thread_local above.
+    """
+    proxy = getattr(_thread_local, "object_proxy", None)
+    if proxy is None:
+        url, _db, _login, _key = _config()
+        proxy = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
+        _thread_local.object_proxy = proxy
+    return proxy
 
 
 def _config() -> tuple[str, str, str, str]:
@@ -72,14 +94,11 @@ def authenticate() -> int:
 
 
 def execute(model: str, method: str, *args: Any, **kwargs: Any) -> Any:
-    """Run an XML-RPC call against `model.method(*args, **kwargs)`. Caches
-    the object proxy across calls."""
-    global _object_proxy
-    url, db, _, key = _config()
+    """Run an XML-RPC call against `model.method(*args, **kwargs)`. Reuses a
+    per-thread object proxy (and its connection) across calls."""
+    _url, db, _login, key = _config()
     uid = authenticate()
-    if _object_proxy is None:
-        _object_proxy = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
-    return _object_proxy.execute_kw(
+    return _object_proxy_for_thread().execute_kw(
         db, uid, key, model, method, list(args), kwargs
     )
 

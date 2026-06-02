@@ -72,7 +72,10 @@ def test_tv_route_renders_with_dark_theme_and_no_chrome(monkeypatch):
     assert r.status_code == 200
     assert 'data-tv-theme="dark"' in r.text
     assert "/static/tv-mode.css" in r.text
-    assert 'http-equiv="refresh"' in r.text
+    # Resilient auto-refresh replaces the hard meta-refresh: no more black
+    # "upstream error" screen on a deploy/blip (see static/tv-refresh.js).
+    assert 'http-equiv="refresh"' not in r.text
+    assert "tv-refresh.js" in r.text
     # Same widgets present.
     assert "wc-pallets-banner" in r.text
 

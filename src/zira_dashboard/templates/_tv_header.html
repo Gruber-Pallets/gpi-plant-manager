@@ -1,20 +1,31 @@
 {# TV-mode header. Top-left: dashboard title + optional crumb above.
    Top-right: optional secondary label (used in sub-project 2 to show
    the operator's name on a per-WC dashboard; unused for VS variants).
+   Center: optional slot, passed via a {% call %} block — the dashboards
+   seat the GOAT watch banner here so celebration alerts sit between the
+   title and the operator names instead of in a full-width row below.
 
    Usage:
      {% from "_tv_header.html" import tv_header %}
      ...
      {{ tv_header("Recycling", crumb="DEPARTMENTS") }}
      {{ tv_header("REPAIR 1", crumb="RECYCLING · REPAIRS", right="CHRISTIAN · JOSE L") }}
+
+   With a center slot (GOAT watch banner), use a call block:
+     {% call tv_header("REPAIR 1", crumb="...", right="...") %}
+       {% include "_goat_watch_banner.html" %}
+     {% endcall %}
 #}
 
 {% macro tv_header(name, crumb=None, right=None) -%}
 <div class="tv-header">
-  <div>
+  <div class="tv-header-main">
     {%- if crumb %}<div class="crumb">{{ crumb }}</div>{% endif %}
     <div class="name">{{ name }}</div>
   </div>
+  {# Center slot. Always emitted (even when empty) so the header keeps its
+     three-column grid shape whether or not a caller passes content. #}
+  <div class="tv-header-center">{% if caller %}{{ caller() }}{% endif %}</div>
   {%- if right %}
   <div class="right">
     <div class="crumb">OPERATORS</div>

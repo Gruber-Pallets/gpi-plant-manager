@@ -36,18 +36,18 @@
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
 {% if tv_mode %}
 <link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
-<meta http-equiv="refresh" content="60">
+<script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>
 {% endif %}
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 <style>{{ goat_badges_css() }}</style>
 </head>
 <body class="wc-dashboard">
 {% if tv_mode %}
-  {{ tv_header(
+  {% call tv_header(
       wc_name,
       crumb="OPERATOR · " + (wc_group or "")|upper,
       right=operators_display or "(unassigned)",
-  ) }}
+  ) %}{% include "_goat_watch_banner.html" %}{% endcall %}
 {% else %}
   <header>
     <div style="display:flex;gap:1.25rem;align-items:center">
@@ -91,7 +91,9 @@
   </div>
 {% endif %}
 
-{% include "_goat_watch_banner.html" %}
+{# In TV mode the banner rides in the header center (see the tv_header
+   {% call %} above); on screen it stays here, below the chrome strip. #}
+{% if not tv_mode %}{% include "_goat_watch_banner.html" %}{% endif %}
 
 <main>
 <div class="grid-stack">

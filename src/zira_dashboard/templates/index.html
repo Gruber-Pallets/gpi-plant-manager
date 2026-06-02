@@ -263,7 +263,7 @@
   </div>
 </main>
 {% if is_today %}
-<script>setTimeout(() => location.reload(), 60000);</script>
+<script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>
 {% endif %}
 {% include '_footer.html' %}
 </body>

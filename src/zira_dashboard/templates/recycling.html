@@ -10,7 +10,6 @@
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
 {% if tv_mode %}
 <link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
-<meta http-equiv="refresh" content="60">
 {% endif %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 {% from "_widget_edit_controls.html" import edit_controls with context %}
@@ -20,7 +19,7 @@
 <body>
 {% if tv_mode %}
 {% from "_tv_header.html" import tv_header %}
-{{ tv_header("Recycling", crumb="DEPARTMENTS · TODAY") }}
+{% call tv_header("Recycling", crumb="DEPARTMENTS · TODAY") %}{% include "_goat_watch_banner.html" %}{% endcall %}
 {% endif %}
 {% if not tv_mode %}
 <header>
@@ -171,7 +170,9 @@
 </div>
 {% endif %}
 
-{% include "_goat_watch_banner.html" %}
+{# TV mode seats the banner in the header center (tv_header {% call %}
+   above); screen mode keeps it here below the edit bar. #}
+{% if not tv_mode %}{% include "_goat_watch_banner.html" %}{% endif %}
 
 <main>
   <div class="grid-stack">
@@ -568,8 +569,8 @@
   })();
 </script>
 
-{% if range_includes_today %}
-<script>setTimeout(() => location.reload(), 60000);</script>
+{% if tv_mode or range_includes_today %}
+<script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>
 {% endif %}
 {% if not tv_mode %}{% include '_footer.html' %}{% endif %}
 {{ hover_tip_clamp_script() }}
