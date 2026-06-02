@@ -12,6 +12,11 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+TESTING_PERSON = "Testing"
+"""Sentinel person_name for ``source='testing'`` rows. These rows mark a
+window whose production is credited to no one; they are never fed into
+crediting as operators."""
+
 
 def add(day: date, wc_name: str, person_name: str,
         start_utc: datetime, end_utc: datetime, source: str = "manual") -> int:
@@ -39,7 +44,8 @@ def for_day(day: date) -> list[dict]:
 
 def people_by_wc(day: date) -> dict[str, list[str]]:
     """Aggregated view: ``{wc_name: [person, ...]}`` -- convenience for joining
-    into ``attribute_for_day``'s assignments dict.
+    into ``attribute_for_day``'s assignments dict. Excludes ``source='testing'``
+    rows so a testing window never becomes a credited operator.
 
     Swallows DB errors (e.g. Postgres unreachable) so callers in hot paths
     like leaderboards keep working.
@@ -50,7 +56,24 @@ def people_by_wc(day: date) -> dict[str, list[str]]:
         return {}
     out: dict[str, list[str]] = {}
     for r in rows:
+        if r.get("source") == "testing":
+            continue
         out.setdefault(r["wc_name"], []).append(r["person_name"])
+    return out
+
+
+def testing_windows_for_day(day: date) -> dict[str, list[tuple]]:
+    """``{wc_name: [(start_utc, end_utc), ...]}`` for ``source='testing'``
+    rows. Swallows DB errors like ``people_by_wc``."""
+    try:
+        rows = for_day(day)
+    except Exception:
+        return {}
+    out: dict[str, list[tuple]] = {}
+    for r in rows:
+        if r.get("source") != "testing":
+            continue
+        out.setdefault(r["wc_name"], []).append((r["start_utc"], r["end_utc"]))
     return out
 
 
@@ -74,7 +97,7 @@ def unattributed_for_day(day: date, client) -> list[dict]:
     Each result dict: ``{wc_name, units, first_sample_utc, last_sample_utc}``.
     """
     from . import staffing
-    from .leaderboard import cached_leaderboard as leaderboard
+    from . import leaderboard as _lb
     from .stations import STATIONS
 
     sched = staffing.load_schedule(day)
@@ -82,7 +105,10 @@ def unattributed_for_day(day: date, client) -> list[dict]:
         wc for wc, ops in sched.assignments.items()
         if ops and wc != staffing.TIME_OFF_KEY
     }
-    attributed_wcs = set(people_by_wc(day).keys())
+    attributed_wcs = (
+        set(people_by_wc(day).keys())
+        | set(testing_windows_for_day(day).keys())
+    )
 
     # STATIONS uses short names (e.g., "Trim Saw", "Junior 2") while
     # LOCATIONS / schedules use the WC display name (e.g., "Trim Saw 1",
@@ -97,7 +123,7 @@ def unattributed_for_day(day: date, client) -> list[dict]:
     # Don't pass now_utc for past days; for today use now.
     today = datetime.now(timezone.utc).date()
     now_arg = datetime.now(timezone.utc) if day == today else None
-    results = leaderboard(client, stations, day, now_utc=now_arg)
+    results = _lb.cached_leaderboard(client, stations, day, now_utc=now_arg)
 
     out: list[dict] = []
     for r in results:
