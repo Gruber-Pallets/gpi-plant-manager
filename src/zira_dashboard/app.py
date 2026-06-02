@@ -49,26 +49,6 @@ _log = logging.getLogger(__name__)
 _WARMER_INTERVAL_SECONDS = 30
 
 
-async def _warm_stratustime_loop():
-    """Re-warm today's StratusTime caches every ~3 minutes so we never
-    pay the cold-cache penalty mid-shift. The underlying caches expire
-    at 5 min (employee directory, time-off requests) or 60 s (attendance,
-    GetUserSchedule); ticking at 3 min keeps everything fresh.
-
-    Errors are logged and swallowed."""
-    from datetime import datetime as _dt, timezone as _tz
-    from . import stratustime_client
-    while True:
-        try:
-            today = _dt.now(_tz.utc).date()
-            await asyncio.to_thread(stratustime_client._employee_id_to_name_map)
-            await asyncio.to_thread(stratustime_client.name_to_emp_id_map)
-            await asyncio.to_thread(stratustime_client.time_off_entries_for_day, today)
-        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
-            _log.warning("StratusTime warmer tick failed: %s", e)
-        await asyncio.sleep(180)  # 3 min — well under the 5 min cache TTL
-
-
 async def _warm_live_cache_loop():
     """Refresh today's attendance, time-off, and production into the
     live_cache tables every 45 s. Each source is wrapped independently so
@@ -202,35 +182,6 @@ def _zira_client():
     return client
 
 
-def _prewarm_stratustime() -> None:
-    """Fire StratusTime token + employee directory once on app boot.
-
-    The first /staffing request after a Railway redeploy otherwise pays
-    for the cold-cache walk (token CreateToken + GetUserBasic SELECT-ALL).
-    Doing it on a daemon thread at startup means the first user gets a
-    warm cache. Wrapped in try/except — a StratusTime outage at boot
-    must never crash the app.
-    """
-    import threading
-
-    def _warm() -> None:
-        try:
-            from datetime import datetime as _dt, timezone as _tz
-            from . import stratustime_client
-            # Warm employee directory + the two name maps that derive from it.
-            stratustime_client._employee_id_to_name_map()
-            stratustime_client.name_to_emp_id_map()
-            # Warm today's time-off-entries chain (requests, non-work shifts,
-            # derived absences). This is what /staffing and /api/late-report
-            # ultimately gate on, so the first user gets a warm cache.
-            today = _dt.now(_tz.utc).date()
-            stratustime_client.time_off_entries_for_day(today)
-        except Exception as e:  # noqa: BLE001 — pre-warm must never bubble
-            _log.warning("StratusTime pre-warm failed: %s", e)
-
-    threading.Thread(target=_warm, daemon=True, name="stratustime-prewarm").start()
-
-
 async def _warm_staffing_pages_loop():
     """Keep today's hot staffing pages pre-rendered in the response cache
     so the first human load — including the first after a Railway deploy —
@@ -274,9 +225,7 @@ async def lifespan(app: FastAPI):
     db.bootstrap_schema()
     from . import tv_displays_store
     tv_displays_store.seed_defaults_if_empty()
-    _prewarm_stratustime()
     warmer_task = asyncio.create_task(_warm_zira_cache_loop())
-    st_warmer_task = asyncio.create_task(_warm_stratustime_loop())
     live_cache_task = asyncio.create_task(_warm_live_cache_loop())
     timeclock_sync_task = asyncio.create_task(_warm_timeclock_sync_loop())
     odoo_attendance_task = asyncio.create_task(_warm_odoo_attendance_loop())
@@ -290,7 +239,6 @@ async def lifespan(app: FastAPI):
     finally:
         for t in (
             warmer_task,
-            st_warmer_task,
             live_cache_task,
             timeclock_sync_task,
             odoo_attendance_task,

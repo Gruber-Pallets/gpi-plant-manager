@@ -104,9 +104,6 @@ def settings_page(
     if section == "roster_filter":
         roster_filter_active, roster_filter_inactive = _roster_filter_lists()
     integration_status = None
-    if section == "integrations":
-        from .. import stratustime_client
-        integration_status = stratustime_client.health_check()
     kiosk_recent_punches: list[dict] = []
     kiosk_recent_variances: list[dict] = []
     timeclock_sync_status: dict | None = None

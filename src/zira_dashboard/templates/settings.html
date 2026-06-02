@@ -254,25 +254,7 @@
   <section class="panel" id="integrations-panel"
            {% if active_section != 'integrations' %}style="display:none"{% endif %}>
     <h2>Integrations</h2>
-    <h3 style="margin-top:0.8rem">StratusTime</h3>
-    {% if integration_status is none %}
-      <p style="color:var(--muted)">Loading…</p>
-    {% elif not integration_status.configured %}
-      <p style="color:var(--bad)">❌ Not configured. {{ integration_status.token_error }}</p>
-    {% elif integration_status.ok %}
-      <p style="color:var(--good)">✓ Connected.</p>
-      <ul style="font-size:0.85rem;color:var(--muted);margin:0.4rem 0 0 1.2rem">
-        <li>Endpoint: <code>{{ integration_status.endpoint }}</code></li>
-        <li>PingTest: HTTP {{ integration_status.ping_status }}</li>
-        <li>CreateToken: token issued</li>
-      </ul>
-    {% else %}
-      <p style="color:var(--bad)">❌ Connection failed.</p>
-      <ul style="font-size:0.85rem">
-        <li>PingTest: {% if integration_status.ping_ok %}<span style="color:var(--good)">OK ({{ integration_status.ping_status }})</span>{% else %}<span style="color:var(--bad)">HTTP {{ integration_status.ping_status }}</span>{% endif %}</li>
-        <li>CreateToken: {% if integration_status.token_ok %}<span style="color:var(--good)">OK</span>{% else %}<span style="color:var(--bad)">{{ integration_status.token_error }}</span>{% endif %}</li>
-      </ul>
-    {% endif %}
+    <p style="color:var(--muted)">Time clock and time off run through Odoo. See the <strong>Timeclock</strong> and <strong>Time Off</strong> panels for sync status.</p>
   </section>
 
   {% include "_settings_tvs.html" %}

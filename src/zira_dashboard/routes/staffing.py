@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import _http_cache, schedule_store, shift_config, staffing, stratustime_client, work_centers_store
+from .. import _http_cache, schedule_store, shift_config, staffing, time_format, work_centers_store
 from ..deps import templates
 
 router = APIRouter()
@@ -372,7 +372,7 @@ def staffing_page(
                 "person_name": r["person_name"],
                 "first_label": s_local.strftime("%I:%M %p").lstrip("0"),
                 "last_label": e_local.strftime("%I:%M %p").lstrip("0"),
-                "time_range": stratustime_client._fmt_time_range(
+                "time_range": time_format.fmt_time_range(
                     s_local.isoformat(), e_local.isoformat()
                 ),
             }
@@ -1074,10 +1074,8 @@ def _bust_after_mutation() -> None:
     """Drop every cache that could now be stale after a write.
 
     Called from POST endpoints that mutate Postgres state (clear-partial,
-    declare-absent, snooze, attribute, etc.). Drops the StratusTime
-    in-process cache, the late-report response cache, and the today
-    bucket of the response cache."""
-    stratustime_client.cache_clear()
+    declare-absent, snooze, attribute, etc.). Drops the late-report
+    response cache and the today bucket of the response cache."""
     _bust_late_report_cache()
     _http_cache.invalidate_today_cache()
 
@@ -1190,103 +1188,3 @@ async def staffing_restore_partial(request: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     _bust_after_mutation()
     return JSONResponse({"ok": True})
-
-
-@router.get("/api/debug/staffing-diag")
-def staffing_diag(names: str = Query(default="jesus,porfirio")):
-    """One-shot diagnostic for late/absent debugging. Returns the full
-    chain of name → emp_id → schedule → attendance → derived absence →
-    time-off-set for a comma-separated list of first-name prefixes.
-
-    Hit /api/debug/staffing-diag?names=jesus,porfirio to dump everything
-    we know about those people for today.
-    """
-    from datetime import timedelta
-    today = datetime.now(timezone.utc).date()
-    prefixes = tuple(p.strip().lower() for p in names.split(",") if p.strip())
-    out: dict = {"today": today.isoformat(), "prefixes": list(prefixes)}
-    if not prefixes:
-        return JSONResponse(out)
-    matches = lambda s: any(s.lower().startswith(p) for p in prefixes)
-    try:
-        emps = stratustime_client.list_employees()
-        out["matching_emps"] = [
-            {
-                "emp_id": str(e.get("EmpIdentifier") or ""),
-                "first": (e.get("FirstName") or "").strip(),
-                "last": (e.get("LastName") or "").strip(),
-                "status": e.get("Status"),
-            }
-            for e in emps
-            if matches(e.get("FirstName") or "")
-        ]
-        nm = stratustime_client.name_to_emp_id_map()
-        out["name_to_id_map_subset"] = {n: i for n, i in nm.items() if matches(n)}
-        from .. import staffing as _s
-        roster = _s.load_roster()
-        out["roster_subset"] = [
-            {"name": p.name, "active": p.active, "reserve": p.reserve}
-            for p in roster if matches(p.name)
-        ]
-        sched = _s.load_schedule(today)
-        out["schedule_assignments_subset"] = {
-            wc: ops for wc, ops in (sched.assignments or {}).items()
-            if any(matches(n) for n in (ops or []))
-        }
-        emp_ids_to_check = sorted({
-            str(e.get("EmpIdentifier") or "")
-            for e in emps if matches(e.get("FirstName") or "")
-        })
-        emp_ids_to_check = [e for e in emp_ids_to_check if e]
-        out["attendance_for_matching_emps"] = stratustime_client.attendance_for_day(
-            today, emp_ids_to_check
-        )
-        try:
-            out["derived_absences_subset"] = [
-                d for d in stratustime_client.derived_absences_for_day(today)
-                if matches(d.get("name") or "")
-            ]
-        except Exception as e:
-            out["derived_absences_error"] = str(e)
-        try:
-            toe = stratustime_client.time_off_entries_for_day(today)
-            out["time_off_entries_subset"] = [e for e in toe if matches(e.get("name") or "")]
-        except Exception as e:
-            out["time_off_entries_error"] = str(e)
-        try:
-            start_ms = stratustime_client._epoch_ms(today)
-            end_ms = stratustime_client._epoch_ms(today + timedelta(days=1))
-            s, p = stratustime_client.authenticated_post("GetUserSchedule", {
-                "StartDate": stratustime_client._wcf_date(start_ms),
-                "EndDate": stratustime_client._wcf_date(end_ms),
-                "DateTimeSchema": 0,
-                "DataAction": {"Name": "SELECT-ALL", "Values": []},
-            })
-            target_iso = today.isoformat()
-            scheduled_ids: list[str] = []
-            if isinstance(p, dict):
-                results = p.get("Results") or []
-                for r in results:
-                    eid = str(r.get("EmpIdentifier") or "")
-                    if (r.get("StartDateTimeSchema") or "")[:10] == target_iso and eid in emp_ids_to_check:
-                        scheduled_ids.append(eid)
-            out["stratustime_scheduled_today_subset"] = sorted(set(scheduled_ids))
-        except Exception as e:
-            out["stratustime_schedule_error"] = str(e)
-    except Exception as e:
-        out["error"] = str(e)
-    return JSONResponse(out)
-
-
-@router.get("/api/stratustime/refresh")
-def stratustime_refresh(back: str | None = Query(default=None)):
-    """Bust the StratusTime in-process cache, then redirect back.
-
-    Triggered by a plain `<a>` link from scheduler / time-off pages.
-    """
-    _bust_after_mutation()
-    target = back or "/staffing"
-    # Basic safety: only allow same-origin paths.
-    if not target.startswith("/"):
-        target = "/staffing"
-    return RedirectResponse(target, status_code=303)
