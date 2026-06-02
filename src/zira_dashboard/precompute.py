@@ -34,15 +34,13 @@ def flatten_attribution(
     zero-unit rows for multi-person WCs with no production; they add
     no value in the table).
 
-    Rows where the operator has no emp_id (not in the StratusTime
-    directory) are dropped silently — the caller is expected to log
-    and the next Odoo sync will pull the person in.
+    Operators not found in the name->id map fall back to using their name
+    as the row key (the column is TEXT and every production_daily read is
+    by name), so a production row is never silently dropped.
     """
     rows: list[dict] = []
     for person, wc_map in attribution.items():
-        emp_id = name_to_emp_id.get(person)
-        if not emp_id:
-            continue
+        emp_id = name_to_emp_id.get(person) or person  # fall back to name; never drop
         for wc_name, totals in wc_map.items():
             units = float(totals.get("units") or 0)
             if units <= 0:
@@ -96,9 +94,9 @@ def precompute_day(day: date, client) -> dict:
 
     Returns {"day": iso, "rows_written": int}. Idempotent; safe to re-run.
     """
-    from . import production_history, stratustime_client
+    from . import production_history, attendance
     attribution = production_history.attribution_for(day, client)
-    name_to_emp_id = stratustime_client.name_to_emp_id_map()
+    name_to_emp_id = attendance.name_to_person_id()
     rows = flatten_attribution(day, attribution, name_to_emp_id)
     written = upsert_production_daily(rows)
     return {"day": day.isoformat(), "rows_written": written}

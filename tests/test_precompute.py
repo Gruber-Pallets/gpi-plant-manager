@@ -41,11 +41,15 @@ def test_flatten_skips_zero_units():
     assert out == []
 
 
-def test_flatten_skips_unknown_name():
+def test_flatten_keeps_unknown_name_using_name():
+    # A person missing from the name->id map is NOT dropped — they fall back
+    # to using their name as the emp_id key, so production is never lost.
     from zira_dashboard.precompute import flatten_attribution
     attribution = {"Ghost": {"Repair 1": {"units": 50.0, "downtime": 0.0, "hours": 4.0, "days_worked": 1}}}
     out = flatten_attribution(date(2026, 5, 1), attribution, name_to_emp_id={})
-    assert out == []
+    assert len(out) == 1
+    assert out[0]["emp_id"] == "Ghost"
+    assert out[0]["name"] == "Ghost"
 
 
 pytestmark_pg = pytest.mark.skipif(
@@ -127,7 +131,7 @@ def test_precompute_day_flattens_and_upserts(monkeypatch):
         "zira_dashboard.production_history.attribution_for", fake_attribution
     )
     monkeypatch.setattr(
-        "zira_dashboard.stratustime_client.name_to_emp_id_map", fake_name_map
+        "zira_dashboard.attendance.name_to_person_id", fake_name_map
     )
     monkeypatch.setattr(precompute, "upsert_production_daily", fake_upsert)
 
