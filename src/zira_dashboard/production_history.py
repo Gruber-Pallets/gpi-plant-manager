@@ -100,6 +100,24 @@ def attribute_for_range(
     return out
 
 
+def _metered_leaderboard(client, day: date):
+    """cached_leaderboard results for all metered WCs, or [] if none.
+    Shared by _fetch_wc_totals and _fetch_wc_samples so the station-building
+    block can't drift between them."""
+    from . import staffing  # local import — staffing imports leaderboard.Station
+    from .leaderboard import cached_leaderboard as leaderboard  # local — leaderboard pulls shift_config/tzdata
+    from .stations import Station
+
+    metered = [loc for loc in staffing.LOCATIONS if loc.meter_id]
+    if not metered:
+        return []
+    stations = [
+        Station(meter_id=loc.meter_id, name=loc.name, category=loc.skill, cell=loc.bay)
+        for loc in metered
+    ]
+    return leaderboard(client, stations, day)
+
+
 def _fetch_wc_totals(client, day: date) -> dict[str, tuple[int, int]]:
     """Returns {wc_name: (units, downtime_minutes)} for every metered WC.
 
@@ -107,38 +125,16 @@ def _fetch_wc_totals(client, day: date) -> dict[str, tuple[int, int]]:
     Unmetered WCs return no entry; callers should treat missing entries as
     zero output (which is what attribute_for_day does).
     """
-    from . import staffing  # local import — staffing imports leaderboard.Station
-    from .leaderboard import cached_leaderboard as leaderboard  # local — leaderboard pulls shift_config/tzdata
-    from .stations import Station
-
-    metered = [loc for loc in staffing.LOCATIONS if loc.meter_id]
-    if not metered:
-        return {}
-    stations = [
-        Station(meter_id=loc.meter_id, name=loc.name, category=loc.skill, cell=loc.bay)
-        for loc in metered
-    ]
-    results = leaderboard(client, stations, day)
-    return {r.station.name: (r.units, r.downtime_minutes) for r in results}
+    return {r.station.name: (r.units, r.downtime_minutes)
+            for r in _metered_leaderboard(client, day)}
 
 
 def _fetch_wc_samples(client, day: date) -> dict[str, list[tuple]]:
     """``{wc_name: [(event_dt_utc, units), ...]}`` for metered WCs on ``day``.
     Reuses the cached leaderboard (same call _fetch_wc_totals makes), so this
     is cheap when both run for the same day."""
-    from . import staffing
-    from .leaderboard import cached_leaderboard as leaderboard
-    from .stations import Station
-
-    metered = [loc for loc in staffing.LOCATIONS if loc.meter_id]
-    if not metered:
-        return {}
-    stations = [
-        Station(meter_id=loc.meter_id, name=loc.name, category=loc.skill, cell=loc.bay)
-        for loc in metered
-    ]
-    results = leaderboard(client, stations, day)
-    return {r.station.name: list(r.samples) for r in results}
+    return {r.station.name: list(r.samples)
+            for r in _metered_leaderboard(client, day)}
 
 
 def _apply_testing_offsets(

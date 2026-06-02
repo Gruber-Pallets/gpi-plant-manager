@@ -33,6 +33,18 @@ def test_apply_testing_offsets_no_testing_returns_input():
     assert production_history._apply_testing_offsets(wc_totals, {}, {}) == wc_totals
 
 
+def test_apply_testing_offsets_multiple_windows_same_wc():
+    wc_totals = {"Junior #2": (50, 0)}
+    samples_by_wc = {"Junior #2": [
+        (_dt(10, 30), 8),   # in window 1
+        (_dt(12, 0), 12),   # between windows -> kept
+        (_dt(14, 30), 6),   # in window 2
+    ]}
+    testing = {"Junior #2": [(_dt(10, 0), _dt(11, 0)), (_dt(14, 0), _dt(15, 0))]}
+    out = production_history._apply_testing_offsets(wc_totals, samples_by_wc, testing)
+    assert out["Junior #2"] == (36, 0)  # 50 - (8 + 6)
+
+
 def test_attribution_for_excludes_testing_units(monkeypatch):
     from zira_dashboard import staffing, wc_attributions
 
