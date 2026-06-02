@@ -447,14 +447,33 @@ def _to_odoo_dt(ts: datetime) -> str:
 def get_current_attendance(employee_odoo_id: int) -> dict | None:
     """Return the open hr.attendance row for this employee (check_out IS
     NULL), or None if they're already clocked out. Most recent open
-    attendance wins if there's somehow more than one."""
+    attendance wins if there's somehow more than one.
+
+    When ODOO_KIOSK_DEPARTMENT_FIELD is configured, the returned dict also
+    carries ``department_id`` (int|None) and ``department_name`` (str|None)
+    parsed from that Many2one, so callers can tell which department the
+    person is currently punched into."""
+    dept_field = _kiosk_department_field()
+    fields = ["id", "employee_id", "check_in"]
+    if dept_field:
+        fields.append(dept_field)
     rows = execute(
         "hr.attendance", "search_read",
         [("employee_id", "=", employee_odoo_id), ("check_out", "=", False)],
-        fields=["id", "employee_id", "check_in"],
+        fields=fields,
         limit=1,
     )
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    row = rows[0]
+    dept_val = row.get(dept_field) if dept_field else None
+    if isinstance(dept_val, list) and dept_val:
+        row["department_id"] = dept_val[0]
+        row["department_name"] = dept_val[1] if len(dept_val) > 1 else None
+    else:
+        row["department_id"] = None
+        row["department_name"] = None
+    return row
 
 
 def _odoo_dt_to_iso(value: Any) -> str | None:
@@ -607,6 +626,16 @@ def transfer(
         closed_id = current["id"]
     new_id = clock_in(employee_odoo_id, new_wc_name, ts)
     return closed_id, new_id
+
+
+def undo_transfer(closed_id: int | None, new_id: int) -> None:
+    """Reverse a transfer: delete the newly opened attendance and reopen the
+    previously closed one (clear its check_out). ``closed_id`` is None when the
+    transfer actually opened a fresh punch (person had none) — then we only
+    delete the new row."""
+    execute("hr.attendance", "unlink", [new_id])
+    if closed_id:
+        execute("hr.attendance", "write", [closed_id], {"check_out": False})
 
 
 # ---------- Time-off reads (2026-05-27) ----------
