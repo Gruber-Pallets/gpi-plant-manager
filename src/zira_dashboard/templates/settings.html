@@ -281,6 +281,15 @@
       </a>
     </div>
 
+    <!-- Sub-tabs: Schedules / Rules / Activity -->
+    <div class="tc-tabs" role="tablist" aria-label="Timeclock settings">
+      <button type="button" class="tc-tab active" data-tc-tab="schedules" role="tab" aria-selected="true">Schedules</button>
+      <button type="button" class="tc-tab" data-tc-tab="rules" role="tab" aria-selected="false">Rules</button>
+      <button type="button" class="tc-tab" data-tc-tab="activity" role="tab" aria-selected="false">Activity</button>
+    </div>
+
+    <div id="tc-tab-schedules" class="tc-panel" role="tabpanel" aria-label="Schedules">
+
     <form method="post" action="/settings/schedule" id="schedule-form"
           data-section="schedule">
       <h3 style="margin-top:1rem">Company Schedule</h3>
@@ -344,6 +353,10 @@
         <button type="button" class="add-break-btn" id="sat-add-break">+ Add break</button>
       </div>
     </form>
+
+    </div><!-- /tc-tab-schedules -->
+
+    <div id="tc-tab-rules" class="tc-panel" role="tabpanel" aria-label="Rules" style="display:none">
 
     <form method="post" action="/settings/rounding" id="rounding-form">
       <h3 style="margin-top:1.6rem">Rounding</h3>
@@ -518,6 +531,10 @@
       {% endif %}
     </div>
 
+    </div><!-- /tc-tab-rules -->
+
+    <div id="tc-tab-activity" class="tc-panel" role="tabpanel" aria-label="Activity" style="display:none">
+
     <h3 style="margin-top:1.6rem">Sync status (last 7 days)</h3>
     {% if timeclock_sync_status is none or timeclock_sync_status.total_7d == 0 %}
       <p style="color:var(--muted);font-style:italic">No punches in the last 7 days.</p>
@@ -604,6 +621,8 @@
         </tbody>
       </table>
     {% endif %}
+
+    </div><!-- /tc-tab-activity -->
   </section>
 
   <!-- Time Off -->
@@ -1204,6 +1223,35 @@
         if (next) next.focus();
       }
     });
+  })();
+
+  // ---------- Timeclock sub-tabs (Schedules / Rules / Activity) ----------
+  (function initTimeclockTabs() {
+    const tablist = document.querySelector('.tc-tabs');
+    if (!tablist) return;
+    const tabs = [...tablist.querySelectorAll('[data-tc-tab]')];
+    const panels = {
+      schedules: document.getElementById('tc-tab-schedules'),
+      rules:     document.getElementById('tc-tab-rules'),
+      activity:  document.getElementById('tc-tab-activity'),
+    };
+    function activate(name) {
+      if (!panels[name]) name = 'schedules';
+      tabs.forEach(t => {
+        const on = t.dataset.tcTab === name;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      for (const [k, el] of Object.entries(panels)) {
+        if (el) el.style.display = (k === name) ? '' : 'none';
+      }
+    }
+    tabs.forEach(t => t.addEventListener('click', () => {
+      activate(t.dataset.tcTab);
+      if (history.replaceState) history.replaceState(null, '', '#' + t.dataset.tcTab);
+    }));
+    const initial = (location.hash || '').replace('#', '');
+    activate(panels[initial] ? initial : 'schedules');
   })();
 </script>
 <script>

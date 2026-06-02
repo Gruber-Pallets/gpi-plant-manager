@@ -567,3 +567,18 @@ button:hover { filter: brightness(1.1); }
 @media (max-width: 700px) {
   .rounding-grid { grid-template-columns: 1fr; gap: 1rem; }
 }
+
+/* Timeclock sub-tabs (Schedules / Rules / Activity) */
+.tc-tabs {
+  display: flex; gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin: 0.5rem 0 1.1rem;
+}
+.tc-tab {
+  background: transparent; color: var(--muted);
+  border: none; border-bottom: 2px solid transparent; border-radius: 0;
+  padding: 0.5rem 0.95rem; margin-bottom: -1px;
+  font: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer;
+}
+.tc-tab:hover { color: var(--fg); }
+.tc-tab.active { color: var(--accent); border-bottom-color: var(--accent); }

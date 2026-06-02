@@ -73,3 +73,17 @@ def test_timeclock_panel_preserves_per_schedule_contract(monkeypatch):
             assert f'action="{action}"' in html, action
     finally:
         _drop_override()
+
+
+def test_timeclock_panel_renders_subtabs():
+    r = client.get("/settings?section=timeclock")
+    assert r.status_code == 200
+    html = r.text
+    for marker in ('data-tc-tab="schedules"',
+                   'data-tc-tab="rules"',
+                   'data-tc-tab="activity"'):
+        assert marker in html, marker
+    for pid in ('id="tc-tab-schedules"',
+                'id="tc-tab-rules"',
+                'id="tc-tab-activity"'):
+        assert pid in html, pid
