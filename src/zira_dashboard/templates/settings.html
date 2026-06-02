@@ -402,6 +402,57 @@
       </div>
     </form>
 
+    <form method="post" action="/settings/auto_lunch" id="auto-lunch-form">
+      <h3 style="margin-top:1.6rem">Auto-Lunch</h3>
+      <p class="note">
+        Automatically signs employees out for lunch and back in, so the unpaid
+        lunch is deducted in Odoo. Schedule employees use the
+        &ldquo;Lunch&rdquo; break from their schedule (set above); flexible
+        employees use the rule below.
+      </p>
+
+      <h4 class="rounding-subhead">Mode</h4>
+      <div style="display:flex; flex-direction:column; gap:.45rem; margin:.4rem 0 1.1rem">
+        <label><input type="radio" name="mode" value="off"
+               {% if auto_lunch.mode == 'off' %}checked{% endif %}>
+          <strong>Off</strong> &mdash; does nothing.</label>
+        <label><input type="radio" name="mode" value="observe"
+               {% if auto_lunch.mode == 'observe' %}checked{% endif %}>
+          <strong>Observe only</strong> &mdash; runs and logs what it
+          <em>would</em> do, but deducts no real lunches. Use this for a day to
+          check it before going live.</label>
+        <label><input type="radio" name="mode" value="live"
+               {% if auto_lunch.mode == 'live' %}checked{% endif %}>
+          <strong>Live</strong> &mdash; actually deducts lunches at each
+          lunch time.</label>
+      </div>
+
+      <h4 class="rounding-subhead">Flexible-schedule employees</h4>
+      <p class="rounding-blurb">
+        For employees on an Odoo <em>flexible</em> schedule (e.g. Juan,
+        Benjamin), who have no fixed lunch time. One rule for all of them:
+      </p>
+      <label>
+        After
+        <input type="number" name="flex_after_hours" min="0" max="24" step="0.5"
+               value="{{ auto_lunch.flex_after_hours }}">
+        hours clocked in, take a
+        <input type="number" name="flex_minutes" min="0" max="120" step="5"
+               value="{{ auto_lunch.flex_minutes }}">
+        minute lunch.
+      </label>
+
+      <p class="effective-note">
+        Effective immediately &mdash; no restart needed.
+      </p>
+      <div class="rounding-actions">
+        {% if saved and active_section == 'timeclock' %}
+          <span class="saved-flash">Saved.</span>
+        {% endif %}
+        <button type="submit">Save Auto-Lunch</button>
+      </div>
+    </form>
+
     <div class="per-schedule-rounding" style="margin-top:1.6rem">
       <h4 class="rounding-subhead">Per-schedule rounding</h4>
       <p class="rounding-blurb">

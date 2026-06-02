@@ -341,6 +341,13 @@ def settings_page(
             for b in _sat.breaks
         ],
     }
+    from .. import auto_lunch_settings
+    _al = auto_lunch_settings.current()
+    auto_lunch_ctx = {
+        "mode": "off" if not _al.enabled else ("observe" if _al.observe_only else "live"),
+        "flex_after_hours": _al.flex_after_hours,
+        "flex_minutes": _al.flex_minutes,
+    }
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -360,6 +367,7 @@ def settings_page(
             "schedule": schedule_ctx,
             "saturday_schedule": saturday_schedule_ctx,
             "rounding": rounding_ctx,
+            "auto_lunch": auto_lunch_ctx,
             "work_schedules": work_schedules_ctx,
             "available_schedules": available_schedules,
             "integration_status": integration_status,
@@ -479,6 +487,53 @@ async def settings_save_rounding(request: Request):
         out_after_min=_clamp(form.get("out_after_min")),
     )
     rounding_store.save(settings)
+    if (request.headers.get("accept") or "").startswith("application/json"):
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+
+def _auto_lunch_mode_flags(mode, current_enabled: bool,
+                           current_observe: bool) -> tuple[bool, bool]:
+    """Map the 3-way Auto-Lunch mode selector to (enabled, observe_only).
+    Unknown/blank mode keeps the current flags (defensive)."""
+    m = (mode or "").strip().lower()
+    if m == "live":
+        return True, False
+    if m == "observe":
+        return True, True
+    if m == "off":
+        return False, True
+    return current_enabled, current_observe
+
+
+@router.post("/settings/auto_lunch")
+async def settings_save_auto_lunch(request: Request):
+    """Save the Auto-Lunch master mode + the flex rule. Takes effect
+    immediately (the store updates its in-process cache), so no restart is
+    needed. Unparseable / out-of-range flex values fall back to the current
+    value rather than rejecting the submission."""
+    from .. import auto_lunch_settings
+    form = await request.form()
+    current = auto_lunch_settings.current()
+    enabled, observe_only = _auto_lunch_mode_flags(
+        form.get("mode"), current.enabled, current.observe_only)
+
+    def _num(raw, lo, hi, fallback, *, integer):
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            return fallback
+        v = max(lo, min(hi, v))
+        return int(v) if integer else v
+
+    auto_lunch_settings.save(auto_lunch_settings.Settings(
+        enabled=enabled,
+        observe_only=observe_only,
+        flex_after_hours=_num(form.get("flex_after_hours"), 0.0, 24.0,
+                              current.flex_after_hours, integer=False),
+        flex_minutes=_num(form.get("flex_minutes"), 0, 120,
+                          current.flex_minutes, integer=True),
+    ))
     if (request.headers.get("accept") or "").startswith("application/json"):
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
