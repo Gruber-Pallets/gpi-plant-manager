@@ -446,7 +446,7 @@ def effective_minutes_worked(name: str, day, window_start_utc, window_end_utc) -
     `window_start_utc` and `window_end_utc` must be timezone-aware UTC datetimes.
     """
     from datetime import datetime, timezone
-    from . import shift_config, stratustime_client
+    from . import shift_config, attendance
     if window_end_utc <= window_start_utc:
         return 0
     base = int((window_end_utc - window_start_utc).total_seconds() // 60)
@@ -467,9 +467,9 @@ def effective_minutes_worked(name: str, day, window_start_utc, window_end_utc) -
     except Exception:
         pass
 
-    # Subtract StratusTime partial-day off intervals.
+    # Subtract partial-day off intervals (Odoo time-off mirror).
     try:
-        intervals_by_name = stratustime_client.partial_off_intervals_for_day(day)
+        intervals_by_name = attendance.partial_off_intervals(day)
     except Exception:
         return max(0, base - break_minutes_in_window)
     intervals = intervals_by_name.get(name) or []
