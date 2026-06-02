@@ -278,10 +278,16 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
         r.station.name: settings_store.station_target(r.station) for r in active_results
     }
     active_segments = [s for s in segments if s.wc_name in active_wc_names]
+    # Prorate the goal by BREAKS-ONLY productive minutes in each segment's
+    # window (matches the long-standing shift_elapsed_minutes pace target).
+    # NOT effective_minutes_worked -- that nets out an operator's partial
+    # time-off, which wrongly shrinks a station's pace goal when someone takes
+    # leave. The per-segment window still makes a mid-day assignment (e.g.
+    # Dismantler 4) accrue only from its own start.
     per_wc_expected = assignment_windows.expected_by_wc(
         active_segments,
         target_per_hour,
-        lambda name, s_utc, e_utc: staffing.effective_minutes_worked(name, d, s_utc, e_utc),
+        lambda name, s_utc, e_utc: shift_config.productive_minutes_in_window(d, s_utc, e_utc),
     )
     for name in active_wc_names:
         per_wc_expected.setdefault(name, 0.0)

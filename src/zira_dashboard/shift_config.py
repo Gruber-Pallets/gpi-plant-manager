@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 from . import schedule_store
@@ -263,6 +263,30 @@ def shift_elapsed_minutes(day: date, now: datetime) -> int:
         be_dt = datetime.combine(day, b.end, tzinfo=SITE_TZ)
         lo = max(bs_dt, start)
         hi = min(be_dt, effective)
+        if hi > lo:
+            total -= int((hi - lo).total_seconds() // 60)
+    return max(0, total)
+
+
+def productive_minutes_in_window(day: date, start_utc: datetime, end_utc: datetime) -> int:
+    """Productive minutes in [start_utc, end_utc] on `day`: the span minus any
+    scheduled breaks overlapping the window.
+
+    Person-INDEPENDENT by design — it does NOT subtract an operator's time-off.
+    This prorates a station PACE GOAL (what the WC should have produced by now
+    if it was running), which must not shrink because one operator took partial
+    leave. (Crediting / man-hours use effective_minutes_worked, which DOES net
+    out time-off — that's a different question.) Honors per-day custom_hours via
+    breaks_for(). Inputs must be tz-aware UTC datetimes.
+    """
+    if end_utc <= start_utc:
+        return 0
+    total = int((end_utc - start_utc).total_seconds() // 60)
+    for b in breaks_for(day):
+        bs = datetime.combine(day, b.start, tzinfo=SITE_TZ).astimezone(timezone.utc)
+        be = datetime.combine(day, b.end, tzinfo=SITE_TZ).astimezone(timezone.utc)
+        lo = max(bs, start_utc)
+        hi = min(be, end_utc)
         if hi > lo:
             total -= int((hi - lo).total_seconds() // 60)
     return max(0, total)
