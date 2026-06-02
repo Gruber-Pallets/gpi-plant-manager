@@ -99,8 +99,8 @@ def expected_by_wc(
     """Sum prorated expected pallets per WC.
 
     `productive_minutes(person, start, end)` returns the working minutes in the
-    window (the route passes staffing.effective_minutes_worked, which already
-    subtracts breaks + partial time-off)."""
+    window. The route passes a closure over staffing.effective_minutes_worked
+    (with the `day` bound), which already subtracts breaks + partial time-off."""
     out: dict[str, float] = {}
     for s in segments:
         thr = target_per_hour.get(s.wc_name, 0.0)
