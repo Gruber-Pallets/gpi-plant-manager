@@ -1054,10 +1054,10 @@ def late_report_json():
             )
 
             id_to_name = {v: k for k, v in (attendance_pkg.get("name_to_id") or {}).items()}
-            full_map = stratustime_client._employee_id_to_name_map()
 
             def _resolve(emp_id):
-                return id_to_name.get(emp_id) or full_map.get(emp_id) or f"Unknown ({emp_id})"
+                # id_to_name covers all active people (Odoo). No StratusTime fallback.
+                return id_to_name.get(emp_id) or f"Unknown ({emp_id})"
 
             for r in sections["scheduled_late"]:
                 out["scheduled_late"].append({
