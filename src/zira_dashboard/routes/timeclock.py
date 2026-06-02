@@ -391,13 +391,17 @@ def timeclock_dashboard(request: Request, token: str):
     # (handled in kiosk_clock_out).
     on_lunch = False
     if p.get("odoo_id"):
-        from .. import auto_lunch
-        now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
-        lunch_run = auto_lunch.active_lunch_run(p["odoo_id"], now_local)
-        if lunch_run is not None:
-            state = {**state, "is_clocked_in": True,
-                     "current_wc": lunch_run.get("wc_name")}
-            on_lunch = True
+        try:
+            from .. import auto_lunch
+            now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+            lunch_run = auto_lunch.active_lunch_run(p["odoo_id"], now_local)
+            if lunch_run is not None:
+                state = {**state, "is_clocked_in": True,
+                         "current_wc": lunch_run.get("wc_name") or state.get("current_wc")}
+                on_lunch = True
+        except Exception:  # overlay is non-essential — never break the dashboard
+            _log.exception("auto-lunch overlay failed for person %s", p.get("odoo_id"))
+            on_lunch = False
 
     sync_warning = _sync_error_warning(p["odoo_id"]) if p.get("odoo_id") else None
     scheduled_wc = _scheduled_wc_for(p["name"])

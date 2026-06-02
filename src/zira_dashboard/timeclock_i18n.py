@@ -38,6 +38,8 @@ TRANSLATIONS: dict[str, str] = {
     "You're not scheduled today": "No estás programado hoy",
     "Pick the work center you're on.": "Elige la estación donde estás trabajando.",
     "Pick Work Center": "Elegir estación",
+    "On lunch — tap Sign Out only if you're leaving for the day.":
+        "En el almuerzo — toque Salir solo si se va por el día.",
     "Time Off Request": "Solicitar tiempo libre",
     # --- pick work center ---
     "Pick where you're working": "Elige dónde estás trabajando",

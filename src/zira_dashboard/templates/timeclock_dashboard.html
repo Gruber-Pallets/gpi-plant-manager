@@ -35,7 +35,7 @@
       </p>
     {% endif %}
     {% if on_lunch %}
-      <p class="lunch-note">On lunch — tap <strong>Sign Out</strong> only if you're leaving for the day.</p>
+      <p class="lunch-note">{{ t("On lunch — tap Sign Out only if you're leaving for the day.") }}</p>
     {% endif %}
     <div style="display: flex; gap: 2rem; flex-wrap: wrap; justify-content: center;">
       <form method="post" action="/timeclock/clock-out/{{ token }}" style="margin: 0;">
