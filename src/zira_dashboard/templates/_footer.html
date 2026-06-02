@@ -571,6 +571,7 @@
     });
   }
 
+  // t is resp.transfer: {transfer: 'moved'|'opened', person, to_dept, closed_id?, new_id}
   function maybeTransferToast(t) {
     if (!t || (t.transfer !== 'moved' && t.transfer !== 'opened')) return;
     var toast = document.createElement('div');
@@ -580,12 +581,15 @@
       + ' <button type="button" class="atd-transfer-undo">Undo</button>';
     document.body.appendChild(toast);
     toast.querySelector('.atd-transfer-undo').addEventListener('click', function () {
+      this.disabled = true;
       fetch('/api/staffing/transfer/undo', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({closed_id: t.closed_id || null, new_id: t.new_id}),
       }).then(function (r) { return r.json(); }).then(function () {
         toast.textContent = 'Transfer undone.';
         setTimeout(function () { toast.remove(); }, 1500);
+      }).catch(function () {
+        toast.textContent = 'Undo failed — network error.';
       });
     });
     setTimeout(function () { if (toast.parentNode) toast.remove(); }, 8000);
