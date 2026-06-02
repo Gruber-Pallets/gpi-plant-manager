@@ -87,32 +87,44 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     results = leaderboard(client, stations, d, now_utc=now if is_today_d else None)
 
     sched = staffing.load_schedule(d)
-    who_by_wc = _who_by_wc(sched.assignments, d)
 
-    ACTIVE_UNITS_THRESHOLD = 5
-    active_wc_names: set[str] = set(who_by_wc.keys())
-    for r in results:
-        if r.units > ACTIVE_UNITS_THRESHOLD:
-            active_wc_names.add(r.station.name)
-
-    active_results = [r for r in results if r.station.name in active_wc_names]
-    active_stations = [s for s in stations if s.name in active_wc_names]
-
-    total_units = sum(r.units for r in active_results)
-    total_downtime = sum(r.downtime_minutes for r in active_results)
-    elapsed = shift_elapsed_minutes(d, now)
-    available = elapsed * len(active_stations)
-    uptime_minutes = max(0, available - total_downtime)
-
-    # Resolve the day's shift bounds once; reused for the man-hours window,
-    # the grace interval, and the productive-intervals math below. Honors
-    # per-day custom_hours via the `_for(d)` variants.
+    # Resolve the day's shift bounds first; reused for the man-hours window,
+    # the grace interval, the productive-intervals math below, AND the work
+    # segment resolution (which needs them to floor/cap punch + attribution
+    # windows). Honors per-day custom_hours via the `_for(d)` variants.
     shift_start_local = datetime.combine(d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ)
     shift_end_local = datetime.combine(d, shift_config.shift_end_for(d), tzinfo=shift_config.SITE_TZ)
     now_local = now.astimezone(shift_config.SITE_TZ)
     window_end_local = min(now_local, shift_end_local) if is_today_d else shift_end_local
     window_start_utc = shift_start_local.astimezone(timezone.utc)
     window_end_utc = window_end_local.astimezone(timezone.utc)
+
+    # Merge schedule + kiosk punches + open-ended attributions into closed work
+    # segments; punches win per person. who/expected both derive from these so a
+    # mid-day assignment (e.g. Dismantler 4) gets a goal prorated from its start.
+    from .. import assignment_windows, timeclock_windows, wc_attributions
+    segments = assignment_windows.resolve_segments(
+        assignments=sched.assignments,
+        attributions=wc_attributions.for_day(d),
+        punch_windows=timeclock_windows.punch_windows_for_day(d),
+        shift_start_utc=window_start_utc,
+        cap_utc=window_end_utc,
+        time_off_key=staffing.TIME_OFF_KEY,
+    )
+    who_by_wc = assignment_windows.who_by_wc(segments)
+
+    ACTIVE_UNITS_THRESHOLD = 5
+    active_wc_names: set[str] = set(who_by_wc.keys())
+    for r in results:
+        if r.units > ACTIVE_UNITS_THRESHOLD:
+            active_wc_names.add(r.station.name)
+    active_results = [r for r in results if r.station.name in active_wc_names]
+    active_stations = [s for s in stations if s.name in active_wc_names]
+    total_units = sum(r.units for r in active_results)
+    total_downtime = sum(r.downtime_minutes for r in active_results)
+    elapsed = shift_elapsed_minutes(d, now)
+    available = elapsed * len(active_stations)
+    uptime_minutes = max(0, available - total_downtime)
 
     # Full-day absences (approved full-day off, manual absences, derived
     # no-punch). Scheduled-but-absent people shouldn't count toward
@@ -257,20 +269,22 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     # Per-WC dicts the aggregator can sum.
     per_wc_units = {r.station.name: r.units for r in active_results}
     per_wc_downtime = {r.station.name: r.downtime_minutes for r in active_results}
-    # Per-WC expected pallets = scheduled_people × hourly_target × elapsed_shift_hours.
-    # Past days use the full shift (elapsed == productive_minutes_for(d)); today
-    # midshift scales linearly via shift_elapsed_minutes. Was previously
-    # `target × productive_intervals_from_meter`, which collapsed Saturday goals
-    # to single-digit hours whenever meters were idle for chunks of the shift.
-    elapsed_hours_d = elapsed / 60.0
-    per_wc_expected = {
-        r.station.name: (
-            settings_store.station_target(r.station)
-            * people_by_wc.get(r.station.name, 0)
-            * elapsed_hours_d
-        )
-        for r in active_results
+    # Per-WC expected pallets: prorate each work segment from its OWN start
+    # (mid-day assignments included) to its end/transfer/now, using productive
+    # minutes (breaks + partial time-off already netted out). Replaces the old
+    # scheduled_headcount x shift-wide elapsed_hours, which ignored mid-day
+    # attributions/punches and so showed no goal for unscheduled-but-worked WCs.
+    target_per_hour = {
+        r.station.name: settings_store.station_target(r.station) for r in active_results
     }
+    active_segments = [s for s in segments if s.wc_name in active_wc_names]
+    per_wc_expected = assignment_windows.expected_by_wc(
+        active_segments,
+        target_per_hour,
+        lambda name, s_utc, e_utc: staffing.effective_minutes_worked(name, d, s_utc, e_utc),
+    )
+    for name in active_wc_names:
+        per_wc_expected.setdefault(name, 0.0)
     per_wc_state = {r.station.name: _state(r, now, is_today_d) for r in active_results}
     per_wc_who = {r.station.name: who_by_wc.get(r.station.name) for r in active_results}
     per_wc_category = {r.station.name: r.station.category for r in active_results}

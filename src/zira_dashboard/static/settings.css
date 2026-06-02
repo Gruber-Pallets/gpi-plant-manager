@@ -502,12 +502,6 @@ button:hover { filter: brightness(1.1); }
   font-weight: 600;
   color: var(--fg);
 }
-.rounding-blurb {
-  color: var(--muted);
-  font-size: 0.85rem;
-  line-height: 1.4;
-  margin: 0 0 0.6rem;
-}
 .rounding-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -541,24 +535,6 @@ button:hover { filter: brightness(1.1); }
   margin: 0.8rem 0 0.4rem;
   font-style: italic;
 }
-.rounding-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-  margin-top: 0.4rem;
-}
-.rounding-actions button {
-  background: var(--accent);
-  color: #fff;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  padding: 0.4rem 0.9rem;
-  font: inherit;
-  font-size: 0.88rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-.rounding-actions button:hover { background: #15803d; }
 .saved-flash {
   color: var(--accent);
   font-weight: 600;
@@ -567,3 +543,57 @@ button:hover { filter: brightness(1.1); }
 @media (max-width: 700px) {
   .rounding-grid { grid-template-columns: 1fr; gap: 1rem; }
 }
+
+/* Timeclock sub-tabs (Schedules / Rules / Activity) */
+.tc-tabs {
+  display: flex; gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin: 0.5rem 0 1.1rem;
+}
+.tc-tab {
+  background: transparent; color: var(--muted);
+  border: none; border-bottom: 2px solid transparent; border-radius: 0;
+  padding: 0.5rem 0.95rem; margin-bottom: -1px;
+  font: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer;
+}
+.tc-tab:hover { color: var(--fg); }
+.tc-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Rounding control card — shared by the default window and each per-schedule
+   override so they read as one family, with the two IN/OUT columns visibly paired. */
+.rounding-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 0.7rem 0.9rem;
+  margin: 0.5rem 0 1rem;
+}
+.rounding-card .rounding-grid { margin: 0.2rem 0 0; gap: 0; }
+.rounding-card .rounding-col { padding: 0 1.2rem; }
+.rounding-card .rounding-col + .rounding-col { border-left: 1px solid var(--border); }
+.ws-rounding-head {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 0.5rem; margin-bottom: 0.5rem;
+}
+@media (max-width: 700px) {
+  .rounding-card .rounding-col { padding: 0; }
+  .rounding-card .rounding-col + .rounding-col {
+    border-left: none; border-top: 1px solid var(--border);
+    margin-top: 0.6rem; padding-top: 0.6rem;
+  }
+}
+
+/* One helper-text style for descriptions under headings inside the timeclock tabs */
+.help {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  margin: 0.15rem 0 0.7rem;
+}
+/* Consistent heading rhythm within each tab panel */
+.tc-panel h3 {
+  margin: 1.1rem 0 0.3rem;
+  font-size: 0.95rem; font-weight: 600; color: var(--fg);
+}
+.tc-panel > form:first-child h3,
+.tc-panel > h3:first-child { margin-top: 0.2rem; }

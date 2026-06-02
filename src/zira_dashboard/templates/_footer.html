@@ -490,7 +490,7 @@
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
             day: li.dataset.day, wc_name: li.dataset.wc, person_name: person,
-            start_utc: li.dataset.start, end_utc: li.dataset.end,
+            start_utc: li.dataset.start,
           }),
         }).then(function (r) { return r.json(); }).then(function (resp) {
           if (resp.ok) {

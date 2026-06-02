@@ -263,7 +263,7 @@
   <section class="panel" id="timeclock-panel"
            {% if active_section != 'timeclock' %}style="display:none"{% endif %}>
     <h2>Timeclock</h2>
-    <p style="color:var(--muted);margin:0 0 0.8rem 0">
+    <p class="help">
       Clock in/out + work-center transfers. Writes to Odoo
       <code>hr.attendance</code>. Auth is name-pick only — no PIN.
     </p>
@@ -281,9 +281,18 @@
       </a>
     </div>
 
+    <!-- Sub-tabs: Schedules / Rules / Activity -->
+    <div class="tc-tabs" role="tablist" aria-label="Timeclock settings">
+      <button type="button" class="tc-tab active" data-tc-tab="schedules" role="tab" aria-selected="true">Schedules</button>
+      <button type="button" class="tc-tab" data-tc-tab="rules" role="tab" aria-selected="false">Rules</button>
+      <button type="button" class="tc-tab" data-tc-tab="activity" role="tab" aria-selected="false">Activity</button>
+    </div>
+
+    <div id="tc-tab-schedules" class="tc-panel" role="tabpanel" aria-label="Schedules">
+
     <form method="post" action="/settings/schedule" id="schedule-form"
           data-section="schedule">
-      <h3 style="margin-top:1rem">Company Schedule</h3>
+      <h3>Company Schedule</h3>
 
       <div class="sched-grid">
         <label for="shift_start">Shift start</label>
@@ -319,8 +328,8 @@
 
     <form method="post" action="/settings/saturday_schedule" id="saturday-schedule-form"
           data-section="saturday_schedule">
-      <h3 style="margin-top:1.6rem">Saturday Default</h3>
-      <p class="note">Applied to Saturdays in the scheduler. Any individual
+      <h3>Saturday Default</h3>
+      <p class="help">Applied to Saturdays in the scheduler. Any individual
         Saturday can still be customized from its Hours pill. Punches on a
         published Saturday round to these hours.</p>
       <div class="sched-grid">
@@ -345,19 +354,24 @@
       </div>
     </form>
 
+    </div><!-- /tc-tab-schedules -->
+
+    <div id="tc-tab-rules" class="tc-panel" role="tabpanel" aria-label="Rules" style="display:none">
+
     <form method="post" action="/settings/rounding" id="rounding-form">
-      <h3 style="margin-top:1.6rem">Rounding</h3>
-      <p class="note">
+      <h3>Rounding</h3>
+      <p class="help">
         Note: Some jurisdictions may limit or prohibit rounding.
       </p>
 
       <h4 class="rounding-subhead">Round To Schedule (default)</h4>
-      <p class="rounding-blurb">
+      <p class="help">
         When clocking in or out, the employee's time can be rounded to the
         plant shift if the entry falls within an acceptable
         &ldquo;window&rdquo;. Enter the values for the window:
       </p>
 
+      <div class="rounding-card">
       <div class="rounding-grid">
         <div class="rounding-col">
           <h4>IN</h4>
@@ -390,85 +404,28 @@
           </label>
         </div>
       </div>
+      </div><!-- /rounding-card -->
       <p class="effective-note">
         Effective immediately &mdash; punches from this point forward use
         these values. Historical punches are unchanged.
       </p>
-      <div class="rounding-actions">
-        {% if saved and active_section == 'timeclock' %}
-          <span class="saved-flash">Saved.</span>
-        {% endif %}
-        <button type="submit">Save Rounding</button>
-      </div>
-    </form>
-
-    <form method="post" action="/settings/auto_lunch" id="auto-lunch-form">
-      <h3 style="margin-top:1.6rem">Auto-Lunch</h3>
-      <p class="note">
-        Automatically signs employees out for lunch and back in, so the unpaid
-        lunch is deducted in Odoo. Schedule employees use the
-        &ldquo;Lunch&rdquo; break from their schedule (set above); flexible
-        employees use the rule below.
-      </p>
-
-      <h4 class="rounding-subhead">Mode</h4>
-      <div style="display:flex; flex-direction:column; gap:.45rem; margin:.4rem 0 1.1rem">
-        <label><input type="radio" name="mode" value="off"
-               {% if auto_lunch.mode == 'off' %}checked{% endif %}>
-          <strong>Off</strong> &mdash; does nothing.</label>
-        <label><input type="radio" name="mode" value="observe"
-               {% if auto_lunch.mode == 'observe' %}checked{% endif %}>
-          <strong>Observe only</strong> &mdash; runs and logs what it
-          <em>would</em> do, but deducts no real lunches. Use this for a day to
-          check it before going live.</label>
-        <label><input type="radio" name="mode" value="live"
-               {% if auto_lunch.mode == 'live' %}checked{% endif %}>
-          <strong>Live</strong> &mdash; actually deducts lunches at each
-          lunch time.</label>
-      </div>
-
-      <h4 class="rounding-subhead">Flexible-schedule employees</h4>
-      <p class="rounding-blurb">
-        For employees on an Odoo <em>flexible</em> schedule (e.g. Juan,
-        Benjamin), who have no fixed lunch time. One rule for all of them:
-      </p>
-      <label>
-        After
-        <input type="number" name="flex_after_hours" min="0" max="24" step="0.5"
-               value="{{ auto_lunch.flex_after_hours }}">
-        hours clocked in, take a
-        <input type="number" name="flex_minutes" min="0" max="120" step="5"
-               value="{{ auto_lunch.flex_minutes }}">
-        minute lunch.
-      </label>
-
-      <p class="effective-note">
-        Effective immediately &mdash; no restart needed.
-      </p>
-      <div class="rounding-actions">
-        {% if saved and active_section == 'timeclock' %}
-          <span class="saved-flash">Saved.</span>
-        {% endif %}
-        <button type="submit">Save Auto-Lunch</button>
-      </div>
     </form>
 
     <div class="per-schedule-rounding" style="margin-top:1.6rem">
       <h4 class="rounding-subhead">Per-schedule rounding</h4>
-      <p class="rounding-blurb">
+      <p class="help">
         Give a specific Odoo work schedule its own rounding windows. The
         hours come from Odoo; the windows behave exactly like the default
         above. Anyone not on a listed schedule uses the default.
       </p>
 
       {% for ws in work_schedules %}
-      <div class="ws-rounding-card"
-           style="border:1px solid var(--border);border-radius:8px;padding:0.8rem;margin:0.6rem 0">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
+      <div class="rounding-card ws-rounding-card">
+        <div class="ws-rounding-head">
           <strong>{{ ws.name }}</strong>
           <span class="note">{{ ws.hours_display }} &middot; from Odoo</span>
         </div>
-        <form method="post" action="/settings/work_schedule_rounding">
+        <form method="post" action="/settings/work_schedule_rounding" class="ws-rounding-fields">
           <input type="hidden" name="resource_calendar_id" value="{{ ws.resource_calendar_id }}">
           <div class="rounding-grid">
             <div class="rounding-col">
@@ -490,7 +447,6 @@
                 minute(s) after the schedule clock-out time.</label>
             </div>
           </div>
-          <button type="submit">Save</button>
         </form>
         <form method="post" action="/settings/work_schedule_rounding/remove" style="margin-top:0.4rem">
           <input type="hidden" name="resource_calendar_id" value="{{ ws.resource_calendar_id }}">
@@ -518,7 +474,56 @@
       {% endif %}
     </div>
 
-    <h3 style="margin-top:1.6rem">Sync status (last 7 days)</h3>
+    <form method="post" action="/settings/auto_lunch" id="auto-lunch-form">
+      <h3>Auto-Lunch</h3>
+      <p class="help">
+        Automatically signs employees out for lunch and back in, so the unpaid
+        lunch is deducted in Odoo. Schedule employees use the
+        &ldquo;Lunch&rdquo; break from their schedule (set above); flexible
+        employees use the rule below.
+      </p>
+
+      <h4 class="rounding-subhead">Mode</h4>
+      <div style="display:flex; flex-direction:column; gap:.45rem; margin:.4rem 0 1.1rem">
+        <label><input type="radio" name="mode" value="off"
+               {% if auto_lunch.mode == 'off' %}checked{% endif %}>
+          <strong>Off</strong> &mdash; does nothing.</label>
+        <label><input type="radio" name="mode" value="observe"
+               {% if auto_lunch.mode == 'observe' %}checked{% endif %}>
+          <strong>Observe only</strong> &mdash; runs and logs what it
+          <em>would</em> do, but deducts no real lunches. Use this for a day to
+          check it before going live.</label>
+        <label><input type="radio" name="mode" value="live"
+               {% if auto_lunch.mode == 'live' %}checked{% endif %}>
+          <strong>Live</strong> &mdash; actually deducts lunches at each
+          lunch time.</label>
+      </div>
+
+      <h4 class="rounding-subhead">Flexible-schedule employees</h4>
+      <p class="help">
+        For employees on an Odoo <em>flexible</em> schedule (e.g. Juan,
+        Benjamin), who have no fixed lunch time. One rule for all of them:
+      </p>
+      <label>
+        After
+        <input type="number" name="flex_after_hours" min="0" max="24" step="0.5"
+               value="{{ auto_lunch.flex_after_hours }}">
+        hours clocked in, take a
+        <input type="number" name="flex_minutes" min="0" max="120" step="5"
+               value="{{ auto_lunch.flex_minutes }}">
+        minute lunch.
+      </label>
+
+      <p class="effective-note">
+        Effective immediately &mdash; no restart needed.
+      </p>
+    </form>
+
+    </div><!-- /tc-tab-rules -->
+
+    <div id="tc-tab-activity" class="tc-panel" role="tabpanel" aria-label="Activity" style="display:none">
+
+    <h3>Sync status (last 7 days)</h3>
     {% if timeclock_sync_status is none or timeclock_sync_status.total_7d == 0 %}
       <p style="color:var(--muted);font-style:italic">No punches in the last 7 days.</p>
     {% else %}
@@ -545,28 +550,28 @@
       </ul>
     {% endif %}
 
-    <h3 style="margin-top:1.6rem">Recent punches</h3>
+    <h3>Recent punches</h3>
     {% if not kiosk_recent_punches %}
       <p style="color:var(--muted);font-style:italic">No punches yet.</p>
     {% else %}
-      <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+      <table>
         <thead>
-          <tr style="text-align:left;border-bottom:1px solid var(--border)">
-            <th style="padding:0.4rem 0.5rem">When</th>
-            <th style="padding:0.4rem 0.5rem">Person</th>
-            <th style="padding:0.4rem 0.5rem">Action</th>
-            <th style="padding:0.4rem 0.5rem">Work Center</th>
-            <th style="padding:0.4rem 0.5rem">Synced</th>
+          <tr>
+            <th>When</th>
+            <th>Person</th>
+            <th>Action</th>
+            <th>Work Center</th>
+            <th>Synced</th>
           </tr>
         </thead>
         <tbody>
           {% for p in kiosk_recent_punches %}
-            <tr style="border-bottom:1px solid var(--border-soft, #eee)">
-              <td style="padding:0.35rem 0.5rem;font-variant-numeric:tabular-nums">{{ p.occurred_at.strftime('%Y-%m-%d %H:%M') }}</td>
-              <td style="padding:0.35rem 0.5rem">{{ p.person_name or ('Odoo #' ~ p.person_odoo_id) }}</td>
-              <td style="padding:0.35rem 0.5rem">{{ p.action }}</td>
-              <td style="padding:0.35rem 0.5rem">{{ p.wc_name or '—' }}</td>
-              <td style="padding:0.35rem 0.5rem">
+            <tr>
+              <td>{{ p.occurred_at.strftime('%Y-%m-%d %H:%M') }}</td>
+              <td>{{ p.person_name or ('Odoo #' ~ p.person_odoo_id) }}</td>
+              <td>{{ p.action }}</td>
+              <td>{{ p.wc_name or '—' }}</td>
+              <td>
                 {% if p.synced_to_odoo %}
                   <span style="color:var(--good)" title="Odoo attendance #{{ p.odoo_attendance_id }}">✓</span>
                 {% else %}
@@ -579,31 +584,33 @@
       </table>
     {% endif %}
 
-    <h3 style="margin-top:1.6rem">Schedule variances <small style="color:var(--muted);font-weight:400">— "I'm somewhere else" overrides</small></h3>
+    <h3>Schedule variances <small style="color:var(--muted);font-weight:400">— "I'm somewhere else" overrides</small></h3>
     {% if not kiosk_recent_variances %}
       <p style="color:var(--muted);font-style:italic">No variances logged yet.</p>
     {% else %}
-      <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+      <table>
         <thead>
-          <tr style="text-align:left;border-bottom:1px solid var(--border)">
-            <th style="padding:0.4rem 0.5rem">When</th>
-            <th style="padding:0.4rem 0.5rem">Person</th>
-            <th style="padding:0.4rem 0.5rem">Scheduled</th>
-            <th style="padding:0.4rem 0.5rem">Actual</th>
+          <tr>
+            <th>When</th>
+            <th>Person</th>
+            <th>Scheduled</th>
+            <th>Actual</th>
           </tr>
         </thead>
         <tbody>
           {% for v in kiosk_recent_variances %}
-            <tr style="border-bottom:1px solid var(--border-soft, #eee)">
-              <td style="padding:0.35rem 0.5rem;font-variant-numeric:tabular-nums">{{ v.occurred_at.strftime('%Y-%m-%d %H:%M') }}</td>
-              <td style="padding:0.35rem 0.5rem">{{ v.person_name or ('Odoo #' ~ v.person_odoo_id) }}</td>
-              <td style="padding:0.35rem 0.5rem">{{ v.scheduled_wc_name or '—' }}</td>
-              <td style="padding:0.35rem 0.5rem">{{ v.actual_wc_name }}</td>
+            <tr>
+              <td>{{ v.occurred_at.strftime('%Y-%m-%d %H:%M') }}</td>
+              <td>{{ v.person_name or ('Odoo #' ~ v.person_odoo_id) }}</td>
+              <td>{{ v.scheduled_wc_name or '—' }}</td>
+              <td>{{ v.actual_wc_name }}</td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     {% endif %}
+
+    </div><!-- /tc-tab-activity -->
   </section>
 
   <!-- Time Off -->
@@ -970,6 +977,14 @@
     form.addEventListener('input', (e) => {
       if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT')) schedule();
     });
+    // Button-less autosaved forms: Enter saves in place, never native-submit
+    // (full reload). data-section forms are handled by the submit interceptor
+    // above, so skip them here to avoid a double save.
+    form.addEventListener('submit', (e) => {
+      if (form.dataset.section) return;
+      e.preventDefault();
+      save();
+    });
     window.addEventListener('beforeunload', () => {
       if (!timer) return;
       clearTimeout(timer);
@@ -981,6 +996,11 @@
   attachAutosaver(document.getElementById('schedule-form'), '/settings/schedule');
   attachAutosaver(document.getElementById('saturday-schedule-form'), '/settings/saturday_schedule');
   attachAutosaver(document.getElementById('wc-form'), '/settings/work_centers');
+  attachAutosaver(document.getElementById('rounding-form'), '/settings/rounding');
+  attachAutosaver(document.getElementById('auto-lunch-form'), '/settings/auto_lunch');
+  document.querySelectorAll('form.ws-rounding-fields').forEach(f => {
+    attachAutosaver(f, '/settings/work_schedule_rounding');
+  });
 
   // ---------- Picker helpers: summary refresh, × clear, max/min guards ----------
   function refreshPickerSummary(picker) {
@@ -1204,6 +1224,35 @@
         if (next) next.focus();
       }
     });
+  })();
+
+  // ---------- Timeclock sub-tabs (Schedules / Rules / Activity) ----------
+  (function initTimeclockTabs() {
+    const tablist = document.querySelector('.tc-tabs');
+    if (!tablist) return;
+    const tabs = [...tablist.querySelectorAll('[data-tc-tab]')];
+    const panels = {
+      schedules: document.getElementById('tc-tab-schedules'),
+      rules:     document.getElementById('tc-tab-rules'),
+      activity:  document.getElementById('tc-tab-activity'),
+    };
+    function activate(name) {
+      if (!panels[name]) name = 'schedules';
+      tabs.forEach(t => {
+        const on = t.dataset.tcTab === name;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      for (const [k, el] of Object.entries(panels)) {
+        if (el) el.style.display = (k === name) ? '' : 'none';
+      }
+    }
+    tabs.forEach(t => t.addEventListener('click', () => {
+      activate(t.dataset.tcTab);
+      if (history.replaceState) history.replaceState(null, '', '#' + t.dataset.tcTab);
+    }));
+    const initial = (location.hash || '').replace('#', '');
+    activate(panels[initial] ? initial : 'schedules');
   })();
 </script>
 <script>

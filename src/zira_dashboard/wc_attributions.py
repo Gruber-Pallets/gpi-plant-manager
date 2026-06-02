@@ -24,8 +24,11 @@ can't drift out of sync."""
 
 
 def add(day: date, wc_name: str, person_name: str,
-        start_utc: datetime, end_utc: datetime, source: str = "manual") -> int:
-    """Insert one attribution row. Returns the new row id."""
+        start_utc: datetime, end_utc: datetime | None = None,
+        source: str = "manual") -> int:
+    """Insert one attribution row. `end_utc=None` means the assignment is
+    OPEN -- it stays running until the person clocks out, transfers, or is
+    reassigned (resolved downstream by assignment_windows). Returns row id."""
     from . import db
     rows = db.query(
         "INSERT INTO wc_time_attributions "

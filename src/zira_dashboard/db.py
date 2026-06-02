@@ -308,12 +308,14 @@ CREATE TABLE IF NOT EXISTS wc_time_attributions (
   wc_name         TEXT NOT NULL,
   person_name     TEXT NOT NULL,
   start_utc       TIMESTAMPTZ NOT NULL,
-  end_utc         TIMESTAMPTZ NOT NULL,
+  end_utc         TIMESTAMPTZ,            -- NULL = open assignment (still running)
   source          TEXT NOT NULL DEFAULT 'manual',
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS wc_time_attributions_day_idx ON wc_time_attributions(day);
 CREATE INDEX IF NOT EXISTS wc_time_attributions_day_wc_idx ON wc_time_attributions(day, wc_name);
+-- Migrate pre-existing deployments where end_utc was created NOT NULL.
+ALTER TABLE wc_time_attributions ALTER COLUMN end_utc DROP NOT NULL;
 
 -- Late / absence overrides for the Late/Absence Report ----------------
 -- manual_absences: marks a scheduled person as Absent for a single day
