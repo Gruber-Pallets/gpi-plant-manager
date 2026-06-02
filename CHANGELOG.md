@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-06-02
 
+### 12:21 PM
+
+- **GOAT celebration banner moved into the TV header — gives the boards back a full row** — the "NEW GOAT" record-break banner used to sit in its own full-width strip *below* the header on every TV dashboard, pushing the widgets down. It now rides in the **center of the header, between the work-center title and the operator name(s)** (so an operator board reads `Repair 1 · 🏆 NEW GOAT — Dismantlers … · Jesus Galindo`). On operator boards it's pinned to a single tight line, and the least-important detail (the prior record it beat) ellipsizes first if the operator names crowd it; on the department boards (`/tv/recycling`, `/tv/new`) there's no name block, so it shows in full. The screen/editor view is unchanged — the banner stays below the chrome there. Built as an optional center slot on the shared `tv_header` macro, filled via a `{% call %}` block, with a 3-column header grid in `tv-mode.css`; touches `_tv_header.html`, `tv-mode.css`, `wc_dashboard.html`, `recycling.html`, `new_dept.html`.
+
 ### 12:20 PM
 
 - **TV dashboards survive deploys & blips — no more black "upstream error" flash** — the four live boards auto-refreshed via an unconditional `<meta http-equiv="refresh">` + `setTimeout(location.reload, 60000)`. A full reload re-requests the whole document, so a momentary backend gap (a deploy swap, a network hiccup) painted the edge's "upstream error" page and blacked the screen until the next reload. Replaced both with a shared guarded refresher (`static/tv-refresh.js`): every 60s it probes the current URL and only reloads on a real 2xx response; on a 5xx / redirect / network error it keeps the last good frame on screen and re-checks every 7s, so a brief outage is invisible on the floor and the board recovers on its own. Belt-and-suspenders with the health-gated deploys. Applied to `recycling.html`, `new_dept.html`, `wc_dashboard.html`, `index.html`; the TV integration tests now assert the meta is gone and `tv-refresh.js` is wired in.
