@@ -496,10 +496,11 @@
           if (resp.ok) {
             status.hidden = false; status.textContent = 'Saved ✓ ' + person;
             li.classList.add('atd-saved');
-            maybeTransferToast(resp.transfer);
             // Hard reload so the dashboards' bars/downtime widgets show the
             // new name immediately in the (no assignment) slot.
-            setTimeout(function () { location.reload(); }, 500);
+            if (!maybeTransferToast(resp.transfer)) {
+              setTimeout(function () { location.reload(); }, 500);
+            }
           } else {
             b.disabled = false; sel.disabled = false;
             status.hidden = false; status.textContent = 'Failed: ' + (resp.error || 'unknown');
@@ -557,9 +558,11 @@
         }).then(function (r) { return r.json(); }).then(function (resp) {
           if (resp.ok) {
             status.hidden = false;
-            status.textContent = person ? ('Saved ✓ testing + ' + person) : 'Saved ✓ testing';
-            maybeTransferToast(resp.transfer);
-            setTimeout(function () { location.reload(); }, 800);
+            var creditedPerson = person && resp.ids && resp.ids.length > 1;
+            status.textContent = creditedPerson ? ('Saved ✓ testing + ' + person) : 'Saved ✓ testing';
+            if (!maybeTransferToast(resp.transfer)) {
+              setTimeout(function () { location.reload(); }, 800);
+            }
           } else {
             b.disabled = false; status.hidden = false;
             status.textContent = 'Failed: ' + (resp.error || 'unknown');
@@ -572,28 +575,40 @@
   }
 
   // t is resp.transfer: {transfer: 'moved'|'opened', person, to_dept, closed_id?, new_id}
+  // Returns true if a toast was shown (and this function now owns the page reload),
+  // false otherwise (caller should do its own reload).
   function maybeTransferToast(t) {
-    if (!t || (t.transfer !== 'moved' && t.transfer !== 'opened')) return;
+    if (!t || (t.transfer !== 'moved' && t.transfer !== 'opened')) return false;
     var toast = document.createElement('div');
     toast.className = 'atd-transfer-toast';
     var verb = t.transfer === 'opened' ? 'Clocked in' : 'Transferred';
     toast.innerHTML = escapeHtml(verb + ' ' + (t.person || '') + ' → ' + (t.to_dept || ''))
       + ' <button type="button" class="atd-transfer-undo">Undo</button>';
     document.body.appendChild(toast);
+    // Auto-dismiss after 8s, then refresh the dashboard so the new assignment shows.
+    var dismiss = setTimeout(function () {
+      if (toast.parentNode) toast.remove();
+      location.reload();
+    }, 8000);
     toast.querySelector('.atd-transfer-undo').addEventListener('click', function () {
       this.disabled = true;
+      clearTimeout(dismiss);
       fetch('/api/staffing/transfer/undo', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({closed_id: t.closed_id || null, new_id: t.new_id}),
       }).then(function (r) { return r.json(); }).then(function () {
         toast.textContent = 'Transfer undone.';
-        setTimeout(function () { toast.remove(); }, 1500);
+        setTimeout(function () { toast.remove(); location.reload(); }, 1200);
       }).catch(function () {
         toast.textContent = 'Undo failed — network error.';
+        setTimeout(function () { toast.remove(); location.reload(); }, 2000);
       });
     });
-    setTimeout(function () { if (toast.parentNode) toast.remove(); }, 8000);
+    return true;
   }
+
+  // Expose so inline-assign popovers (recycling.html / new_dept.html) can reuse it.
+  window.gpiTransferToast = maybeTransferToast;
 
   // Kick it off after a short delay so the rest of the page renders first.
   setTimeout(refreshCount, 300);

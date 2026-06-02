@@ -550,7 +550,9 @@
           .then(function (data) {
             if (data.ok) {
               status.hidden = false; status.textContent = 'Saved ✓ ' + person;
-              setTimeout(function () { location.reload(); }, 600);
+              if (!(window.gpiTransferToast && window.gpiTransferToast(data.transfer))) {
+                setTimeout(function () { location.reload(); }, 600);
+              }
             } else {
               save.disabled = false; sel.disabled = false;
               status.hidden = false; status.textContent = 'Failed: ' + (data.error || 'unknown');

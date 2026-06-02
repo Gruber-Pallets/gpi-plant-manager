@@ -947,7 +947,8 @@ async def staffing_attribute_with_testing(request: Request):
 
     ids: list[int] = []
     ids.append(wc_attributions.add(
-        day, wc, wc_attributions.TESTING_PERSON, t_start, t_end, source="testing"))
+        day, wc, wc_attributions.TESTING_PERSON, t_start, t_end,
+        source=wc_attributions.TESTING_SOURCE))
 
     transfer = {"transfer": "none"}
     remainder = str(body.get("remainder_person") or "").strip()

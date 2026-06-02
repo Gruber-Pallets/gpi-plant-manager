@@ -17,6 +17,11 @@ TESTING_PERSON = "Testing"
 window whose production is credited to no one; they are never fed into
 crediting as operators."""
 
+TESTING_SOURCE = "testing"
+"""``wc_time_attributions.source`` value marking a no-credit testing segment.
+Referenced by the write side (routes) and both read-side filters so the string
+can't drift out of sync."""
+
 
 def add(day: date, wc_name: str, person_name: str,
         start_utc: datetime, end_utc: datetime, source: str = "manual") -> int:
@@ -56,7 +61,7 @@ def people_by_wc(day: date) -> dict[str, list[str]]:
         return {}
     out: dict[str, list[str]] = {}
     for r in rows:
-        if r.get("source") == "testing":
+        if r.get("source") == TESTING_SOURCE:
             continue
         out.setdefault(r["wc_name"], []).append(r["person_name"])
     return out
@@ -71,7 +76,7 @@ def testing_windows_for_day(day: date) -> dict[str, list[tuple]]:
         return {}
     out: dict[str, list[tuple]] = {}
     for r in rows:
-        if r.get("source") != "testing":
+        if r.get("source") != TESTING_SOURCE:
             continue
         out.setdefault(r["wc_name"], []).append((r["start_utc"], r["end_utc"]))
     return out
