@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-06-03
 
+### 10:36 AM
+
+- **Deduped Odoo many2one unwrapping into `odoo_client.unwrap_m2o()` (Tier 1, behavior-identical)** — Odoo returns many2one fields as `[id, name]` (or `False`); the "give me the id" unwrap was hand-written ~12 times — eleven inline `x[0] if isinstance(x, list) else x` expressions in `odoo_client.py` plus `time_off_sync._unwrap_many2one`. Replaced all with one `unwrap_m2o(val)` (returns the id for a non-empty list/tuple, else the value unchanged — matching the existing inline semantics, and safe against the empty-list edge the old form would have crashed on). Deliberately **left `odoo_sync._m2o_id` alone** — it returns `None` (not the value as-is) for non-lists, a genuinely different contract, so folding it in would have changed behavior. Verified across `[id,name]` / `False` / bare-id / empty / tuple inputs; the mocked Odoo test suites cover the call sites; full suite green (524 passed), ruff clean.
+
 ### 10:31 AM
 
 - **Deduped the person-id ↔ name map inversion (Tier 1, behavior-identical)** — five sites rebuilt the `{str(odoo_id): name}` inverse of `attendance.name_to_person_id()` inline (`timeclock_windows.py` ×2, `routes/staffing.py` ×3). Added one `attendance.person_id_to_name(name_to_id=None)` — it fetches + inverts when called bare (the timeclock-windows sites, which already did exactly that), or inverts an **already-fetched** map when passed one (the staffing sites, so it adds **no extra DB query** on the hot staffing render). Identity stays `str(person_odoo_id)` throughout. Verified output + no new queries; full suite green (524 passed), ruff clean.

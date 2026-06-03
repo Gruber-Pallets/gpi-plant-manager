@@ -359,13 +359,6 @@ def poll_odoo_leaves() -> int:
     return len(leaves)
 
 
-def _unwrap_many2one(field: Any) -> Any:
-    """Odoo XML-RPC returns Many2one fields as ``[id, display_name]``
-    lists. Anywhere else (e.g. a write payload echo) they may already be
-    a bare id. Normalize to just the id."""
-    return field[0] if isinstance(field, list) else field
-
-
 def _upsert_one(leave: dict[str, Any]) -> None:
     """Insert or update one Odoo hr.leave into the local mirror.
 
@@ -376,8 +369,8 @@ def _upsert_one(leave: dict[str, Any]) -> None:
     """
     odoo_leave_id = leave["id"]
     state = leave["state"]
-    person_odoo_id = _unwrap_many2one(leave["employee_id"])
-    holiday_status_id = _unwrap_many2one(leave["holiday_status_id"])
+    person_odoo_id = odoo_client.unwrap_m2o(leave["employee_id"])
+    holiday_status_id = odoo_client.unwrap_m2o(leave["holiday_status_id"])
     date_from = _parse_date(leave["request_date_from"])
     date_to = _parse_date(leave["request_date_to"])
     request_unit_hours = bool(leave.get("request_unit_hours"))

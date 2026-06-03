@@ -26,6 +26,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def unwrap_m2o(val):
+    """Odoo many2one → its id. XML-RPC returns these as ``[id, name]`` (or
+    ``False`` when unset; sometimes a bare id in a write-payload echo). Returns
+    the id for a non-empty list/tuple, otherwise the value unchanged."""
+    return val[0] if isinstance(val, (list, tuple)) and val else val
+
+
 class OdooConfigError(RuntimeError):
     """Required env var is missing or malformed."""
 
@@ -127,7 +134,7 @@ def fetch_skill_columns_with_types() -> list[dict]:
     )
     by_type: dict[int, list[str]] = {tid: [] for tid in type_ids}
     for s in skills:
-        tid = s["skill_type_id"][0] if isinstance(s["skill_type_id"], list) else s["skill_type_id"]
+        tid = unwrap_m2o(s["skill_type_id"])
         by_type.setdefault(tid, []).append(s["name"])
     out: list[dict] = []
     for tid in type_ids:
@@ -154,7 +161,7 @@ def fetch_skill_level_buckets() -> dict[int, int]:
     )
     by_type: dict[int, list[dict]] = {}
     for lvl in levels:
-        tid = lvl["skill_type_id"][0] if isinstance(lvl["skill_type_id"], list) else lvl["skill_type_id"]
+        tid = unwrap_m2o(lvl["skill_type_id"])
         by_type.setdefault(tid, []).append(lvl)
     out: dict[int, int] = {}
     for tid, lvls in by_type.items():
@@ -225,7 +232,7 @@ def _calendar_hours_from_lines(rows) -> dict:
         if r.get("day_period") == "lunch":
             continue
         cal = r.get("calendar_id")
-        cal_id = cal[0] if isinstance(cal, (list, tuple)) and cal else cal
+        cal_id = unwrap_m2o(cal)
         if not isinstance(cal_id, int) or isinstance(cal_id, bool):
             continue
         try:
@@ -321,9 +328,9 @@ def fetch_skills_for(employee_ids: list[int]) -> dict[int, list[dict]]:
     )
     out: dict[int, list[dict]] = {eid: [] for eid in employee_ids}
     for r in rows:
-        eid = r["employee_id"][0] if isinstance(r["employee_id"], list) else r["employee_id"]
-        sid = r["skill_id"][0]    if isinstance(r["skill_id"], list)    else r["skill_id"]
-        lid = r["skill_level_id"][0] if isinstance(r["skill_level_id"], list) else r["skill_level_id"]
+        eid = unwrap_m2o(r["employee_id"])
+        sid = unwrap_m2o(r["skill_id"])
+        lid = unwrap_m2o(r["skill_level_id"])
         sname = r["skill_id"][1] if isinstance(r["skill_id"], list) else ""
         out.setdefault(eid, []).append({"skill_id": sid, "skill_name": sname, "level_id": lid})
     return out
@@ -355,7 +362,7 @@ def fetch_spanish_speaker_ids() -> set[int]:
     out: set[int] = set()
     for r in rows:
         eid = r["employee_id"]
-        out.add(eid[0] if isinstance(eid, list) else eid)
+        out.add(unwrap_m2o(eid))
     return out
 
 
@@ -509,7 +516,7 @@ def fetch_open_attendances() -> list[dict]:
     out: list[dict] = []
     for r in rows:
         emp = r.get("employee_id")
-        emp_id = emp[0] if isinstance(emp, list) else emp
+        emp_id = unwrap_m2o(emp)
         if not emp_id:
             continue
         out.append({
@@ -544,7 +551,7 @@ def fetch_attendances_for_day(day) -> list[dict]:
     agg: dict[int, dict] = {}
     for r in rows:
         emp = r.get("employee_id")
-        emp_id = emp[0] if isinstance(emp, list) else emp
+        emp_id = unwrap_m2o(emp)
         if not emp_id:
             continue
         ci = _odoo_dt_to_iso(r.get("check_in"))
@@ -594,7 +601,7 @@ def fetch_attendance_intervals_for_day(day) -> list[dict]:
     out: list[dict] = []
     for r in rows:
         emp = r.get("employee_id")
-        emp_id = emp[0] if isinstance(emp, list) else emp
+        emp_id = unwrap_m2o(emp)
         if not emp_id:
             continue
         ci = _odoo_dt_to_iso(r.get("check_in"))
@@ -778,7 +785,7 @@ def fetch_resource_calendar(employee_odoo_id: int) -> dict | None:
     if not emp_rows or not emp_rows[0].get("resource_calendar_id"):
         return None
     cal_field = emp_rows[0]["resource_calendar_id"]
-    cal_id = cal_field[0] if isinstance(cal_field, list) else cal_field
+    cal_id = unwrap_m2o(cal_field)
     cal_rows = execute(
         "resource.calendar", "read",
         [cal_id], ["id", "tz"],
@@ -849,7 +856,7 @@ def fetch_balances_for(employee_odoo_id: int) -> list[dict]:
     def _hsid(row: dict) -> int:
         """Many2one fields come as [id, name] from Odoo — unwrap to id."""
         v = row["holiday_status_id"]
-        return v[0] if isinstance(v, list) else v
+        return unwrap_m2o(v)
 
     out: list[dict] = []
     for t in types:
