@@ -19,7 +19,7 @@ The JSON→Postgres migration is **complete**. Postgres is the single source of 
 
 ## Tier 0 — Pure cruft removal · zero/near-zero risk
 
-Batched as one cleanup change. Behavior + UI identical.
+Batched as one cleanup change. Behavior + UI identical. **✅ Shipped 2026-06-03 (commit `0ca0f9e`).**
 
 - [ ] **Delete `requirements.txt`** — lists dead `weasyprint` (replaced by Playwright), contradicts `pyproject.toml` (the real source; Dockerfile uses `pip install .`), would mislead `pip install -r`. *Risk: Low.*
 - [ ] **Drop unused `httpx`** dep from `pyproject.toml:23` — zero imports anywhere. *Risk: Low.*
@@ -34,7 +34,7 @@ Batched as one cleanup change. Behavior + UI identical.
 
 ## Tier 1 — Low-risk structural tidies · mechanical, output identical
 
-- [ ] **Extract `_footer.html`'s ~923 lines of inline changelog CSS/JS → `/static`** (`changelog.css` + `changelog.js`, cache-busted via `static_v`). Footer is 938 lines, 98% inline assets, zero Jinja, included on 6 pages. Biggest single cleanup; also makes it browser-cacheable. *Risk: Low.*
+- [x] **Extract `_footer.html`'s inline CSS/JS → `/static`** — shipped as `footer.css` + `footer.js` (cache-busted via `static_v`); 938 → 16 lines, verified byte-identical. Carried 3 global features (changelog modal, Assignments-to-Do, Late/Absence). Kept plain `<script src>` (not `defer`) to preserve execution order + the `window.gpiTransferToast` export. **✅ Shipped 2026-06-03.**
 - [ ] **Move `db.py`'s ~770-line `_SCHEMA_DDL` → a `_schema.py`/`schema.sql`.** Shrinks `db.py` (918→~150) to its connection-pool facade. Keep the pool/query API unchanged (207 call sites). If using `.sql`, load via `importlib.resources` so it ships. *Risk: Low.*
 - [ ] **Unify the 10 background warmer loops** behind one `_run_warmer(name, fn, interval)` + a registry in `app.py` (~130→~40 lines, no cadence change). *Risk: Low.*
 - [ ] **Dedupe pure helpers:** `_fmt_hf` (byte-identical copy: `scheduler_time_off.py` & `routes/timeclock_time_off.py`) → `time_format.py`; `_parse_time` (`work_schedule_store` re-declares `schedule_store`'s); `unwrap_m2o` (~14 Odoo many2one sites in `odoo_client.py` + `odoo_sync._m2o_id` + `time_off_sync._unwrap_many2one`); `person_id_to_name()` (rebuilt at 5 sites). *Risk: Low–Medium (covered by existing tests).*

@@ -1,0 +1,250 @@
+  .app-footer {
+    border-top: 1px solid var(--border, #d8dee5);
+    background: var(--panel, #fff);
+    padding: 0.5rem 1rem;
+    font-size: 0.78rem;
+    color: var(--muted, #6b7280);
+    text-align: center;
+  }
+  .app-footer .changelog-link {
+    color: var(--muted, #6b7280);
+    text-decoration: none;
+    position: relative;
+  }
+  .app-footer .changelog-link:hover { color: var(--accent, #16a34a); }
+  .app-footer .changelog-link.has-new {
+    color: var(--accent, #16a34a);
+    font-weight: 600;
+  }
+  .app-footer .changelog-link.has-new::before {
+    content: "";
+    display: inline-block;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent, #16a34a);
+    margin-right: 0.35rem;
+    vertical-align: 1px;
+  }
+
+  .changelog-modal[hidden] { display: none; }
+  .changelog-modal {
+    position: fixed; inset: 0; z-index: 9000;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .changelog-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.45);
+  }
+  .changelog-card {
+    position: relative;
+    background: var(--panel, #fff); color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5); border-radius: 12px;
+    width: min(720px, 92vw);
+    max-height: 80vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.25);
+  }
+  .changelog-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--border, #d8dee5);
+  }
+  .changelog-head h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .changelog-close {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--muted, #6b7280); font-size: 1.3rem; line-height: 1;
+    padding: 0.1rem 0.5rem; border-radius: 6px;
+  }
+  .changelog-close:hover { background: var(--panel-2, #f1f4f7); color: var(--fg, #1f2937); }
+  .changelog-body {
+    padding: 0.6rem 1.1rem 1.1rem;
+    overflow-y: auto;
+    line-height: 1.55;
+    font-size: 0.92rem;
+  }
+  .changelog-body h1 { font-size: 1.05rem; margin: 0.6rem 0 0.4rem; }
+  .changelog-body h2 {
+    font-size: 0.78rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--muted, #6b7280);
+    margin: 1.1rem 0 0.4rem;
+    border-bottom: 1px solid var(--border, #d8dee5);
+    padding-bottom: 0.25rem;
+  }
+  .changelog-body h2:first-child { margin-top: 0; }
+  .changelog-body h3 { font-size: 0.95rem; margin: 0.6rem 0 0.3rem; }
+  .changelog-body ul { margin: 0 0 0.6rem 1.1rem; padding: 0; }
+  .changelog-body li { margin: 0.18rem 0; }
+  .changelog-body p { margin: 0.4rem 0; color: var(--muted, #6b7280); }
+  .changelog-body code {
+    background: var(--panel-2, #f1f4f7);
+    padding: 0.05rem 0.3rem; border-radius: 4px;
+    font-size: 0.86em;
+  }
+  .changelog-body .changelog-deploy { padding: 0 0.5rem; margin: 0 -0.5rem; border-radius: 6px; }
+  .changelog-body .changelog-deploy.changelog-new {
+    animation: changelog-flash 3s ease-out 0.15s;
+    animation-fill-mode: backwards;
+  }
+  @keyframes changelog-flash {
+    0%   { background: var(--accent-dim, #dcfce7); box-shadow: 0 0 0 1px var(--accent, #16a34a) inset; }
+    100% { background: transparent; box-shadow: 0 0 0 0 transparent inset; }
+  }
+
+  /* Global "Assignments to Do" nav badge + modal — appears on every page
+     when at least one metered WC produced today without a person assigned. */
+  .assign-todo-nav-badge {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    background: var(--warn-dim, #fef3c7); color: var(--warn, #a16207);
+    border: 1px solid var(--warn, #a16207); border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.78rem; font-weight: 700; text-decoration: none;
+    margin-right: 0.2rem;
+    animation: atd-pulse 2.4s ease-in-out infinite;
+  }
+  .assign-todo-nav-badge:hover { background: var(--warn, #a16207); color: white; }
+  .assign-todo-nav-badge .cnt {
+    background: var(--warn, #a16207); color: white;
+    border-radius: 999px; padding: 0 0.45rem; font-size: 0.72rem;
+  }
+  .assign-todo-nav-badge:hover .cnt { background: white; color: var(--warn, #a16207); }
+  @keyframes atd-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--warn, #a16207); }
+    50%      { box-shadow: 0 0 0 4px rgba(161,98,7,0.18); }
+  }
+
+  .atd-modal[hidden] { display: none; }
+  .atd-modal { position: fixed; inset: 0; z-index: 9100; display: flex; align-items: center; justify-content: center; }
+  .atd-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+  .atd-card {
+    position: relative;
+    background: var(--panel, #fff); color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5); border-radius: 12px;
+    width: min(660px, 92vw); max-height: 80vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.25);
+  }
+  .atd-head { display: flex; justify-content: space-between; align-items: center; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border, #d8dee5); }
+  .atd-head h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .atd-close { background: transparent; border: none; cursor: pointer; color: var(--muted, #6b7280); font-size: 1.3rem; padding: 0.1rem 0.5rem; border-radius: 6px; }
+  .atd-close:hover { background: var(--panel-2, #f1f4f7); color: var(--fg, #1f2937); }
+  .atd-body { padding: 0.8rem 1rem; overflow-y: auto; }
+  .atd-help { color: var(--muted, #6b7280); font-size: 0.85rem; margin: 0 0 0.7rem; }
+  .atd-section-title {
+    font-size: 0.7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--muted, #6b7280);
+    margin: 1rem 0 0.4rem;
+    border-top: 1px solid var(--border, #d8dee5);
+    padding-top: 0.6rem;
+  }
+  .atd-section-title:first-child, .atd-list:first-child + .atd-section-title { margin-top: 0; border-top: none; padding-top: 0; }
+  .atd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  .atd-item, .atd-saved-item {
+    border: 1px solid var(--border, #d8dee5); border-radius: 8px;
+    padding: 0.55rem 0.75rem; background: var(--panel-2, #f1f4f7);
+  }
+  .atd-saved-item { background: var(--accent-dim, #dcfce7); display: flex; align-items: center; gap: 0.5rem; }
+  .atd-saved-text { flex: 1 1 auto; font-size: 0.88rem; }
+  .atd-saved-meta { color: var(--muted, #6b7280); font-size: 0.78rem; margin-left: 0.4rem; }
+  .atd-item.atd-saved { background: var(--accent-dim, #dcfce7); border-color: var(--accent, #16a34a); }
+  .atd-item-head { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.4rem; }
+  .atd-item-head strong { font-size: 0.95rem; }
+  .atd-meta { color: var(--muted, #6b7280); font-size: 0.78rem; }
+  .atd-pick { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .atd-pick select {
+    background: var(--panel, #fff); border: 1px solid var(--border, #d8dee5); border-radius: 6px;
+    padding: 0.3rem 0.5rem; font: inherit; font-size: 0.85rem; color: var(--fg, #1f2937);
+    flex: 1 1 auto; min-width: 12rem;
+  }
+  .atd-pick button {
+    background: var(--accent, #16a34a); color: white;
+    border: 1px solid var(--accent, #16a34a); border-radius: 6px;
+    padding: 0.3rem 0.8rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  .atd-pick button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .atd-status { font-size: 0.8rem; color: var(--muted, #6b7280); }
+  .atd-saved-item .atd-delete {
+    background: transparent; color: var(--muted, #6b7280);
+    border: 1px solid var(--border, #d8dee5); border-radius: 6px;
+    padding: 0 0.5rem; font: inherit; font-size: 1.1rem; line-height: 1.4; cursor: pointer;
+  }
+  .atd-saved-item .atd-delete:hover { color: var(--bad, #ef4444); border-color: var(--bad, #ef4444); }
+  .atd-testing-panel { margin-top: 6px; padding: 8px; background: #f8f8f8; border-radius: 6px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .atd-testing-panel label { font-size: 0.85rem; }
+  .atd-test-remainder { flex-basis: 100%; }
+  .atd-transfer-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1f2937; color: #fff; padding: 10px 16px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 10000; font-size: 0.9rem; }
+  .atd-transfer-toast .atd-transfer-undo { margin-left: 10px; background: #f59e0b; color: #1f2937; border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+
+  /* Global "Late/Absence Report" badge — appears on every page when one or
+     more scheduled people are 15+ minutes past shift-start without a punch. */
+  .late-nav-badge {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    background: #fee2e2; color: #b91c1c;
+    border: 1px solid #b91c1c; border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.78rem; font-weight: 700; text-decoration: none;
+    margin-right: 0.2rem;
+    animation: late-pulse 1.6s ease-in-out infinite;
+  }
+  .late-nav-badge:hover { background: #b91c1c; color: white; }
+  .late-nav-badge .cnt {
+    background: #b91c1c; color: white;
+    border-radius: 999px; padding: 0 0.45rem; font-size: 0.72rem;
+  }
+  .late-nav-badge:hover .cnt { background: white; color: #b91c1c; }
+  @keyframes late-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(185,28,28,0.7); }
+    50%      { box-shadow: 0 0 0 6px rgba(185,28,28,0.0); }
+  }
+
+  .late-modal[hidden] { display: none; }
+  .late-modal { position: fixed; inset: 0; z-index: 9100; display: flex; align-items: center; justify-content: center; }
+  .late-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+  .late-card {
+    position: relative;
+    background: var(--panel, #fff); color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5); border-radius: 12px;
+    width: min(560px, 92vw); max-height: 80vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.25);
+  }
+  .late-head { display: flex; justify-content: space-between; align-items: center; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border, #d8dee5); }
+  .late-head h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .late-close { background: transparent; border: none; cursor: pointer; color: var(--muted, #6b7280); font-size: 1.3rem; padding: 0.1rem 0.5rem; border-radius: 6px; }
+  .late-close:hover { background: var(--panel-2, #f1f4f7); color: var(--fg, #1f2937); }
+  .late-body { padding: 0.8rem 1rem; overflow-y: auto; }
+  .late-help { color: var(--muted, #6b7280); font-size: 0.85rem; margin: 0 0 0.7rem; }
+  .late-section-title {
+    font-size: 0.7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--muted, #6b7280);
+    margin: 1rem 0 0.4rem;
+    border-top: 1px solid var(--border, #d8dee5);
+    padding-top: 0.6rem;
+  }
+  .late-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  .late-item {
+    border: 1px solid #fecaca; border-radius: 8px;
+    padding: 0.55rem 0.75rem; background: #fef2f2;
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  }
+  .late-item-name { flex: 1 1 auto; font-weight: 600; font-size: 0.95rem; color: #b91c1c; }
+  .late-item-mins { color: #b91c1c; font-size: 0.78rem; font-weight: 600; }
+  .late-item-actions { display: flex; gap: 0.4rem; }
+  .late-item-actions button {
+    border: 1px solid var(--border, #d8dee5); border-radius: 6px;
+    padding: 0.3rem 0.7rem; font: inherit; font-size: 0.82rem; font-weight: 600;
+    cursor: pointer; background: var(--panel, #fff); color: var(--fg, #1f2937);
+  }
+  .late-item-actions .late-declare { background: #b91c1c; color: white; border-color: #b91c1c; }
+  .late-item-actions .late-declare:hover { background: #991b1b; }
+  .late-item-actions .late-snooze:hover { background: var(--panel-2, #f1f4f7); }
+  .late-item-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .late-snoozed-item {
+    border: 1px solid var(--border, #d8dee5); border-radius: 8px;
+    padding: 0.45rem 0.75rem; background: var(--panel-2, #f1f4f7);
+    display: flex; align-items: center; gap: 0.6rem;
+    color: var(--muted, #6b7280); font-size: 0.85rem;
+  }
+  .late-snoozed-name { flex: 1 1 auto; font-weight: 600; }
+  .late-status { font-size: 0.78rem; color: var(--muted, #6b7280); width: 100%; margin-top: 0.3rem; }
