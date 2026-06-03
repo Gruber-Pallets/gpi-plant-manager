@@ -326,7 +326,8 @@ def debug_goal_calc(day: str, wc: str = "Dismantler 1"):
     guessing. Remove once the goal regression is resolved."""
     from datetime import date as _date, datetime as _dt, timezone as _tz
     from fastapi.responses import JSONResponse
-    from .. import shift_config, settings_store, staffing, work_centers_store
+    from .. import (shift_config, settings_store, staffing, work_centers_store,
+                    assignment_windows, timeclock_windows, wc_attributions)
     from ..stations import recycling_stations
     try:
         d = _date.fromisoformat(day)
@@ -343,20 +344,43 @@ def debug_goal_calc(day: str, wc: str = "Dismantler 1"):
         pmpd = shift_config.productive_minutes_per_day()
         stgt = settings_store.station_target(st) if st else None
         gpd = work_centers_store.goal_per_day(loc) if loc else None
+        # Replicate the ACTUAL segment-based goal path (resolve_segments +
+        # productive_minutes_in_window) so we see the real per-WC window/goal,
+        # not a simplified full-shift calc.
+        punches = timeclock_windows.punch_windows_for_day(d)
+        attrs = wc_attributions.creditable_for_day(d)
+        segs = assignment_windows.resolve_segments(
+            assignments=sched.assignments, attributions=attrs, punch_windows=punches,
+            shift_start_utc=win_start, cap_utc=win_end, time_off_key=staffing.TIME_OFF_KEY,
+        )
+        seg_dump = [
+            {"wc": s.wc_name, "person": s.person_name, "source": s.source,
+             "start": s.start_utc.isoformat(), "end": s.end_utc.isoformat(),
+             "prod_min": shift_config.productive_minutes_in_window(d, s.start_utc, s.end_utc)}
+            for s in segs if s.wc_name == wc
+        ]
+        real_goal = sum((stgt or 0) * sd["prod_min"] / 60.0 for sd in seg_dump)
+        punch_dump = {
+            name: [[w, (a.isoformat() if a else None), (b.isoformat() if b else None)]
+                   for (w, a, b) in wins]
+            for name, wins in punches.items()
+        }
         return JSONResponse({
             "day": day, "wc": wc,
             "sched_published": getattr(sched, "published", None),
+            "scheduled_at_wc": (sched.assignments.get(wc) or []),
             "sched_custom_hours_RAW": sched.custom_hours,
             "shift_start_for": str(ss), "shift_end_for": str(se),
             "breaks_for_day": [[str(b.start), str(b.end), getattr(b, "name", "")]
                                for b in shift_config.breaks_for(d)],
-            "global_breaks": [[str(b.start), str(b.end)] for b in shift_config.breaks()],
-            "global_shift": [str(shift_config.shift_start()), str(shift_config.shift_end())],
             "productive_minutes_per_day_GLOBAL": pmpd,
-            "productive_minutes_in_window_DAY": pmw,
+            "productive_minutes_in_window_FULL": pmw,
             "goal_per_day": gpd,
             "station_target_per_hour": stgt,
-            "computed_full_day_goal": (stgt * pmw / 60.0) if stgt else None,
+            "simplified_full_day_goal": (stgt * pmw / 60.0) if stgt else None,
+            "SEGMENTS_for_wc": seg_dump,
+            "REAL_goal_from_segments": real_goal,
+            "punch_windows_ALL": punch_dump,
         })
     except Exception as e:
         import traceback
