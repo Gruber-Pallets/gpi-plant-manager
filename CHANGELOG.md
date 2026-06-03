@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-06-03
 
+### 9:53 AM
+
+- **Unified the 10 background warmer loops behind one runner + registry (Tier 1 refactor, behavior-identical)** — `app.py`'s startup ran ten near-identical `async def _warm_*_loop()` functions, each repeating the same `while True / try / await to_thread(…) / except-log / sleep(N)` skeleton (~175 lines + a 10-line create/cancel block). Replaced them with ten tiny `_tick_*` coroutines (each is the original loop's exact body) driven by one `_run_warmer(name, tick, interval)` helper over a `_WARMERS` registry. Every warmer keeps its **exact cadence** (30/45/60/300/600s), its immediate-first-run, and its log-and-swallow safety — verified the registry holds all 10 with intervals unchanged. `app.py` drops 428 → 354 lines and the lifespan is now a 3-line comprehension. Updated 3 structural tests that asserted the old per-loop function names (they now assert the tick is a registered coroutine). Full suite green (524 passed).
+
 ### 9:46 AM
 
 - **Deduped two copy-pasted helpers (Tier 1 refactor, behavior-identical)** — `_fmt_hf` (the decimal-hour → `"6:30am"` clock formatter) existed as a **byte-identical copy** in `scheduler_time_off.py` and `routes/timeclock_time_off.py` — with a code comment literally flagging the "keep these in sync" hazard. It's now a single `fmt_decimal_hour` in `time_format.py` that both import. Separately, `work_schedule_store._parse_time` was a verbatim copy of `schedule_store._parse_time`; it now imports the shared one (mirroring what `saturday_schedule_store` already does). Pure functions, no behavior change — verified the formatter across am/pm/midnight/noon edge cases; full suite green (524 passed).

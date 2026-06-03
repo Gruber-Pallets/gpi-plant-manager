@@ -46,148 +46,6 @@ from .routes import (
 
 
 _log = logging.getLogger(__name__)
-_WARMER_INTERVAL_SECONDS = 30
-
-
-async def _warm_live_cache_loop():
-    """Refresh today's attendance, time-off, and production into the
-    live_cache tables every 45 s. Each source is wrapped independently so
-    one outage doesn't block the others. The loop itself never raises —
-    a hard failure logs and the next tick tries again.
-
-    The production refresh also UPSERTs today's `production_daily` rows
-    so MTD / today leaderboards see today's partial-day data without a
-    separate query path."""
-    from . import live_cache
-    while True:
-        try:
-            today = datetime.now(timezone.utc).date()
-            await asyncio.to_thread(live_cache.refresh_attendance, today)
-            await asyncio.to_thread(
-                live_cache.refresh_production, today, _zira_client()
-            )
-        except Exception as e:  # noqa: BLE001 — warmer must never die
-            _log.warning("live_cache warmer tick failed: %s", e)
-        await asyncio.sleep(45)
-
-
-async def _warm_timeclock_sync_loop():
-    """Reconcile any timeclock_punches_log rows still flagged unsynced
-    against Odoo. Routes write to Odoo synchronously on each punch; this
-    loop catches anything that failed during a transient Odoo outage.
-    Runs every 60s. Errors are logged and swallowed."""
-    from . import timeclock_sync
-    while True:
-        try:
-            await asyncio.to_thread(timeclock_sync.retry_unsynced_punches)
-        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
-            _log.warning("Kiosk sync warmer tick failed: %s", e)
-        await asyncio.sleep(60)
-
-
-async def _warm_odoo_attendance_loop():
-    """Mirror Odoo's open hr.attendance into odoo_open_attendance_cache every
-    ~30s so the timeclock punch screen reflects out-of-band Odoo edits
-    (manual add/close/delete/time-edit) without an XML-RPC call on the tap.
-    Errors are logged and swallowed so the warmer can't kill itself."""
-    from . import live_cache
-    while True:
-        try:
-            await asyncio.to_thread(live_cache.refresh_odoo_open_attendance)
-        except Exception as e:  # noqa: BLE001 — never let the warmer die
-            _log.warning("Odoo open-attendance warmer failed: %s", e)
-        await asyncio.sleep(30)
-
-
-async def _warm_auto_lunch_loop():
-    """Drive the auto-lunch worker every 60s. Mirrors the other warmers:
-    runs the sync worker off the event loop, swallows errors so the loop
-    never dies, sleeps 60s between ticks. No-ops while the feature is
-    disabled (auto_lunch_settings.enabled defaults to FALSE)."""
-    from . import auto_lunch
-    while True:
-        try:
-            await asyncio.to_thread(auto_lunch.run_tick)
-        except Exception as e:  # noqa: BLE001
-            _log.warning("auto-lunch tick failed: %s", e)
-        await asyncio.sleep(60)
-
-
-async def _time_off_sync_loop():
-    """Reconcile any time_off_requests rows still flagged unsynced
-    against Odoo `hr.leave`. Mirrors `_warm_timeclock_sync_loop` — routes
-    write to Odoo synchronously on submit; this loop catches anything
-    that failed during a transient Odoo outage. Runs every 60s.
-    Errors are logged and swallowed."""
-    from . import time_off_sync
-    while True:
-        try:
-            await asyncio.to_thread(time_off_sync.retry_unsynced_requests)
-        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
-            _log.warning("Time-off sync retry sweep failed: %s", e)
-        await asyncio.sleep(60)
-
-
-async def _time_off_poll_loop():
-    """Pull `hr.leave` state changes back from Odoo every 60s so the
-    local mirror picks up manager approvals/refusals and cascades them
-    into the staffing scheduler. Errors are logged and swallowed."""
-    from . import time_off_sync
-    while True:
-        try:
-            await asyncio.to_thread(time_off_sync.poll_odoo_leaves)
-        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
-            _log.warning("Time-off poll loop failed: %s", e)
-        await asyncio.sleep(60)
-
-
-async def _time_off_balance_sweep_loop():
-    """Refresh stale `time_off_balances` rows from Odoo every 10 min so
-    available balances stay current without each kiosk-balance read
-    paying a per-employee Odoo round-trip. Errors are logged and
-    swallowed."""
-    from . import time_off_balances
-    while True:
-        try:
-            await asyncio.to_thread(
-                time_off_balances.refresh_stale, 600
-            )
-        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
-            _log.warning("Time-off balance sweep failed: %s", e)
-        await asyncio.sleep(600)
-
-
-async def _warm_zira_cache_loop():
-    """Periodically warm today's Zira leaderboard cache so user
-    requests on /recycling never pay the cold-cache penalty.
-
-    Runs every 30s. Each tick re-fetches today's leaderboard via
-    the existing cached_leaderboard helper, which writes through
-    the in-process TODAY cache. Past days are not touched here —
-    they're cached forever-ish on first read.
-
-    Errors are logged and swallowed; one bad Zira call shouldn't
-    kill the warmer."""
-    from .leaderboard import cached_leaderboard
-    from .stations import recycling_stations
-    while True:
-        try:
-            stations = recycling_stations()
-            if stations:
-                today = datetime.now(timezone.utc).date()
-                now_utc = datetime.now(timezone.utc)
-                # Run the (sync, blocking) leaderboard fetch off the event
-                # loop so we don't stall request handling.
-                await asyncio.to_thread(
-                    cached_leaderboard,
-                    _zira_client(),
-                    stations,
-                    today,
-                    now_utc,
-                )
-        except Exception as e:  # noqa: BLE001 — never let warmer kill itself
-            _log.warning("Zira warmer tick failed: %s", e)
-        await asyncio.sleep(_WARMER_INTERVAL_SECONDS)
 
 
 def _zira_client():
@@ -196,74 +54,143 @@ def _zira_client():
     return client
 
 
-async def _warm_staffing_pages_loop():
-    """Keep today's hot staffing pages pre-rendered in the response cache
-    so the first human load — including the first after a Railway deploy —
-    is a warm <1ms hit instead of a ~1.9s cold render. Ticks every 45s
-    (matching the live_cache data-refresh cadence); the response cache TTL
-    is 60s so it never goes cold between ticks. The first iteration runs
-    immediately on boot, before the first sleep."""
-    from . import page_warmer
-    while True:
-        try:
-            await asyncio.to_thread(page_warmer.warm_once)
-        except Exception as e:  # noqa: BLE001 — warmer must never die
-            _log.warning("staffing page warmer tick failed: %s", e)
-        await asyncio.sleep(45)
+# --- Background warmers --------------------------------------------------
+# Each warmer runs its tick coroutine forever on a fixed interval; the first
+# run happens immediately, before the first sleep. _run_warmer owns the
+# while/try/except/sleep skeleton so the ticks stay tiny. The refresh_*
+# helpers already log+swallow internally; the try in _run_warmer is the
+# backstop that keeps a warmer alive across an unexpected bad tick.
 
 
-async def _warm_staffing_stable_loop():
-    """Warm the slow-changing staffing pages (the skills matrix) every
-    5 min. Roster/skill data rarely changes and writes invalidate the
-    cache directly, so 5 min is plenty — and it avoids triggering
-    odoo_sync.sync(force=False) every 45s. First iteration runs on boot."""
+async def _tick_zira_cache():
+    """Warm today's Zira leaderboard cache so /recycling never pays the
+    cold-cache penalty. Past days are cached on first read, not here."""
+    from .leaderboard import cached_leaderboard
+    from .stations import recycling_stations
+    stations = recycling_stations()
+    if stations:
+        today = datetime.now(timezone.utc).date()
+        now_utc = datetime.now(timezone.utc)
+        # Run the (sync, blocking) leaderboard fetch off the event loop.
+        await asyncio.to_thread(
+            cached_leaderboard, _zira_client(), stations, today, now_utc
+        )
+
+
+async def _tick_live_cache():
+    """Refresh today's attendance into live_cache and UPSERT today's
+    production_daily rows (so MTD / today leaderboards see partial-day data)."""
+    from . import live_cache
+    today = datetime.now(timezone.utc).date()
+    await asyncio.to_thread(live_cache.refresh_attendance, today)
+    await asyncio.to_thread(live_cache.refresh_production, today, _zira_client())
+
+
+async def _tick_timeclock_sync():
+    """Retry any timeclock_punches_log rows still flagged unsynced to Odoo."""
+    from . import timeclock_sync
+    await asyncio.to_thread(timeclock_sync.retry_unsynced_punches)
+
+
+async def _tick_odoo_attendance():
+    """Mirror Odoo's open hr.attendance into odoo_open_attendance_cache so the
+    punch screen reflects out-of-band Odoo edits without an XML-RPC on the tap."""
+    from . import live_cache
+    await asyncio.to_thread(live_cache.refresh_odoo_open_attendance)
+
+
+async def _tick_auto_lunch():
+    """Drive the auto-lunch worker. No-ops while the feature is disabled
+    (auto_lunch_settings.enabled defaults to FALSE)."""
+    from . import auto_lunch
+    await asyncio.to_thread(auto_lunch.run_tick)
+
+
+async def _tick_time_off_sync():
+    """Retry any time_off_requests rows still flagged unsynced to Odoo hr.leave."""
+    from . import time_off_sync
+    await asyncio.to_thread(time_off_sync.retry_unsynced_requests)
+
+
+async def _tick_time_off_poll():
+    """Pull hr.leave state changes back from Odoo so the local mirror picks up
+    manager approvals/refusals and cascades them into the staffing scheduler."""
+    from . import time_off_sync
+    await asyncio.to_thread(time_off_sync.poll_odoo_leaves)
+
+
+async def _tick_time_off_balance():
+    """Refresh stale time_off_balances rows from Odoo (older than 10 min) so
+    kiosk balance reads don't each pay a per-employee Odoo round-trip."""
+    from . import time_off_balances
+    await asyncio.to_thread(time_off_balances.refresh_stale, 600)
+
+
+async def _tick_staffing_pages():
+    """Keep today's hot staffing pages pre-rendered in the response cache so the
+    first human load (including the first after a Railway deploy) is a warm hit."""
     from . import page_warmer
+    await asyncio.to_thread(page_warmer.warm_once)
+
+
+async def _tick_staffing_stable():
+    """Warm the slow-changing staffing pages (the skills matrix). Roster/skill
+    data rarely changes and writes invalidate the cache directly, so 5 min is
+    plenty -- and it avoids triggering odoo_sync.sync(force=False) every 45s."""
+    from . import page_warmer
+    await asyncio.to_thread(page_warmer.warm_skills_once)
+
+
+# (name, tick coroutine, interval seconds). `name` is used only in the
+# "warmer tick failed" log line. Intervals are unchanged from the original
+# per-loop functions this registry replaced.
+_WARMERS = [
+    ("Zira cache", _tick_zira_cache, 30),
+    ("live_cache", _tick_live_cache, 45),
+    ("kiosk sync", _tick_timeclock_sync, 60),
+    ("Odoo open-attendance", _tick_odoo_attendance, 30),
+    ("auto-lunch", _tick_auto_lunch, 60),
+    ("time-off sync", _tick_time_off_sync, 60),
+    ("time-off poll", _tick_time_off_poll, 60),
+    ("time-off balance", _tick_time_off_balance, 600),
+    ("staffing pages", _tick_staffing_pages, 45),
+    ("staffing stable", _tick_staffing_stable, 300),
+]
+
+
+async def _run_warmer(name: str, tick, interval: int):
+    """Run `tick` forever, every `interval` seconds; the first run is immediate
+    (before the first sleep). Errors are logged and swallowed so a warmer can
+    never kill itself."""
     while True:
         try:
-            await asyncio.to_thread(page_warmer.warm_skills_once)
-        except Exception as e:  # noqa: BLE001 — warmer must never die
-            _log.warning("staffing stable warmer tick failed: %s", e)
-        await asyncio.sleep(300)
+            await tick()
+        except Exception as e:  # noqa: BLE001 -- a warmer must never die
+            _log.warning("%s warmer tick failed: %s", name, e)
+        await asyncio.sleep(interval)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialise the Postgres pool, start the Zira cache warmer,
-    bootstrap schema. On shutdown, cancel the warmer and shut the pool.
+    """Initialise the Postgres pool, bootstrap schema, then start the background
+    warmers. On shutdown, cancel the warmers and shut the pool.
 
     If ``DATABASE_URL`` is missing or the pool can't be created,
-    ``db.init_pool()`` raises with a clear message — fail fast rather than
+    ``db.init_pool()`` raises with a clear message -- fail fast rather than
     silently fall back to JSON storage.
     """
     db.init_pool()
     db.bootstrap_schema()
     from . import tv_displays_store
     tv_displays_store.seed_defaults_if_empty()
-    warmer_task = asyncio.create_task(_warm_zira_cache_loop())
-    live_cache_task = asyncio.create_task(_warm_live_cache_loop())
-    timeclock_sync_task = asyncio.create_task(_warm_timeclock_sync_loop())
-    odoo_attendance_task = asyncio.create_task(_warm_odoo_attendance_loop())
-    time_off_sync_task = asyncio.create_task(_time_off_sync_loop())
-    time_off_poll_task = asyncio.create_task(_time_off_poll_loop())
-    time_off_balance_task = asyncio.create_task(_time_off_balance_sweep_loop())
-    staffing_pages_task = asyncio.create_task(_warm_staffing_pages_loop())
-    staffing_stable_task = asyncio.create_task(_warm_staffing_stable_loop())
-    auto_lunch_task = asyncio.create_task(_warm_auto_lunch_loop())
+    warmer_tasks = [
+        asyncio.create_task(_run_warmer(name, tick, interval))
+        for (name, tick, interval) in _WARMERS
+    ]
     try:
         yield
     finally:
-        for t in (
-            warmer_task,
-            live_cache_task,
-            timeclock_sync_task,
-            odoo_attendance_task,
-            time_off_sync_task,
-            time_off_poll_task,
-            time_off_balance_task,
-            staffing_pages_task,
-            staffing_stable_task,
-            auto_lunch_task,
-        ):
+        for t in warmer_tasks:
             t.cancel()
             try:
                 await t

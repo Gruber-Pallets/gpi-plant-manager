@@ -59,11 +59,12 @@ import asyncio
 
 
 def test_app_defines_staffing_pages_loop():
-    # Structural check: the lifespan loop exists and is a coroutine fn.
-    # conftest sets the test env so importing app is safe.
+    # Structural check: the staffing-pages warmer tick exists, is a coroutine,
+    # and is registered in the warmer registry. conftest sets the test env so
+    # importing app is safe.
     from zira_dashboard import app as app_module
-    assert hasattr(app_module, "_warm_staffing_pages_loop")
-    assert asyncio.iscoroutinefunction(app_module._warm_staffing_pages_loop)
+    assert asyncio.iscoroutinefunction(app_module._tick_staffing_pages)
+    assert any(t is app_module._tick_staffing_pages for _, t, _ in app_module._WARMERS)
 
 
 def test_warm_skills_once_calls_handler(monkeypatch):
@@ -90,4 +91,5 @@ def test_warm_skills_once_swallows_exception(monkeypatch):
 
 def test_app_defines_staffing_stable_loop():
     from zira_dashboard import app as app_module
-    assert asyncio.iscoroutinefunction(app_module._warm_staffing_stable_loop)
+    assert asyncio.iscoroutinefunction(app_module._tick_staffing_stable)
+    assert any(t is app_module._tick_staffing_stable for _, t, _ in app_module._WARMERS)

@@ -78,4 +78,5 @@ def test_transfer_in_also_self_corrects(monkeypatch, fake_db):
 def test_odoo_attendance_warmer_is_coroutine():
     import inspect
     from zira_dashboard import app as app_module
-    assert inspect.iscoroutinefunction(app_module._warm_odoo_attendance_loop)
+    assert inspect.iscoroutinefunction(app_module._tick_odoo_attendance)
+    assert any(t is app_module._tick_odoo_attendance for _, t, _ in app_module._WARMERS)
