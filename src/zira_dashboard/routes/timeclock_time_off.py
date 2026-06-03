@@ -33,9 +33,8 @@ Routes:
 
 from __future__ import annotations
 
-import calendar as _cal
 import json as _json
-from datetime import date as _date, timedelta as _td
+from datetime import date as _date
 
 from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -46,10 +45,10 @@ from .. import (
     schedule_store,
     settings_store,
     time_off_balances,
+    time_off_calendar as _tcal,
     time_off_sync,
 )
 from ..deps import templates
-from ..time_format import fmt_decimal_hour
 from ..time_off_wizard import (
     compute_working_hours_json as _compute_working_hours_json,
     shape_to_hour_bounds as _shape_to_hour_bounds,
@@ -989,48 +988,15 @@ def mine_edit_submit(
 # ----- Who's Out calendar (Task 20) -----
 
 
-def _label_for(r: dict) -> str:
-    """Render a privacy-safe timing label for one approved leave row.
-
-    Deliberately omits the leave-type name — coworkers should see that
-    someone is out and when, but not why. The four shapes map to:
-      - ``full_day``   -> ``"full day"``
-      - ``late_arrival`` -> ``"arrives 9:00am"`` (arrival = hour_to)
-      - ``early_leave``  -> ``"leaves 2:00pm"`` (leave = hour_from)
-      - ``midday_gap``   -> ``"10:00am–12:00pm"`` (gap = hour_from..hour_to)
-    """
-    if r["shape"] == "full_day":
-        return "full day"
-    hf = float(r["hour_from"] or 0)
-    ht = float(r["hour_to"] or 0)
-    if r["shape"] == "late_arrival":
-        return f"arrives {fmt_decimal_hour(ht)}"
-    if r["shape"] == "early_leave":
-        return f"leaves {fmt_decimal_hour(hf)}"
-    return f"{fmt_decimal_hour(hf)}–{fmt_decimal_hour(ht)}"
-
-
-def _parse_holiday_date(s):
-    """Odoo returns 'YYYY-MM-DD HH:MM:SS' strings for datetime fields.
-    Strip the time component to get a date for the per-day fan-out.
-
-    Tolerant of already-parsed values (passing in a ``date`` returns it
-    as-is) so callers don't have to branch on type; returns ``None`` on
-    anything unparseable so the caller can skip that holiday rather than
-    crash the whole calendar render."""
-    if not s:
-        return None
-    if hasattr(s, "isoformat"):  # already a date
-        return s
-    try:
-        return _date.fromisoformat(str(s)[:10])
-    except ValueError:
-        return None
-
-
 def _approved_by_day(start_d: _date, end_d: _date) -> dict:
     """Return ``{date: [{name, label, source}, ...]}`` for approved
     leaves and company-wide public holidays overlapping ``[start_d, end_d]``.
+
+    Thin I/O wrapper: fetches the rows (this is the patchable seam the route
+    tests stub), then hands them to the pure
+    :func:`time_off_calendar.fan_out_approved` for the per-day fan-out
+    (imported here as ``_tcal`` — the module name clashes with this file's
+    ``time_off_calendar`` route handler below).
 
     Only reads ``state='validate'`` for leaves — the kiosk calendar
     shouldn't surface pending requests because HR may still refuse them;
@@ -1044,7 +1010,7 @@ def _approved_by_day(start_d: _date, end_d: _date) -> dict:
     templates can style them distinctly from per-employee leaves. A
     failing Odoo call swallows to an empty list so the calendar still
     renders the rest of the day's entries during a transient outage."""
-    rows = db.query(
+    leaves = db.query(
         "SELECT r.shape, r.date_from, r.date_to, r.hour_from, r.hour_to, "
         "p.name AS person_name "
         "FROM time_off_requests r "
@@ -1054,45 +1020,22 @@ def _approved_by_day(start_d: _date, end_d: _date) -> dict:
         "ORDER BY p.name",
         (start_d, end_d),
     )
-    by_day: dict = {}
-    for r in rows:
-        label = _label_for(r)
-        cur = max(r["date_from"], start_d)
-        end = min(r["date_to"], end_d)
-        while cur <= end:
-            by_day.setdefault(cur, []).append({
-                "name": r["person_name"], "label": label,
-                "full": r["shape"] == "full_day",
-            })
-            cur = cur + _td(days=1)
-
-    # Merge in company-wide public holidays. Failure is non-fatal — a
-    # transient Odoo outage on the calendar route shouldn't break the
-    # whole render; the rest of the day's entries (from the local
-    # mirror) still show.
+    # Failure is non-fatal — a transient Odoo outage on the calendar route
+    # shouldn't break the whole render; the rest of the day's entries (from
+    # the local mirror) still show.
     try:
         holidays = odoo_client.fetch_public_holidays(start_d, end_d)
     except Exception:  # noqa: BLE001 — never let the holiday fetch crash render
         holidays = []
-    for h in holidays:
-        h_start = _parse_holiday_date(h.get("date_from"))
-        h_end = _parse_holiday_date(h.get("date_to"))
-        if not h_start or not h_end:
-            continue
-        cur = max(h_start, start_d)
-        end = min(h_end, end_d)
-        while cur <= end:
-            by_day.setdefault(cur, []).append({
-                "name": h.get("name") or "Plant Closed",
-                "label": "Plant Closed",
-                "source": "holiday",
-            })
-            cur = cur + _td(days=1)
-    return by_day
+    return _tcal.fan_out_approved(leaves, holidays, start_d, end_d)
 
 
 def _build_calendar_context(month: str | None) -> dict:
     """Shared month-grid builder for the Who's Out calendar.
+
+    Thin orchestrator: resolves the month bounds, fetches the off-map via the
+    (patchable) :func:`_approved_by_day`, then hands both to the pure
+    ``_tcal.build_calendar_grid`` for the grid assembly.
 
     Returns the template fields common to both entry points — the
     token-gated per-person route (reached from the time-off menu) and
@@ -1104,52 +1047,9 @@ def _build_calendar_context(month: str | None) -> dict:
     ``month`` ("YYYY-MM") comes from the prev/next nav links; anything
     missing or malformed falls back to the current month so a stale or
     typo'd URL never 500s the kiosk."""
-    today = _date.today()
-    first = today.replace(day=1)
-    if month:
-        try:
-            y, m = str(month).split("-")
-            first = _date(int(y), int(m), 1)
-        except (ValueError, TypeError):
-            first = today.replace(day=1)
-    if first.month == 12:
-        next_first = first.replace(year=first.year + 1, month=1)
-    else:
-        next_first = first.replace(month=first.month + 1)
-    last = next_first - _td(days=1)
-    range_start = first - _td(days=first.weekday())
-    range_end = last + _td(days=(6 - last.weekday()))
+    _first, range_start, range_end, _prev, _next = _tcal.month_bounds(month)
     off_map = _approved_by_day(range_start, range_end)
-
-    weeks = _cal.Calendar(firstweekday=0).monthdatescalendar(
-        first.year, first.month,
-    )
-    week_cells = []
-    for week in weeks:
-        w = []
-        for d in week:
-            # Drop Sundays — the plant is closed, so the column carried no
-            # signal; removing it gives the remaining Mon–Sat columns more room.
-            if d.weekday() == 6:
-                continue
-            w.append({
-                "num": d.day,
-                "outside": d.month != first.month,
-                "is_today": d == today,
-                "weekend": d.weekday() >= 5,
-                "names": off_map.get(d, []),
-            })
-        week_cells.append(w)
-
-    # Prev/next month anchors (YYYY-MM) for the nav links.
-    prev_first = (first - _td(days=1)).replace(day=1)
-    return {
-        "heading": first.strftime("%B %Y"),
-        "weeks": week_cells,
-        "prev_month": prev_first.strftime("%Y-%m"),
-        "next_month": next_first.strftime("%Y-%m"),
-        "is_current_month": first == today.replace(day=1),
-    }
+    return _tcal.build_calendar_grid(month, off_map)
 
 
 @router.get("/timeclock/time-off/calendar/{token}", response_class=HTMLResponse)
