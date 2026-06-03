@@ -30,3 +30,19 @@ def test_progress_color_ramps_and_clamps():
     # Beyond the clamp stays pinned to the step-12 extreme.
     assert rd.progress_color(300.0) == "hsl(130, 79%, 23%)"
     assert rd.progress_color(-50.0) == "hsl(0, 79%, 23%)"
+
+
+def test_compute_per_wc_expected_filters_active_and_defaults_zero():
+    from datetime import datetime, timezone
+    from zira_dashboard import assignment_windows as aw
+    def u(h):
+        return datetime(2026, 6, 2, h, tzinfo=timezone.utc)
+    segs = [aw.WorkSegment("Dismantler 1", "A", u(12), u(20), "schedule"),
+            aw.WorkSegment("Inactive WC", "B", u(12), u(20), "schedule")]
+    out = rd.compute_per_wc_expected(
+        segments=segs, active_wc_names={"Dismantler 1", "Dismantler 4"},
+        target_per_hour={"Dismantler 1": 6.0, "Inactive WC": 6.0},
+        productive_minutes=lambda n, s, e: (e - s).total_seconds() / 60.0)
+    assert out["Dismantler 1"] == 48.0      # active + worked (8h * 6/hr)
+    assert out["Dismantler 4"] == 0.0       # active, no segment -> defaulted
+    assert "Inactive WC" not in out          # not in active set -> filtered
