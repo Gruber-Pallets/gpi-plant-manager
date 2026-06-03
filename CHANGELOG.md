@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-06-03
 
+### 10:42 AM
+
+- **Centralized `app_settings` table access into one `app_settings.py` (Tier 1, behavior-identical)** — the "read a JSON value from `app_settings` / upsert one" logic was written three times with subtly different decode branches and a duplicated `INSERT … ::jsonb … ON CONFLICT … updated_at = now()`: `settings_store._read`/`_write` (typed `dict[str,int]` — these feed the per-WC / per-group **goal targets**), `settings_store._read_raw`/`_write_raw` (arbitrary JSON for time-off settings), and `odoo_sync._write_last_sync`. New `app_settings.get_setting`/`set_setting` own the decode (psycopg2 may return JSONB decoded or as raw text — normalize both) and the upsert; `settings_store` now delegates to them (keeping its int-coercion and the typed getters exactly as before), as does `odoo_sync._write_last_sync`. Deliberately **left `odoo_sync._read_last_sync` on its own decode** — `odoo_last_sync` is a scalar JSON *string*, which the generic helper can't safely decode in psycopg2's decoded-object mode (a bug-trap avoided). Verified the goal-target coercion path is preserved exactly; full suite green (524 passed), ruff clean.
+
 ### 10:36 AM
 
 - **Deduped Odoo many2one unwrapping into `odoo_client.unwrap_m2o()` (Tier 1, behavior-identical)** — Odoo returns many2one fields as `[id, name]` (or `False`); the "give me the id" unwrap was hand-written ~12 times — eleven inline `x[0] if isinstance(x, list) else x` expressions in `odoo_client.py` plus `time_off_sync._unwrap_many2one`. Replaced all with one `unwrap_m2o(val)` (returns the id for a non-empty list/tuple, else the value unchanged — matching the existing inline semantics, and safe against the empty-list edge the old form would have crashed on). Deliberately **left `odoo_sync._m2o_id` alone** — it returns `None` (not the value as-is) for non-lists, a genuinely different contract, so folding it in would have changed behavior. Verified across `[id,name]` / `False` / bare-id / empty / tuple inputs; the mocked Odoo test suites cover the call sites; full suite green (524 passed), ruff clean.

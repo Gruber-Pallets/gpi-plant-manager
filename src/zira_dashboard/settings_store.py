@@ -18,8 +18,6 @@ group targets via STATIONS.category buckets.
 
 from __future__ import annotations
 
-import json
-
 from .shift_config import TARGET_PER_DAY, productive_minutes_per_day
 from .stations import STATIONS, Station
 
@@ -43,16 +41,10 @@ def _productive_hours() -> float:
 
 
 def _read(key: str) -> dict[str, int]:
-    from . import db
-    rows = db.query("SELECT value FROM app_settings WHERE key = %s", (key,))
-    if not rows:
-        return {}
-    raw = rows[0]["value"]
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
+    """Read a target dict (``{str: int}``) from app_settings, coercing values
+    to int and dropping any that won't convert. Missing/non-dict → ``{}``."""
+    from . import app_settings
+    raw = app_settings.get_setting(key)
     if not isinstance(raw, dict):
         return {}
     out = {}
@@ -65,13 +57,8 @@ def _read(key: str) -> dict[str, int]:
 
 
 def _write(key: str, data: dict[str, int]) -> None:
-    from . import db
-    db.execute(
-        "INSERT INTO app_settings (key, value, updated_at) "
-        "VALUES (%s, %s::jsonb, now()) "
-        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-        (key, json.dumps({str(k): int(v) for k, v in data.items()})),
-    )
+    from . import app_settings
+    app_settings.set_setting(key, {str(k): int(v) for k, v in data.items()})
 
 
 def save(station_targets: dict[str, int], group_targets: dict[str, int]) -> None:
@@ -120,38 +107,20 @@ _DEFAULT_SHIFT_HOURS: tuple[float, float] = (6.0, 14.5)
 
 
 def _read_raw(key: str):
-    """Return the raw value from app_settings, or None if missing.
+    """Return the stored JSON value for ``key`` (any shape), or None if missing.
 
-    Unlike the legacy ``_read`` above (which coerces values to ``dict[str, int]``),
-    this returns whatever JSON shape was stored — scalar, list, or dict — for
-    callers that need arbitrary payloads (e.g. time-off settings).
-    """
-    from . import db
-    rows = db.query("SELECT value FROM app_settings WHERE key = %s", (key,))
-    if not rows:
-        return None
-    raw = rows[0]["value"]
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return None
-    return raw
+    Thin wrapper over ``app_settings.get_setting`` — kept so the typed getters
+    below read clearly. Unlike the legacy ``_read`` (which coerces to
+    ``dict[str, int]``), this returns whatever shape was stored."""
+    from . import app_settings
+    return app_settings.get_setting(key)
 
 
 def _write_raw(key: str, value) -> None:
-    """Upsert key -> value (JSON-encoded) into app_settings.
-
-    Matches the ``::jsonb`` + ``updated_at = now()`` convention used by the
-    legacy ``_write`` above and by ``odoo_sync`` / migration scripts.
-    """
-    from . import db
-    db.execute(
-        "INSERT INTO app_settings (key, value, updated_at) "
-        "VALUES (%s, %s::jsonb, now()) "
-        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-        (key, json.dumps(value)),
-    )
+    """Upsert ``key`` → ``value`` (JSON-encoded). Thin wrapper over
+    ``app_settings.set_setting``."""
+    from . import app_settings
+    app_settings.set_setting(key, value)
 
 
 # hidden_leave_type_ids -> list[int]

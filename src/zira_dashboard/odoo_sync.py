@@ -60,6 +60,10 @@ class SyncResult:
 
 
 def _read_last_sync() -> datetime | None:
+    # odoo_last_sync is a scalar JSON *string* (an isoformat); app_settings.
+    # get_setting can't decode that in psycopg2's "already-decoded" mode
+    # (json.loads on a bare date string fails), so this keeps its own
+    # dual-mode decode rather than going through the shared helper.
     from . import db
     rows = db.query("SELECT value FROM app_settings WHERE key = 'odoo_last_sync'")
     if not rows:
@@ -83,13 +87,8 @@ def _read_last_sync() -> datetime | None:
 
 
 def _write_last_sync(now: datetime) -> None:
-    from . import db
-    db.execute(
-        "INSERT INTO app_settings (key, value, updated_at) "
-        "VALUES ('odoo_last_sync', %s::jsonb, now()) "
-        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-        (json.dumps(now.isoformat()),),
-    )
+    from . import app_settings
+    app_settings.set_setting("odoo_last_sync", now.isoformat())
 
 
 def sync(force: bool = False) -> SyncResult:
