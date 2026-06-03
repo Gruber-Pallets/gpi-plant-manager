@@ -7,7 +7,7 @@ without re-paying the Zira API cost.
 Today's data is NOT cached here — it changes through the shift.
 The in-process TODAY cache in leaderboard.py handles that.
 
-Schema (db._SCHEMA_DDL):
+Schema (_schema.SCHEMA_DDL):
     CREATE TABLE zira_daily_cache (
         meter_id    TEXT,
         day         DATE,
