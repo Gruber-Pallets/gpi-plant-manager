@@ -60,6 +60,47 @@ def _who_by_wc(assignments: dict[str, list[str]], day) -> dict[str, str]:
     return out
 
 
+def _absent_names(d) -> set:
+    """Full-day absences for day `d` (approved full-day off, manual absences,
+    derived no-punch), used to exclude scheduled-but-absent people from
+    man-hours. Falls back to an empty set if attendance can't be loaded."""
+    try:
+        from .. import attendance
+        return attendance.full_day_absent_names(d)
+    except Exception:
+        return set()
+
+
+def _assign_popover_context(today, client):
+    """Inline-assign popover data for the single-day "today" view: any
+    unattributed WCs (so "(no assignment)" lines become click-to-attribute)
+    plus the active roster names. Returns
+    (assignments_todo_by_wc, all_active_people); both empty on error."""
+    assignments_todo_by_wc: dict[str, dict] = {}
+    all_active_people: list[str] = []
+    try:
+        from .. import staffing as _staffing, wc_attributions
+        todo = wc_attributions.unattributed_for_day(today, client)
+        site_tz = shift_config.SITE_TZ
+        for item in todo:
+            first = item["first_sample_utc"].astimezone(site_tz)
+            last = item["last_sample_utc"].astimezone(site_tz)
+            assignments_todo_by_wc[item["wc_name"]] = {
+                "wc_name": item["wc_name"],
+                "units": item["units"],
+                "first_label": first.strftime("%I:%M %p").lstrip("0"),
+                "last_label": last.strftime("%I:%M %p").lstrip("0"),
+                "first_iso": item["first_sample_utc"].isoformat(),
+                "last_iso": item["last_sample_utc"].isoformat(),
+            }
+        roster = _staffing.load_roster()
+        all_active_people = sorted((p.name for p in roster if p.active), key=str.lower)
+    except Exception:
+        assignments_todo_by_wc = {}
+        all_active_people = []
+    return assignments_todo_by_wc, all_active_people
+
+
 def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     """Compute the per-day numbers for the recycling dashboard.
 
@@ -126,11 +167,7 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     # Full-day absences (approved full-day off, manual absences, derived
     # no-punch). Scheduled-but-absent people shouldn't count toward
     # man-hours — otherwise pph/hr/person collapses by the absent share.
-    try:
-        from .. import attendance
-        _absent_today = attendance.full_day_absent_names(d)
-    except Exception:
-        _absent_today = set()
+    _absent_today = _absent_names(d)
 
     total_man_minutes = 0
     total_recycling_people = 0
@@ -521,26 +558,7 @@ def _render_recycling(
     assignments_todo_by_wc: dict[str, dict] = {}
     all_active_people: list[str] = []
     if is_today:
-        try:
-            from .. import staffing as _staffing, wc_attributions
-            todo = wc_attributions.unattributed_for_day(today, client)
-            site_tz = shift_config.SITE_TZ
-            for item in todo:
-                first = item["first_sample_utc"].astimezone(site_tz)
-                last = item["last_sample_utc"].astimezone(site_tz)
-                assignments_todo_by_wc[item["wc_name"]] = {
-                    "wc_name": item["wc_name"],
-                    "units": item["units"],
-                    "first_label": first.strftime("%I:%M %p").lstrip("0"),
-                    "last_label": last.strftime("%I:%M %p").lstrip("0"),
-                    "first_iso": item["first_sample_utc"].isoformat(),
-                    "last_iso": item["last_sample_utc"].isoformat(),
-                }
-            roster = _staffing.load_roster()
-            all_active_people = sorted((p.name for p in roster if p.active), key=str.lower)
-        except Exception:
-            assignments_todo_by_wc = {}
-            all_active_people = []
+        assignments_todo_by_wc, all_active_people = _assign_popover_context(today, client)
 
     response = templates.TemplateResponse(
         request,
@@ -716,11 +734,7 @@ def _render_new_dept(
 
     # Full-day absences excluded from man-hours — see _recycling_day_data
     # for the full rationale.
-    try:
-        from .. import attendance
-        _absent_today = attendance.full_day_absent_names(d)
-    except Exception:
-        _absent_today = set()
+    _absent_today = _absent_names(d)
 
     total_man_minutes_new = 0
     total_new_vs_people = 0
@@ -806,26 +820,7 @@ def _render_new_dept(
     assignments_todo_by_wc: dict[str, dict] = {}
     all_active_people: list[str] = []
     if is_today:
-        try:
-            from .. import staffing as _staffing, wc_attributions
-            todo = wc_attributions.unattributed_for_day(today, client)
-            site_tz = shift_config.SITE_TZ
-            for item in todo:
-                first = item["first_sample_utc"].astimezone(site_tz)
-                last = item["last_sample_utc"].astimezone(site_tz)
-                assignments_todo_by_wc[item["wc_name"]] = {
-                    "wc_name": item["wc_name"],
-                    "units": item["units"],
-                    "first_label": first.strftime("%I:%M %p").lstrip("0"),
-                    "last_label": last.strftime("%I:%M %p").lstrip("0"),
-                    "first_iso": item["first_sample_utc"].isoformat(),
-                    "last_iso": item["last_sample_utc"].isoformat(),
-                }
-            roster = _staffing.load_roster()
-            all_active_people = sorted((p.name for p in roster if p.active), key=str.lower)
-        except Exception:
-            assignments_todo_by_wc = {}
-            all_active_people = []
+        assignments_todo_by_wc, all_active_people = _assign_popover_context(today, client)
 
     response = templates.TemplateResponse(
         request,
