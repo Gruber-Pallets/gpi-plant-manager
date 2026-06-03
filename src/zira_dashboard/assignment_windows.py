@@ -99,8 +99,11 @@ def expected_by_wc(
     """Sum prorated expected pallets per WC.
 
     `productive_minutes(person, start, end)` returns the working minutes in the
-    window. The route passes a closure over staffing.effective_minutes_worked
-    (with the `day` bound), which already subtracts breaks + partial time-off."""
+    window. Since the June 2026 pace-goal fix the route passes a closure over
+    shift_config.productive_minutes_in_window (with the `day` bound), which
+    subtracts breaks only -- deliberately NOT effective_minutes_worked, since
+    netting out partial time-off would wrongly shrink the pace goal on
+    partial-leave days."""
     out: dict[str, float] = {}
     for s in segments:
         thr = target_per_hour.get(s.wc_name, 0.0)
