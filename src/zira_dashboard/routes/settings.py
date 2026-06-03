@@ -678,7 +678,7 @@ async def settings_save(request: Request):
     """Save the Per-Group overrides. Work-center rows post to /settings/work_center/{key}."""
     form = await request.form()
     group_targets: dict[str, int] = {}
-    # Keep the legacy station_targets dict empty; goals are now stored in work_centers.json.
+    # Keep the legacy station_targets dict empty; goals are now stored in the work_centers table.
     station_targets: dict[str, int] = {}
     for s in STATIONS:
         raw = (form.get(f"station_{s.meter_id}") or "").strip()

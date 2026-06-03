@@ -1,8 +1,8 @@
 """Staffing data layer: locations, roster, daily schedules.
 
-Storage is flat JSON files so you get free history and easy manual edits.
-- roster.json               — people + per-skill levels (0–3) + active flag
-- schedules/YYYY-MM-DD.json — one file per day with assignments
+Storage is Postgres (people, person_skills, schedules, schedule_assignments).
+Roster + skills are synced from Odoo; schedules are edited in the app. The
+Plant Scheduler CSV is a read-only first-run seed for default assignments.
 """
 
 from __future__ import annotations
@@ -111,7 +111,6 @@ class Person:
         return int(self.skills.get(skill, 0))
 
 
-ROSTER_PATH = Path("roster.json")
 PLANT_SCHEDULER_CSV = Path("Plant Scheduler(Plant Scheduler).csv")
 
 _lock = RLock()
@@ -279,7 +278,7 @@ def _invalidate_schedule_cache(day: date) -> None:
 
 def load_schedule(day: date) -> Schedule:
     """Hydrate a Schedule from Postgres (schedules + schedule_assignments
-    + schedule_time_off + schedule_wc_notes). Returns an empty Schedule
+    + schedule_wc_notes). Returns an empty Schedule
     if the day has no row yet. Cached in-process per-day; invalidated on
     save_schedule()."""
     with _schedule_cache_lock:

@@ -23,6 +23,9 @@ Plant Scheduler*.csv
 results/
 CAPABILITY_REPORT.md
 
+# Generated preview (regenerate with scripts/render_kiosk_preview.py)
+kiosk_preview.html
+
 # Python
 __pycache__/
 *.py[cod]

@@ -12,8 +12,6 @@ pytestmark = pytest.mark.skipif(
 def _reset_caches():
     from zira_dashboard import db
     db.execute("DELETE FROM today_attendance_cache")
-    db.execute("DELETE FROM today_timeoff_cache")
-    db.execute("DELETE FROM today_production_cache")
 
 
 def test_write_then_read_attendance():

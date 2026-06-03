@@ -1,9 +1,9 @@
 """Live cache for today's Odoo data.
 
-Owns three single-row JSONB tables (today_attendance_cache,
-today_timeoff_cache, today_production_cache). The warmer (in app.py)
-overwrites them every 45 s. Live routes read through this module
-instead of calling the external APIs in the request path.
+Owns the single-row JSONB table today_attendance_cache plus the keyed
+odoo_open_attendance_cache snapshot. The warmer (in app.py) overwrites
+them on a short interval. Live routes read through this module instead
+of calling the external APIs in the request path.
 
 The `is_stale` helper supports the cold-start safety valve: if a route
 reads a cache row whose refreshed_at is older than ~3 minutes, it can
@@ -52,22 +52,6 @@ def write_attendance(day: date, payload: Any) -> None:
 
 def read_attendance(day: date) -> tuple[Any | None, datetime | None]:
     return _read("today_attendance_cache", day)
-
-
-def write_timeoff(day: date, payload: Any) -> None:
-    _write("today_timeoff_cache", day, payload)
-
-
-def read_timeoff(day: date) -> tuple[Any | None, datetime | None]:
-    return _read("today_timeoff_cache", day)
-
-
-def write_production(day: date, payload: Any) -> None:
-    _write("today_production_cache", day, payload)
-
-
-def read_production(day: date) -> tuple[Any | None, datetime | None]:
-    return _read("today_production_cache", day)
 
 
 # ---- Odoo open-attendance snapshot (single-row, keyed by person id) ----
@@ -147,18 +131,15 @@ def refresh_attendance(day: date) -> None:
 
 
 def refresh_production(day: date, client) -> None:
-    """Refresh today's Zira production AND today's production_daily rows.
+    """UPSERT today's production_daily rows from Zira.
 
-    The cache table holds the raw payload (used by the /recycling and
-    /new dashboards); production_daily rows are written so MTD / today
-    leaderboards
-    see today's partial-day data without a separate query path.
+    precompute_day calls attribution_for(day) + flatten + upsert, so MTD /
+    today leaderboards see today's partial-day data without a separate query
+    path. (There is no separate production cache row — production_daily is the
+    store.)
     """
     try:
         from . import precompute
-        # Side effect: also UPSERTs today's production_daily rows because
-        # precompute_day calls attribution_for(day) + flatten + upsert.
-        result = precompute.precompute_day(day, client)
-        write_production(day, result)
+        precompute.precompute_day(day, client)
     except Exception as e:
         _log.warning("refresh_production(%s) failed: %s", day, e)

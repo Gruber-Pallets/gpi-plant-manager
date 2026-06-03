@@ -1,44 +1,38 @@
-# Zira API Capability Probe
+# GPI Plant Manager
 
-A Python toolkit that probes the Zira.us public API and writes a human-readable
-capability report to `CAPABILITY_REPORT.md`. Documented in
-`docs/superpowers/specs/2026-04-24-zira-api-capability-probe-design.md`.
+Plant operations platform for Gruber Pallets: a daily staffing scheduler,
+work-center dashboards, recycling production goals, leaderboards/recognition,
+and a timeclock kiosk. Server-rendered FastAPI + HTMX, backed by Postgres,
+wired to the Zira.us telematics API (live production metrics) and Odoo (HR:
+employees, skills, attendance, time-off). Deployed on Railway.
+
+## Stack
+
+- **Web:** FastAPI + uvicorn, Jinja2 templates, HTMX (server-rendered HTML).
+- **Data:** Postgres (single source of truth) via psycopg2.
+- **Integrations:** Zira.us API (production), Odoo XML-RPC (HR), Slack
+  (schedule share), Microsoft Entra ID (OIDC login), Playwright (PDF render).
 
 ## Setup
 
-Requires Python 3.11+.
+Requires Python 3.11+ and a Postgres database.
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-Copy `.env.example` to `.env` and fill in your `ZIRA_API_KEY`
-(created in the Zira site under the **Applications** tab).
-
-Open `config.yaml` and replace every `REPLACE_WITH_*` value with the IDs you
-copied from the Zira UI:
-
-- **`test_data_source.meter_id`** — a small "API Test DS" you create in Zira's
-  Data Sources tab. Give it two metrics: one number, one text.
-- **`test_data_source.metrics.number` / `.text`** — metric IDs from inside
-  that test DS (edit the DS, click the copy icon next to each metric).
-- **`read_targets.data_sources[].meter_id`** — one or two existing
-  production data sources to read from (no writes land here).
-- **`read_targets.channels[].channel_id`** — one or two channel IDs for
-  aggregated analytics.
+Copy `.env.example` to `.env` and fill in the values (Postgres `DATABASE_URL`,
+Odoo + Zira credentials, auth secrets, etc.). The schema is created
+automatically on startup by `db.bootstrap_schema()`.
 
 ## Running
 
 ```bash
-python -m zira_probe.runner               # full probe suite
-python -m zira_probe.runner --auth-only   # just verify the API key
-python -m zira_probe.runner --skip-writes # reads + undocumented only
+zira-dashboard                      # console script
+# or: uvicorn zira_dashboard.app:app
 ```
 
-Outputs:
-
-- `CAPABILITY_REPORT.md` — human-readable summary by category.
-- `results/*.json` — raw per-probe request/response logs (API key redacted).
+Set `AUTH_DISABLED=1` to bypass login during local development.
 
 ## Tests
 
@@ -46,7 +40,14 @@ Outputs:
 pytest -v
 ```
 
-Unit tests cover `ZiraClient` (mocked HTTP), `Config` loading, `ProbeResult`
-and the raw-log writer, and the report renderer. Probes themselves run
-against the live Zira API and are validated by reviewing the generated
-report.
+Pure-logic tests run anywhere; tests that touch Postgres are skipped unless
+`DATABASE_URL` is set.
+
+## Layout
+
+- `src/zira_dashboard/` — the app. `routes/` holds feature routers;
+  `*_store.py` = Postgres-backed persistence; `*_sync.py` = external sync
+  (Odoo); `*_client.py` = API clients.
+- `src/zira_probe/` — standalone Zira API capability-probe CLI; its
+  `client.py` is also the dashboard's Zira client.
+- `docs/superpowers/` — design specs and implementation plans.
