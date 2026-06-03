@@ -65,7 +65,7 @@ Batched as one cleanup change. Behavior + UI identical. **✅ Shipped 2026-06-03
 
 ## Test safety-net (enabler for Tier 2)
 
-- [ ] **Provision Postgres in CI** so the **35 of 102 DB-gated test files** actually run (currently silently skipped without `DATABASE_URL` → false comfort).
+- [x] **Provision Postgres in CI** — shipped `.github/workflows/tests.yml` (Postgres 16 service, prod Python 3.13, ruff + pytest). The DB-gated tests now run + gate (776 passing). First run surfaced 2 real gaps (httpx for TestClient → dev extra; ZIRA_API_KEY at import → CI env) + **28 pre-existing broken DB-tests** (never ran in CI; not from this refactor) — skipped + tracked in `docs/TEST_DEBT.md` for burn-down. **✅ Shipped 2026-06-03.**
 - [ ] **Add goal-pace characterization tests** before touching recycling/`wc_dashboard_data` math — lock today's numbers using the attendance/punch/attribution shapes from the June goal-regression commits.
 - [ ] **Add 2 missing fixtures** so `test_time_off_routes.py` & `test_timeclock_dashboard_tile.py` assert instead of permanently skipping.
 
