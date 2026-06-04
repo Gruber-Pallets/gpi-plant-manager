@@ -88,6 +88,21 @@ def required_skills_for(loc: Location) -> tuple[str, ...]:
     `skill` field when `required_skills` is unset, for backward compatibility."""
     return loc.required_skills if loc.required_skills else (loc.skill,)
 
+
+# Static work-center -> department map, built once from LOCATIONS. This is the
+# `Location.department` classification (Recycled / New / Supervisor /
+# Maintenance / Transportation) — NOT the user-editable
+# work_centers_store.department. Drives department-based punch rounding.
+_LOCATION_DEPARTMENT: dict[str, str] = {loc.name: loc.department for loc in LOCATIONS}
+
+
+def department_for_wc(wc_name: str | None) -> str | None:
+    """Static department for a work-center name, or None if unknown/blank."""
+    if not wc_name:
+        return None
+    return _LOCATION_DEPARTMENT.get(wc_name)
+
+
 DEPARTMENT_ORDER = ("Recycled", "New", "Supervisor", "Maintenance", "Transportation")
 
 BAY_SUBTITLES: dict[str, str] = {
