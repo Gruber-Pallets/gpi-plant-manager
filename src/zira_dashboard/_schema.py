@@ -825,4 +825,21 @@ INSERT INTO department_rounding (department, system_id)
 INSERT INTO department_rounding (department, system_id)
   SELECT 'Maintenance', id FROM rounding_systems WHERE name = 'Plant Operator'
   ON CONFLICT (department) DO NOTHING;
+
+-- Missing-work-center alert (2026-06-04). Cache of Odoo hr.attendance rows
+-- (last 14 days) lacking a kiosk work-center tag, refreshed by a warmer; plus
+-- a suppression table for records a manager has assigned or dismissed.
+CREATE TABLE IF NOT EXISTS missing_wc_cache (
+  id           INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  snapshot     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  refreshed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS missing_wc_resolved (
+  attendance_id BIGINT PRIMARY KEY,
+  action        TEXT NOT NULL CHECK (action IN ('assigned','dismissed')),
+  name          TEXT,
+  wc_name       TEXT,
+  resolved_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
