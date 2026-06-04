@@ -774,4 +774,55 @@ CREATE TABLE IF NOT EXISTS auto_lunch_settings (
   flex_minutes      INTEGER NOT NULL DEFAULT 30
 );
 INSERT INTO auto_lunch_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- Department-driven rounding (2026-06-04). Named rounding "systems" (each a set
+-- of the four windows) are selected by the static department an employee works
+-- that day (staffing.Location.department). rounding_settings id=1 remains the
+-- plant-default fallback for any punch that doesn't resolve to a mapped dept.
+CREATE TABLE IF NOT EXISTS rounding_systems (
+  id              SERIAL PRIMARY KEY,
+  name            TEXT NOT NULL UNIQUE,
+  in_before_min   INT NOT NULL DEFAULT 0,
+  in_after_min    INT NOT NULL DEFAULT 0,
+  out_before_min  INT NOT NULL DEFAULT 0,
+  out_after_min   INT NOT NULL DEFAULT 0,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS department_rounding (
+  department  TEXT PRIMARY KEY,
+  system_id   INTEGER REFERENCES rounding_systems(id) ON DELETE SET NULL
+);
+
+-- Seed the three systems (idempotent via UNIQUE(name)). Plant Operator inherits
+-- the current plant-default windows so Recycled/New behavior is preserved on
+-- migration; Transportation seeds to the known driver policy; Supervisor starts
+-- at no-rounding for Dale to set.
+INSERT INTO rounding_systems (name, in_before_min, in_after_min, out_before_min, out_after_min)
+  SELECT 'Plant Operator', in_before_min, in_after_min, out_before_min, out_after_min
+  FROM rounding_settings WHERE id = 1
+  ON CONFLICT (name) DO NOTHING;
+INSERT INTO rounding_systems (name, in_before_min, in_after_min, out_before_min, out_after_min)
+  VALUES ('Transportation', 20, 0, 0, 0)
+  ON CONFLICT (name) DO NOTHING;
+INSERT INTO rounding_systems (name)
+  VALUES ('Supervisor')
+  ON CONFLICT (name) DO NOTHING;
+
+-- Seed the department->system map (idempotent via PRIMARY KEY(department)).
+INSERT INTO department_rounding (department, system_id)
+  SELECT 'Recycled', id FROM rounding_systems WHERE name = 'Plant Operator'
+  ON CONFLICT (department) DO NOTHING;
+INSERT INTO department_rounding (department, system_id)
+  SELECT 'New', id FROM rounding_systems WHERE name = 'Plant Operator'
+  ON CONFLICT (department) DO NOTHING;
+INSERT INTO department_rounding (department, system_id)
+  SELECT 'Supervisor', id FROM rounding_systems WHERE name = 'Supervisor'
+  ON CONFLICT (department) DO NOTHING;
+INSERT INTO department_rounding (department, system_id)
+  SELECT 'Transportation', id FROM rounding_systems WHERE name = 'Transportation'
+  ON CONFLICT (department) DO NOTHING;
+INSERT INTO department_rounding (department, system_id)
+  SELECT 'Maintenance', id FROM rounding_systems WHERE name = 'Plant Operator'
+  ON CONFLICT (department) DO NOTHING;
 """
