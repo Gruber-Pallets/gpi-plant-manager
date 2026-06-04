@@ -483,6 +483,41 @@ def get_current_attendance(employee_odoo_id: int) -> dict | None:
     return row
 
 
+def fetch_attendances_missing_wc(since) -> list[dict]:
+    """hr.attendance from `since` (a tz-aware datetime) with NO kiosk
+    work-center tag. Returns
+    [{att_id, employee_odoo_id, employee_name, check_in (ISO), check_out (ISO|None)}].
+
+    Returns [] (and logs once) when the kiosk WC field isn't configured — with
+    no WC field we can't tell tagged from untagged, so the alert stays dark
+    rather than flagging every record."""
+    import logging
+    wc_field = _kiosk_wc_field()
+    if not wc_field:
+        logging.getLogger(__name__).warning(
+            "ODOO_KIOSK_WC_FIELD not configured; missing-work-center alert disabled"
+        )
+        return []
+    rows = execute(
+        "hr.attendance", "search_read",
+        [("check_in", ">=", _to_odoo_dt(since)), (wc_field, "=", False)],
+        fields=["id", "employee_id", "check_in", "check_out"],
+        order="check_in desc",
+        limit=500,
+    )
+    out: list[dict] = []
+    for r in rows:
+        emp = r.get("employee_id")
+        out.append({
+            "att_id": r["id"],
+            "employee_odoo_id": unwrap_m2o(emp),
+            "employee_name": emp[1] if isinstance(emp, list) and len(emp) > 1 else None,
+            "check_in": _odoo_dt_to_iso(r.get("check_in")),
+            "check_out": _odoo_dt_to_iso(r.get("check_out")),
+        })
+    return out
+
+
 def _odoo_dt_to_iso(value: Any) -> str | None:
     """Odoo returns datetimes as naive-UTC 'YYYY-MM-DD HH:MM:SS' strings
     (and False for empty). Return an ISO-8601 string with an explicit UTC
