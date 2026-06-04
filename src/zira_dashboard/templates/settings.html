@@ -411,12 +411,99 @@
       </p>
     </form>
 
-    <div class="per-schedule-rounding" style="margin-top:1.6rem">
-      <h4 class="rounding-subhead">Per-schedule rounding</h4>
+    <div class="rounding-systems" style="margin-top:1.6rem">
+      <h4 class="rounding-subhead">Rounding systems</h4>
       <p class="help">
-        Give a specific Odoo work schedule its own rounding windows. The
-        hours come from Odoo; the windows behave exactly like the default
-        above. Anyone not on a listed schedule uses the default.
+        Named sets of rounding windows. Each department below is assigned one
+        system; editing a system changes rounding for every department using it.
+      </p>
+
+      {% for sys in rounding_systems %}
+      <div class="rounding-card ws-rounding-card">
+        <div class="ws-rounding-head">
+          <strong>{{ sys.name }}</strong>
+        </div>
+        <form method="post" action="/settings/rounding_system" class="ws-rounding-fields">
+          <input type="hidden" name="system_id" value="{{ sys.id }}">
+          <div class="rounding-grid">
+            <div class="rounding-col">
+              <h4>IN</h4>
+              <label>Up to
+                <input type="number" name="in_before_min" min="0" max="60" value="{{ sys.in_before_min }}">
+                minute(s) before the schedule clock-in time.</label>
+              <label>Up to
+                <input type="number" name="in_after_min" min="0" max="60" value="{{ sys.in_after_min }}">
+                minute(s) after the schedule clock-in time.</label>
+            </div>
+            <div class="rounding-col">
+              <h4>OUT</h4>
+              <label>Up to
+                <input type="number" name="out_before_min" min="0" max="60" value="{{ sys.out_before_min }}">
+                minute(s) before the schedule clock-out time.</label>
+              <label>Up to
+                <input type="number" name="out_after_min" min="0" max="60" value="{{ sys.out_after_min }}">
+                minute(s) after the schedule clock-out time.</label>
+            </div>
+          </div>
+          <button type="submit">Save</button>
+        </form>
+        <form method="post" action="/settings/rounding_system/rename" style="margin-top:0.4rem">
+          <input type="hidden" name="system_id" value="{{ sys.id }}">
+          <label>Rename:
+            <input type="text" name="name" value="{{ sys.name }}" maxlength="80">
+          </label>
+          <button type="submit">Rename</button>
+        </form>
+        <form method="post" action="/settings/rounding_system/remove" style="margin-top:0.4rem">
+          <input type="hidden" name="system_id" value="{{ sys.id }}">
+          <button type="submit"
+                  onclick="return confirm('Remove this system? Departments using it revert to the plant default rounding.')">
+            Remove
+          </button>
+        </form>
+      </div>
+      {% else %}
+      <p class="note">No rounding systems yet.</p>
+      {% endfor %}
+
+      <form method="post" action="/settings/rounding_system/add" style="margin-top:0.8rem">
+        <label>Add a system:
+          <input type="text" name="name" placeholder="e.g. Plant Operator" maxlength="80">
+        </label>
+        <button type="submit">Add</button>
+      </form>
+    </div>
+
+    <div class="department-rounding" style="margin-top:1.6rem">
+      <h4 class="rounding-subhead">Department rounding</h4>
+      <p class="help">
+        Which rounding system each department uses. An employee's punches use the
+        system of the department they work that day (from the scheduler; falling
+        back to where they clock in). &ldquo;Plant default&rdquo; uses the default
+        windows at the top.
+      </p>
+      {% for row in department_rounding %}
+      <form method="post" action="/settings/department_rounding"
+            style="display:flex; align-items:center; gap:.6rem; margin:.35rem 0">
+        <input type="hidden" name="department" value="{{ row.department }}">
+        <strong style="min-width:8rem">{{ row.department }}</strong>
+        <select name="system_id" onchange="this.form.submit()">
+          <option value="none" {% if not row.system_id %}selected{% endif %}>Plant default</option>
+          {% for sys in rounding_systems %}
+          <option value="{{ sys.id }}" {% if row.system_id == sys.id %}selected{% endif %}>{{ sys.name }}</option>
+          {% endfor %}
+        </select>
+        <noscript><button type="submit">Save</button></noscript>
+      </form>
+      {% endfor %}
+    </div>
+
+    <div class="per-schedule-rounding" style="margin-top:1.6rem">
+      <h4 class="rounding-subhead">Custom shift hours</h4>
+      <p class="help">
+        Odoo work schedules whose hours differ from the plant default (e.g.
+        drivers at 5:45&ndash;2:30). The hours come from Odoo and set the boundary
+        rounding pulls toward. Rounding windows are set by department above, not here.
       </p>
 
       {% for ws in work_schedules %}
@@ -425,39 +512,16 @@
           <strong>{{ ws.name }}</strong>
           <span class="note">{{ ws.hours_display }} &middot; from Odoo</span>
         </div>
-        <form method="post" action="/settings/work_schedule_rounding" class="ws-rounding-fields">
-          <input type="hidden" name="resource_calendar_id" value="{{ ws.resource_calendar_id }}">
-          <div class="rounding-grid">
-            <div class="rounding-col">
-              <h4>IN</h4>
-              <label>Up to
-                <input type="number" name="in_before_min" min="0" max="60" value="{{ ws.in_before_min }}">
-                minute(s) before the schedule clock-in time.</label>
-              <label>Up to
-                <input type="number" name="in_after_min" min="0" max="60" value="{{ ws.in_after_min }}">
-                minute(s) after the schedule clock-in time.</label>
-            </div>
-            <div class="rounding-col">
-              <h4>OUT</h4>
-              <label>Up to
-                <input type="number" name="out_before_min" min="0" max="60" value="{{ ws.out_before_min }}">
-                minute(s) before the schedule clock-out time.</label>
-              <label>Up to
-                <input type="number" name="out_after_min" min="0" max="60" value="{{ ws.out_after_min }}">
-                minute(s) after the schedule clock-out time.</label>
-            </div>
-          </div>
-        </form>
         <form method="post" action="/settings/work_schedule_rounding/remove" style="margin-top:0.4rem">
           <input type="hidden" name="resource_calendar_id" value="{{ ws.resource_calendar_id }}">
           <button type="submit"
-                  onclick="return confirm('Remove this schedule override? Its employees revert to the default rounding.')">
+                  onclick="return confirm('Remove this schedule? Its employees use the plant-default hours.')">
             Remove
           </button>
         </form>
       </div>
       {% else %}
-      <p class="note">No per-schedule overrides yet.</p>
+      <p class="note">No custom shift hours yet.</p>
       {% endfor %}
 
       {% if available_schedules %}
