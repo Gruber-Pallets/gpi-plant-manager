@@ -316,6 +316,24 @@ def settings_page(
         }
         for o in work_schedule_store.all_overrides()
     ]
+    from .. import rounding_system_store
+    _systems = rounding_system_store.all_systems()
+    rounding_systems_ctx = [
+        {
+            "id": s.id,
+            "name": s.name,
+            "in_before_min": s.rounding.in_before_min,
+            "in_after_min": s.rounding.in_after_min,
+            "out_before_min": s.rounding.out_before_min,
+            "out_after_min": s.rounding.out_after_min,
+        }
+        for s in _systems
+    ]
+    _dept_map = rounding_system_store.department_map()
+    department_rounding_ctx = [
+        {"department": d, "system_id": _dept_map.get(d)}
+        for d in staffing.DEPARTMENT_ORDER
+    ]
     # Skill list comes directly from the `skills` table — Odoo's
     # Production + Supervisor skill types. Production first (alphabetical),
     # then Supervisor.
@@ -366,6 +384,8 @@ def settings_page(
             "schedule": schedule_ctx,
             "saturday_schedule": saturday_schedule_ctx,
             "rounding": rounding_ctx,
+            "rounding_systems": rounding_systems_ctx,
+            "department_rounding": department_rounding_ctx,
             "auto_lunch": auto_lunch_ctx,
             "work_schedules": work_schedules_ctx,
             "available_schedules": available_schedules,
@@ -489,6 +509,100 @@ async def settings_save_rounding(request: Request):
     if (request.headers.get("accept") or "").startswith("application/json"):
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+
+@router.post("/settings/rounding_system")
+async def settings_save_rounding_system(request: Request):
+    """Save the four windows for ONE rounding system (by id). Same 0..60 clamp
+    as /settings/rounding."""
+    from .. import rounding_system_store
+    from ..rounding import RoundingSettings
+    form = await request.form()
+
+    def _clamp(raw) -> int:
+        try:
+            v = int(raw)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(60, v))
+
+    try:
+        system_id = int(form.get("system_id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
+    rounding_system_store.save_system_windows(system_id, RoundingSettings(
+        in_before_min=_clamp(form.get("in_before_min")),
+        in_after_min=_clamp(form.get("in_after_min")),
+        out_before_min=_clamp(form.get("out_before_min")),
+        out_after_min=_clamp(form.get("out_after_min")),
+    ))
+    if (request.headers.get("accept") or "").startswith("application/json"):
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
+
+
+@router.post("/settings/rounding_system/add")
+async def settings_add_rounding_system(request: Request):
+    """Create a new (all-zero) rounding system by name."""
+    from .. import rounding_system_store
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "bad name"}, status_code=400)
+    rounding_system_store.add_system(name)
+    return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
+
+
+@router.post("/settings/rounding_system/rename")
+async def settings_rename_rounding_system(request: Request):
+    """Rename one rounding system."""
+    from .. import rounding_system_store
+    form = await request.form()
+    try:
+        system_id = int(form.get("system_id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
+    name = (form.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "bad name"}, status_code=400)
+    rounding_system_store.rename_system(system_id, name)
+    return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
+
+
+@router.post("/settings/rounding_system/remove")
+async def settings_remove_rounding_system(request: Request):
+    """Delete a rounding system. Departments mapped to it revert to plant default."""
+    from .. import rounding_system_store
+    form = await request.form()
+    try:
+        system_id = int(form.get("system_id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
+    rounding_system_store.delete_system(system_id)
+    return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
+
+
+@router.post("/settings/department_rounding")
+async def settings_save_department_rounding(request: Request):
+    """Map one static department to a rounding system, or to the plant default
+    (system_id 'none'/blank)."""
+    from .. import rounding_system_store
+    form = await request.form()
+    department = (form.get("department") or "").strip()
+    if not department:
+        return JSONResponse({"ok": False, "error": "bad department"}, status_code=400)
+    raw = form.get("system_id")
+    if raw in (None, "", "none", "0"):
+        system_id = None
+    else:
+        try:
+            system_id = int(raw)
+        except (TypeError, ValueError):
+            return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
+    rounding_system_store.set_department_system(department, system_id)
+    if (request.headers.get("accept") or "").startswith("application/json"):
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
 
 
 def _auto_lunch_mode_flags(mode, current_enabled: bool,
