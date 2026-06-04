@@ -4,6 +4,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-06-04
 
+### 9:21 AM
+
+- **Flexible-schedule employees are now exempt from punch rounding** — anyone whose Odoo work-schedule "Schedule Type" is flexible (`people.is_flexible`) now has their kiosk punches recorded **exactly as punched**, with no rounding, no matter which department/rounding system would otherwise apply. Flex employees have no fixed start/end to round toward, so the prior behavior could wrongly pull an early/late punch to the plant-default shift boundary (the same reason they're already excluded from the Late/Absence report). The exemption sits at the single punch choke point (`_open_log_row` → `_windows_for_day`), so it covers clock-in, clock-out, and transfers; auto-lunch punches were already stamped unrounded and are unaffected. +1 unit test; full local suite green (617 passed).
+
 ### 9:04 AM
 
 - **Updated two settings-panel characterization tests to the new four-block rounding UI (test-only, no behavior change)** — the Postgres-gated CI suite (which doesn't run locally) caught that `test_settings_timeclock_layout.py` still pinned the old "Per-schedule rounding" heading and the bare `/settings/work_schedule_rounding` save form — both intentionally changed in the rounding revamp below (heading renamed "Custom shift hours"; saving rounding windows moved to the per-department rounding systems). Updated the two stale assertions to the current contract, now also locking the new `/settings/rounding_system/add` + `/settings/department_rounding` endpoints. App/UI behavior is unchanged.

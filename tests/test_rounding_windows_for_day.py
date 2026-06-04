@@ -63,6 +63,19 @@ def test_multi_dept_first_scheduled_wins(monkeypatch):
     assert timeclock._windows_for_day("Frank", MONDAY, None) == RoundingSettings(9, 0, 0, 0)
 
 
+def test_flexible_employee_is_exempt(monkeypatch):
+    # A flex-schedule employee has no fixed start/end, so they're exempt from
+    # rounding even when scheduled into a department that would round (and even
+    # vs. the plant default) — resolves to all-zero windows (apply_rounding no-op).
+    monkeypatch.setattr(staffing, "load_schedule", lambda d: _sched({"Dismantler 1": ["Gina"]}))
+    monkeypatch.setattr(rounding_system_store, "windows_for_department",
+                        lambda dept: RoundingSettings(20, 0, 0, 0))
+    monkeypatch.setattr(rounding_store, "current", lambda: RoundingSettings(5, 5, 5, 5))
+    assert timeclock._windows_for_day(
+        "Gina", MONDAY, "Dismantler 1", is_flexible=True
+    ) == RoundingSettings(0, 0, 0, 0)
+
+
 # ---- _effective_punch_wc ----
 
 def test_effective_wc_clock_in_uses_form_wc():

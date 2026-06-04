@@ -283,12 +283,19 @@ def _effective_punch_wc(action, wc_name, person_odoo_id):
     return None
 
 
-def _windows_for_day(person_name, local_date, effective_wc):
+def _windows_for_day(person_name, local_date, effective_wc, is_flexible=False):
     """Resolve the four rounding windows by the static department the employee
     works `local_date`: their first scheduled WC's department, else the WC they
     clock into, else the plant default. Never raises a config error past the
-    fallback."""
+    fallback.
+
+    Flexible-schedule employees (Odoo "Schedule Type" = flexible) have no fixed
+    start/end to round toward, so they're exempt from rounding entirely:
+    all-zero windows make apply_rounding a no-op and the raw punch is kept."""
     from .. import rounding_store, rounding_system_store
+    from ..rounding import RoundingSettings
+    if is_flexible:
+        return RoundingSettings(0, 0, 0, 0)
     dept = None
     if person_name:
         sched = staffing.load_schedule(local_date)
@@ -335,14 +342,15 @@ def _open_log_row(
     try:
         local_date = occurred_at.astimezone(shift_config.SITE_TZ).date()
         prow = db.query(
-            "SELECT name, resource_calendar_id FROM people WHERE odoo_id = %s",
+            "SELECT name, resource_calendar_id, is_flexible FROM people WHERE odoo_id = %s",
             (person_odoo_id,),
         )
         person_name = prow[0]["name"] if prow else None
         cal_id = prow[0]["resource_calendar_id"] if prow else None
+        is_flexible = bool(prow[0]["is_flexible"]) if prow else False
         shift_start, shift_end = _hours_for_punch(cal_id, local_date)
         effective_wc = _effective_punch_wc(action, wc_name, person_odoo_id)
-        windows = _windows_for_day(person_name, local_date, effective_wc)
+        windows = _windows_for_day(person_name, local_date, effective_wc, is_flexible)
         rounded = rounding.apply_rounding(
             action, occurred_at, shift_start, shift_end, windows,
         )
