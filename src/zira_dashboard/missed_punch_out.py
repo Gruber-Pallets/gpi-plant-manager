@@ -129,11 +129,13 @@ def get_unresolved(attendance_id) -> dict | None:
 
 
 def correct(attendance_id, corrected_ts) -> None:
-    """Mark a flag resolved with the manager-entered punch-out time."""
+    """Mark a flag resolved with the manager-entered punch-out time. Guarded on
+    `resolved_at IS NULL` so a double-submit can't overwrite an already-recorded
+    correction (the row's resolved_at/corrected_at stay as first set)."""
     from . import db
     db.execute(
         "UPDATE missed_punch_out SET corrected_at = %s, resolved_at = now() "
-        "WHERE attendance_id = %s",
+        "WHERE attendance_id = %s AND resolved_at IS NULL",
         (corrected_ts, int(attendance_id)),
     )
 
