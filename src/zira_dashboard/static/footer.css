@@ -248,3 +248,21 @@
   }
   .late-snoozed-name { flex: 1 1 auto; font-weight: 600; }
   .late-status { font-size: 0.78rem; color: var(--muted, #6b7280); width: 100%; margin-top: 0.3rem; }
+  .mpo-time-input {
+    margin-left: 0.4rem;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid var(--border, #d1d5db);
+    border-radius: 4px;
+    font: inherit;
+  }
+  .mpo-save-btn {
+    margin-left: 0.5rem;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid #b91c1c;
+    border-radius: 4px;
+    background: #b91c1c;
+    color: white;
+    cursor: pointer;
+  }
+  .mpo-save-btn:hover { background: #991b1b; }
+  .mpo-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }

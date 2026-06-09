@@ -31,6 +31,7 @@ from .routes import (
     timeclock_time_off,
     late_report,
     missing_wc,
+    missed_punch_out,
     leaderboards,
     past_schedules,
     people,
@@ -153,6 +154,15 @@ async def _tick_missing_wc():
     await asyncio.to_thread(missing_wc.write_cache, rows)
 
 
+async def _tick_missed_punch_out():
+    """Close any attendance still open from a prior day at that day's midnight
+    and flag it for the Missed-Punch-Out alert. Cadence doesn't affect the close
+    time (it's computed from the check-in day, not 'now')."""
+    from . import missed_punch_out, shift_config
+    today = datetime.now(shift_config.SITE_TZ).date()
+    await asyncio.to_thread(missed_punch_out.run_close, today)
+
+
 # (name, tick coroutine, interval seconds). `name` is used only in the
 # "warmer tick failed" log line. Intervals are unchanged from the original
 # per-loop functions this registry replaced.
@@ -168,6 +178,7 @@ _WARMERS = [
     ("staffing pages", _tick_staffing_pages, 45),
     ("staffing stable", _tick_staffing_stable, 300),
     ("missing WC", _tick_missing_wc, 180),
+    ("missed punch-out", _tick_missed_punch_out, 60),
 ]
 
 
@@ -341,6 +352,7 @@ app.include_router(tv_displays.router)
 app.include_router(staffing.router)
 app.include_router(late_report.router)
 app.include_router(missing_wc.router)
+app.include_router(missed_punch_out.router)
 app.include_router(share.router)
 app.include_router(skills.router)
 app.include_router(people.router)
