@@ -1,8 +1,9 @@
 """Pure logic for the missed-punch-out alert (no DB/Odoo)."""
 
+import asyncio
 from datetime import date, datetime, timezone
 
-from zira_dashboard import missed_punch_out as mpo, odoo_client
+from zira_dashboard import app as app_module, missed_punch_out as mpo, odoo_client
 from zira_dashboard.shift_config import SITE_TZ
 
 
@@ -104,3 +105,10 @@ def test_run_close_isolates_per_record_failure(monkeypatch):
 
     assert n == 1          # only the record that closed cleanly is counted
     assert flagged == [2]  # the failed record was never flagged; the sweep continued
+
+
+def test_tick_calls_run_close_with_site_local_today(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(mpo, "run_close", lambda today: seen.update({"today": today}))
+    asyncio.run(app_module._tick_missed_punch_out())
+    assert seen["today"] == datetime.now(SITE_TZ).date()
