@@ -1,0 +1,52 @@
+"""Pure logic for the missed-punch-out alert (no DB/Odoo)."""
+
+from datetime import date, datetime, timezone
+
+from zira_dashboard import missed_punch_out as mpo
+from zira_dashboard.shift_config import SITE_TZ
+
+
+def _iso(y, m, d, hh, mm):
+    """A UTC ISO string the way odoo_client.fetch_open_attendances emits."""
+    return datetime(y, m, d, hh, mm, tzinfo=timezone.utc).isoformat()
+
+
+def test_overdue_closures_flags_only_prior_day():
+    today = date(2026, 6, 9)
+    # 18:00 UTC on 6/8 == 13:00 site-local on 6/8 (prior day) -> overdue.
+    rows = [
+        {"att_id": 1, "employee_odoo_id": 10, "check_in": _iso(2026, 6, 8, 18, 0)},
+        # 15:00 UTC on 6/9 == 10:00 site-local on 6/9 (today) -> NOT overdue.
+        {"att_id": 2, "employee_odoo_id": 20, "check_in": _iso(2026, 6, 9, 15, 0)},
+    ]
+    out = mpo.overdue_closures(rows, today)
+    assert [c["att_id"] for c in out] == [1]
+    c = out[0]
+    assert c["employee_odoo_id"] == 10
+    # midnight ending the check-in day (6/8) == 6/9 00:00 site-local.
+    assert c["midnight"] == datetime(2026, 6, 9, 0, 0, tzinfo=SITE_TZ)
+    assert c["check_in"] == rows[0]["check_in"]
+
+
+def test_overdue_closures_uses_site_local_date():
+    # 04:00 UTC on 6/9 == 23:00 site-local on 6/8 (prior day) -> overdue,
+    # even though the UTC date is already 6/9.
+    today = date(2026, 6, 9)
+    rows = [{"att_id": 5, "employee_odoo_id": 30, "check_in": _iso(2026, 6, 9, 4, 0)}]
+    out = mpo.overdue_closures(rows, today)
+    assert len(out) == 1
+    assert out[0]["midnight"] == datetime(2026, 6, 9, 0, 0, tzinfo=SITE_TZ)
+
+
+def test_overdue_closures_skips_bad_or_missing_check_in():
+    today = date(2026, 6, 9)
+    rows = [
+        {"att_id": 7, "employee_odoo_id": 40, "check_in": None},
+        {"att_id": 8, "employee_odoo_id": 41, "check_in": "not-a-date"},
+    ]
+    assert mpo.overdue_closures(rows, today) == []
+
+
+def test_check_in_label_includes_date_in_site_local():
+    label = mpo._check_in_label(_iso(2026, 6, 8, 18, 0))  # 13:00 local, Monday
+    assert label == "1:00 PM Mon Jun 8"
