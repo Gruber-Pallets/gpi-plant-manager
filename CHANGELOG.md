@@ -2,6 +2,12 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+## 2026-06-08
+
+### 3:11 PM
+
+- **Fixed a site-wide outage — every page was returning *Internal Server Error* because `httpx` was missing in production.** Opening the site (which redirects unauthenticated users to `/auth/login`) built Authlib's Microsoft Entra OIDC client, and **Authlib imports `httpx` at runtime** — but `httpx` had been moved into the **dev-only** `[project.optional-dependencies]` on 6/03 (during the CI safety-net change, on the mistaken note that it was "test-only; the app uses requests at runtime"). The Docker image installs with `pip install .` — **runtime deps only, no extras** — so production shipped without `httpx`. Because Authlib imports it *lazily*, the app still booted, `/healthz` stayed green, the Docker build succeeded, and the full test suite passed (the test env installs `.[dev]`, which *does* include `httpx`) — so nothing flagged it until a real page load, which 500'd with `ModuleNotFoundError: No module named 'httpx'`. Root-caused from the Railway deploy logs; the live image had been built from `origin/main`, where `httpx` was still parked in dev extras. **Fix:** moved `httpx` back into runtime `[project.dependencies]` (commit `59e78a5`), redeployed, and verified the home page, `/auth/login`, and `/recycling` now redirect to Microsoft sign-in (200) instead of 500. **Guardrail:** added a `prod-deps-smoke` CI job that mirrors the Docker build — `pip install .` (runtime deps only) then imports the app **and** the Authlib OIDC path — so any future runtime dependency mislabeled as a dev extra fails CI instead of silently taking down the site (verified the guard reproduces the exact `ModuleNotFoundError` when `httpx` is absent).
+
 ## 2026-06-04
 
 ### 10:42 AM
