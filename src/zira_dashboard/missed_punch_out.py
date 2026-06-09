@@ -136,3 +136,24 @@ def correct(attendance_id, corrected_ts) -> None:
         "WHERE attendance_id = %s",
         (corrected_ts, int(attendance_id)),
     )
+
+
+def run_close(today) -> int:
+    """One sweep: close every open attendance whose check-in was on a prior
+    day at that day's midnight, and flag each. `today` is the site-local date.
+    Returns how many were closed. Owns the Odoo read + writes (off the hot
+    path; called by the warmer). One bad record never kills the sweep."""
+    from . import odoo_client
+    open_rows = odoo_client.fetch_open_attendances()
+    closures = overdue_closures(open_rows, today)
+    n = 0
+    for c in closures:
+        try:
+            odoo_client.clock_out(c["att_id"], c["midnight"])
+            record_close(c["att_id"], c["employee_odoo_id"],
+                         c["check_in"], c["midnight"])
+            n += 1
+        except Exception as e:  # noqa: BLE001 — one record never kills the sweep
+            _log.warning("missed-punch close failed for att %s: %s",
+                         c.get("att_id"), e)
+    return n

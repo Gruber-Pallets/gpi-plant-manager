@@ -2,7 +2,7 @@
 
 from datetime import date, datetime, timezone
 
-from zira_dashboard import missed_punch_out as mpo
+from zira_dashboard import missed_punch_out as mpo, odoo_client
 from zira_dashboard.shift_config import SITE_TZ
 
 
@@ -50,3 +50,57 @@ def test_overdue_closures_skips_bad_or_missing_check_in():
 def test_check_in_label_includes_date_in_site_local():
     label = mpo._check_in_label(_iso(2026, 6, 8, 18, 0))  # 13:00 local, Monday
     assert label == "1:00 PM Mon Jun 8"
+
+
+def test_run_close_closes_only_prior_day_and_records(monkeypatch):
+    today = date(2026, 6, 9)
+    monkeypatch.setattr(odoo_client, "fetch_open_attendances", lambda: [
+        {"att_id": 1, "employee_odoo_id": 10, "check_in": _iso(2026, 6, 8, 18, 0)},
+        {"att_id": 2, "employee_odoo_id": 20, "check_in": _iso(2026, 6, 9, 15, 0)},
+    ])
+    closed, recorded = [], []
+    monkeypatch.setattr(odoo_client, "clock_out",
+                        lambda att, ts: closed.append((att, ts)))
+    monkeypatch.setattr(mpo, "record_close",
+                        lambda att, emp, ci, mid: recorded.append((att, emp, mid)))
+
+    n = mpo.run_close(today)
+
+    assert n == 1
+    assert closed == [(1, datetime(2026, 6, 9, 0, 0, tzinfo=SITE_TZ))]
+    assert recorded == [(1, 10, datetime(2026, 6, 9, 0, 0, tzinfo=SITE_TZ))]
+
+
+def test_run_close_noop_when_all_today(monkeypatch):
+    today = date(2026, 6, 9)
+    monkeypatch.setattr(odoo_client, "fetch_open_attendances", lambda: [
+        {"att_id": 2, "employee_odoo_id": 20, "check_in": _iso(2026, 6, 9, 15, 0)},
+    ])
+    monkeypatch.setattr(odoo_client, "clock_out",
+                        lambda att, ts: (_ for _ in ()).throw(AssertionError("should not close")))
+    monkeypatch.setattr(mpo, "record_close", lambda *a: None)
+    assert mpo.run_close(today) == 0
+
+
+def test_run_close_isolates_per_record_failure(monkeypatch):
+    # Two overdue records; closing the first raises. The sweep must not abort:
+    # the second still closes, the failed one is neither flagged nor counted.
+    today = date(2026, 6, 9)
+    monkeypatch.setattr(odoo_client, "fetch_open_attendances", lambda: [
+        {"att_id": 1, "employee_odoo_id": 10, "check_in": _iso(2026, 6, 7, 18, 0)},
+        {"att_id": 2, "employee_odoo_id": 20, "check_in": _iso(2026, 6, 8, 18, 0)},
+    ])
+
+    def _clock_out(att, ts):
+        if att == 1:
+            raise RuntimeError("odoo boom")
+
+    flagged = []
+    monkeypatch.setattr(odoo_client, "clock_out", _clock_out)
+    monkeypatch.setattr(mpo, "record_close",
+                        lambda att, emp, ci, mid: flagged.append(att))
+
+    n = mpo.run_close(today)
+
+    assert n == 1          # only the record that closed cleanly is counted
+    assert flagged == [2]  # the failed record was never flagged; the sweep continued
