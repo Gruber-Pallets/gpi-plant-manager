@@ -66,3 +66,73 @@ def _check_in_label(value) -> str:
     local = dt.astimezone(SITE_TZ)
     fmt = "%#I:%M %p %a %b %#d" if os.name == "nt" else "%-I:%M %p %a %b %-d"
     return local.strftime(fmt)
+
+
+def _name_for(employee_odoo_id) -> str:
+    """Person's name from `people`, or '#<odoo_id>' when not mapped."""
+    from . import db
+    rows = db.query(
+        "SELECT name FROM people WHERE odoo_id = %s", (int(employee_odoo_id),))
+    if rows and rows[0].get("name"):
+        return rows[0]["name"]
+    return f"#{employee_odoo_id}"
+
+
+def record_close(attendance_id, employee_odoo_id, check_in, auto_closed_at) -> None:
+    """Flag an attendance auto-closed at midnight. Idempotent (PK conflict ->
+    no-op), so re-running the warmer never duplicates a row. `check_in` may be
+    an ISO string or datetime; `auto_closed_at` is the midnight datetime."""
+    from . import db
+    db.execute(
+        "INSERT INTO missed_punch_out "
+        "(attendance_id, employee_odoo_id, name, check_in, auto_closed_at) "
+        "VALUES (%s, %s, %s, %s, %s) "
+        "ON CONFLICT (attendance_id) DO NOTHING",
+        (int(attendance_id), int(employee_odoo_id),
+         _name_for(employee_odoo_id), check_in, auto_closed_at),
+    )
+
+
+def _shape_row(r: dict) -> dict:
+    ci = r.get("check_in")
+    check_in_date = None
+    if hasattr(ci, "astimezone"):
+        check_in_date = ci.astimezone(SITE_TZ).date().isoformat()
+    return {
+        "attendance_id": r.get("attendance_id"),
+        "employee_odoo_id": r.get("employee_odoo_id"),
+        "name": r.get("name") or f"#{r.get('employee_odoo_id')}",
+        "check_in_label": _check_in_label(ci),
+        "check_in_date": check_in_date,
+    }
+
+
+def current_rows() -> list[dict]:
+    """Badge/modal payload: unresolved flags, newest first. All local reads."""
+    from . import db
+    rows = db.query(
+        "SELECT attendance_id, employee_odoo_id, name, check_in, auto_closed_at "
+        "FROM missed_punch_out WHERE resolved_at IS NULL "
+        "ORDER BY check_in DESC")
+    return [_shape_row(r) for r in rows]
+
+
+def get_unresolved(attendance_id) -> dict | None:
+    """The unresolved flag row (carries check_in + auto_closed_at for the route's
+    bounds check), or None if unknown or already resolved."""
+    from . import db
+    rows = db.query(
+        "SELECT attendance_id, employee_odoo_id, name, check_in, auto_closed_at "
+        "FROM missed_punch_out WHERE attendance_id = %s AND resolved_at IS NULL",
+        (int(attendance_id),))
+    return rows[0] if rows else None
+
+
+def correct(attendance_id, corrected_ts) -> None:
+    """Mark a flag resolved with the manager-entered punch-out time."""
+    from . import db
+    db.execute(
+        "UPDATE missed_punch_out SET corrected_at = %s, resolved_at = now() "
+        "WHERE attendance_id = %s",
+        (corrected_ts, int(attendance_id)),
+    )
