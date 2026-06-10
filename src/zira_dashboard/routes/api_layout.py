@@ -11,6 +11,8 @@ Routes:
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -32,7 +34,7 @@ async def save_layout(page: str, request: Request):
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
     if not isinstance(data, list):
         return JSONResponse({"ok": False, "error": "expected list"}, status_code=400)
-    layout_store.save(page, data)
+    await asyncio.to_thread(layout_store.save, page, data)
     return JSONResponse({"ok": True, "count": len(data)})
 
 
@@ -49,13 +51,17 @@ async def save_widget(page: str, widget_id: str, request: Request):
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
     if not isinstance(data, dict):
         return JSONResponse({"ok": False, "error": "expected object"}, status_code=400)
-    saved = widget_customizer.save_one(page, widget_id, data)
-    # Customs apply to every rendered page regardless of date range, so we
-    # drop BOTH cache buckets — otherwise the JS reload after saving a title
-    # serves the still-cached old HTML until the TTL (15s today / 5min past)
-    # expires, and the edit looks like it didn't take.
-    _http_cache.invalidate_all_cache()
-    return JSONResponse({"ok": True, "config": saved})
+
+    def _work():
+        saved = widget_customizer.save_one(page, widget_id, data)
+        # Customs apply to every rendered page regardless of date range, so we
+        # drop ALL cache buckets — otherwise the JS reload after saving a title
+        # serves the still-cached old HTML until the TTL (15s today / 5min past)
+        # expires, and the edit looks like it didn't take.
+        _http_cache.invalidate_all_cache()
+        return JSONResponse({"ok": True, "config": saved})
+
+    return await asyncio.to_thread(_work)
 
 
 @router.delete("/api/widget/{page}/{widget_id}")

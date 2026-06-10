@@ -15,6 +15,13 @@ from hashlib import sha256
 from typing import Optional
 
 from . import auth, db
+from ._cache import TTLCache
+
+# Token-row cache for the TV polling hot path: every /tv/* request calls
+# lookup_active, so cache hits skip the DB entirely between refreshes.
+# Trade-off: revoking a token can take up to ~60s to take effect on a TV
+# (acceptable — revocation is a rare admin action).
+_lookup_cache = TTLCache(ttl_seconds=60)
 
 
 def _random_token() -> str:
@@ -69,10 +76,14 @@ def mint(name: str, created_by: str) -> tuple[int, str]:
 def lookup_active(signed: str | None) -> Optional[dict]:
     """Validate signature, then look up an un-revoked DB row. Returns
     the row dict or None. Bumps `last_used_at` as a side effect when a
-    valid match is found."""
+    valid match is found. Rows are cached in-process for 60s, so a
+    revocation can take up to ~60s to take effect on a polling TV."""
     raw = _verify_signature(signed)
     if raw is None:
         return None
+    cached = _lookup_cache.peek(raw)
+    if cached is not None:
+        return cached
     rows = db.query(
         "SELECT id, name, token, created_at, last_used_at, revoked_at "
         "FROM device_tokens WHERE token = %s AND revoked_at IS NULL",
@@ -82,15 +93,20 @@ def lookup_active(signed: str | None) -> Optional[dict]:
         return None
     row = rows[0]
     # Bump last_used_at — best effort; ignore failures so a flaky DB
-    # write doesn't break TV display rendering.
+    # write doesn't break TV display rendering. Only when NULL or older
+    # than 5 minutes — last_used_at is a coarse "is this TV alive" signal,
+    # not worth an UPDATE per request.
     try:
         with db.cursor() as cur:
             cur.execute(
-                "UPDATE device_tokens SET last_used_at = now() WHERE id = %s",
+                "UPDATE device_tokens SET last_used_at = now() "
+                "WHERE id = %s AND (last_used_at IS NULL "
+                "OR last_used_at < now() - interval '5 minutes')",
                 (row["id"],),
             )
     except Exception:
         pass
+    _lookup_cache.set(raw, row)
     return row
 
 

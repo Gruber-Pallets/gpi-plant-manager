@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections import defaultdict
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Query, Request
@@ -171,6 +173,11 @@ def staffing_leaderboards(
     person_certs = cert_lookup.load_person_certs()
 
     records = production_history.daily_records(start_d, end_d)
+    # Bucket once by WC so the per-WC and per-group sections below reuse the
+    # buckets instead of rescanning the full record list per section.
+    records_by_wc: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        records_by_wc[r["wc"]].append(r)
 
     snap = lstore.snapshot()
     wc_settings_dict = snap.get("wc", {})
@@ -181,13 +188,24 @@ def staffing_leaderboards(
     # Per-WC top-5 (best days) + per-WC averages computation.
     from .. import shift_config
 
+    # Memoize productive minutes per day for this request — averages_for_wc /
+    # averages_for_group otherwise recompute it once per record per section.
+    _pm_by_day: dict[date, float] = {}
+
+    def _productive_minutes_cached(day):
+        v = _pm_by_day.get(day)
+        if v is None:
+            v = shift_config.productive_minutes_for(day)
+            _pm_by_day[day] = v
+        return v
+
     sections = []
     avg_sections = []
     for loc in staffing.LOCATIONS:
         station = Station(meter_id=loc.meter_id, name=loc.name, category=loc.skill, cell=loc.bay)
         target_per_day = settings_store.station_target_per_day(station)
         target_per_hour = settings_store.station_target(station)
-        wc_records = [r for r in records if r["wc"] == loc.name]
+        wc_records = records_by_wc.get(loc.name, [])
 
         # --- Best Days (existing top-5) ---
         def metric_value(r):
@@ -197,7 +215,9 @@ def staffing_leaderboards(
                 return 0.0
             return r["units"] / target_per_day
 
-        wc_records.sort(key=lambda r: (-metric_value(r), r["day"]))
+        # sorted() copy — the shared bucket must stay unmutated for the
+        # group sections below.
+        wc_records = sorted(wc_records, key=lambda r: (-metric_value(r), r["day"]))
         top = wc_records[:5]
 
         name_counts: dict[str, int] = {}
@@ -238,7 +258,7 @@ def staffing_leaderboards(
         wc_avg_settings = wc_avg_settings_dict.get(loc.name, {"sort_order": 0, "is_inactive": False})
         avg_auto_inactive = not wc_records
         avg_rows = averages_for_wc(
-            wc_records, target_per_hour, shift_config.productive_minutes_for, metric,
+            wc_records, target_per_hour, _productive_minutes_cached, metric,
         )
         avg_sections.append({
             "loc_name": loc.name,
@@ -265,7 +285,9 @@ def staffing_leaderboards(
         member_names = {loc.name for loc in member_locs}
         if not member_names:
             continue
-        g_records = [r for r in records if r["wc"] in member_names]
+        g_records = [
+            r for loc in member_locs for r in records_by_wc.get(loc.name, [])
+        ]
         target_by_wc = {
             loc.name: settings_store.station_target_per_day(
                 Station(meter_id=loc.meter_id, name=loc.name, category=loc.skill, cell=loc.bay)
@@ -322,7 +344,7 @@ def staffing_leaderboards(
         g_avg_set = group_avg_settings_dict.get(group_name, {"sort_order": 0, "is_inactive": False})
         avg_auto_inactive = not g_records
         avg_rows = averages_for_group(
-            g_records, target_per_hour_by_wc, shift_config.productive_minutes_for, metric,
+            g_records, target_per_hour_by_wc, _productive_minutes_cached, metric,
         )
         avg_group_sections.append({
             "loc_name": group_name,
@@ -386,10 +408,14 @@ async def leaderboards_set_order(request: Request, kind: str = Query(default="wc
     order = body.get("order") or []
     if not isinstance(order, list):
         return JSONResponse({"ok": False, "error": "order must be a list"}, status_code=400)
-    lstore.set_order(kind, [str(x) for x in order if isinstance(x, str)])
-    from .. import _http_cache
-    _http_cache.invalidate_all_cache()
-    return JSONResponse({"ok": True})
+
+    def _work():
+        lstore.set_order(kind, [str(x) for x in order if isinstance(x, str)])
+        from .. import _http_cache
+        _http_cache.invalidate_all_cache()
+        return JSONResponse({"ok": True})
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/staffing/leaderboards/wc/{name}/inactive")

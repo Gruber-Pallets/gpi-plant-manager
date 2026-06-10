@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request
@@ -14,6 +16,11 @@ from ..deps import templates
 from ..staffing_attendance import _late_emp_ids, _safe_attendance, _safe_time_off_entries
 
 router = APIRouter()
+
+# Persistent fan-out pool for the staffing page render. Module-level so a
+# cache-missed request reuses warm threads instead of paying thread spin-up
+# for a fresh ThreadPoolExecutor on every render.
+_PAGE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="staffing-page")
 
 
 class _Phase:
@@ -61,7 +68,6 @@ def staffing_page(
     publish_blocked: int = Query(default=0),
     view: str = Query(default="draft"),
 ):
-    from concurrent.futures import ThreadPoolExecutor
     from .. import cert_lookup
     phases: dict[str, float] = {}
     _total_t0 = time.perf_counter()
@@ -107,49 +113,49 @@ def staffing_page(
         except Exception:
             return []
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        with _Phase(phases, "db"):
-            f_certs = pool.submit(cert_lookup.load_person_certs)
-            f_roster = pool.submit(staffing.load_roster)
-            f_sched = pool.submit(staffing.load_schedule, d)
-            f_time_off_entries = pool.submit(_safe_time_off_entries, d)
-            # Independent of schedule/roster — fire immediately.
-            f_assignments_todo = pool.submit(_safe_assignments_todo)
-            f_assignments_done = pool.submit(_safe_assignments_done)
-            person_certs = f_certs.result()
-            roster = f_roster.result()
-            sched = f_sched.result()
-        # If this day has both a current draft and a posted snapshot, the user may want
-        # to view the posted version. Swap the visible fields in from the snapshot.
-        has_snapshot = bool(sched.published_snapshot) and not sched.published
-        view_mode = view if view in ("draft", "posted") else "draft"
-        viewing_posted = has_snapshot and view_mode == "posted"
-        if viewing_posted:
-            snap = sched.published_snapshot or {}
-            sched.assignments = {k: list(v) for k, v in (snap.get("assignments") or {}).items()}
-            sched.notes = str(snap.get("notes") or "")
-            sched.wc_notes = dict(snap.get("wc_notes") or {})
-            sched.testing_day = bool(snap.get("testing_day", False))
-        # If the day has no saved assignments, pre-fill from per-work-center defaults.
-        if not sched.assignments:
-            seeded: dict[str, list[str]] = {}
-            for loc in staffing.LOCATIONS:
-                dp = work_centers_store.default_people(loc)
-                if dp:
-                    seeded[loc.name] = list(dp)
-            if not seeded:  # fallback for first-run: legacy CSV defaults
-                seeded = staffing.default_assignments()
-            sched.assignments = seeded
+    pool = _PAGE_POOL
+    with _Phase(phases, "db"):
+        f_certs = pool.submit(cert_lookup.load_person_certs)
+        f_roster = pool.submit(staffing.load_roster)
+        f_sched = pool.submit(staffing.load_schedule, d)
+        f_time_off_entries = pool.submit(_safe_time_off_entries, d)
+        # Independent of schedule/roster — fire immediately.
+        f_assignments_todo = pool.submit(_safe_assignments_todo)
+        f_assignments_done = pool.submit(_safe_assignments_done)
+        person_certs = f_certs.result()
+        roster = f_roster.result()
+        sched = f_sched.result()
+    # If this day has both a current draft and a posted snapshot, the user may want
+    # to view the posted version. Swap the visible fields in from the snapshot.
+    has_snapshot = bool(sched.published_snapshot) and not sched.published
+    view_mode = view if view in ("draft", "posted") else "draft"
+    viewing_posted = has_snapshot and view_mode == "posted"
+    if viewing_posted:
+        snap = sched.published_snapshot or {}
+        sched.assignments = {k: list(v) for k, v in (snap.get("assignments") or {}).items()}
+        sched.notes = str(snap.get("notes") or "")
+        sched.wc_notes = dict(snap.get("wc_notes") or {})
+        sched.testing_day = bool(snap.get("testing_day", False))
+    # If the day has no saved assignments, pre-fill from per-work-center defaults.
+    if not sched.assignments:
+        seeded: dict[str, list[str]] = {}
+        for loc in staffing.LOCATIONS:
+            dp = work_centers_store.default_people(loc)
+            if dp:
+                seeded[loc.name] = list(dp)
+        if not seeded:  # fallback for first-run: legacy CSV defaults
+            seeded = staffing.default_assignments()
+        sched.assignments = seeded
 
-        # Now that the schedule is in hand, kick off attendance in parallel
-        # with our render-prep work below.
-        f_attendance = pool.submit(_safe_attendance, d, sched, today)
+    # Now that the schedule is in hand, kick off attendance in parallel
+    # with our render-prep work below.
+    f_attendance = pool.submit(_safe_attendance, d, sched, today)
 
-        # Collect Odoo time-off (already fetched in parallel above).
-        with _Phase(phases, "attendance"):
-            time_off_entries = f_time_off_entries.result()
-            attendance_pkg = f_attendance.result()
-            attendance_by_name = attendance_pkg.get("by_name") or {}
+    # Collect Odoo time-off (already fetched in parallel above).
+    with _Phase(phases, "attendance"):
+        time_off_entries = f_time_off_entries.result()
+        attendance_pkg = f_attendance.result()
+        attendance_by_name = attendance_pkg.get("by_name") or {}
 
     # Resolve the late-emp-id set to roster names for the template highlight.
     late_emp_ids = _late_emp_ids(d, today, attendance_pkg)
@@ -307,6 +313,13 @@ async def staffing_save(
     except ValueError:
         return RedirectResponse("/staffing", status_code=303)
     form = await request.form()
+    # All remaining work is blocking (Postgres reads/writes) — run it in a
+    # worker thread so the autosave never stalls the event loop (and the TV
+    # dashboard polls sharing it).
+    return await asyncio.to_thread(_staffing_save_work, request, d, auto, form)
+
+
+def _staffing_save_work(request: Request, d: date, auto: int, form):
     assignments: dict[str, list[str]] = {}
     for loc in staffing.LOCATIONS:
         picked = form.getlist(f"loc__{loc.name}")
@@ -463,41 +476,45 @@ async def staffing_hours_save(request: Request):
       break_start, break_end, break_name: parallel lists, one entry per break
     """
     form = await request.form()
-    day_raw = (form.get("day") or "").strip()
-    try:
-        d = date.fromisoformat(day_raw)
-    except ValueError:
-        return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
 
-    sched = staffing.load_schedule(d)
+    def _work():
+        day_raw = (form.get("day") or "").strip()
+        try:
+            d = date.fromisoformat(day_raw)
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
 
-    if form.get("reset") == "1":
-        sched.custom_hours = None
+        sched = staffing.load_schedule(d)
+
+        if form.get("reset") == "1":
+            sched.custom_hours = None
+            staffing.save_schedule(sched)
+            _http_cache.invalidate_today_cache()
+            return JSONResponse({"ok": True, "reset": True})
+
+        start_s = (form.get("start") or "").strip()
+        end_s = (form.get("end") or "").strip()
+        if not start_s or not end_s or start_s >= end_s:
+            return JSONResponse({"ok": False, "error": "shift start must be before end"}, status_code=400)
+
+        starts = form.getlist("break_start")
+        ends   = form.getlist("break_end")
+        names  = form.getlist("break_name")
+        breaks_out: list[dict] = []
+        for bs, be, bn in zip(starts, ends, names):
+            bs, be = bs.strip(), be.strip()
+            if not bs or not be or bs >= be:
+                return JSONResponse({"ok": False, "error": f"bad break: {bs}-{be}"}, status_code=400)
+            if bs < start_s or be > end_s:
+                return JSONResponse({"ok": False, "error": f"break {bs}-{be} outside shift"}, status_code=400)
+            breaks_out.append({"start": bs, "end": be, "name": (bn or "Break").strip()[:40]})
+
+        sched.custom_hours = {"start": start_s, "end": end_s, "breaks": breaks_out}
         staffing.save_schedule(sched)
         _http_cache.invalidate_today_cache()
-        return JSONResponse({"ok": True, "reset": True})
+        return JSONResponse({"ok": True})
 
-    start_s = (form.get("start") or "").strip()
-    end_s = (form.get("end") or "").strip()
-    if not start_s or not end_s or start_s >= end_s:
-        return JSONResponse({"ok": False, "error": "shift start must be before end"}, status_code=400)
-
-    starts = form.getlist("break_start")
-    ends   = form.getlist("break_end")
-    names  = form.getlist("break_name")
-    breaks_out: list[dict] = []
-    for bs, be, bn in zip(starts, ends, names):
-        bs, be = bs.strip(), be.strip()
-        if not bs or not be or bs >= be:
-            return JSONResponse({"ok": False, "error": f"bad break: {bs}-{be}"}, status_code=400)
-        if bs < start_s or be > end_s:
-            return JSONResponse({"ok": False, "error": f"break {bs}-{be} outside shift"}, status_code=400)
-        breaks_out.append({"start": bs, "end": be, "name": (bn or "Break").strip()[:40]})
-
-    sched.custom_hours = {"start": start_s, "end": end_s, "breaks": breaks_out}
-    staffing.save_schedule(sched)
-    _http_cache.invalidate_today_cache()
-    return JSONResponse({"ok": True})
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/api/staffing/attribute")
@@ -527,17 +544,22 @@ async def staffing_attribute(request: Request):
         return JSONResponse({"ok": False, "error": "missing/invalid fields"}, status_code=400)
     if end_utc is not None and end_utc <= start_utc:
         return JSONResponse({"ok": False, "error": "end must be after start"}, status_code=400)
-    new_id = wc_attributions.add(day, wc, person, start_utc, end_utc)
-    # Department transfer side-effect: if the person physically moved to this
-    # WC's department, reflect it in Odoo. Never let an Odoo hiccup fail the
-    # attribution write — the credit is the source of truth.
-    from .. import staffing_transfer
-    try:
-        transfer = staffing_transfer.decide_and_apply(person, wc, start_utc)
-    except Exception as e:  # noqa: BLE001
-        transfer = {"transfer": "error", "error": str(e)}
-    invalidate_today_cache()
-    return JSONResponse({"ok": True, "id": new_id, "transfer": transfer})
+
+    def _work():
+        new_id = wc_attributions.add(day, wc, person, start_utc, end_utc)
+        # Department transfer side-effect: if the person physically moved to this
+        # WC's department, reflect it in Odoo. Never let an Odoo hiccup fail the
+        # attribution write — the credit is the source of truth.
+        from .. import staffing_transfer
+        try:
+            transfer = staffing_transfer.decide_and_apply(person, wc, start_utc)
+        except Exception as e:  # noqa: BLE001
+            transfer = {"transfer": "error", "error": str(e)}
+        invalidate_today_cache()
+        _bust_assignments_todo_cache()
+        return JSONResponse({"ok": True, "id": new_id, "transfer": transfer})
+
+    return await asyncio.to_thread(_work)
 
 
 @router.delete("/api/staffing/attribute/{attribution_id}")
@@ -549,6 +571,7 @@ def staffing_attribute_delete(attribution_id: int):
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     invalidate_today_cache()
+    _bust_assignments_todo_cache()
     return JSONResponse({"ok": True})
 
 
@@ -575,27 +598,31 @@ async def staffing_attribute_with_testing(request: Request):
     if not wc or t_end <= t_start:
         return JSONResponse({"ok": False, "error": "missing/invalid fields"}, status_code=400)
 
-    ids: list[int] = []
-    ids.append(wc_attributions.add(
-        day, wc, wc_attributions.TESTING_PERSON, t_start, t_end,
-        source=wc_attributions.TESTING_SOURCE))
+    def _work():
+        ids: list[int] = []
+        ids.append(wc_attributions.add(
+            day, wc, wc_attributions.TESTING_PERSON, t_start, t_end,
+            source=wc_attributions.TESTING_SOURCE))
 
-    transfer = {"transfer": "none"}
-    remainder = str(body.get("remainder_person") or "").strip()
-    if remainder:
-        try:
-            rem_end = _dt.fromisoformat(body["sensed_end_utc"])
-        except (KeyError, TypeError, ValueError):
-            rem_end = t_end
-        if rem_end > t_end:
-            ids.append(wc_attributions.add(day, wc, remainder, t_end, rem_end))
+        transfer = {"transfer": "none"}
+        remainder = str(body.get("remainder_person") or "").strip()
+        if remainder:
             try:
-                transfer = staffing_transfer.decide_and_apply(remainder, wc, t_end)
-            except Exception as e:  # noqa: BLE001
-                transfer = {"transfer": "error", "error": str(e)}
+                rem_end = _dt.fromisoformat(body["sensed_end_utc"])
+            except (KeyError, TypeError, ValueError):
+                rem_end = t_end
+            if rem_end > t_end:
+                ids.append(wc_attributions.add(day, wc, remainder, t_end, rem_end))
+                try:
+                    transfer = staffing_transfer.decide_and_apply(remainder, wc, t_end)
+                except Exception as e:  # noqa: BLE001
+                    transfer = {"transfer": "error", "error": str(e)}
 
-    invalidate_today_cache()
-    return JSONResponse({"ok": True, "ids": ids, "transfer": transfer})
+        invalidate_today_cache()
+        _bust_assignments_todo_cache()
+        return JSONResponse({"ok": True, "ids": ids, "transfer": transfer})
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/api/staffing/transfer/undo")
@@ -610,12 +637,19 @@ async def staffing_transfer_undo(request: Request):
         closed_id = int(raw_closed) if raw_closed else None
     except (KeyError, TypeError, ValueError) as e:
         return JSONResponse({"ok": False, "error": f"bad body: {e}"}, status_code=400)
-    try:
-        odoo_client.undo_transfer(closed_id, new_id)
-    except Exception as e:  # noqa: BLE001
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    invalidate_today_cache()
-    return JSONResponse({"ok": True})
+
+    def _work():
+        try:
+            odoo_client.undo_transfer(closed_id, new_id)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        invalidate_today_cache()
+        return JSONResponse({"ok": True})
+
+    return await asyncio.to_thread(_work)
+
+
+_ASSIGNMENTS_TODO_CACHE: dict = {"value": None, "expires_at": 0.0}
 
 
 @router.get("/api/assignments-todo")
@@ -624,9 +658,19 @@ def assignments_todo_json():
 
     Always for today. Returns count, items (pending), saved (already
     attributed today), and the active-people roster.
+
+    Cached in-process for 30 s (same pattern as the late-report cache
+    below). Polled by every page load's footer and every /tv/new reload;
+    each cold call pays schedule + attribution + roster + Zira-cache work.
+    Attribution writes bust it via _bust_assignments_todo_cache.
     """
     from .. import staffing as _staffing, wc_attributions
     from ..deps import client as _client
+    now_ts = time.time()
+    cached = _ASSIGNMENTS_TODO_CACHE.get("value")
+    if cached is not None and now_ts < _ASSIGNMENTS_TODO_CACHE.get("expires_at", 0):
+        return JSONResponse(cached)
+
     today = datetime.now(timezone.utc).date()
     out: dict = {"count": 0, "today": today.isoformat(), "items": [], "saved": [], "people": []}
     try:
@@ -659,7 +703,14 @@ def assignments_todo_json():
         out["count"] = len(out["items"])
     except Exception:
         pass
+    _ASSIGNMENTS_TODO_CACHE["value"] = out
+    _ASSIGNMENTS_TODO_CACHE["expires_at"] = now_ts + 30.0
     return JSONResponse(out)
+
+
+def _bust_assignments_todo_cache() -> None:
+    _ASSIGNMENTS_TODO_CACHE["value"] = None
+    _ASSIGNMENTS_TODO_CACHE["expires_at"] = 0.0
 
 
 _LATE_REPORT_CACHE: dict = {"value": None, "expires_at": 0.0}
@@ -792,8 +843,10 @@ def _bust_after_mutation() -> None:
 
     Called from POST endpoints that mutate Postgres state (clear-partial,
     declare-absent, snooze, attribute, etc.). Drops the late-report
-    response cache and the today bucket of the response cache."""
+    response cache, the assignments-todo cache, and the today bucket of
+    the response cache."""
     _bust_late_report_cache()
+    _bust_assignments_todo_cache()
     _http_cache.invalidate_today_cache()
 
 
@@ -827,17 +880,21 @@ async def staffing_clear_partial(request: Request):
             {"ok": False, "error": "name (preferred), request_id, or emp_id required"},
             status_code=400,
         )
-    try:
-        if name:
-            late_report.clear_partial_by_name(day, name)
-        elif request_id:
-            late_report.clear_time_off_request(day, int(request_id))
-        else:
-            late_report.clear_non_work_shift(day, str(emp_id))
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    _bust_after_mutation()
-    return JSONResponse({"ok": True})
+
+    def _work():
+        try:
+            if name:
+                late_report.clear_partial_by_name(day, name)
+            elif request_id:
+                late_report.clear_time_off_request(day, int(request_id))
+            else:
+                late_report.clear_non_work_shift(day, str(emp_id))
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        _bust_after_mutation()
+        return JSONResponse({"ok": True})
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/api/staffing/clear-testing-day")
@@ -859,21 +916,24 @@ async def staffing_clear_testing_day(request: Request):
         d = _date.fromisoformat(body["day"])
     except (KeyError, TypeError, ValueError) as e:
         return JSONResponse({"ok": False, "error": f"bad day: {e}"}, status_code=400)
-    existing = staffing.load_schedule(d)
-    if not existing.testing_day:
-        return JSONResponse({"ok": True, "no_op": True})
-    staffing.save_schedule(staffing.Schedule(
-        day=d,
-        published=existing.published,
-        assignments={k: list(v) for k, v in existing.assignments.items()},
-        notes=existing.notes,
-        wc_notes=dict(existing.wc_notes),
-        testing_day=False,
-        published_snapshot=existing.published_snapshot,
-        custom_hours=existing.custom_hours,
-    ))
-    _bust_after_mutation()
-    return JSONResponse({"ok": True})
+    def _work():
+        existing = staffing.load_schedule(d)
+        if not existing.testing_day:
+            return JSONResponse({"ok": True, "no_op": True})
+        staffing.save_schedule(staffing.Schedule(
+            day=d,
+            published=existing.published,
+            assignments={k: list(v) for k, v in existing.assignments.items()},
+            notes=existing.notes,
+            wc_notes=dict(existing.wc_notes),
+            testing_day=False,
+            published_snapshot=existing.published_snapshot,
+            custom_hours=existing.custom_hours,
+        ))
+        _bust_after_mutation()
+        return JSONResponse({"ok": True})
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/api/staffing/restore-partial")
@@ -894,14 +954,18 @@ async def staffing_restore_partial(request: Request):
             {"ok": False, "error": "name, request_id, or emp_id required"},
             status_code=400,
         )
-    try:
-        if name:
-            late_report.restore_partial_by_name(day, name)
-        elif request_id:
-            late_report.restore_time_off_request(day, int(request_id))
-        else:
-            late_report.restore_non_work_shift(day, str(emp_id))
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    _bust_after_mutation()
-    return JSONResponse({"ok": True})
+
+    def _work():
+        try:
+            if name:
+                late_report.restore_partial_by_name(day, name)
+            elif request_id:
+                late_report.restore_time_off_request(day, int(request_id))
+            else:
+                late_report.restore_non_work_shift(day, str(emp_id))
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        _bust_after_mutation()
+        return JSONResponse({"ok": True})
+
+    return await asyncio.to_thread(_work)

@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -116,7 +118,8 @@ async def post_display(request: Request):
         wc_name = None
     if theme not in ("light", "dark"):
         return JSONResponse({"ok": False, "error": "theme must be light or dark"}, status_code=400)
-    saved = tv_displays_store.save(
+    saved = await asyncio.to_thread(
+        tv_displays_store.save,
         name=name.strip(), kind=kind, wc_name=wc_name, theme=theme,
         id=int(row_id) if row_id is not None else None,
     )
@@ -137,7 +140,7 @@ async def post_theme(display_id: int, request: Request):
     theme = (body or {}).get("theme")
     if theme not in ("light", "dark"):
         return JSONResponse({"ok": False, "error": "theme must be light or dark"}, status_code=400)
-    tv_displays_store.set_theme(display_id, theme)
+    await asyncio.to_thread(tv_displays_store.set_theme, display_id, theme)
     return JSONResponse({"ok": True})
 
 

@@ -278,6 +278,13 @@ def _pph_debug_impl(day: str | None):
     except Exception as e:
         absent_today = [f"<error: {e}>"]
 
+    # Partial-day off intervals fetched ONCE and passed into each
+    # effective_minutes_worked call (it used to re-query per person).
+    try:
+        partials = attendance.partial_off_intervals(d)
+    except Exception:
+        partials = None
+
     locations_dump: list[dict] = []
     total_man_minutes = 0
     total_recycling_people = 0
@@ -296,7 +303,8 @@ def _pph_debug_impl(day: str | None):
                     continue
                 try:
                     mins = staffing.effective_minutes_worked(
-                        person_name, d, window_start_utc, window_end_utc
+                        person_name, d, window_start_utc, window_end_utc,
+                        partials=partials,
                     )
                 except Exception as e:
                     mins = -1

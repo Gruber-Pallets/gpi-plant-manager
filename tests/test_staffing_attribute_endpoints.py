@@ -139,6 +139,51 @@ def test_attribute_with_testing_skips_zero_length_remainder(monkeypatch):
     assert resp.json()["transfer"] == {"transfer": "none"}
 
 
+def test_assignments_todo_json_caches_and_busts(monkeypatch):
+    """GET /api/assignments-todo serves from the 30s in-process cache on
+    repeat calls; _bust_assignments_todo_cache forces a recompute."""
+    from zira_dashboard import staffing as staffing_mod
+
+    calls = {"n": 0}
+
+    def fake_unattributed(day, zira_client):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(wc_attributions, "unattributed_for_day", fake_unattributed)
+    monkeypatch.setattr(wc_attributions, "for_day", lambda day: [])
+    monkeypatch.setattr(staffing_mod, "load_roster", lambda: [])
+
+    staffing_routes._bust_assignments_todo_cache()  # isolate from other tests
+    r1 = client.get("/api/assignments-todo")
+    assert r1.status_code == 200 and calls["n"] == 1
+    r2 = client.get("/api/assignments-todo")
+    assert r2.status_code == 200 and calls["n"] == 1  # cache hit
+    assert r2.json() == r1.json()
+    staffing_routes._bust_assignments_todo_cache()
+    r3 = client.get("/api/assignments-todo")
+    assert r3.status_code == 200 and calls["n"] == 2  # bust -> recompute
+    staffing_routes._bust_assignments_todo_cache()  # leave clean for other tests
+
+
+def test_attribute_busts_assignments_todo_cache(monkeypatch):
+    """Saving an attribution must drop the assignments-todo cache so the
+    modal/badge reflects the write immediately, not after 30s."""
+    monkeypatch.setattr(wc_attributions, "add", lambda *a, **k: 5)
+    monkeypatch.setattr(staffing_transfer, "decide_and_apply",
+                        lambda person, wc, ts: {"transfer": "none"})
+    monkeypatch.setattr(staffing_routes, "invalidate_today_cache", lambda: None, raising=False)
+
+    staffing_routes._ASSIGNMENTS_TODO_CACHE["value"] = {"count": 0}
+    staffing_routes._ASSIGNMENTS_TODO_CACHE["expires_at"] = 9e18
+    resp = client.post("/api/staffing/attribute", json={
+        "day": "2026-06-02", "wc_name": "Junior #2", "person_name": "Lauro",
+        "start_utc": "2026-06-02T13:00:00+00:00", "end_utc": "2026-06-02T16:00:00+00:00",
+    })
+    assert resp.status_code == 200
+    assert staffing_routes._ASSIGNMENTS_TODO_CACHE["value"] is None
+
+
 def test_attribute_transfer_error_does_not_fail_credit(monkeypatch):
     monkeypatch.setattr(wc_attributions, "add", lambda *a, **k: 77)
     def boom(person, wc, ts):

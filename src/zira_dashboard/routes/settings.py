@@ -9,6 +9,7 @@ Routes:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import time as _time
 
 from fastapi import APIRouter, Query, Request
@@ -28,6 +29,16 @@ def _odoo_configured() -> bool:
     import os
     return all(os.environ.get(k) for k in
                ("ODOO_URL", "ODOO_DB", "ODOO_LOGIN", "ODOO_API_KEY"))
+
+
+def _clamp(raw) -> int:
+    """Clamp a rounding-window form value to 0..60 minutes (bad input -> 0).
+    Shared by the rounding-system and work-schedule rounding save routes."""
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(60, v))
 
 
 def _parse_hhmm(raw: str | None) -> _time | None:
@@ -395,47 +406,51 @@ def settings_page(
 @router.post("/settings/schedule")
 async def settings_save_schedule(request: Request):
     form = await request.form()
-    current = schedule_store.current()
-    shift_s = _parse_hhmm(form.get("shift_start")) or current.shift_start
-    shift_e = _parse_hhmm(form.get("shift_end")) or current.shift_end
-    if shift_e <= shift_s:
-        shift_e = current.shift_end
-    weekday_set = set()
-    for i in range(7):
-        if form.get(f"weekday_{i}"):
-            weekday_set.add(i)
-    if not weekday_set:
-        weekday_set = set(current.work_weekdays)
-    # Collect breaks from indexed form fields (start_N, end_N, name_N).
-    breaks_new: list[schedule_store.Break] = []
-    idx = 0
-    while True:
-        bs = _parse_hhmm(form.get(f"break_start_{idx}"))
-        be = _parse_hhmm(form.get(f"break_end_{idx}"))
-        bn = (form.get(f"break_name_{idx}") or "").strip() or "Break"
-        if bs is None and be is None and not form.get(f"break_name_{idx}"):
-            # No form fields at this index → stop scanning.
-            if idx > 50:
-                break
+
+    def _work():
+        current = schedule_store.current()
+        shift_s = _parse_hhmm(form.get("shift_start")) or current.shift_start
+        shift_e = _parse_hhmm(form.get("shift_end")) or current.shift_end
+        if shift_e <= shift_s:
+            shift_e = current.shift_end
+        weekday_set = set()
+        for i in range(7):
+            if form.get(f"weekday_{i}"):
+                weekday_set.add(i)
+        if not weekday_set:
+            weekday_set = set(current.work_weekdays)
+        # Collect breaks from indexed form fields (start_N, end_N, name_N).
+        breaks_new: list[schedule_store.Break] = []
+        idx = 0
+        while True:
+            bs = _parse_hhmm(form.get(f"break_start_{idx}"))
+            be = _parse_hhmm(form.get(f"break_end_{idx}"))
+            bn = (form.get(f"break_name_{idx}") or "").strip() or "Break"
+            if bs is None and be is None and not form.get(f"break_name_{idx}"):
+                # No form fields at this index → stop scanning.
+                if idx > 50:
+                    break
+                idx += 1
+                if idx > 50:
+                    break
+                continue
+            if bs and be and be > bs:
+                breaks_new.append(schedule_store.Break(bs, be, bn[:40]))
             idx += 1
             if idx > 50:
                 break
-            continue
-        if bs and be and be > bs:
-            breaks_new.append(schedule_store.Break(bs, be, bn[:40]))
-        idx += 1
-        if idx > 50:
-            break
-    breaks_new.sort(key=lambda b: b.start)
-    schedule_store.save(schedule_store.Schedule(
-        shift_start=shift_s,
-        shift_end=shift_e,
-        work_weekdays=frozenset(weekday_set),
-        breaks=tuple(breaks_new),
-    ))
-    if (request.headers.get("accept") or "").startswith("application/json"):
-        return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+        breaks_new.sort(key=lambda b: b.start)
+        schedule_store.save(schedule_store.Schedule(
+            shift_start=shift_s,
+            shift_end=shift_e,
+            work_weekdays=frozenset(weekday_set),
+            breaks=tuple(breaks_new),
+        ))
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True})
+        return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/settings/saturday_schedule")
@@ -445,29 +460,33 @@ async def settings_save_saturday_schedule(request: Request):
     current value rather than rejecting the submission."""
     from .. import saturday_schedule_store
     form = await request.form()
-    current = saturday_schedule_store.current()
-    shift_s = _parse_hhmm(form.get("shift_start")) or current.shift_start
-    shift_e = _parse_hhmm(form.get("shift_end")) or current.shift_end
-    if shift_e <= shift_s:
-        shift_e = current.shift_end
-    breaks_new: list[schedule_store.Break] = []
-    idx = 0
-    while idx <= 50:
-        bs = _parse_hhmm(form.get(f"break_start_{idx}"))
-        be = _parse_hhmm(form.get(f"break_end_{idx}"))
-        bn = (form.get(f"break_name_{idx}") or "").strip() or "Break"
-        if bs and be and be > bs:
-            breaks_new.append(schedule_store.Break(bs, be, bn[:40]))
-        idx += 1
-    breaks_new.sort(key=lambda b: b.start)
-    saturday_schedule_store.save(saturday_schedule_store.SaturdaySchedule(
-        shift_start=shift_s,
-        shift_end=shift_e,
-        breaks=tuple(breaks_new),
-    ))
-    if (request.headers.get("accept") or "").startswith("application/json"):
-        return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+    def _work():
+        current = saturday_schedule_store.current()
+        shift_s = _parse_hhmm(form.get("shift_start")) or current.shift_start
+        shift_e = _parse_hhmm(form.get("shift_end")) or current.shift_end
+        if shift_e <= shift_s:
+            shift_e = current.shift_end
+        breaks_new: list[schedule_store.Break] = []
+        idx = 0
+        while idx <= 50:
+            bs = _parse_hhmm(form.get(f"break_start_{idx}"))
+            be = _parse_hhmm(form.get(f"break_end_{idx}"))
+            bn = (form.get(f"break_name_{idx}") or "").strip() or "Break"
+            if bs and be and be > bs:
+                breaks_new.append(schedule_store.Break(bs, be, bn[:40]))
+            idx += 1
+        breaks_new.sort(key=lambda b: b.start)
+        saturday_schedule_store.save(saturday_schedule_store.SaturdaySchedule(
+            shift_start=shift_s,
+            shift_end=shift_e,
+            breaks=tuple(breaks_new),
+        ))
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True})
+        return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/settings/rounding_system")
@@ -477,27 +496,23 @@ async def settings_save_rounding_system(request: Request):
     from .. import rounding_system_store
     from ..rounding import RoundingSettings
     form = await request.form()
-
-    def _clamp(raw) -> int:
-        try:
-            v = int(raw)
-        except (TypeError, ValueError):
-            return 0
-        return max(0, min(60, v))
-
     try:
         system_id = int(form.get("system_id"))
     except (TypeError, ValueError):
         return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
-    rounding_system_store.save_system_windows(system_id, RoundingSettings(
-        in_before_min=_clamp(form.get("in_before_min")),
-        in_after_min=_clamp(form.get("in_after_min")),
-        out_before_min=_clamp(form.get("out_before_min")),
-        out_after_min=_clamp(form.get("out_after_min")),
-    ))
-    if (request.headers.get("accept") or "").startswith("application/json"):
-        return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
+
+    def _work():
+        rounding_system_store.save_system_windows(system_id, RoundingSettings(
+            in_before_min=_clamp(form.get("in_before_min")),
+            in_after_min=_clamp(form.get("in_after_min")),
+            out_before_min=_clamp(form.get("out_before_min")),
+            out_after_min=_clamp(form.get("out_after_min")),
+        ))
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True})
+        return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/settings/rounding_system/add")
@@ -508,7 +523,7 @@ async def settings_add_rounding_system(request: Request):
     name = (form.get("name") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "bad name"}, status_code=400)
-    rounding_system_store.add_system(name)
+    await asyncio.to_thread(rounding_system_store.add_system, name)
     return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
 
 
@@ -521,7 +536,7 @@ async def settings_remove_rounding_system(request: Request):
         system_id = int(form.get("system_id"))
     except (TypeError, ValueError):
         return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
-    rounding_system_store.delete_system(system_id)
+    await asyncio.to_thread(rounding_system_store.delete_system, system_id)
     return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
 
 
@@ -542,7 +557,7 @@ async def settings_save_department_rounding(request: Request):
             system_id = int(raw)
         except (TypeError, ValueError):
             return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
-    rounding_system_store.set_department_system(department, system_id)
+    await asyncio.to_thread(rounding_system_store.set_department_system, department, system_id)
     if (request.headers.get("accept") or "").startswith("application/json"):
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
@@ -570,9 +585,6 @@ async def settings_save_auto_lunch(request: Request):
     value rather than rejecting the submission."""
     from .. import auto_lunch_settings
     form = await request.form()
-    current = auto_lunch_settings.current()
-    enabled, observe_only = _auto_lunch_mode_flags(
-        form.get("mode"), current.enabled, current.observe_only)
 
     def _num(raw, lo, hi, fallback, *, integer):
         try:
@@ -582,17 +594,23 @@ async def settings_save_auto_lunch(request: Request):
         v = max(lo, min(hi, v))
         return int(v) if integer else v
 
-    auto_lunch_settings.save(auto_lunch_settings.Settings(
-        enabled=enabled,
-        observe_only=observe_only,
-        flex_after_hours=_num(form.get("flex_after_hours"), 0.0, 24.0,
-                              current.flex_after_hours, integer=False),
-        flex_minutes=_num(form.get("flex_minutes"), 0, 120,
-                          current.flex_minutes, integer=True),
-    ))
-    if (request.headers.get("accept") or "").startswith("application/json"):
-        return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+    def _work():
+        current = auto_lunch_settings.current()
+        enabled, observe_only = _auto_lunch_mode_flags(
+            form.get("mode"), current.enabled, current.observe_only)
+        auto_lunch_settings.save(auto_lunch_settings.Settings(
+            enabled=enabled,
+            observe_only=observe_only,
+            flex_after_hours=_num(form.get("flex_after_hours"), 0.0, 24.0,
+                                  current.flex_after_hours, integer=False),
+            flex_minutes=_num(form.get("flex_minutes"), 0, 120,
+                              current.flex_minutes, integer=True),
+        ))
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True})
+        return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/settings/work_schedule_rounding")
@@ -603,27 +621,23 @@ async def settings_save_work_schedule_rounding(request: Request):
     from .. import work_schedule_store
     from ..rounding import RoundingSettings
     form = await request.form()
-
-    def _clamp(raw) -> int:
-        try:
-            v = int(raw)
-        except (TypeError, ValueError):
-            return 0
-        return max(0, min(60, v))
-
     try:
         cal_id = int(form.get("resource_calendar_id"))
     except (TypeError, ValueError):
         return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
-    work_schedule_store.save_rounding(cal_id, RoundingSettings(
-        in_before_min=_clamp(form.get("in_before_min")),
-        in_after_min=_clamp(form.get("in_after_min")),
-        out_before_min=_clamp(form.get("out_before_min")),
-        out_after_min=_clamp(form.get("out_after_min")),
-    ))
-    if (request.headers.get("accept") or "").startswith("application/json"):
-        return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+    def _work():
+        work_schedule_store.save_rounding(cal_id, RoundingSettings(
+            in_before_min=_clamp(form.get("in_before_min")),
+            in_after_min=_clamp(form.get("in_after_min")),
+            out_before_min=_clamp(form.get("out_before_min")),
+            out_after_min=_clamp(form.get("out_after_min")),
+        ))
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True})
+        return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/settings/work_schedule_rounding/add")
@@ -636,12 +650,16 @@ async def settings_add_work_schedule(request: Request):
         cal_id = int(form.get("resource_calendar_id"))
     except (TypeError, ValueError):
         return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
-    work_schedule_store.create(cal_id)
-    try:
-        odoo_sync.refresh_work_schedule_hours(only_ids=[cal_id])
-    except Exception:
-        pass  # row exists; hours fill in on the next periodic sync
-    return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
+
+    def _work():
+        work_schedule_store.create(cal_id)
+        try:
+            odoo_sync.refresh_work_schedule_hours(only_ids=[cal_id])
+        except Exception:
+            pass  # row exists; hours fill in on the next periodic sync
+        return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/settings/work_schedule_rounding/remove")
@@ -653,7 +671,7 @@ async def settings_remove_work_schedule(request: Request):
         cal_id = int(form.get("resource_calendar_id"))
     except (TypeError, ValueError):
         return JSONResponse({"ok": False, "error": "bad id"}, status_code=400)
-    work_schedule_store.delete(cal_id)
+    await asyncio.to_thread(work_schedule_store.delete, cal_id)
     return RedirectResponse(url="/settings?saved=1&section=timeclock#rules", status_code=303)
 
 
@@ -667,10 +685,14 @@ async def settings_add_group(request: Request):
     name = (form.get("name") or "").strip()[:80]
     if not name:
         return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
-    if name in set(work_centers_store.registered_groups()):
-        return JSONResponse({"ok": False, "error": "already exists", "name": name}, status_code=409)
-    work_centers_store.add_group(name)
-    return JSONResponse({"ok": True, "name": name})
+
+    def _work():
+        if name in set(work_centers_store.registered_groups()):
+            return JSONResponse({"ok": False, "error": "already exists", "name": name}, status_code=409)
+        work_centers_store.add_group(name)
+        return JSONResponse({"ok": True, "name": name})
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/settings/work_centers")
@@ -678,55 +700,58 @@ async def settings_save_work_centers(request: Request):
     """Bulk save: group registry edits, WC rows, group/VS overrides."""
     form = await request.form()
 
-    # 1. Group registry (delete, rename, add) — do first so WC save sees updated names.
-    for name in list(work_centers_store.registered_groups()):
-        if form.get(f"group_delete__{name}"):
-            work_centers_store.delete_group(name)
-    for name in list(work_centers_store.registered_groups()):
-        new_name = (form.get(f"group_rename__{name}") or "").strip()
-        if new_name and new_name != name:
-            work_centers_store.rename_group(name, new_name)
-    new_group = (form.get("group_new") or "").strip()
-    if new_group:
-        work_centers_store.add_group(new_group)
+    def _work():
+        # 1. Group registry (delete, rename, add) — do first so WC save sees updated names.
+        for name in list(work_centers_store.registered_groups()):
+            if form.get(f"group_delete__{name}"):
+                work_centers_store.delete_group(name)
+        for name in list(work_centers_store.registered_groups()):
+            new_name = (form.get(f"group_rename__{name}") or "").strip()
+            if new_name and new_name != name:
+                work_centers_store.rename_group(name, new_name)
+        new_group = (form.get("group_new") or "").strip()
+        if new_group:
+            work_centers_store.add_group(new_group)
 
-    # 2. Work-center rows.
-    for loc in staffing.LOCATIONS:
-        key = loc.meter_id or f"name:{loc.name}"
-        prefix = f"wc__{key}__"
-        updates: dict = {}
-        for field in ("goal_per_day", "min_ops", "max_ops", "department"):
-            name = prefix + field
-            if name in form:
-                updates[field] = form.get(name) or ""
-        # Multi-valued: required_skills (checkbox list). The hidden
-        # required_skills_present marker (settings.html) lets us
-        # distinguish "no checkboxes posted" (form didn't include this
-        # section — leave DB alone) from "explicitly cleared" (form
-        # did include it but no skills checked — save the empty list).
-        if (prefix + "required_skills_present") in form:
-            updates["required_skills"] = form.getlist(prefix + "required_skills")
-        # Single-value Group select (stored internally as a 1-element list in `groups`).
-        group_field = prefix + "group"
-        if group_field in form:
-            v = (form.get(group_field) or "").strip()
-            updates["groups"] = [v] if v else []
-        # Multi-select Default People checkbox list.
-        dp_present = prefix + "default_people_present"
-        if dp_present in form:
-            updates["default_people"] = form.getlist(prefix + "default_people")
-        if updates:
-            work_centers_store.save_one(loc, updates)
+        # 2. Work-center rows.
+        for loc in staffing.LOCATIONS:
+            key = loc.meter_id or f"name:{loc.name}"
+            prefix = f"wc__{key}__"
+            updates: dict = {}
+            for field in ("goal_per_day", "min_ops", "max_ops", "department"):
+                name = prefix + field
+                if name in form:
+                    updates[field] = form.get(name) or ""
+            # Multi-valued: required_skills (checkbox list). The hidden
+            # required_skills_present marker (settings.html) lets us
+            # distinguish "no checkboxes posted" (form didn't include this
+            # section — leave DB alone) from "explicitly cleared" (form
+            # did include it but no skills checked — save the empty list).
+            if (prefix + "required_skills_present") in form:
+                updates["required_skills"] = form.getlist(prefix + "required_skills")
+            # Single-value Group select (stored internally as a 1-element list in `groups`).
+            group_field = prefix + "group"
+            if group_field in form:
+                v = (form.get(group_field) or "").strip()
+                updates["groups"] = [v] if v else []
+            # Multi-select Default People checkbox list.
+            dp_present = prefix + "default_people_present"
+            if dp_present in form:
+                updates["default_people"] = form.getlist(prefix + "default_people")
+            if updates:
+                work_centers_store.save_one(loc, updates)
 
-    # 3. Group + VS overrides.
-    for kind in work_centers_store.GROUP_KINDS:
-        for name in work_centers_store.all_group_names(kind):
-            field = f"group_override__{kind}__{name}"
-            if field in form:
-                work_centers_store.save_group_override(kind, name, form.get(field) or "")
-    if (request.headers.get("accept") or "").startswith("application/json"):
-        return JSONResponse({"ok": True})
-    return RedirectResponse(url="/settings?saved=1&section=work_centers", status_code=303)
+        # 3. Group + VS overrides.
+        for kind in work_centers_store.GROUP_KINDS:
+            for name in work_centers_store.all_group_names(kind):
+                field = f"group_override__{kind}__{name}"
+                if field in form:
+                    work_centers_store.save_group_override(kind, name, form.get(field) or "")
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True})
+        return RedirectResponse(url="/settings?saved=1&section=work_centers", status_code=303)
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/settings")
@@ -750,7 +775,7 @@ async def settings_save(request: Request):
                 group_targets[c] = max(0, int(raw))
             except ValueError:
                 pass
-    settings_store.save(station_targets, group_targets)
+    await asyncio.to_thread(settings_store.save, station_targets, group_targets)
     if (request.headers.get("accept") or "").startswith("application/json"):
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1", status_code=303)
@@ -775,14 +800,20 @@ async def roster_filter_toggle(request: Request):
         return JSONResponse({"ok": False, "error": "odoo_id required (int)"}, status_code=400)
     if not isinstance(excluded_raw, bool):
         return JSONResponse({"ok": False, "error": "excluded must be true or false"}, status_code=400)
-    db.execute(
-        "UPDATE people SET excluded = %s WHERE odoo_id = %s",
-        (excluded_raw, odoo_id),
-    )
-    staffing._invalidate_roster_cache()
-    from .. import _http_cache
-    _http_cache.invalidate_today_cache()
-    return JSONResponse({"ok": True})
+
+    def _work():
+        db.execute(
+            "UPDATE people SET excluded = %s WHERE odoo_id = %s",
+            (excluded_raw, odoo_id),
+        )
+        staffing._invalidate_roster_cache()
+        from .. import _http_cache
+        _http_cache.invalidate_today_cache()
+        # The skills matrix (stable bucket) renders the roster too.
+        _http_cache.invalidate_stable_cache()
+        return JSONResponse({"ok": True})
+
+    return await asyncio.to_thread(_work)
 
 
 # ---------- Time Off settings (2026-05-27) ----------
@@ -805,7 +836,7 @@ async def time_off_set_hidden_types(request: Request):
             ids.append(int(v))
         except (TypeError, ValueError):
             continue
-    settings_store.set_hidden_leave_type_ids(ids)
+    await asyncio.to_thread(settings_store.set_hidden_leave_type_ids, ids)
     if _wants_json(request):
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1&section=time_off",

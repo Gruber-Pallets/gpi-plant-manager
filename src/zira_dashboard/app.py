@@ -171,10 +171,14 @@ _WARMERS = [
 ]
 
 
-async def _run_warmer(name: str, tick, interval: int):
-    """Run `tick` forever, every `interval` seconds; the first run is immediate
-    (before the first sleep). Errors are logged and swallowed so a warmer can
-    never kill itself."""
+async def _run_warmer(name: str, tick, interval: int, stagger: float = 0):
+    """Run `tick` forever, every `interval` seconds; the first run happens
+    right after the (short) `stagger` sleep, before the first long sleep.
+    The stagger offsets each warmer's start so they don't all fire at boot
+    and re-collide on shared interval multiples. Errors are logged and
+    swallowed so a warmer can never kill itself."""
+    if stagger:
+        await asyncio.sleep(stagger)
     while True:
         try:
             await tick()
@@ -197,8 +201,8 @@ async def lifespan(app: FastAPI):
     from . import tv_displays_store
     tv_displays_store.seed_defaults_if_empty()
     warmer_tasks = [
-        asyncio.create_task(_run_warmer(name, tick, interval))
-        for (name, tick, interval) in _WARMERS
+        asyncio.create_task(_run_warmer(name, tick, interval, stagger=index * 2))
+        for index, (name, tick, interval) in enumerate(_WARMERS)
     ]
     try:
         yield
@@ -266,7 +270,7 @@ templates.env.globals["static_v"] = _static_v
 
 
 @app.middleware("http")
-async def _security_headers(request, call_next):
+async def _security_and_cache_headers(request, call_next):
     """Tell browsers to remember this site is HTTPS-only and lock down a
     few common attack surfaces. The HSTS max-age is one year with
     includeSubDomains so www. and any future subdomains inherit. Do not
@@ -279,6 +283,12 @@ async def _security_headers(request, call_next):
     for public discovery. The X-Robots-Tag header is the authoritative
     signal (Google obeys the most restrictive directive across header +
     meta tag) and applies to every response, including non-HTML.
+
+    Also sets far-future cache headers on /static/ responses. The
+    mtime-versioned URL (?v=<mtime>) makes browsers re-fetch when the
+    file changes, so it's safe to cache aggressively when it doesn't.
+    (Single middleware for all response headers — each BaseHTTPMiddleware
+    layer adds per-request overhead.)
     """
     response = await call_next(request)
     response.headers.setdefault(
@@ -291,6 +301,11 @@ async def _security_headers(request, call_next):
         "X-Robots-Tag",
         "noindex, nofollow, noarchive, nosnippet",
     )
+    if request.url.path.startswith("/static/"):
+        response.headers.setdefault(
+            "Cache-Control",
+            "public, max-age=31536000, immutable",
+        )
     return response
 
 
@@ -316,20 +331,6 @@ if auth_disabled():
         "Unset this env var to enforce authentication. "
         "(Repeated every 500 requests by RequireAuthMiddleware.)"
     )
-
-
-@app.middleware("http")
-async def _static_cache_headers(request, call_next):
-    """Set far-future cache headers on /static/ responses. The
-    mtime-versioned URL (?v=<mtime>) makes browsers re-fetch when the
-    file changes, so it's safe to cache aggressively when it doesn't."""
-    response = await call_next(request)
-    if request.url.path.startswith("/static/"):
-        response.headers.setdefault(
-            "Cache-Control",
-            "public, max-age=31536000, immutable",
-        )
-    return response
 
 
 # Mount each feature router. URL paths are owned by the routers themselves.

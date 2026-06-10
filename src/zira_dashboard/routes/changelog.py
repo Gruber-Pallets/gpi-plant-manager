@@ -144,6 +144,11 @@ def changelog_html() -> HTMLResponse:
     return HTMLResponse(_md_to_html(text))
 
 
+# Parsed /changelog/latest result keyed on the file's mtime — every page's
+# footer polls the endpoint, but the file only changes on deploy.
+_latest_memo: tuple[float, str | None] | None = None
+
+
 @router.get("/changelog/latest")
 def changelog_latest() -> JSONResponse:
     """Return the most recent deployment identifier as ISO date or
@@ -153,10 +158,15 @@ def changelog_latest() -> JSONResponse:
     than localStorage.changelog_seen, and to highlight new sections inside
     the modal.
     """
-    if not CHANGELOG_PATH.exists():
+    global _latest_memo
+    try:
+        mtime = CHANGELOG_PATH.stat().st_mtime
+    except OSError:
         return JSONResponse({"latest_date": None})
-    text = CHANGELOG_PATH.read_text(encoding="utf-8")
-    return JSONResponse({"latest_date": _latest_deploy_when(text)})
+    if _latest_memo is None or _latest_memo[0] != mtime:
+        text = CHANGELOG_PATH.read_text(encoding="utf-8")
+        _latest_memo = (mtime, _latest_deploy_when(text))
+    return JSONResponse({"latest_date": _latest_memo[1]})
 
 
 @router.get("/changelog.md", response_class=PlainTextResponse)

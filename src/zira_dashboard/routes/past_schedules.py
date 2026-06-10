@@ -8,6 +8,7 @@ Routes:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 
 from fastapi import APIRouter, Query, Request
@@ -22,6 +23,15 @@ router = APIRouter()
 ADMIN_PASSWORD = "4840"
 
 
+def _unpublish_day(d: date) -> None:
+    sched = staffing.load_schedule(d)
+    # Snapshot the posted version so the scheduler can toggle between draft + posted.
+    if sched.published and not sched.published_snapshot:
+        sched.published_snapshot = staffing.snapshot_of(sched)
+    sched.published = False
+    staffing.save_schedule(sched)
+
+
 @router.post("/staffing/past/unpublish")
 async def staffing_past_unpublish(request: Request):
     form = await request.form()
@@ -30,13 +40,15 @@ async def staffing_past_unpublish(request: Request):
         d = date.fromisoformat(day_raw)
     except ValueError:
         return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
-    sched = staffing.load_schedule(d)
-    # Snapshot the posted version so the scheduler can toggle between draft + posted.
-    if sched.published and not sched.published_snapshot:
-        sched.published_snapshot = staffing.snapshot_of(sched)
-    sched.published = False
-    staffing.save_schedule(sched)
+    await asyncio.to_thread(_unpublish_day, d)
     return JSONResponse({"ok": True, "day": d.isoformat()})
+
+
+def _delete_day(d: date) -> None:
+    # Hard-delete from Postgres (cascades to schedule_assignments, etc.).
+    from .. import db as _db
+    _db.execute("DELETE FROM schedules WHERE day = %s", (d,))
+    staffing._invalidate_schedule_cache(d)
 
 
 @router.post("/staffing/past/delete")
@@ -50,10 +62,7 @@ async def staffing_past_delete(request: Request):
         d = date.fromisoformat(day_raw)
     except ValueError:
         return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
-    # Hard-delete from Postgres (cascades to schedule_assignments, etc.).
-    from .. import db as _db
-    _db.execute("DELETE FROM schedules WHERE day = %s", (d,))
-    staffing._invalidate_schedule_cache(d)
+    await asyncio.to_thread(_delete_day, d)
     return JSONResponse({"ok": True, "day": d.isoformat()})
 
 
@@ -66,7 +75,7 @@ def staffing_past(
     wc: str | None = Query(default=None),
     published: str | None = Query(default=None),
 ):
-    from .. import cert_lookup
+    from .. import cert_lookup, db
     person_certs = cert_lookup.load_person_certs()
 
     def _parse(s):
@@ -77,21 +86,27 @@ def staffing_past(
     pub_filter = published if published in ("0", "1") else ""
 
     rows = []
+
+    # Filter-dropdown options come from ALL history (one set-based query) so
+    # the user can always broaden a filtered view. TIME_OFF_KEY never reaches
+    # schedule_assignments (save_schedule skips it), so no exclusion needed.
     all_people: set[str] = set()
     all_wcs: set[str] = set()
+    for r in db.query(
+        "SELECT DISTINCT wc.name AS wc_name, pe.name AS person_name "
+        "FROM schedule_assignments sa "
+        "JOIN work_centers wc ON wc.id = sa.wc_id "
+        "JOIN people pe ON pe.id = sa.person_id"
+    ):
+        all_wcs.add(r["wc_name"])
+        all_people.add(r["person_name"])
 
-    for day, sched in staffing.iter_saved_schedules():
-        # Collect for filter dropdowns (all days)
-        for loc_name, names in sched.assignments.items():
-            if loc_name == staffing.TIME_OFF_KEY:
-                continue
-            all_wcs.add(loc_name)
-            for n in names or []:
-                all_people.add(n)
-
-        if d_from and day < d_from: continue
-        if d_to and day > d_to: continue
-        if pub_filter == "1" and not sched.published: continue
+    # Bulk-load (3 set-based queries) instead of hydrating each day with
+    # load_schedule's 3-queries-per-day path. Date + published=1 filters are
+    # pushed into SQL; draft-only stays in Python (no published=FALSE arg).
+    for day, sched in staffing.load_schedules_bulk(
+        start=d_from, end=d_to, published_only=(pub_filter == "1")
+    ):
         if pub_filter == "0" and sched.published: continue
 
         # Apply person + wc filters to produce filtered_assignments

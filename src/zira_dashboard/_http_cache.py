@@ -57,16 +57,29 @@ from ._cache import TTLCache
 # every 15s and hits this warm server cache, so revalidation is ~free.)
 _RESPONSE_CACHE_TODAY = TTLCache(ttl_seconds=60.0, max_entries=64)
 _RESPONSE_CACHE_PAST = TTLCache(ttl_seconds=300.0, max_entries=128)
+# "Stable" bucket: pages whose data changes only on explicit writes (which
+# invalidate this bucket directly) rather than continuously through the day —
+# e.g. the skills matrix. 600s TTL so the page stays warm between the skills
+# warmer's 300s ticks instead of going cold like the 60s today bucket.
+# Mutations call invalidate_stable_cache() so edits still show immediately.
+_RESPONSE_CACHE_STABLE = TTLCache(ttl_seconds=600.0, max_entries=32)
 
 
-def get_cached_response(cache_key, *, includes_today: bool) -> Response | None:
+def _bucket_for(*, includes_today: bool, stable: bool) -> TTLCache:
+    if stable:
+        return _RESPONSE_CACHE_STABLE
+    return _RESPONSE_CACHE_TODAY if includes_today else _RESPONSE_CACHE_PAST
+
+
+def get_cached_response(cache_key, *, includes_today: bool, stable: bool = False) -> Response | None:
     """Return a cached HTMLResponse for the given key, or None on miss.
 
     The returned response is a fresh HTMLResponse built from cached bytes
     + content_type. We re-apply Cache-Control headers so the browser side
-    of the cache stays in sync.
+    of the cache stays in sync. `stable=True` selects the long-TTL bucket
+    (`includes_today` still drives the browser Cache-Control headers).
     """
-    cache = _RESPONSE_CACHE_TODAY if includes_today else _RESPONSE_CACHE_PAST
+    cache = _bucket_for(includes_today=includes_today, stable=stable)
     cached = cache.peek(cache_key)
     if cached is None:
         return None
@@ -83,22 +96,30 @@ def invalidate_today_cache() -> None:
     _RESPONSE_CACHE_TODAY.invalidate()
 
 
+def invalidate_stable_cache() -> None:
+    """Drop every cached response in the stable bucket. Call this from the
+    write paths of pages cached with stable=True (e.g. skills-matrix /
+    roster mutations) so edits show on the next load despite the long TTL."""
+    _RESPONSE_CACHE_STABLE.invalidate()
+
+
 def invalidate_all_cache() -> None:
-    """Drop every cached response in BOTH today and past buckets. Use this
-    for writes that affect rendering regardless of date range — e.g., widget
-    customizations (title, color, alignment) apply to every cached page of
-    the same type, so a save on today must also invalidate the cached week,
-    month, and custom-range views."""
+    """Drop every cached response in ALL buckets (today, past, stable). Use
+    this for writes that affect rendering regardless of date range — e.g.,
+    widget customizations (title, color, alignment) apply to every cached
+    page of the same type, so a save on today must also invalidate the
+    cached week, month, and custom-range views."""
     _RESPONSE_CACHE_TODAY.invalidate()
     _RESPONSE_CACHE_PAST.invalidate()
+    _RESPONSE_CACHE_STABLE.invalidate()
 
 
-def store_cached_response(cache_key, *, includes_today: bool, response: Response) -> None:
+def store_cached_response(cache_key, *, includes_today: bool, response: Response, stable: bool = False) -> None:
     """Cache a response's body bytes + content_type for future serve.
 
     Safe to call after `set_cache_headers` — we capture the body only,
     not the headers (those are re-applied on serve)."""
-    cache = _RESPONSE_CACHE_TODAY if includes_today else _RESPONSE_CACHE_PAST
+    cache = _bucket_for(includes_today=includes_today, stable=stable)
     # Force Starlette's TemplateResponse to render its template if it
     # hasn't already; .body is the rendered bytes.
     body = response.body if hasattr(response, "body") else b""

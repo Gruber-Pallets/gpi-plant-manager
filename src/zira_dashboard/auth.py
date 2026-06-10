@@ -168,6 +168,12 @@ def _is_bypass_path(path: str) -> bool:
     return any(path.startswith(p) for p in _BYPASS_PREFIXES)
 
 
+# Memoized parse of TV_ALLOWED_IPS: (raw env string, parsed entries). Keyed
+# on the raw string (not parse-once-forever) so tests that monkeypatch the
+# env var still see their value; production parses once per process.
+_tv_allowlist_memo: tuple[str, tuple] | None = None
+
+
 def _ip_allowlisted(request) -> bool:
     """True when the request's client IP matches any entry in the
     `TV_ALLOWED_IPS` env var (comma-separated single IPs and/or CIDR
@@ -184,9 +190,26 @@ def _ip_allowlisted(request) -> bool:
     """
     import ipaddress
     import os
+    global _tv_allowlist_memo
     allowed_raw = os.environ.get("TV_ALLOWED_IPS", "").strip()
     if not allowed_raw:
         return False
+    if _tv_allowlist_memo is None or _tv_allowlist_memo[0] != allowed_raw:
+        entries = []
+        for entry in allowed_raw.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            try:
+                if "/" in entry:
+                    entries.append(ipaddress.ip_network(entry, strict=False))
+                else:
+                    entries.append(ipaddress.ip_address(entry))
+            except ValueError:
+                # Malformed env var entry — skip it, log nothing (env var is
+                # operator config, not user input; a typo here is a deploy issue).
+                continue
+        _tv_allowlist_memo = (allowed_raw, tuple(entries))
     client_ip = request.client.host if request.client else None
     if not client_ip:
         return False
@@ -194,21 +217,12 @@ def _ip_allowlisted(request) -> bool:
         client_addr = ipaddress.ip_address(client_ip)
     except ValueError:
         return False
-    for entry in allowed_raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        try:
-            if "/" in entry:
-                if client_addr in ipaddress.ip_network(entry, strict=False):
-                    return True
-            else:
-                if client_addr == ipaddress.ip_address(entry):
-                    return True
-        except ValueError:
-            # Malformed env var entry — skip it, log nothing (env var is
-            # operator config, not user input; a typo here is a deploy issue).
-            continue
+    for entry in _tv_allowlist_memo[1]:
+        if isinstance(entry, (ipaddress.IPv4Network, ipaddress.IPv6Network)):
+            if client_addr in entry:
+                return True
+        elif client_addr == entry:
+            return True
     return False
 
 

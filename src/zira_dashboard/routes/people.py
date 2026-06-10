@@ -6,6 +6,7 @@ keep working.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request
@@ -184,10 +185,14 @@ async def update_attendance_reason(name: str, request: Request):
     reason_raw = body.get("reason")
     reason = (str(reason_raw).strip() or None) if reason_raw is not None else None
     table = "manual_absences" if type_ == "absent" else "late_arrivals"
-    db.execute(
-        f"UPDATE {table} SET reason = %s WHERE day = %s AND name = %s",
-        (reason, d, name),
-    )
-    from .. import _http_cache
-    _http_cache.invalidate_today_cache()
-    return JSONResponse({"ok": True})
+
+    def _work():
+        db.execute(
+            f"UPDATE {table} SET reason = %s WHERE day = %s AND name = %s",
+            (reason, d, name),
+        )
+        from .. import _http_cache
+        _http_cache.invalidate_today_cache()
+        return JSONResponse({"ok": True})
+
+    return await asyncio.to_thread(_work)

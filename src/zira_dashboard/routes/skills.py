@@ -9,6 +9,7 @@ Routes:
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from fastapi import APIRouter, Request
@@ -26,13 +27,15 @@ def staffing_skills(request: Request):
     from .. import cert_lookup, _http_cache
 
     # Response cache. The matrix is roster + skill-level data, which changes
-    # only on roster/skill writes (each invalidates the today bucket) and on
-    # Odoo sync. On a cache hit we also skip the per-request
-    # odoo_sync.sync(force=False) freshness check — fine within the 60s TTL,
+    # only on roster/skill writes (each invalidates the stable bucket) and on
+    # Odoo sync. Cached in the long-TTL stable bucket (600s) — the 60s today
+    # bucket left the page cold 80% of the time between the skills warmer's
+    # 300s ticks. On a cache hit we also skip the per-request
+    # odoo_sync.sync(force=False) freshness check — fine within the TTL,
     # and the page warmer / a real miss will re-trigger it.
     response_cache_key = ("staffing_skills",)
     cached_resp = _http_cache.get_cached_response(
-        response_cache_key, includes_today=True
+        response_cache_key, includes_today=True, stable=True
     )
     if cached_resp is not None:
         return cached_resp
@@ -76,7 +79,7 @@ def staffing_skills(request: Request):
     )
     _http_cache.set_cache_headers(response, includes_today=True)
     _http_cache.store_cached_response(
-        response_cache_key, includes_today=True, response=response
+        response_cache_key, includes_today=True, response=response, stable=True
     )
     return response
 
@@ -84,30 +87,39 @@ def staffing_skills(request: Request):
 @router.post("/staffing/skills")
 async def staffing_skills_save(request: Request):
     form = await request.form()
-    roster = staffing.load_roster()
-    # `active` is now sourced from Odoo (read-only in the matrix UI). Only
-    # the local `reserve` flag is editable; everything else round-trips
-    # untouched.
-    for person in roster:
-        name = person.name
-        if form.get(f"reserve_present__{name}"):
-            person.reserve = form.get(f"reserve__{name}") in ("on", "1", "true")
-    staffing.save_roster(roster)
-    from .. import _http_cache
-    _http_cache.invalidate_today_cache()
-    if (request.headers.get("accept") or "").startswith("application/json"):
-        return JSONResponse({"ok": True})
-    return RedirectResponse(url="/staffing/skills", status_code=303)
+
+    def _work():
+        roster = staffing.load_roster()
+        # `active` is now sourced from Odoo (read-only in the matrix UI). Only
+        # the local `reserve` flag is editable; everything else round-trips
+        # untouched.
+        for person in roster:
+            name = person.name
+            if form.get(f"reserve_present__{name}"):
+                person.reserve = form.get(f"reserve__{name}") in ("on", "1", "true")
+        staffing.save_roster(roster)
+        from .. import _http_cache
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True})
+        return RedirectResponse(url="/staffing/skills", status_code=303)
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/staffing/skills/refresh")
-async def staffing_skills_refresh(request: Request):
+def staffing_skills_refresh(request: Request):
     """Force-sync from Odoo. Returns JSON for AJAX clients (so the matrix
-    can show progress + reload), or 303 for plain form submits."""
+    can show progress + reload), or 303 for plain form submits.
+
+    Sync `def` on purpose: FastAPI runs it in the threadpool, keeping the
+    full Odoo sync (seconds of XML-RPC) off the event loop."""
     from .. import odoo_sync
     result = odoo_sync.sync(force=True)
     from .. import _http_cache
     _http_cache.invalidate_today_cache()
+    _http_cache.invalidate_stable_cache()
     if (request.headers.get("accept") or "").startswith("application/json"):
         return JSONResponse({
             "ok": result.ok,
@@ -124,27 +136,37 @@ async def staffing_skills_refresh(request: Request):
 async def staffing_skills_view_create(request: Request):
     from .. import skill_matrix_views_store as views_store
     body = await request.json()
-    name = (body.get("name") or "").strip()
-    if not name:
-        return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
-    if views_store.get_view(name) is not None:
-        return JSONResponse({"ok": False, "error": "name already exists"}, status_code=409)
-    view = views_store.create_view(name, body)
-    from .. import _http_cache
-    _http_cache.invalidate_today_cache()
-    return JSONResponse({"ok": True, "view": view})
+
+    def _work():
+        name = (body.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
+        if views_store.get_view(name) is not None:
+            return JSONResponse({"ok": False, "error": "name already exists"}, status_code=409)
+        view = views_store.create_view(name, body)
+        from .. import _http_cache
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
+        return JSONResponse({"ok": True, "view": view})
+
+    return await asyncio.to_thread(_work)
 
 
 @router.put("/staffing/skills/views/{name}")
 async def staffing_skills_view_update(name: str, request: Request):
     from .. import skill_matrix_views_store as views_store
     body = await request.json()
-    if views_store.get_view(name) is None:
-        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
-    view = views_store.update_view(name, body)
-    from .. import _http_cache
-    _http_cache.invalidate_today_cache()
-    return JSONResponse({"ok": True, "view": view})
+
+    def _work():
+        if views_store.get_view(name) is None:
+            return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+        view = views_store.update_view(name, body)
+        from .. import _http_cache
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
+        return JSONResponse({"ok": True, "view": view})
+
+    return await asyncio.to_thread(_work)
 
 
 @router.delete("/staffing/skills/views/default")
@@ -153,6 +175,7 @@ def staffing_skills_view_clear_default():
     views_store.set_default(None)
     from .. import _http_cache
     _http_cache.invalidate_today_cache()
+    _http_cache.invalidate_stable_cache()
     return JSONResponse({"ok": True})
 
 
@@ -162,6 +185,7 @@ def staffing_skills_view_delete(name: str):
     views_store.delete_view(name)
     from .. import _http_cache
     _http_cache.invalidate_today_cache()
+    _http_cache.invalidate_stable_cache()
     return JSONResponse({"ok": True})
 
 
@@ -173,42 +197,53 @@ def staffing_skills_view_set_default(name: str):
     views_store.set_default(name)
     from .. import _http_cache
     _http_cache.invalidate_today_cache()
+    _http_cache.invalidate_stable_cache()
     return JSONResponse({"ok": True})
 
 
 @router.post("/staffing/people/add")
 async def staffing_person_add(request: Request):
     form = await request.form()
-    name = (form.get("name") or "").strip()[:80]
-    if not name:
-        return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
-    roster = staffing.load_roster()
-    if any(p.name.lower() == name.lower() for p in roster):
-        return JSONResponse({"ok": False, "error": f"'{name}' already exists"}, status_code=409)
-    skills = {s: 0 for s in staffing.SKILLS}
-    roster.append(staffing.Person(name=name, active=True, skills=skills))
-    staffing.save_roster(roster)
-    from .. import _http_cache
-    _http_cache.invalidate_today_cache()
-    if (request.headers.get("accept") or "").startswith("application/json"):
-        return JSONResponse({"ok": True, "name": name})
-    return RedirectResponse(url="/staffing/skills", status_code=303)
+
+    def _work():
+        name = (form.get("name") or "").strip()[:80]
+        if not name:
+            return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
+        roster = staffing.load_roster()
+        if any(p.name.lower() == name.lower() for p in roster):
+            return JSONResponse({"ok": False, "error": f"'{name}' already exists"}, status_code=409)
+        skills = {s: 0 for s in staffing.SKILLS}
+        roster.append(staffing.Person(name=name, active=True, skills=skills))
+        staffing.save_roster(roster)
+        from .. import _http_cache
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True, "name": name})
+        return RedirectResponse(url="/staffing/skills", status_code=303)
+
+    return await asyncio.to_thread(_work)
 
 
 @router.post("/staffing/people/delete")
 async def staffing_person_delete(request: Request):
     form = await request.form()
-    name = (form.get("name") or "").strip()
-    if not name:
-        return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
-    roster = staffing.load_roster()
-    before = len(roster)
-    roster = [p for p in roster if p.name != name]
-    if len(roster) == before:
-        return JSONResponse({"ok": False, "error": f"'{name}' not found"}, status_code=404)
-    staffing.save_roster(roster)
-    from .. import _http_cache
-    _http_cache.invalidate_today_cache()
-    if (request.headers.get("accept") or "").startswith("application/json"):
-        return JSONResponse({"ok": True, "removed": name})
-    return RedirectResponse(url="/staffing/skills", status_code=303)
+
+    def _work():
+        name = (form.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
+        roster = staffing.load_roster()
+        before = len(roster)
+        roster = [p for p in roster if p.name != name]
+        if len(roster) == before:
+            return JSONResponse({"ok": False, "error": f"'{name}' not found"}, status_code=404)
+        staffing.save_roster(roster)
+        from .. import _http_cache
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True, "removed": name})
+        return RedirectResponse(url="/staffing/skills", status_code=303)
+
+    return await asyncio.to_thread(_work)

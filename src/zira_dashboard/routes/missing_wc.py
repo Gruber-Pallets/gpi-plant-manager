@@ -8,6 +8,8 @@ re-round — the department tag is the fix.
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -29,14 +31,10 @@ def missing_wc_json():
     })
 
 
-@router.post("/missing-wc/assign")
-async def missing_wc_assign(request: Request):
-    """Assign a work center to a flagged attendance record.
-
-    Body (JSON): {attendance_id, wc_name, name?}
-    """
+def _assign_sync(body: dict) -> JSONResponse:
+    """Blocking half of /missing-wc/assign (Odoo XML-RPC + Postgres write);
+    runs in a worker thread via asyncio.to_thread."""
     from .. import missing_wc, odoo_client, staffing
-    body = await request.json()
     try:
         att_id = int(body.get("attendance_id"))
     except (TypeError, ValueError):
@@ -53,14 +51,20 @@ async def missing_wc_assign(request: Request):
     return JSONResponse({"ok": True})
 
 
-@router.post("/missing-wc/dismiss")
-async def missing_wc_dismiss(request: Request):
-    """Dismiss a record that legitimately has no work center.
+@router.post("/missing-wc/assign")
+async def missing_wc_assign(request: Request):
+    """Assign a work center to a flagged attendance record.
 
-    Body (JSON): {attendance_id, name?}
+    Body (JSON): {attendance_id, wc_name, name?}
     """
-    from .. import missing_wc
     body = await request.json()
+    return await asyncio.to_thread(_assign_sync, body)
+
+
+def _dismiss_sync(body: dict) -> JSONResponse:
+    """Blocking half of /missing-wc/dismiss (Postgres write); runs in a
+    worker thread via asyncio.to_thread."""
+    from .. import missing_wc
     try:
         att_id = int(body.get("attendance_id"))
     except (TypeError, ValueError):
@@ -68,3 +72,13 @@ async def missing_wc_dismiss(request: Request):
     name = (str(body.get("name") or "").strip() or None)
     missing_wc.resolve(att_id, "dismissed", name=name)
     return JSONResponse({"ok": True})
+
+
+@router.post("/missing-wc/dismiss")
+async def missing_wc_dismiss(request: Request):
+    """Dismiss a record that legitimately has no work center.
+
+    Body (JSON): {attendance_id, name?}
+    """
+    body = await request.json()
+    return await asyncio.to_thread(_dismiss_sync, body)

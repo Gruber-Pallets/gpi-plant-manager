@@ -14,6 +14,7 @@ duplicating the helper. Cache invalidation runs through
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
@@ -30,18 +31,10 @@ def _bust_caches() -> None:
     _bust_after_mutation()
 
 
-@router.post("/api/late-report/declare-absent")
-async def late_report_declare_absent(request: Request):
-    """Mark a person as Absent for today.
-
-    Body (JSON): {emp_id, name, reason}
-
-    Reason is REQUIRED — no manual_absences row gets written until
-    a non-empty reason is captured. Side effects: writes to
-    manual_absences; clears any pending snooze; busts caches.
-    """
+def _declare_absent_sync(body: dict) -> JSONResponse:
+    """Blocking half of /api/late-report/declare-absent (Postgres writes +
+    cache busting); runs in a worker thread via asyncio.to_thread."""
     from .. import db, late_report
-    body = await request.json()
     emp_id = str(body.get("emp_id") or "").strip()
     name = str(body.get("name") or "").strip()
     reason_raw = body.get("reason")
@@ -66,19 +59,24 @@ async def late_report_declare_absent(request: Request):
     return JSONResponse({"ok": True})
 
 
-@router.post("/api/late-report/save-late-arrival")
-async def late_report_save_late_arrival(request: Request):
-    """Record a late-arrival event for today.
+@router.post("/api/late-report/declare-absent")
+async def late_report_declare_absent(request: Request):
+    """Mark a person as Absent for today.
 
     Body (JSON): {emp_id, name, reason}
 
-    Reason is REQUIRED — no late_arrivals row gets written until a
-    non-empty reason is captured. Side effects: writes to
-    late_arrivals; busts the report cache so the row drops out of
-    needs_reason on the next poll.
+    Reason is REQUIRED — no manual_absences row gets written until
+    a non-empty reason is captured. Side effects: writes to
+    manual_absences; clears any pending snooze; busts caches.
     """
-    from .. import late_report
     body = await request.json()
+    return await asyncio.to_thread(_declare_absent_sync, body)
+
+
+def _save_late_arrival_sync(body: dict) -> JSONResponse:
+    """Blocking half of /api/late-report/save-late-arrival (Postgres write +
+    cache busting); runs in a worker thread via asyncio.to_thread."""
+    from .. import late_report
     emp_id = str(body.get("emp_id") or "").strip()
     name = str(body.get("name") or "").strip()
     reason_raw = body.get("reason")
@@ -99,14 +97,25 @@ async def late_report_save_late_arrival(request: Request):
     return JSONResponse({"ok": True})
 
 
-@router.post("/api/late-report/snooze")
-async def late_report_snooze(request: Request):
-    """Silence a person from the Late/Absence Report for `minutes` (default 30).
+@router.post("/api/late-report/save-late-arrival")
+async def late_report_save_late_arrival(request: Request):
+    """Record a late-arrival event for today.
 
-    Body (JSON): {emp_id, name, minutes?}
+    Body (JSON): {emp_id, name, reason}
+
+    Reason is REQUIRED — no late_arrivals row gets written until a
+    non-empty reason is captured. Side effects: writes to
+    late_arrivals; busts the report cache so the row drops out of
+    needs_reason on the next poll.
     """
-    from .. import late_report
     body = await request.json()
+    return await asyncio.to_thread(_save_late_arrival_sync, body)
+
+
+def _snooze_sync(body: dict) -> JSONResponse:
+    """Blocking half of /api/late-report/snooze (Postgres write + cache
+    busting); runs in a worker thread via asyncio.to_thread."""
+    from .. import late_report
     emp_id = str(body.get("emp_id") or "").strip()
     name = str(body.get("name") or "").strip()
     try:
@@ -125,14 +134,20 @@ async def late_report_snooze(request: Request):
     return JSONResponse({"ok": True, "minutes": minutes})
 
 
-@router.post("/api/late-report/undo-absent")
-async def late_report_undo_absent(request: Request):
-    """Reverse a declared absence (e.g., manager mis-clicked).
+@router.post("/api/late-report/snooze")
+async def late_report_snooze(request: Request):
+    """Silence a person from the Late/Absence Report for `minutes` (default 30).
 
-    Body (JSON): {emp_id}
+    Body (JSON): {emp_id, name, minutes?}
     """
-    from .. import late_report
     body = await request.json()
+    return await asyncio.to_thread(_snooze_sync, body)
+
+
+def _undo_absent_sync(body: dict) -> JSONResponse:
+    """Blocking half of /api/late-report/undo-absent (Postgres write + cache
+    busting); runs in a worker thread via asyncio.to_thread."""
+    from .. import late_report
     emp_id = str(body.get("emp_id") or "").strip()
     if not emp_id:
         return JSONResponse({"ok": False, "error": "emp_id required"}, status_code=400)
@@ -143,3 +158,13 @@ async def late_report_undo_absent(request: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     _bust_caches()
     return JSONResponse({"ok": True})
+
+
+@router.post("/api/late-report/undo-absent")
+async def late_report_undo_absent(request: Request):
+    """Reverse a declared absence (e.g., manager mis-clicked).
+
+    Body (JSON): {emp_id}
+    """
+    body = await request.json()
+    return await asyncio.to_thread(_undo_absent_sync, body)

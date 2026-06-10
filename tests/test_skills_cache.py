@@ -40,8 +40,10 @@ def test_skills_save_invalidates_cache(client):
     from zira_dashboard import _http_cache
 
     client.get("/staffing/skills")  # populate cache
-    assert _http_cache._RESPONSE_CACHE_TODAY.peek(("staffing_skills",)) is not None
+    # The skills matrix lives in the long-TTL stable bucket (600s), not the
+    # 60s today bucket — writes invalidate it directly.
+    assert _http_cache._RESPONSE_CACHE_STABLE.peek(("staffing_skills",)) is not None
     # A roster save must clear it so edits show immediately. Don't follow
     # the 303 redirect — the redirected GET would just repopulate the cache.
     client.post("/staffing/skills", data={}, follow_redirects=False)
-    assert _http_cache._RESPONSE_CACHE_TODAY.peek(("staffing_skills",)) is None
+    assert _http_cache._RESPONSE_CACHE_STABLE.peek(("staffing_skills",)) is None

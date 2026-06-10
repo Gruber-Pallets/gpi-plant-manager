@@ -6,6 +6,7 @@ existing TV bookmarks and external links keep working after the
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request
@@ -28,6 +29,12 @@ from ..shift_config import shift_elapsed_minutes
 from ..stations import Station, recycling_stations
 
 router = APIRouter()
+
+# Persistent pool for range-view day fan-out (see _render_recycling). A
+# per-request ThreadPoolExecutor paid thread spin-up/teardown on every render;
+# this one lives for the process. Cap at 4 workers so we don't starve the DB
+# pool (maxconn=20) or hammer the Zira API on multi-month ranges.
+_RANGE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="dept-range")
 
 
 def _who_by_wc(assignments: dict[str, list[str]], day) -> dict[str, str]:
@@ -169,6 +176,14 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     # man-hours — otherwise pph/hr/person collapses by the absent share.
     _absent_today = _absent_names(d)
 
+    # Partial-day off intervals fetched ONCE per day and passed into
+    # effective_minutes_worked below (it used to re-query per person).
+    try:
+        from .. import attendance as _attendance
+        _partials = _attendance.partial_off_intervals(d)
+    except Exception:
+        _partials = None
+
     total_man_minutes = 0
     total_recycling_people = 0
     for loc in staffing.LOCATIONS:
@@ -186,6 +201,7 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
             total_recycling_people += 1
             total_man_minutes += staffing.effective_minutes_worked(
                 person_name, d, window_start_utc, window_end_utc,
+                partials=_partials,
             )
     # Fallback for days without a published schedule: if nobody was scheduled
     # but production still happened, estimate man-hours from the active WCs.
@@ -410,19 +426,16 @@ def _render_recycling(
         cursor += timedelta(days=1)
 
     # Range views (week/month/quarter/year) used to walk days sequentially,
-    # paying full I/O cost per day on a cold cache. Fan out across a small
-    # pool — `_recycling_day_data` is read-only and the caches it touches
-    # (leaderboard TTL, per-day schedule cache, work_centers, settings) are
-    # thread-safe. Cap at 4 workers so we don't starve the DB pool (maxconn=20)
-    # or hammer the Zira API on multi-month ranges. Single-day stays inline
-    # so we don't pay pool-spinup cost on the most common case.
+    # paying full I/O cost per day on a cold cache. Fan out across the
+    # module-level pool — `_recycling_day_data` is read-only and the caches it
+    # touches (leaderboard TTL, per-day schedule cache, work_centers,
+    # settings) are thread-safe. Single-day stays inline so the most common
+    # case doesn't queue behind a busy pool.
     def _compute_day(d):
         return _recycling_day_data(d, now, d == today, align_to_standard=is_range)
 
     if len(days) > 1:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=4) as _pool:
-            per_day = list(_pool.map(_compute_day, days))
+        per_day = list(_RANGE_POOL.map(_compute_day, days))
     else:
         per_day = [_compute_day(d) for d in days]
 
@@ -736,6 +749,13 @@ def _render_new_dept(
     # for the full rationale.
     _absent_today = _absent_names(d)
 
+    # Partial-day off intervals fetched ONCE per day (see _recycling_day_data).
+    try:
+        from .. import attendance as _attendance
+        _partials = _attendance.partial_off_intervals(d)
+    except Exception:
+        _partials = None
+
     total_man_minutes_new = 0
     total_new_vs_people = 0
     for wc_name, ops in sched_for_labels.assignments.items():
@@ -747,6 +767,7 @@ def _render_new_dept(
             total_new_vs_people += 1
             total_man_minutes_new += staffing.effective_minutes_worked(
                 person_name, d, window_start_utc, window_end_utc,
+                partials=_partials,
             )
     total_man_hours = total_man_minutes_new / 60.0
     pph_per_person = (total_units / total_man_hours) if total_man_hours > 0 else 0.0
