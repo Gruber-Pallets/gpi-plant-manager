@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from ..deps import (
@@ -30,6 +30,25 @@ router = APIRouter()
 @router.get("/")
 def home():
     return RedirectResponse(url="/recycling", status_code=307)
+
+
+@router.get("/tv/ping")
+def tv_ping():
+    """Tiny liveness probe for tv-refresh.js.
+
+    The plant-floor TVs probe before reloading so a backend blip never
+    paints an error page over live production numbers. Probing the full
+    dashboard URL downloaded the whole page just to throw it away (then
+    again on reload), so the TVs probe this empty 204 instead.
+
+    Deliberately NOT in the auth bypass list: it sits behind
+    RequireAuthMiddleware exactly like the dashboards, so a missing or
+    expired session still produces the redirect-to-login signal
+    (``redirect: "manual"`` => opaqueredirect => ``resp.ok === false``)
+    that tv-refresh.js treats as "don't reload". The path lives under
+    /tv/ so the TVs' IP-allowlist / ?device= token auth applies.
+    """
+    return Response(status_code=204)
 
 
 @router.get("/work-centers", response_class=HTMLResponse)

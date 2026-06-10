@@ -12,6 +12,98 @@
 <link rel="stylesheet" href="/static/leaderboards.css?v={{ static_v('leaderboards.css') }}">
 {% endblock %}
 
+{# ---- Section macros ----------------------------------------------------
+   Every leaderboard card shares the same shell: drag handle + title (+
+   "group" tag), hide button (active) or show/auto-empty (inactive), then a
+   table. `kind` is the data-kind drag/reorder key — 'group'/'wc' for Best
+   Days, 'group-avg'/'wc-avg' for Best Averages; group variants add a WC
+   column. #}
+
+{% macro lb_section_header(s, is_group, inactive) %}
+          <div class="lb-section-header">
+            <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
+            <h3>{{ s.loc_name }}{% if is_group %} <span class="lb-section-tag">group</span>{% endif %}</h3>
+            {% if not inactive %}
+              <button type="button" class="lb-hide-btn" title="Mark inactive">&#10005;</button>
+            {% elif s.is_manually_inactive %}
+              <button type="button" class="lb-show-btn" title="Mark active">&#8634;</button>
+            {% else %}
+              <span class="lb-auto-empty" title="No data in this range — auto-hidden">auto-empty</span>
+            {% endif %}
+          </div>
+{% endmacro %}
+
+{% macro lb_days_section(s, kind, inactive=false) %}
+        {% set is_group = kind == 'group' %}
+        <div class="lb-section{% if inactive %} lb-section-inactive{% endif %}" data-kind="{{ kind }}" data-wc="{{ s.loc_name }}" draggable="true">
+          {{ lb_section_header(s, is_group, inactive) }}
+          {% if s.rows %}
+            <table class="lb-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>Operator</th><th>Date</th>{% if is_group %}<th>WC</th>{% endif %}
+                  <th class="num">Units</th><th class="num">% of Goal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in s.rows %}
+                  <tr>
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td>{{ r.day_label }}</td>
+                    {% if is_group %}<td>{{ r.wc }}</td>{% endif %}
+                    <td class="num">{{ r.units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.pct * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+        </div>
+{% endmacro %}
+
+{% macro lb_avg_row(r, s, is_group, hidden) %}
+                  <tr{% if hidden %} class="lb-row-hidden"{% endif %}>
+                    <td class="rank">{{ r.rank }}</td>
+                    <td class="op"><button type="button" class="lb-name-btn"
+   data-name="{{ r.name }}" {% if is_group %}data-group{% else %}data-wc{% endif %}="{{ s.loc_name }}"
+   data-start="{{ start }}" data-end="{{ end }}"
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    {% if is_group %}<td>{{ r.top_wc }}</td>{% endif %}
+                    <td class="num">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
+                  </tr>
+{% endmacro %}
+
+{% macro lb_avg_section(s, kind, inactive=false) %}
+        {% set is_group = kind == 'group-avg' %}
+        <div class="lb-section{% if inactive %} lb-section-inactive{% endif %}" data-kind="{{ kind }}" data-wc="{{ s.loc_name }}" draggable="true">
+          {{ lb_section_header(s, is_group, inactive) }}
+          {% if s.rows %}
+            {% set top5 = s.rows[:5] %}
+            {% set rest = s.rows[5:] %}
+            <table class="lb-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>Operator</th>{% if is_group %}<th>Top WC</th>{% endif %}
+                  <th class="num">Avg/day{% if metric == 'units' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                  <th class="num">Avg %{% if metric == 'pct' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in top5 %}{{ lb_avg_row(r, s, is_group, false) }}{% endfor %}
+                {% for r in rest %}{{ lb_avg_row(r, s, is_group, true) }}{% endfor %}
+              </tbody>
+            </table>
+            {% if rest %}
+              <button type="button" class="lb-expand-btn" onclick="toggleAll(this)">
+                &#9662; Show all ({{ s.rows|length }})
+              </button>
+            {% endif %}
+          {% endif %}
+        </div>
+{% endmacro %}
+
 {% block content %}
 <form class="lb-toolbar" method="get" action="/staffing/leaderboards">
   <span class="lb-tool-label">Range:</span>
@@ -42,141 +134,15 @@
   <section class="lb-pane lb-pane-days">
     <h2 class="lb-pane-header">Best Days</h2>
     <div class="lb-pane-active">
-      {% for s in active_groups %}
-        <div class="lb-section" data-kind="group" data-wc="{{ s.loc_name }}" draggable="true">
-          <div class="lb-section-header">
-            <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
-            <h3>{{ s.loc_name }} <span class="lb-section-tag">group</span></h3>
-            <button type="button" class="lb-hide-btn" title="Mark inactive">&#10005;</button>
-          </div>
-          {% if s.rows %}
-            <table class="lb-table">
-              <thead>
-                <tr>
-                  <th>#</th><th>Operator</th><th>Date</th><th>WC</th>
-                  <th class="num">Units</th><th class="num">% of Goal</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for r in s.rows %}
-                  <tr>
-                    <td class="rank">{{ r.rank }}</td>
-                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                    <td>{{ r.day_label }}</td>
-                    <td>{{ r.wc }}</td>
-                    <td class="num">{{ r.units|round|int }}</td>
-                    <td class="num pct">{{ '%.0f' % (r.pct * 100) }}%</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          {% endif %}
-        </div>
-      {% endfor %}
-      {% for s in active_sections %}
-        <div class="lb-section" data-kind="wc" data-wc="{{ s.loc_name }}" draggable="true">
-          <div class="lb-section-header">
-            <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
-            <h3>{{ s.loc_name }}</h3>
-            <button type="button" class="lb-hide-btn" title="Mark inactive">&#10005;</button>
-          </div>
-          {% if s.rows %}
-            <table class="lb-table">
-              <thead>
-                <tr>
-                  <th>#</th><th>Operator</th><th>Date</th>
-                  <th class="num">Units</th><th class="num">% of Goal</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for r in s.rows %}
-                  <tr>
-                    <td class="rank">{{ r.rank }}</td>
-                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                    <td>{{ r.day_label }}</td>
-                    <td class="num">{{ r.units|round|int }}</td>
-                    <td class="num pct">{{ '%.0f' % (r.pct * 100) }}%</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          {% endif %}
-        </div>
-      {% endfor %}
+      {% for s in active_groups %}{{ lb_days_section(s, 'group') }}{% endfor %}
+      {% for s in active_sections %}{{ lb_days_section(s, 'wc') }}{% endfor %}
     </div>
 
     <details class="lb-inactive-wrap">
       <summary>Inactive ({{ (inactive_sections|length) + (inactive_groups|length) }})</summary>
       <div class="lb-inactive-content lb-pane-active">
-        {% for s in inactive_groups %}
-          <div class="lb-section lb-section-inactive" data-kind="group" data-wc="{{ s.loc_name }}" draggable="true">
-            <div class="lb-section-header">
-              <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
-              <h3>{{ s.loc_name }} <span class="lb-section-tag">group</span></h3>
-              {% if s.is_manually_inactive %}
-                <button type="button" class="lb-show-btn" title="Mark active">&#8634;</button>
-              {% else %}
-                <span class="lb-auto-empty" title="No data in this range — auto-hidden">auto-empty</span>
-              {% endif %}
-            </div>
-            {% if s.rows %}
-              <table class="lb-table">
-                <thead>
-                  <tr>
-                    <th>#</th><th>Operator</th><th>Date</th><th>WC</th>
-                    <th class="num">Units</th><th class="num">% of Goal</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for r in s.rows %}
-                    <tr>
-                      <td class="rank">{{ r.rank }}</td>
-                      <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                      <td>{{ r.day_label }}</td>
-                      <td>{{ r.wc }}</td>
-                      <td class="num">{{ r.units|round|int }}</td>
-                      <td class="num pct">{{ '%.0f' % (r.pct * 100) }}%</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            {% endif %}
-          </div>
-        {% endfor %}
-        {% for s in inactive_sections %}
-          <div class="lb-section lb-section-inactive" data-kind="wc" data-wc="{{ s.loc_name }}" draggable="true">
-            <div class="lb-section-header">
-              <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
-              <h3>{{ s.loc_name }}</h3>
-              {% if s.is_manually_inactive %}
-                <button type="button" class="lb-show-btn" title="Mark active">&#8634;</button>
-              {% else %}
-                <span class="lb-auto-empty" title="No data in this range — auto-hidden">auto-empty</span>
-              {% endif %}
-            </div>
-            {% if s.rows %}
-              <table class="lb-table">
-                <thead>
-                  <tr>
-                    <th>#</th><th>Operator</th><th>Date</th>
-                    <th class="num">Units</th><th class="num">% of Goal</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for r in s.rows %}
-                    <tr>
-                      <td class="rank">{{ r.rank }}</td>
-                      <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                      <td>{{ r.day_label }}</td>
-                      <td class="num">{{ r.units|round|int }}</td>
-                      <td class="num pct">{{ '%.0f' % (r.pct * 100) }}%</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            {% endif %}
-          </div>
-        {% endfor %}
+        {% for s in inactive_groups %}{{ lb_days_section(s, 'group', inactive=true) }}{% endfor %}
+        {% for s in inactive_sections %}{{ lb_days_section(s, 'wc', inactive=true) }}{% endfor %}
       </div>
     </details>
   </section>
@@ -184,227 +150,15 @@
   <section class="lb-pane lb-pane-avg">
     <h2 class="lb-pane-header">Best Averages</h2>
     <div class="lb-pane-active">
-      {% for s in active_avg_groups %}
-        <div class="lb-section" data-kind="group-avg" data-wc="{{ s.loc_name }}" draggable="true">
-          <div class="lb-section-header">
-            <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
-            <h3>{{ s.loc_name }} <span class="lb-section-tag">group</span></h3>
-            <button type="button" class="lb-hide-btn" title="Mark inactive">&#10005;</button>
-          </div>
-          {% if s.rows %}
-            {% set top5 = s.rows[:5] %}
-            {% set rest = s.rows[5:] %}
-            <table class="lb-table">
-              <thead>
-                <tr>
-                  <th>#</th><th>Operator</th><th>Top WC</th>
-                  <th class="num">Avg/day{% if metric == 'units' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
-                  <th class="num">Avg %{% if metric == 'pct' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for r in top5 %}
-                  <tr>
-                    <td class="rank">{{ r.rank }}</td>
-                    <td class="op"><button type="button" class="lb-name-btn"
-   data-name="{{ r.name }}" data-group="{{ s.loc_name }}"
-   data-start="{{ start }}" data-end="{{ end }}"
-   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                    <td>{{ r.top_wc }}</td>
-                    <td class="num">{{ r.avg_units|round|int }}</td>
-                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
-                  </tr>
-                {% endfor %}
-                {% for r in rest %}
-                  <tr class="lb-row-hidden">
-                    <td class="rank">{{ r.rank }}</td>
-                    <td class="op"><button type="button" class="lb-name-btn"
-   data-name="{{ r.name }}" data-group="{{ s.loc_name }}"
-   data-start="{{ start }}" data-end="{{ end }}"
-   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                    <td>{{ r.top_wc }}</td>
-                    <td class="num">{{ r.avg_units|round|int }}</td>
-                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-            {% if rest %}
-              <button type="button" class="lb-expand-btn" onclick="toggleAll(this)">
-                &#9662; Show all ({{ s.rows|length }})
-              </button>
-            {% endif %}
-          {% endif %}
-        </div>
-      {% endfor %}
-      {% for s in active_avg_sections %}
-        <div class="lb-section" data-kind="wc-avg" data-wc="{{ s.loc_name }}" draggable="true">
-          <div class="lb-section-header">
-            <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
-            <h3>{{ s.loc_name }}</h3>
-            <button type="button" class="lb-hide-btn" title="Mark inactive">&#10005;</button>
-          </div>
-          {% if s.rows %}
-            {% set top5 = s.rows[:5] %}
-            {% set rest = s.rows[5:] %}
-            <table class="lb-table">
-              <thead>
-                <tr>
-                  <th>#</th><th>Operator</th>
-                  <th class="num">Avg/day{% if metric == 'units' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
-                  <th class="num">Avg %{% if metric == 'pct' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for r in top5 %}
-                  <tr>
-                    <td class="rank">{{ r.rank }}</td>
-                    <td class="op"><button type="button" class="lb-name-btn"
-   data-name="{{ r.name }}" data-wc="{{ s.loc_name }}"
-   data-start="{{ start }}" data-end="{{ end }}"
-   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                    <td class="num">{{ r.avg_units|round|int }}</td>
-                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
-                  </tr>
-                {% endfor %}
-                {% for r in rest %}
-                  <tr class="lb-row-hidden">
-                    <td class="rank">{{ r.rank }}</td>
-                    <td class="op"><button type="button" class="lb-name-btn"
-   data-name="{{ r.name }}" data-wc="{{ s.loc_name }}"
-   data-start="{{ start }}" data-end="{{ end }}"
-   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                    <td class="num">{{ r.avg_units|round|int }}</td>
-                    <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-            {% if rest %}
-              <button type="button" class="lb-expand-btn" onclick="toggleAll(this)">
-                &#9662; Show all ({{ s.rows|length }})
-              </button>
-            {% endif %}
-          {% endif %}
-        </div>
-      {% endfor %}
+      {% for s in active_avg_groups %}{{ lb_avg_section(s, 'group-avg') }}{% endfor %}
+      {% for s in active_avg_sections %}{{ lb_avg_section(s, 'wc-avg') }}{% endfor %}
     </div>
 
     <details class="lb-inactive-wrap">
       <summary>Inactive ({{ (inactive_avg_sections|length) + (inactive_avg_groups|length) }})</summary>
       <div class="lb-inactive-content lb-pane-active">
-        {% for s in inactive_avg_groups %}
-          <div class="lb-section lb-section-inactive" data-kind="group-avg" data-wc="{{ s.loc_name }}" draggable="true">
-            <div class="lb-section-header">
-              <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
-              <h3>{{ s.loc_name }} <span class="lb-section-tag">group</span></h3>
-              {% if s.is_manually_inactive %}
-                <button type="button" class="lb-show-btn" title="Mark active">&#8634;</button>
-              {% else %}
-                <span class="lb-auto-empty" title="No data in this range — auto-hidden">auto-empty</span>
-              {% endif %}
-            </div>
-            {% if s.rows %}
-              {% set top5 = s.rows[:5] %}
-              {% set rest = s.rows[5:] %}
-              <table class="lb-table">
-                <thead>
-                  <tr>
-                    <th>#</th><th>Operator</th><th>Top WC</th>
-                    <th class="num">Avg/day{% if metric == 'units' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
-                    <th class="num">Avg %{% if metric == 'pct' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for r in top5 %}
-                    <tr>
-                      <td class="rank">{{ r.rank }}</td>
-                      <td class="op"><button type="button" class="lb-name-btn"
-   data-name="{{ r.name }}" data-group="{{ s.loc_name }}"
-   data-start="{{ start }}" data-end="{{ end }}"
-   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                      <td>{{ r.top_wc }}</td>
-                      <td class="num">{{ r.avg_units|round|int }}</td>
-                      <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
-                    </tr>
-                  {% endfor %}
-                  {% for r in rest %}
-                    <tr class="lb-row-hidden">
-                      <td class="rank">{{ r.rank }}</td>
-                      <td class="op"><button type="button" class="lb-name-btn"
-   data-name="{{ r.name }}" data-group="{{ s.loc_name }}"
-   data-start="{{ start }}" data-end="{{ end }}"
-   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                      <td>{{ r.top_wc }}</td>
-                      <td class="num">{{ r.avg_units|round|int }}</td>
-                      <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-              {% if rest %}
-                <button type="button" class="lb-expand-btn" onclick="toggleAll(this)">
-                  &#9662; Show all ({{ s.rows|length }})
-                </button>
-              {% endif %}
-            {% endif %}
-          </div>
-        {% endfor %}
-        {% for s in inactive_avg_sections %}
-          <div class="lb-section lb-section-inactive" data-kind="wc-avg" data-wc="{{ s.loc_name }}" draggable="true">
-            <div class="lb-section-header">
-              <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
-              <h3>{{ s.loc_name }}</h3>
-              {% if s.is_manually_inactive %}
-                <button type="button" class="lb-show-btn" title="Mark active">&#8634;</button>
-              {% else %}
-                <span class="lb-auto-empty" title="No data in this range — auto-hidden">auto-empty</span>
-              {% endif %}
-            </div>
-            {% if s.rows %}
-              {% set top5 = s.rows[:5] %}
-              {% set rest = s.rows[5:] %}
-              <table class="lb-table">
-                <thead>
-                  <tr>
-                    <th>#</th><th>Operator</th>
-                    <th class="num">Avg/day{% if metric == 'units' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
-                    <th class="num">Avg %{% if metric == 'pct' %} <span class="lb-sort-caret">&#9662;</span>{% endif %}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for r in top5 %}
-                    <tr>
-                      <td class="rank">{{ r.rank }}</td>
-                      <td class="op"><button type="button" class="lb-name-btn"
-   data-name="{{ r.name }}" data-wc="{{ s.loc_name }}"
-   data-start="{{ start }}" data-end="{{ end }}"
-   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                      <td class="num">{{ r.avg_units|round|int }}</td>
-                      <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
-                    </tr>
-                  {% endfor %}
-                  {% for r in rest %}
-                    <tr class="lb-row-hidden">
-                      <td class="rank">{{ r.rank }}</td>
-                      <td class="op"><button type="button" class="lb-name-btn"
-   data-name="{{ r.name }}" data-wc="{{ s.loc_name }}"
-   data-start="{{ start }}" data-end="{{ end }}"
-   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
-                      <td class="num">{{ r.avg_units|round|int }}</td>
-                      <td class="num pct">{{ '%.0f' % (r.avg_pct * 100) }}%</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-              {% if rest %}
-                <button type="button" class="lb-expand-btn" onclick="toggleAll(this)">
-                  &#9662; Show all ({{ s.rows|length }})
-                </button>
-              {% endif %}
-            {% endif %}
-          </div>
-        {% endfor %}
+        {% for s in inactive_avg_groups %}{{ lb_avg_section(s, 'group-avg', inactive=true) }}{% endfor %}
+        {% for s in inactive_avg_sections %}{{ lb_avg_section(s, 'wc-avg', inactive=true) }}{% endfor %}
       </div>
     </details>
   </section>

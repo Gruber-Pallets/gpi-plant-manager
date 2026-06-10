@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>{% if tv_mode %}TV · {% endif %}Departments — Recycling — GPI Plant Manager</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
+<link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
 {% if tv_mode %}
@@ -175,7 +175,7 @@
 {% if not tv_mode %}{% include "_goat_watch_banner.html" %}{% endif %}
 
 <main>
-  <div class="grid-stack">
+  <div class="grid-stack" data-layout-page="recycling" data-tv-mode="{{ '1' if tv_mode else '0' }}" data-fallback-rows="30">
 
     {# Total Downtime KPI dropped 2026-05-14 + Up Time KPI dropped 2026-05-15 —
        both numbers now sit at the top-right of the Downtime Report widget. #}
@@ -373,202 +373,21 @@
   {% endif %}
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
-<script>
-  const tvMode = {{ 'true' if tv_mode else 'false' }};
-  const tvMargin = 2;
-  const grid = GridStack.init({
-    column: 12,
-    cellHeight: 60,
-    margin: tvMode ? tvMargin : 8,
-    float: false,
-    handle: '.grid-stack-item-content > h3, .grid-stack-item-content > .label',
-    staticGrid: tvMode,
-  });
+<script src="/static/vendor/gridstack-all.js?v={{ static_v('vendor/gridstack-all.js') }}"></script>
+{# Gridstack init / layout persistence / widget edit controls — shared with
+   /wc/{slug}; parameterized by the data attributes on .grid-stack above.
+   GOAT Watch dismiss handler lives in _goat_watch_banner.html so it ships
+   with every dashboard that includes the partial. #}
+<script src="/static/dashboard-grid.js?v={{ static_v('dashboard-grid.js') }}"></script>
 
-  if (tvMode) {
-    function fitGridToViewport() {
-      // 1. How many rows of grid does the actual layout occupy?
-      //    Initialize to 0 so we measure the TRUE max from the saved
-      //    layout — initializing to 30 made layouts smaller than the
-      //    default leave dead space at the bottom.
-      const items = grid.save(false);
-      let maxRows = 0;
-      for (const it of items) {
-        if (it.id) {
-          const bottom = (it.y || 0) + (it.h || 1);
-          if (bottom > maxRows) maxRows = bottom;
-        }
-      }
-      if (maxRows < 1) maxRows = 30;  // safety fallback only if grid is empty
-      // 2. Measure ACTUAL TV-header height (it scales with root font).
-      const headerEl = document.querySelector('.tv-header');
-      const headerHeight = headerEl ? Math.ceil(headerEl.getBoundingClientRect().height) : 80;
-      // 3. Subtract header + per-row margin + a few px of safety from viewport.
-      const safety = 8;
-      const available = window.innerHeight - headerHeight - (maxRows - 1) * tvMargin - safety;
-      const target = Math.max(16, Math.floor(available / maxRows));
-      grid.cellHeight(target);
-    }
-    // Run now (so cellHeight is correct before paint) AND again after
-    // the next frame in case the TV header height changed once fonts
-    // rendered. Cheap, and handles edge cases where the first call
-    // measures pre-font-load.
-    fitGridToViewport();
-    requestAnimationFrame(fitGridToViewport);
-    window.addEventListener('resize', fitGridToViewport);
-  }
-
-  {% if not tv_mode %}
-  const indicator = document.getElementById('save-indicator');
-  let saveTimer = null;
-
-  function persistLayout() {
-    const items = grid.save(false).map(it => ({
-      id: it.id,
-      x: it.x, y: it.y, w: it.w, h: it.h,
-    })).filter(it => it.id);
-    fetch('/api/layout/recycling', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(items),
-    }).then(r => {
-      if (r.ok) {
-        indicator.textContent = 'Saved';
-        clearTimeout(saveTimer);
-        saveTimer = setTimeout(() => {
-          indicator.textContent = 'Drag / resize — layout auto-saves';
-        }, 1500);
-      } else {
-        indicator.textContent = 'Save failed';
-      }
-    }).catch(() => indicator.textContent = 'Save failed (network)');
-  }
-
-  grid.on('change', persistLayout);
-  grid.on('resizestop', persistLayout);
-  grid.on('dragstop', persistLayout);
-
-  document.getElementById('reset-layout').addEventListener('click', () => {
-    fetch('/api/layout/recycling', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify([]),
-    }).then(() => location.reload());
-  });
-
-  // Per-widget edit controls
-  function openEdit(btn) {
-    const content = btn.closest('.grid-stack-item-content');
-    content.querySelector('.widget-edit').hidden = false;
-  }
-  function closeEdit(btn) {
-    const content = btn.closest('.grid-stack-item-content');
-    content.querySelector('.widget-edit').hidden = true;
-  }
-  function saveWidget(btn, id) {
-    const panel = btn.closest('.widget-edit');
-    const cfg = {};
-    panel.querySelectorAll('input[name], select[name]').forEach(el => {
-      const k = el.name;
-      if (el.type === 'checkbox') {
-        cfg[k] = el.checked;
-      } else {
-        cfg[k] = el.value;
-      }
-    });
-    fetch('/api/widget/recycling/' + encodeURIComponent(id), {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(cfg),
-    }).then(r => { if (r.ok) location.reload(); });
-  }
-  function resetWidget(btn, id) {
-    fetch('/api/widget/recycling/' + encodeURIComponent(id), {method: 'DELETE'})
-      .then(r => { if (r.ok) location.reload(); });
-  }
-  // Prevent Gridstack from starting a drag when clicking inside the edit panel
-  document.querySelectorAll('.widget-edit, .widget-edit-btn').forEach(el => {
-    el.addEventListener('mousedown', e => e.stopPropagation());
-    el.addEventListener('touchstart', e => e.stopPropagation());
-  });
-  {% endif %}
-
-  // GOAT Watch dismiss handler now lives in _goat_watch_banner.html so it
-  // ships with every dashboard that includes the partial.
-
-  // Inline-assign popover for "(no assignment)" bars.
-  (function () {
-    var people = {{ all_active_people | tojson }};
-    if (!people || !people.length) return;
-    var popover = null;
-    function buildPopover() {
-      var p = document.createElement('div');
-      p.className = 'assign-popover';
-      p.innerHTML = '<select class="assign-pick"><option value="">— pick person —</option>'
-        + people.map(function (n) { return '<option value="' + n.replace(/"/g, '&quot;') + '">' + n + '</option>'; }).join('')
-        + '</select> <button type="button" class="assign-save">Save</button>'
-        + '<span class="assign-status" hidden></span>';
-      document.body.appendChild(p);
-      return p;
-    }
-    function close() {
-      if (popover) { popover.remove(); popover = null; }
-      document.removeEventListener('mousedown', onOutside, true);
-    }
-    function onOutside(e) {
-      if (popover && !popover.contains(e.target) && !e.target.classList.contains('no-assign-btn')) close();
-    }
-    document.addEventListener('mousedown', function (e) {
-      if (!e.target.classList.contains('no-assign-btn')) return;
-      e.preventDefault(); e.stopPropagation();
-      var btn = e.target;
-      if (popover) close();
-      popover = buildPopover();
-      var rect = btn.getBoundingClientRect();
-      popover.style.position = 'absolute';
-      popover.style.left = (rect.left + window.scrollX) + 'px';
-      popover.style.top = (rect.bottom + 4 + window.scrollY) + 'px';
-      var sel = popover.querySelector('.assign-pick');
-      var save = popover.querySelector('.assign-save');
-      var status = popover.querySelector('.assign-status');
-      save.addEventListener('click', function () {
-        var person = sel.value;
-        if (!person) { status.hidden = false; status.textContent = 'Pick a person.'; return; }
-        save.disabled = true; sel.disabled = true; status.hidden = true;
-        fetch('/api/staffing/attribute', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            day: btn.dataset.day,
-            wc_name: btn.dataset.wc,
-            person_name: person,
-            start_utc: btn.dataset.start,
-          }),
-        }).then(function (r) { return r.json(); })
-          .then(function (data) {
-            if (data.ok) {
-              status.hidden = false; status.textContent = 'Saved ✓ ' + person;
-              if (!(window.gpiTransferToast && window.gpiTransferToast(data.transfer))) {
-                setTimeout(function () { location.reload(); }, 600);
-              }
-            } else {
-              save.disabled = false; sel.disabled = false;
-              status.hidden = false; status.textContent = 'Failed: ' + (data.error || 'unknown');
-            }
-          }).catch(function () {
-            save.disabled = false; sel.disabled = false;
-            status.hidden = false; status.textContent = 'Network error.';
-          });
-      });
-      // close on Escape
-      document.addEventListener('keydown', function once(e2) {
-        if (e2.key === 'Escape') { close(); document.removeEventListener('keydown', once); }
-      });
-      setTimeout(function () { document.addEventListener('mousedown', onOutside, true); }, 0);
-    }, true);
-  })();
-</script>
+{% if not tv_mode %}
+{# Inline-assign popover for "(no assignment)" bars. TV mode hides the
+   .no-assign-btn triggers (tv-mode.css), so don't ship the script or the
+   roster JSON to the TVs. #}
+<script src="/static/assign-popover.js?v={{ static_v('assign-popover.js') }}"
+        data-endpoint="/api/staffing/attribute"
+        data-people='{{ all_active_people | tojson }}'></script>
+{% endif %}
 
 {% if tv_mode or range_includes_today %}
 <script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>

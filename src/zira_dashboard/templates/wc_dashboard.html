@@ -30,7 +30,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>{% if tv_mode %}TV · {% endif %}{{ wc_name }} — GPI Plant Manager</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
+<link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
 <link rel="stylesheet" href="/static/wc_dashboard.css?v={{ static_v('wc_dashboard.css') }}">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
@@ -96,7 +96,7 @@
 {% if not tv_mode %}{% include "_goat_watch_banner.html" %}{% endif %}
 
 <main>
-<div class="grid-stack">
+<div class="grid-stack" data-layout-page="operator" data-tv-mode="{{ '1' if tv_mode else '0' }}" data-fallback-rows="25">
 
   {# Pallets / hr KPI — the only standalone KPI now; Units / Up Time /
      Downtime were folded into the Pallets banner + Downtime widget. #}
@@ -299,124 +299,11 @@
 </div>{# /.grid-stack #}
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
-<script>
-  const tvMode = {{ 'true' if tv_mode else 'false' }};
-  const tvMargin = 2;
-  const grid = GridStack.init({
-    column: 12,
-    cellHeight: 60,
-    margin: tvMode ? tvMargin : 8,
-    float: false,
-    handle: '.grid-stack-item-content > h3, .grid-stack-item-content > .label',
-    staticGrid: tvMode,
-  });
-
-  if (tvMode) {
-    function fitGridToViewport() {
-      // Measure the TRUE max y+h from items, starting at 0. Initializing
-      // to 25 (the operator-defaults extent) made layouts smaller than
-      // the default leave dead space at the bottom.
-      const items = grid.save(false);
-      let maxRows = 0;
-      for (const it of items) {
-        if (it.id) {
-          const bottom = (it.y || 0) + (it.h || 1);
-          if (bottom > maxRows) maxRows = bottom;
-        }
-      }
-      if (maxRows < 1) maxRows = 25;  // safety fallback only if grid is empty
-      const headerEl = document.querySelector('.tv-header');
-      const headerHeight = headerEl ? Math.ceil(headerEl.getBoundingClientRect().height) : 80;
-      const safety = 8;
-      const available = window.innerHeight - headerHeight - (maxRows - 1) * tvMargin - safety;
-      const target = Math.max(16, Math.floor(available / maxRows));
-      grid.cellHeight(target);
-    }
-    fitGridToViewport();
-    requestAnimationFrame(fitGridToViewport);
-    window.addEventListener('resize', fitGridToViewport);
-  }
-
-  {% if not tv_mode %}
-  const indicator = document.getElementById('save-indicator');
-  let saveTimer = null;
-
-  function persistLayout() {
-    const items = grid.save(false).map(it => ({
-      id: it.id, x: it.x, y: it.y, w: it.w, h: it.h,
-    })).filter(it => it.id);
-    fetch('/api/layout/operator', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(items),
-    }).then(r => {
-      if (r.ok) {
-        indicator.textContent = 'Saved';
-        clearTimeout(saveTimer);
-        saveTimer = setTimeout(() => {
-          indicator.textContent = 'Drag / resize — layout auto-saves';
-        }, 1500);
-      } else {
-        indicator.textContent = 'Save failed';
-      }
-    }).catch(() => indicator.textContent = 'Save failed (network)');
-  }
-
-  grid.on('change', persistLayout);
-  grid.on('resizestop', persistLayout);
-  grid.on('dragstop', persistLayout);
-
-  document.getElementById('reset-layout').addEventListener('click', () => {
-    fetch('/api/layout/operator', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify([]),
-    }).then(() => location.reload());
-  });
-
-  // WC picker: navigate to the chosen WC.
-  const picker = document.getElementById('wc-picker');
-  if (picker) {
-    picker.addEventListener('change', (e) => {
-      window.location.href = '/wc/' + e.target.value;
-    });
-  }
-
-  // Per-widget edit controls.
-  function openEdit(btn) {
-    const content = btn.closest('.grid-stack-item-content');
-    content.querySelector('.widget-edit').hidden = false;
-  }
-  function closeEdit(btn) {
-    const content = btn.closest('.grid-stack-item-content');
-    content.querySelector('.widget-edit').hidden = true;
-  }
-  function saveWidget(btn, id) {
-    const panel = btn.closest('.widget-edit');
-    const cfg = {};
-    panel.querySelectorAll('input[name], select[name]').forEach(el => {
-      const k = el.name;
-      if (el.type === 'checkbox') cfg[k] = el.checked;
-      else cfg[k] = el.value;
-    });
-    fetch('/api/widget/operator/' + encodeURIComponent(id), {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(cfg),
-    }).then(r => { if (r.ok) location.reload(); });
-  }
-  function resetWidget(btn, id) {
-    fetch('/api/widget/operator/' + encodeURIComponent(id), {method: 'DELETE'})
-      .then(r => { if (r.ok) location.reload(); });
-  }
-  // Prevent Gridstack from starting a drag when interacting with the edit panel.
-  document.querySelectorAll('.widget-edit, .widget-edit-btn').forEach(el => {
-    el.addEventListener('mousedown', e => e.stopPropagation());
-    el.addEventListener('touchstart', e => e.stopPropagation());
-  });
-  {% endif %}
-</script>
+<script src="/static/vendor/gridstack-all.js?v={{ static_v('vendor/gridstack-all.js') }}"></script>
+{# Gridstack init / layout persistence / WC picker / widget edit controls —
+   shared with /recycling; parameterized by the data attributes on
+   .grid-stack above. #}
+<script src="/static/dashboard-grid.js?v={{ static_v('dashboard-grid.js') }}"></script>
 {{ hover_tip_clamp_script() }}
 </body>
 </html>
