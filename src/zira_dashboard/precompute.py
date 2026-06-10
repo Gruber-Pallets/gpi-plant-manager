@@ -72,7 +72,7 @@ def upsert_production_daily(rows: Iterable[dict]) -> int:
         INSERT INTO production_daily (
             day, emp_id, name, wc_name,
             units, downtime, hours, days_worked, computed_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+        ) VALUES %s
         ON CONFLICT (day, emp_id, wc_name) DO UPDATE SET
             name        = EXCLUDED.name,
             units       = EXCLUDED.units,
@@ -81,11 +81,15 @@ def upsert_production_daily(rows: Iterable[dict]) -> int:
             days_worked = EXCLUDED.days_worked,
             computed_at = now()
     """
-    db.execute_many(sql, [
-        (r["day"], r["emp_id"], r["name"], r["wc_name"],
-         r["units"], r["downtime"], r["hours"], r["days_worked"])
-        for r in rows
-    ])
+    with db.cursor() as cur:
+        # execute_values folds every row into one statement — a single
+        # round-trip instead of executemany's one per row (this runs
+        # every 45s from the live warmer).
+        db.execute_values(cur, sql, [
+            (r["day"], r["emp_id"], r["name"], r["wc_name"],
+             r["units"], r["downtime"], r["hours"], r["days_worked"])
+            for r in rows
+        ], template="(%s, %s, %s, %s, %s, %s, %s, %s, now())")
     return len(rows)
 
 

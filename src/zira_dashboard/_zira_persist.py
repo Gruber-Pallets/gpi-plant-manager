@@ -1,11 +1,14 @@
-"""Persistent cache for past-day Zira leaderboard results.
+"""Persistent cache for Zira leaderboard results.
 
 Past-day production data is immutable. Serializing each StationTotal
 to JSONB in `zira_daily_cache` lets us survive Railway redeploys
 without re-paying the Zira API cost.
 
-Today's data is NOT cached here — it changes through the shift.
-The in-process TODAY cache in leaderboard.py handles that.
+Today's rows are upserted here too (throttled in leaderboard.py to at
+most once per 5 minutes per station) so a redeploy or the midnight
+day-rollover doesn't lose the in-progress snapshot. Live reads of
+today's data still come from the in-process TODAY cache in
+leaderboard.py, not this table.
 
 Schema (_schema.SCHEMA_DDL):
     CREATE TABLE zira_daily_cache (
@@ -142,10 +145,14 @@ def save_day(totals: list[StationTotal], day: date) -> None:
         for total in totals
     ]
     with db.cursor() as cur:
-        cur.executemany(
+        # execute_values folds every row into one statement — a single
+        # round-trip instead of executemany's one per row.
+        db.execute_values(
+            cur,
             "INSERT INTO zira_daily_cache (meter_id, day, payload, computed_at) "
-            "VALUES (%s, %s, %s::jsonb, %s) "
+            "VALUES %s "
             "ON CONFLICT (meter_id, day) DO UPDATE SET "
             "  payload = EXCLUDED.payload, computed_at = EXCLUDED.computed_at",
             rows,
+            template="(%s, %s, %s::jsonb, %s)",
         )

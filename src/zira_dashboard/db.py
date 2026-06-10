@@ -32,8 +32,12 @@ from ._schema import SCHEMA_DDL
 _pool: Optional[ThreadedConnectionPool] = None
 
 
-def init_pool(minconn: int = 1, maxconn: int = 20) -> None:
+def init_pool(minconn: int = 10, maxconn: int = 20) -> None:
     """Initialize the global connection pool. Idempotent — second call no-ops.
+
+    ``minconn`` defaults to 10 because ThreadedConnectionPool closes returned
+    connections beyond minconn — a low floor means constant TCP+TLS churn
+    under concurrent load.
 
     Reads the connection string from the ``DATABASE_URL`` environment variable.
     Raises ``RuntimeError`` if it is not set.

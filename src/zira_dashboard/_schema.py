@@ -461,21 +461,6 @@ CREATE TABLE IF NOT EXISTS odoo_open_attendance_cache (
   refreshed_at TIMESTAMPTZ
 );
 
--- TV dashboard layout templates ----------------------------------------
--- Named snapshots of a widget-layout arrangement. The /wc/{slug}
--- editor saves the current layout as a template; the apply endpoint
--- fans it out to one WC, every WC in a group, or every WC at once.
--- Theme is stored per template per the spec, but theme propagation
--- to targets waits for sub-project 4 (tv_displays.theme).
-CREATE TABLE IF NOT EXISTS tv_dashboard_templates (
-  id          SERIAL PRIMARY KEY,
-  name        TEXT NOT NULL UNIQUE,
-  layout_json JSONB NOT NULL,
-  theme       TEXT NOT NULL DEFAULT 'dark' CHECK (theme IN ('light', 'dark')),
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 -- TV display registry ---------------------------------------------------
 -- Each row is a TV mounted somewhere in the plant. Carries a friendly
 -- name, the dashboard it shows (kind + optional wc_name), and the theme
@@ -514,11 +499,21 @@ DROP TABLE IF EXISTS widget_definitions;
 DROP TABLE IF EXISTS tv_dashboard_templates;
 DROP TABLE IF EXISTS pinned_dashboards;
 
--- Tighten tv_displays.kind CHECK back down to the live kinds.
+-- Tighten tv_displays.kind CHECK back down to the live kinds. Guarded so
+-- the constraint is only added when missing — an unconditional DROP + ADD
+-- takes an ACCESS EXCLUSIVE lock and re-validates the table on every boot.
 DELETE FROM tv_displays WHERE kind = 'custom';
-ALTER TABLE tv_displays DROP CONSTRAINT IF EXISTS tv_displays_kind_check;
-ALTER TABLE tv_displays ADD CONSTRAINT tv_displays_kind_check
-  CHECK (kind IN ('vs_recycling', 'vs_new', 'wc'));
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'tv_displays_kind_check'
+      AND conrelid = 'tv_displays'::regclass
+  ) THEN
+    ALTER TABLE tv_displays ADD CONSTRAINT tv_displays_kind_check
+      CHECK (kind IN ('vs_recycling', 'vs_new', 'wc'));
+  END IF;
+END $$;
 
 -- Operator dashboard switch (2026-05-14): the per-WC widget layouts
 -- saved under page='wc:{slug}' are orphaned now that every /wc/{slug}
@@ -642,6 +637,12 @@ CREATE TABLE IF NOT EXISTS work_schedules (
 -- timeclock_punches_log already exists in production.
 ALTER TABLE timeclock_punches_log
   ADD COLUMN IF NOT EXISTS rounded_at TIMESTAMPTZ;
+
+-- Expression index for the effective punch time. timeclock_windows
+-- filters/orders on COALESCE(rounded_at, occurred_at); must live after the
+-- rounded_at ALTER above so fresh installs have the column.
+CREATE INDEX IF NOT EXISTS idx_punches_log_effective_at
+  ON timeclock_punches_log ((COALESCE(rounded_at, occurred_at)));
 
 -- Time-off requests (2026-05-27): local mirror of Odoo hr.leave + sync state.
 -- `originating_kiosk_user` = TRUE for rows submitted via the kiosk (we own
