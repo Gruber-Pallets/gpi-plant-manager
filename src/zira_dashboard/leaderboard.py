@@ -163,8 +163,15 @@ def _adjusted_downtime(
         return 0
     breaks_by_day: dict[date, Any] = {}  # shared memo — one breaks_for() per local date
     total_minutes = 0.0
-    for event_start, duration_min in downtime_rows:
-        event_end = event_start + timedelta(minutes=duration_min)
+    for event_end, duration_min in downtime_rows:
+        # The meter stamps each reading at the END of the interval it covers,
+        # and `duration` is that interval's length in minutes -- so the event
+        # spans [event_end - duration, event_end], looking BACKWARD. Projecting
+        # it forward instead laid the overnight idle hour (the hourly Stop
+        # stamped 07:00 with duration=60, which describes 06:00->07:00) on top
+        # of the morning's production, inflating every producing station's
+        # downtime by ~an hour at shift start.
+        event_start = event_end - timedelta(minutes=duration_min)
         for ai_start, ai_end in intervals:
             overlap_start = max(event_start, ai_start)
             overlap_end = min(event_end, ai_end)

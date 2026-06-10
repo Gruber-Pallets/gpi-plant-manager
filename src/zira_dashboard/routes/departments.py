@@ -429,8 +429,10 @@ def _render_recycling(
     # paying full I/O cost per day on a cold cache. Fan out across the
     # module-level pool — `_recycling_day_data` is read-only and the caches it
     # touches (leaderboard TTL, per-day schedule cache, work_centers,
-    # settings) are thread-safe. Single-day stays inline so the most common
-    # case doesn't queue behind a busy pool.
+    # settings) are thread-safe. The pool is capped at 4 workers so we don't
+    # starve the DB pool (maxconn=30) or hammer the Zira API on multi-month
+    # ranges. Single-day stays inline so the most common case doesn't queue
+    # behind a busy pool.
     def _compute_day(d):
         return _recycling_day_data(d, now, d == today, align_to_standard=is_range)
 

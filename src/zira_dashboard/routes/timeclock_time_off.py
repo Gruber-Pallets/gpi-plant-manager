@@ -1044,11 +1044,33 @@ def _build_calendar_context(month: str | None) -> dict:
     and the prev/next month anchors. Callers layer on ``token``/``public``
     and ``bilingual`` themselves.
 
+    Each leave entry's ``full`` flag is refined against the company shift
+    length (via :func:`_tcal.is_full_day`) before grid assembly: an unpaid
+    full day arrives from Odoo tagged ``midday_gap`` with full-shift hour
+    bounds, so without this it would render as a partial (amber) showing a
+    bogus time range. Refined full days show the name alone (blue, no time);
+    only genuine leave-early / arrive-late / mid-day-gap shapes keep a
+    timing label (amber). Matches the staffing Time Off calendar.
+
     ``month`` ("YYYY-MM") comes from the prev/next nav links; anything
     missing or malformed falls back to the current month so a stale or
     typo'd URL never 500s the kiosk."""
     _first, range_start, range_end, _prev, _next = _tcal.month_bounds(month)
     off_map = _approved_by_day(range_start, range_end)
+    shift_len = None  # resolved lazily — skip the schedule fetch if no one's off
+    for entries in off_map.values():
+        for e in entries:
+            if e.get("source") == "holiday":
+                continue
+            if shift_len is None:
+                shift_len = schedule_store.current().shift_len
+            e["full"] = _tcal.is_full_day(
+                e.get("shape"), e.get("hour_from"), e.get("hour_to"), shift_len,
+            )
+            # Full days carry no timing — the name + blue chip already says
+            # "out all day"; only partials keep their leave/arrive time.
+            if e["full"]:
+                e["label"] = ""
     return _tcal.build_calendar_grid(month, off_map)
 
 

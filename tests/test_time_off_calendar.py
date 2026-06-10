@@ -50,6 +50,41 @@ def test_label_for_none_hour_coerced_to_zero_without_crashing():
     assert label == f"12:00am{NDASH}12:00pm"
 
 
+# ---------- is_full_day: full vs genuine-partial from the off-window span ----------
+
+# Standard plant shift: 7:00am–3:30pm = 8.5 decimal hours.
+SHIFT_LEN = 8.5
+
+
+def test_is_full_day_true_for_full_day_shape():
+    assert c.is_full_day("full_day", None, None, SHIFT_LEN) is True
+
+
+def test_is_full_day_true_when_off_window_spans_the_whole_shift():
+    # An unpaid full day entered in Odoo arrives tagged `midday_gap` with
+    # full-shift hour bounds — it must still read as a full day.
+    assert c.is_full_day("midday_gap", 7.0, 15.5, SHIFT_LEN) is True
+
+
+def test_is_full_day_false_for_genuine_partials():
+    # leave early at 2pm — off-window is the half hour to shift end.
+    assert c.is_full_day("early_leave", 14.0, 15.5, SHIFT_LEN) is False
+    # arrive late at 9am — off-window is the morning before arrival.
+    assert c.is_full_day("late_arrival", 7.0, 9.0, SHIFT_LEN) is False
+    # mid-day gap — a slice out of the middle.
+    assert c.is_full_day("midday_gap", 10.0, 12.0, SHIFT_LEN) is False
+
+
+def test_is_full_day_tolerance_absorbs_small_shortfalls():
+    # Off-window 30 min shy of the full shift still counts as full.
+    assert c.is_full_day("midday_gap", 7.0, 15.0, SHIFT_LEN) is True
+
+
+def test_is_full_day_true_when_hour_bounds_missing():
+    # No timing to show → treat as full so nothing leaks a bogus time.
+    assert c.is_full_day("midday_gap", None, None, SHIFT_LEN) is True
+
+
 # ---------- parse_holiday_date: tolerant date coercion ----------
 
 
@@ -178,7 +213,10 @@ def test_fan_out_full_day_leave_fans_one_full_entry_per_in_range_day():
     out = c.fan_out_approved(leaves, [], date(2026, 6, 1), date(2026, 6, 3))
     assert sorted(out.keys()) == [date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)]
     for d in out:
-        assert out[d] == [{"name": "Alice", "label": "full day", "full": True}]
+        assert out[d] == [{
+            "name": "Alice", "label": "full day", "full": True,
+            "shape": "full_day", "hour_from": None, "hour_to": None,
+        }]
 
 
 def test_fan_out_midday_gap_is_partial_with_label():
@@ -192,6 +230,11 @@ def test_fan_out_midday_gap_is_partial_with_label():
     assert entry["name"] == "Bob"
     assert entry["full"] is False
     assert entry["label"] == f"10:00am{NDASH}12:00pm"
+    # Raw shape + bounds ride along so a shift-aware consumer can refine
+    # full-vs-partial via is_full_day.
+    assert entry["shape"] == "midday_gap"
+    assert entry["hour_from"] == 10.0
+    assert entry["hour_to"] == 12.0
 
 
 def test_fan_out_holiday_emits_holiday_source_entry_per_day():
@@ -238,5 +281,8 @@ def test_fan_out_leave_and_holiday_coexist_on_same_day():
     out = c.fan_out_approved(leaves, holidays, date(2026, 7, 1), date(2026, 7, 31))
     day = out[date(2026, 7, 4)]
     # Leaves are appended before holidays (matches the original fan-out order).
-    assert day[0] == {"name": "Dana", "label": "full day", "full": True}
+    assert day[0] == {
+        "name": "Dana", "label": "full day", "full": True,
+        "shape": "full_day", "hour_from": None, "hour_to": None,
+    }
     assert day[1]["source"] == "holiday"

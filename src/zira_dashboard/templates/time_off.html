@@ -80,8 +80,8 @@
               {{ e.name }}
             </span>
           {% else %}
-            <span class="off-pill odoo src-odoo" title="{{ e.label }}">
-              {{ e.name }}{% if e.label and e.label != 'full day' %} <span style="opacity:0.75;font-weight:400">· {{ e.label }}</span>{% endif %}
+            <span class="off-pill {{ 'odoo' if e.full else 'partial' }} src-odoo" title="{{ e.label or 'full day' }}">
+              {{ e.name }}{% if e.label %} <span style="opacity:0.75;font-weight:400">· {{ e.label }}</span>{% endif %}
             </span>
           {% endif %}
         {% endfor %}
@@ -105,7 +105,7 @@
                 {% if e.source == 'holiday' %}
                   <span class="off-pill holiday src-holiday" title="Plant Closed">{{ e.name }}</span>
                 {% else %}
-                  <span class="off-pill odoo src-odoo" title="{{ e.label }}">{{ e.name }}{% if e.label and e.label != 'full day' %} · {{ e.label }}{% endif %}</span>
+                  <span class="off-pill {{ 'odoo' if e.full else 'partial' }} src-odoo" title="{{ e.label or 'full day' }}">{{ e.name }}{% if e.label %} · {{ e.label }}{% endif %}</span>
                 {% endif %}
               {% endfor %}
             </div>
@@ -134,7 +134,7 @@
                     {% if e.source == 'holiday' %}
                       <span class="off-pill holiday src-holiday" title="Plant Closed">{{ e.name }}</span>
                     {% else %}
-                      <span class="off-pill odoo src-odoo" title="{{ e.label }}">{{ e.name }}{% if e.label and e.label != 'full day' %} · {{ e.label }}{% endif %}</span>
+                      <span class="off-pill {{ 'odoo' if e.full else 'partial' }} src-odoo" title="{{ e.label or 'full day' }}">{{ e.name }}{% if e.label %} · {{ e.label }}{% endif %}</span>
                     {% endif %}
                   {% endfor %}
                 </div>

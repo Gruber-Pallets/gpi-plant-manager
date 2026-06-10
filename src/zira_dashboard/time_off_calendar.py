@@ -32,6 +32,32 @@ def label_for(r: dict) -> str:
     return f"{fmt_decimal_hour(hf)}–{fmt_decimal_hour(ht)}"
 
 
+# How much shorter than the full company shift an off-window may be and still
+# count as "the whole working day" — absorbs lunch/rounding and small shift
+# mismatches between the global schedule and an individual's resource calendar.
+_FULL_DAY_TOL = 0.5
+
+
+def is_full_day(shape, hour_from, hour_to, shift_len: float) -> bool:
+    """Whether a leave row occupies essentially the whole working day.
+
+    ``full_day`` shape is always full. Hour-bounded leaves need a closer
+    look: leaves entered directly in Odoo and synced in are tagged
+    ``midday_gap`` whenever they carry hour bounds (``time_off_sync`` can't
+    tell late/early/gap from Odoo alone), so a full *unpaid* day off arrives
+    here looking like a partial. We recover the distinction from the
+    off-window span: if it covers at least the whole company shift
+    (``shift_len`` decimal hours, minus a small tolerance) the person is out
+    all day; the three genuine partials (arrive late / leave early / mid-day
+    gap) only ever cover part of it. Missing bounds → treat as full (there's
+    no timing to show anyway)."""
+    if shape == "full_day":
+        return True
+    if hour_from is None or hour_to is None:
+        return True
+    return (float(hour_to) - float(hour_from)) >= shift_len - _FULL_DAY_TOL
+
+
 def parse_holiday_date(s):
     """Odoo returns 'YYYY-MM-DD HH:MM:SS' strings for datetime fields.
     Strip the time component to get a date for the per-day fan-out.
@@ -98,8 +124,12 @@ def fan_out_approved(leave_rows, holiday_rows, start_d: _date, end_d: _date) -> 
 
     ``leave_rows`` carry ``shape``/``date_from``/``date_to``/``hour_from``/
     ``hour_to``/``person_name``; each is expanded over every day it overlaps
-    ``[start_d, end_d]`` into ``{name, label, full}``. ``holiday_rows`` carry
-    ``name``/``date_from``/``date_to``; each in-range day gets a
+    ``[start_d, end_d]`` into ``{name, label, full, shape, hour_from,
+    hour_to}``. The ``full`` flag is the simple shape-only test (kept for the
+    Who's Out kiosk grid); the raw ``shape``/``hour_from``/``hour_to`` ride
+    along so a consumer that knows the shift length can refine full-vs-partial
+    via :func:`is_full_day` (the staffing calendar does). ``holiday_rows``
+    carry ``name``/``date_from``/``date_to``; each in-range day gets a
     ``{name, label: "Plant Closed", source: "holiday"}`` entry."""
     by_day: dict = {}
     for r in leave_rows:
@@ -110,6 +140,8 @@ def fan_out_approved(leave_rows, holiday_rows, start_d: _date, end_d: _date) -> 
             by_day.setdefault(cur, []).append({
                 "name": r["person_name"], "label": label,
                 "full": r["shape"] == "full_day",
+                "shape": r["shape"],
+                "hour_from": r["hour_from"], "hour_to": r["hour_to"],
             })
             cur = cur + _td(days=1)
 

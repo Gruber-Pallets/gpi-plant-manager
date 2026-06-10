@@ -776,3 +776,158 @@
     pollMs: 60000,
   });
 })();
+
+// Global "Missed Punch Out" badge + modal — present on every page.
+// Mirrors the Missing-Work-Center badge/modal and reuses its .late-* styling.
+// Each row takes a time the manager enters; saving rewrites that attendance's
+// check_out (from midnight to the entered time) and clears the row.
+(function () {
+  var navBadge = null;
+  var modal = null;
+  var data = null;
+  var ENDPOINT = '/api/missed-punch-out';
+
+  function settingsLink() {
+    return document.querySelector('header nav a[href="/settings"]')
+        || document.querySelector('header.app nav a[href="/settings"]');
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function refreshCount() {
+    if (document.hidden) return;  // don't poll background tabs (matches makeBadgeModal)
+    fetch(ENDPOINT).then(function (r) { return r.json(); }).then(function (d) {
+      data = d;
+      injectOrUpdateBadge();
+    }).catch(function () {});
+  }
+
+  function injectOrUpdateBadge() {
+    if (!data || !data.count) {
+      if (navBadge) { navBadge.remove(); navBadge = null; }
+      return;
+    }
+    var anchor = settingsLink();
+    if (!anchor) return;
+    if (!navBadge) {
+      navBadge = document.createElement('a');
+      navBadge.href = '#';
+      navBadge.className = 'late-nav-badge mpo-nav-badge';
+      navBadge.title = 'Employees auto-clocked-out at midnight — click to set the real time';
+      navBadge.addEventListener('click', function (e) { e.preventDefault(); openModal(); });
+      anchor.parentNode.insertBefore(navBadge, anchor.nextSibling);
+    }
+    navBadge.innerHTML = '⏰ <span class="cnt">' + data.count + '</span> Missed Punch Out';
+    navBadge.style.display = '';
+  }
+
+  function openModal() {
+    closeModal();
+    modal = document.createElement('div');
+    modal.className = 'late-modal mpo-modal';
+    modal.innerHTML = ''
+      + '<div class="late-backdrop"></div>'
+      + '<div class="late-card" role="dialog" aria-modal="true" aria-label="Missed punch out">'
+      + '  <div class="late-head"><h3>Missed Punch Out</h3>'
+      + '    <button type="button" class="late-close" aria-label="Close">×</button></div>'
+      + '  <div class="late-body">Loading…</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    document.documentElement.style.overflow = 'hidden';
+    modal.querySelector('.late-backdrop').addEventListener('click', closeModal);
+    modal.querySelector('.late-close').addEventListener('click', closeModal);
+    document.addEventListener('keydown', escClose);
+    fetch(ENDPOINT).then(function (r) { return r.json(); }).then(renderModal);
+  }
+
+  function closeModal() {
+    if (modal) { modal.remove(); modal = null; }
+    document.documentElement.style.overflow = '';
+    document.removeEventListener('keydown', escClose);
+  }
+
+  function escClose(e) { if (e.key === 'Escape') closeModal(); }
+
+  function postJson(url, payload) {
+    return fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    }).then(function (r) { return r.json(); });
+  }
+
+  function finishRow(li, label, ok) {
+    var status = li.querySelector('.late-status');
+    status.textContent = label;
+    status.hidden = false;
+    if (ok) {
+      li.querySelectorAll('button, input').forEach(function (el) { el.disabled = true; });
+      li.style.opacity = '0.6';
+      refreshCount();
+    }
+  }
+
+  function wireActions(body) {
+    body.querySelectorAll('.mpo-save-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var li = btn.closest('.late-item');
+        var input = li.querySelector('.mpo-time-input');
+        if (!input.value) { input.focus(); return; }
+        btn.disabled = true;
+        postJson('/missed-punch-out/correct', {
+          attendance_id: parseInt(li.getAttribute('data-att'), 10),
+          time: input.value,
+        }).then(function (res) {
+          if (res && res.ok) {
+            finishRow(li, 'Corrected ✓', true);
+          } else {
+            finishRow(li, (res && res.error) || 'Error', false);
+            btn.disabled = false;
+          }
+        }).catch(function () { finishRow(li, 'Error', false); btn.disabled = false; });
+      });
+    });
+  }
+
+  function renderModal(d) {
+    data = d;
+    if (!modal) return;
+    var body = modal.querySelector('.late-body');
+    var rows = (d && d.rows) || [];
+    if (!rows.length) {
+      body.innerHTML = '<p class="late-help">No missed punch-outs. Anyone left clocked in '
+        + 'overnight is auto-clocked-out at midnight and appears here so you can set the '
+        + 'time they actually left.</p>';
+      return;
+    }
+    var html = '<ul class="late-list">';
+    rows.forEach(function (item) {
+      html += '<li class="late-item" data-att="' + item.attendance_id + '">'
+        + '<span class="late-item-name">' + escapeHtml(item.name) + '</span>'
+        + '<span class="late-item-mins">clocked in ' + escapeHtml(item.check_in_label)
+        + ' · auto-closed at midnight</span>'
+        + '<div class="late-reason-row">'
+        + '  <label>Actually left at '
+        + '    <input type="time" class="mpo-time-input" />'
+        + '  </label>'
+        + '  <button type="button" class="mpo-save-btn">Save</button>'
+        + '</div>'
+        + '<span class="late-status" hidden></span>'
+        + '</li>';
+    });
+    html += '</ul>';
+    body.innerHTML = html;
+    wireActions(body);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', refreshCount);
+  } else {
+    refreshCount();
+  }
+  setInterval(refreshCount, 60000);
+})();

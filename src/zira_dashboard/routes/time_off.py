@@ -13,17 +13,27 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
-from .. import _http_cache
+from .. import _http_cache, schedule_store
 from ..deps import templates
+from ..time_off_calendar import is_full_day
 from .timeclock_time_off import _approved_by_day
 
 router = APIRouter()
 
 
+def _company_shift_len() -> float:
+    """Length of the company shift in decimal hours (e.g. 7:00–15:30 → 8.5).
+
+    Cheap, no Odoo round-trip — the global Company Schedule is enough to tell
+    a whole-day off-window from a genuine partial; per-person resource
+    calendars only matter for the kiosk's own validation, not this glance."""
+    return schedule_store.current().shift_len
+
+
 def _odoo_time_off_by_day(
     start_d: date, end_d: date,
 ) -> dict[date, list[dict]]:
-    """Return ``{date: [{name, label, source}, ...]}`` for approved
+    """Return ``{date: [{name, label, source, full}, ...]}`` for approved
     leaves AND company-wide public holidays in the local mirror
     overlapping ``[start_d, end_d]``.
 
@@ -32,19 +42,35 @@ def _odoo_time_off_by_day(
     with ``source='odoo'`` so the template can render them distinctly
     from a public-holiday entry on the same day; ``_approved_by_day``
     pre-tags public-holiday entries with ``source='holiday'`` which we
-    preserve here so they get the distinct red styling in the template."""
+    preserve here so they get the distinct red styling in the template.
+
+    Per-leave we recompute ``full`` against the company shift length via
+    :func:`is_full_day` — Odoo-synced leaves arrive tagged ``midday_gap``
+    whenever they carry hour bounds, so a full *unpaid* day off would
+    otherwise look (and read its time) like a partial. Only genuine partials
+    keep a timing ``label``; full days blank it so the template shows the name
+    alone (green) and reserves the gold partial styling + time for the three
+    leave-early / arrive-late / mid-day-gap shapes."""
     raw = _approved_by_day(start_d, end_d)
-    return {
-        d: [
-            {
-                "name": e["name"],
-                "label": e["label"],
-                "source": e.get("source") or "odoo",
-            }
-            for e in entries
-        ]
-        for d, entries in raw.items()
-    }
+    shift_len = _company_shift_len()
+
+    def _shape(e: dict) -> dict:
+        if e.get("source") == "holiday":
+            return {"name": e["name"], "label": e["label"], "source": "holiday",
+                    "full": True}
+        full = is_full_day(
+            e.get("shape"), e.get("hour_from"), e.get("hour_to"), shift_len,
+        )
+        return {
+            "name": e["name"],
+            # Time only rides along for genuine partials; full days show the
+            # name alone (see template — green, no time).
+            "label": "" if full else e["label"],
+            "source": e.get("source") or "odoo",
+            "full": full,
+        }
+
+    return {d: [_shape(e) for e in entries] for d, entries in raw.items()}
 
 
 @router.get("/staffing/time-off", response_class=HTMLResponse)

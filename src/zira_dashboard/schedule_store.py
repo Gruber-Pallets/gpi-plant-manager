@@ -33,6 +33,15 @@ class Schedule:
     work_weekdays: frozenset[int]   # 0=Mon .. 6=Sun
     breaks: tuple[Break, ...]
 
+    @property
+    def shift_len(self) -> float:
+        """Shift length in decimal hours (e.g. 7:00–15:30 → 8.5). Used to
+        tell a whole-day off-window from a genuine partial on the time-off
+        calendars (see ``time_off_calendar.is_full_day``)."""
+        start = self.shift_start.hour + self.shift_start.minute / 60.0
+        end = self.shift_end.hour + self.shift_end.minute / 60.0
+        return end - start
+
 
 DEFAULT_SCHEDULE = Schedule(
     shift_start=time(7, 0),

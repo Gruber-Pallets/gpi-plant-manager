@@ -109,7 +109,7 @@
                         {{ n.name }}
                       </li>
                     {% else %}
-                      <li class="wo-chip{% if loop.index0 >= 4 %} wo-overflow{% endif %}" title="{{ n.name }} — {{ n.label }}" style="
+                      <li class="wo-chip{% if loop.index0 >= 4 %} wo-overflow{% endif %}" title="{{ n.name }}{% if n.label %} — {{ n.label }}{% endif %}" style="
                         font-size: 0.85rem;
                         line-height: 1.2;
                         color: #0f172a;
@@ -117,7 +117,7 @@
                         background: {% if n.full %}#60a5fa{% else %}#fef3c7{% endif %};
                         border-radius: 0.25rem;
                         padding: 0.15rem 0.35rem;">
-                        <strong>{{ n.name }}</strong> — {{ n.label }}
+                        <strong>{{ n.name }}</strong>{% if n.label %} — {{ n.label }}{% endif %}
                       </li>
                     {% endif %}
                   {% endfor %}

@@ -843,4 +843,15 @@ CREATE TABLE IF NOT EXISTS missing_wc_resolved (
   wc_name       TEXT,
   resolved_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS missed_punch_out (
+  attendance_id    BIGINT PRIMARY KEY,
+  employee_odoo_id BIGINT NOT NULL,
+  name             TEXT,
+  check_in         TIMESTAMPTZ NOT NULL,
+  auto_closed_at   TIMESTAMPTZ NOT NULL,
+  corrected_at     TIMESTAMPTZ,
+  resolved_at      TIMESTAMPTZ,
+  flagged_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
