@@ -61,7 +61,7 @@ def test_run_close_closes_only_prior_day_and_records(monkeypatch):
     ])
     closed, recorded = [], []
     monkeypatch.setattr(odoo_client, "clock_out",
-                        lambda att, ts: closed.append((att, ts)))
+                        lambda att, ts, **kw: closed.append((att, ts)))
     monkeypatch.setattr(mpo, "record_close",
                         lambda att, emp, ci, mid: recorded.append((att, emp, mid)))
 
@@ -78,7 +78,7 @@ def test_run_close_noop_when_all_today(monkeypatch):
         {"att_id": 2, "employee_odoo_id": 20, "check_in": _iso(2026, 6, 9, 15, 0)},
     ])
     monkeypatch.setattr(odoo_client, "clock_out",
-                        lambda att, ts: (_ for _ in ()).throw(AssertionError("should not close")))
+                        lambda att, ts, **kw: (_ for _ in ()).throw(AssertionError("should not close")))
     monkeypatch.setattr(mpo, "record_close", lambda *a: None)
     assert mpo.run_close(today) == 0
 
@@ -92,7 +92,7 @@ def test_run_close_isolates_per_record_failure(monkeypatch):
         {"att_id": 2, "employee_odoo_id": 20, "check_in": _iso(2026, 6, 8, 18, 0)},
     ])
 
-    def _clock_out(att, ts):
+    def _clock_out(att, ts, **kw):
         if att == 1:
             raise RuntimeError("odoo boom")
 
@@ -105,6 +105,23 @@ def test_run_close_isolates_per_record_failure(monkeypatch):
 
     assert n == 1          # only the record that closed cleanly is counted
     assert flagged == [2]  # the failed record was never flagged; the sweep continued
+
+
+def test_run_close_marks_odoo_checkout_as_automatic(monkeypatch):
+    today = date(2026, 6, 9)
+    monkeypatch.setattr(odoo_client, "fetch_open_attendances", lambda: [
+        {"att_id": 1, "employee_odoo_id": 10, "check_in": _iso(2026, 6, 8, 18, 0)},
+    ])
+    calls = []
+    monkeypatch.setattr(
+        odoo_client, "clock_out",
+        lambda att, ts, **kw: calls.append((att, ts, kw)),
+    )
+    monkeypatch.setattr(mpo, "record_close", lambda *a: None)
+
+    assert mpo.run_close(today) == 1
+
+    assert calls and calls[0][2] == {"mode": "auto_check_out"}
 
 
 def test_tick_calls_run_close_with_site_local_today(monkeypatch):

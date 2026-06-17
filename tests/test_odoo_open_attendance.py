@@ -82,6 +82,94 @@ def test_set_attendance_wc_noop_without_field(monkeypatch):
     fake.assert_not_called()
 
 
+def test_clock_in_marks_kiosk_attendance_approved(monkeypatch):
+    monkeypatch.delenv("ODOO_KIOSK_WC_FIELD", raising=False)
+    monkeypatch.delenv("ODOO_KIOSK_DEPARTMENT_FIELD", raising=False)
+    fake = MagicMock(return_value=123)
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    ts = datetime(2026, 6, 16, 16, 30, tzinfo=timezone.utc)
+    assert odoo_client.clock_in(5, None, ts) == 123
+
+    fake.assert_called_once_with(
+        "hr.attendance", "create",
+        {
+            "employee_id": 5,
+            "check_in": "2026-06-16 16:30:00",
+            "in_mode": "kiosk",
+            "overtime_status": "approved",
+        },
+    )
+
+
+def test_clock_out_approves_regular_hours_after_odoo_computes_no_overtime(monkeypatch):
+    fake = MagicMock(side_effect=[True, [{"overtime_hours": 0}], True])
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    ts = datetime(2026, 6, 16, 21, 30, tzinfo=timezone.utc)
+    odoo_client.clock_out(88, ts)
+
+    assert fake.call_args_list[0].args == (
+        "hr.attendance", "write",
+        [88],
+        {
+            "check_out": "2026-06-16 21:30:00",
+            "out_mode": "kiosk",
+        },
+    )
+    assert fake.call_args_list[1].args == (
+        "hr.attendance", "search_read", [("id", "=", 88)]
+    )
+    assert fake.call_args_list[1].kwargs == {
+        "fields": ["overtime_hours"],
+        "limit": 1,
+    }
+    assert fake.call_args_list[2].args == (
+        "hr.attendance", "write", [88], {"overtime_status": "approved"}
+    )
+
+
+def test_clock_out_can_mark_automatic_checkout(monkeypatch):
+    fake = MagicMock(side_effect=[True, [{"overtime_hours": 0}], True])
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    ts = datetime(2026, 6, 17, 5, 0, tzinfo=timezone.utc)
+    odoo_client.clock_out(88, ts, mode="auto_check_out")
+
+    assert fake.call_args_list[0].args == (
+        "hr.attendance", "write",
+        [88],
+        {
+            "check_out": "2026-06-17 05:00:00",
+            "out_mode": "auto_check_out",
+        },
+    )
+
+
+def test_clock_out_leaves_positive_overtime_to_approve(monkeypatch):
+    fake = MagicMock(side_effect=[True, [{"overtime_hours": 1.25}], True])
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    ts = datetime(2026, 6, 16, 23, 0, tzinfo=timezone.utc)
+    odoo_client.clock_out(88, ts)
+
+    assert fake.call_args_list[2].args == (
+        "hr.attendance", "write", [88], {"overtime_status": "to_approve"}
+    )
+
+
+def test_clock_out_approves_negative_extra_hours(monkeypatch):
+    fake = MagicMock(side_effect=[True, [{"overtime_hours": -24}], True])
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    ts = datetime(2026, 6, 16, 21, 30, tzinfo=timezone.utc)
+    odoo_client.clock_out(88, ts)
+
+    assert fake.call_args_list[2].args == (
+        "hr.attendance", "write", [88], {"overtime_status": "approved"}
+    )
+
+
 def test_refresh_builds_keyed_snapshot(monkeypatch):
     from zira_dashboard import live_cache
     monkeypatch.setattr(

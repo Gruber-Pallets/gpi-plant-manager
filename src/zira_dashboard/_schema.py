@@ -242,6 +242,7 @@ CREATE TABLE IF NOT EXISTS manual_absences (
 CREATE INDEX IF NOT EXISTS manual_absences_day_idx ON manual_absences(day);
 
 ALTER TABLE manual_absences ADD COLUMN IF NOT EXISTS reason TEXT;
+ALTER TABLE manual_absences ADD COLUMN IF NOT EXISTS odoo_leave_id INTEGER;
 
 CREATE TABLE IF NOT EXISTS late_arrivals (
   day            DATE NOT NULL,

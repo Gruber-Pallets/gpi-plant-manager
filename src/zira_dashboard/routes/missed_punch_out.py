@@ -67,7 +67,7 @@ def _correct_sync(body: dict):
             status_code=400)
 
     try:
-        odoo_client.clock_out(att_id, corrected)
+        odoo_client.clock_out(att_id, corrected, mode="manual")
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     missed_punch_out.correct(att_id, corrected)

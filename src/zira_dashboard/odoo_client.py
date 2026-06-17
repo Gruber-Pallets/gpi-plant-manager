@@ -565,6 +565,25 @@ def _odoo_dt_to_iso(value: Any) -> str | None:
     return None
 
 
+def _is_zero_duration_attendance(row: dict) -> bool:
+    """True for closed Odoo rows with no meaningful worked interval.
+
+    Odoo can surface cleanup/no-op rows around midnight as 12:00:00 to
+    12:00:01, which displays as 00:00 worked time. Those should not make the
+    dashboard treat someone as present for the day.
+    """
+    check_in = _odoo_dt_to_iso(row.get("check_in"))
+    check_out = _odoo_dt_to_iso(row.get("check_out"))
+    if not check_in or not check_out:
+        return False
+    try:
+        start = datetime.fromisoformat(check_in)
+        end = datetime.fromisoformat(check_out)
+    except (TypeError, ValueError):
+        return False
+    return 0 <= (end - start).total_seconds() < 60
+
+
 def fetch_open_attendances() -> list[dict]:
     """Every currently-open hr.attendance (check_out IS NULL), one entry
     per clocked-in employee. Returns
@@ -617,6 +636,8 @@ def fetch_attendances_for_day(day) -> list[dict]:
     )
     agg: dict[int, dict] = {}
     for r in rows:
+        if _is_zero_duration_attendance(r):
+            continue
         emp = r.get("employee_id")
         emp_id = unwrap_m2o(emp)
         if not emp_id:
@@ -667,6 +688,8 @@ def fetch_attendance_intervals_for_day(day) -> list[dict]:
     )
     out: list[dict] = []
     for r in rows:
+        if _is_zero_duration_attendance(r):
+            continue
         emp = r.get("employee_id")
         emp_id = unwrap_m2o(emp)
         if not emp_id:
@@ -700,8 +723,27 @@ def set_attendance_wc(attendance_id: int, wc_name: str | None) -> None:
     execute("hr.attendance", "write", [attendance_id], payload)
 
 
+def _overtime_status_for_attendance(attendance_id: int) -> str:
+    rows = execute(
+        "hr.attendance", "search_read",
+        [("id", "=", attendance_id)],
+        fields=["overtime_hours"],
+        limit=1,
+    )
+    try:
+        overtime_hours = float(rows[0].get("overtime_hours") or 0)
+    except (IndexError, TypeError, ValueError):
+        overtime_hours = 0
+    return "to_approve" if overtime_hours > 0 else "approved"
+
+
 def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
     """Create a new hr.attendance with check_in=ts. Returns the new id.
+
+    Kiosk-created records are marked as ``approved`` so Odoo's manager-review
+    overtime setting does not put every normal plant punch into Management >
+    To Approve. Actual missed-punch corrections still have their own local
+    alert flow.
 
     Writes the WC name into ODOO_KIOSK_WC_FIELD when configured (Char).
     Writes the WC's resolved Odoo department into ODOO_KIOSK_DEPARTMENT_FIELD
@@ -711,6 +753,8 @@ def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
     payload: dict[str, Any] = {
         "employee_id": employee_odoo_id,
         "check_in": _to_odoo_dt(ts),
+        "in_mode": "kiosk",
+        "overtime_status": "approved",
     }
     wc_field = _kiosk_wc_field()
     if wc_field and wc_name:
@@ -723,13 +767,21 @@ def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
     return execute("hr.attendance", "create", payload)
 
 
-def clock_out(attendance_id: int, ts: datetime) -> None:
+def clock_out(attendance_id: int, ts: datetime, *, mode: str = "kiosk") -> None:
     """Set check_out on an existing hr.attendance. Safe to call on an
     already-closed record — Odoo just overwrites the timestamp."""
     execute(
         "hr.attendance", "write",
         [attendance_id],
-        {"check_out": _to_odoo_dt(ts)},
+        {
+            "check_out": _to_odoo_dt(ts),
+            "out_mode": mode,
+        },
+    )
+    execute(
+        "hr.attendance", "write",
+        [attendance_id],
+        {"overtime_status": _overtime_status_for_attendance(attendance_id)},
     )
 
 
@@ -1079,6 +1131,29 @@ def confirm_leave(leave_id: int) -> None:
     rows = execute("hr.leave", "read", [leave_id], ["state"])
     if rows and rows[0].get("state") == "draft":
         execute("hr.leave", "action_confirm", [leave_id])
+
+
+def approve_leave(leave_id: int) -> str | None:
+    """Approve a pending hr.leave and return its final Odoo state.
+
+    Odoo 19 generally creates Time Off in ``confirm``. Older flows may still
+    expose ``draft`` first, and two-step approval can pass through
+    ``validate1``. Read between each workflow action so this is safe to call
+    on duplicates and retries.
+    """
+    state: str | None = None
+    for _ in range(3):
+        rows = execute("hr.leave", "read", [leave_id], ["state"])
+        state = rows[0].get("state") if rows else None
+        if state == "draft":
+            confirm_leave(leave_id)
+            continue
+        if state in ("confirm", "validate1"):
+            execute("hr.leave", "action_approve", [leave_id])
+            continue
+        return state
+    rows = execute("hr.leave", "read", [leave_id], ["state"])
+    return rows[0].get("state") if rows else state
 
 
 def write_leave(leave_id: int, **fields: Any) -> None:

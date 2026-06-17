@@ -44,18 +44,19 @@ def test_get_returns_count_and_rows():
 def test_correct_rewrites_check_out_and_resolves(monkeypatch):
     calls = {}
     monkeypatch.setattr(odoo_client, "clock_out",
-                        lambda att, ts: calls.update(att=att, ts=ts))
+                        lambda att, ts, **kw: calls.update(att=att, ts=ts, kw=kw))
     r = client.post("/missed-punch-out/correct",
                     json={"attendance_id": ATT, "time": "16:30"})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert calls["att"] == ATT
     assert calls["ts"] == datetime(2026, 6, 8, 16, 30, tzinfo=SITE_TZ)
+    assert calls["kw"] == {"mode": "manual"}
     assert mpo.get_unresolved(ATT) is None
 
 
 def test_correct_rejects_time_before_check_in(monkeypatch):
     monkeypatch.setattr(odoo_client, "clock_out",
-                        lambda att, ts: (_ for _ in ()).throw(AssertionError("no write")))
+                        lambda att, ts, **kw: (_ for _ in ()).throw(AssertionError("no write")))
     r = client.post("/missed-punch-out/correct",
                     json={"attendance_id": ATT, "time": "06:00"})  # before 13:00 check-in
     assert r.status_code == 400

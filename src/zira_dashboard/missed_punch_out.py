@@ -151,7 +151,7 @@ def run_close(today) -> int:
     n = 0
     for c in closures:
         try:
-            odoo_client.clock_out(c["att_id"], c["midnight"])
+            odoo_client.clock_out(c["att_id"], c["midnight"], mode="auto_check_out")
             record_close(c["att_id"], c["employee_odoo_id"],
                          c["check_in"], c["midnight"])
             n += 1

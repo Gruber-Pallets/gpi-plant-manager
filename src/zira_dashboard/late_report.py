@@ -24,17 +24,35 @@ DEFAULT_SNOOZE_MINUTES = 30
 _last_snooze_cleanup: float = 0.0
 
 
-def declare_absent(day, emp_id: str, name: str, reason: str | None = None) -> None:
+def declare_absent(
+    day,
+    emp_id: str,
+    name: str,
+    reason: str | None = None,
+    odoo_leave_id: int | None = None,
+) -> None:
     db.execute(
         """
-        INSERT INTO manual_absences (day, emp_id, name, reason)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO manual_absences (day, emp_id, name, reason, odoo_leave_id)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (day, emp_id) DO UPDATE SET
           name = EXCLUDED.name,
-          reason = EXCLUDED.reason
+          reason = EXCLUDED.reason,
+          odoo_leave_id = EXCLUDED.odoo_leave_id
         """,
-        (day, str(emp_id), name, reason),
+        (day, str(emp_id), name, reason, odoo_leave_id),
     )
+
+
+def odoo_leave_id_for_absence(day, emp_id: str) -> int | None:
+    rows = db.query(
+        "SELECT odoo_leave_id FROM manual_absences WHERE day = %s AND emp_id = %s",
+        (day, str(emp_id)),
+    )
+    if not rows:
+        return None
+    leave_id = rows[0].get("odoo_leave_id")
+    return int(leave_id) if leave_id is not None else None
 
 
 def undo_absent(day, emp_id: str) -> None:

@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from .. import absence_sync, db, late_report
+
 router = APIRouter()
 
 
@@ -34,7 +36,6 @@ def _bust_caches() -> None:
 def _declare_absent_sync(body: dict) -> JSONResponse:
     """Blocking half of /api/late-report/declare-absent (Postgres writes +
     cache busting); runs in a worker thread via asyncio.to_thread."""
-    from .. import db, late_report
     emp_id = str(body.get("emp_id") or "").strip()
     name = str(body.get("name") or "").strip()
     reason_raw = body.get("reason")
@@ -46,9 +47,28 @@ def _declare_absent_sync(body: dict) -> JSONResponse:
             {"ok": False, "error": "reason required — no record posts until a reason is given"},
             status_code=400,
         )
+    try:
+        employee_odoo_id = int(emp_id)
+    except ValueError:
+        return JSONResponse(
+            {"ok": False, "error": "emp_id must be an Odoo employee id"},
+            status_code=400,
+        )
     today = datetime.now(timezone.utc).date()
     try:
-        late_report.declare_absent(today, emp_id, name, reason=reason)
+        absence = absence_sync.create_absence_for_day(
+            employee_odoo_id=employee_odoo_id,
+            employee_name=name,
+            day=today,
+            reason=reason,
+        )
+        late_report.declare_absent(
+            today,
+            emp_id,
+            name,
+            reason=reason,
+            odoo_leave_id=absence["leave_id"],
+        )
         db.execute(
             "DELETE FROM late_snoozes WHERE day = %s AND emp_id = %s",
             (today, emp_id),
@@ -147,12 +167,14 @@ async def late_report_snooze(request: Request):
 def _undo_absent_sync(body: dict) -> JSONResponse:
     """Blocking half of /api/late-report/undo-absent (Postgres write + cache
     busting); runs in a worker thread via asyncio.to_thread."""
-    from .. import late_report
     emp_id = str(body.get("emp_id") or "").strip()
     if not emp_id:
         return JSONResponse({"ok": False, "error": "emp_id required"}, status_code=400)
     today = datetime.now(timezone.utc).date()
     try:
+        absence_sync.refuse_absence_leave(
+            late_report.odoo_leave_id_for_absence(today, emp_id)
+        )
         late_report.undo_absent(today, emp_id)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

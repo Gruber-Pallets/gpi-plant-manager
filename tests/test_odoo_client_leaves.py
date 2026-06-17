@@ -423,6 +423,24 @@ def test_create_leave_partial_day_with_hours(monkeypatch):
     assert payload["request_hour_to"] == 12.0
 
 
+def test_approve_leave_advances_pending_leave_to_validated(monkeypatch):
+    calls = []
+    states = iter(["confirm", "validate"])
+
+    def fake_execute(model, method, *args, **kwargs):
+        calls.append((model, method, args, kwargs))
+        if (model, method) == ("hr.leave", "read"):
+            return [{"state": next(states)}]
+        if (model, method) == ("hr.leave", "action_approve"):
+            return True
+        raise AssertionError(f"unexpected call: {(model, method)}")
+
+    monkeypatch.setattr(odoo_client, "execute", fake_execute)
+
+    assert odoo_client.approve_leave(555) == "validate"
+    assert [c[1] for c in calls] == ["read", "action_approve", "read"]
+
+
 def test_write_leave_passes_fields(monkeypatch):
     responses = {("hr.leave", "write"): True}
     calls = _stub_execute(monkeypatch, responses)
