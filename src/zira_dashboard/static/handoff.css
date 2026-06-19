@@ -256,6 +256,15 @@ header.app nav a.active {
   color: var(--fg);
   white-space: pre-wrap;
 }
+.detail-link {
+  display: inline-flex;
+  margin-top: 0.55rem;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+.detail-link:hover { text-decoration: underline; }
 .handoff-row .empty-note,
 .empty-row {
   color: var(--muted);
@@ -263,6 +272,64 @@ header.app nav a.active {
 .empty-row {
   padding: 0.85rem 0.9rem;
   font-weight: 800;
+}
+.empty-row.compact {
+  padding: 0.55rem 0;
+}
+.detail-notes {
+  margin: 0;
+  padding: 0.9rem;
+  white-space: pre-wrap;
+}
+.snapshot-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  padding: 0.9rem;
+}
+.snapshot-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.snapshot-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+}
+.snapshot-section-head strong {
+  font-size: 0.9rem;
+}
+.snapshot-section-head span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.snapshot-section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.snapshot-section li {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(100px, 0.8fr) minmax(120px, 1fr);
+  gap: 0.45rem;
+  padding: 0.55rem 0.7rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.snapshot-section li + li {
+  border-top: 1px solid #e6ebf0;
+}
+.snapshot-section li strong {
+  color: var(--fg);
+}
+.snapshot-section li em {
+  font-style: normal;
 }
 
 @media (max-width: 800px) {
@@ -277,6 +344,12 @@ header.app nav a.active {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .handoff-form {
+    grid-template-columns: 1fr;
+  }
+  .snapshot-sections {
+    grid-template-columns: 1fr;
+  }
+  .snapshot-section li {
     grid-template-columns: 1fr;
   }
 }

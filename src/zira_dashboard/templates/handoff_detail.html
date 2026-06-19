@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/static/gpi-logo.png">
+<title>Handoff Snapshot — GPI Plant Manager</title>
+<link rel="stylesheet" href="/static/handoff.css?v={{ static_v('handoff.css') }}">
+</head>
+<body>
+<header class="app">
+  <div class="brand-row">
+    <a href="/recycling" class="brand">
+      <img src="/static/gpi-logo.png" alt="GPI">
+      <h1>Plant Manager</h1>
+    </a>
+    <nav>
+      <a href="/recycling">Dashboards</a>
+      <a href="/trophies">Trophy Case</a>
+      <a href="/exceptions">Inbox</a>
+      <a href="/handoff" class="active">Handoff</a>
+      <a href="/staffing">Staffing</a>
+      <a href="/settings">Settings</a>
+    </nav>
+  </div>
+  <div class="day-chip">{{ today }}</div>
+</header>
+
+<main class="handoff-shell">
+  <div class="page-title">
+    <div>
+      <h2>{{ handoff.shift_label }} Handoff</h2>
+      <p>{{ handoff.handoff_date }} · {{ handoff.created_at_label }} · {{ handoff.created_by }}</p>
+    </div>
+    <a class="secondary-btn" href="/handoff">Back to Handoff</a>
+  </div>
+
+  {% if handoff.source_errors %}
+  <div class="source-warning">
+    <strong>Some checks could not load.</strong>
+    <span>{{ handoff.source_error_label }}</span>
+  </div>
+  {% endif %}
+
+  <section class="snapshot-band" aria-label="Saved exception snapshot">
+    <div class="metric urgent">
+      <span>{{ handoff.urgent_total }}</span>
+      <strong>Urgent</strong>
+    </div>
+    <div class="metric">
+      <span>{{ handoff.open_total }}</span>
+      <strong>Open</strong>
+    </div>
+    {% for section in sections %}
+      <div class="metric">
+        <span>{{ section.count }}</span>
+        <strong>{{ section.title }}</strong>
+      </div>
+    {% endfor %}
+  </section>
+
+  <section class="handoff-form-section">
+    <div class="section-head">
+      <h3>Notes</h3>
+      <span>Saved with this handoff</span>
+    </div>
+    {% if handoff.notes %}
+      <p class="detail-notes">{{ handoff.notes }}</p>
+    {% else %}
+      <p class="detail-notes empty-note">No notes entered.</p>
+    {% endif %}
+  </section>
+
+  <section class="recent-section">
+    <div class="section-head">
+      <h3>Saved Inbox Snapshot</h3>
+      <span>{{ snapshot.generated_at or '' }}</span>
+    </div>
+    {% if sections %}
+      <div class="snapshot-sections">
+        {% for section in sections %}
+        <section class="snapshot-section">
+          <div class="snapshot-section-head">
+            <strong>{{ section.title }}</strong>
+            <span>{{ section.count }} open</span>
+          </div>
+          {% if section.rows %}
+            <ul>
+              {% for row in section.rows %}
+              <li>
+                <strong>{{ row.name }}</strong>
+                <span>{{ row.label }}</span>
+                <em>{{ row.detail }}</em>
+              </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="empty-row compact">All clear</div>
+          {% endif %}
+        </section>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-row">No snapshot sections were saved.</div>
+    {% endif %}
+  </section>
+</main>
+
+{% include '_footer.html' %}
+</body>
+</html>

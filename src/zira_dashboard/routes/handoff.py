@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import exception_inbox, plant_day
@@ -33,6 +33,17 @@ def _created_at_label(value) -> str:
     return str(value or "")
 
 
+def _json_value(value, fallback):
+    if value in (None, ""):
+        return fallback
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return fallback
+    return value
+
+
 def _recent_handoffs(limit: int = 10) -> list[dict]:
     from .. import db
 
@@ -51,8 +62,30 @@ def _recent_handoffs(limit: int = 10) -> list[dict]:
             "created_at_label": _created_at_label(row.get("created_at")),
             "has_source_errors": bool(source_errors),
             "source_error_label": ", ".join(e.get("source", "") for e in source_errors),
+            "detail_href": f"/handoff/{row['id']}",
         })
     return out
+
+
+def _load_handoff(handoff_id: int) -> dict | None:
+    from .. import db
+
+    rows = db.query(
+        "SELECT id, handoff_date, shift_label, created_by, notes, open_total, "
+        "urgent_total, source_errors, exception_snapshot, created_at, updated_at "
+        "FROM plant_shift_handoffs WHERE id = %s",
+        (handoff_id,),
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    source_errors = _json_value(row.get("source_errors"), [])
+    snapshot = _json_value(row.get("exception_snapshot"), {})
+    row["source_errors"] = source_errors if isinstance(source_errors, list) else []
+    row["exception_snapshot"] = snapshot if isinstance(snapshot, dict) else {}
+    row["created_at_label"] = _created_at_label(row.get("created_at"))
+    row["source_error_label"] = ", ".join(e.get("source", "") for e in row["source_errors"])
+    return row
 
 
 def _create_handoff(*, shift_label: str, created_by: str, notes: str) -> dict:
@@ -96,6 +129,24 @@ def handoff_page(request: Request, saved: int | None = None):
             "recent": _recent_handoffs(),
             "saved": saved,
             "default_created_by": _created_by(request),
+        },
+    )
+
+
+@router.get("/handoff/{handoff_id}", response_class=HTMLResponse)
+def handoff_detail_page(request: Request, handoff_id: int):
+    row = _load_handoff(handoff_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="handoff not found")
+    snapshot = row.get("exception_snapshot") or {}
+    return templates.TemplateResponse(
+        request,
+        "handoff_detail.html",
+        {
+            "today": plant_day.today().isoformat(),
+            "handoff": row,
+            "snapshot": snapshot,
+            "sections": snapshot.get("sections") or [],
         },
     )
 
