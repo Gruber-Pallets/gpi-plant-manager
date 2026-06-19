@@ -1,4 +1,34 @@
 (function () {
+  if (!window.gpiFetch) {
+    window.gpiFetch = function (url, opts) {
+      opts = opts || {};
+      if (typeof fetch === 'function') return fetch(url, opts);
+      return new Promise(function (resolve, reject) {
+        var xhr = new XMLHttpRequest();
+        xhr.open(opts.method || 'GET', url, true);
+        var headers = opts.headers || {};
+        Object.keys(headers).forEach(function (name) {
+          xhr.setRequestHeader(name, headers[name]);
+        });
+        xhr.onload = function () {
+          var responseText = xhr.responseText || '';
+          resolve({
+            ok: xhr.status >= 200 && xhr.status < 300,
+            status: xhr.status,
+            json: function () {
+              return Promise.resolve(responseText ? JSON.parse(responseText) : {});
+            },
+            text: function () { return Promise.resolve(responseText); },
+          });
+        };
+        xhr.onerror = function () { reject(new Error('network error')); };
+        xhr.send(opts.body || null);
+      });
+    };
+  }
+})();
+
+(function () {
   var btn = document.getElementById('changelog-open');
   var modal = document.getElementById('changelog-modal');
   var backdrop = document.getElementById('changelog-backdrop');
@@ -9,7 +39,7 @@
   var latestDate = null;
 
   // Check whether there's a newer entry than the user has seen.
-  fetch('/changelog/latest')
+  window.gpiFetch('/changelog/latest')
     .then(function (r) { return r.json(); })
     .then(function (data) {
       latestDate = data && data.latest_date;
@@ -27,7 +57,7 @@
     var seenAtOpen = '';
     try { seenAtOpen = localStorage.getItem('changelog_seen') || ''; } catch (e2) {}
     if (!loaded) {
-      fetch('/changelog')
+      window.gpiFetch('/changelog')
         .then(function (r) { return r.text(); })
         .then(function (html) {
           body.innerHTML = html;
@@ -68,15 +98,96 @@
   });
 })();
 
-// Global nav badges + modals — present on every page. Three instances share
+// Global nav badges + modals — present on every page. Four instances share
 // the makeBadgeModal factory below: "Assignments to Do", "Late/Absence
-// Report", and "Missing Work Center". Element IDs / classes / endpoints are
-// unchanged from the original per-feature IIFEs (footer.css and the inline
-// dashboard scripts depend on them).
+// Report", "Missing Work Center", and "Missed Punch Out". Element IDs /
+// classes / endpoints are unchanged from the original per-feature IIFEs
+// (footer.css and the inline dashboard scripts depend on them).
 (function () {
   function settingsLink() {
     return document.querySelector('header nav a[href="/settings"]')
         || document.querySelector('header.app nav a[href="/settings"]');
+  }
+
+  function ensureInboxLink() {
+    var anchor = settingsLink();
+    if (!anchor || !anchor.parentNode) return;
+    var existing = anchor.parentNode.querySelector('a[href="/exceptions"]');
+    if (existing) {
+      existing.classList.add('inbox-nav-link');
+      return existing;
+    }
+    var link = document.createElement('a');
+    link.href = '/exceptions';
+    link.textContent = 'Inbox';
+    link.className = 'inbox-nav-link';
+    if (window.location && window.location.pathname === '/exceptions') {
+      link.classList.add('active');
+    }
+    anchor.parentNode.insertBefore(link, anchor);
+    return link;
+  }
+
+  function ensureInboxLabel(link) {
+    if (!link) return null;
+    var label = link.querySelector('.inbox-nav-label');
+    if (!label) {
+      link.textContent = '';
+      label = document.createElement('span');
+      label.className = 'inbox-nav-label';
+      label.textContent = 'Inbox';
+      link.appendChild(label);
+    }
+    return label;
+  }
+
+  function ensureInboxCount(link) {
+    ensureInboxLabel(link);
+    var count = link.querySelector('.inbox-nav-count');
+    if (!count) {
+      count = document.createElement('span');
+      count.className = 'inbox-nav-count';
+      count.hidden = true;
+      link.appendChild(count);
+    }
+    return count;
+  }
+
+  function updateInboxSummaryLink(link, data) {
+    if (!link || !data) return;
+    var total = parseInt(data.total || 0, 10) || 0;
+    var urgent = parseInt(data.urgent_total || 0, 10) || 0;
+    var degraded = !!(data.source_errors && data.source_errors.length);
+    var count = ensureInboxCount(link);
+    link.classList.toggle('has-open', total > 0);
+    link.classList.toggle('has-urgent', urgent > 0);
+    link.classList.toggle('is-degraded', degraded);
+    count.hidden = total <= 0 && !degraded;
+    count.textContent = degraded && total <= 0 ? '!' : total > 99 ? '99+' : String(total);
+    var title = total > 0
+      ? 'Exception Inbox: ' + total + ' open' + (urgent > 0 ? ', ' + urgent + ' urgent' : '')
+      : 'Exception Inbox: all clear';
+    if (degraded) title += ' (some checks could not load)';
+    link.title = title;
+  }
+
+  function refreshInboxSummary(link) {
+    if (!link) return;
+    window.gpiFetch('/api/exceptions/summary').then(function (r) { return r.json(); }).then(function (d) {
+      updateInboxSummaryLink(link, d);
+    }).catch(function () {});
+  }
+
+  function startInboxSummary(link) {
+    if (!link) return;
+    window.gpiRefreshInboxSummary = function () { refreshInboxSummary(link); };
+    setTimeout(function () { refreshInboxSummary(link); }, 650);
+    setInterval(function () {
+      if (!document.hidden) refreshInboxSummary(link);
+    }, 60000);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) refreshInboxSummary(link);
+    });
   }
 
   function escapeHtml(s) {
@@ -86,7 +197,7 @@
   }
 
   function postJson(url, payload) {
-    return fetch(url, {
+    return window.gpiFetch(url, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload),
@@ -106,7 +217,7 @@
     var data = null;
 
     function refreshCount() {
-      fetch(cfg.endpoint).then(function (r) { return r.json(); }).then(function (d) {
+      window.gpiFetch(cfg.endpoint).then(function (r) { return r.json(); }).then(function (d) {
         data = d;
         injectOrUpdateBadge();
       }).catch(function () {});
@@ -147,7 +258,7 @@
       modal.querySelector('.' + cfg.prefix + '-backdrop').addEventListener('click', closeModal);
       modal.querySelector('.' + cfg.prefix + '-close').addEventListener('click', closeModal);
       document.addEventListener('keydown', escClose);
-      fetch(cfg.endpoint).then(function (r) { return r.json(); }).then(renderModal);
+      window.gpiFetch(cfg.endpoint).then(function (r) { return r.json(); }).then(renderModal);
     }
 
     function closeModal() {
@@ -167,6 +278,7 @@
     var api = {
       refreshCount: refreshCount,
       closeModal: closeModal,
+      openModal: openModal,
       renderModal: renderModal,
       injectOrUpdateBadge: injectOrUpdateBadge,
       isModalOpen: function () { return !!modal; },
@@ -192,6 +304,9 @@
 
     return api;
   }
+
+  startInboxSummary(ensureInboxLink());
+  window.gpiAlertBadges = window.gpiAlertBadges || {};
 
   // ---------- "Assignments to Do" ----------
 
@@ -331,7 +446,7 @@
         var li = b.closest('.atd-saved-item');
         if (!li || !confirm('Remove this attribution?')) return;
         b.disabled = true;
-        fetch('/api/staffing/attribute/' + encodeURIComponent(li.dataset.attributionId), {method: 'DELETE'})
+        window.gpiFetch('/api/staffing/attribute/' + encodeURIComponent(li.dataset.attributionId), {method: 'DELETE'})
           .then(function (r) { return r.json(); })
           .then(function (resp) {
             if (resp.ok) {
@@ -386,7 +501,7 @@
     });
   }
 
-  makeBadgeModal({
+  window.gpiAlertBadges.assignments = makeBadgeModal({
     endpoint: '/api/assignments-todo',
     badgeClass: 'assign-todo-nav-badge',
     badgeTitle: 'Production happened at unscheduled work centers — click to assign',
@@ -611,7 +726,7 @@
         // actionable left OR the caller set `alwaysClose: true` (Snooze),
         // close the modal — otherwise re-render so the user can keep
         // working without "Saving…" lingering on the saved row.
-        fetch(LATE_ENDPOINT).then(function (r) { return r.json(); }).then(function (d) {
+        window.gpiFetch(LATE_ENDPOINT).then(function (r) { return r.json(); }).then(function (d) {
           api.setData(d);
           api.injectOrUpdateBadge();
           var anyActionable = (d.scheduled_late && d.scheduled_late.length)
@@ -631,7 +746,7 @@
     });
   }
 
-  makeBadgeModal({
+  window.gpiAlertBadges.late = makeBadgeModal({
     endpoint: LATE_ENDPOINT,
     badgeClass: 'late-nav-badge',
     badgeTitle: 'Scheduled people who haven\'t clocked in yet — click to manage',
@@ -759,7 +874,7 @@
     });
   }
 
-  makeBadgeModal({
+  window.gpiAlertBadges.missing_wc = makeBadgeModal({
     endpoint: '/api/missing-wc',
     badgeClass: 'late-nav-badge mwc-nav-badge',
     badgeTitle: 'Attendance records with no work center — click to assign',
@@ -775,103 +890,23 @@
     render: renderMwcBody,
     pollMs: 60000,
   });
-})();
 
-// Global "Missed Punch Out" badge + modal — present on every page.
-// Mirrors the Missing-Work-Center badge/modal and reuses its .late-* styling.
-// Each row takes a time the manager enters; saving rewrites that attendance's
-// check_out (from midnight to the entered time) and clears the row.
-(function () {
-  var navBadge = null;
-  var modal = null;
-  var data = null;
-  var ENDPOINT = '/api/missed-punch-out';
+  // ---------- "Missed Punch Out" ----------
+  // Each row takes a time the manager enters; saving rewrites that attendance's
+  // check_out (from midnight to the entered time) and clears the row.
 
-  function settingsLink() {
-    return document.querySelector('header nav a[href="/settings"]')
-        || document.querySelector('header.app nav a[href="/settings"]');
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
-    });
-  }
-
-  function refreshCount() {
-    if (document.hidden) return;  // don't poll background tabs (matches makeBadgeModal)
-    fetch(ENDPOINT).then(function (r) { return r.json(); }).then(function (d) {
-      data = d;
-      injectOrUpdateBadge();
-    }).catch(function () {});
-  }
-
-  function injectOrUpdateBadge() {
-    if (!data || !data.count) {
-      if (navBadge) { navBadge.remove(); navBadge = null; }
-      return;
-    }
-    var anchor = settingsLink();
-    if (!anchor) return;
-    if (!navBadge) {
-      navBadge = document.createElement('a');
-      navBadge.href = '#';
-      navBadge.className = 'late-nav-badge mpo-nav-badge';
-      navBadge.title = 'Employees auto-clocked-out at midnight — click to set the real time';
-      navBadge.addEventListener('click', function (e) { e.preventDefault(); openModal(); });
-      anchor.parentNode.insertBefore(navBadge, anchor.nextSibling);
-    }
-    navBadge.innerHTML = '⏰ <span class="cnt">' + data.count + '</span> Missed Punch Out';
-    navBadge.style.display = '';
-  }
-
-  function openModal() {
-    closeModal();
-    modal = document.createElement('div');
-    modal.className = 'late-modal mpo-modal';
-    modal.innerHTML = ''
-      + '<div class="late-backdrop"></div>'
-      + '<div class="late-card" role="dialog" aria-modal="true" aria-label="Missed punch out">'
-      + '  <div class="late-head"><h3>Missed Punch Out</h3>'
-      + '    <button type="button" class="late-close" aria-label="Close">×</button></div>'
-      + '  <div class="late-body">Loading…</div>'
-      + '</div>';
-    document.body.appendChild(modal);
-    document.documentElement.style.overflow = 'hidden';
-    modal.querySelector('.late-backdrop').addEventListener('click', closeModal);
-    modal.querySelector('.late-close').addEventListener('click', closeModal);
-    document.addEventListener('keydown', escClose);
-    fetch(ENDPOINT).then(function (r) { return r.json(); }).then(renderModal);
-  }
-
-  function closeModal() {
-    if (modal) { modal.remove(); modal = null; }
-    document.documentElement.style.overflow = '';
-    document.removeEventListener('keydown', escClose);
-  }
-
-  function escClose(e) { if (e.key === 'Escape') closeModal(); }
-
-  function postJson(url, payload) {
-    return fetch(url, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload),
-    }).then(function (r) { return r.json(); });
-  }
-
-  function finishRow(li, label, ok) {
+  function finishMpoRow(li, label, ok, api) {
     var status = li.querySelector('.late-status');
     status.textContent = label;
     status.hidden = false;
     if (ok) {
       li.querySelectorAll('button, input').forEach(function (el) { el.disabled = true; });
       li.style.opacity = '0.6';
-      refreshCount();
+      api.refreshCount();
     }
   }
 
-  function wireActions(body) {
+  function wireMpoActions(body, api) {
     body.querySelectorAll('.mpo-save-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var li = btn.closest('.late-item');
@@ -883,20 +918,17 @@
           time: input.value,
         }).then(function (res) {
           if (res && res.ok) {
-            finishRow(li, 'Corrected ✓', true);
+            finishMpoRow(li, 'Corrected ✓', true, api);
           } else {
-            finishRow(li, (res && res.error) || 'Error', false);
+            finishMpoRow(li, (res && res.error) || 'Error', false, api);
             btn.disabled = false;
           }
-        }).catch(function () { finishRow(li, 'Error', false); btn.disabled = false; });
+        }).catch(function () { finishMpoRow(li, 'Error', false, api); btn.disabled = false; });
       });
     });
   }
 
-  function renderModal(d) {
-    data = d;
-    if (!modal) return;
-    var body = modal.querySelector('.late-body');
+  function renderMpoBody(body, d, api) {
     var rows = (d && d.rows) || [];
     if (!rows.length) {
       body.innerHTML = '<p class="late-help">No missed punch-outs. Anyone left clocked in '
@@ -921,13 +953,23 @@
     });
     html += '</ul>';
     body.innerHTML = html;
-    wireActions(body);
+    wireMpoActions(body, api);
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', refreshCount);
-  } else {
-    refreshCount();
-  }
-  setInterval(refreshCount, 60000);
+  window.gpiAlertBadges.missed_punch_out = makeBadgeModal({
+    endpoint: '/api/missed-punch-out',
+    badgeClass: 'late-nav-badge mpo-nav-badge',
+    badgeTitle: 'Employees auto-clocked-out at midnight — click to set the real time',
+    badgeVisible: function (d) { return !!d.count; },
+    updateBadge: function (el, d) {
+      el.innerHTML = '⏰ <span class="cnt">' + d.count + '</span> Missed Punch Out';
+      el.style.display = '';
+    },
+    prefix: 'late',
+    modalClass: 'late-modal mpo-modal',
+    ariaLabel: 'Missed punch out',
+    heading: 'Missed Punch Out',
+    render: renderMpoBody,
+    pollMs: 60000,
+  });
 })();

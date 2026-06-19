@@ -90,6 +90,31 @@
     100% { background: transparent; box-shadow: 0 0 0 0 transparent inset; }
   }
 
+  .inbox-nav-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .inbox-nav-count {
+    min-width: 1.35rem;
+    padding: 0.04rem 0.36rem;
+    border-radius: 999px;
+    background: var(--accent-dim, #dcfce7);
+    color: var(--accent, #16a34a);
+    font-size: 0.68rem;
+    font-weight: 800;
+    line-height: 1.25;
+    text-align: center;
+  }
+  .inbox-nav-link.has-urgent .inbox-nav-count {
+    background: #fee2e2;
+    color: #b91c1c;
+  }
+  .inbox-nav-link.is-degraded .inbox-nav-count {
+    background: var(--warn-dim, #fef3c7);
+    color: var(--warn, #a16207);
+  }
+
   /* Global "Assignments to Do" nav badge + modal — appears on every page
      when at least one metered WC produced today without a person assigned. */
   .assign-todo-nav-badge {

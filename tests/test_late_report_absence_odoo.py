@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date
 from unittest.mock import MagicMock
 
 from zira_dashboard.routes import late_report as late_report_routes
 
-
-class _FixedDateTime(datetime):
-    @classmethod
-    def now(cls, tz=None):
-        return datetime(2026, 6, 17, 15, 30, tzinfo=timezone.utc)
+FIXED_DAY = date(2026, 6, 17)
 
 
 def test_declare_absent_sync_posts_absence_to_odoo_before_local_write(monkeypatch):
@@ -20,7 +16,7 @@ def test_declare_absent_sync_posts_absence_to_odoo_before_local_write(monkeypatc
     })
     declare_absent = MagicMock()
     db_execute = MagicMock()
-    monkeypatch.setattr(late_report_routes, "datetime", _FixedDateTime)
+    monkeypatch.setattr(late_report_routes, "plant_today", lambda: FIXED_DAY)
     monkeypatch.setattr(late_report_routes.absence_sync, "create_absence_for_day", create_absence)
     monkeypatch.setattr(late_report_routes.late_report, "declare_absent", declare_absent)
     monkeypatch.setattr(late_report_routes.db, "execute", db_execute)
@@ -36,11 +32,11 @@ def test_declare_absent_sync_posts_absence_to_odoo_before_local_write(monkeypatc
     create_absence.assert_called_once_with(
         employee_odoo_id=5,
         employee_name="Test Person",
-        day=_FixedDateTime.now(timezone.utc).date(),
+        day=FIXED_DAY,
         reason="No call no show",
     )
     declare_absent.assert_called_once_with(
-        _FixedDateTime.now(timezone.utc).date(),
+        FIXED_DAY,
         "5",
         "Test Person",
         reason="No call no show",
@@ -67,7 +63,7 @@ def test_undo_absent_refuses_linked_odoo_absence_before_local_delete(monkeypatch
     odoo_leave_id_for_absence = MagicMock(return_value=777)
     refuse_absence = MagicMock()
     undo_absent = MagicMock()
-    monkeypatch.setattr(late_report_routes, "datetime", _FixedDateTime)
+    monkeypatch.setattr(late_report_routes, "plant_today", lambda: FIXED_DAY)
     monkeypatch.setattr(
         late_report_routes.late_report,
         "odoo_leave_id_for_absence",
@@ -81,8 +77,8 @@ def test_undo_absent_refuses_linked_odoo_absence_before_local_delete(monkeypatch
 
     assert response.status_code == 200
     odoo_leave_id_for_absence.assert_called_once_with(
-        _FixedDateTime.now(timezone.utc).date(),
+        FIXED_DAY,
         "5",
     )
     refuse_absence.assert_called_once_with(777)
-    undo_absent.assert_called_once_with(_FixedDateTime.now(timezone.utc).date(), "5")
+    undo_absent.assert_called_once_with(FIXED_DAY, "5")

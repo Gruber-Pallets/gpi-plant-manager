@@ -22,6 +22,7 @@ from ..deps import (
     templates,
 )
 from ..leaderboard import cached_leaderboard as leaderboard
+from ..plant_day import today as plant_today
 from ..stations import CATEGORIES
 
 router = APIRouter()
@@ -58,7 +59,7 @@ def index(
     category: str | None = Query(default=None),
 ):
     d = _parse_day(day)
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     is_today = d == today
     # Try cached HTML response.
     from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
@@ -127,7 +128,7 @@ def api_leaderboard(
     category: str | None = Query(default=None),
 ):
     d = _parse_day(day)
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     is_today = d == today
     stations = _filter_stations(category)
     now = datetime.now(timezone.utc)

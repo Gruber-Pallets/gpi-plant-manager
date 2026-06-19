@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from .. import _http_cache, attendance, schedule_store, shift_config, staffing, staffing_view, time_format, work_centers_store
 from .._http_cache import invalidate_today_cache
 from ..deps import templates
+from ..plant_day import today as plant_today, now as plant_now
 from ..staffing_attendance import _late_emp_ids, _safe_attendance, _safe_time_off_entries
 
 router = APIRouter()
@@ -71,7 +72,7 @@ def staffing_page(
     from .. import cert_lookup
     phases: dict[str, float] = {}
     _total_t0 = time.perf_counter()
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     # Default to the next working day (Dale plans the day before; skip weekends).
     try:
         d = date.fromisoformat(day) if day else _next_working_day(today)
@@ -652,9 +653,8 @@ async def staffing_transfer_undo(request: Request):
 _ASSIGNMENTS_TODO_CACHE: dict = {"value": None, "expires_at": 0.0}
 
 
-@router.get("/api/assignments-todo")
-def assignments_todo_json():
-    """JSON snapshot for the global "Assignments to Do" nav badge + modal.
+def assignments_todo_payload() -> dict:
+    """Snapshot for the global "Assignments to Do" nav badge + modal.
 
     Always for today. Returns count, items (pending), saved (already
     attributed today), and the active-people roster.
@@ -669,9 +669,9 @@ def assignments_todo_json():
     now_ts = time.time()
     cached = _ASSIGNMENTS_TODO_CACHE.get("value")
     if cached is not None and now_ts < _ASSIGNMENTS_TODO_CACHE.get("expires_at", 0):
-        return JSONResponse(cached)
+        return cached
 
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     out: dict = {"count": 0, "today": today.isoformat(), "items": [], "saved": [], "people": []}
     try:
         site_tz = shift_config.SITE_TZ
@@ -705,7 +705,13 @@ def assignments_todo_json():
         pass
     _ASSIGNMENTS_TODO_CACHE["value"] = out
     _ASSIGNMENTS_TODO_CACHE["expires_at"] = now_ts + 30.0
-    return JSONResponse(out)
+    return out
+
+
+@router.get("/api/assignments-todo")
+def assignments_todo_json():
+    """JSON snapshot for the global "Assignments to Do" nav badge + modal."""
+    return JSONResponse(assignments_todo_payload())
 
 
 def _bust_assignments_todo_cache() -> None:
@@ -716,9 +722,8 @@ def _bust_assignments_todo_cache() -> None:
 _LATE_REPORT_CACHE: dict = {"value": None, "expires_at": 0.0}
 
 
-@router.get("/api/late-report")
-def late_report_json():
-    """JSON snapshot for the global Late/Absence Report badge + modal.
+def late_report_payload() -> dict:
+    """Snapshot for the global Late/Absence Report badge + modal.
 
     Always for today. Returns four sections:
       scheduled_late:   scheduled people who haven't punched in past threshold
@@ -736,9 +741,9 @@ def late_report_json():
     now_ts = time.time()
     cached = _LATE_REPORT_CACHE.get("value")
     if cached is not None and now_ts < _LATE_REPORT_CACHE.get("expires_at", 0):
-        return JSONResponse(cached)
+        return cached
 
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     out: dict = {
         "count": 0,
         "today": today.isoformat(),
@@ -753,7 +758,7 @@ def late_report_json():
         attendance_pkg = _safe_attendance(today, sched, today)
         by_id = attendance_pkg.get("by_id") or {}
         if by_id:
-            now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+            now_local = plant_now()
             shift_start_local = datetime.combine(
                 today, shift_config.shift_start_for(today), tzinfo=shift_config.SITE_TZ
             )
@@ -830,7 +835,13 @@ def late_report_json():
         pass
     _LATE_REPORT_CACHE["value"] = out
     _LATE_REPORT_CACHE["expires_at"] = now_ts + 30.0
-    return JSONResponse(out)
+    return out
+
+
+@router.get("/api/late-report")
+def late_report_json():
+    """JSON snapshot for the global Late/Absence Report badge + modal."""
+    return JSONResponse(late_report_payload())
 
 
 def _bust_late_report_cache() -> None:

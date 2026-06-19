@@ -20,12 +20,14 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db
+from .plant_day import today as plant_today
 from .routes import (
     admin,
     api_layout,
     auth as auth_routes,
     changelog,
     dashboard,
+    exceptions,
     goat_watch,
     timeclock,
     timeclock_time_off,
@@ -71,7 +73,7 @@ async def _tick_zira_cache():
     from .stations import recycling_stations
     stations = recycling_stations()
     if stations:
-        today = datetime.now(timezone.utc).date()
+        today = plant_today()
         now_utc = datetime.now(timezone.utc)
         # Run the (sync, blocking) leaderboard fetch off the event loop.
         await asyncio.to_thread(
@@ -83,7 +85,7 @@ async def _tick_live_cache():
     """Refresh today's attendance into live_cache and UPSERT today's
     production_daily rows (so MTD / today leaderboards see partial-day data)."""
     from . import live_cache
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     await asyncio.to_thread(live_cache.refresh_attendance, today)
     await asyncio.to_thread(live_cache.refresh_production, today, _zira_client())
 
@@ -347,6 +349,7 @@ if auth_disabled():
 # Mount each feature router. URL paths are owned by the routers themselves.
 app.include_router(auth_routes.router)
 app.include_router(dashboard.router)
+app.include_router(exceptions.router)
 app.include_router(departments.router)
 app.include_router(wc_dashboard.router)
 app.include_router(tv_displays.router)

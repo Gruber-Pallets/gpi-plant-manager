@@ -11,7 +11,7 @@ acyclic: ``app`` depends on ``deps`` and ``routes``; ``routes`` depend on
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from zira_probe.client import ZiraClient
 
 from .leaderboard import StationTotal
+from .plant_day import parse_day as _parse_plant_day
 from .stations import STATIONS
 
 load_dotenv()
@@ -41,9 +42,7 @@ RUNNING_STALENESS = timedelta(minutes=10)
 
 
 def _parse_day(day: str | None) -> date:
-    if not day:
-        return datetime.now(timezone.utc).date()
-    return date.fromisoformat(day)
+    return _parse_plant_day(day)
 
 
 _ALLTIME_START = date(2024, 1, 1)

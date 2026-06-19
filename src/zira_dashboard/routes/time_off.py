@@ -8,13 +8,14 @@ shape (``name`` + ``label``) the template renders.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from .. import _http_cache, schedule_store
 from ..deps import templates
+from ..plant_day import today as plant_today
 from ..time_off_calendar import is_full_day
 from .timeclock_time_off import _approved_by_day
 
@@ -80,7 +81,7 @@ def staffing_time_off(
     date_: str | None = Query(default=None, alias="date"),
 ):
     scale = scale if scale in {"day", "week", "month", "quarter", "year"} else "month"
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     try:
         cursor = date.fromisoformat(date_) if date_ else today
     except ValueError:

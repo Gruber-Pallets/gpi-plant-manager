@@ -11,8 +11,6 @@ are shared across every WC under page='operator'.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -24,6 +22,7 @@ from .. import (
     work_centers_store,
 )
 from ..deps import templates
+from ..plant_day import today as plant_today, now as plant_now
 
 router = APIRouter()
 
@@ -39,10 +38,10 @@ def _shift_start_label(day) -> str:
 
 def _now_label(day) -> str:
     """Current local time `HH:MM` if `day` is today (in SITE_TZ); empty otherwise."""
-    today_local = datetime.now(shift_config.SITE_TZ).date()
+    today_local = plant_today()
     if day != today_local:
         return ""
-    now_local = datetime.now(shift_config.SITE_TZ)
+    now_local = plant_now()
     return f"{now_local.hour:02d}:{now_local.minute:02d}"
 
 
@@ -59,7 +58,7 @@ def _render_wc_dashboard(
     if loc is None:
         return JSONResponse({"error": f"no work center matches slug {slug!r}"}, status_code=404)
 
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
 
     # Server-side HTML response cache — 15s on today's data, same pattern
     # /recycling uses. TVs auto-refresh every 30-60s so this is the

@@ -108,12 +108,12 @@ def derived_absent_names(day) -> set:
     shift_start + ABSENT_BUFFER_MINUTES who are not on approved/pending
     time off. Today only (matches the old derived_absences_for_day) —
     past/future days return an empty set."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta
     from . import shift_config, staffing, scheduler_time_off, live_cache
-    today = datetime.now(timezone.utc).date()
-    if day != today:
+    from . import plant_day
+    if day != plant_day.today():
         return set()
-    now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+    now_local = plant_day.now()
     shift_start_local = datetime.combine(day, shift_config.shift_start_for(day), tzinfo=shift_config.SITE_TZ)
     if now_local < shift_start_local + timedelta(minutes=ABSENT_BUFFER_MINUTES):
         return set()

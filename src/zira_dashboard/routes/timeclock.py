@@ -59,6 +59,7 @@ from .. import db, timeclock_sync, shift_config, staffing, attendance_state
 # importable as part of the module surface.
 from .. import live_cache  # noqa: F401
 from ..deps import templates
+from ..plant_day import today as plant_today
 
 router = APIRouter()
 _log = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ def _pending_time_off_count(person_odoo_id: int) -> int:
 def _scheduled_wc_for(person_name: str) -> str | None:
     """Today's scheduled WC for `person_name`, or None if unscheduled.
     Returns the first match if scheduled on multiple."""
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     sched = staffing.load_schedule(today)
     for wc_name, names in (sched.assignments or {}).items():
         if person_name in names:

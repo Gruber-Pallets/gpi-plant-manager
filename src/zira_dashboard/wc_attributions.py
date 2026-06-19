@@ -145,7 +145,8 @@ def unattributed_for_day(day: date, client) -> list[dict]:
     # Trim Saw, etc., not just Recycling-cell stations).
     stations = [s for s in STATIONS if s.meter_id]
     # Don't pass now_utc for past days; for today use now.
-    today = datetime.now(timezone.utc).date()
+    from .plant_day import today as plant_today
+    today = plant_today()
     now_arg = datetime.now(timezone.utc) if day == today else None
     results = _lb.cached_leaderboard(client, stations, day, now_utc=now_arg)
 

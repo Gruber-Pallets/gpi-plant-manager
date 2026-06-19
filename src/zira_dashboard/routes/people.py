@@ -7,13 +7,14 @@ keep working.
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import staffing
 from ..deps import templates
+from ..plant_day import today as plant_today
 
 router = APIRouter()
 
@@ -45,7 +46,7 @@ def staffing_player_card(
     end: str | None = Query(default=None),
 ):
     from .. import production_history, _http_cache
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     end_d = date.fromisoformat(end) if end else today
     start_d = date.fromisoformat(start) if start else (end_d - timedelta(days=29))
 

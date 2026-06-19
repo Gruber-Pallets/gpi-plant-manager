@@ -15,12 +15,12 @@ duplicating the helper. Cache invalidation runs through
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from .. import absence_sync, db, late_report
+from ..plant_day import today as plant_today
 
 router = APIRouter()
 
@@ -54,7 +54,7 @@ def _declare_absent_sync(body: dict) -> JSONResponse:
             {"ok": False, "error": "emp_id must be an Odoo employee id"},
             status_code=400,
         )
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     try:
         absence = absence_sync.create_absence_for_day(
             employee_odoo_id=employee_odoo_id,
@@ -108,7 +108,7 @@ def _save_late_arrival_sync(body: dict) -> JSONResponse:
             {"ok": False, "error": "reason required — no record posts until a reason is given"},
             status_code=400,
         )
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     try:
         late_report.save_late_arrival(today, emp_id, name, reason=reason)
     except Exception as e:
@@ -145,7 +145,7 @@ def _snooze_sync(body: dict) -> JSONResponse:
     minutes = max(1, min(minutes, 8 * 60))
     if not emp_id or not name:
         return JSONResponse({"ok": False, "error": "emp_id and name required"}, status_code=400)
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     try:
         late_report.snooze(today, emp_id, name, minutes)
     except Exception as e:
@@ -170,7 +170,7 @@ def _undo_absent_sync(body: dict) -> JSONResponse:
     emp_id = str(body.get("emp_id") or "").strip()
     if not emp_id:
         return JSONResponse({"ok": False, "error": "emp_id required"}, status_code=400)
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     try:
         absence_sync.refuse_absence_leave(
             late_report.odoo_leave_id_for_absence(today, emp_id)

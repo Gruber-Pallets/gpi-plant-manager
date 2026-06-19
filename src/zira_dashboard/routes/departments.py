@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 from .. import layout_store, settings_store, shift_config, staffing, widget_customizer, work_centers_store
 from ..deps import _parse_day, _state, client, templates
 from ..leaderboard import cached_leaderboard as leaderboard
+from ..plant_day import today as plant_today
 from ..progress import progress_buckets
 from ..recycling_data import (
     aggregate_buckets,
@@ -402,7 +403,7 @@ def _render_recycling(
     """
     from ..deps import resolve_range
 
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     start_d, end_d, custom_range_active = resolve_range(window, start, end, today)
 
     is_today = (start_d == end_d == today)
@@ -699,7 +700,7 @@ def _render_new_dept(
     separate cache entries.
     """
     d = _parse_day(day)
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     is_today = d == today
     # Try cached HTML response.
     from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
@@ -914,5 +915,4 @@ def tv_new_vs_redirect(request: Request):
     q = request.url.query
     target = "/tv/new" + (f"?{q}" if q else "")
     return RedirectResponse(url=target, status_code=301)
-
 

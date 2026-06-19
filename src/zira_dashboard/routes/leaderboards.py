@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .. import settings_store, staffing
 from ..deps import resolve_range, templates
+from ..plant_day import today as plant_today
 from ..production_history import attribution_per_day
 from ..stations import Station
 from .._cache import TTLCache
@@ -156,7 +157,7 @@ def staffing_leaderboards(
         store_cached_response,
     )
 
-    today_d = datetime.now(timezone.utc).date()
+    today_d = plant_today()
     start_d, end_d, custom_range_active = resolve_range(window, start, end, today_d)
     includes_today = range_includes_today(end_d, today_d)
 
@@ -466,7 +467,7 @@ def person_days_json(
 
     scope_key = f"wc:{wc}" if wc else f"group:{group}"
     cache_key = (name, scope_key, start_d.isoformat(), end_d.isoformat())
-    today = datetime.now(timezone.utc).date()
+    today = plant_today()
     includes_today = start_d <= today <= end_d
     cache = _PERSON_DAYS_CACHE_TODAY if includes_today else _PERSON_DAYS_CACHE_PAST
     cached = cache.peek(cache_key)
