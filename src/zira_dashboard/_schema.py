@@ -727,6 +727,10 @@ CREATE TABLE IF NOT EXISTS plant_shift_handoffs (
   shift_label         TEXT NOT NULL DEFAULT 'Day',
   created_by          TEXT NOT NULL DEFAULT '',
   notes               TEXT NOT NULL DEFAULT '',
+  follow_up_required  BOOLEAN NOT NULL DEFAULT FALSE,
+  resolved_at         TIMESTAMPTZ,
+  resolved_by         TEXT NOT NULL DEFAULT '',
+  resolution_note     TEXT NOT NULL DEFAULT '',
   open_total          INTEGER NOT NULL DEFAULT 0,
   urgent_total        INTEGER NOT NULL DEFAULT 0,
   source_errors       JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -736,6 +740,14 @@ CREATE TABLE IF NOT EXISTS plant_shift_handoffs (
 );
 CREATE INDEX IF NOT EXISTS plant_shift_handoffs_date_idx
   ON plant_shift_handoffs (handoff_date DESC, created_at DESC);
+ALTER TABLE plant_shift_handoffs
+  ADD COLUMN IF NOT EXISTS follow_up_required BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS resolved_by TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS resolution_note TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS plant_shift_handoffs_open_followup_idx
+  ON plant_shift_handoffs (created_at DESC)
+  WHERE follow_up_required = TRUE AND resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS scheduler_moves_person_date_idx
   ON scheduler_moves (person_odoo_id, schedule_date);
 

@@ -208,6 +208,19 @@ header.app nav a.active {
 .handoff-form .primary-btn {
   justify-self: start;
 }
+.handoff-form label.checkbox-label {
+  grid-column: 1 / -1;
+  align-items: center;
+  flex-direction: row;
+  gap: 0.45rem;
+  color: var(--fg);
+  font-size: 0.86rem;
+}
+.checkbox-label input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
 
 .handoff-list {
   display: flex;
@@ -251,6 +264,17 @@ header.app nav a.active {
   background: var(--warn-dim);
   color: var(--warn);
 }
+.handoff-counts .ok {
+  border-color: #86efac;
+  background: var(--accent-dim);
+  color: #166534;
+}
+.followups-section {
+  border-color: #f4ca64;
+}
+.followups-section .section-head {
+  background: #fffbeb;
+}
 .handoff-row p {
   margin: 0;
   color: var(--fg);
@@ -280,6 +304,49 @@ header.app nav a.active {
   margin: 0;
   padding: 0.9rem;
   white-space: pre-wrap;
+}
+.followup-panel.open {
+  border-color: #f4ca64;
+}
+.followup-panel.open .section-head {
+  background: #fffbeb;
+}
+.followup-panel.resolved {
+  border-color: #86efac;
+}
+.followup-panel.resolved .section-head {
+  background: var(--accent-dim);
+}
+.resolve-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.65fr) minmax(260px, 1.35fr);
+  gap: 0.75rem;
+  padding: 0.9rem;
+}
+.resolve-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.resolve-form input,
+.resolve-form textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.48rem 0.55rem;
+}
+.resolve-form textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.resolve-form .primary-btn {
+  justify-self: start;
 }
 .snapshot-sections {
   display: grid;
@@ -344,6 +411,9 @@ header.app nav a.active {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .handoff-form {
+    grid-template-columns: 1fr;
+  }
+  .resolve-form {
     grid-template-columns: 1fr;
   }
   .snapshot-sections {

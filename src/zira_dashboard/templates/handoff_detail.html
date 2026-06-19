@@ -71,6 +71,38 @@
     {% endif %}
   </section>
 
+  {% if handoff.is_open_followup %}
+  <section class="handoff-form-section followup-panel open">
+    <div class="section-head">
+      <h3>Follow-up Open</h3>
+      <span>Close this once the next action is handled</span>
+    </div>
+    <form method="post" action="/handoff/{{ handoff.id }}/resolve" class="resolve-form">
+      <label>
+        Resolved by
+        <input type="text" name="resolved_by" value="">
+      </label>
+      <label class="notes-label">
+        Resolution note
+        <textarea name="resolution_note" rows="4" placeholder="What changed, who was notified, or what was completed"></textarea>
+      </label>
+      <button type="submit" class="primary-btn">Mark Resolved</button>
+    </form>
+  </section>
+  {% elif handoff.follow_up_required %}
+  <section class="handoff-form-section followup-panel resolved">
+    <div class="section-head">
+      <h3>Follow-up Resolved</h3>
+      <span>{{ handoff.resolved_at_label }} · {{ handoff.resolved_by or 'Unknown' }}</span>
+    </div>
+    {% if handoff.resolution_note %}
+      <p class="detail-notes">{{ handoff.resolution_note }}</p>
+    {% else %}
+      <p class="detail-notes empty-note">No resolution note entered.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
   <section class="recent-section">
     <div class="section-head">
       <h3>Saved Inbox Snapshot</h3>

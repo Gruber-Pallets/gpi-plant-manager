@@ -59,6 +59,36 @@
     {% endfor %}
   </section>
 
+  {% if open_followups %}
+  <section class="recent-section followups-section">
+    <div class="section-head">
+      <h3>Open Follow-ups</h3>
+      <span>{{ open_followups|length }} need closure</span>
+    </div>
+    <div class="handoff-list">
+      {% for row in open_followups %}
+      <article class="handoff-row">
+        <div class="handoff-row-head">
+          <strong>{{ row.shift_label }} · {{ row.handoff_date }}</strong>
+          <span>{{ row.created_at_label }} · {{ row.created_by }}</span>
+        </div>
+        <div class="handoff-counts">
+          <span class="warn">Follow-up open</span>
+          <span>{{ row.open_total }} open</span>
+          <span>{{ row.urgent_total }} urgent</span>
+        </div>
+        {% if row.notes %}
+          <p>{{ row.notes }}</p>
+        {% else %}
+          <p class="empty-note">No notes entered.</p>
+        {% endif %}
+        <a class="detail-link" href="/handoff/{{ row.id }}">Open follow-up</a>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
   <section class="handoff-form-section">
     <div class="section-head">
       <h3>New Handoff</h3>
@@ -82,6 +112,10 @@
         Notes
         <textarea name="notes" rows="8" placeholder="Staffing moves, blockers, unresolved exceptions, safety notes, maintenance follow-up"></textarea>
       </label>
+      <label class="checkbox-label">
+        <input type="checkbox" name="follow_up_required" value="true">
+        <span>Needs follow-up</span>
+      </label>
       <button type="submit" class="primary-btn">Save Handoff</button>
     </form>
   </section>
@@ -102,6 +136,11 @@
           <div class="handoff-counts">
             <span>{{ row.open_total }} open</span>
             <span>{{ row.urgent_total }} urgent</span>
+            {% if row.is_open_followup %}
+              <span class="warn">Follow-up open</span>
+            {% elif row.follow_up_required %}
+              <span class="ok">Resolved {{ row.resolved_at_label }}</span>
+            {% endif %}
             {% if row.has_source_errors %}
               <span class="warn">Incomplete: {{ row.source_error_label }}</span>
             {% endif %}
