@@ -718,6 +718,24 @@ CREATE TABLE IF NOT EXISTS scheduler_moves (
   reason          TEXT NOT NULL,
   occurred_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Manager handoff log. Each saved handoff snapshots the Exception Inbox
+-- at that moment so unresolved daily work is preserved with the shift notes.
+CREATE TABLE IF NOT EXISTS plant_shift_handoffs (
+  id                  BIGSERIAL PRIMARY KEY,
+  handoff_date        DATE NOT NULL,
+  shift_label         TEXT NOT NULL DEFAULT 'Day',
+  created_by          TEXT NOT NULL DEFAULT '',
+  notes               TEXT NOT NULL DEFAULT '',
+  open_total          INTEGER NOT NULL DEFAULT 0,
+  urgent_total        INTEGER NOT NULL DEFAULT 0,
+  source_errors       JSONB NOT NULL DEFAULT '[]'::jsonb,
+  exception_snapshot  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS plant_shift_handoffs_date_idx
+  ON plant_shift_handoffs (handoff_date DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS scheduler_moves_person_date_idx
   ON scheduler_moves (person_odoo_id, schedule_date);
 

@@ -29,6 +29,7 @@ from .routes import (
     dashboard,
     exceptions,
     goat_watch,
+    handoff,
     timeclock,
     timeclock_time_off,
     late_report,
@@ -350,6 +351,7 @@ if auth_disabled():
 app.include_router(auth_routes.router)
 app.include_router(dashboard.router)
 app.include_router(exceptions.router)
+app.include_router(handoff.router)
 app.include_router(departments.router)
 app.include_router(wc_dashboard.router)
 app.include_router(tv_displays.router)

@@ -128,6 +128,21 @@
     return link;
   }
 
+  function ensureHandoffLink() {
+    var anchor = settingsLink();
+    if (!anchor || !anchor.parentNode) return;
+    var existing = anchor.parentNode.querySelector('a[href="/handoff"]');
+    if (existing) return existing;
+    var link = document.createElement('a');
+    link.href = '/handoff';
+    link.textContent = 'Handoff';
+    if (window.location && window.location.pathname === '/handoff') {
+      link.className = 'active';
+    }
+    anchor.parentNode.insertBefore(link, anchor);
+    return link;
+  }
+
   function ensureInboxLabel(link) {
     if (!link) return null;
     var label = link.querySelector('.inbox-nav-label');
@@ -306,6 +321,7 @@
   }
 
   startInboxSummary(ensureInboxLink());
+  ensureHandoffLink();
   window.gpiAlertBadges = window.gpiAlertBadges || {};
 
   // ---------- "Assignments to Do" ----------
