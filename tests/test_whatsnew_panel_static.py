@@ -21,6 +21,7 @@ def test_footer_css_has_whatsnew_trigger_and_card_styles():
     css = CSS.read_text(encoding="utf-8")
 
     assert ".app-footer" not in css
+    assert ".changelog-deploy" not in css
     assert ".whatsnew-btn" in css
     assert ".whatsnew-dot" in css
     assert ".cl-entry" in css

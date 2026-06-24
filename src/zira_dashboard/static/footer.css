@@ -194,16 +194,6 @@
     padding: 0.05rem 0.3rem; border-radius: 4px;
     font-size: 0.86em;
   }
-  .changelog-body .changelog-deploy { padding: 0 0.5rem; margin: 0 -0.5rem; border-radius: 6px; }
-  .changelog-body .changelog-deploy.changelog-new {
-    animation: changelog-flash 3s ease-out 0.15s;
-    animation-fill-mode: backwards;
-  }
-  @keyframes changelog-flash {
-    0%   { background: var(--accent-dim, #dcfce7); box-shadow: 0 0 0 1px var(--accent, #16a34a) inset; }
-    100% { background: transparent; box-shadow: 0 0 0 0 transparent inset; }
-  }
-
   .inbox-nav-link {
     display: inline-flex;
     align-items: center;
