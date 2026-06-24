@@ -131,3 +131,33 @@ async def submit_feedback(
         odoo_task_id=task_id,
     )
     return JSONResponse({"ok": True, "id": new_id, "task_id": task_id})
+
+
+@router.get("/api/feedback/mine")
+def my_feedback(request: Request) -> JSONResponse:
+    submitter = getattr(request.state, "user_upn", None)
+    rows = feedback_store.for_submitter(submitter)
+    task_ids = [r["odoo_task_id"] for r in rows if r.get("odoo_task_id")]
+    status_available = True
+    try:
+        stages = odoo_client.fetch_task_stage_names(task_ids) if task_ids else {}
+    except Exception:
+        log.exception("feedback: could not read task stages")
+        stages = {}
+        status_available = False
+
+    items = []
+    for r in rows:
+        message = (r.get("message") or "").strip()
+        title = message.splitlines()[0] if message else "(no description)"
+        if len(title) > _TITLE_MAX:
+            title = title[: _TITLE_MAX - 1].rstrip() + "…"
+        items.append({
+            "type": r.get("task_type") or "bug",
+            "title": title,
+            "created_at": str(r.get("created_at") or ""),
+            "page_url": r.get("page_url"),
+            "status": odoo_client.feedback_status_bucket(stages.get(r.get("odoo_task_id"))),
+        })
+
+    return JSONResponse({"ok": True, "items": items, "status_available": status_available})
