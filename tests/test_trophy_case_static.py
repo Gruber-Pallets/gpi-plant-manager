@@ -23,3 +23,9 @@ def test_trophy_case_edit_buttons_have_accessible_names():
     assert 'aria-label="Edit best {{ blk.group }} award"' in html
     assert 'aria-label="Edit best {{ w.wc }} award"' in html
     assert 'aria-label="Edit monthly ribbon for {{ s.name }}"' in html
+
+
+def test_trophy_case_override_modal_has_dialog_semantics():
+    html = _template()
+
+    assert '<div class="tc-modal" role="dialog" aria-modal="true" aria-labelledby="tc-modal-title">' in html
