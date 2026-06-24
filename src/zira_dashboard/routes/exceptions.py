@@ -61,10 +61,15 @@ def _load_time_off_request(request_id: int) -> dict[str, Any] | None:
     from .. import db
 
     rows = db.query(
-        "SELECT id, person_odoo_id, originating_kiosk_user, shape, "
-        "holiday_status_id, date_from, date_to, hour_from, hour_to, "
-        "note, state, odoo_leave_id, sync_error "
-        "FROM time_off_requests WHERE id = %s",
+        "SELECT r.id, r.person_odoo_id, r.originating_kiosk_user, r.shape, "
+        "r.holiday_status_id, r.date_from, r.date_to, r.hour_from, r.hour_to, "
+        "r.note, r.state, r.odoo_leave_id, r.sync_error, "
+        "COALESCE(p.name, '#' || r.person_odoo_id::text) AS person_name, "
+        "COALESCE(lt.name, 'Time off') AS leave_type "
+        "FROM time_off_requests r "
+        "LEFT JOIN people p ON p.odoo_id = r.person_odoo_id "
+        "LEFT JOIN leave_types_cache lt ON lt.holiday_status_id = r.holiday_status_id "
+        "WHERE r.id = %s",
         (request_id,),
     )
     return rows[0] if rows else None

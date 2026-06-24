@@ -435,3 +435,19 @@ def test_time_off_refuse_unsynced_draft_stays_local(monkeypatch):
     assert resp.status_code == 200
     assert refused == []
     assert updates == [(56, "refuse")]
+
+
+def test_load_time_off_request_selects_name_and_type(monkeypatch):
+    captured = {}
+    def fake_query(sql, params):
+        captured["sql"] = sql
+        return [{"id": 55, "person_name": "Maria Delgado", "leave_type": "PTO"}]
+    from zira_dashboard import db as _db
+    monkeypatch.setattr(_db, "query", fake_query)
+
+    row = exceptions_route._load_time_off_request(55)
+
+    assert row["person_name"] == "Maria Delgado"
+    assert row["leave_type"] == "PTO"
+    assert "COALESCE(p.name" in captured["sql"]
+    assert "leave_types_cache" in captured["sql"]
