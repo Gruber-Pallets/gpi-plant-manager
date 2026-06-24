@@ -34,7 +34,13 @@ def test_footer_css_has_whatsnew_trigger_and_card_styles():
     assert ".whatsnew-dot" in css
     assert ".cl-entry" in css
     assert ".cl-badge" in css
-    assert ".changelog-feedback" in css
+    # New feedback modal styles.
+    assert ".fb-modal" in css
+    assert ".fb-card" in css
+    assert ".fb-type-btn" in css
+    assert ".fb-submit" in css
+    assert ".fb-attachment-chip" in css
+    assert ".fb-status-pill" in css
 
 
 def test_footer_js_injects_trigger_read_state_and_feedback_submit():

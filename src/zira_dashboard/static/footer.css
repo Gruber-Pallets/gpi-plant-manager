@@ -395,3 +395,75 @@
   }
   .mpo-save-btn:hover { background: #991b1b; }
   .mpo-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Feedback modals (Send + View) ---------- */
+.fb-modal { position: fixed; inset: 0; z-index: 1000; display: flex;
+  align-items: center; justify-content: center; }
+.fb-modal[hidden] { display: none; }
+.fb-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.45); }
+.fb-card { position: relative; width: 480px; max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 2rem); overflow: auto; background: #fff;
+  border-radius: 14px; padding: 1.25rem 1.5rem;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25); }
+.fb-head { display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 1.1rem; }
+.fb-head h3 { margin: 0; font-size: 1.2rem; }
+.fb-close { border: none; background: none; font-size: 1rem; font-weight: 600;
+  color: #6b7280; cursor: pointer; }
+.fb-close:hover { color: #111827; }
+
+.fb-type { display: inline-flex; background: #f1f5f9; border-radius: 9px;
+  padding: 3px; margin-bottom: 1.1rem; gap: 2px; }
+.fb-type-btn { border: none; background: none; font-size: 0.9rem; font-weight: 600;
+  padding: 6px 18px; border-radius: 7px; color: #6b7280; cursor: pointer; }
+.fb-type-btn.is-active { background: var(--accent, #16a34a); color: #fff; }
+
+.fb-label { display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 6px; }
+.fb-desc { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db;
+  border-radius: 8px; padding: 10px 12px; font: inherit; resize: vertical;
+  min-height: 104px; }
+.fb-desc:focus { outline: none; border-color: var(--accent, #16a34a);
+  box-shadow: 0 0 0 3px var(--accent-dim, #dcfce7); }
+
+.fb-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.fb-attachment-chip { display: inline-flex; align-items: center; gap: 8px;
+  background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px;
+  padding: 6px 8px; font-size: 0.78rem; color: #475569; }
+.fb-attachment-chip img { width: 28px; height: 28px; object-fit: cover;
+  border-radius: 4px; }
+.fb-attachment-remove { border: none; background: none; color: #94a3b8;
+  cursor: pointer; font-size: 0.9rem; line-height: 1; }
+.fb-attachment-remove:hover { color: #ef4444; }
+
+.fb-actions-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.fb-upload { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem;
+  font-weight: 600; border: 1px solid #d1d5db; background: #fff; border-radius: 8px;
+  padding: 7px 12px; cursor: pointer; }
+.fb-upload:hover { background: #f8fafc; }
+.fb-hint { font-size: 0.78rem; color: #9ca3af; }
+
+.fb-footer { display: flex; align-items: center; justify-content: flex-end;
+  gap: 10px; margin-top: 1.4rem; }
+.fb-status { margin-right: auto; font-size: 0.82rem; color: #6b7280; }
+.fb-cancel { border: 1px solid #d1d5db; background: #fff; border-radius: 8px;
+  padding: 8px 16px; font-weight: 600; cursor: pointer; }
+.fb-submit { border: none; background: var(--accent, #16a34a); color: #fff;
+  border-radius: 8px; padding: 8px 18px; font-weight: 600; cursor: pointer; }
+.fb-submit:disabled { opacity: 0.55; cursor: default; }
+
+.fb-view-body { font-size: 0.9rem; }
+.fb-view-item { display: flex; align-items: center; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid #eef2f7; }
+.fb-view-item:last-child { border-bottom: none; }
+.fb-view-main { flex: 1; min-width: 0; }
+.fb-view-title { font-weight: 600; color: #1f2937; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.fb-view-meta { font-size: 0.76rem; color: #9ca3af; }
+.fb-view-empty { color: #6b7280; padding: 0.5rem 0; }
+
+.fb-status-pill { font-size: 0.74rem; font-weight: 700; padding: 3px 10px;
+  border-radius: 999px; text-transform: capitalize; white-space: nowrap; }
+.fb-status-pill.is-open { background: var(--accent-dim, #dcfce7);
+  color: var(--accent, #15803d); }
+.fb-status-pill.is-done { background: #dcfce7; color: #15803d; }
+.fb-status-pill.is-rejected { background: #fee2e2; color: #b91c1c; }
