@@ -900,6 +900,8 @@ CREATE TABLE IF NOT EXISTS time_off_decisions (
   leave_type      TEXT,
   date_from       DATE,
   date_to         DATE,
+  hour_from       NUMERIC,
+  hour_to         NUMERIC,
   action          TEXT NOT NULL CHECK (action IN ('approve','deny')),
   result_state    TEXT,
   reason          TEXT,
@@ -908,6 +910,9 @@ CREATE TABLE IF NOT EXISTS time_off_decisions (
   source          TEXT,
   decided_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE time_off_decisions
+  ADD COLUMN IF NOT EXISTS hour_from NUMERIC,
+  ADD COLUMN IF NOT EXISTS hour_to NUMERIC;
 CREATE INDEX IF NOT EXISTS time_off_decisions_decided_at_idx
   ON time_off_decisions (decided_at DESC);
 """

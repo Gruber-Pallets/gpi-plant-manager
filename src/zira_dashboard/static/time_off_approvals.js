@@ -53,6 +53,7 @@
 
   function dateRange(decision) {
     if (!decision) return '';
+    if (decision.date_label) return decision.date_label;
     var start = decision.date_from || '';
     var end = decision.date_to || '';
     return end && end !== start ? start + ' to ' + end : start;

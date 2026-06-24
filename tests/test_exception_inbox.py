@@ -430,6 +430,8 @@ def test_time_off_approve_endpoint_updates_to_odoo_state(monkeypatch):
         "leave_type": "PTO",
         "date_from": date(2026, 6, 22),
         "date_to": date(2026, 6, 22),
+        "hour_from": 8.5,
+        "hour_to": 12.25,
         "state": "confirm",
         "odoo_leave_id": 99,
     }
@@ -463,6 +465,8 @@ def test_time_off_approve_endpoint_updates_to_odoo_state(monkeypatch):
     assert audits[0]["result_state"] == "validate"
     assert audits[0]["actor_upn"] == "dale@gruberpallets.com"
     assert audits[0]["person_name"] == "Maria Delgado"
+    assert audits[0]["hour_from"] == 8.5
+    assert audits[0]["hour_to"] == 12.25
     payload = json.loads(resp.body)
     assert payload["decision"] == {
         "action": "approve",
@@ -470,6 +474,9 @@ def test_time_off_approve_endpoint_updates_to_odoo_state(monkeypatch):
         "leave_type": "PTO",
         "date_from": "2026-06-22",
         "date_to": "2026-06-22",
+        "hour_from": 8.5,
+        "hour_to": 12.25,
+        "date_label": "2026-06-22 - 8:30 AM to 12:15 PM",
         "reason": None,
         "actor_name": "Dale Gruber",
         "actor_upn": "dale@gruberpallets.com",

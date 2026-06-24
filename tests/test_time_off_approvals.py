@@ -104,6 +104,8 @@ def test_recent_payload_formats_decision_time_in_plant_timezone(monkeypatch):
         "leave_type": "PTO",
         "date_from": date(2026, 6, 25),
         "date_to": date(2026, 6, 25),
+        "hour_from": 8.5,
+        "hour_to": 12.25,
         "reason": None,
         "actor_name": "Dale Gruber",
         "actor_upn": "dale@gruberpallets.com",
@@ -113,6 +115,7 @@ def test_recent_payload_formats_decision_time_in_plant_timezone(monkeypatch):
     rows = page._recent_payload(days=30)
 
     assert rows[0]["decided_label"] == "6/24 9:05 AM"
+    assert rows[0]["date_label"] == "2026-06-25 - 8:30 AM to 12:15 PM"
 
 
 def test_approvals_page_renders_200(monkeypatch):
@@ -149,6 +152,7 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
         "leave_type": "Sick",
         "date_from": date(2026, 6, 20),
         "date_to": date(2026, 6, 20),
+        "date_label": "2026-06-20 - 8:30 AM to 12:15 PM",
         "reason": "Coverage too thin",
         "actor_name": "Dale Gruber",
         "actor_upn": "dale@gruberpallets.com",
@@ -165,6 +169,7 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
     assert "Awaiting 2nd approval" in resp.text
     assert "Juan Morales" in resp.text
     assert "Coverage too thin" in resp.text
+    assert "2026-06-20 - 8:30 AM to 12:15 PM" in resp.text
     assert "6/24 9:05 AM" in resp.text
     assert "/static/time_off_approvals.js" in resp.text
     assert 'data-pending-count' in resp.text
@@ -190,6 +195,7 @@ def test_approvals_js_removes_resolved_rows_and_updates_pending_counts():
     assert "[data-recent-decisions]" in js
     assert "[data-recent-empty]" in js
     assert "resp.decision" in js
+    assert "decision.date_label" in js
     assert "decision.decided_label" in js
     assert "bumpPendingCount(-1);" in js
     assert "No pending time-off requests." in js

@@ -21,6 +21,8 @@ def record_decision(
     leave_type: str | None,
     date_from: date | None,
     date_to: date | None,
+    hour_from: float | None,
+    hour_to: float | None,
     action: str,
     result_state: str | None,
     reason: str | None,
@@ -32,12 +34,12 @@ def record_decision(
     db.execute(
         "INSERT INTO time_off_decisions "
         "(request_id, odoo_leave_id, person_odoo_id, person_name, leave_type, "
-        " date_from, date_to, action, result_state, reason, actor_upn, "
-        " actor_name, source) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " date_from, date_to, hour_from, hour_to, action, result_state, "
+        " reason, actor_upn, actor_name, source) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (request_id, odoo_leave_id, person_odoo_id, person_name, leave_type,
-         date_from, date_to, action, result_state, reason, actor_upn,
-         actor_name, source),
+         date_from, date_to, hour_from, hour_to, action, result_state, reason,
+         actor_upn, actor_name, source),
     )
 
 
@@ -45,7 +47,8 @@ def recent_decisions(days: int = 30) -> list[dict[str, Any]]:
     """Decisions in the last ``days`` days, newest first."""
     return db.query(
         "SELECT id, request_id, odoo_leave_id, person_odoo_id, person_name, "
-        "leave_type, date_from, date_to, action, result_state, reason, "
+        "leave_type, date_from, date_to, hour_from, hour_to, action, "
+        "result_state, reason, "
         "actor_upn, actor_name, source, decided_at "
         "FROM time_off_decisions "
         "WHERE decided_at >= now() - make_interval(days => %s) "

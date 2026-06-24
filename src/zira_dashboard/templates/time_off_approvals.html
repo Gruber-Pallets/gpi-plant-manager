@@ -77,7 +77,7 @@
           <tr class="exception-row">
             <th scope="row">{{ d.person_name }}</th>
             <td>
-              {{ d.action | capitalize }} · {{ d.leave_type }} {{ d.date_from }}{% if d.date_to != d.date_from %} to {{ d.date_to }}{% endif %}
+              {{ d.action | capitalize }} · {{ d.leave_type }} {{ d.date_label or d.date_from }}
               {% if d.reason %}<div class="muted">{{ d.reason }}</div>{% endif %}
             </td>
             <td>

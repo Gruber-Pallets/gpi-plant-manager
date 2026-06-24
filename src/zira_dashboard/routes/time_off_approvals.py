@@ -108,7 +108,11 @@ def _pending_payload(today: date) -> list[dict[str, Any]]:
 
 def _recent_payload(days: int = 30) -> list[dict[str, Any]]:
     return [
-        {**row, "decided_label": _decision_time_label(row.get("decided_at"))}
+        {
+            **row,
+            "date_label": _date_label(row),
+            "decided_label": _decision_time_label(row.get("decided_at")),
+        }
         for row in time_off_audit.recent_decisions(days=days)
     ]
 

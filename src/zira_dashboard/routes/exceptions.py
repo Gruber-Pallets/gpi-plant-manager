@@ -101,6 +101,30 @@ def _decision_time_label(value: datetime) -> str:
     return value.astimezone(plant_day.SITE_TZ).strftime("%-m/%-d %-I:%M %p")
 
 
+def _hour_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _hour_label(value: Any) -> str:
+    total_minutes = int(round(float(value) * 60))
+    hour = (total_minutes // 60) % 24
+    minute = total_minutes % 60
+    suffix = "AM" if hour < 12 else "PM"
+    display_hour = hour % 12 or 12
+    return f"{display_hour}:{minute:02d} {suffix}"
+
+
+def _decision_date_label(row: dict[str, Any]) -> str:
+    start = _iso_day(row.get("date_from")) or ""
+    end = _iso_day(row.get("date_to")) or ""
+    label = f"{start} to {end}" if end and end != start else start
+    if row.get("hour_from") is not None and row.get("hour_to") is not None:
+        label += f" - {_hour_label(row['hour_from'])} to {_hour_label(row['hour_to'])}"
+    return label
+
+
 def _decision_summary(
     row: dict[str, Any],
     *,
@@ -118,6 +142,9 @@ def _decision_summary(
         "leave_type": row.get("leave_type"),
         "date_from": _iso_day(row.get("date_from")),
         "date_to": _iso_day(row.get("date_to")),
+        "hour_from": _hour_value(row.get("hour_from")),
+        "hour_to": _hour_value(row.get("hour_to")),
+        "date_label": _decision_date_label(row),
         "reason": reason,
         "actor_name": actor_name,
         "actor_upn": actor_upn,
@@ -204,6 +231,8 @@ def _approve_time_off_sync(
         leave_type=row.get("leave_type"),
         date_from=row.get("date_from"),
         date_to=row.get("date_to"),
+        hour_from=row.get("hour_from"),
+        hour_to=row.get("hour_to"),
         action="approve",
         result_state=final_state,
         reason=None,
@@ -289,6 +318,8 @@ def _refuse_time_off_sync(
         leave_type=row.get("leave_type"),
         date_from=row.get("date_from"),
         date_to=row.get("date_to"),
+        hour_from=row.get("hour_from"),
+        hour_to=row.get("hour_to"),
         action="deny",
         result_state="refuse",
         reason=reason,
