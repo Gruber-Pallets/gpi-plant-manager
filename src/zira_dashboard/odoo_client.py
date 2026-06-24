@@ -85,8 +85,9 @@ def _server_proxy(url: str) -> xmlrpc.client.ServerProxy:
 
 def _reset_cache_for_tests() -> None:
     """Clear cached uid + per-thread object proxy; tests call this between cases."""
-    global _uid_cache
+    global _uid_cache, _feedback_project_id
     _uid_cache = None
+    _feedback_project_id = None
     if hasattr(_thread_local, "object_proxy"):
         del _thread_local.object_proxy
 
@@ -143,6 +144,13 @@ def execute(model: str, method: str, *args: Any, **kwargs: Any) -> Any:
 
 
 SKILL_TYPE_NAMES = ("Production Skills", "Supervisor Skills", "Certifications")
+
+FEEDBACK_PROJECT_NAME = "Plant Manager"
+FEEDBACK_STAGES = ("New", "In Progress", "Done", "Rejected")
+FEEDBACK_DONE_STAGE = "Done"
+FEEDBACK_REJECTED_STAGE = "Rejected"
+
+_feedback_project_id: int | None = None
 
 
 def fetch_skill_columns_with_types() -> list[dict]:
@@ -1278,3 +1286,49 @@ def find_duplicate_leave(
         fields=["id"], limit=1,
     )
     return rows[0]["id"] if rows else None
+
+
+def _ensure_feedback_stages(project_id: int) -> None:
+    existing = execute(
+        "project.task.type", "search_read",
+        [("project_ids", "in", [project_id])], fields=["name"],
+    ) or []
+    have = {r["name"] for r in existing}
+    for seq, name in enumerate(FEEDBACK_STAGES):
+        if name in have:
+            continue
+        execute("project.task.type", "create", {
+            "name": name,
+            "sequence": seq,
+            "fold": name in (FEEDBACK_DONE_STAGE, FEEDBACK_REJECTED_STAGE),
+            "project_ids": [(4, project_id)],
+        })
+
+
+def ensure_feedback_project() -> int:
+    """Find-or-create the 'Plant Manager' project (+ its stages); cache the id."""
+    global _feedback_project_id
+    if _feedback_project_id is not None:
+        return _feedback_project_id
+    found = execute(
+        "project.project", "search_read",
+        [("name", "=", FEEDBACK_PROJECT_NAME)], fields=["id"], limit=1,
+    )
+    if found:
+        project_id = found[0]["id"]
+    else:
+        project_id = execute("project.project", "create", {"name": FEEDBACK_PROJECT_NAME})
+    _ensure_feedback_stages(project_id)
+    _feedback_project_id = project_id
+    return project_id
+
+
+def ensure_feedback_tag(name: str) -> int:
+    """Find-or-create a project.tags row by name; return its id."""
+    found = execute(
+        "project.tags", "search_read",
+        [("name", "=", name)], fields=["id"], limit=1,
+    )
+    if found:
+        return found[0]["id"]
+    return execute("project.tags", "create", {"name": name})
