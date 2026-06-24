@@ -124,6 +124,8 @@ def test_approvals_page_renders_200(monkeypatch):
 
     assert resp.status_code == 200
     assert "Time off approvals" in resp.text
+    assert 'data-recent-decisions' in resp.text
+    assert 'data-recent-empty' in resp.text
 
 
 def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch):
@@ -186,6 +188,7 @@ def test_approvals_js_removes_resolved_rows_and_updates_pending_counts():
     assert "function removeResolvedRow(row)" in js
     assert "function prependDecision(decision)" in js
     assert "[data-recent-decisions]" in js
+    assert "[data-recent-empty]" in js
     assert "resp.decision" in js
     assert "bumpPendingCount(-1);" in js
     assert "No pending time-off requests." in js

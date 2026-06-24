@@ -71,7 +71,6 @@
           <span>Last 30 days</span>
         </div>
       </div>
-      {% if recent %}
       <table>
         <tbody data-recent-decisions>
         {% for d in recent %}
@@ -89,8 +88,8 @@
         {% endfor %}
         </tbody>
       </table>
-      {% else %}
-        <div class="empty-row">No decisions in the last 30 days.</div>
+      {% if not recent %}
+        <div class="empty-row" data-recent-empty>No decisions in the last 30 days.</div>
       {% endif %}
     </section>
   </div>

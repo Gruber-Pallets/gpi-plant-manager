@@ -66,6 +66,9 @@
   function prependDecision(decision) {
     var tbody = document.querySelector('[data-recent-decisions]');
     if (!tbody || !decision) return;
+    var empty = document.querySelector('[data-recent-empty]');
+    if (empty) empty.remove();
+
     var row = document.createElement('tr');
     row.className = 'exception-row';
     row.appendChild(textCell('th', decision.person_name || 'Unknown'));
