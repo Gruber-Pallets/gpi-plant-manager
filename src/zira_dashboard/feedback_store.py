@@ -5,6 +5,10 @@ from __future__ import annotations
 from . import db
 
 
+def _clamp_limit(limit: int) -> int:
+    return max(1, min(int(limit), 500))
+
+
 def insert(
     message: str,
     submitter: str | None = None,
@@ -26,5 +30,5 @@ def recent(limit: int = 200) -> list[dict]:
     return db.query(
         "SELECT id, created_at, submitter, page_url, category, message "
         "FROM feedback ORDER BY id DESC LIMIT %s",
-        (limit,),
+        (_clamp_limit(limit),),
     )
