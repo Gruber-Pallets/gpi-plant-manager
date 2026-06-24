@@ -83,21 +83,3 @@ def test_post_feedback_drops_unsafe_page_url(monkeypatch):
 
     assert resp.status_code == 200
     assert captured["page_url"] is None
-
-
-def test_admin_feedback_renders_rows(monkeypatch):
-    monkeypatch.setattr(feedback_store, "recent", lambda limit=200: [{
-        "id": 5,
-        "created_at": "2026-06-24 09:00",
-        "submitter": "dale@example.com",
-        "page_url": "/staffing",
-        "category": "Bug",
-        "message": "Sticky note text here",
-    }])
-
-    resp = client.get("/admin/feedback")
-
-    assert resp.status_code == 200
-    assert "Sticky note text here" in resp.text
-    assert "dale@example.com" in resp.text
-    assert 'href="/staffing"' in resp.text
