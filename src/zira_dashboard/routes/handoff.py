@@ -318,6 +318,7 @@ def handoff_page(request: Request, saved: int | None = None):
             "recent": _recent_handoffs(),
             "open_followups": open_followups,
             "open_followup_count": open_followup_count,
+            "initial_handoff_summary": {"open_followups": open_followup_count},
             "saved": saved,
             "default_created_by": _created_by(request),
             "default_shift_label": _default_shift_label(),

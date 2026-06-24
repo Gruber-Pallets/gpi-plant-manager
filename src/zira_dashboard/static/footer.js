@@ -268,10 +268,25 @@
     }).catch(function () {});
   }
 
+  function readHandoffSummaryBootstrap() {
+    var el = document.getElementById('gpi-handoff-summary-bootstrap');
+    if (!el) return null;
+    try {
+      return JSON.parse(el.textContent || '{}');
+    } catch (e) {
+      return null;
+    }
+  }
+
   function startHandoffSummary(link) {
     if (!link) return;
     window.gpiRefreshHandoffSummary = function () { refreshHandoffSummary(link); };
-    setTimeout(function () { refreshHandoffSummary(link); }, 900);
+    var initial = readHandoffSummaryBootstrap();
+    if (initial) {
+      updateHandoffSummaryLink(link, initial);
+    } else {
+      setTimeout(function () { refreshHandoffSummary(link); }, 900);
+    }
     setInterval(function () {
       if (!document.hidden) refreshHandoffSummary(link);
     }, 60000);

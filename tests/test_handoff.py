@@ -532,6 +532,20 @@ def test_handoff_page_shows_total_open_followup_count(monkeypatch):
     assert "Showing 1 most recent" in resp.text
 
 
+def test_handoff_page_bootstraps_nav_summary(monkeypatch):
+    monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
+    monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
+    monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [])
+    monkeypatch.setattr(handoff, "_open_followups_with_count", lambda: ([], 3))
+    client = TestClient(app)
+
+    resp = client.get("/handoff")
+
+    assert resp.status_code == 200
+    assert 'id="gpi-handoff-summary-bootstrap"' in resp.text
+    assert '"open_followups": 3' in resp.text
+
+
 def test_open_followups_with_count_uses_window_count(monkeypatch):
     captured = {}
 
@@ -866,6 +880,8 @@ def test_footer_injects_handoff_nav_link():
     assert "href = '/handoff'" in js
     assert "/api/handoff/summary" in js
     assert "startHandoffSummary(ensureHandoffLink())" in js
+    assert "readHandoffSummaryBootstrap" in js
+    assert "updateHandoffSummaryLink(link, initial)" in js
     assert "handoff-nav-count" in js
     assert ".handoff-nav-count" in css
     assert ".handoff-nav-link.has-open .handoff-nav-count" in css
