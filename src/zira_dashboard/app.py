@@ -28,6 +28,7 @@ from .routes import (
     changelog,
     dashboard,
     exceptions,
+    feedback,
     goat_watch,
     handoff,
     timeclock,
@@ -371,6 +372,7 @@ app.include_router(trophies.router)
 app.include_router(settings.router)
 app.include_router(api_layout.router)
 app.include_router(changelog.router)
+app.include_router(feedback.router)
 app.include_router(admin.router)
 app.include_router(goat_watch.router)
 app.include_router(timeclock.router)

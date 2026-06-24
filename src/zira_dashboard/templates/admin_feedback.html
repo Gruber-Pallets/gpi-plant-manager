@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Feedback - GPI Plant Manager</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem; color: #1f2937; }
+  h1 { font-size: 1.2rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { border: 1px solid #d8dee5; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+  th { background: #f1f4f7; }
+  .muted { color: #6b7280; font-size: 0.8rem; }
+  .empty { color: #6b7280; }
+  a { color: #16a34a; }
+</style>
+</head>
+<body>
+  <h1>Feedback</h1>
+  <p><a href="/recycling">Back to dashboards</a></p>
+  {% if items %}
+  <table>
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>From</th>
+        <th>Category</th>
+        <th>Message</th>
+        <th>Page</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td class="muted">{{ it.created_at }}</td>
+        <td>{{ it.submitter or '-' }}</td>
+        <td>{{ it.category or '-' }}</td>
+        <td>{{ it.message }}</td>
+        <td class="muted">{{ it.page_url or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No feedback yet.</p>
+  {% endif %}
+</body>
+</html>
