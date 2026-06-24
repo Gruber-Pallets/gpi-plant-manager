@@ -39,6 +39,7 @@ def test_footer_js_injects_trigger_read_state_and_feedback_submit():
     assert "changelog_read" in js
     assert "function markAllRead()" in js
     assert "function submitFeedback" in js
+    assert "messageEl.focus()" in js
     assert "window.gpiFetch('/feedback'" in js
     assert "function makeBadgeModal" in js
 

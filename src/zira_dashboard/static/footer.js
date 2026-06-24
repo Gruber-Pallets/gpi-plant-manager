@@ -200,7 +200,11 @@
   function toggleFeedback(event) {
     if (event) event.preventDefault();
     var form = document.getElementById('changelog-feedback');
-    if (form) form.hidden = !form.hidden;
+    if (form) {
+      form.hidden = !form.hidden;
+      var messageEl = document.getElementById('changelog-feedback-message');
+      if (!form.hidden && messageEl) messageEl.focus();
+    }
   }
 
   function submitFeedback(event) {
