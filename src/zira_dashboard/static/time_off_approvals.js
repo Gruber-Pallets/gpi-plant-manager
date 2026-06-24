@@ -45,6 +45,47 @@
     }
   }
 
+  function textCell(tag, text) {
+    var el = document.createElement(tag);
+    el.textContent = text || '';
+    return el;
+  }
+
+  function dateRange(decision) {
+    if (!decision) return '';
+    var start = decision.date_from || '';
+    var end = decision.date_to || '';
+    return end && end !== start ? start + ' to ' + end : start;
+  }
+
+  function titleCase(text) {
+    text = String(text || '');
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
+  }
+
+  function prependDecision(decision) {
+    var tbody = document.querySelector('[data-recent-decisions]');
+    if (!tbody || !decision) return;
+    var row = document.createElement('tr');
+    row.className = 'exception-row';
+    row.appendChild(textCell('th', decision.person_name || 'Unknown'));
+
+    var detail = textCell(
+      'td',
+      titleCase(decision.action) + ' · ' + (decision.leave_type || 'Time off') + ' ' + dateRange(decision)
+    );
+    if (decision.reason) {
+      var reason = document.createElement('div');
+      reason.className = 'muted';
+      reason.textContent = decision.reason;
+      detail.appendChild(reason);
+    }
+    row.appendChild(detail);
+
+    row.appendChild(textCell('td', decision.actor_name || decision.actor_upn || 'Unknown'));
+    tbody.insertBefore(row, tbody.firstChild);
+  }
+
   function done(row, text) {
     busy(row, true);
     status(row, text, false);
@@ -76,6 +117,7 @@
             status(row, 'Moved forward; refreshing...', false);
             setTimeout(function () { window.location.reload(); }, 600);
           } else if (resp && resp.ok) {
+            prependDecision(resp.decision);
             done(row, 'Approved');
           } else {
             busy(row, false);
@@ -109,6 +151,7 @@
         source: 'page',
       }).then(function (resp) {
         if (resp && resp.ok) {
+          prependDecision(resp.decision);
           done(row, 'Denied');
         } else {
           busy(row, false);

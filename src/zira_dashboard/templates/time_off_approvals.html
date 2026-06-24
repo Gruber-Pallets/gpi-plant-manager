@@ -73,7 +73,7 @@
       </div>
       {% if recent %}
       <table>
-        <tbody>
+        <tbody data-recent-decisions>
         {% for d in recent %}
           <tr class="exception-row">
             <th scope="row">{{ d.person_name }}</th>

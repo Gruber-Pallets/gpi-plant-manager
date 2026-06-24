@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime
 from pathlib import Path
 
@@ -457,6 +458,19 @@ def test_time_off_approve_endpoint_updates_to_odoo_state(monkeypatch):
     assert audits[0]["result_state"] == "validate"
     assert audits[0]["actor_upn"] == "dale@gruberpallets.com"
     assert audits[0]["person_name"] == "Maria Delgado"
+    payload = json.loads(resp.body)
+    assert payload["decision"] == {
+        "action": "approve",
+        "person_name": "Maria Delgado",
+        "leave_type": "PTO",
+        "date_from": "2026-06-22",
+        "date_to": "2026-06-22",
+        "reason": None,
+        "actor_name": "Dale Gruber",
+        "actor_upn": "dale@gruberpallets.com",
+        "source": "page",
+        "result_state": "validate",
+    }
 
 
 def test_time_off_refuse_requires_reason():
@@ -515,6 +529,11 @@ def test_time_off_refuse_unsynced_draft_stays_local(monkeypatch):
     assert audits[0]["action"] == "deny"
     assert audits[0]["reason"] == "No coverage"
     assert audits[0]["source"] == "inbox"
+    payload = json.loads(resp.body)
+    assert payload["decision"]["action"] == "deny"
+    assert payload["decision"]["reason"] == "No coverage"
+    assert payload["decision"]["source"] == "inbox"
+    assert payload["decision"]["person_name"] == "Carlos Ortega"
 
 
 def test_time_off_refuse_synced_posts_reason_to_odoo(monkeypatch):

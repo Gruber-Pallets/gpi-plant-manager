@@ -86,6 +86,38 @@ def _actor_from(request: Request) -> tuple[str | None, str | None]:
     )
 
 
+def _iso_day(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _decision_summary(
+    row: dict[str, Any],
+    *,
+    action: str,
+    result_state: str,
+    reason: str | None,
+    actor_upn: str | None,
+    actor_name: str | None,
+    source: str | None,
+) -> dict[str, Any]:
+    return {
+        "action": action,
+        "person_name": row.get("person_name"),
+        "leave_type": row.get("leave_type"),
+        "date_from": _iso_day(row.get("date_from")),
+        "date_to": _iso_day(row.get("date_to")),
+        "reason": reason,
+        "actor_name": actor_name,
+        "actor_upn": actor_upn,
+        "source": source,
+        "result_state": result_state,
+    }
+
+
 def _refresh_time_off_surfaces() -> None:
     from .. import _http_cache
     from .staffing import _bust_after_mutation
@@ -169,7 +201,20 @@ def _approve_time_off_sync(
         actor_name=actor_name,
         source=source,
     )
-    return JSONResponse({"ok": True, "state": final_state, "approved": final_state == "validate"})
+    return JSONResponse({
+        "ok": True,
+        "state": final_state,
+        "approved": final_state == "validate",
+        "decision": _decision_summary(
+            row,
+            action="approve",
+            result_state=final_state,
+            reason=None,
+            actor_upn=actor_upn,
+            actor_name=actor_name,
+            source=source,
+        ),
+    })
 
 
 @router.post("/api/exceptions/time-off/{request_id}/approve")
@@ -241,7 +286,19 @@ def _refuse_time_off_sync(
         actor_name=actor_name,
         source=source,
     )
-    return JSONResponse({"ok": True, "state": "refuse"})
+    return JSONResponse({
+        "ok": True,
+        "state": "refuse",
+        "decision": _decision_summary(
+            row,
+            action="deny",
+            result_state="refuse",
+            reason=reason,
+            actor_upn=actor_upn,
+            actor_name=actor_name,
+            source=source,
+        ),
+    })
 
 
 @router.post("/api/exceptions/time-off/{request_id}/refuse")

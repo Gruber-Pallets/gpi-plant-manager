@@ -166,6 +166,7 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
     assert "6/24 9:05 AM" in resp.text
     assert "/static/time_off_approvals.js" in resp.text
     assert 'data-pending-count' in resp.text
+    assert 'data-recent-decisions' in resp.text
     assert 'href="/staffing/time-off/approvals"   class="active">Approvals</a>' in resp.text
 
 
@@ -183,5 +184,8 @@ def test_approvals_js_removes_resolved_rows_and_updates_pending_counts():
     assert "function bumpPendingCount(delta)" in js
     assert "[data-pending-count]" in js
     assert "function removeResolvedRow(row)" in js
+    assert "function prependDecision(decision)" in js
+    assert "[data-recent-decisions]" in js
+    assert "resp.decision" in js
     assert "bumpPendingCount(-1);" in js
     assert "No pending time-off requests." in js
