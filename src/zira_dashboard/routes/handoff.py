@@ -256,6 +256,7 @@ def _update_handoff_notes(*, handoff_id: int, notes: str) -> dict | None:
 @router.get("/handoff", response_class=HTMLResponse)
 def handoff_page(request: Request, saved: int | None = None):
     summary = exception_inbox.build_summary()
+    open_followups = _open_followups()
     return templates.TemplateResponse(
         request,
         "handoff.html",
@@ -263,7 +264,8 @@ def handoff_page(request: Request, saved: int | None = None):
             "today": plant_day.today().isoformat(),
             "summary": summary,
             "recent": _recent_handoffs(),
-            "open_followups": _open_followups(),
+            "open_followups": open_followups,
+            "open_followup_count": _open_followup_count(),
             "saved": saved,
             "default_created_by": _created_by(request),
         },

@@ -29,6 +29,7 @@ def test_handoff_page_renders_current_snapshot_and_recent(monkeypatch):
     monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
     monkeypatch.setattr(handoff, "_open_followups", lambda: [])
+    monkeypatch.setattr(handoff, "_open_followup_count", lambda: 0)
     monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [{
         "id": 7,
         "handoff_date": date(2026, 6, 18),
@@ -312,6 +313,7 @@ def test_handoff_page_renders_open_followups(monkeypatch):
     monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
     monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [])
+    monkeypatch.setattr(handoff, "_open_followup_count", lambda: 1)
     monkeypatch.setattr(handoff, "_open_followups", lambda: [{
         "id": 21,
         "handoff_date": date(2026, 6, 19),
@@ -332,6 +334,32 @@ def test_handoff_page_renders_open_followups(monkeypatch):
     assert "Open Follow-ups" in resp.text
     assert "Maintenance must check Repair 1" in resp.text
     assert "/handoff/21" in resp.text
+
+
+def test_handoff_page_shows_total_open_followup_count(monkeypatch):
+    monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
+    monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
+    monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [])
+    monkeypatch.setattr(handoff, "_open_followup_count", lambda: 4)
+    monkeypatch.setattr(handoff, "_open_followups", lambda: [{
+        "id": 21,
+        "handoff_date": date(2026, 6, 19),
+        "shift_label": "Night",
+        "created_by": "Mia",
+        "notes": "Maintenance must check Repair 1",
+        "open_total": 3,
+        "urgent_total": 1,
+        "follow_up_required": True,
+        "is_open_followup": True,
+        "created_at_label": "6/19 10:15 PM",
+    }])
+    client = TestClient(app)
+
+    resp = client.get("/handoff")
+
+    assert resp.status_code == 200
+    assert "4 need closure" in resp.text
+    assert "Showing 1 most recent" in resp.text
 
 
 def test_handoff_detail_renders_followup_resolve_form(monkeypatch):

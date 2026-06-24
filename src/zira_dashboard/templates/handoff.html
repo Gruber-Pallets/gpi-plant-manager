@@ -63,7 +63,12 @@
   <section class="recent-section followups-section">
     <div class="section-head">
       <h3>Open Follow-ups</h3>
-      <span>{{ open_followups|length }} need closure</span>
+      <span>
+        {{ open_followup_count }} need closure
+        {% if open_followup_count > open_followups|length %}
+          · Showing {{ open_followups|length }} most recent
+        {% endif %}
+      </span>
     </div>
     <div class="handoff-list">
       {% for row in open_followups %}
