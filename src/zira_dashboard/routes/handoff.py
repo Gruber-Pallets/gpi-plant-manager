@@ -76,6 +76,63 @@ def _shape_handoff_row(row: dict) -> dict:
     return shaped
 
 
+_SOURCE_SECTION_IDS = {
+    "Assignments To Do": "assignments",
+    "Late / Absence": "late",
+    "Missing Work Center": "missing_wc",
+    "Missed Punch Out": "missed_punch_out",
+    "Pending Time Off": "time_off",
+}
+
+
+def _snapshot_row_keys(snapshot: dict) -> set[str]:
+    keys: set[str] = set()
+    for section in snapshot.get("sections") or []:
+        for row in section.get("rows") or []:
+            key = row.get("row_key")
+            if key:
+                keys.add(str(key))
+    return keys
+
+
+def _degraded_section_ids(snapshot: dict) -> set[str]:
+    out: set[str] = set()
+    for err in snapshot.get("source_errors") or []:
+        source = err.get("source") if isinstance(err, dict) else None
+        section_id = _SOURCE_SECTION_IDS.get(str(source or ""))
+        if section_id:
+            out.add(section_id)
+    return out
+
+
+def _annotate_snapshot_sections(
+    sections: list[dict],
+    *,
+    current_keys: set[str],
+    degraded_section_ids: set[str],
+) -> list[dict]:
+    annotated: list[dict] = []
+    for section in sections:
+        section_id = str(section.get("id") or "")
+        rows = []
+        for row in section.get("rows") or []:
+            shaped = dict(row)
+            key = shaped.get("row_key")
+            if key:
+                if section_id in degraded_section_ids:
+                    shaped["current_status"] = "unknown"
+                    shaped["current_status_label"] = "Check unavailable"
+                elif str(key) in current_keys:
+                    shaped["current_status"] = "still_open"
+                    shaped["current_status_label"] = "Still open"
+                else:
+                    shaped["current_status"] = "cleared"
+                    shaped["current_status_label"] = "Cleared"
+            rows.append(shaped)
+        annotated.append({**section, "rows": rows})
+    return annotated
+
+
 def _recent_handoffs(limit: int = 10) -> list[dict]:
     from .. import db
 
@@ -205,6 +262,19 @@ def handoff_detail_page(request: Request, handoff_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail="handoff not found")
     snapshot = row.get("exception_snapshot") or {}
+    sections = snapshot.get("sections") or []
+    try:
+        current_snapshot = exception_inbox.build_snapshot()
+        current_keys = _snapshot_row_keys(current_snapshot)
+        degraded_section_ids = _degraded_section_ids(current_snapshot)
+    except Exception:  # noqa: BLE001 -- detail history should still render if live checks fail
+        current_keys = set()
+        degraded_section_ids = {str(section.get("id") or "") for section in sections}
+    sections = _annotate_snapshot_sections(
+        sections,
+        current_keys=current_keys,
+        degraded_section_ids=degraded_section_ids,
+    )
     return templates.TemplateResponse(
         request,
         "handoff_detail.html",
@@ -212,7 +282,7 @@ def handoff_detail_page(request: Request, handoff_id: int):
             "today": plant_day.today().isoformat(),
             "handoff": row,
             "snapshot": snapshot,
-            "sections": snapshot.get("sections") or [],
+            "sections": sections,
         },
     )
 

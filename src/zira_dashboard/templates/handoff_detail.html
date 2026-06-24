@@ -123,6 +123,9 @@
                 <strong>{{ row.name }}</strong>
                 <span>{{ row.label }}</span>
                 <em>{{ row.detail }}</em>
+                {% if row.current_status %}
+                  <span class="snapshot-row-status {{ row.current_status.replace('_', '-') }}">{{ row.current_status_label }}</span>
+                {% endif %}
               </li>
               {% endfor %}
             </ul>

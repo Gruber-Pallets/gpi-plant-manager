@@ -94,6 +94,108 @@ def test_handoff_detail_renders_saved_snapshot(monkeypatch):
     assert "Clocked in 7:05 AM" in resp.text
 
 
+def test_annotate_snapshot_sections_marks_current_status():
+    sections = [{
+        "id": "missing_wc",
+        "title": "Missing Work Center",
+        "count": 2,
+        "rows": [
+            {"name": "Ana", "label": "No work center", "detail": "7:05 AM", "row_key": "missing_wc:1"},
+            {"name": "Ben", "label": "No work center", "detail": "7:10 AM", "row_key": "missing_wc:2"},
+            {"name": "Cal", "label": "No work center", "detail": "7:15 AM"},
+        ],
+    }]
+
+    annotated = handoff._annotate_snapshot_sections(
+        sections,
+        current_keys={"missing_wc:1"},
+        degraded_section_ids=set(),
+    )
+
+    rows = annotated[0]["rows"]
+    assert rows[0]["current_status"] == "still_open"
+    assert rows[0]["current_status_label"] == "Still open"
+    assert rows[1]["current_status"] == "cleared"
+    assert rows[1]["current_status_label"] == "Cleared"
+    assert "current_status" not in rows[2]
+    assert sections[0]["rows"][0].get("current_status") is None
+
+
+def test_annotate_snapshot_sections_marks_degraded_sources_unknown():
+    sections = [{
+        "id": "late",
+        "title": "Late / Absence",
+        "count": 1,
+        "rows": [{"name": "Ana", "label": "Scheduled late", "detail": "12 min", "row_key": "late:1"}],
+    }]
+
+    annotated = handoff._annotate_snapshot_sections(
+        sections,
+        current_keys=set(),
+        degraded_section_ids={"late"},
+    )
+
+    assert annotated[0]["rows"][0]["current_status"] == "unknown"
+    assert annotated[0]["rows"][0]["current_status_label"] == "Check unavailable"
+
+
+def test_handoff_detail_renders_current_snapshot_status(monkeypatch):
+    monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
+    monkeypatch.setattr(handoff, "_load_handoff", lambda handoff_id: {
+        "id": handoff_id,
+        "handoff_date": date(2026, 6, 18),
+        "shift_label": "Day",
+        "created_by": "Dale",
+        "notes": "Review missing work centers",
+        "open_total": 2,
+        "urgent_total": 1,
+        "source_errors": [],
+        "source_error_label": "",
+        "follow_up_required": False,
+        "is_open_followup": False,
+        "created_at_label": "6/18 2:10 PM",
+        "exception_snapshot": {
+            "generated_at": "2:09 PM",
+            "sections": [{
+                "id": "missing_wc",
+                "title": "Missing Work Center",
+                "count": 2,
+                "rows": [
+                    {
+                        "name": "Ana",
+                        "label": "No work center",
+                        "detail": "Clocked in 7:05 AM",
+                        "row_key": "missing_wc:1",
+                    },
+                    {
+                        "name": "Ben",
+                        "label": "No work center",
+                        "detail": "Clocked in 7:10 AM",
+                        "row_key": "missing_wc:2",
+                    },
+                ],
+            }],
+        },
+    })
+    monkeypatch.setattr(handoff.exception_inbox, "build_snapshot", lambda: {
+        "source_errors": [],
+        "sections": [{
+            "id": "missing_wc",
+            "title": "Missing Work Center",
+            "rows": [{"row_key": "missing_wc:1"}],
+        }],
+    })
+    client = TestClient(app)
+
+    resp = client.get("/handoff/7")
+
+    assert resp.status_code == 200
+    assert "Still open" in resp.text
+    assert "Cleared" in resp.text
+    assert 'class="snapshot-row-status still-open"' in resp.text
+    assert 'class="snapshot-row-status cleared"' in resp.text
+
+
 def test_load_handoff_normalizes_jsonb_strings(monkeypatch):
     def fake_query(sql, params):
         assert params == (7,)

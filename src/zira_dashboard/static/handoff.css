@@ -383,7 +383,8 @@ header.app nav a.active {
 }
 .snapshot-section li {
   display: grid;
-  grid-template-columns: minmax(130px, 1fr) minmax(100px, 0.8fr) minmax(120px, 1fr);
+  grid-template-columns: minmax(130px, 1fr) minmax(100px, 0.8fr) minmax(120px, 1fr) auto;
+  align-items: center;
   gap: 0.45rem;
   padding: 0.55rem 0.7rem;
   color: var(--muted);
@@ -397,6 +398,30 @@ header.app nav a.active {
 }
 .snapshot-section li em {
   font-style: normal;
+}
+.snapshot-row-status {
+  justify-self: end;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.42rem;
+  font-size: 0.72rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.snapshot-row-status.still-open {
+  border-color: #f2a5a5;
+  background: var(--bad-dim);
+  color: var(--bad);
+}
+.snapshot-row-status.cleared {
+  border-color: #86efac;
+  background: var(--accent-dim);
+  color: #166534;
+}
+.snapshot-row-status.unknown {
+  border-color: #f4ca64;
+  background: var(--warn-dim);
+  color: var(--warn);
 }
 
 @media (max-width: 800px) {
@@ -421,5 +446,8 @@ header.app nav a.active {
   }
   .snapshot-section li {
     grid-template-columns: 1fr;
+  }
+  .snapshot-row-status {
+    justify-self: start;
   }
 }
