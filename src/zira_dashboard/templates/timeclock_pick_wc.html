@@ -19,10 +19,10 @@
   ">
     {% for wc in work_centers %}
       {% if purpose == 'clock_in' %}
-        <form method="post" action="/timeclock/clock-in/{{ token }}" style="margin: 0;">
+        <form method="post" action="/timeclock/clock-in/{{ token }}" class="k-punch-form" style="margin: 0;">
           <input type="hidden" name="wc_name" value="{{ wc.name }}" />
           <input type="hidden" name="scheduled_wc_name" value="{{ scheduled }}" />
-          <button type="submit" class="k-btn secondary" style="
+          <button type="submit" class="k-btn secondary" aria-busy="false" style="
             width: 100%; padding: 1.5rem 1rem;
             font-size: 1.4rem; min-height: 100px; min-width: unset;
             text-align: center; line-height: 1.2;">
@@ -33,9 +33,9 @@
           </button>
         </form>
       {% else %}
-        <form method="post" action="/timeclock/transfer/{{ token }}" style="margin: 0;">
+        <form method="post" action="/timeclock/transfer/{{ token }}" class="k-punch-form" style="margin: 0;">
           <input type="hidden" name="new_wc_name" value="{{ wc.name }}" />
-          <button type="submit" class="k-btn secondary" style="
+          <button type="submit" class="k-btn secondary" aria-busy="false" style="
             width: 100%; padding: 1.5rem 1rem;
             font-size: 1.4rem; min-height: 100px; min-width: unset;
             text-align: center; line-height: 1.2;">
@@ -49,4 +49,14 @@
     {% endfor %}
   </div>
 </div>
+<script>
+  document.querySelectorAll('.k-punch-form').forEach(function (form) {
+    form.addEventListener('submit', function () {
+      var btn = form.querySelector('button[type="submit"]');
+      if (!btn) return;
+      btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
+    });
+  });
+</script>
 {% endblock %}
