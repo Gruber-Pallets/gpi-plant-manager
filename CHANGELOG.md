@@ -22,6 +22,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **The timeclock home search box now has an explicit accessible name.** Screen readers and voice-control tools can identify the kiosk name filter as "Search your name" instead of relying on placeholder text that disappears once an employee starts typing.
 - **Handoff follow-up resolution fields now have explicit accessible names.** The saved handoff detail page labels the "Resolved by" and "Resolution note" controls directly, keeping follow-up closure consistent with the rest of the manager workflow forms.
 - **The new handoff form now labels its signer and notes fields directly.** Managers entering shift handoffs get explicit "Signed by" and "Handoff notes" control names instead of relying on surrounding text or placeholder copy.
+- **The People Matrix filter now has an explicit accessible name.** The skills/reserve planning search box is identified as "Filter people" for screen readers and voice-control tools instead of relying on placeholder text alone.
 
 ## 2026-06-19
 

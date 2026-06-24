@@ -19,7 +19,7 @@
     <h2 style="margin:0">People Matrix</h2>
     <span class="counts">{{ active_count }} active · {{ inactive_count }} inactive · {{ skills|length }} skills</span>
     <div style="margin-left:auto;display:flex;gap:0.75rem;align-items:center">
-      <input type="search" id="wheel-filter" placeholder="Filter people…">
+      <input type="search" id="wheel-filter" placeholder="Filter people…" aria-label="Filter people">
       <div class="view-wrap">
         <button type="button" class="view-btn" id="view-btn" aria-haspopup="true" aria-expanded="false">View ▾</button>
         <div class="view-popover" id="view-popover" hidden></div>
