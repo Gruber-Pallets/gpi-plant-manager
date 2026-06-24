@@ -12,10 +12,17 @@ def test_footer_template_uses_panel_without_old_text_link():
 
     assert "app-footer" not in html
     assert "changelog-open" not in html
-    assert "changelog-feedback-toggle" in html
-    assert "changelog-feedback-message" in html
-    assert 'aria-label="Feedback message"' in html
     assert "changelog-markall" in html
+    # Old inline feedback form is gone; new modals + buttons present.
+    assert "changelog-feedback-toggle" not in html
+    assert 'id="fb-open"' in html
+    assert 'id="fb-view-open"' in html
+    assert 'id="fb-modal"' in html
+    assert 'id="fb-view-modal"' in html
+    assert 'id="fb-desc"' in html
+    assert 'data-type="bug"' in html
+    assert 'data-type="feature"' in html
+    assert 'id="fb-file-input"' in html
 
 
 def test_footer_css_has_whatsnew_trigger_and_card_styles():
