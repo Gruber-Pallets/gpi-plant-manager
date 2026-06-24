@@ -37,6 +37,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **Trophy Case award edit controls now have explicit accessible names.** The pencil buttons name the award they edit, and the override modal labels its action, winner, and note fields directly.
 - **The Trophy Case override panel now announces as a modal dialog.** The edit-award panel exposes dialog semantics and uses its visible "Edit award" title as the dialog name.
 - **The Trophy Case override panel now closes with Escape and restores focus.** Keyboard users can dismiss the edit-award dialog without reaching for Cancel, and focus returns to the pencil button that opened it.
+- **Trophy Case year and month pickers now have explicit accessible names.** The annual trophy year selector and monthly ribbon selector no longer depend on nearby visual text alone.
 
 ## 2026-06-19
 

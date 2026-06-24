@@ -39,3 +39,10 @@ def test_trophy_case_override_modal_closes_with_escape_and_restores_focus():
     assert "opener.focus();" in html
     assert "document.addEventListener('keydown'" in html
     assert "e.key === 'Escape'" in html
+
+
+def test_trophy_case_year_and_month_pickers_have_accessible_names():
+    html = _template()
+
+    assert 'id="year-picker" aria-label="Trophy year"' in html
+    assert 'id="month-picker" aria-label="Ribbon month"' in html
