@@ -1117,6 +1117,7 @@
   }
 
   function resetSendForm() {
+    revokeAttachmentUrls();
     attachments = [];
     currentType = 'bug';
     var desc = $('fb-desc');
@@ -1151,6 +1152,12 @@
     renderAttachments();
   }
 
+  function revokeAttachmentUrls() {
+    attachments.forEach(function (att) {
+      if (att.url) URL.revokeObjectURL(att.url);
+    });
+  }
+
   function renderAttachments() {
     var box = $('fb-attachments');
     if (!box) return;
@@ -1172,6 +1179,7 @@
       rm.setAttribute('aria-label', 'Remove attachment');
       rm.textContent = '×';
       rm.addEventListener('click', function () {
+        if (att.url) URL.revokeObjectURL(att.url);
         attachments.splice(idx, 1);
         renderAttachments();
       });
