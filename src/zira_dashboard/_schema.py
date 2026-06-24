@@ -885,4 +885,29 @@ CREATE TABLE IF NOT EXISTS missed_punch_out (
   resolved_at      TIMESTAMPTZ,
   flagged_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 2026-06-24: append-only audit log of time-off approve/deny decisions made
+-- in-app. Deliberately denormalized (no FK to time_off_requests): the leave
+-- poller hard-deletes mirror rows when a leave is deleted in Odoo, and the
+-- decision history must survive that. request_id is the mirror id at decision
+-- time, kept for correlation only.
+CREATE TABLE IF NOT EXISTS time_off_decisions (
+  id              SERIAL PRIMARY KEY,
+  request_id      INTEGER,
+  odoo_leave_id   INTEGER,
+  person_odoo_id  INTEGER,
+  person_name     TEXT,
+  leave_type      TEXT,
+  date_from       DATE,
+  date_to         DATE,
+  action          TEXT NOT NULL CHECK (action IN ('approve','deny')),
+  result_state    TEXT,
+  reason          TEXT,
+  actor_upn       TEXT,
+  actor_name      TEXT,
+  source          TEXT,
+  decided_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS time_off_decisions_decided_at_idx
+  ON time_off_decisions (decided_at DESC);
 """
