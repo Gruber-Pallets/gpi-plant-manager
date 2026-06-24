@@ -396,6 +396,9 @@ def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
     assert "source: 'inbox'" in js
     assert "Enter a reason, then Deny again." in js
     assert "A reason is required to deny." in js
+    assert "event.key !== 'Enter'" in js
+    assert ".js-time-off-refuse" in js
+    assert "btn.click()" in js
 
 
 def test_footer_enhances_inbox_nav_with_summary_count():

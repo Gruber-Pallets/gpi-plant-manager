@@ -197,5 +197,8 @@ def test_approvals_js_removes_resolved_rows_and_updates_pending_counts():
     assert "resp.decision" in js
     assert "decision.date_label" in js
     assert "decision.decided_label" in js
+    assert "event.key !== 'Enter'" in js
+    assert ".js-refuse" in js
+    assert "btn.click()" in js
     assert "bumpPendingCount(-1);" in js
     assert "No pending time-off requests." in js

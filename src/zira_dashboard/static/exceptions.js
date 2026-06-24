@@ -477,6 +477,18 @@
     }
   });
 
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter') return;
+    if (!event.target || !event.target.closest) return;
+    var input = event.target.closest('.js-time-off-reason');
+    if (!input || input.hidden) return;
+    var row = input.closest('.exception-row');
+    var btn = row && row.querySelector('.js-time-off-refuse');
+    if (!btn || btn.disabled) return;
+    event.preventDefault();
+    btn.click();
+  });
+
   document.addEventListener('change', function (event) {
     var preset = event.target.closest('.js-reason-preset');
     if (!preset) return;
