@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 from fastapi.testclient import TestClient
 
@@ -71,6 +71,49 @@ def test_pending_payload_flags_over_balance_and_past_due(monkeypatch):
     assert rows[0]["past_due"] is True
 
 
+def test_pending_payload_formats_partial_time_window(monkeypatch):
+    monkeypatch.setattr(page, "_pending_rows", lambda today: [{
+        "id": 57,
+        "person_odoo_id": 9,
+        "person_name": "Luis Vega",
+        "leave_type": "Appointment",
+        "holiday_status_id": 5,
+        "date_from": date(2026, 6, 25),
+        "date_to": date(2026, 6, 25),
+        "hour_from": 8.5,
+        "hour_to": 12.25,
+        "state": "confirm",
+    }])
+    monkeypatch.setattr(page.time_off_context, "balance_for", lambda pid, hsid: None)
+    monkeypatch.setattr(
+        page.time_off_context,
+        "coverage_for",
+        lambda pid, df, dt: {"count": 0, "scope": "department"},
+    )
+
+    rows = page._pending_payload(date(2026, 6, 24))
+
+    assert rows[0]["date_label"] == "2026-06-25 - 8:30 AM to 12:15 PM"
+
+
+def test_recent_payload_formats_decision_time_in_plant_timezone(monkeypatch):
+    monkeypatch.setattr(page.time_off_audit, "recent_decisions", lambda days=30: [{
+        "person_name": "Ana Flores",
+        "action": "approve",
+        "leave_type": "PTO",
+        "date_from": date(2026, 6, 25),
+        "date_to": date(2026, 6, 25),
+        "reason": None,
+        "actor_name": "Dale Gruber",
+        "actor_upn": "dale@gruberpallets.com",
+        "decided_at": datetime(2026, 6, 24, 14, 5, tzinfo=timezone.utc),
+    }])
+
+    rows = page._recent_payload(days=30)
+
+    assert rows[0]["decided_label"] == "6/24 9:05 AM"
+
+
 def test_approvals_page_renders_200(monkeypatch):
     monkeypatch.setattr(page, "_pending_payload", lambda today: [])
     monkeypatch.setattr(page.time_off_audit, "recent_decisions", lambda days=30: [])
@@ -89,13 +132,14 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
         "leave_type": "PTO",
         "date_from": date(2026, 6, 30),
         "date_to": date(2026, 7, 2),
+        "date_label": "2026-06-30 to 2026-07-02",
         "balance": {"remaining": 24.0, "unit": "hours"},
         "coverage": {"count": 2, "scope": "department"},
         "over_balance": False,
         "past_due": False,
         "awaiting_second": True,
     }])
-    monkeypatch.setattr(page.time_off_audit, "recent_decisions", lambda days=30: [{
+    monkeypatch.setattr(page, "_recent_payload", lambda days=30: [{
         "person_name": "Juan Morales",
         "action": "deny",
         "leave_type": "Sick",
@@ -104,6 +148,7 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
         "reason": "Coverage too thin",
         "actor_name": "Dale Gruber",
         "actor_upn": "dale@gruberpallets.com",
+        "decided_label": "6/24 9:05 AM",
     }])
     client = TestClient(app)
 
@@ -116,5 +161,6 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
     assert "Awaiting 2nd approval" in resp.text
     assert "Juan Morales" in resp.text
     assert "Coverage too thin" in resp.text
+    assert "6/24 9:05 AM" in resp.text
     assert "/static/time_off_approvals.js" in resp.text
     assert 'href="/staffing/time-off/approvals"   class="active">Approvals</a>' in resp.text

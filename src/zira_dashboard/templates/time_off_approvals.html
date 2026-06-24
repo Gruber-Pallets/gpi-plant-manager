@@ -33,7 +33,7 @@
               data-priority="{{ 'urgent' if r.past_due or r.over_balance else 'normal' }}">
             <th scope="row">{{ r.person_name }}</th>
             <td>
-              {{ r.leave_type }} · {{ r.date_from }}{% if r.date_to != r.date_from %} to {{ r.date_to }}{% endif %}
+              {{ r.leave_type }} · {{ r.date_label or r.date_from }}
               {% if r.past_due %}<span class="priority-pill urgent">Past due</span>{% endif %}
               {% if r.awaiting_second %}<span class="priority-pill warn">Awaiting 2nd approval</span>{% endif %}
             </td>
@@ -81,7 +81,10 @@
               {{ d.action | capitalize }} · {{ d.leave_type }} {{ d.date_from }}{% if d.date_to != d.date_from %} to {{ d.date_to }}{% endif %}
               {% if d.reason %}<div class="muted">{{ d.reason }}</div>{% endif %}
             </td>
-            <td>{{ d.actor_name or d.actor_upn or 'Unknown' }}</td>
+            <td>
+              {{ d.actor_name or d.actor_upn or 'Unknown' }}
+              {% if d.decided_label %}<div class="muted">{{ d.decided_label }}</div>{% endif %}
+            </td>
           </tr>
         {% endfor %}
         </tbody>
