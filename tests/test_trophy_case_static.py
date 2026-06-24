@@ -52,3 +52,13 @@ def test_trophy_case_override_modal_focuses_action_on_open():
     html = _template()
 
     assert "document.getElementById('tc-action').focus();" in html
+
+
+def test_trophy_case_save_button_exposes_busy_state():
+    html = _template()
+
+    assert 'id="tc-save" aria-busy="false"' in html
+    assert "var saveBtn = document.getElementById('tc-save');" in html
+    assert "saveBtn.disabled = true;" in html
+    assert "saveBtn.setAttribute('aria-busy', 'true');" in html
+    assert "saveBtn.setAttribute('aria-busy', 'false');" in html

@@ -39,6 +39,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **The Trophy Case override panel now closes with Escape and restores focus.** Keyboard users can dismiss the edit-award dialog without reaching for Cancel, and focus returns to the pencil button that opened it.
 - **Trophy Case year and month pickers now have explicit accessible names.** The annual trophy year selector and monthly ribbon selector no longer depend on nearby visual text alone.
 - **The Trophy Case override panel now moves focus into the dialog when opened.** Opening an award edit places focus on the action selector, so keyboard users land inside the modal immediately.
+- **The Trophy Case override Save button now exposes a busy state.** Saving an award override disables the button, marks it busy, and restores it if the request fails, avoiding accidental duplicate submits.
 
 ## 2026-06-19
 

@@ -190,7 +190,7 @@
     <textarea id="tc-note" rows="2" aria-label="Award override note"></textarea>
     <div class="actions">
       <button id="tc-cancel">Cancel</button>
-      <button class="primary" id="tc-save">Save</button>
+      <button class="primary" id="tc-save" aria-busy="false">Save</button>
     </div>
   </div>
 </div>
@@ -244,6 +244,10 @@
 
   document.getElementById('tc-save').addEventListener('click', function () {
     if (!current) return;
+    var saveBtn = document.getElementById('tc-save');
+    saveBtn.disabled = true;
+    saveBtn.setAttribute('aria-busy', 'true');
+    saveBtn.textContent = 'Saving...';
     var action = document.getElementById('tc-action').value;
     var body = Object.assign({}, current, {
       action: action,
@@ -256,8 +260,18 @@
       body: JSON.stringify(body),
     }).then(function (r) {
       if (r.ok) { window.location.reload(); }
-      else { alert('Save failed.'); }
-    }).catch(function () { alert('Network error.'); });
+      else {
+        alert('Save failed.');
+        saveBtn.disabled = false;
+        saveBtn.setAttribute('aria-busy', 'false');
+        saveBtn.textContent = 'Save';
+      }
+    }).catch(function () {
+      alert('Network error.');
+      saveBtn.disabled = false;
+      saveBtn.setAttribute('aria-busy', 'false');
+      saveBtn.textContent = 'Save';
+    });
   });
 
   // Year + month pickers reload with new query string.
