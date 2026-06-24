@@ -427,12 +427,20 @@ def test_time_off_approve_endpoint_updates_to_odoo_state(monkeypatch):
     assert audits[0]["person_name"] == "Maria Delgado"
 
 
+def test_time_off_refuse_requires_reason():
+    resp = exceptions_route._refuse_time_off_sync(56, reason="")
+
+    assert resp.status_code == 400
+
+
 def test_time_off_refuse_unsynced_draft_stays_local(monkeypatch):
     from zira_dashboard import odoo_client
 
     row = {
         "id": 56,
         "person_odoo_id": 8,
+        "person_name": "Carlos Ortega",
+        "leave_type": "Unpaid",
         "date_from": date(2026, 6, 22),
         "date_to": date(2026, 6, 22),
         "state": "draft",
@@ -440,19 +448,111 @@ def test_time_off_refuse_unsynced_draft_stays_local(monkeypatch):
     }
     updates = []
     refused = []
+    posted = []
+    audits = []
     monkeypatch.setattr(exceptions_route, "_load_time_off_request", lambda request_id: row)
     monkeypatch.setattr(odoo_client, "refuse_leave", lambda leave_id: refused.append(leave_id))
+    monkeypatch.setattr(
+        odoo_client,
+        "post_leave_message",
+        lambda leave_id, body: posted.append((leave_id, body)),
+    )
     monkeypatch.setattr(
         exceptions_route,
         "_set_time_off_state",
         lambda old, state: updates.append((old["id"], state)),
     )
+    monkeypatch.setattr(
+        exceptions_route.time_off_audit,
+        "record_decision",
+        lambda **kw: audits.append(kw),
+    )
 
-    resp = exceptions_route._refuse_time_off_sync(56)
+    resp = exceptions_route._refuse_time_off_sync(
+        56,
+        reason="No coverage",
+        actor_upn="dale@gruberpallets.com",
+        actor_name="Dale Gruber",
+        source="inbox",
+    )
 
     assert resp.status_code == 200
     assert refused == []
+    assert posted == []
     assert updates == [(56, "refuse")]
+    assert audits[0]["action"] == "deny"
+    assert audits[0]["reason"] == "No coverage"
+    assert audits[0]["source"] == "inbox"
+
+
+def test_time_off_refuse_synced_posts_reason_to_odoo(monkeypatch):
+    from zira_dashboard import odoo_client
+
+    row = {
+        "id": 57,
+        "person_odoo_id": 9,
+        "person_name": "Luis Vega",
+        "leave_type": "PTO",
+        "date_from": date(2026, 6, 25),
+        "date_to": date(2026, 6, 25),
+        "state": "confirm",
+        "odoo_leave_id": 99,
+    }
+    posted = []
+    monkeypatch.setattr(exceptions_route, "_load_time_off_request", lambda request_id: row)
+    monkeypatch.setattr(odoo_client, "refuse_leave", lambda leave_id: None)
+    monkeypatch.setattr(
+        odoo_client,
+        "post_leave_message",
+        lambda leave_id, body: posted.append((leave_id, body)),
+    )
+    monkeypatch.setattr(exceptions_route, "_set_time_off_state", lambda old, state: None)
+    monkeypatch.setattr(exceptions_route.time_off_audit, "record_decision", lambda **kw: None)
+
+    resp = exceptions_route._refuse_time_off_sync(57, reason="Coverage too thin")
+
+    assert resp.status_code == 200
+    assert posted == [(99, "Coverage too thin")]
+
+
+def test_time_off_refuse_survives_chatter_post_failure(monkeypatch):
+    from zira_dashboard import odoo_client
+
+    row = {
+        "id": 58,
+        "person_odoo_id": 9,
+        "person_name": "Luis Vega",
+        "leave_type": "PTO",
+        "date_from": date(2026, 6, 25),
+        "date_to": date(2026, 6, 25),
+        "state": "confirm",
+        "odoo_leave_id": 99,
+    }
+    updates = []
+    audits = []
+
+    def boom(leave_id, body):
+        raise RuntimeError("odoo down")
+
+    monkeypatch.setattr(exceptions_route, "_load_time_off_request", lambda request_id: row)
+    monkeypatch.setattr(odoo_client, "refuse_leave", lambda leave_id: None)
+    monkeypatch.setattr(odoo_client, "post_leave_message", boom)
+    monkeypatch.setattr(
+        exceptions_route,
+        "_set_time_off_state",
+        lambda old, state: updates.append(state),
+    )
+    monkeypatch.setattr(
+        exceptions_route.time_off_audit,
+        "record_decision",
+        lambda **kw: audits.append(kw),
+    )
+
+    resp = exceptions_route._refuse_time_off_sync(58, reason="No coverage")
+
+    assert resp.status_code == 200
+    assert updates == ["refuse"]
+    assert len(audits) == 1
 
 
 def test_load_time_off_request_selects_name_and_type(monkeypatch):

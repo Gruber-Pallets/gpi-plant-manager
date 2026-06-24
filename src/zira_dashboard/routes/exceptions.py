@@ -189,8 +189,20 @@ async def approve_time_off_request(request_id: int, request: Request):
     )
 
 
-def _refuse_time_off_sync(request_id: int) -> JSONResponse:
+def _refuse_time_off_sync(
+    request_id: int,
+    reason: str,
+    actor_upn: str | None = None,
+    actor_name: str | None = None,
+    source: str | None = None,
+) -> JSONResponse:
+    import logging
+
     from .. import odoo_client
+
+    reason = (reason or "").strip()
+    if not reason:
+        return _json_error("a reason is required to deny", 400)
 
     row = _load_time_off_request(request_id)
     if row is None:
@@ -199,15 +211,53 @@ def _refuse_time_off_sync(request_id: int) -> JSONResponse:
     if state in _TERMINAL_TIME_OFF_STATES:
         return JSONResponse({"ok": True, "state": state, "no_op": True})
 
-    if row.get("odoo_leave_id") is not None:
+    leave_id = row.get("odoo_leave_id")
+    if leave_id is not None:
         try:
-            odoo_client.refuse_leave(int(row["odoo_leave_id"]))
+            odoo_client.refuse_leave(int(leave_id))
         except Exception as e:
             return _json_error(str(e), 500)
+        try:
+            odoo_client.post_leave_message(int(leave_id), reason)
+        except Exception as e:  # noqa: BLE001 -- denial already succeeded
+            logging.getLogger(__name__).warning(
+                "chatter post failed for leave %s (denial still applied): %s",
+                leave_id,
+                e,
+            )
     _set_time_off_state(row, "refuse")
+    time_off_audit.record_decision(
+        request_id=row["id"],
+        odoo_leave_id=leave_id,
+        person_odoo_id=row.get("person_odoo_id"),
+        person_name=row.get("person_name"),
+        leave_type=row.get("leave_type"),
+        date_from=row.get("date_from"),
+        date_to=row.get("date_to"),
+        action="deny",
+        result_state="refuse",
+        reason=reason,
+        actor_upn=actor_upn,
+        actor_name=actor_name,
+        source=source,
+    )
     return JSONResponse({"ok": True, "state": "refuse"})
 
 
 @router.post("/api/exceptions/time-off/{request_id}/refuse")
-async def refuse_time_off_request(request_id: int):
-    return await asyncio.to_thread(_refuse_time_off_sync, request_id)
+async def refuse_time_off_request(request_id: int, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reason = (body or {}).get("reason", "")
+    source = (body or {}).get("source")
+    actor_upn, actor_name = _actor_from(request)
+    return await asyncio.to_thread(
+        _refuse_time_off_sync,
+        request_id,
+        reason,
+        actor_upn,
+        actor_name,
+        source,
+    )
