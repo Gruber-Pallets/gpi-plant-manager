@@ -157,6 +157,15 @@
     return reason;
   }
 
+  function submitRowInput(input, selector) {
+    if (!input || input.hidden) return false;
+    var row = input.closest('.exception-row');
+    var btn = row && row.querySelector(selector);
+    if (!btn || btn.disabled) return false;
+    btn.click();
+    return true;
+  }
+
   function fallbackRowKey(row) {
     return [
       row.dataset.actionType || '',
@@ -481,12 +490,17 @@
     if (event.key !== 'Enter') return;
     if (!event.target || !event.target.closest) return;
     var input = event.target.closest('.js-time-off-reason');
-    if (!input || input.hidden) return;
-    var row = input.closest('.exception-row');
-    var btn = row && row.querySelector('.js-time-off-refuse');
-    if (!btn || btn.disabled) return;
-    event.preventDefault();
-    btn.click();
+    if (submitRowInput(input, '.js-time-off-refuse')) {
+      event.preventDefault();
+      return;
+    }
+    input = event.target.closest('.js-reason-input');
+    if (submitRowInput(input, '.js-absent, .js-save-late')) {
+      event.preventDefault();
+      return;
+    }
+    input = event.target.closest('.js-punch-time');
+    if (submitRowInput(input, '.js-punch-save')) event.preventDefault();
   });
 
   document.addEventListener('change', function (event) {

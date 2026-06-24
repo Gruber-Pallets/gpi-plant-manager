@@ -398,6 +398,11 @@ def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
     assert "A reason is required to deny." in js
     assert "event.key !== 'Enter'" in js
     assert ".js-time-off-refuse" in js
+    assert "function submitRowInput" in js
+    assert ".js-reason-input" in js
+    assert ".js-absent, .js-save-late" in js
+    assert ".js-punch-time" in js
+    assert ".js-punch-save" in js
     assert "btn.click()" in js
 
 
