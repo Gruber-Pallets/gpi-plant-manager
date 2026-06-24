@@ -1,14 +1,13 @@
-"""GET /changelog — renders CHANGELOG.md as HTML for the footer modal.
+"""GET /changelog — renders CHANGELOG.md as HTML for the What's New modal.
 
 Tiny inline renderer; no external markdown lib. Supports:
-- # Heading 1, ## Heading 2 (date YYYY-MM-DD), ### Heading 3 (deploy time, e.g. "9:43 AM")
-- - bullet (one level)
+- ## Heading 2 (date YYYY-MM-DD), ### Heading 3 (deploy time, e.g. "9:43 AM")
+- #### Features/Fixes group headings; otherwise bullets render as Highlights
 - **bold** and *italic*
-- Blank line separates blocks
 - Backtick `code`
 
-Each `### TIME` heading opens a `<section class="changelog-deploy" data-when="YYYY-MM-DDTHH:MM">`
-that the footer JS uses to highlight unread deployments when the modal opens.
+Each `### TIME` heading renders one `<article class="cl-entry">` card with a
+stable key for read-state tracking in the richer What's New panel.
 """
 
 from __future__ import annotations
@@ -40,75 +39,119 @@ def _parse_time_to_24h(s: str) -> str | None:
     return f"{h:02d}:{mm:02d}"
 
 
-def _md_to_html(text: str) -> str:
-    """Convert a small subset of markdown to HTML. Escape input first.
+def _heading_time_text(s: str) -> str:
+    return re.split(r"\s+[—-]\s+", s.strip(), maxsplit=1)[0].strip()
 
-    Wraps each `### TIME` block (heading + following bullets) in a
-    <section class="changelog-deploy" data-when="..."> so the footer JS
-    can identify which deployments are newer than what the user has seen.
-    """
-    out_lines: list[str] = []
-    in_list = False
-    in_section = False
-    last_h2_date: str | None = None
 
-    def _close_list():
-        nonlocal in_list
-        if in_list:
-            out_lines.append("</ul>")
-            in_list = False
+def _fmt_inline(text: str) -> str:
+    """Escape, then apply the small inline markdown subset."""
+    line = html.escape(text.rstrip())
+    line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+    line = re.sub(r"`([^`]+)`", r"<code>\1</code>", line)
+    line = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<em>\1</em>", line)
+    return line
 
-    def _close_section():
-        nonlocal in_section
-        if in_section:
-            out_lines.append("</section>")
-            in_section = False
+
+def _parse_entries(text: str) -> list[dict]:
+    """Parse CHANGELOG.md into one card entry per deploy heading."""
+    entries: list[dict] = []
+    cur_date: str | None = None
+    date_counts: dict[str | None, int] = {}
+    entry: dict | None = None
+    group = "highlights"
+
+    def push() -> None:
+        nonlocal entry
+        if entry is not None:
+            entries.append(entry)
+            entry = None
 
     for raw in text.splitlines():
-        line = html.escape(raw.rstrip())
-        line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
-        line = re.sub(r"`([^`]+)`", r"<code>\1</code>", line)
-        line = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<em>\1</em>", line)
+        s = raw.rstrip()
+        if s.startswith("#### "):
+            label = s[5:].strip().lower()
+            if entry is None:
+                continue
+            if label.startswith("feature"):
+                group = "features"
+            elif label.startswith("fix"):
+                group = "fixes"
+            else:
+                group = "highlights"
+        elif s.startswith("### "):
+            push()
+            head = s[4:].strip()
+            parts = re.split(r"\s+[—-]\s+", head, maxsplit=1)
+            time_text = _heading_time_text(head)
+            title = parts[1].strip() if len(parts) > 1 else None
+            t24 = _parse_time_to_24h(time_text)
+            idx = date_counts.get(cur_date, 0)
+            date_counts[cur_date] = idx + 1
+            if cur_date and t24:
+                key = f"{cur_date}T{t24}"
+            elif cur_date:
+                key = f"{cur_date}#{idx}"
+            else:
+                key = f"entry#{len(entries)}"
+            entry = {
+                "date": cur_date,
+                "title": title,
+                "key": key,
+                "features": [],
+                "fixes": [],
+                "highlights": [],
+            }
+            group = "highlights"
+        elif s.startswith("## "):
+            push()
+            m = re.match(r"^##\s+(\d{4}-\d{2}-\d{2})", s)
+            cur_date = m.group(1) if m else (s[3:].strip() or None)
+        elif s.startswith("# "):
+            push()
+        elif s.startswith("- ") and entry is not None:
+            entry[group].append(_fmt_inline(s[2:]))
+    push()
+    return entries
 
-        if line.startswith("### "):
-            _close_list()
-            _close_section()
-            time_text = line[4:]
-            data_when = ""
-            if last_h2_date:
-                t24 = _parse_time_to_24h(time_text)
-                if t24:
-                    data_when = f"{last_h2_date}T{t24}"
-            attr = f' data-when="{data_when}"' if data_when else ""
-            out_lines.append(f'<section class="changelog-deploy"{attr}>')
-            out_lines.append(f"<h3>{time_text}</h3>")
-            in_section = True
-        elif line.startswith("## "):
-            _close_list()
-            _close_section()
-            heading = line[3:]
-            m = re.match(r"^(\d{4}-\d{2}-\d{2})", heading)
-            last_h2_date = m.group(1) if m else None
-            out_lines.append(f"<h2>{heading}</h2>")
-        elif line.startswith("# "):
-            _close_list()
-            _close_section()
-            out_lines.append(f"<h1>{line[2:]}</h1>")
-        elif line.startswith("- "):
-            if not in_list:
-                out_lines.append("<ul>")
-                in_list = True
-            out_lines.append(f"<li>{line[2:]}</li>")
-        elif line.strip() == "":
-            _close_list()
-            out_lines.append("")
-        else:
-            _close_list()
-            out_lines.append(f"<p>{line}</p>")
 
-    _close_list()
-    _close_section()
-    return "\n".join(out_lines)
+def _render_entry(e: dict) -> str:
+    has_feature = bool(e["features"])
+    out = [
+        f'<article class="cl-entry" data-key="{html.escape(e["key"], quote=True)}" '
+        f'data-feature="{"1" if has_feature else "0"}">',
+        '<header class="cl-entry-head">',
+    ]
+    if e["title"]:
+        out.append(f'<span class="cl-entry-title">{_fmt_inline(e["title"])}</span>')
+    if e["date"]:
+        out.append(f'<span class="cl-entry-date">{html.escape(e["date"])}</span>')
+    if has_feature:
+        out.append('<span class="cl-badge">New feature</span>')
+    out.append("</header>")
+
+    def group_html(label: str, items: list[str]) -> str:
+        if not items:
+            return ""
+        lis = "".join(f"<li>{x}</li>" for x in items)
+        return (
+            f'<div class="cl-group"><h4 class="cl-group-title">{label}</h4>'
+            f"<ul>{lis}</ul></div>"
+        )
+
+    out.append(group_html("Features", e["features"]))
+    out.append(group_html("Fixes", e["fixes"]))
+    out.append(group_html("Highlights", e["highlights"]))
+    out.append(
+        f'<button type="button" class="cl-markread" '
+        f'data-key="{html.escape(e["key"], quote=True)}">Mark read</button>'
+    )
+    out.append("</article>")
+    return "".join(out)
+
+
+def _md_to_html(text: str) -> str:
+    """Render CHANGELOG.md as a stack of per-deploy cards."""
+    return "\n".join(_render_entry(e) for e in _parse_entries(text))
 
 
 def _latest_deploy_when(text: str) -> str | None:
@@ -128,7 +171,7 @@ def _latest_deploy_when(text: str) -> str | None:
             if m:
                 latest_date = m.group(1)
         elif line.startswith("### ") and latest_date is not None and latest_time is None:
-            t = _parse_time_to_24h(line[4:])
+            t = _parse_time_to_24h(_heading_time_text(line[4:]))
             if t:
                 latest_time = t
     if latest_date and latest_time:

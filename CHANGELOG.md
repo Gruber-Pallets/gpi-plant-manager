@@ -2,6 +2,14 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+## 2026-06-24
+
+### 10:11 AM - What's New cards
+
+#### Features
+
+- **What's New entries now render as deploy cards.** The `/changelog` renderer now turns each deploy into a semantic card with a stable read-state key, optional title, Features/Fixes/Highlights groups, and a New feature badge when an entry has structured feature bullets. Titled deploy headings still feed `/changelog/latest` correctly, so unread detection keeps working as the richer panel rolls out.
+
 ## 2026-06-19
 
 ### 7:35 AM
