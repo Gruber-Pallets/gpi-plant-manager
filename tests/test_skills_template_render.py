@@ -83,3 +83,9 @@ def test_people_matrix_view_popover_has_accessible_relationship():
 
     assert 'id="view-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="view-popover"' in html
     assert 'id="view-popover" role="dialog" aria-label="People Matrix view options" hidden' in html
+
+
+def test_people_matrix_sync_status_is_announced_politely():
+    html = _render_skills_html()
+
+    assert 'id="sync-status" role="status" aria-live="polite"' in html

@@ -30,6 +30,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **People Matrix column sorting now works from the keyboard.** Sortable headers are focusable, expose their sort state, and respond to Enter or Space in addition to mouse clicks.
 - **People Matrix view options now have an explicit popover relationship.** The View button points to a labeled dialog-style popover, making saved view/filter controls clearer to assistive tech.
 - **People Matrix view options now close with Escape.** Keyboard users can dismiss the View popover without clicking outside it, and focus returns to the View button.
+- **People Matrix Odoo sync status now announces updates politely.** The "Refreshing from Odoo..." and last-synced messages live in a polite status region, so refresh progress is not silent for assistive tech.
 
 ## 2026-06-19
 

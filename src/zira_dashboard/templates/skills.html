@@ -38,7 +38,7 @@
 
   {# Sync header bar — AJAX refresh so we can show progress while Odoo wakes up #}
   <div class="sync-bar">
-    <span id="sync-status">
+    <span id="sync-status" role="status" aria-live="polite">
       {% if sync_last_at %}
         Last synced: {{ sync_last_at | replace('T', ' ') | truncate(16, end='') }}
       {% else %}
