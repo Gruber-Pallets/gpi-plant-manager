@@ -17,6 +17,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **The What's New panel moved to a green top-right trigger.** Replaced the old footer text link with a header-injected announcement button, a card-based modal, per-entry read state, Mark all read, and an inline Send feedback form wired to `POST /feedback`. Recycling's range picker now sits below the dashboard subnav instead of inside the header, keeping the new top-right trigger clear. The trigger now gets its own header slot instead of being inserted inside page-specific controls, and TV-mode documents explicitly skip the trigger script guard so shop-floor display views stay display-only even if the shared footer is included later. Removed the old changelog-deploy flash CSS now that entries render as read-state cards, gave the feedback message box a real accessible name instead of relying on placeholder text, and focus now lands in that message box as soon as the feedback form opens.
 - **Feedback storage and review routes are ready for the new panel.** Added the feedback table, store module, `POST /feedback` endpoint, and `/admin/feedback` page to persist and review category, page URL, submitter, message, and created time. Feedback submissions now trim optional category and page fields too, dropping blank whitespace instead of storing noisy values. Feedback list reads now clamp their row limit before SQL, avoid invalid or oversized future admin reads, and fall back to the default page size if a future query passes a non-numeric limit. Admin feedback rows now link back to the submitted page, while submitted page URLs are limited to local paths or HTTP(S) URLs before storage.
 
+#### Fixes
+
+- **The timeclock home search box now has an explicit accessible name.** Screen readers and voice-control tools can identify the kiosk name filter as "Search your name" instead of relying on placeholder text that disappears once an employee starts typing.
+
 ## 2026-06-19
 
 ### 7:35 AM

@@ -42,3 +42,13 @@ def test_dashboard_bilingual_shows_spanish():
     assert "Pick Work Center" in html       # English still present
     assert "Elegir estación" in html        # Spanish added
     assert 'class="k-es"' in html
+
+
+def test_home_search_input_has_accessible_name():
+    html = _env().get_template("timeclock_home.html").render(
+        people=[{"id": 1, "name": "Maria Garcia"}],
+        session_expired=False,
+    )
+
+    assert 'id="filter"' in html
+    assert 'aria-label="Search your name"' in html
