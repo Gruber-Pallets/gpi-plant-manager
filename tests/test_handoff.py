@@ -141,6 +141,8 @@ def test_handoff_detail_renders_saved_snapshot(monkeypatch):
     assert "Clocked in 7:05 AM" in resp.text
     assert 'action="/handoff/7/notes"' in resp.text
     assert "Save Notes" in resp.text
+    assert 'href="/exceptions"' in resp.text
+    assert "Open Inbox" in resp.text
 
 
 def test_annotate_snapshot_sections_marks_current_status():

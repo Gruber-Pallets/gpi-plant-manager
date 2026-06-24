@@ -108,6 +108,13 @@ header.app nav a.active {
   color: #fff;
 }
 .primary-btn:hover { background: #15803d; }
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 
 .saved-banner,
 .source-warning {
@@ -470,6 +477,9 @@ header.app nav a.active {
   .handoff-row-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .page-actions {
+    justify-content: flex-start;
   }
   .snapshot-band {
     grid-template-columns: repeat(2, minmax(0, 1fr));

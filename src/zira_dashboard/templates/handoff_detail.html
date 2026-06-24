@@ -32,7 +32,10 @@
       <h2>{{ handoff.shift_label }} Handoff</h2>
       <p>{{ handoff.handoff_date }} · {{ handoff.created_at_label }} · {{ handoff.created_by }}</p>
     </div>
-    <a class="secondary-btn" href="/handoff">Back to Handoff</a>
+    <div class="page-actions">
+      <a class="secondary-btn" href="/exceptions">Open Inbox</a>
+      <a class="secondary-btn" href="/handoff">Back to Handoff</a>
+    </div>
   </div>
 
   {% if handoff.source_errors %}
