@@ -36,7 +36,7 @@
         <td>
           {% if not t.revoked_at %}
           <form method="post" action="/admin/devices/{{ t.id }}/revoke" style="display:inline">
-            <button type="submit" onclick="return confirm('Revoke {{ t.name }}? The TV will stop loading on next refresh.')">Revoke</button>
+            <button type="submit" aria-label="Revoke {{ t.name }}" onclick="return confirm('Revoke {{ t.name }}? The TV will stop loading on next refresh.')">Revoke</button>
           </form>
           {% endif %}
         </td>

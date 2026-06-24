@@ -33,6 +33,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **People Matrix Odoo sync status now announces updates politely.** The "Refreshing from Odoo..." and last-synced messages live in a polite status region, so refresh progress is not silent for assistive tech.
 - **People Matrix Odoo refresh now exposes its busy state.** The Refresh from Odoo button starts as not busy, marks itself busy while the sync request runs, and resets if the refresh fails.
 - **Device token setup fields now have explicit accessible names.** The admin TV-token screen labels the device display-name field and the one-time token URL field directly instead of relying on placeholder or surrounding text.
+- **Device token revoke buttons now name the TV they affect.** Each revoke action exposes a label like "Revoke Bay 3 TV," making the admin device table safer to operate with assistive tech.
 
 ## 2026-06-19
 
