@@ -181,19 +181,21 @@ def _recent_handoffs(limit: int = 10) -> list[dict]:
     return [_shape_handoff_row(row) for row in rows]
 
 
-def _open_followups(limit: int = 6) -> list[dict]:
+def _open_followups_with_count(limit: int = 6) -> tuple[list[dict], int]:
     from .. import db
 
     rows = db.query(
         "SELECT id, handoff_date, shift_label, created_by, notes, open_total, "
         "urgent_total, source_errors, follow_up_required, resolved_at, resolved_by, "
-        "resolution_note, created_at "
+        "resolution_note, created_at, COUNT(*) OVER () AS total_count "
         "FROM plant_shift_handoffs "
         "WHERE follow_up_required = TRUE AND resolved_at IS NULL "
         "ORDER BY created_at DESC LIMIT %s",
         (limit,),
     )
-    return [_shape_handoff_row(row) for row in rows]
+    if not rows:
+        return [], 0
+    return [_shape_handoff_row(row) for row in rows], int(rows[0].get("total_count") or 0)
 
 
 def _open_followup_count() -> int:
@@ -306,7 +308,7 @@ def _mark_handoff_followup(*, handoff_id: int) -> dict | None:
 @router.get("/handoff", response_class=HTMLResponse)
 def handoff_page(request: Request, saved: int | None = None):
     summary = exception_inbox.build_summary()
-    open_followups = _open_followups()
+    open_followups, open_followup_count = _open_followups_with_count()
     return templates.TemplateResponse(
         request,
         "handoff.html",
@@ -315,7 +317,7 @@ def handoff_page(request: Request, saved: int | None = None):
             "summary": summary,
             "recent": _recent_handoffs(),
             "open_followups": open_followups,
-            "open_followup_count": _open_followup_count(),
+            "open_followup_count": open_followup_count,
             "saved": saved,
             "default_created_by": _created_by(request),
             "default_shift_label": _default_shift_label(),

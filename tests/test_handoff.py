@@ -38,8 +38,7 @@ def test_default_shift_label_uses_plant_local_time():
 def test_handoff_page_renders_current_snapshot_and_recent(monkeypatch):
     monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
-    monkeypatch.setattr(handoff, "_open_followups", lambda: [])
-    monkeypatch.setattr(handoff, "_open_followup_count", lambda: 0)
+    monkeypatch.setattr(handoff, "_open_followups_with_count", lambda: ([], 0))
     monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [{
         "id": 7,
         "handoff_date": date(2026, 6, 18),
@@ -75,8 +74,7 @@ def test_handoff_page_selects_default_shift(monkeypatch):
         lambda: datetime(2026, 6, 22, 16, 0, tzinfo=tz),
     )
     monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
-    monkeypatch.setattr(handoff, "_open_followups", lambda: [])
-    monkeypatch.setattr(handoff, "_open_followup_count", lambda: 0)
+    monkeypatch.setattr(handoff, "_open_followups_with_count", lambda: ([], 0))
     monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [])
     client = TestClient(app)
 
@@ -89,8 +87,7 @@ def test_handoff_page_selects_default_shift(monkeypatch):
 def test_handoff_page_saved_banner_links_to_saved_handoff(monkeypatch):
     monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
-    monkeypatch.setattr(handoff, "_open_followups", lambda: [])
-    monkeypatch.setattr(handoff, "_open_followup_count", lambda: 0)
+    monkeypatch.setattr(handoff, "_open_followups_with_count", lambda: ([], 0))
     monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [])
     client = TestClient(app)
 
@@ -427,19 +424,25 @@ def test_handoff_page_renders_open_followups(monkeypatch):
     monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
     monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [])
-    monkeypatch.setattr(handoff, "_open_followup_count", lambda: 1)
-    monkeypatch.setattr(handoff, "_open_followups", lambda: [{
-        "id": 21,
-        "handoff_date": date(2026, 6, 19),
-        "shift_label": "Night",
-        "created_by": "Mia",
-        "notes": "Maintenance must check Repair 1",
-        "open_total": 3,
-        "urgent_total": 1,
-        "follow_up_required": True,
-        "is_open_followup": True,
-        "created_at_label": "6/19 10:15 PM",
-    }])
+    monkeypatch.setattr(
+        handoff,
+        "_open_followups_with_count",
+        lambda: (
+            [{
+                "id": 21,
+                "handoff_date": date(2026, 6, 19),
+                "shift_label": "Night",
+                "created_by": "Mia",
+                "notes": "Maintenance must check Repair 1",
+                "open_total": 3,
+                "urgent_total": 1,
+                "follow_up_required": True,
+                "is_open_followup": True,
+                "created_at_label": "6/19 10:15 PM",
+            }],
+            1,
+        ),
+    )
     client = TestClient(app)
 
     resp = client.get("/handoff")
@@ -454,19 +457,25 @@ def test_handoff_page_shows_total_open_followup_count(monkeypatch):
     monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
     monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [])
-    monkeypatch.setattr(handoff, "_open_followup_count", lambda: 4)
-    monkeypatch.setattr(handoff, "_open_followups", lambda: [{
-        "id": 21,
-        "handoff_date": date(2026, 6, 19),
-        "shift_label": "Night",
-        "created_by": "Mia",
-        "notes": "Maintenance must check Repair 1",
-        "open_total": 3,
-        "urgent_total": 1,
-        "follow_up_required": True,
-        "is_open_followup": True,
-        "created_at_label": "6/19 10:15 PM",
-    }])
+    monkeypatch.setattr(
+        handoff,
+        "_open_followups_with_count",
+        lambda: (
+            [{
+                "id": 21,
+                "handoff_date": date(2026, 6, 19),
+                "shift_label": "Night",
+                "created_by": "Mia",
+                "notes": "Maintenance must check Repair 1",
+                "open_total": 3,
+                "urgent_total": 1,
+                "follow_up_required": True,
+                "is_open_followup": True,
+                "created_at_label": "6/19 10:15 PM",
+            }],
+            4,
+        ),
+    )
     client = TestClient(app)
 
     resp = client.get("/handoff")
@@ -474,6 +483,49 @@ def test_handoff_page_shows_total_open_followup_count(monkeypatch):
     assert resp.status_code == 200
     assert "4 need closure" in resp.text
     assert "Showing 1 most recent" in resp.text
+
+
+def test_open_followups_with_count_uses_window_count(monkeypatch):
+    captured = {}
+
+    def fake_query(sql, params):
+        captured["sql"] = sql
+        captured["params"] = params
+        return [{
+            "id": 21,
+            "handoff_date": date(2026, 6, 19),
+            "shift_label": "Night",
+            "created_by": "Mia",
+            "notes": "Maintenance must check Repair 1",
+            "open_total": 3,
+            "urgent_total": 1,
+            "source_errors": [],
+            "follow_up_required": True,
+            "resolved_at": None,
+            "resolved_by": "",
+            "resolution_note": "",
+            "created_at": datetime(2026, 6, 19, 22, 15, tzinfo=timezone.utc),
+            "total_count": 4,
+        }]
+
+    monkeypatch.setattr(db, "query", fake_query)
+
+    rows, total = handoff._open_followups_with_count(limit=6)
+
+    assert "COUNT(*) OVER () AS total_count" in captured["sql"]
+    assert captured["params"] == (6,)
+    assert total == 4
+    assert rows[0]["id"] == 21
+    assert rows[0]["is_open_followup"] is True
+
+
+def test_open_followups_with_count_returns_zero_when_empty(monkeypatch):
+    monkeypatch.setattr(db, "query", lambda sql, params: [])
+
+    rows, total = handoff._open_followups_with_count(limit=6)
+
+    assert rows == []
+    assert total == 0
 
 
 def test_handoff_detail_renders_followup_resolve_form(monkeypatch):
