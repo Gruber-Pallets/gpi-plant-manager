@@ -163,3 +163,8 @@ def test_post_feedback_escapes_html_in_description(monkeypatch):
     assert "<script>" not in body_html
     assert "&lt;script&gt;" in body_html
     assert "a &lt; b &amp;" in body_html
+
+
+def test_admin_feedback_route_removed():
+    resp = client.get("/admin/feedback")
+    assert resp.status_code == 404
