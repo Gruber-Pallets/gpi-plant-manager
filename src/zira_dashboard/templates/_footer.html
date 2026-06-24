@@ -1,14 +1,35 @@
-<footer class="app-footer">
-  <a href="#" id="changelog-open" class="changelog-link">What's new ↗</a>
-</footer>
 <div id="changelog-modal" class="changelog-modal" hidden>
   <div class="changelog-backdrop" id="changelog-backdrop"></div>
   <div class="changelog-card" role="dialog" aria-modal="true" aria-label="What's new">
     <div class="changelog-head">
-      <h3>What's new</h3>
-      <button type="button" id="changelog-close" class="changelog-close" aria-label="Close">×</button>
+      <div class="changelog-titles">
+        <h3>What's new</h3>
+        <p class="changelog-sub">Recent Plant Manager changes</p>
+      </div>
+      <div class="changelog-head-actions">
+        <button type="button" id="changelog-feedback-toggle" class="changelog-feedback-btn">Send feedback</button>
+        <button type="button" id="changelog-close" class="changelog-close" aria-label="Close">Close</button>
+      </div>
     </div>
-    <div id="changelog-body" class="changelog-body">Loading…</div>
+    <form id="changelog-feedback" class="changelog-feedback" hidden>
+      <select id="changelog-feedback-category" class="changelog-feedback-category" aria-label="Feedback category">
+        <option value="">General</option>
+        <option value="Bug">Bug</option>
+        <option value="Idea">Idea</option>
+        <option value="Other">Other</option>
+      </select>
+      <textarea id="changelog-feedback-message" class="changelog-feedback-message" rows="3"
+                placeholder="Tell us what's working or what's not..."></textarea>
+      <div class="changelog-feedback-actions">
+        <button type="submit" class="changelog-feedback-send">Send</button>
+        <button type="button" id="changelog-feedback-cancel" class="changelog-feedback-cancel">Cancel</button>
+        <span id="changelog-feedback-status" class="changelog-feedback-status" hidden></span>
+      </div>
+    </form>
+    <div class="changelog-toolbar">
+      <button type="button" id="changelog-markall" class="changelog-markall">Mark all read</button>
+    </div>
+    <div id="changelog-body" class="changelog-body">Loading...</div>
   </div>
 </div>
 <link rel="stylesheet" href="/static/footer.css?v={{ static_v('footer.css') }}">

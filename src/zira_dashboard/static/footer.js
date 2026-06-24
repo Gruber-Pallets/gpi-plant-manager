@@ -29,73 +29,229 @@
 })();
 
 (function () {
-  var btn = document.getElementById('changelog-open');
-  var modal = document.getElementById('changelog-modal');
-  var backdrop = document.getElementById('changelog-backdrop');
-  var closeBtn = document.getElementById('changelog-close');
-  var body = document.getElementById('changelog-body');
-  if (!btn || !modal) return;
-  var loaded = false;
-  var latestDate = null;
+  var btn = null;
+  var dot = null;
+  var modal = null;
+  var body = null;
+  var panelLoaded = false;
 
-  // Check whether there's a newer entry than the user has seen.
-  window.gpiFetch('/changelog/latest')
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      latestDate = data && data.latest_date;
-      if (!latestDate) return;
-      var seen = '';
-      try { seen = localStorage.getItem('changelog_seen') || ''; } catch (e) {}
-      if (latestDate > seen) btn.classList.add('has-new');
-    })
-    .catch(function () { /* offline / first-load — silently skip */ });
+  function getCutoff() {
+    try { return localStorage.getItem('changelog_cutoff') || ''; } catch (e) { return ''; }
+  }
 
-  function open(e) {
-    if (e) e.preventDefault();
+  function setCutoff(value) {
+    try { localStorage.setItem('changelog_cutoff', value || ''); } catch (e) {}
+  }
+
+  function getRead() {
+    try { return new Set(JSON.parse(localStorage.getItem('changelog_read') || '[]')); }
+    catch (e) { return new Set(); }
+  }
+
+  function setRead(readSet) {
+    try { localStorage.setItem('changelog_read', JSON.stringify(Array.from(readSet))); } catch (e) {}
+  }
+
+  function whenOf(key) {
+    return String(key || '').split('#')[0];
+  }
+
+  function isUnread(key) {
+    return whenOf(key) > getCutoff() && !getRead().has(key);
+  }
+
+  function injectButton() {
+    var header = document.querySelector('header');
+    if (!header || header.querySelector('.whatsnew-btn')) return;
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'whatsnew-btn';
+    btn.setAttribute('aria-label', "What's new");
+    btn.setAttribute('aria-haspopup', 'dialog');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" '
+      + 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+      + 'stroke-linejoin="round"><path d="M3 11l15-5v13L3 14z"></path>'
+      + '<path d="M11.5 19a3 3 0 0 1-5.5-1.7"></path></svg>'
+      + '<span class="whatsnew-dot" hidden></span>';
+    dot = btn.querySelector('.whatsnew-dot');
+    if (header.children.length >= 2) {
+      header.children[header.children.length - 1].appendChild(btn);
+    } else {
+      var slot = document.createElement('div');
+      slot.className = 'whatsnew-slot';
+      slot.appendChild(btn);
+      header.appendChild(slot);
+    }
+    btn.addEventListener('click', openPanel);
+  }
+
+  function refreshDot() {
+    if (!dot) return;
+    window.gpiFetch('/changelog/latest')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var latest = data && data.latest_date;
+        var hasCutoff = false;
+        try { hasCutoff = localStorage.getItem('changelog_cutoff') != null; } catch (e) {}
+        if (!hasCutoff) {
+          var seen = '';
+          try { seen = localStorage.getItem('changelog_seen') || ''; } catch (e2) {}
+          setCutoff(seen || latest || '');
+        }
+        dot.hidden = !(latest && isUnread(latest));
+      })
+      .catch(function () {});
+  }
+
+  function ensureModal() {
+    modal = document.getElementById('changelog-modal');
+    body = document.getElementById('changelog-body');
+    if (!modal) return false;
+    if (modal.dataset.wired) return true;
+    modal.dataset.wired = '1';
+    var backdrop = document.getElementById('changelog-backdrop');
+    var closeBtn = document.getElementById('changelog-close');
+    var markAll = document.getElementById('changelog-markall');
+    var feedbackToggle = document.getElementById('changelog-feedback-toggle');
+    var feedbackForm = document.getElementById('changelog-feedback');
+    var feedbackCancel = document.getElementById('changelog-feedback-cancel');
+    if (backdrop) backdrop.addEventListener('click', closePanel);
+    if (closeBtn) closeBtn.addEventListener('click', closePanel);
+    if (markAll) markAll.addEventListener('click', markAllRead);
+    if (feedbackToggle) feedbackToggle.addEventListener('click', toggleFeedback);
+    if (feedbackForm) feedbackForm.addEventListener('submit', submitFeedback);
+    if (feedbackCancel) feedbackCancel.addEventListener('click', toggleFeedback);
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && modal && !modal.hidden) closePanel();
+    });
+    return true;
+  }
+
+  function openPanel(event) {
+    if (event) event.preventDefault();
+    if (!ensureModal()) return;
     modal.hidden = false;
     document.documentElement.style.overflow = 'hidden';
-    var seenAtOpen = '';
-    try { seenAtOpen = localStorage.getItem('changelog_seen') || ''; } catch (e2) {}
-    if (!loaded) {
+    if (!panelLoaded) {
       window.gpiFetch('/changelog')
         .then(function (r) { return r.text(); })
-        .then(function (html) {
-          body.innerHTML = html;
-          loaded = true;
-          // Highlight any deployment section newer than seenAtOpen — flash 3s.
-          body.querySelectorAll('.changelog-deploy[data-when]').forEach(function (sec) {
-            if (sec.dataset.when > seenAtOpen) sec.classList.add('changelog-new');
-          });
+        .then(function (htmlText) {
+          body.innerHTML = htmlText;
+          panelLoaded = true;
+          wireCards();
+          applyReadState();
         })
         .catch(function () { body.innerHTML = '<p>Could not load changelog.</p>'; });
     } else {
-      // Modal opened a second time in the same page-load — re-flash anything
-      // still considered new (in case localStorage shifted).
-      body.querySelectorAll('.changelog-deploy[data-when]').forEach(function (sec) {
-        sec.classList.remove('changelog-new');
-        if (sec.dataset.when > seenAtOpen) {
-          // Re-trigger animation by reflowing.
-          void sec.offsetWidth;
-          sec.classList.add('changelog-new');
-        }
-      });
-    }
-    // Mark as read AFTER capturing seenAtOpen so the highlight uses pre-open value.
-    if (latestDate) {
-      try { localStorage.setItem('changelog_seen', latestDate); } catch (e3) {}
-      btn.classList.remove('has-new');
+      applyReadState();
     }
   }
-  function close() {
-    modal.hidden = true;
+
+  function closePanel() {
+    if (modal) modal.hidden = true;
     document.documentElement.style.overflow = '';
   }
-  btn.addEventListener('click', open);
-  backdrop.addEventListener('click', close);
-  closeBtn.addEventListener('click', close);
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !modal.hidden) close();
-  });
+
+  function applyReadState() {
+    if (!body) return;
+    Array.prototype.forEach.call(body.querySelectorAll('.cl-entry'), function (card) {
+      var key = card.getAttribute('data-key');
+      var unread = isUnread(key);
+      card.classList.toggle('cl-read', !unread);
+      var markRead = card.querySelector('.cl-markread');
+      if (markRead) markRead.hidden = !unread;
+    });
+    refreshDotFromCards();
+  }
+
+  function refreshDotFromCards() {
+    if (!dot || !body) return;
+    var anyUnread = Array.prototype.some.call(
+      body.querySelectorAll('.cl-entry'),
+      function (card) { return isUnread(card.getAttribute('data-key')); }
+    );
+    dot.hidden = !anyUnread;
+  }
+
+  function wireCards() {
+    Array.prototype.forEach.call(body.querySelectorAll('.cl-markread'), function (markRead) {
+      markRead.addEventListener('click', function () {
+        var readSet = getRead();
+        readSet.add(markRead.getAttribute('data-key'));
+        setRead(readSet);
+        applyReadState();
+      });
+    });
+  }
+
+  function markAllRead() {
+    if (!body) return;
+    var newest = getCutoff();
+    Array.prototype.forEach.call(body.querySelectorAll('.cl-entry'), function (card) {
+      var when = whenOf(card.getAttribute('data-key'));
+      if (when > newest) newest = when;
+    });
+    setCutoff(newest);
+    setRead(new Set());
+    applyReadState();
+  }
+
+  function toggleFeedback(event) {
+    if (event) event.preventDefault();
+    var form = document.getElementById('changelog-feedback');
+    if (form) form.hidden = !form.hidden;
+  }
+
+  function submitFeedback(event) {
+    event.preventDefault();
+    var messageEl = document.getElementById('changelog-feedback-message');
+    var categoryEl = document.getElementById('changelog-feedback-category');
+    var statusEl = document.getElementById('changelog-feedback-status');
+    var sendBtn = event.target.querySelector('button[type="submit"]');
+    var message = ((messageEl && messageEl.value) || '').trim();
+    if (statusEl) statusEl.hidden = false;
+    if (!message) {
+      if (statusEl) statusEl.textContent = 'Please enter a message.';
+      return;
+    }
+    if (sendBtn) sendBtn.disabled = true;
+    if (statusEl) statusEl.textContent = 'Sending...';
+    window.gpiFetch('/feedback', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message: message,
+        category: (categoryEl && categoryEl.value) || null,
+        page_url: window.location.href,
+      }),
+    }).then(function (r) { return r.json(); }).then(function (resp) {
+      if (resp && resp.ok) {
+        if (messageEl) messageEl.value = '';
+        if (statusEl) statusEl.textContent = 'Thanks - sent!';
+        setTimeout(function () {
+          var form = document.getElementById('changelog-feedback');
+          if (form) form.hidden = true;
+          if (statusEl) statusEl.hidden = true;
+        }, 1500);
+      } else if (statusEl) {
+        statusEl.textContent = 'Failed: ' + ((resp && resp.error) || 'unknown');
+      }
+      if (sendBtn) sendBtn.disabled = false;
+    }).catch(function () {
+      if (statusEl) statusEl.textContent = 'Network error.';
+      if (sendBtn) sendBtn.disabled = false;
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      injectButton();
+      refreshDot();
+    });
+  } else {
+    injectButton();
+    refreshDot();
+  }
 })();
 
 // Global nav badges + modals — present on every page. Four instances share

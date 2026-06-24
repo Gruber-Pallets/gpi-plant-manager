@@ -1,29 +1,143 @@
-  .app-footer {
-    border-top: 1px solid var(--border, #d8dee5);
-    background: var(--panel, #fff);
-    padding: 0.5rem 1rem;
-    font-size: 0.78rem;
-    color: var(--muted, #6b7280);
-    text-align: center;
-  }
-  .app-footer .changelog-link {
-    color: var(--muted, #6b7280);
-    text-decoration: none;
+  .whatsnew-slot { margin-left: auto; display: flex; align-items: center; }
+  .whatsnew-btn {
     position: relative;
-  }
-  .app-footer .changelog-link:hover { color: var(--accent, #16a34a); }
-  .app-footer .changelog-link.has-new {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 30px;
+    padding: 0;
+    cursor: pointer;
+    background: transparent;
     color: var(--accent, #16a34a);
-    font-weight: 600;
+    border: 1px solid var(--accent, #16a34a);
+    border-radius: 8px;
   }
-  .app-footer .changelog-link.has-new::before {
-    content: "";
-    display: inline-block;
-    width: 7px; height: 7px; border-radius: 50%;
+  .whatsnew-btn:hover { background: var(--accent-dim, #dcfce7); }
+  .whatsnew-dot {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
     background: var(--accent, #16a34a);
-    margin-right: 0.35rem;
-    vertical-align: 1px;
+    border: 2px solid var(--panel, #fff);
   }
+
+  .changelog-titles h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .changelog-sub {
+    margin: 0.1rem 0 0;
+    font-size: 0.8rem;
+    color: var(--muted, #6b7280);
+  }
+  .changelog-head-actions { display: flex; align-items: center; gap: 0.5rem; }
+  .changelog-feedback-btn {
+    background: transparent;
+    color: var(--accent, #16a34a);
+    border: 1px solid var(--accent, #16a34a);
+    border-radius: 6px;
+    padding: 0.3rem 0.7rem;
+    font: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+  .changelog-feedback-btn:hover { background: var(--accent-dim, #dcfce7); }
+  .changelog-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.5rem 1.1rem 0;
+  }
+  .changelog-markall,
+  .cl-markread,
+  .changelog-feedback-cancel {
+    background: transparent;
+    color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5);
+    border-radius: 6px;
+    padding: 0.25rem 0.6rem;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .changelog-markall:hover,
+  .cl-markread:hover,
+  .changelog-feedback-cancel:hover {
+    border-color: var(--accent, #16a34a);
+    color: var(--accent, #16a34a);
+  }
+  .changelog-feedback {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.6rem 1.1rem;
+    border-bottom: 1px solid var(--border, #d8dee5);
+  }
+  .changelog-feedback[hidden] { display: none; }
+  .changelog-feedback-category {
+    align-self: flex-start;
+    border: 1px solid var(--border, #d8dee5);
+    border-radius: 6px;
+    padding: 0.3rem;
+    font: inherit;
+  }
+  .changelog-feedback-message {
+    width: 100%;
+    resize: vertical;
+    font: inherit;
+    border: 1px solid var(--border, #d8dee5);
+    border-radius: 6px;
+    padding: 0.4rem;
+  }
+  .changelog-feedback-actions { display: flex; align-items: center; gap: 0.5rem; }
+  .changelog-feedback-send {
+    background: var(--accent, #16a34a);
+    color: #fff;
+    border: 1px solid var(--accent, #16a34a);
+    border-radius: 6px;
+    padding: 0.3rem 0.8rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .changelog-feedback-status { font-size: 0.8rem; color: var(--muted, #6b7280); }
+
+  .cl-entry {
+    border: 1px solid var(--border, #d8dee5);
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.75rem;
+  }
+  .cl-entry.cl-read { opacity: 0.7; }
+  .cl-entry-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.4rem;
+  }
+  .cl-entry-title { font-size: 0.98rem; font-weight: 700; }
+  .cl-entry-date { font-size: 0.78rem; color: var(--muted, #6b7280); }
+  .cl-badge {
+    background: var(--accent-dim, #dcfce7);
+    color: #166534;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+  }
+  .cl-group { margin: 0.3rem 0; }
+  .cl-group-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted, #6b7280);
+    margin: 0.4rem 0 0.2rem;
+  }
+  .cl-group ul { margin: 0 0 0.4rem 1.1rem; padding: 0; }
+  .cl-group li { margin: 0.18rem 0; }
+  .cl-markread { margin-top: 0.3rem; }
 
   .changelog-modal[hidden] { display: none; }
   .changelog-modal {
