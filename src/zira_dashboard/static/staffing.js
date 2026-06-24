@@ -925,10 +925,10 @@
       const row = document.createElement('div');
       row.className = 'break-row';
       row.innerHTML =
-        '<input type="time" class="b-start" step="60">'
-      + '<input type="time" class="b-end"   step="60">'
-      + '<input type="text" class="b-name" placeholder="Name" maxlength="40">'
-      + '<button type="button" class="remove-btn" title="Remove">×</button>';
+        '<input type="time" class="b-start" step="60" aria-label="Break start time">'
+      + '<input type="time" class="b-end"   step="60" aria-label="Break end time">'
+      + '<input type="text" class="b-name" placeholder="Name" maxlength="40" aria-label="Break name">'
+      + '<button type="button" class="remove-btn" title="Remove" aria-label="Remove break">×</button>';
       list.appendChild(row);
     });
 
@@ -955,7 +955,18 @@
       return { start, end, breaks };
     }
 
+    function setSaveBusy(busy) {
+      if (busy) {
+        save.disabled = true;
+        save.setAttribute('aria-busy', 'true');
+      } else {
+        save.disabled = false;
+        save.setAttribute('aria-busy', 'false');
+      }
+    }
+
     save.addEventListener('click', async () => {
+      if (save.disabled) return;
       // Past-day edits retroactively reshuffle leaderboards + player cards
       // for any window that contains this day. Make the user confirm.
       const today_iso = window.SCHEDULE_TODAY;
@@ -992,9 +1003,18 @@
         }
       }
 
-      const r = await fetch('/staffing/hours', { method: 'POST', body });
-      if (r.ok) location.reload();
-      else alert('Save failed: ' + (await r.text()));
+      setSaveBusy(true);
+      try {
+        const r = await fetch('/staffing/hours', { method: 'POST', body });
+        if (r.ok) location.reload();
+        else {
+          setSaveBusy(false);
+          alert('Save failed: ' + (await r.text()));
+        }
+      } catch (e) {
+        setSaveBusy(false);
+        alert('Network error.');
+      }
     });
   })();
 

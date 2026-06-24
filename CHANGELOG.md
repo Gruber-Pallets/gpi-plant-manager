@@ -45,6 +45,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **Leaderboards section visibility controls now name the section and expose busy state.** The hide/show icon buttons announce which work center or group they affect, disable during the async update, and recover if the request fails.
 - **Leaderboards person-detail popup now keeps keyboard focus in the workflow.** Opening a leaderboard average row moves focus into the popup, the Close button has an explicit accessible name, and closing restores focus to the operator button that opened it.
 - **Plant Scheduler partial time-off controls now name the employee they affect.** The partial-clear chips, clearable time-off rows, restored-partial buttons, and dynamically inserted badges now expose person-specific action names instead of relying on shorthand chip text or hover titles.
+- **Plant Scheduler custom-hours controls now have explicit names and safer saves.** The shift/break time fields, break names, and break remove buttons now expose accessible names, and the custom-hours Save button disables with a busy state while the update is being posted.
 
 ## 2026-06-19
 

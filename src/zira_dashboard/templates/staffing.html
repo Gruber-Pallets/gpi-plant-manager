@@ -133,7 +133,7 @@
       <a href="/staffing?day={{ today }}" class="day-hot {% if day == today %}active{% endif %}" title="Jump to today">Today</a>
       <a href="/staffing?day={{ tomorrow }}" class="day-hot {% if day == tomorrow %}active{% endif %}" title="Jump to the next working day">Next Day</a>
       <button type="button" class="hours-pill {% if hours_source == 'custom' %}custom{% elif hours_source == 'saturday_default' %}saturday-default{% endif %}" id="hours-pill"
-              title="Click to edit shift hours for this day">
+              title="Click to edit shift hours for this day" aria-label="Edit shift hours for {{ day }}">
         <span class="label">Hours</span>
         <span>{{ eff_hours_label }}</span>
         {% if hours_source != 'weekday_default' %}<span>· {{ eff_breaks|length }} break{{ eff_breaks|length != 1 and 's' or '' }}</span>{% endif %}{% if hours_source == 'saturday_default' %}<span>· Saturday default</span>{% endif %}
@@ -143,18 +143,18 @@
         <h4>Custom hours for {{ day }}</h4>
         <div class="row">
           <label>Shift</label>
-          <input type="time" id="hours-start" value="{{ eff_hours_start }}" step="300">
+          <input type="time" id="hours-start" value="{{ eff_hours_start }}" step="300" aria-label="Shift start time">
           <span style="color:var(--muted)">→</span>
-          <input type="time" id="hours-end"   value="{{ eff_hours_end }}"   step="300">
+          <input type="time" id="hours-end"   value="{{ eff_hours_end }}"   step="300" aria-label="Shift end time">
         </div>
         <div class="row" style="margin-bottom:0.25rem"><label>Breaks</label></div>
         <div id="hours-breaks-list" class="breaks-list">
           {% for b in eff_breaks %}
             <div class="break-row">
-              <input type="time" class="b-start" value="{{ b.start }}" step="60">
-              <input type="time" class="b-end"   value="{{ b.end }}"   step="60">
-              <input type="text" class="b-name"  value="{{ b.name }}" maxlength="40">
-              <button type="button" class="remove-btn" title="Remove break">×</button>
+              <input type="time" class="b-start" value="{{ b.start }}" step="60" aria-label="Break start time">
+              <input type="time" class="b-end"   value="{{ b.end }}"   step="60" aria-label="Break end time">
+              <input type="text" class="b-name"  value="{{ b.name }}" maxlength="40" aria-label="Break name">
+              <button type="button" class="remove-btn" title="Remove break" aria-label="Remove break">×</button>
             </div>
           {% endfor %}
         </div>
@@ -162,7 +162,7 @@
         <div class="actions">
           <button type="button" class="reset"  id="hours-reset">Reset to defaults</button>
           <button type="button" class="cancel" id="hours-cancel">Cancel</button>
-          <button type="button" class="save"   id="hours-save">Save</button>
+          <button type="button" class="save"   id="hours-save" aria-busy="false">Save</button>
         </div>
       </div>
       <button type="button" id="clear-schedule-btn" class="clear-btn">Reset to defaults</button>

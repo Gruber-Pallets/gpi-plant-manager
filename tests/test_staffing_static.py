@@ -18,3 +18,26 @@ def test_staffing_partial_time_off_controls_name_the_person():
     assert 'aria-label="Restore partial time off for {{ c.name }}"' in html
     assert 'aria-label="Clear partial time off for {{ a.name }}"' in html
     assert "btn.setAttribute('aria-label', 'Clear partial time off for ' + name);" in js
+
+
+def test_staffing_custom_hours_controls_are_named_and_busy():
+    html = _template()
+    js = _script()
+
+    assert 'id="hours-pill"' in html
+    assert 'aria-label="Edit shift hours for {{ day }}"' in html
+    assert 'id="hours-start" value="{{ eff_hours_start }}" step="300" aria-label="Shift start time"' in html
+    assert 'id="hours-end"   value="{{ eff_hours_end }}"   step="300" aria-label="Shift end time"' in html
+    assert 'class="b-start" value="{{ b.start }}" step="60" aria-label="Break start time"' in html
+    assert 'class="b-end"   value="{{ b.end }}"   step="60" aria-label="Break end time"' in html
+    assert 'class="b-name"  value="{{ b.name }}" maxlength="40" aria-label="Break name"' in html
+    assert 'class="remove-btn" title="Remove break" aria-label="Remove break"' in html
+    assert 'class="save"   id="hours-save" aria-busy="false"' in html
+    assert 'aria-label="Break start time"' in js
+    assert 'aria-label="Break end time"' in js
+    assert 'aria-label="Break name"' in js
+    assert 'aria-label="Remove break"' in js
+    assert "save.disabled = true;" in js
+    assert "save.setAttribute('aria-busy', 'true');" in js
+    assert "save.disabled = false;" in js
+    assert "save.setAttribute('aria-busy', 'false');" in js
