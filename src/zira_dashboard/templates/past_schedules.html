@@ -21,6 +21,7 @@
   .popover { background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.25rem; max-width: 30rem; box-shadow: 0 12px 36px rgba(0,0,0,0.5); }
   .popover h4 { margin: 0 0 0.45rem; font-size: 0.95rem; font-weight: 700; color: var(--warn); }
   .popover p { margin: 0.25rem 0; font-size: 0.88rem; line-height: 1.45; }
+  .popover label { display: block; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 0.7rem; }
   .popover input[type=password] { margin-top: 0.5rem; padding: 0.4rem 0.55rem; background: var(--panel-2); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 0.9rem; width: 100%; }
   .popover .popover-error { color: var(--bad); font-size: 0.8rem; margin-top: 0.25rem; display: none; }
   .popover .popover-error.show { display: block; }
@@ -76,7 +77,9 @@
 
 {% block scripts %}
 <script>
-  function showPopup(opts) {
+  let popoverOpener = null;
+  function showPopup(opts, opener) {
+    popoverOpener = opener || document.activeElement;
     let bd = document.getElementById('popover-bd');
     if (!bd) {
       bd = document.createElement('div');
@@ -86,30 +89,56 @@
     bd.innerHTML = '';
     const pop = document.createElement('div');
     pop.className = 'popover';
-    const h = document.createElement('h4'); h.textContent = opts.title; pop.appendChild(h);
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-modal', 'true');
+    pop.setAttribute('aria-labelledby', 'past-schedules-popover-title');
+    const h = document.createElement('h4');
+    h.id = 'past-schedules-popover-title';
+    h.textContent = opts.title; pop.appendChild(h);
     const p = document.createElement('p'); p.textContent = opts.msg; pop.appendChild(p);
     let pwInput = null, errDiv = null;
     if (opts.askPassword) {
+      const label = document.createElement('label');
+      label.setAttribute('for', 'past-schedules-admin-password');
+      label.textContent = 'Admin password';
+      pop.appendChild(label);
       pwInput = document.createElement('input');
+      pwInput.id = 'past-schedules-admin-password';
       pwInput.type = 'password';
       pwInput.placeholder = 'Admin password';
       pop.appendChild(pwInput);
       errDiv = document.createElement('div');
       errDiv.className = 'popover-error';
+      errDiv.setAttribute('role', 'alert');
       pop.appendChild(errDiv);
     }
     const actions = document.createElement('div'); actions.className = 'actions'; pop.appendChild(actions);
-    const close = () => bd.classList.remove('show');
+    const close = () => {
+      bd.classList.remove('show');
+      if (popoverOpener && typeof popoverOpener.focus === 'function') {
+        popoverOpener.focus();
+      }
+    };
     for (const b of opts.buttons) {
       const btn = document.createElement('button');
       btn.type = 'button'; btn.textContent = b.label; btn.className = b.cls || 'ghost';
+      btn.setAttribute('aria-busy', 'false');
       btn.onclick = () => {
         if (b.fn) {
+          const setBusy = (busy) => {
+            if (busy) {
+              btn.disabled = true;
+              btn.setAttribute('aria-busy', 'true');
+            } else {
+              btn.disabled = false;
+              btn.setAttribute('aria-busy', 'false');
+            }
+          };
           const pw = pwInput ? pwInput.value : null;
           const showErr = (msg) => {
             if (errDiv) { errDiv.textContent = msg; errDiv.classList.add('show'); }
           };
-          const done = b.fn({pw, close, showErr});
+          const done = b.fn({pw, close, showErr, setBusy});
           if (done !== false) close();
         } else close();
       };
@@ -118,7 +147,17 @@
     bd.appendChild(pop);
     bd.classList.add('show');
     if (pwInput) pwInput.focus();
+    else actions.querySelector('button').focus();
   }
+  document.addEventListener('keydown', (e) => {
+    const bd = document.getElementById('popover-bd');
+    if (bd && bd.classList.contains('show') && e.key === 'Escape') {
+      bd.classList.remove('show');
+      if (popoverOpener && typeof popoverOpener.focus === 'function') {
+        popoverOpener.focus();
+      }
+    }
+  });
 
   document.querySelectorAll('.edit-btn').forEach(b => {
     b.addEventListener('click', () => {
@@ -134,13 +173,19 @@
         msg: 'This schedule (' + day + ') is already POSTED to the plant. Editing will move it back to DRAFT and change what’s recorded here in Past Schedules. Only do this if you are certain you are correcting a real mistake.',
         buttons: [
           { label: 'Cancel', cls: 'ghost' },
-          { label: 'Move to draft & edit', cls: 'primary', fn: () => {
+          { label: 'Move to draft & edit', cls: 'primary', fn: ({setBusy}) => {
+              setBusy(true);
               const fd = new FormData(); fd.append('day', day);
               fetch('/staffing/past/unpublish', { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } })
-                .then(r => { if (r.ok) { location.href = '/staffing?day=' + day; } });
+                .then(r => {
+                  if (r.ok) { location.href = '/staffing?day=' + day; }
+                  else setBusy(false);
+                })
+                .catch(() => setBusy(false));
+              return false;
           }},
         ],
-      });
+      }, b);
     });
   });
 
@@ -153,19 +198,20 @@
         askPassword: true,
         buttons: [
           { label: 'Cancel', cls: 'ghost' },
-          { label: 'Delete permanently', cls: 'danger', fn: ({pw, close, showErr}) => {
+          { label: 'Delete permanently', cls: 'danger', fn: ({pw, close, showErr, setBusy}) => {
+              setBusy(true);
               const fd = new FormData(); fd.append('day', day); fd.append('admin_password', pw || '');
               fetch('/staffing/past/delete', { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } })
                 .then(r => r.json().then(j => ({ok: r.ok, j})))
                 .then(({ok, j}) => {
                   if (ok) { close(); location.reload(); }
-                  else showErr(j.error || 'Delete failed.');
+                  else { setBusy(false); showErr(j.error || 'Delete failed.'); }
                 })
-                .catch(() => showErr('Delete failed (network).'));
+                .catch(() => { setBusy(false); showErr('Delete failed (network).'); });
               return false;  // keep popup open until server responds
           }},
         ],
-      });
+      }, b);
     });
   });
 </script>
