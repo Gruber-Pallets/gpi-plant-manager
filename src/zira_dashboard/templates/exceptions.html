@@ -170,6 +170,7 @@
                 <button type="button" class="row-btn primary js-punch-save">Correct</button>
               {% elif action and action.type == 'time_off' %}
                 <button type="button" class="row-btn primary js-time-off-approve">Approve</button>
+                <input type="text" class="inline-input js-time-off-reason" placeholder="Reason to deny" hidden>
                 <button type="button" class="row-btn danger js-time-off-refuse">Deny</button>
               {% endif %}
               <span class="row-status" hidden></span>

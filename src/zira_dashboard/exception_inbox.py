@@ -318,7 +318,7 @@ def build_snapshot() -> dict:
             "tone": "info",
             "action_key": None,
             "action_label": None,
-            "href": "/staffing/time-off",
+            "href": "/staffing/time-off/approvals",
             "empty": "All clear",
             "context": {},
             "rows": pending_rows,

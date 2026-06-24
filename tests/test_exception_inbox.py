@@ -210,6 +210,21 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     ]
 
 
+def test_pending_time_off_section_links_to_approvals_page(monkeypatch):
+    monkeypatch.setattr(exception_inbox.plant_day, "today", lambda: date(2026, 6, 19))
+    monkeypatch.setattr(staffing_routes, "assignments_todo_payload", lambda: {"count": 0})
+    monkeypatch.setattr(staffing_routes, "late_report_payload", lambda: {"count": 0})
+    monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
+    monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
+    monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
+    monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
+
+    snap = exception_inbox.build_snapshot()
+
+    time_off = next(s for s in snap["sections"] if s["id"] == "time_off")
+    assert time_off["href"] == "/staffing/time-off/approvals"
+
+
 def test_exceptions_api_uses_snapshot(monkeypatch):
     monkeypatch.setattr(exceptions_route.exception_inbox, "build_snapshot", _snapshot)
     client = TestClient(app)
@@ -363,6 +378,23 @@ def test_exceptions_js_refreshes_shared_badges_after_inline_resolution():
     assert "function bumpFocusCounts(row, delta)" in js
     assert "[data-focus-count=\"" in js
     assert "bumpFocusCount('urgent', delta)" in js
+
+
+def test_inbox_template_has_inline_time_off_deny_reason():
+    html = (STATIC_DIR.parent / "templates" / "exceptions.html").read_text(encoding="utf-8")
+
+    assert "js-time-off-approve" in html
+    assert "js-time-off-reason" in html
+    assert "js-time-off-refuse" in html
+
+
+def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
+    js = (STATIC_DIR / "exceptions.js").read_text(encoding="utf-8")
+
+    assert "js-time-off-reason" in js
+    assert "source: 'inbox'" in js
+    assert "Enter a reason, then Deny again." in js
+    assert "A reason is required to deny." in js
 
 
 def test_footer_enhances_inbox_nav_with_summary_count():

@@ -434,7 +434,9 @@
     if (rowBtn.classList.contains('js-time-off-approve')) {
       setBusy(row, true);
       rowStatus(row, 'Approving...', false);
-      postJson('/api/exceptions/time-off/' + encodeURIComponent(row.dataset.requestId) + '/approve', {})
+      postJson('/api/exceptions/time-off/' + encodeURIComponent(row.dataset.requestId) + '/approve', {
+        source: 'inbox',
+      })
         .then(function (resp) {
           if (resp && resp.ok && resp.approved === false) {
             rowStatus(row, 'Moved forward; refreshing...', false);
@@ -449,10 +451,25 @@
     }
 
     if (rowBtn.classList.contains('js-time-off-refuse')) {
-      if (!confirm('Deny this time-off request?')) return;
+      var reasonInput = row.querySelector('.js-time-off-reason');
+      if (reasonInput && reasonInput.hidden) {
+        reasonInput.hidden = false;
+        reasonInput.focus();
+        rowStatus(row, 'Enter a reason, then Deny again.', false);
+        return;
+      }
+      var denyReason = reasonInput ? reasonInput.value.trim() : '';
+      if (!denyReason) {
+        if (reasonInput) reasonInput.focus();
+        failRow(row, 'A reason is required to deny.');
+        return;
+      }
       setBusy(row, true);
       rowStatus(row, 'Denying...', false);
-      postJson('/api/exceptions/time-off/' + encodeURIComponent(row.dataset.requestId) + '/refuse', {})
+      postJson('/api/exceptions/time-off/' + encodeURIComponent(row.dataset.requestId) + '/refuse', {
+        reason: denyReason,
+        source: 'inbox',
+      })
         .then(function (resp) {
           if (resp && resp.ok) resolveRow(row, 'Denied');
           else failRow(row, (resp && resp.error) || 'Deny failed.');
