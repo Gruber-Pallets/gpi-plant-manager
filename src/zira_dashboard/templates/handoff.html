@@ -114,11 +114,11 @@
       </label>
       <label>
         Signed by
-        <input type="text" name="created_by" value="{{ default_created_by }}">
+        <input type="text" name="created_by" value="{{ default_created_by }}" aria-label="Signed by">
       </label>
       <label class="notes-label">
         Notes
-        <textarea name="notes" rows="8" placeholder="Staffing moves, blockers, unresolved exceptions, safety notes, maintenance follow-up"></textarea>
+        <textarea name="notes" rows="8" aria-label="Handoff notes" placeholder="Staffing moves, blockers, unresolved exceptions, safety notes, maintenance follow-up"></textarea>
       </label>
       <label class="checkbox-label">
         <input type="checkbox" name="follow_up_required" value="true">

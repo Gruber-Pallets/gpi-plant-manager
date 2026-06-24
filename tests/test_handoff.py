@@ -65,6 +65,20 @@ def test_handoff_page_renders_current_snapshot_and_recent(monkeypatch):
     assert "/static/handoff.css" in resp.text
 
 
+def test_new_handoff_form_fields_have_accessible_names(monkeypatch):
+    monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
+    monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
+    monkeypatch.setattr(handoff, "_open_followups_with_count", lambda: ([], 0))
+    monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [])
+    client = TestClient(app)
+
+    resp = client.get("/handoff")
+
+    assert resp.status_code == 200
+    assert 'aria-label="Signed by"' in resp.text
+    assert 'aria-label="Handoff notes"' in resp.text
+
+
 def test_handoff_detail_notes_textarea_has_accessible_name(monkeypatch):
     monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(handoff, "_load_handoff", lambda handoff_id: {
