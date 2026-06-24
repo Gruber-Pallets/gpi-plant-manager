@@ -40,6 +40,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **Trophy Case year and month pickers now have explicit accessible names.** The annual trophy year selector and monthly ribbon selector no longer depend on nearby visual text alone.
 - **The Trophy Case override panel now moves focus into the dialog when opened.** Opening an award edit places focus on the action selector, so keyboard users land inside the modal immediately.
 - **The Trophy Case override Save button now exposes a busy state.** Saving an award override disables the button, marks it busy, and restores it if the request fails, avoiding accidental duplicate submits.
+- **The Trophy Case override panel now resets the replacement-name field when reopened.** If a manager previously chose Delete or Reset, the next award edit correctly shows the winner field again when the action resets to Reassign.
 
 ## 2026-06-19
 

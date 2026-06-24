@@ -62,3 +62,9 @@ def test_trophy_case_save_button_exposes_busy_state():
     assert "saveBtn.disabled = true;" in html
     assert "saveBtn.setAttribute('aria-busy', 'true');" in html
     assert "saveBtn.setAttribute('aria-busy', 'false');" in html
+
+
+def test_trophy_case_reopen_resets_replacement_name_row():
+    html = _template()
+
+    assert "document.getElementById('tc-name-row').style.display = 'block';" in html
