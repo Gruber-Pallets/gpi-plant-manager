@@ -2,9 +2,14 @@
 
 Latest updates to GPI Plant Manager. Newest first. Each day is split by deployment time so you can tell what shipped together.
 
+<!-- Format: `## YYYY-MM-DD` date, then `### TIME - Optional Title` per deploy.
+     Within a deploy, optional `#### Features` / `#### Fixes` group the bullets
+     (anything ungrouped renders as "Highlights"). An entry with a Features
+     group shows a green "New feature" badge in the What's New panel. -->
+
 ## 2026-06-24
 
-### 10:11 AM - What's New cards
+### 10:11 AM - What's New panel, top-right
 
 #### Features
 
