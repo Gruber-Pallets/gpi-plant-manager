@@ -57,6 +57,11 @@ BEGIN
   END IF;
 END $$;
 
+-- 2026-06-24 migration: the Shift Handoff feature was removed. Drop its
+-- table (and its indexes, which go with it) on existing installs. Idempotent:
+-- drops once in prod, then a no-op on every boot; fresh installs never had it.
+DROP TABLE IF EXISTS plant_shift_handoffs;
+
 -- HR-mastered entities (mirrored from Odoo via TTL sync) ----------------
 
 CREATE TABLE IF NOT EXISTS people (
@@ -719,35 +724,6 @@ CREATE TABLE IF NOT EXISTS scheduler_moves (
   occurred_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Manager handoff log. Each saved handoff snapshots the Exception Inbox
--- at that moment so unresolved daily work is preserved with the shift notes.
-CREATE TABLE IF NOT EXISTS plant_shift_handoffs (
-  id                  BIGSERIAL PRIMARY KEY,
-  handoff_date        DATE NOT NULL,
-  shift_label         TEXT NOT NULL DEFAULT 'Day',
-  created_by          TEXT NOT NULL DEFAULT '',
-  notes               TEXT NOT NULL DEFAULT '',
-  follow_up_required  BOOLEAN NOT NULL DEFAULT FALSE,
-  resolved_at         TIMESTAMPTZ,
-  resolved_by         TEXT NOT NULL DEFAULT '',
-  resolution_note     TEXT NOT NULL DEFAULT '',
-  open_total          INTEGER NOT NULL DEFAULT 0,
-  urgent_total        INTEGER NOT NULL DEFAULT 0,
-  source_errors       JSONB NOT NULL DEFAULT '[]'::jsonb,
-  exception_snapshot  JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS plant_shift_handoffs_date_idx
-  ON plant_shift_handoffs (handoff_date DESC, created_at DESC);
-ALTER TABLE plant_shift_handoffs
-  ADD COLUMN IF NOT EXISTS follow_up_required BOOLEAN NOT NULL DEFAULT FALSE,
-  ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS resolved_by TEXT NOT NULL DEFAULT '',
-  ADD COLUMN IF NOT EXISTS resolution_note TEXT NOT NULL DEFAULT '';
-CREATE INDEX IF NOT EXISTS plant_shift_handoffs_open_followup_idx
-  ON plant_shift_handoffs (created_at DESC)
-  WHERE follow_up_required = TRUE AND resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS scheduler_moves_person_date_idx
   ON scheduler_moves (person_odoo_id, schedule_date);
 

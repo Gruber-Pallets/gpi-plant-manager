@@ -199,11 +199,6 @@
     align-items: center;
     gap: 0.35rem;
   }
-  .handoff-nav-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-  }
   .inbox-nav-count {
     min-width: 1.35rem;
     padding: 0.04rem 0.36rem;
@@ -220,21 +215,6 @@
     color: #b91c1c;
   }
   .inbox-nav-link.is-degraded .inbox-nav-count {
-    background: var(--warn-dim, #fef3c7);
-    color: var(--warn, #a16207);
-  }
-  .handoff-nav-count {
-    min-width: 1.35rem;
-    padding: 0.04rem 0.36rem;
-    border-radius: 999px;
-    background: var(--warn-dim, #fef3c7);
-    color: var(--warn, #a16207);
-    font-size: 0.68rem;
-    font-weight: 800;
-    line-height: 1.25;
-    text-align: center;
-  }
-  .handoff-nav-link.has-open .handoff-nav-count {
     background: var(--warn-dim, #fef3c7);
     color: var(--warn, #a16207);
   }

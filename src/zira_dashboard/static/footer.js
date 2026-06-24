@@ -75,8 +75,9 @@
     btn.setAttribute('aria-haspopup', 'dialog');
     btn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" '
       + 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-      + 'stroke-linejoin="round"><path d="M3 11l15-5v13L3 14z"></path>'
-      + '<path d="M11.5 19a3 3 0 0 1-5.5-1.7"></path></svg>'
+      + 'stroke-linejoin="round"><path d="M12 3v3.5M12 17.5v3.5M3 12h3.5'
+      + 'M17.5 12h3.5M15.5 8.5l2.1-2.1M8.5 8.5l-2.1-2.1M15.5 15.5l2.1 2.1'
+      + 'M8.5 15.5l-2.1 2.1"></path></svg>'
       + '<span class="whatsnew-dot" hidden></span>';
     dot = btn.querySelector('.whatsnew-dot');
     var slot = document.createElement('div');
@@ -289,25 +290,6 @@
     return link;
   }
 
-  function ensureHandoffLink() {
-    var anchor = settingsLink();
-    if (!anchor || !anchor.parentNode) return;
-    var existing = anchor.parentNode.querySelector('a[href="/handoff"]');
-    if (existing) {
-      existing.classList.add('handoff-nav-link');
-      return existing;
-    }
-    var link = document.createElement('a');
-    link.href = '/handoff';
-    link.textContent = 'Handoff';
-    link.className = 'handoff-nav-link';
-    if (window.location && window.location.pathname === '/handoff') {
-      link.classList.add('active');
-    }
-    anchor.parentNode.insertBefore(link, anchor);
-    return link;
-  }
-
   function ensureInboxLabel(link) {
     if (!link) return null;
     var label = link.querySelector('.inbox-nav-label');
@@ -382,77 +364,6 @@
     }, 60000);
     document.addEventListener('visibilitychange', function () {
       if (!document.hidden) refreshInboxSummary(link);
-    });
-  }
-
-  function ensureHandoffLabel(link) {
-    if (!link) return null;
-    var label = link.querySelector('.handoff-nav-label');
-    if (!label) {
-      link.textContent = '';
-      label = document.createElement('span');
-      label.className = 'handoff-nav-label';
-      label.textContent = 'Handoff';
-      link.appendChild(label);
-    }
-    return label;
-  }
-
-  function ensureHandoffCount(link) {
-    ensureHandoffLabel(link);
-    var count = link.querySelector('.handoff-nav-count');
-    if (!count) {
-      count = document.createElement('span');
-      count.className = 'handoff-nav-count';
-      count.hidden = true;
-      link.appendChild(count);
-    }
-    return count;
-  }
-
-  function updateHandoffSummaryLink(link, data) {
-    if (!link || !data) return;
-    var open = parseInt(data.open_followups || 0, 10) || 0;
-    var count = ensureHandoffCount(link);
-    link.classList.toggle('has-open', open > 0);
-    count.hidden = open <= 0;
-    count.textContent = open > 99 ? '99+' : String(open);
-    link.title = open > 0
-      ? 'Shift Handoff: ' + open + ' open follow-up' + (open === 1 ? '' : 's')
-      : 'Shift Handoff: no open follow-ups';
-  }
-
-  function refreshHandoffSummary(link) {
-    if (!link) return;
-    window.gpiFetch('/api/handoff/summary').then(function (r) { return r.json(); }).then(function (d) {
-      updateHandoffSummaryLink(link, d);
-    }).catch(function () {});
-  }
-
-  function readHandoffSummaryBootstrap() {
-    var el = document.getElementById('gpi-handoff-summary-bootstrap');
-    if (!el) return null;
-    try {
-      return JSON.parse(el.textContent || '{}');
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function startHandoffSummary(link) {
-    if (!link) return;
-    window.gpiRefreshHandoffSummary = function () { refreshHandoffSummary(link); };
-    var initial = readHandoffSummaryBootstrap();
-    if (initial) {
-      updateHandoffSummaryLink(link, initial);
-    } else {
-      setTimeout(function () { refreshHandoffSummary(link); }, 900);
-    }
-    setInterval(function () {
-      if (!document.hidden) refreshHandoffSummary(link);
-    }, 60000);
-    document.addEventListener('visibilitychange', function () {
-      if (!document.hidden) refreshHandoffSummary(link);
     });
   }
 
@@ -572,7 +483,6 @@
   }
 
   startInboxSummary(ensureInboxLink());
-  startHandoffSummary(ensureHandoffLink());
   window.gpiAlertBadges = window.gpiAlertBadges || {};
 
   // ---------- "Assignments to Do" ----------
