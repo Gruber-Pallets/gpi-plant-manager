@@ -46,3 +46,9 @@ def test_trophy_case_year_and_month_pickers_have_accessible_names():
 
     assert 'id="year-picker" aria-label="Trophy year"' in html
     assert 'id="month-picker" aria-label="Ribbon month"' in html
+
+
+def test_trophy_case_override_modal_focuses_action_on_open():
+    html = _template()
+
+    assert "document.getElementById('tc-action').focus();" in html
