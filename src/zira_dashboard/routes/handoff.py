@@ -37,6 +37,19 @@ def _resolved_at_label(value) -> str:
     return _created_at_label(value)
 
 
+def _default_shift_label(now: datetime | None = None) -> str:
+    now = now or plant_day.now()
+    local_now = now.astimezone(plant_day.SITE_TZ) if now.tzinfo else now
+    if local_now.weekday() >= 5:
+        return "Weekend"
+    hour = local_now.hour
+    if 5 <= hour < 15:
+        return "Day"
+    if 15 <= hour < 23:
+        return "Evening"
+    return "Night"
+
+
 def _json_value(value, fallback):
     if value in (None, ""):
         return fallback
@@ -268,6 +281,7 @@ def handoff_page(request: Request, saved: int | None = None):
             "open_followup_count": _open_followup_count(),
             "saved": saved,
             "default_created_by": _created_by(request),
+            "default_shift_label": _default_shift_label(),
         },
     )
 

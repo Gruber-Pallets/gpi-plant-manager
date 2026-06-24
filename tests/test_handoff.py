@@ -25,6 +25,16 @@ def _summary():
     }
 
 
+def test_default_shift_label_uses_plant_local_time():
+    tz = handoff.plant_day.SITE_TZ
+
+    assert handoff._default_shift_label(datetime(2026, 6, 22, 6, 0, tzinfo=tz)) == "Day"
+    assert handoff._default_shift_label(datetime(2026, 6, 22, 16, 0, tzinfo=tz)) == "Evening"
+    assert handoff._default_shift_label(datetime(2026, 6, 22, 23, 30, tzinfo=tz)) == "Night"
+    assert handoff._default_shift_label(datetime(2026, 6, 23, 4, 30, tzinfo=tz)) == "Night"
+    assert handoff._default_shift_label(datetime(2026, 6, 20, 10, 0, tzinfo=tz)) == "Weekend"
+
+
 def test_handoff_page_renders_current_snapshot_and_recent(monkeypatch):
     monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
@@ -54,6 +64,26 @@ def test_handoff_page_renders_current_snapshot_and_recent(monkeypatch):
     assert "Repair 2 needs follow-up" in resp.text
     assert "/handoff/7" in resp.text
     assert "/static/handoff.css" in resp.text
+
+
+def test_handoff_page_selects_default_shift(monkeypatch):
+    tz = handoff.plant_day.SITE_TZ
+    monkeypatch.setattr(handoff.plant_day, "today", lambda: date(2026, 6, 22))
+    monkeypatch.setattr(
+        handoff.plant_day,
+        "now",
+        lambda: datetime(2026, 6, 22, 16, 0, tzinfo=tz),
+    )
+    monkeypatch.setattr(handoff.exception_inbox, "build_summary", _summary)
+    monkeypatch.setattr(handoff, "_open_followups", lambda: [])
+    monkeypatch.setattr(handoff, "_open_followup_count", lambda: 0)
+    monkeypatch.setattr(handoff, "_recent_handoffs", lambda: [])
+    client = TestClient(app)
+
+    resp = client.get("/handoff")
+
+    assert resp.status_code == 200
+    assert '<option value="Evening" selected>' in resp.text
 
 
 def test_handoff_detail_renders_saved_snapshot(monkeypatch):
