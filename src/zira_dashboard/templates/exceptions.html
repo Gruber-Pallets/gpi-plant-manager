@@ -127,7 +127,7 @@
             <td>{{ row.detail }}</td>
             <td class="row-actions">
               {% if action and action.type == 'assignment' %}
-                <select class="inline-select js-person">
+                <select class="inline-select js-person" aria-label="Person to assign">
                   <option value="">Person...</option>
                   {% for person in context.get('people', []) %}
                     <option value="{{ person }}">{{ person }}</option>
@@ -143,7 +143,7 @@
                   <option value="Overslept">Overslept</option>
                   <option value="">Other</option>
                 </select>
-                <input type="text" class="inline-input js-reason-input" placeholder="Reason required">
+                <input type="text" class="inline-input js-reason-input" aria-label="Late or absence reason" placeholder="Reason required">
                 <button type="button" class="row-btn primary js-absent">Absent</button>
                 <button type="button" class="row-btn js-snooze">Snooze</button>
               {% elif action and action.type == 'late_reason' %}
@@ -154,10 +154,10 @@
                   <option value="Overslept">Overslept</option>
                   <option value="">Other</option>
                 </select>
-                <input type="text" class="inline-input js-reason-input" placeholder="Reason required">
+                <input type="text" class="inline-input js-reason-input" aria-label="Late or absence reason" placeholder="Reason required">
                 <button type="button" class="row-btn primary js-save-late">Save</button>
               {% elif action and action.type == 'missing_wc' %}
-                <select class="inline-select js-wc">
+                <select class="inline-select js-wc" aria-label="Work center to assign">
                   <option value="">Work center...</option>
                   {% for wc in context.get('work_centers', []) %}
                     <option value="{{ wc }}">{{ wc }}</option>
@@ -170,7 +170,7 @@
                 <button type="button" class="row-btn primary js-punch-save">Correct</button>
               {% elif action and action.type == 'time_off' %}
                 <button type="button" class="row-btn primary js-time-off-approve">Approve</button>
-                <input type="text" class="inline-input js-time-off-reason" placeholder="Reason to deny" hidden>
+                <input type="text" class="inline-input js-time-off-reason" aria-label="Reason to deny time off" placeholder="Reason to deny" hidden>
                 <button type="button" class="row-btn danger js-time-off-refuse">Deny</button>
               {% endif %}
               <span class="row-status" hidden></span>

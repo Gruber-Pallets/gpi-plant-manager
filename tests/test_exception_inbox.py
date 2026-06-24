@@ -387,6 +387,10 @@ def test_inbox_template_has_inline_time_off_deny_reason():
     assert "js-time-off-approve" in html
     assert "js-time-off-reason" in html
     assert "js-time-off-refuse" in html
+    assert 'aria-label="Person to assign"' in html
+    assert 'aria-label="Late or absence reason"' in html
+    assert 'aria-label="Work center to assign"' in html
+    assert 'aria-label="Reason to deny time off"' in html
 
 
 def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
