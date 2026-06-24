@@ -69,6 +69,12 @@ def _decision_time_label(value: Any) -> str:
     return local.strftime("%-m/%-d %-I:%M %p")
 
 
+def _state_label(state: str | None) -> str:
+    if state == "validate1":
+        return "Awaiting 2nd approval"
+    return "To approve"
+
+
 def _pending_payload(today: date) -> list[dict[str, Any]]:
     """Attach balance, coverage, and risk flags to each pending row."""
     rows = []
@@ -95,6 +101,7 @@ def _pending_payload(today: date) -> list[dict[str, Any]]:
             "over_balance": over_balance,
             "past_due": row["date_to"] < today,
             "awaiting_second": row["state"] == "validate1",
+            "state_label": _state_label(row.get("state")),
         })
     return rows
 

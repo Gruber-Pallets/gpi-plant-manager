@@ -35,7 +35,7 @@
             <td>
               {{ r.leave_type }} · {{ r.date_label or r.date_from }}
               {% if r.past_due %}<span class="priority-pill urgent">Past due</span>{% endif %}
-              {% if r.awaiting_second %}<span class="priority-pill warn">Awaiting 2nd approval</span>{% endif %}
+              <span class="priority-pill {{ 'warn' if r.awaiting_second else 'info' }}">{{ r.state_label or 'To approve' }}</span>
             </td>
             <td>
               {% if r.balance %}

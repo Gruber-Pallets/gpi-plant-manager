@@ -37,6 +37,7 @@ def test_pending_payload_attaches_balance_and_coverage(monkeypatch):
     assert r["person_name"] == "Maria Delgado"
     assert r["balance"] == {"remaining": 24.0, "unit": "days"}
     assert r["coverage"] == {"count": 2, "scope": "department"}
+    assert r["state_label"] == "To approve"
     assert r["over_balance"] is False
     assert r["past_due"] is False
 
@@ -138,6 +139,7 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
         "over_balance": False,
         "past_due": False,
         "awaiting_second": True,
+        "state_label": "Awaiting 2nd approval",
     }])
     monkeypatch.setattr(page, "_recent_payload", lambda days=30: [{
         "person_name": "Juan Morales",
