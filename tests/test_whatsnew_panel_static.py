@@ -51,10 +51,14 @@ def test_footer_js_injects_trigger_read_state_and_feedback_submit():
     assert "changelog_cutoff" in js
     assert "changelog_read" in js
     assert "function markAllRead()" in js
-    assert "function submitFeedback" in js
-    assert "messageEl.focus()" in js
-    assert "window.gpiFetch('/feedback'" in js
     assert "function makeBadgeModal" in js
+    # New feedback modal wiring.
+    assert "function submitFeedback" in js
+    assert "FormData" in js
+    assert "window.gpiFetch('/feedback'" in js
+    assert "/api/feedback/mine" in js
+    assert "function renderMyFeedback" in js
+    assert "'paste'" in js
 
 
 def test_footer_js_skips_tv_mode_documents():
