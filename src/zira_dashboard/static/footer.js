@@ -79,14 +79,10 @@
       + '<path d="M11.5 19a3 3 0 0 1-5.5-1.7"></path></svg>'
       + '<span class="whatsnew-dot" hidden></span>';
     dot = btn.querySelector('.whatsnew-dot');
-    if (header.children.length >= 2) {
-      header.children[header.children.length - 1].appendChild(btn);
-    } else {
-      var slot = document.createElement('div');
-      slot.className = 'whatsnew-slot';
-      slot.appendChild(btn);
-      header.appendChild(slot);
-    }
+    var slot = document.createElement('div');
+    slot.className = 'whatsnew-slot';
+    slot.appendChild(btn);
+    header.appendChild(slot);
     btn.addEventListener('click', openPanel);
   }
 

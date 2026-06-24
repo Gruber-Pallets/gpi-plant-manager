@@ -47,3 +47,11 @@ def test_footer_js_skips_tv_mode_documents():
     assert "function isTvMode()" in js
     assert "document.documentElement.dataset.tvTheme" in js
     assert "if (isTvMode()) return;" in js
+
+
+def test_footer_js_uses_dedicated_header_slot_for_trigger():
+    js = JS.read_text(encoding="utf-8")
+
+    assert "slot.className = 'whatsnew-slot'" in js
+    assert "header.appendChild(slot)" in js
+    assert "header.children[header.children.length - 1].appendChild(btn)" not in js
