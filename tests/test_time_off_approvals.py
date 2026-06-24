@@ -163,4 +163,23 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
     assert "Coverage too thin" in resp.text
     assert "6/24 9:05 AM" in resp.text
     assert "/static/time_off_approvals.js" in resp.text
+    assert 'data-pending-count' in resp.text
     assert 'href="/staffing/time-off/approvals"   class="active">Approvals</a>' in resp.text
+
+
+def test_approvals_js_removes_resolved_rows_and_updates_pending_counts():
+    from pathlib import Path
+
+    js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "zira_dashboard"
+        / "static"
+        / "time_off_approvals.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function bumpPendingCount(delta)" in js
+    assert "[data-pending-count]" in js
+    assert "function removeResolvedRow(row)" in js
+    assert "bumpPendingCount(-1);" in js
+    assert "No pending time-off requests." in js

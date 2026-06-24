@@ -22,14 +22,41 @@
     });
   }
 
+  function countText(el) {
+    return Math.max(0, parseInt(el.textContent || '0', 10) || 0);
+  }
+
+  function bumpPendingCount(delta) {
+    document.querySelectorAll('[data-pending-count]').forEach(function (el) {
+      el.textContent = countText(el) + delta;
+    });
+  }
+
+  function removeResolvedRow(row) {
+    var section = row.closest('.inbox-section');
+    var tbody = row.parentElement;
+    row.remove();
+    if (tbody && !tbody.querySelector('.exception-row') && section) {
+      var table = section.querySelector('table');
+      var empty = document.createElement('div');
+      empty.className = 'empty-row';
+      empty.textContent = 'No pending time-off requests.';
+      if (table) table.replaceWith(empty);
+    }
+  }
+
   function done(row, text) {
     busy(row, true);
     status(row, text, false);
     row.classList.add('is-resolved');
     row.style.opacity = '0.5';
+    bumpPendingCount(-1);
     if (typeof window.gpiRefreshInboxSummary === 'function') {
       window.gpiRefreshInboxSummary();
     }
+    setTimeout(function () {
+      removeResolvedRow(row);
+    }, 450);
   }
 
   document.addEventListener('click', function (event) {

@@ -10,7 +10,7 @@
   <div class="inbox-title">
     <div>
       <h2>Time off approvals</h2>
-      <p><span>{{ pending | length }}</span> pending</p>
+      <p><span data-pending-count>{{ pending | length }}</span> pending</p>
     </div>
     <a class="refresh-btn" href="/staffing/time-off/approvals">Refresh</a>
   </div>
@@ -20,7 +20,7 @@
       <div class="section-head">
         <div>
           <h3>Pending</h3>
-          <span><span class="section-open-count">{{ pending | length }}</span> open</span>
+          <span><span class="section-open-count" data-pending-count>{{ pending | length }}</span> open</span>
         </div>
       </div>
       {% if pending %}
