@@ -68,7 +68,7 @@
             <div class="name-inner">
               <a class="name-link" href="/staffing/people/{{ p.name | urlencode }}">{{ p.name }}{{ cert_badges(p.name, person_certs) }}{{ goat_badges(p.name, goat_holders()) }}</a>
               {% if p.employee_id and odoo_url %}
-                <a class="odoo-link" href="{{ odoo_url }}/web#id={{ p.employee_id }}&model=hr.employee&view_type=form" target="_blank" rel="noopener" title="Open in Odoo">↗</a>
+                <a class="odoo-link" href="{{ odoo_url }}/web#id={{ p.employee_id }}&model=hr.employee&view_type=form" target="_blank" rel="noopener" title="Open in Odoo" aria-label="Open {{ p.name }} in Odoo">↗</a>
               {% endif %}
             </div>
           </td>

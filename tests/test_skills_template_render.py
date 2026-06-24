@@ -15,12 +15,12 @@ def _env():
     return env
 
 
-def _render_skills_html():
+def _render_skills_html(*, employee_id=None, odoo_url=""):
     person = SimpleNamespace(
         name="Maria Garcia",
         active=True,
         reserve=False,
-        employee_id=None,
+        employee_id=employee_id,
         skills={"Repair": 2},
     )
 
@@ -38,7 +38,7 @@ def _render_skills_html():
         default_view_state=None,
         sync_last_at=None,
         sync_error=None,
-        odoo_url="",
+        odoo_url=odoo_url,
     )
 
 
@@ -54,3 +54,10 @@ def test_people_matrix_reserve_checkbox_names_person():
 
     assert 'name="reserve__Maria Garcia"' in html
     assert 'aria-label="Reserve Maria Garcia"' in html
+
+
+def test_people_matrix_odoo_link_names_person():
+    html = _render_skills_html(employee_id=42, odoo_url="https://odoo.example")
+
+    assert "https://odoo.example/web#id=42" in html
+    assert 'aria-label="Open Maria Garcia in Odoo"' in html
