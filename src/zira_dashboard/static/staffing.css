@@ -19,10 +19,7 @@
 
   /* App header */
   header.app { padding: 0.75rem 1.25rem; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: space-between; }
-  header.app h1 { margin: 0; font-size: 1.05rem; font-weight: 600; }
-  header.app nav { display: flex; gap: 0.5rem; }
-  header.app nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; padding: 0.25rem 0.6rem; border-radius: 6px; }
-  header.app nav a.active { color: var(--accent); background: var(--accent-dim); font-weight: 600; }
+  /* Brand + nav styling lives in topnav.css (shared across all pages). */
   .pub-pill { font-size: 0.7rem; padding: 0.2rem 0.6rem; border-radius: 999px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
   .pub-pill.on { background: var(--accent-dim); color: var(--accent); }
   .pub-pill.off { background: var(--warn-dim); color: var(--warn); }

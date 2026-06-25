@@ -1,0 +1,21 @@
+{#
+  Shared top navigation menu — the single source of truth for the main menu.
+  Include inside a page <header>, setting active_nav to highlight the current page:
+    {% set active_nav = 'staffing' %}{% include "_topnav.html" %}
+  Valid active_nav values: dashboards, trophies, inbox, staffing, settings.
+  Styling lives in topnav.css (load it in the page <head>), so the menu looks
+  and sits identically on every page.
+#}
+<div class="brand-row">
+  <a href="/recycling" class="brand">
+    <img src="/static/gpi-logo.png" alt="GPI">
+    <h1>Plant Manager</h1>
+  </a>
+  <nav>
+    <a href="/recycling"{% if active_nav == 'dashboards' %} class="active"{% endif %}>Dashboards</a>
+    <a href="/trophies"{% if active_nav == 'trophies' %} class="active"{% endif %}>Trophy Case</a>
+    <a href="/exceptions"{% if active_nav == 'inbox' %} class="active"{% endif %}>Inbox</a>
+    <a href="/staffing"{% if active_nav == 'staffing' %} class="active"{% endif %}>Staffing</a>
+    <a href="/settings"{% if active_nav == 'settings' %} class="active"{% endif %}>Settings</a>
+  </nav>
+</div>

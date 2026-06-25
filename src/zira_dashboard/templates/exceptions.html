@@ -5,24 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>Exception Inbox — GPI Plant Manager</title>
+<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
 <link rel="stylesheet" href="/static/exceptions.css?v={{ static_v('exceptions.css') }}">
 </head>
 <body>
 <header class="app">
-  <div class="brand-row">
-    <a href="/recycling" class="brand">
-      <img src="/static/gpi-logo.png" alt="GPI">
-      <h1>Plant Manager</h1>
-    </a>
-    <nav>
-      <a href="/recycling">Dashboards</a>
-      <a href="/trophies">Trophy Case</a>
-      <a href="/exceptions" class="active">Inbox</a>
-      <a href="/staffing">Staffing</a>
-      <a href="/settings">Settings</a>
-    </nav>
-  </div>
-  <div class="day-chip">{{ snapshot.today }}</div>
+  {% set active_nav = 'inbox' %}{% include "_topnav.html" %}
 </header>
 
 <main class="inbox-shell">

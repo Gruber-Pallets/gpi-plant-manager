@@ -6,6 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>{% block title %}Staffing{% endblock %} — GPI Plant Manager</title>
+<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
 <style>
   :root {
     --bg: #f1f4f7;
@@ -30,10 +31,7 @@
     border-bottom: 1px solid var(--border);
     display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: space-between;
   }
-  header.app h1 { margin: 0; font-size: 1.05rem; font-weight: 600; }
-  header.app nav { display: flex; gap: 0.5rem; }
-  header.app nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; padding: 0.25rem 0.6rem; border-radius: 6px; }
-  header.app nav a.active { color: var(--accent); background: var(--accent-dim); font-weight: 600; }
+  /* Brand + nav styling lives in topnav.css (shared across all pages). */
 
   /* Staffing sub-nav */
   .sub-nav { display: flex; gap: 0.25rem; padding: 0.55rem 1.25rem 0; border-bottom: 1px solid var(--border); background: var(--panel); }
@@ -60,18 +58,7 @@
 </head>
 <body>
 <header class="app">
-  <div style="display:flex;gap:1.25rem;align-items:center">
-    <a href="/recycling" style="display:flex;align-items:center;gap:0.55rem;text-decoration:none;color:inherit">
-      <img src="/static/gpi-logo.png" alt="GPI" style="height:28px;width:auto;display:block">
-      <h1 style="margin:0">Plant Manager</h1>
-    </a>
-    <nav>
-      <a href="/recycling">Dashboards</a>
-      <a href="/trophies" class="{% if active in ['trophies', 'leaderboards'] %}active{% endif %}">Trophy Case</a>
-      <a href="/staffing" class="{% if active not in ['leaderboards', 'trophies'] %}active{% endif %}">Staffing</a>
-      <a href="/settings">Settings</a>
-    </nav>
-  </div>
+  {% set active_nav = 'trophies' if active in ['trophies', 'leaderboards'] else 'staffing' %}{% include "_topnav.html" %}
 </header>
 {% if active in ['trophies', 'leaderboards'] %}
 {% with active=active %}{% include '_trophies_subnav.html' %}{% endwith %}

@@ -1,0 +1,43 @@
+/* Shared top navigation menu (brand + links).
+   Single source of truth for the main menu's look, loaded by every page that
+   renders _topnav.html so the menu never changes from one page to the next.
+   Scoped to .brand-row so it is independent of each page's <header> chrome. */
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+.brand-row .brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: inherit;
+  text-decoration: none;
+}
+.brand-row .brand img {
+  height: 28px;
+  width: auto;
+  display: block;
+}
+.brand-row .brand h1 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+.brand-row nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.brand-row nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+}
+.brand-row nav a.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  font-weight: 600;
+}

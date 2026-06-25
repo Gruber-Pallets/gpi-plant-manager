@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>{% if tv_mode %}TV · {% endif %}Departments — New — GPI Plant Manager</title>
+<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
 <link rel="stylesheet" href="/static/new_dept.css?v={{ static_v('new_dept.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
 {% if tv_mode %}
@@ -21,18 +22,7 @@
 {% endif %}
 {% from "_cumulative_progress_chart.html" import cumulative_progress_chart %}
 <header>
-  <div style="display:flex;gap:1.25rem;align-items:center">
-    <a href="/recycling" style="display:flex;align-items:center;gap:0.55rem;text-decoration:none;color:inherit">
-      <img src="/static/gpi-logo.png" alt="GPI" style="height:28px;width:auto;display:block">
-      <h1 style="margin:0">Plant Manager</h1>
-    </a>
-    <nav>
-      <a href="/recycling" class="active">Dashboards</a>
-      <a href="/trophies">Trophy Case</a>
-      <a href="/staffing">Staffing</a>
-      <a href="/settings">Settings</a>
-    </nav>
-  </div>
+  {% set active_nav = 'dashboards' %}{% include "_topnav.html" %}
   <form method="get" action="/new">
     <label for="day">Day</label>
     <input id="day" type="date" name="day" value="{{ day }}" max="{{ today }}">

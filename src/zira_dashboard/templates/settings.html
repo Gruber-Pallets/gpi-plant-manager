@@ -5,21 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>Settings — GPI Plant Manager</title>
+<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
 <link rel="stylesheet" href="/static/settings.css?v={{ static_v('settings.css') }}">
 </head>
 <body>
 <header>
-  <a href="/recycling" style="display:flex;align-items:center;gap:0.55rem;text-decoration:none;color:inherit">
-    <img src="/static/gpi-logo.png" alt="GPI" style="height:28px;width:auto;display:block">
-    <h1 style="margin:0">Plant Manager</h1>
-  </a>
-  <nav>
-    <a href="/recycling">Dashboards</a>
-    <a href="/trophies">Trophy Case</a>
-    <a href="/staffing">Staffing</a>
-    <a href="/settings" class="active">Settings</a>
-    <a href="/admin/feedback">Feedback</a>
-  </nav>
+  {% set active_nav = 'settings' %}{% include "_topnav.html" %}
   <div class="page-actions">
     <button type="button" class="undo-btn" id="page-undo-btn" title="Undo last save" aria-label="Undo" disabled>↶</button>
     <button type="button" class="redo-btn" id="page-redo-btn" title="Redo" aria-label="Redo" disabled>↷</button>

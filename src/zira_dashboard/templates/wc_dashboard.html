@@ -31,6 +31,7 @@
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
 <title>{% if tv_mode %}TV · {% endif %}{{ wc_name }} — GPI Plant Manager</title>
 <link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
+<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
 <link rel="stylesheet" href="/static/wc_dashboard.css?v={{ static_v('wc_dashboard.css') }}">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
@@ -50,18 +51,7 @@
   ) %}{% include "_goat_watch_banner.html" %}{% endcall %}
 {% else %}
   <header>
-    <div style="display:flex;gap:1.25rem;align-items:center">
-      <a href="/recycling" style="display:flex;align-items:center;gap:0.55rem;text-decoration:none;color:inherit">
-        <img src="/static/gpi-logo.png" alt="GPI" style="height:28px;width:auto;display:block">
-        <h1 style="margin:0">Plant Manager</h1>
-      </a>
-      <nav>
-        <a href="/recycling">Dashboards</a>
-        <a href="/trophies">Trophy Case</a>
-        <a href="/staffing">Staffing</a>
-        <a href="/settings">Settings</a>
-      </nav>
-    </div>
+    {% set active_nav = 'dashboards' %}{% include "_topnav.html" %}
   </header>
   {% include "_dashboards_subnav.html" %}
   {# One unified chrome strip: WC picker (acts as the page title) +

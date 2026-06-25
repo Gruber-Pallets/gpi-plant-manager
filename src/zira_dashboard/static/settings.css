@@ -20,9 +20,7 @@ header {
   flex-wrap: wrap;
 }
 h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
-nav { display: flex; gap: 0.5rem; }
-nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; padding: 0.25rem 0.6rem; border-radius: 6px; }
-nav a.active { color: var(--accent); background: var(--accent-dim); font-weight: 600; }
+/* Brand + nav styling lives in topnav.css (shared across all pages). */
 
 main { padding: 0.65rem 1rem 1rem; }
 h2 { margin: 0.9rem 0 0.4rem; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); }
