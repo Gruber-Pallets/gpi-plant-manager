@@ -277,7 +277,7 @@
     var count = ensureInboxCount(link);
     link.classList.toggle('has-open', total > 0);
     link.classList.toggle('has-urgent', urgent > 0);
-    link.classList.toggle('is-degraded', degraded);
+    link.classList.toggle('is-degraded', degraded && total <= 0);
     count.hidden = total <= 0 && !degraded;
     count.textContent = degraded && total <= 0 ? '!' : total > 99 ? '99+' : String(total);
     var title = total > 0

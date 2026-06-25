@@ -622,9 +622,11 @@ def test_footer_enhances_inbox_nav_with_summary_count():
     assert "window.gpiRefreshInboxSummary" in js
     assert "inbox-nav-count" in js
     assert "source_errors" in js
-    assert "is-degraded" in js
+    assert "link.classList.toggle('has-open', total > 0)" in js
+    assert "link.classList.toggle('is-degraded', degraded && total <= 0)" in js
     assert ".inbox-nav-count" in css
-    assert ".inbox-nav-link.has-urgent .inbox-nav-count" in css
+    assert ".inbox-nav-link.has-open" in css
+    assert ".inbox-nav-link.has-open .inbox-nav-count" in css
     assert ".inbox-nav-link.is-degraded .inbox-nav-count" in css
 
 

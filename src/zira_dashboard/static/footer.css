@@ -197,7 +197,11 @@
     line-height: 1.25;
     text-align: center;
   }
-  .inbox-nav-link.has-urgent .inbox-nav-count {
+  .inbox-nav-link.has-open {
+    color: #b91c1c;
+    font-weight: 700;
+  }
+  .inbox-nav-link.has-open .inbox-nav-count {
     background: #fee2e2;
     color: #b91c1c;
   }
