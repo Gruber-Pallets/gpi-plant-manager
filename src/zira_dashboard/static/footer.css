@@ -1,4 +1,28 @@
-  .whatsnew-slot { margin-left: auto; display: flex; align-items: center; }
+  .whatsnew-slot { margin-left: auto; display: flex; align-items: center; gap: 0.4rem; }
+  /* Undo/Redo are relocated into this slot by footer.js so they sit just left
+     of the What's New button with one consistent look on every screen. */
+  .whatsnew-slot .undo-btn,
+  .whatsnew-slot .redo-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    min-width: 34px;
+    padding: 0 0.5rem;
+    background: transparent;
+    color: var(--fg, #1f2937);
+    border: 1px solid var(--border, #d8dee5);
+    border-radius: 8px;
+    font: inherit;
+    font-size: 1.05rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .whatsnew-slot .undo-btn:hover:not(:disabled),
+  .whatsnew-slot .redo-btn:hover:not(:disabled) { border-color: #60a5fa; color: #60a5fa; }
+  .whatsnew-slot .undo-btn:disabled,
+  .whatsnew-slot .redo-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .whatsnew-btn {
     position: relative;
     display: inline-flex;

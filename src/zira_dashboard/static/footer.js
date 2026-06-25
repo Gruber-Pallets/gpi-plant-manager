@@ -82,6 +82,17 @@
     dot = btn.querySelector('.whatsnew-dot');
     var slot = document.createElement('div');
     slot.className = 'whatsnew-slot';
+    // Pull the page's Undo/Redo buttons — wherever the template placed them
+    // (a header cluster on Staffing/Settings, the content toolbar on Skills) —
+    // into this slot, to the LEFT of the What's New button. This keeps them in
+    // the same spot with one shared style on every screen. The Undo button
+    // inside a save-toast is intentionally left alone.
+    var actionBtns = document.querySelectorAll('button.undo-btn, button.redo-btn');
+    Array.prototype.forEach.call(actionBtns, function (b) {
+      if (b.closest('.save-toast') || b.closest('.whatsnew-slot')) return;
+      b.classList.remove('header-undo-redo');
+      slot.appendChild(b);
+    });
     slot.appendChild(btn);
     header.appendChild(slot);
     btn.addEventListener('click', openPanel);
