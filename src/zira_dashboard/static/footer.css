@@ -384,7 +384,9 @@
   .mpo-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ---------- Feedback modals (Send + View) ---------- */
-.fb-modal { position: fixed; inset: 0; z-index: 1000; display: flex;
+/* Above the What's New panel (z-index 9000) and the nav-badge modals (9100):
+   these open from inside that panel, so a lower z-index renders them behind it. */
+.fb-modal { position: fixed; inset: 0; z-index: 9200; display: flex;
   align-items: center; justify-content: center; }
 .fb-modal[hidden] { display: none; }
 .fb-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.45); }

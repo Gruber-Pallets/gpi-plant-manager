@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -5,6 +6,26 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "src" / "zira_dashboard" / "templates" / "_footer.html"
 CSS = ROOT / "src" / "zira_dashboard" / "static" / "footer.css"
 JS = ROOT / "src" / "zira_dashboard" / "static" / "footer.js"
+
+
+def _rule_zindex(css, selector):
+    """z-index of the first rule block for an exact selector (skips `sel[hidden]`)."""
+    m = re.search(re.escape(selector) + r"\s*\{[^}]*?z-index:\s*(\d+)", css)
+    return int(m.group(1)) if m else None
+
+
+def test_feedback_modal_stacks_above_whatsnew_panel():
+    # The Send/View feedback modals open from inside the What's New panel, so
+    # their z-index must sit ABOVE the panel's or they render behind it.
+    css = CSS.read_text(encoding="utf-8")
+    fb = _rule_zindex(css, ".fb-modal")
+    panel = _rule_zindex(css, ".changelog-modal")
+    assert fb is not None, ".fb-modal z-index not found"
+    assert panel is not None, ".changelog-modal z-index not found"
+    assert fb >= panel, (
+        f".fb-modal z-index ({fb}) must be >= .changelog-modal ({panel}) — "
+        "it opens from within the What's New panel"
+    )
 
 
 def test_footer_template_uses_panel_without_old_text_link():
