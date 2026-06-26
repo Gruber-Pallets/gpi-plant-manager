@@ -56,122 +56,121 @@
   </div>
   <div class="focus-empty" data-focus-empty hidden>All clear for this focus.</div>
 
-  <div class="summary-strip" aria-label="Open exception counts">
-    {% for section in sections %}
-      <a href="#{{ section.id }}" class="summary-tile {{ section.tone }}" data-summary-id="{{ section.id }}">
-        <span class="summary-count">{{ section.count }}</span>
-        <span>{{ section.title }}</span>
-      </a>
+  <div class="queue" data-queue>
+    {% for row in queue %}
+      {% set action = row.get('action') %}
+      <div class="exception-row priority-{{ row.get('priority', 'normal') }}"
+           data-section-id="{{ row.section_id }}"
+           data-action-type="{{ action.type if action else '' }}"
+           data-priority="{{ row.get('priority', 'normal') }}"
+           data-row-key="{{ row.get('row_key', '') }}"
+           data-item-key="{{ row.get('item_key', '') }}"
+           data-person-name="{{ row.name }}"
+           {% if action and action.type == 'assignment' %}
+             data-day="{{ action.day or '' }}"
+             data-wc-name="{{ action.wc_name or '' }}"
+             data-start-utc="{{ action.start_utc or '' }}"
+             data-end-utc="{{ action.end_utc or '' }}"
+           {% elif action and action.type in ('late_absence', 'late_reason') %}
+             data-emp-id="{{ action.emp_id or '' }}"
+           {% elif action and action.type in ('missing_wc', 'missed_punch_out') %}
+             data-attendance-id="{{ action.attendance_id or '' }}"
+           {% elif action and action.type == 'time_off' %}
+             data-request-id="{{ action.request_id or '' }}"
+           {% endif %}
+      >
+        <div class="exception-main">
+          <div class="exception-head">
+            <span class="exception-name">{{ row.name }}</span>
+            <span class="category-tag tone-{{ row.tone }}">{{ row.category_label }}</span>
+            {% if row.get('badge') %}
+              <span class="priority-pill {{ row.get('priority', 'normal') }}">{{ row.badge }}</span>
+            {% endif %}
+          </div>
+          <div class="exception-detail">{{ row.label }}{% if row.detail %} · {{ row.detail }}{% endif %}</div>
+        </div>
+        <div class="row-actions">
+          {% if action and action.type == 'assignment' %}
+            <select class="inline-select js-person" aria-label="Person to assign">
+              <option value="">Person...</option>
+              {% for person in people %}
+                <option value="{{ person }}">{{ person }}</option>
+              {% endfor %}
+            </select>
+            <button type="button" class="row-btn primary js-assign">Save</button>
+            <button type="button" class="row-btn" data-alert-open="assignments">Testing</button>
+          {% elif action and action.type == 'late_absence' %}
+            <select class="inline-select js-reason-preset" aria-label="Reason preset">
+              <option value="">Reason...</option>
+              <option value="Sick">Sick</option>
+              <option value="Car issues">Car issues</option>
+              <option value="Overslept">Overslept</option>
+              <option value="">Other</option>
+            </select>
+            <input type="text" class="inline-input js-reason-input" aria-label="Late or absence reason" placeholder="Reason required">
+            <button type="button" class="row-btn primary js-absent">Absent</button>
+            <button type="button" class="row-btn js-snooze">Snooze</button>
+          {% elif action and action.type == 'late_reason' %}
+            <select class="inline-select js-reason-preset" aria-label="Reason preset">
+              <option value="">Reason...</option>
+              <option value="Sick">Sick</option>
+              <option value="Car issues">Car issues</option>
+              <option value="Overslept">Overslept</option>
+              <option value="">Other</option>
+            </select>
+            <input type="text" class="inline-input js-reason-input" aria-label="Late or absence reason" placeholder="Reason required">
+            <button type="button" class="row-btn primary js-save-late">Save</button>
+          {% elif action and action.type == 'missing_wc' %}
+            <select class="inline-select js-wc" aria-label="Work center to assign">
+              <option value="">Work center...</option>
+              {% for wc in work_centers %}
+                <option value="{{ wc }}">{{ wc }}</option>
+              {% endfor %}
+            </select>
+            <button type="button" class="row-btn primary js-missing-wc-save">Assign</button>
+            <button type="button" class="row-btn js-missing-wc-dismiss">Dismiss</button>
+          {% elif action and action.type == 'missed_punch_out' %}
+            <input type="time" class="inline-input time js-punch-time" aria-label="Actual punch-out time">
+            <button type="button" class="row-btn primary js-punch-save">Correct</button>
+          {% elif action and action.type == 'time_off' %}
+            <button type="button" class="row-btn primary js-time-off-approve">Approve</button>
+            <input type="text" class="inline-input js-time-off-reason" aria-label="Reason to deny time off" placeholder="Reason to deny" hidden>
+            <button type="button" class="row-btn danger js-time-off-refuse">Deny</button>
+          {% elif row.get('href') %}
+            <a class="row-btn" href="{{ row.href }}">Open</a>
+          {% endif %}
+          <span class="row-status" hidden></span>
+        </div>
+      </div>
     {% endfor %}
+    <div class="queue-empty" data-queue-empty {% if queue %}hidden{% endif %}>
+      Inbox zero — nothing needs you right now.
+    </div>
   </div>
 
-  <div class="section-stack">
-    {% for section in sections %}
-    <section id="{{ section.id }}" class="inbox-section {{ section.tone }}">
-      <div class="section-head">
-        <div>
-          <h3>{{ section.title }}</h3>
-          <span><span class="section-open-count">{{ section.count }}</span> open</span>
-        </div>
-        {% if section.action_key %}
-          <button type="button" class="section-action" data-alert-open="{{ section.action_key }}">{{ section.action_label }}</button>
-        {% elif section.href %}
-          <a class="section-action" href="{{ section.href }}">Open</a>
-        {% endif %}
+  <div class="archive" data-archive>
+    <button type="button" class="archive-toggle" data-archive-toggle aria-expanded="false">
+      <span class="archive-caret" aria-hidden="true">▸</span>
+      <span class="archive-label">Archive</span>
+      <span class="archive-count" data-archive-count hidden></span>
+    </button>
+    <div class="archive-body" data-archive-body hidden>
+      <div class="archive-filters">
+        <label class="archive-filter">
+          <span>Actor</span>
+          <select class="inline-select" data-archive-actor>
+            <option value="">Everyone</option>
+          </select>
+        </label>
+        <label class="archive-filter archive-checkbox">
+          <input type="checkbox" data-archive-hide-auto checked>
+          Hide auto-resolved
+        </label>
       </div>
-      {% if section.rows %}
-      <table>
-        <tbody>
-        {% for row in section.rows %}
-          {% set action = row.get('action') %}
-          {% set context = section.get('context', {}) %}
-          <tr class="exception-row priority-{{ row.get('priority', 'normal') }}"
-              data-section-id="{{ section.id }}"
-              data-action-type="{{ action.type if action else '' }}"
-              data-priority="{{ row.get('priority', 'normal') }}"
-              data-row-key="{{ row.get('row_key', '') }}"
-              {% if action and action.type == 'assignment' %}
-                data-day="{{ action.day or '' }}"
-                data-wc-name="{{ action.wc_name or '' }}"
-                data-start-utc="{{ action.start_utc or '' }}"
-                data-end-utc="{{ action.end_utc or '' }}"
-              {% elif action and action.type in ('late_absence', 'late_reason') %}
-                data-emp-id="{{ action.emp_id or '' }}"
-                data-person-name="{{ action.name or '' }}"
-              {% elif action and action.type in ('missing_wc', 'missed_punch_out') %}
-                data-attendance-id="{{ action.attendance_id or '' }}"
-                data-person-name="{{ action.name or row.name or '' }}"
-              {% elif action and action.type == 'time_off' %}
-                data-request-id="{{ action.request_id or '' }}"
-              {% endif %}
-          >
-            <th scope="row">{{ row.name }}</th>
-            <td>
-              {{ row.label }}
-              {% if row.get('badge') %}
-                <span class="priority-pill {{ row.get('priority', 'normal') }}">{{ row.badge }}</span>
-              {% endif %}
-            </td>
-            <td>{{ row.detail }}</td>
-            <td class="row-actions">
-              {% if action and action.type == 'assignment' %}
-                <select class="inline-select js-person" aria-label="Person to assign">
-                  <option value="">Person...</option>
-                  {% for person in context.get('people', []) %}
-                    <option value="{{ person }}">{{ person }}</option>
-                  {% endfor %}
-                </select>
-                <button type="button" class="row-btn primary js-assign">Save</button>
-                <button type="button" class="row-btn" data-alert-open="assignments">Testing</button>
-              {% elif action and action.type == 'late_absence' %}
-                <select class="inline-select js-reason-preset" aria-label="Reason preset">
-                  <option value="">Reason...</option>
-                  <option value="Sick">Sick</option>
-                  <option value="Car issues">Car issues</option>
-                  <option value="Overslept">Overslept</option>
-                  <option value="">Other</option>
-                </select>
-                <input type="text" class="inline-input js-reason-input" aria-label="Late or absence reason" placeholder="Reason required">
-                <button type="button" class="row-btn primary js-absent">Absent</button>
-                <button type="button" class="row-btn js-snooze">Snooze</button>
-              {% elif action and action.type == 'late_reason' %}
-                <select class="inline-select js-reason-preset" aria-label="Reason preset">
-                  <option value="">Reason...</option>
-                  <option value="Sick">Sick</option>
-                  <option value="Car issues">Car issues</option>
-                  <option value="Overslept">Overslept</option>
-                  <option value="">Other</option>
-                </select>
-                <input type="text" class="inline-input js-reason-input" aria-label="Late or absence reason" placeholder="Reason required">
-                <button type="button" class="row-btn primary js-save-late">Save</button>
-              {% elif action and action.type == 'missing_wc' %}
-                <select class="inline-select js-wc" aria-label="Work center to assign">
-                  <option value="">Work center...</option>
-                  {% for wc in context.get('work_centers', []) %}
-                    <option value="{{ wc }}">{{ wc }}</option>
-                  {% endfor %}
-                </select>
-                <button type="button" class="row-btn primary js-missing-wc-save">Assign</button>
-                <button type="button" class="row-btn js-missing-wc-dismiss">Dismiss</button>
-              {% elif action and action.type == 'missed_punch_out' %}
-                <input type="time" class="inline-input time js-punch-time" aria-label="Actual punch-out time">
-                <button type="button" class="row-btn primary js-punch-save">Correct</button>
-              {% elif action and action.type == 'time_off' %}
-                <button type="button" class="row-btn primary js-time-off-approve">Approve</button>
-                <input type="text" class="inline-input js-time-off-reason" aria-label="Reason to deny time off" placeholder="Reason to deny" hidden>
-                <button type="button" class="row-btn danger js-time-off-refuse">Deny</button>
-              {% endif %}
-              <span class="row-status" hidden></span>
-            </td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-        <div class="empty-row">{{ section.empty }}</div>
-      {% endif %}
-    </section>
-    {% endfor %}
+      <div class="archive-groups" data-archive-groups></div>
+      <div class="archive-empty" data-archive-empty hidden>No archived activity yet.</div>
+      <button type="button" class="refresh-btn small archive-more" data-archive-more hidden>Show earlier</button>
+    </div>
   </div>
 </main>
 <script id="gpi-inbox-summary-bootstrap" type="application/json">{{ initial_nav_summary | tojson }}</script>
