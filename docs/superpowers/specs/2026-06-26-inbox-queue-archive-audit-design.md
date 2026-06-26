@@ -355,12 +355,19 @@ Mirrors the existing style (Odoo mocked), extending
 
 ## Build order (shippable phases)
 
-1. **Audit log on human actions** — `inbox_events` + `inbox_log` + wire actor
-   capture and event writes into all six handlers. Delivers the audit trail across
-   every category with no UI change yet.
-2. **Combined queue + archive** — flat sorted hide-empty queue, collapsed
-   day-grouped archive with filters and "show earlier". The visible feature.
+1. **Audit log on the four inbox-native actions** — `inbox_events` + `inbox_log` +
+   actor capture and event writes wired into the **time-off, missing-WC,
+   missed-punch, and late** handlers (the mutators with dedicated route files).
+   Snooze writes no event. Delivers the who/when audit trail for the bulk of daily
+   manager actions, with no UI change yet.
+2. **Combined queue + archive (+ assignment-credit logging)** — flat sorted
+   hide-empty queue, collapsed day-grouped archive with filters and "show earlier";
+   and, since this phase refactors the assignments surface, event logging for the
+   staffing "credit" action (`POST /api/staffing/attribute`, threaded with
+   `source='inbox'`). The visible feature.
 3. **Undo** — the post-action window + per-action reversal.
 4. **Fully-live + auto-resolve** — `inbox_open_items` mirror, reconcile on the
    background tick, polling/diff client with the stale-action safeguard.
+   Plant-schedule resolutions, and any item that clears itself, are logged here as
+   `auto_resolved`.
 5. *(Later)* **Audit page (C)** — filterable/exportable view over `inbox_events`.
