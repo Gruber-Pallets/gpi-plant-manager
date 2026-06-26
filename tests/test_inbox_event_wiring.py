@@ -70,3 +70,43 @@ def test_time_off_deny_records_inbox_event(monkeypatch):
     assert e["item_key"] == "time_off:56"
     assert e["action"] == "deny"
     assert e["reason"] == "No coverage"
+
+
+def test_missing_wc_assign_records_inbox_event(monkeypatch):
+    from zira_dashboard import odoo_client, missing_wc, staffing
+    from zira_dashboard.routes import missing_wc as missing_wc_route
+
+    events = _capture_events(monkeypatch)
+    monkeypatch.setattr(odoo_client, "set_attendance_wc", lambda att_id, wc: None)
+    monkeypatch.setattr(missing_wc, "resolve", lambda *a, **k: None)
+    wc_name = staffing.LOCATIONS[0].name
+
+    resp = missing_wc_route._assign_sync(
+        {"attendance_id": 999100, "wc_name": wc_name, "name": "Maria"},
+        actor_upn="dale@gruberpallets.com", actor_name="Dale Gruber")
+
+    assert resp.status_code == 200
+    e = events[0]
+    assert e["item_kind"] == "missing_wc"
+    assert e["item_key"] == "missing_wc:999100"
+    assert e["action"] == "assign"
+    assert e["after_value"] == wc_name
+    assert e["actor_name"] == "Dale Gruber"
+
+
+def test_missing_wc_dismiss_records_inbox_event(monkeypatch):
+    from zira_dashboard import missing_wc
+    from zira_dashboard.routes import missing_wc as missing_wc_route
+
+    events = _capture_events(monkeypatch)
+    monkeypatch.setattr(missing_wc, "resolve", lambda *a, **k: None)
+
+    resp = missing_wc_route._dismiss_sync(
+        {"attendance_id": 999100, "name": "Maria"},
+        actor_upn="dale@gruberpallets.com", actor_name="Dale Gruber")
+
+    assert resp.status_code == 200
+    e = events[0]
+    assert e["item_kind"] == "missing_wc"
+    assert e["item_key"] == "missing_wc:999100"
+    assert e["action"] == "dismiss"

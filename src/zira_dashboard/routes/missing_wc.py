@@ -31,10 +31,10 @@ def missing_wc_json():
     })
 
 
-def _assign_sync(body: dict) -> JSONResponse:
+def _assign_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     """Blocking half of /missing-wc/assign (Odoo XML-RPC + Postgres write);
     runs in a worker thread via asyncio.to_thread."""
-    from .. import missing_wc, odoo_client, staffing
+    from .. import inbox_log, missing_wc, odoo_client, staffing
     try:
         att_id = int(body.get("attendance_id"))
     except (TypeError, ValueError):
@@ -48,6 +48,19 @@ def _assign_sync(body: dict) -> JSONResponse:
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     missing_wc.resolve(att_id, "assigned", name=name, wc_name=wc_name)
+    inbox_log.log_event_safe(
+        item_kind="missing_wc",
+        item_key=f"missing_wc:{att_id}",
+        person_name=name,
+        category_label="Missing WC",
+        action="assign",
+        outcome=f"Assigned to {wc_name}",
+        after_value=wc_name,
+        actor_upn=actor_upn,
+        actor_name=actor_name,
+        source="inbox",
+        reversible=True,
+    )
     return JSONResponse({"ok": True})
 
 
@@ -57,20 +70,34 @@ async def missing_wc_assign(request: Request):
 
     Body (JSON): {attendance_id, wc_name, name?}
     """
+    from .. import inbox_log
     body = await request.json()
-    return await asyncio.to_thread(_assign_sync, body)
+    actor_upn, actor_name = inbox_log.actor_from(request)
+    return await asyncio.to_thread(_assign_sync, body, actor_upn, actor_name)
 
 
-def _dismiss_sync(body: dict) -> JSONResponse:
+def _dismiss_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     """Blocking half of /missing-wc/dismiss (Postgres write); runs in a
     worker thread via asyncio.to_thread."""
-    from .. import missing_wc
+    from .. import inbox_log, missing_wc
     try:
         att_id = int(body.get("attendance_id"))
     except (TypeError, ValueError):
         return JSONResponse({"ok": False, "error": "bad attendance_id"}, status_code=400)
     name = (str(body.get("name") or "").strip() or None)
     missing_wc.resolve(att_id, "dismissed", name=name)
+    inbox_log.log_event_safe(
+        item_kind="missing_wc",
+        item_key=f"missing_wc:{att_id}",
+        person_name=name,
+        category_label="Missing WC",
+        action="dismiss",
+        outcome="Dismissed",
+        actor_upn=actor_upn,
+        actor_name=actor_name,
+        source="inbox",
+        reversible=True,
+    )
     return JSONResponse({"ok": True})
 
 
@@ -80,5 +107,7 @@ async def missing_wc_dismiss(request: Request):
 
     Body (JSON): {attendance_id, name?}
     """
+    from .. import inbox_log
     body = await request.json()
-    return await asyncio.to_thread(_dismiss_sync, body)
+    actor_upn, actor_name = inbox_log.actor_from(request)
+    return await asyncio.to_thread(_dismiss_sync, body, actor_upn, actor_name)
