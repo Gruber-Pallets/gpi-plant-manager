@@ -87,3 +87,40 @@ def recent_events(days: int = 30) -> list[dict[str, Any]]:
         "ORDER BY resolved_at DESC",
         (days,),
     )
+
+
+def archive(
+    *,
+    before=None,
+    actor_upn: str | None = None,
+    include_auto: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """History for the inbox archive, newest first.
+
+    - ``before``: a ``resolved_at`` value; returns only rows strictly older
+      (the "show earlier" cursor).
+    - ``actor_upn``: restrict to one actor (also excludes auto-resolved, which
+      have a NULL actor).
+    - ``include_auto``: when False (default), hide auto-resolved rows.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if before is not None:
+        clauses.append("resolved_at < %s")
+        params.append(before)
+    if actor_upn:
+        clauses.append("actor_upn = %s")
+        params.append(actor_upn)
+    elif not include_auto:
+        clauses.append("actor_upn IS NOT NULL")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.append(limit)
+    return db.query(
+        "SELECT id, item_kind, item_key, person_name, category_label, action, "
+        "outcome, before_value, after_value, reason, actor_upn, actor_name, "
+        "source, reversible, undone_at, resolved_at "
+        "FROM inbox_events" + where +
+        " ORDER BY resolved_at DESC LIMIT %s",
+        tuple(params),
+    )
