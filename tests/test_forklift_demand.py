@@ -1,0 +1,44 @@
+from zira_dashboard import forklift_demand as fd
+
+
+def _snap(total, by_hour):
+    return {"total_calls": total, "by_hour": by_hour, "by_station": {}}
+
+
+def test_predict_from_history_uses_median_and_peak():
+    snaps = [
+        _snap(400, {"8": {"calls": 30}, "9": {"calls": 70}}),
+        _snap(420, {"8": {"calls": 40}, "9": {"calls": 60}}),
+        _snap(440, {"8": {"calls": 50}, "9": {"calls": 80}}),
+    ]
+    f = fd.predict_from_history(snaps)
+    assert f.total_calls == 420            # median of 400,420,440
+    assert f.peak_hour == 9
+    assert f.peak_calls == 70              # mean of 70,60,80
+    assert f.basis == "history" and f.n_days == 3
+
+
+def test_predict_from_history_empty_returns_zero_basis_none():
+    f = fd.predict_from_history([])
+    assert f.total_calls == 0 and f.basis == "none" and f.peak_hour is None
+
+
+def test_bootstrap_from_trends_divides_week_by_operating_days():
+    trends = {"weeks": [
+        {"claimedCalls": 2000}, {"claimedCalls": 2100},
+    ]}
+    f = fd.bootstrap_from_trends(trends, operating_days=5)
+    # mean weekly = 2050 -> per day = 410
+    assert f.total_calls == 410 and f.basis == "bootstrap"
+
+
+def test_recommend_drivers_ceils_peak_over_throughput():
+    assert fd.recommend_drivers(peak_calls=70, throughput_per_hour=30) == 3
+    assert fd.recommend_drivers(peak_calls=0, throughput_per_hour=30) == 1  # floor of 1
+
+
+def test_assess_coverage_ok_and_short():
+    ok = fd.assess_coverage(recommended=3, dedicated=3, certified=5, backups=3)
+    assert ok.status == "ok" and ok.gap == 0
+    short = fd.assess_coverage(recommended=4, dedicated=2, certified=5, backups=3)
+    assert short.status == "short" and short.gap == 2

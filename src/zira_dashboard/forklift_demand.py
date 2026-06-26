@@ -1,0 +1,84 @@
+"""Pure forklift demand prediction + driver recommendation + coverage check.
+
+v1 model (calibrated as history accumulates):
+  - predict next working day from recent same-weekday snapshots (median total,
+    mean per-hour shape); fall back to bootstrapping from the app's weekly
+    trends when there is no same-weekday history yet.
+  - recommend = ceil(busiest-hour calls / per-driver hourly throughput), min 1.
+  - coverage compares the recommendation to dedicated drivers scheduled.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from statistics import median
+
+# Default per-driver throughput (calls/hour). Derived loosely from observed
+# data (~70 calls in the busiest hour handled by ~2-3 drivers). Override-able
+# later via settings; calibrated against overload/neglect history.
+DEFAULT_THROUGHPUT_PER_HOUR = 30.0
+
+
+@dataclass
+class DemandForecast:
+    total_calls: float = 0.0
+    by_hour: dict[int, float] = field(default_factory=dict)
+    peak_hour: int | None = None
+    peak_calls: float = 0.0
+    basis: str = "none"          # 'history' | 'bootstrap' | 'none'
+    n_days: int = 0
+
+
+@dataclass
+class Coverage:
+    status: str                   # 'ok' | 'short'
+    recommended: int
+    dedicated: int
+    certified: int
+    backups: int
+    gap: int
+
+
+def predict_from_history(snapshots: list[dict]) -> DemandForecast:
+    if not snapshots:
+        return DemandForecast()
+    totals = [float(s.get("total_calls") or 0) for s in snapshots]
+    # mean calls per hour-slot across snapshots
+    sums: dict[int, float] = {}
+    for s in snapshots:
+        for slot, payload in (s.get("by_hour") or {}).items():
+            hour = int(slot)
+            calls = float((payload or {}).get("calls") or 0)
+            sums[hour] = sums.get(hour, 0.0) + calls
+    by_hour = {h: round(v / len(snapshots), 1) for h, v in sums.items()}
+    peak_hour = max(by_hour, key=by_hour.get) if by_hour else None
+    peak_calls = by_hour[peak_hour] if peak_hour is not None else 0.0
+    return DemandForecast(
+        total_calls=median(totals), by_hour=by_hour,
+        peak_hour=peak_hour, peak_calls=peak_calls,
+        basis="history", n_days=len(snapshots),
+    )
+
+
+def bootstrap_from_trends(weekly_trends: dict, operating_days: int = 5) -> DemandForecast:
+    weeks = (weekly_trends or {}).get("weeks") or []
+    claimed = [float(w.get("claimedCalls") or 0) for w in weeks if w.get("claimedCalls")]
+    if not claimed or operating_days <= 0:
+        return DemandForecast()
+    per_day = (sum(claimed) / len(claimed)) / operating_days
+    return DemandForecast(total_calls=round(per_day, 1), basis="bootstrap", n_days=0)
+
+
+def recommend_drivers(peak_calls: float, throughput_per_hour: float = DEFAULT_THROUGHPUT_PER_HOUR) -> int:
+    if throughput_per_hour <= 0:
+        return 1
+    return max(1, math.ceil(peak_calls / throughput_per_hour))
+
+
+def assess_coverage(recommended: int, dedicated: int, certified: int, backups: int) -> Coverage:
+    gap = max(0, recommended - dedicated)
+    return Coverage(
+        status="ok" if gap == 0 else "short",
+        recommended=recommended, dedicated=dedicated,
+        certified=certified, backups=backups, gap=gap,
+    )
