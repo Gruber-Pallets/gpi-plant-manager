@@ -284,6 +284,7 @@ def test_plant_schedule_reminder_adds_unpublished_next_business_day(monkeypatch)
         "badge": "Publish",
         "href": "/staffing?day=2026-06-26",
         "row_key": "plant_schedule:2026-06-26",
+        "item_key": "plant_schedule:2026-06-26",
     }]
 
 

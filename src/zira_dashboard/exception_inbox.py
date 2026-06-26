@@ -11,6 +11,7 @@ import logging
 from datetime import date, time, timedelta
 
 from . import plant_day, schedule_store, staffing
+from . import inbox_keys
 
 _log = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ def _plant_schedule_reminder() -> tuple[int, list[dict]]:
         "badge": "Publish",
         "href": f"/staffing?day={target_day.isoformat()}",
         "row_key": _row_key("plant_schedule", target_day.isoformat()),
+        "item_key": inbox_keys.plant_schedule(target_day.isoformat()),
     }]
 
 
@@ -125,6 +127,7 @@ def _pending_time_off(today: date, limit: int = 8) -> tuple[int, list[dict]]:
             "priority": "info",
             "badge": "Approval",
             "row_key": _row_key("time_off", r["id"], r["state"]),
+            "item_key": inbox_keys.time_off(r["id"]),
             "action": {
                 "type": "time_off",
                 "request_id": r["id"],
@@ -135,6 +138,31 @@ def _pending_time_off(today: date, limit: int = 8) -> tuple[int, list[dict]]:
         for r in rows
     ]
     return int(rows[0].get("total_count") or 0) if rows else 0, shaped
+
+
+_TIER_RANK = {"urgent": 0, "warn": 1, "info": 2, "normal": 2, "muted": 3}
+
+
+def _queue_from_sections(sections: list[dict]) -> list[dict]:
+    """Flatten section rows into one queue: urgency tier first (urgent → warn →
+    info → muted/follow-up), preserving each section's order within a tier.
+    Empty sections contribute nothing. Each row is tagged with its category."""
+    tagged = []
+    for section_order, section in enumerate(sections):
+        for row_index, row in enumerate(section.get("rows") or []):
+            tagged.append((
+                _TIER_RANK.get(row.get("priority", "normal"), 2),
+                section_order,
+                row_index,
+                {
+                    **row,
+                    "section_id": section["id"],
+                    "category_label": section["title"],
+                    "tone": section["tone"],
+                },
+            ))
+    tagged.sort(key=lambda t: (t[0], t[1], t[2]))
+    return [t[3] for t in tagged]
 
 
 def build_summary() -> dict:
@@ -221,6 +249,7 @@ def build_snapshot() -> dict:
             "priority": "urgent",
             "badge": "Needs decision",
             "row_key": _row_key("late", "scheduled", item.get("emp_id")),
+            "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
             "action": {
                 "type": "late_absence",
                 "kind": "scheduled",
@@ -236,6 +265,7 @@ def build_snapshot() -> dict:
             "priority": "urgent",
             "badge": "Needs decision",
             "row_key": _row_key("late", "unscheduled", item.get("emp_id")),
+            "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
             "action": {
                 "type": "late_absence",
                 "kind": "unscheduled",
@@ -251,6 +281,7 @@ def build_snapshot() -> dict:
             "priority": "warn",
             "badge": "Reason",
             "row_key": _row_key("late_reason", item.get("emp_id")),
+            "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
             "action": {
                 "type": "late_reason",
                 "emp_id": item.get("emp_id"),
@@ -266,6 +297,7 @@ def build_snapshot() -> dict:
             "priority": "muted",
             "badge": "Follow-up",
             "row_key": _row_key("late_snoozed", item.get("emp_id"), item.get("until_iso")),
+            "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
         })
 
     sections = [
@@ -286,6 +318,7 @@ def build_snapshot() -> dict:
                     "priority": "warn",
                     "badge": "Credit",
                     "row_key": _row_key("assignment", item.get("wc_name"), item.get("first_iso")),
+                    "item_key": inbox_keys.assignment(item.get("wc_name"), item.get("first_iso")),
                     "action": {
                         "type": "assignment",
                         "day": assignments.get("today") or today.isoformat(),
@@ -337,6 +370,7 @@ def build_snapshot() -> dict:
                     "priority": "urgent",
                     "badge": "Fix WC",
                     "row_key": _row_key("missing_wc", r.get("attendance_id")),
+                    "item_key": inbox_keys.missing_wc(r.get("attendance_id")),
                     "action": {
                         "type": "missing_wc",
                         "attendance_id": r.get("attendance_id"),
@@ -363,6 +397,7 @@ def build_snapshot() -> dict:
                     "priority": "urgent",
                     "badge": "Fix time",
                     "row_key": _row_key("missed_punch_out", r.get("attendance_id")),
+                    "item_key": inbox_keys.missed_punch_out(r.get("attendance_id")),
                     "action": {
                         "type": "missed_punch_out",
                         "attendance_id": r.get("attendance_id"),
@@ -384,6 +419,7 @@ def build_snapshot() -> dict:
             "rows": pending_rows,
         },
     ]
+    queue = _queue_from_sections(sections)
     total = sum(int(s["count"]) for s in sections)
     urgent_total = sum(
         1
@@ -405,4 +441,5 @@ def build_snapshot() -> dict:
         "follow_up_total": follow_up_total,
         "source_errors": source_errors,
         "sections": sections,
+        "queue": queue,
     }
