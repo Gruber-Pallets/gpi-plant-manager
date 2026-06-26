@@ -64,19 +64,15 @@
     return Math.max(0, parseInt(el.textContent || '0', 10) || 0);
   }
 
-  function bumpCounts(sectionId, delta) {
-    var section = document.getElementById(sectionId);
-    var sectionCount = section && section.querySelector('.section-open-count');
-    if (sectionCount) sectionCount.textContent = countElText(sectionCount) + delta;
-
-    var tileCount = document.querySelector('[data-summary-id="' + sectionId + '"] .summary-count');
-    if (tileCount) tileCount.textContent = countElText(tileCount) + delta;
-
-    var total = document.querySelector('[data-total-open]');
-    if (total) total.textContent = countElText(total) + delta;
+  function bumpCount(el, delta) {
+    if (el) el.textContent = countElText(el) + delta;
   }
 
-  function bumpUrgent(row, delta) {
+  function bumpTotal(delta) {
+    bumpCount(document.querySelector('[data-total-open]'), delta);
+  }
+
+  function bumpUrgentInline(row, delta) {
     if (!row || row.dataset.priority !== 'urgent') return;
     var urgent = document.querySelector('[data-urgent-open]');
     var wrap = document.querySelector('[data-urgent-wrap]');
@@ -113,25 +109,25 @@
     if (typeof window.gpiRefreshInboxSummary === 'function') window.gpiRefreshInboxSummary();
   }
 
+  function updateQueueEmpty() {
+    var queue = document.querySelector('[data-queue]');
+    var empty = document.querySelector('[data-queue-empty]');
+    if (!queue || !empty) return;
+    var hasRows = !!queue.querySelector('.exception-row');
+    empty.hidden = hasRows;
+  }
+
   function removeResolvedRow(row) {
-    var section = row.closest('.inbox-section');
-    var tbody = row.parentElement;
     row.remove();
-    if (tbody && !tbody.querySelector('.exception-row') && section) {
-      var table = section.querySelector('table');
-      var empty = document.createElement('div');
-      empty.className = 'empty-row';
-      empty.textContent = 'All clear';
-      if (table) table.replaceWith(empty);
-    }
+    updateQueueEmpty();
   }
 
   function resolveRow(row, label) {
     rowStatus(row, label || 'Done', false);
     setBusy(row, true);
     row.classList.add('is-resolved');
-    bumpCounts(row.dataset.sectionId, -1);
-    bumpUrgent(row, -1);
+    bumpTotal(-1);
+    bumpUrgentInline(row, -1);
     bumpFocusCounts(row, -1);
     refreshSharedBadge(row);
     refreshInboxSummary();
@@ -183,39 +179,34 @@
 
   function currentSnapshotSignature() {
     var warning = document.querySelector('[data-source-warning]');
-    var sectionParts = Array.from(document.querySelectorAll('.inbox-section')).map(function (section) {
-      var rows = Array.from(section.querySelectorAll('.exception-row')).map(function (row) {
-        return rowKey(row);
-      });
-      var count = section.querySelector('.section-open-count');
-      return [
-        section.id,
-        count ? count.textContent.trim() : rows.length,
-        rows.join(','),
-      ].join('|');
+    var total = document.querySelector('[data-total-open]');
+    var rows = Array.from(document.querySelectorAll('.exception-row')).map(function (row) {
+      return (row.dataset.itemKey || '') + '#' + rowKey(row);
     });
-    return (warning ? warning.dataset.sourceErrors || '' : '') + '::' + sectionParts.join('||');
+    return [
+      warning ? warning.dataset.sourceErrors || '' : '',
+      total ? total.textContent.trim() : rows.length,
+      rows.join(','),
+    ].join('::');
   }
 
   function snapshotSignature(snapshot) {
     var errors = (snapshot.source_errors || []).map(function (err) {
       return err.source || '';
     }).join(',');
-    var sections = (snapshot.sections || []).map(function (section) {
-      var rows = (section.rows || []).map(function (row) {
-        var action = row.action || {};
-        return row.row_key || [
-          action.type || '',
-          action.request_id || '',
-          action.attendance_id || '',
-          action.emp_id || '',
-          action.wc_name || '',
-          action.start_utc || '',
-        ].join(':');
-      });
-      return [section.id, section.count, rows.join(',')].join('|');
-    }).join('||');
-    return errors + '::' + sections;
+    var rows = (snapshot.queue || []).map(function (row) {
+      var action = row.action || {};
+      var key = row.row_key || [
+        action.type || '',
+        action.request_id || '',
+        action.attendance_id || '',
+        action.emp_id || '',
+        action.wc_name || '',
+        action.start_utc || '',
+      ].join(':');
+      return (row.item_key || '') + '#' + key;
+    });
+    return [errors, snapshot.total, rows.join(',')].join('::');
   }
 
   function hasInlineWorkInProgress() {
@@ -250,17 +241,10 @@
       btn.classList.toggle('active', btn.dataset.focusMode === currentFocus);
     });
     var visibleRows = 0;
-    document.querySelectorAll('.inbox-section').forEach(function (section) {
-      var visibleInSection = 0;
-      section.querySelectorAll('.exception-row').forEach(function (row) {
-        var visible = rowMatchesFocus(row, currentFocus);
-        row.hidden = !visible;
-        if (visible) {
-          visibleRows += 1;
-          visibleInSection += 1;
-        }
-      });
-      section.classList.toggle('is-filter-hidden', currentFocus !== 'all' && visibleInSection === 0);
+    document.querySelectorAll('.exception-row').forEach(function (row) {
+      var visible = rowMatchesFocus(row, currentFocus);
+      row.hidden = !visible;
+      if (visible) visibleRows += 1;
     });
     updateFocusEmpty(visibleRows);
     try { sessionStorage.setItem('exceptions_focus', currentFocus); } catch (e) {}
@@ -271,7 +255,7 @@
     fetchCompat('/api/exceptions', {headers: {'Accept': 'application/json'}})
       .then(function (r) { return r.json(); })
       .then(function (snapshot) {
-        if (!snapshot || !snapshot.sections) return;
+        if (!snapshot || !snapshot.queue) return;
         if (snapshotSignature(snapshot) === currentSnapshotSignature()) return;
         if (hasInlineWorkInProgress()) {
           showRefreshNotice();
@@ -280,6 +264,187 @@
         }
       })
       .catch(function () {});
+  }
+
+  // ---- Archive --------------------------------------------------------------
+  var archiveLoaded = false;
+  var archiveNextBefore = null;
+  var archiveKnownActors = {};
+
+  function archiveEls() {
+    return {
+      toggle: document.querySelector('[data-archive-toggle]'),
+      body: document.querySelector('[data-archive-body]'),
+      groups: document.querySelector('[data-archive-groups]'),
+      empty: document.querySelector('[data-archive-empty]'),
+      more: document.querySelector('[data-archive-more]'),
+      count: document.querySelector('[data-archive-count]'),
+      actor: document.querySelector('[data-archive-actor]'),
+      hideAuto: document.querySelector('[data-archive-hide-auto]'),
+    };
+  }
+
+  function archiveQuery(extra) {
+    var els = archiveEls();
+    var params = [];
+    if (els.hideAuto && !els.hideAuto.checked) params.push('include_auto=true');
+    var actor = els.actor ? els.actor.value : '';
+    if (actor) params.push('actor=' + encodeURIComponent(actor));
+    if (extra) params.push(extra);
+    return '/api/exceptions/archive' + (params.length ? '?' + params.join('&') : '');
+  }
+
+  function glyphFor(action) {
+    if (action === 'deny') return {text: '✗', cls: 'bad'};
+    if (action === 'dismiss') return {text: '–', cls: 'muted'};
+    if (action === 'auto_resolved') return {text: '↻', cls: 'muted'};
+    return {text: '✓', cls: 'ok'};
+  }
+
+  function defaultOutcome(action) {
+    if (action === 'approve') return 'Approved';
+    if (action === 'deny') return 'Denied';
+    if (action === 'dismiss') return 'Dismissed';
+    if (action === 'correct') return 'Corrected';
+    if (action === 'assign') return 'Assigned';
+    if (action === 'absent') return 'Marked absent';
+    if (action === 'auto_resolved') return 'Auto-resolved';
+    return 'Resolved';
+  }
+
+  function rememberActor(event) {
+    if (event.auto || !event.actor_upn) return;
+    if (archiveKnownActors[event.actor_upn]) return;
+    archiveKnownActors[event.actor_upn] = event.actor_name || event.actor_upn;
+  }
+
+  function syncActorOptions() {
+    var els = archiveEls();
+    if (!els.actor) return;
+    var current = els.actor.value;
+    var upns = Object.keys(archiveKnownActors).sort(function (a, b) {
+      return archiveKnownActors[a].localeCompare(archiveKnownActors[b]);
+    });
+    var html = '<option value="">Everyone</option>';
+    upns.forEach(function (upn) {
+      var selected = upn === current ? ' selected' : '';
+      html += '<option value="' + upn + '"' + selected + '>' + archiveKnownActors[upn] + '</option>';
+    });
+    els.actor.innerHTML = html;
+  }
+
+  function renderArchiveEvent(event) {
+    var row = document.createElement('div');
+    row.className = 'archive-event' + (event.auto ? ' is-auto' : '');
+
+    var glyph = glyphFor(event.action);
+    var glyphEl = document.createElement('span');
+    glyphEl.className = 'archive-glyph ' + glyph.cls;
+    glyphEl.setAttribute('aria-hidden', 'true');
+    glyphEl.textContent = glyph.text;
+    row.appendChild(glyphEl);
+
+    var main = document.createElement('div');
+    main.className = 'archive-event-main';
+
+    var head = document.createElement('div');
+    head.className = 'archive-event-head';
+    if (event.person_name) {
+      var name = document.createElement('span');
+      name.className = 'archive-event-name';
+      name.textContent = event.person_name;
+      head.appendChild(name);
+    }
+    if (event.category_label) {
+      var tag = document.createElement('span');
+      tag.className = 'category-tag tone-info';
+      tag.textContent = event.category_label;
+      head.appendChild(tag);
+    }
+    main.appendChild(head);
+
+    var outcome = document.createElement('div');
+    outcome.className = 'archive-event-outcome';
+    var by = event.auto ? 'auto-resolved' : (event.actor_name || event.actor_upn || 'unknown');
+    var text = (event.outcome || defaultOutcome(event.action)) + ' by ' + by;
+    if (event.before_value) text += ' (was ' + event.before_value + ')';
+    outcome.textContent = text;
+    if (event.reason) {
+      var reason = document.createElement('span');
+      reason.className = 'archive-event-reason';
+      reason.textContent = ' “' + event.reason + '”';
+      outcome.appendChild(reason);
+    }
+    main.appendChild(outcome);
+    row.appendChild(main);
+
+    var time = document.createElement('span');
+    time.className = 'archive-event-time';
+    time.textContent = event.time_label || '';
+    row.appendChild(time);
+    return row;
+  }
+
+  function renderArchiveGroups(groups, append) {
+    var els = archiveEls();
+    if (!els.groups) return;
+    if (!append) els.groups.innerHTML = '';
+    groups.forEach(function (group) {
+      var dayEl = document.createElement('div');
+      dayEl.className = 'archive-day';
+      var label = document.createElement('p');
+      label.className = 'archive-day-label';
+      label.textContent = group.label || group.day;
+      dayEl.appendChild(label);
+      var list = document.createElement('div');
+      list.className = 'archive-list';
+      (group.events || []).forEach(function (event) {
+        rememberActor(event);
+        list.appendChild(renderArchiveEvent(event));
+      });
+      dayEl.appendChild(list);
+      els.groups.appendChild(dayEl);
+    });
+    syncActorOptions();
+    var hasAny = !!els.groups.querySelector('.archive-event');
+    if (els.empty) els.empty.hidden = hasAny;
+  }
+
+  function fetchArchive(before, append) {
+    var els = archiveEls();
+    return fetchCompat(archiveQuery(before ? 'before=' + encodeURIComponent(before) : ''), {
+      headers: {'Accept': 'application/json'},
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data) return;
+        archiveNextBefore = data.next_before || null;
+        renderArchiveGroups(data.groups || [], append);
+        if (els.more) els.more.hidden = !archiveNextBefore;
+      })
+      .catch(function () {});
+  }
+
+  function reloadArchive() {
+    archiveKnownActors = {};
+    var els = archiveEls();
+    if (els.actor && els.actor.value && els.actor.value !== '') {
+      // keep the selected actor visible even if it has no events this fetch
+      archiveKnownActors[els.actor.value] = els.actor.options[els.actor.selectedIndex].textContent;
+    }
+    fetchArchive(null, false);
+  }
+
+  function toggleArchive() {
+    var els = archiveEls();
+    if (!els.toggle || !els.body) return;
+    var open = els.body.hidden;
+    els.body.hidden = !open;
+    els.toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && !archiveLoaded) {
+      archiveLoaded = true;
+      fetchArchive(null, false);
+    }
   }
 
   document.addEventListener('click', function (event) {
@@ -297,6 +462,20 @@
       return;
     }
 
+    var archiveToggle = event.target.closest('[data-archive-toggle]');
+    if (archiveToggle) {
+      event.preventDefault();
+      toggleArchive();
+      return;
+    }
+
+    var archiveMore = event.target.closest('[data-archive-more]');
+    if (archiveMore) {
+      event.preventDefault();
+      if (archiveNextBefore) fetchArchive(archiveNextBefore, true);
+      return;
+    }
+
     var btn = event.target.closest('[data-alert-open]');
     if (btn) {
       event.preventDefault();
@@ -308,7 +487,7 @@
     if (!rowBtn) return;
     var row = rowBtn.closest('.exception-row');
     if (!row) return;
-    var personName = row.dataset.personName || row.querySelector('th').textContent.trim();
+    var personName = row.dataset.personName || (row.querySelector('.exception-name') ? row.querySelector('.exception-name').textContent.trim() : '');
     var attendanceId = asInt(row.dataset.attendanceId);
     var empId = row.dataset.empId || '';
 
@@ -505,16 +684,23 @@
 
   document.addEventListener('change', function (event) {
     var preset = event.target.closest('.js-reason-preset');
-    if (!preset) return;
-    var row = preset.closest('.exception-row');
-    var input = row && row.querySelector('.js-reason-input');
-    if (!input) return;
-    if (preset.value) input.value = preset.value;
-    input.focus();
+    if (preset) {
+      var row = preset.closest('.exception-row');
+      var input = row && row.querySelector('.js-reason-input');
+      if (!input) return;
+      if (preset.value) input.value = preset.value;
+      input.focus();
+      return;
+    }
+
+    if (event.target.closest('[data-archive-actor]') || event.target.closest('[data-archive-hide-auto]')) {
+      reloadArchive();
+    }
   });
 
   try { currentFocus = sessionStorage.getItem('exceptions_focus') || 'all'; } catch (e) {}
   applyFocus(currentFocus);
+  updateQueueEmpty();
   window.setInterval(pollFreshness, POLL_MS);
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) pollFreshness();
