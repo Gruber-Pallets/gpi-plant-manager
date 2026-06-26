@@ -732,6 +732,22 @@ def set_attendance_wc(attendance_id: int, wc_name: str | None) -> None:
     execute("hr.attendance", "write", [attendance_id], payload)
 
 
+def clear_attendance_wc(attendance_id: int) -> None:
+    """Clear the kiosk WC (and resolved department) on an hr.attendance — the
+    reverse of set_attendance_wc, used by inbox undo of a missing-WC assign.
+    Writes the field(s) to False directly (set_attendance_wc guards against a
+    falsy value and would no-op) so the missing-WC warmer re-flags the row.
+    No-op when the WC field isn't configured."""
+    wc_field = _kiosk_wc_field()
+    if not wc_field:
+        return
+    payload: dict[str, Any] = {wc_field: False}
+    dept_field = _kiosk_department_field()
+    if dept_field:
+        payload[dept_field] = False
+    execute("hr.attendance", "write", [attendance_id], payload)
+
+
 def _overtime_status_for_attendance(attendance_id: int) -> str:
     rows = execute(
         "hr.attendance", "search_read",

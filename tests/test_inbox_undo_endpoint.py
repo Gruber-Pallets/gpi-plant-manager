@@ -35,7 +35,7 @@ def test_undo_assign_clears_wc_then_unresolves(monkeypatch):
     from zira_dashboard import missing_wc, odoo_client
     calls = {}
     monkeypatch.setattr(inbox_log, "get_event", lambda eid: _ev(id=eid, action="assign", after_value="Saw 1"))
-    monkeypatch.setattr(odoo_client, "set_attendance_wc", lambda att, wc: calls.setdefault("cleared", (att, wc)))
+    monkeypatch.setattr(odoo_client, "clear_attendance_wc", lambda att: calls.setdefault("cleared", att))
     monkeypatch.setattr(missing_wc, "unresolve", lambda att: calls.setdefault("unresolve", att))
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: 99)
     monkeypatch.setattr(inbox_log, "mark_undone", lambda e, u: None)
@@ -43,7 +43,7 @@ def test_undo_assign_clears_wc_then_unresolves(monkeypatch):
 
     resp = exceptions_route._undo_sync(7, None, None)
     assert resp.status_code == 200
-    assert calls["cleared"] == (48213, None)
+    assert calls["cleared"] == 48213
     assert calls["unresolve"] == 48213
 
 
@@ -74,3 +74,17 @@ def test_undo_rejects_already_undone(monkeypatch):
                         lambda eid: _ev(id=eid, undone_at=exceptions_route.plant_day.now()))
     resp = exceptions_route._undo_sync(7, None, None)
     assert resp.status_code == 409
+
+
+def test_clear_attendance_wc_writes_false(monkeypatch):
+    """The real write semantics: clearing must write the WC field to False
+    (the bug this guards against was set_attendance_wc(.., None) no-opping)."""
+    from zira_dashboard import odoo_client
+
+    calls = {}
+    monkeypatch.setattr(odoo_client, "_kiosk_wc_field", lambda: "x_wc")
+    monkeypatch.setattr(odoo_client, "_kiosk_department_field", lambda: None)
+    monkeypatch.setattr(odoo_client, "execute",
+                        lambda *a, **k: calls.setdefault("args", a))
+    odoo_client.clear_attendance_wc(48213)
+    assert calls["args"] == ("hr.attendance", "write", [48213], {"x_wc": False})

@@ -472,7 +472,7 @@ def _reverse_event(ev: dict[str, Any]) -> None:
     if kind == "missing_wc":
         att_id = int(key.split(":")[1])
         if action == "assign":
-            odoo_client.set_attendance_wc(att_id, None)
+            odoo_client.clear_attendance_wc(att_id)
         missing_wc.unresolve(att_id)
     elif kind == "late":
         _, emp_id, day = key.split(":", 2)
