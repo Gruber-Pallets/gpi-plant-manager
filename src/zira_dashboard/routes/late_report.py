@@ -75,7 +75,7 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
         )
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    inbox_log.log_event_safe(
+    eid = inbox_log.log_event_safe(
         item_kind="late",
         item_key=inbox_keys.late(emp_id, today.isoformat()),
         person_name=name,
@@ -89,7 +89,7 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
         reversible=True,
     )
     _bust_caches()
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "event_id": eid})
 
 
 @router.post("/api/late-report/declare-absent")
@@ -127,7 +127,7 @@ def _save_late_arrival_sync(body: dict, actor_upn=None, actor_name=None) -> JSON
         late_report.save_late_arrival(today, emp_id, name, reason=reason)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    inbox_log.log_event_safe(
+    eid = inbox_log.log_event_safe(
         item_kind="late",
         item_key=inbox_keys.late(emp_id, today.isoformat()),
         person_name=name,
@@ -138,10 +138,10 @@ def _save_late_arrival_sync(body: dict, actor_upn=None, actor_name=None) -> JSON
         actor_upn=actor_upn,
         actor_name=actor_name,
         source="inbox",
-        reversible=False,
+        reversible=True,
     )
     _bust_caches()
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "event_id": eid})
 
 
 @router.post("/api/late-report/save-late-arrival")

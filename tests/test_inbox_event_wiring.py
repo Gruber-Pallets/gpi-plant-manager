@@ -4,6 +4,7 @@ Collaborators (Odoo, suppression-table writes, inbox_log itself) are
 monkeypatched, so these need no Postgres. They assert each handler calls
 inbox_log.log_event_safe with the right event shape + actor.
 """
+import json
 from datetime import date, datetime, timezone
 
 from zira_dashboard import inbox_log
@@ -45,6 +46,7 @@ def test_time_off_approve_records_inbox_event(monkeypatch):
     assert e["action"] == "approve"
     assert e["actor_upn"] == "dale@gruberpallets.com"
     assert e["person_name"] == "Maria Delgado"
+    assert events[0]["reversible"] is False
 
 
 def test_time_off_deny_records_inbox_event(monkeypatch):
@@ -70,6 +72,7 @@ def test_time_off_deny_records_inbox_event(monkeypatch):
     assert e["item_key"] == "time_off:56"
     assert e["action"] == "deny"
     assert e["reason"] == "No coverage"
+    assert events[0]["reversible"] is False
 
 
 def test_missing_wc_assign_records_inbox_event(monkeypatch):
@@ -92,6 +95,8 @@ def test_missing_wc_assign_records_inbox_event(monkeypatch):
     assert e["action"] == "assign"
     assert e["after_value"] == wc_name
     assert e["actor_name"] == "Dale Gruber"
+    assert json.loads(resp.body)["event_id"] == 1
+    assert events[0]["reversible"] is True
 
 
 def test_missing_wc_dismiss_records_inbox_event(monkeypatch):
@@ -110,6 +115,8 @@ def test_missing_wc_dismiss_records_inbox_event(monkeypatch):
     assert e["item_kind"] == "missing_wc"
     assert e["item_key"] == "missing_wc:999100"
     assert e["action"] == "dismiss"
+    assert json.loads(resp.body)["event_id"] == 1
+    assert events[0]["reversible"] is True
 
 
 def test_missed_punch_correct_records_inbox_event(monkeypatch):
@@ -162,6 +169,8 @@ def test_late_declare_absent_records_inbox_event(monkeypatch):
     assert e["reason"] == "Sick"
     assert e["person_name"] == "Tomas Vela"
     assert e["item_key"].startswith("late:42:")
+    assert json.loads(resp.body)["event_id"] == 1
+    assert events[0]["reversible"] is True
 
 
 def test_late_save_reason_records_inbox_event(monkeypatch):
@@ -181,6 +190,8 @@ def test_late_save_reason_records_inbox_event(monkeypatch):
     assert e["item_kind"] == "late"
     assert e["action"] == "reason"
     assert e["reason"] == "Overslept"
+    assert json.loads(resp.body)["event_id"] == 1
+    assert events[0]["reversible"] is True
 
 
 def test_late_snooze_records_no_inbox_event(monkeypatch):

@@ -572,7 +572,7 @@ async def staffing_attribute(request: Request):
                 actor_upn=actor_upn,
                 actor_name=actor_name,
                 source="inbox",
-                reversible=True,
+                reversible=False,
             )
         invalidate_today_cache()
         _bust_assignments_todo_cache()

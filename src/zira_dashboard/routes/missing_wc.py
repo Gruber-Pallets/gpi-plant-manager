@@ -48,7 +48,7 @@ def _assign_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     missing_wc.resolve(att_id, "assigned", name=name, wc_name=wc_name)
-    inbox_log.log_event_safe(
+    eid = inbox_log.log_event_safe(
         item_kind="missing_wc",
         item_key=inbox_keys.missing_wc(att_id),
         person_name=name,
@@ -61,7 +61,7 @@ def _assign_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
         source="inbox",
         reversible=True,
     )
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "event_id": eid})
 
 
 @router.post("/missing-wc/assign")
@@ -86,7 +86,7 @@ def _dismiss_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "bad attendance_id"}, status_code=400)
     name = (str(body.get("name") or "").strip() or None)
     missing_wc.resolve(att_id, "dismissed", name=name)
-    inbox_log.log_event_safe(
+    eid = inbox_log.log_event_safe(
         item_kind="missing_wc",
         item_key=inbox_keys.missing_wc(att_id),
         person_name=name,
@@ -98,7 +98,7 @@ def _dismiss_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
         source="inbox",
         reversible=True,
     )
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "event_id": eid})
 
 
 @router.post("/missing-wc/dismiss")

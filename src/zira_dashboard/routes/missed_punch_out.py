@@ -90,6 +90,6 @@ def _correct_sync(body: dict, actor_upn=None, actor_name=None):
         actor_upn=actor_upn,
         actor_name=actor_name,
         source="inbox",
-        reversible=True,
+        reversible=False,
     )
     return JSONResponse({"ok": True})

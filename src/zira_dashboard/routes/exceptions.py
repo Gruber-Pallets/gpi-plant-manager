@@ -320,7 +320,7 @@ def _approve_time_off_sync(
         actor_upn=actor_upn,
         actor_name=actor_name,
         source=source,
-        reversible=True,
+        reversible=False,
     )
     return JSONResponse({
         "ok": True,
@@ -420,7 +420,7 @@ def _refuse_time_off_sync(
         actor_upn=actor_upn,
         actor_name=actor_name,
         source=source,
-        reversible=True,
+        reversible=False,
     )
     return JSONResponse({
         "ok": True,
