@@ -19,7 +19,7 @@ import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import absence_sync, db, inbox_log, late_report
+from .. import absence_sync, db, inbox_keys, inbox_log, late_report
 from ..plant_day import today as plant_today
 
 router = APIRouter()
@@ -77,7 +77,7 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     inbox_log.log_event_safe(
         item_kind="late",
-        item_key=f"late:{emp_id}:{today.isoformat()}",
+        item_key=inbox_keys.late(emp_id, today.isoformat()),
         person_name=name,
         category_label="Late",
         action="absent",
@@ -129,7 +129,7 @@ def _save_late_arrival_sync(body: dict, actor_upn=None, actor_name=None) -> JSON
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     inbox_log.log_event_safe(
         item_kind="late",
-        item_key=f"late:{emp_id}:{today.isoformat()}",
+        item_key=inbox_keys.late(emp_id, today.isoformat()),
         person_name=name,
         category_label="Late",
         action="reason",

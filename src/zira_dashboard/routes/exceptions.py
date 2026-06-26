@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from .. import exception_inbox, inbox_log, plant_day, time_off_audit
+from .. import exception_inbox, inbox_keys, inbox_log, plant_day, time_off_audit
 from ..deps import templates
 
 router = APIRouter()
@@ -242,7 +242,7 @@ def _approve_time_off_sync(
     )
     inbox_log.log_event_safe(
         item_kind="time_off",
-        item_key=f"time_off:{row['id']}",
+        item_key=inbox_keys.time_off(row["id"]),
         person_name=row.get("person_name"),
         category_label="Time off",
         action="approve",
@@ -342,7 +342,7 @@ def _refuse_time_off_sync(
     )
     inbox_log.log_event_safe(
         item_kind="time_off",
-        item_key=f"time_off:{row['id']}",
+        item_key=inbox_keys.time_off(row["id"]),
         person_name=row.get("person_name"),
         category_label="Time off",
         action="deny",

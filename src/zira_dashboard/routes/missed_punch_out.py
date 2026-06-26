@@ -48,7 +48,7 @@ async def missed_punch_out_correct(request: Request):
 
 
 def _correct_sync(body: dict, actor_upn=None, actor_name=None):
-    from .. import inbox_log, missed_punch_out, odoo_client
+    from .. import inbox_keys, inbox_log, missed_punch_out, odoo_client
     from ..shift_config import SITE_TZ
     try:
         att_id = int(body.get("attendance_id"))
@@ -80,7 +80,7 @@ def _correct_sync(body: dict, actor_upn=None, actor_name=None):
     missed_punch_out.correct(att_id, corrected)
     inbox_log.log_event_safe(
         item_kind="missed_punch_out",
-        item_key=f"missed_punch_out:{att_id}",
+        item_key=inbox_keys.missed_punch_out(att_id),
         person_name=row.get("name"),
         category_label="Missed punch out",
         action="correct",

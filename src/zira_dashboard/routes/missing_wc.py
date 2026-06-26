@@ -34,7 +34,7 @@ def missing_wc_json():
 def _assign_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     """Blocking half of /missing-wc/assign (Odoo XML-RPC + Postgres write);
     runs in a worker thread via asyncio.to_thread."""
-    from .. import inbox_log, missing_wc, odoo_client, staffing
+    from .. import inbox_keys, inbox_log, missing_wc, odoo_client, staffing
     try:
         att_id = int(body.get("attendance_id"))
     except (TypeError, ValueError):
@@ -50,7 +50,7 @@ def _assign_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     missing_wc.resolve(att_id, "assigned", name=name, wc_name=wc_name)
     inbox_log.log_event_safe(
         item_kind="missing_wc",
-        item_key=f"missing_wc:{att_id}",
+        item_key=inbox_keys.missing_wc(att_id),
         person_name=name,
         category_label="Missing WC",
         action="assign",
@@ -79,7 +79,7 @@ async def missing_wc_assign(request: Request):
 def _dismiss_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     """Blocking half of /missing-wc/dismiss (Postgres write); runs in a
     worker thread via asyncio.to_thread."""
-    from .. import inbox_log, missing_wc
+    from .. import inbox_keys, inbox_log, missing_wc
     try:
         att_id = int(body.get("attendance_id"))
     except (TypeError, ValueError):
@@ -88,7 +88,7 @@ def _dismiss_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     missing_wc.resolve(att_id, "dismissed", name=name)
     inbox_log.log_event_safe(
         item_kind="missing_wc",
-        item_key=f"missing_wc:{att_id}",
+        item_key=inbox_keys.missing_wc(att_id),
         person_name=name,
         category_label="Missing WC",
         action="dismiss",
