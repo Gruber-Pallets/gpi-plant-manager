@@ -934,3 +934,10 @@ def test_load_time_off_request_selects_name_and_type(monkeypatch):
     assert row["leave_type"] == "PTO"
     assert "COALESCE(p.name" in captured["sql"]
     assert "leave_types_cache" in captured["sql"]
+
+
+def test_exceptions_js_has_undo_affordance():
+    import pathlib
+    js = pathlib.Path("src/zira_dashboard/static/exceptions.js").read_text()
+    assert "/api/exceptions/undo/" in js
+    assert "data-undo" in js  # the Undo control rendered in the row status

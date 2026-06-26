@@ -122,19 +122,54 @@
     updateQueueEmpty();
   }
 
-  function resolveRow(row, label) {
-    rowStatus(row, label || 'Done', false);
+  var UNDO_MS = 5000;
+
+  function undoRow(row, eventId) {
     setBusy(row, true);
-    row.classList.add('is-resolved');
+    rowStatus(row, 'Undoing...', false);
+    postJson('/api/exceptions/undo/' + encodeURIComponent(eventId), {})
+      .then(function (resp) {
+        if (resp && resp.ok) {
+          window.location.reload();
+        } else {
+          rowStatus(row, (resp && resp.error) || 'Undo failed.', true);
+        }
+      })
+      .catch(function () { rowStatus(row, 'Network error.', true); });
+  }
+
+  function finalizeResolved(row) {
     bumpTotal(-1);
     bumpUrgentInline(row, -1);
     bumpFocusCounts(row, -1);
     refreshSharedBadge(row);
     refreshInboxSummary();
-    setTimeout(function () {
-      removeResolvedRow(row);
-      applyFocus(currentFocus);
-    }, 450);
+    removeResolvedRow(row);
+    applyFocus(currentFocus);
+  }
+
+  function resolveRow(row, label, eventId) {
+    setBusy(row, true);
+    row.classList.add('is-resolved');
+    var status = row.querySelector('.row-status');
+    if (eventId && status) {
+      status.hidden = false;
+      status.textContent = (label || 'Done') + ' · ';
+      var undo = document.createElement('button');
+      undo.type = 'button';
+      undo.className = 'undo-link';
+      undo.setAttribute('data-undo', String(eventId));
+      undo.textContent = 'Undo';
+      status.appendChild(undo);
+      var timer = setTimeout(function () { finalizeResolved(row); }, UNDO_MS);
+      undo.addEventListener('click', function () {
+        clearTimeout(timer);
+        undoRow(row, eventId);
+      });
+    } else {
+      rowStatus(row, label || 'Done', false);
+      setTimeout(function () { finalizeResolved(row); }, 450);
+    }
   }
 
   function failRow(row, label) {
@@ -513,7 +548,7 @@
         source: 'inbox',
       }).then(function (resp) {
         if (resp && resp.ok) {
-          resolveRow(row, 'Assigned');
+          resolveRow(row, 'Assigned', resp.event_id);
           if (window.gpiTransferToast) window.gpiTransferToast(resp.transfer);
         } else {
           failRow(row, (resp && resp.error) || 'Assignment failed.');
@@ -550,7 +585,7 @@
         name: personName,
         reason: absentReason,
       }).then(function (resp) {
-        if (resp && resp.ok) resolveRow(row, 'Marked absent');
+        if (resp && resp.ok) resolveRow(row, 'Marked absent', resp.event_id);
         else failRow(row, (resp && resp.error) || 'Save failed.');
       }).catch(function () { failRow(row, 'Network error.'); });
       return;
@@ -566,7 +601,7 @@
         name: personName,
         reason: lateReason,
       }).then(function (resp) {
-        if (resp && resp.ok) resolveRow(row, 'Reason saved');
+        if (resp && resp.ok) resolveRow(row, 'Reason saved', resp.event_id);
         else failRow(row, (resp && resp.error) || 'Save failed.');
       }).catch(function () { failRow(row, 'Network error.'); });
       return;
@@ -585,7 +620,7 @@
         wc_name: wc,
         name: personName,
       }).then(function (resp) {
-        if (resp && resp.ok) resolveRow(row, 'Assigned');
+        if (resp && resp.ok) resolveRow(row, 'Assigned', resp.event_id);
         else failRow(row, (resp && resp.error) || 'Assign failed.');
       }).catch(function () { failRow(row, 'Network error.'); });
       return;
@@ -602,7 +637,7 @@
         attendance_id: attendanceId,
         name: personName,
       }).then(function (resp) {
-        if (resp && resp.ok) resolveRow(row, 'Dismissed');
+        if (resp && resp.ok) resolveRow(row, 'Dismissed', resp.event_id);
         else failRow(row, (resp && resp.error) || 'Dismiss failed.');
       }).catch(function () { failRow(row, 'Network error.'); });
       return;

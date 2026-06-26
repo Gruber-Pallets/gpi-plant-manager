@@ -384,6 +384,16 @@ header.app {
   font-weight: 800;
   text-align: right;
 }
+.undo-link {
+  border: 0;
+  background: transparent;
+  color: var(--info);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  padding: 0;
+}
 .exception-row.is-resolved {
   opacity: 0.55;
   transition: opacity 0.18s ease;
