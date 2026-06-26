@@ -49,3 +49,33 @@ def test_archive_filters_by_actor():
     rows = [r for r in inbox_log.archive(actor_upn="maria@gruberpallets.com", limit=500)
             if r["item_key"].startswith(KP)]
     assert {r["item_key"] for r in rows} == {KP + "3"}
+
+
+from fastapi.testclient import TestClient
+
+from zira_dashboard.app import app
+
+_client = TestClient(app)
+
+
+def test_archive_endpoint_groups_by_day_and_hides_auto():
+    _seed()
+    r = _client.get("/api/exceptions/archive")
+    assert r.status_code == 200
+    body = r.json()
+    assert "groups" in body and "next_before" in body
+    events = [e for g in body["groups"] for e in g["events"]
+              if str(e.get("category_label") or "")]
+    seen = {(e["category_label"], e["action"]) for e in events}
+    assert ("Time off", "approve") in seen
+    assert ("Missing WC", "assign") in seen
+    assert all(e["action"] != "auto_resolved" for e in events)
+    g0 = body["groups"][0]
+    assert g0["label"] and g0["events"][0]["time_label"]
+
+
+def test_archive_endpoint_include_auto_flag():
+    _seed()
+    r = _client.get("/api/exceptions/archive?include_auto=true")
+    actions = {e["action"] for g in r.json()["groups"] for e in g["events"]}
+    assert "auto_resolved" in actions

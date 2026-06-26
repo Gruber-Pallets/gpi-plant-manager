@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -99,6 +99,72 @@ def _decision_time_label(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(plant_day.SITE_TZ).strftime("%-m/%-d %-I:%M %p")
+
+
+def _group_archive_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group newest-first events into plant-local day buckets for the archive."""
+    today = plant_day.today()
+    yesterday = today - timedelta(days=1)
+    groups: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for r in rows:
+        resolved = r["resolved_at"]
+        if resolved.tzinfo is None:
+            resolved = resolved.replace(tzinfo=timezone.utc)
+        local = resolved.astimezone(plant_day.SITE_TZ)
+        day = local.date()
+        if day == today:
+            label = "Today"
+        elif day == yesterday:
+            label = "Yesterday"
+        else:
+            label = local.strftime("%A, %b %-d")
+        if current is None or current["day"] != day.isoformat():
+            current = {"day": day.isoformat(), "label": label, "events": []}
+            groups.append(current)
+        current["events"].append({
+            "id": r["id"],
+            "item_kind": r.get("item_kind"),
+            "item_key": r.get("item_key"),
+            "person_name": r.get("person_name"),
+            "category_label": r.get("category_label"),
+            "action": r.get("action"),
+            "outcome": r.get("outcome"),
+            "before_value": r.get("before_value"),
+            "after_value": r.get("after_value"),
+            "reason": r.get("reason"),
+            "actor_name": r.get("actor_name"),
+            "actor_upn": r.get("actor_upn"),
+            "auto": r.get("actor_upn") is None,
+            "time_label": local.strftime("%-I:%M %p"),
+        })
+    return groups
+
+
+@router.get("/api/exceptions/archive")
+def exceptions_archive_json(
+    before: str | None = None,
+    actor: str | None = None,
+    include_auto: bool = False,
+    limit: int = 200,
+):
+    before_dt = None
+    if before:
+        try:
+            before_dt = datetime.fromisoformat(before)
+        except ValueError:
+            return _json_error("bad 'before' cursor", 400)
+    limit = max(1, min(int(limit), 500))
+    rows = inbox_log.archive(
+        before=before_dt, actor_upn=actor, include_auto=include_auto, limit=limit
+    )
+    next_before = (
+        rows[-1]["resolved_at"].isoformat() if len(rows) == limit and rows else None
+    )
+    return JSONResponse({
+        "groups": _group_archive_by_day(rows),
+        "next_before": next_before,
+    })
 
 
 def _hour_value(value: Any) -> float | None:
