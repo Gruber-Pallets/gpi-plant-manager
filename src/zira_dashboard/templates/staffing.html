@@ -323,6 +323,7 @@
         <div title="{{ hour }}:00 — {{ (frac * 100)|round|int }}% of peak" style="flex:1;background:#f5c518;height:{{ (frac * 100)|round|int }}%;min-height:2px"></div>
         {% endfor %}
       </div>
+      {% if forklift_advisor.recommended %}
       <div style="font-size:14px;margin:2px 0"><strong>Recommend {{ forklift_advisor.recommended }} dedicated driver{{ forklift_advisor.recommended != 1 and 's' or '' }}</strong></div>
       {% if forklift_advisor.coverage.status == 'ok' %}
       <div style="color:#137333;font-weight:600">✅ Coverage OK</div>
@@ -330,6 +331,9 @@
       <div style="color:#b54708;font-weight:600">⚠️ Short {{ forklift_advisor.coverage.gap }} — {{ forklift_advisor.coverage.dedicated }} dedicated of {{ forklift_advisor.recommended }}</div>
       {% endif %}
       <div style="opacity:.8;margin-top:2px">{{ forklift_advisor.coverage.certified }} certified scheduled{% if forklift_advisor.backup_names %} · backups: {{ forklift_advisor.backup_names|join(', ') }}{% endif %}</div>
+      {% else %}
+      <div style="opacity:.7;margin:2px 0">Recommendation builds as history accrues</div>
+      {% endif %}
       <div style="opacity:.55;margin-top:5px;font-size:11px">{% if forklift_advisor.basis == 'history' %}based on {{ forklift_advisor.n_days }} recent {{ forklift_advisor.day_label.split(' ')[0] }}s{% else %}early estimate (building history){% endif %}</div>
     </div>
     {% endif %}

@@ -21,6 +21,16 @@ def _weekly_trends_or_none() -> dict | None:
         return None
 
 
+def _today_hourly_shape_or_none() -> list | None:
+    """Today's dashboard hourly shape (hourlyClaimAvgs); None on any error."""
+    try:
+        from . import forklift_client
+        dash = forklift_client.fetch_dashboard()
+        return (dash or {}).get("hourlyClaimAvgs") or None
+    except Exception:
+        return None
+
+
 def build_advisor(target_day: date, dedicated: int, certified: int, backups: int) -> dict:
     weekday = target_day.weekday()  # Mon=0
     snaps = []
@@ -33,13 +43,21 @@ def build_advisor(target_day: date, dedicated: int, certified: int, backups: int
     if forecast.basis == "none":
         trends = _weekly_trends_or_none()
         if trends:
-            forecast = forklift_demand.bootstrap_from_trends(trends)
+            base = forklift_demand.bootstrap_from_trends(trends)
+            if base.total_calls > 0:
+                shape = _today_hourly_shape_or_none()
+                forecast = forklift_demand.forecast_from_total_and_shape(
+                    base.total_calls, shape or [])
 
     if forecast.basis == "none" or forecast.total_calls <= 0:
         return {"available": False}
 
-    recommended = forklift_demand.recommend_drivers(forecast.peak_calls)
-    coverage = forklift_demand.assess_coverage(recommended, dedicated, certified, backups)
+    if forecast.peak_calls > 0:
+        recommended = forklift_demand.recommend_drivers(forecast.peak_calls)
+        coverage = forklift_demand.assess_coverage(recommended, dedicated, certified, backups)
+    else:
+        recommended = None
+        coverage = None
     backup_names = app_settings.get_setting("forklift_overload_responders") or []
 
     # sparkline data: list of (hour, fraction-of-peak) sorted by hour

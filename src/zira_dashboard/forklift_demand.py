@@ -69,6 +69,29 @@ def bootstrap_from_trends(weekly_trends: dict, operating_days: int = 5) -> Deman
     return DemandForecast(total_calls=round(per_day, 1), basis="bootstrap", n_days=0)
 
 
+def forecast_from_total_and_shape(total_calls: float, hourly_slots: list[dict]) -> DemandForecast:
+    """Cold-start forecast: daily VOLUME from weekly trends, hourly SHAPE from
+    today's dashboard hourlyClaimAvgs (each {slot, calls}). Distributes the
+    volume across the observed shape so peak_hour/peak_calls are meaningful on
+    day one. Returns a shapeless bootstrap forecast (peak_calls=0) when there is
+    no usable shape, so callers can suppress the recommendation."""
+    slots = []
+    for s in hourly_slots or []:
+        if s.get("slot") is None:
+            continue
+        slots.append((int(s["slot"]), float(s.get("calls") or 0)))
+    shape_total = sum(c for _, c in slots)
+    if total_calls <= 0 or shape_total <= 0:
+        return DemandForecast(total_calls=round(float(total_calls), 1), basis="bootstrap")
+    by_hour = {h: round(total_calls * (c / shape_total), 1) for h, c in slots}
+    peak_hour = max(by_hour, key=by_hour.get)
+    return DemandForecast(
+        total_calls=round(float(total_calls), 1), by_hour=by_hour,
+        peak_hour=peak_hour, peak_calls=by_hour[peak_hour],
+        basis="bootstrap", n_days=0,
+    )
+
+
 def recommend_drivers(peak_calls: float, throughput_per_hour: float = DEFAULT_THROUGHPUT_PER_HOUR) -> int:
     if throughput_per_hour <= 0:
         return 1

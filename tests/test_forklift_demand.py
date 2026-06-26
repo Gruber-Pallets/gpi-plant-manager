@@ -32,6 +32,21 @@ def test_bootstrap_from_trends_divides_week_by_operating_days():
     assert f.total_calls == 410 and f.basis == "bootstrap"
 
 
+def test_forecast_from_total_and_shape_distributes_volume():
+    slots = [{"slot": 8, "calls": 30}, {"slot": 9, "calls": 70}]
+    f = fd.forecast_from_total_and_shape(450, slots)
+    assert f.basis == "bootstrap"
+    assert f.peak_hour == 9
+    assert f.peak_calls == 315.0          # 450 * 70/100
+    assert f.by_hour[8] == 135.0          # 450 * 30/100
+    assert f.total_calls == 450
+
+
+def test_forecast_from_total_and_shape_no_shape_is_shapeless():
+    f = fd.forecast_from_total_and_shape(450, [])
+    assert f.basis == "bootstrap" and f.peak_calls == 0.0 and f.total_calls == 450
+
+
 def test_recommend_drivers_ceils_peak_over_throughput():
     assert fd.recommend_drivers(peak_calls=70, throughput_per_hour=30) == 3
     assert fd.recommend_drivers(peak_calls=0, throughput_per_hour=30) == 1  # floor of 1
