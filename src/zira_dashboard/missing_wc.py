@@ -72,6 +72,15 @@ def resolve(attendance_id, action: str, name: str | None = None,
     )
 
 
+def unresolve(attendance_id) -> None:
+    """Drop a suppression row so the attendance re-appears in the alert (undo)."""
+    from . import db
+    db.execute(
+        "DELETE FROM missing_wc_resolved WHERE attendance_id = %s",
+        (int(attendance_id),),
+    )
+
+
 def resolved_ids() -> set[int]:
     """Suppressed attendance ids. The snapshot only covers the last 14 days,
     so older resolutions are irrelevant — the filter keeps this 60s badge-poll

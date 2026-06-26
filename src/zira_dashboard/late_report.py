@@ -62,6 +62,13 @@ def undo_absent(day, emp_id: str) -> None:
     )
 
 
+def undo_late_arrival(day, emp_id: str) -> None:
+    db.execute(
+        "DELETE FROM late_arrivals WHERE day = %s AND emp_id = %s",
+        (day, str(emp_id)),
+    )
+
+
 def absences_for_day(day) -> list[dict]:
     """Return list of {emp_id, name, declared_at} for declared absences.
 

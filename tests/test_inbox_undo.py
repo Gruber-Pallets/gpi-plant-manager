@@ -41,3 +41,24 @@ def test_get_event_and_mark_undone():
 
 def test_get_event_missing_returns_none():
     assert inbox_log.get_event(-1) is None
+
+
+def test_missing_wc_unresolve_removes_suppression():
+    from zira_dashboard import missing_wc
+    ATT = 999700
+    db.execute("DELETE FROM missing_wc_resolved WHERE attendance_id = %s", (ATT,))
+    missing_wc.resolve(ATT, "dismissed", name="Maria")
+    assert ATT in missing_wc.resolved_ids()
+    missing_wc.unresolve(ATT)
+    assert ATT not in missing_wc.resolved_ids()
+
+
+def test_undo_late_arrival_deletes_row():
+    from zira_dashboard import late_report
+    from datetime import date
+    DAY, EMP = date(2026, 6, 26), "999801"
+    db.execute("DELETE FROM late_arrivals WHERE day = %s AND emp_id = %s", (DAY, EMP))
+    late_report.save_late_arrival(DAY, EMP, "Test Person", reason="Sick")
+    assert db.query("SELECT 1 FROM late_arrivals WHERE day=%s AND emp_id=%s", (DAY, EMP))
+    late_report.undo_late_arrival(DAY, EMP)
+    assert not db.query("SELECT 1 FROM late_arrivals WHERE day=%s AND emp_id=%s", (DAY, EMP))
