@@ -39,7 +39,49 @@ def test_complete_kinds_skips_errored_and_truncated():
     assert "missing_wc" in complete
     assert "missed_punch_out" in complete
     assert "time_off" not in complete   # source errored
-    assert "late" not in complete       # count(9) != shown rows(2)
+    assert "late" not in complete       # rows(2) < count(9) -> truncated by a cap
+
+
+def test_complete_kinds_includes_late_despite_snoozed_padding():
+    """build_snapshot appends `snoozed` rows to the late queue, but the late
+    `count` sums only the three actionable buckets -> len(rows) > count. A
+    display cap can only ever HIDE rows (shown < count), so more-rows-than-count
+    is never truncation. late must stay fully-enumerated so a legitimate late
+    self-clear auto-resolves promptly instead of waiting for a snooze-free tick."""
+    snapshot = {
+        "source_errors": [],
+        "sections": [
+            {
+                "id": "late",
+                "count": 1,  # one actionable item (e.g. scheduled_late)
+                "rows": [
+                    {"item_key": "late:5:2026-06-26", "priority": "urgent"},  # counted
+                    {"item_key": "late:8:2026-06-26", "priority": "muted"},   # snoozed, NOT counted
+                ],
+            },
+        ],
+    }
+    assert "late" in inbox_reconcile._complete_kinds(snapshot)
+
+
+def test_complete_kinds_includes_late_when_item_key_repeats_across_buckets():
+    """All four late buckets share one item_key per employee, so an employee in
+    two buckets yields two rows but a single open-set key. len(rows) still
+    exceeds count; late must not be dropped from complete_kinds over it."""
+    snapshot = {
+        "source_errors": [],
+        "sections": [
+            {
+                "id": "late",
+                "count": 1,
+                "rows": [
+                    {"item_key": "late:5:2026-06-26", "priority": "urgent"},  # scheduled late
+                    {"item_key": "late:5:2026-06-26", "priority": "muted"},   # same emp, snoozed
+                ],
+            },
+        ],
+    }
+    assert "late" in inbox_reconcile._complete_kinds(snapshot)
 
 
 def _mirror_row(**over):

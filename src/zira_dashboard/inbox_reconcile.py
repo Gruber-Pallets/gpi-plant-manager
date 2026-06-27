@@ -62,9 +62,16 @@ def plan_reconcile(open_now: dict, prev: dict, complete_kinds: set) -> dict:
 
 
 def _complete_kinds(snapshot: dict) -> set:
-    """Item kinds fully enumerated this tick: the source did not error AND the
-    shown rows equal the true count (not truncated by a display cap). Only these
-    are safe to auto-resolve departures from."""
+    """Item kinds fully enumerated this tick: the source did not error AND no
+    display cap hid any rows. Only these are safe to auto-resolve departures from.
+
+    A display cap can only ever HIDE items, so a truncated section shows FEWER
+    rows than its true ``count`` -- the test is ``len(rows) < count``, not
+    inequality. Some sections legitimately carry MORE rows than ``count``: the
+    late queue appends ``snoozed`` rows (excluded from the actionable ``count``)
+    and reuses one ``item_key`` across buckets, so ``len(rows) > count`` there.
+    That direction is never truncation, so it must not drop the kind -- otherwise
+    a legitimate late self-clear would wait for a snooze-free tick to auto-resolve."""
     errored = {e.get("source") for e in (snapshot.get("source_errors") or [])}
     complete: set[str] = set()
     for section in snapshot.get("sections") or []:
@@ -73,8 +80,8 @@ def _complete_kinds(snapshot: dict) -> set:
             continue
         if _KIND_SOURCE.get(kind) in errored:
             continue
-        if int(section.get("count") or 0) != len(section.get("rows") or []):
-            continue  # truncated by a display cap -> not fully enumerated
+        if len(section.get("rows") or []) < int(section.get("count") or 0):
+            continue  # fewer rows than count -> truncated by a display cap
         complete.add(kind)
     return complete
 
