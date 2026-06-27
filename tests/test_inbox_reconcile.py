@@ -72,3 +72,11 @@ def test_run_once_skips_auto_when_human_resolved(monkeypatch):
 
     assert deleted == ["missing_wc:1"]  # mirror row cleared
     assert logged == []                 # but NOT logged auto_resolved (human did it)
+
+
+def test_reconcile_tick_is_registered():
+    from zira_dashboard import app
+    names = [w[0] for w in app._WARMERS]
+    assert "Inbox reconcile" in names
+    entry = next(w for w in app._WARMERS if w[0] == "Inbox reconcile")
+    assert entry[2] == 60  # seconds

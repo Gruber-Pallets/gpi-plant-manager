@@ -177,6 +177,14 @@ async def _tick_forklift():
     await asyncio.to_thread(forklift_snapshot.snapshot_today, None, today)
 
 
+async def _tick_inbox_reconcile():
+    """Log auto_resolved for inbox items that cleared themselves and refresh the
+    open-items mirror. Skips categories whose source errored this tick, so a
+    transient Odoo hiccup never mass-logs false resolutions."""
+    from . import inbox_reconcile
+    await asyncio.to_thread(inbox_reconcile.run_once)
+
+
 # (name, tick coroutine, interval seconds). `name` is used only in the
 # "warmer tick failed" log line. Intervals are unchanged from the original
 # per-loop functions this registry replaced.
@@ -194,6 +202,7 @@ _WARMERS = [
     ("missing WC", _tick_missing_wc, 180),
     ("missed punch-out", _tick_missed_punch_out, 60),
     ("forklift snapshot", _tick_forklift, 600),
+    ("Inbox reconcile", _tick_inbox_reconcile, 60),
 ]
 
 
