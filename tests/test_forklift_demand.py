@@ -53,7 +53,7 @@ def test_recommend_drivers_ceils_peak_over_throughput():
 
 
 def test_assess_coverage_ok_and_short():
-    ok = fd.assess_coverage(recommended=3, dedicated=3, certified=5, backups=3)
-    assert ok.status == "ok" and ok.gap == 0
-    short = fd.assess_coverage(recommended=4, dedicated=2, certified=5, backups=3)
+    ok = fd.assess_coverage(recommended=3, scheduled=3, backups=3)
+    assert ok.status == "ok" and ok.gap == 0 and ok.scheduled == 3
+    short = fd.assess_coverage(recommended=4, scheduled=2, backups=3)
     assert short.status == "short" and short.gap == 2

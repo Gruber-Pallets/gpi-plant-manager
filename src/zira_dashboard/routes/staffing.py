@@ -62,23 +62,19 @@ def _next_working_day(d: date) -> date:
     return d + timedelta(days=1)
 
 
-FORKLIFT_WC_NAMES = ("Loading/Jockeying", "Tablets")
-FORKLIFT_CERT = "Forklift Certified"
+FORKLIFT_TABLETS_WC = "Tablets"
 
 
-def _forklift_scheduled_counts(assignments, person_certs, overload_responders):
-    """Derive dedicated/certified/backup counts from the draft schedule.
-    - dedicated: people assigned to the forklift work centers
-    - certified: scheduled people holding the Forklift Certified cert
-    - backups: certified scheduled people flagged as overload responders
+def _forklift_scheduled_counts(assignments, overload_responders):
+    """Derive forklift-driver coverage counts from the draft schedule.
+    - tablets: people assigned to the Tablets work center (the queue drivers we
+      size against -- NOT merely certified people).
+    - backups: scheduled people flagged as overload responders (can jump in).
     """
-    dedicated = set()
-    for wc in FORKLIFT_WC_NAMES:
-        dedicated.update(assignments.get(wc, []) or [])
+    tablets = assignments.get(FORKLIFT_TABLETS_WC, []) or []
     scheduled = {n for names in assignments.values() for n in (names or [])}
-    certified = {n for n in scheduled if FORKLIFT_CERT in (person_certs.get(n) or [])}
-    backups = {n for n in certified if n in overload_responders}
-    return {"dedicated": len(dedicated), "certified": len(certified), "backups": len(backups)}
+    backups = {n for n in scheduled if n in overload_responders}
+    return {"tablets": len(set(tablets)), "backups": len(backups)}
 
 
 @router.get("/staffing", response_class=HTMLResponse)
@@ -273,10 +269,9 @@ def staffing_page(
     try:
         from .. import app_settings, forklift_advisor
         _overload = set(app_settings.get_setting("forklift_overload_responders") or [])
-        _counts = _forklift_scheduled_counts(sched.assignments, person_certs, _overload)
+        _counts = _forklift_scheduled_counts(sched.assignments, _overload)
         forklift_advisor_model = forklift_advisor.build_advisor(
-            target_day=d, dedicated=_counts["dedicated"],
-            certified=_counts["certified"], backups=_counts["backups"],
+            target_day=d, scheduled=_counts["tablets"], backups=_counts["backups"],
         )
     except Exception:
         forklift_advisor_model = {"available": False}

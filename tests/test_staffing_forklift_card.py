@@ -3,29 +3,26 @@ from datetime import date
 from zira_dashboard import forklift_advisor
 
 
-def test_scheduled_counts_helper_counts_dedicated_certified_backups():
+def test_scheduled_counts_helper_counts_tablets_and_backups():
     from zira_dashboard.routes import staffing
     assignments = {
         "Loading/Jockeying": ["Juan"],
-        "Tablets": ["Luke"],
+        "Tablets": ["Luke", "Pascual"],
         "Prosaw #4": ["Trent"],
     }
-    person_certs = {"Juan": ["Forklift Certified"], "Luke": ["Forklift Certified"],
-                    "Trent": ["Forklift Certified"], "Iban": []}
     counts = staffing._forklift_scheduled_counts(
-        assignments, person_certs, overload_responders={"Juan", "Luke", "Louie"})
-    assert counts["dedicated"] == 2          # Juan + Luke on forklift WCs
-    assert counts["certified"] == 3          # Juan, Luke, Trent scheduled & certified
-    assert counts["backups"] == 2            # Juan, Luke are overload responders
+        assignments, overload_responders={"Juan", "Luke", "Louie"})
+    assert counts["tablets"] == 2            # Luke + Pascual on the Tablets WC
+    assert counts["backups"] == 2            # Juan + Luke scheduled & overload responders
 
 
-def test_build_advisor_short_when_under_dedicated(monkeypatch):
+def test_build_advisor_short_when_under_scheduled(monkeypatch):
     monkeypatch.setattr(forklift_advisor.forklift_store, "calls_daily_for_weekday",
                         lambda wd, limit=8: [
                             {"day": date(2026, 6, 19), "total_calls": 500,
                              "by_hour": {"9": {"calls": 120}}, "by_station": {}}])
     monkeypatch.setattr(forklift_advisor.app_settings, "get_setting", lambda k: [])
-    adv = forklift_advisor.build_advisor(date(2026, 6, 26), dedicated=1, certified=2, backups=0)
+    adv = forklift_advisor.build_advisor(date(2026, 6, 26), scheduled=1, backups=0)
     assert adv["recommended"] == 4 and adv["coverage"].status == "short" and adv["coverage"].gap == 3
 
 
@@ -67,7 +64,7 @@ def test_forklift_block_renders_card_from_advisor_model():
     from zira_dashboard.deps import templates
 
     coverage = forklift_demand.assess_coverage(
-        recommended=3, dedicated=3, certified=4, backups=3)  # status == "ok"
+        recommended=3, scheduled=3, backups=3)  # status == "ok"
     model = {
         "available": True,
         "day_label": "Sat Jun 27",
@@ -91,9 +88,9 @@ def test_forklift_block_renders_card_from_advisor_model():
     # And the short-coverage branch renders the gap message.
     short_model = dict(model)
     short_model["coverage"] = forklift_demand.assess_coverage(
-        recommended=4, dedicated=1, certified=2, backups=0)  # gap == 3
+        recommended=4, scheduled=1, backups=0)  # gap == 3
     short_model["recommended"] = 4
     rendered_short = templates.env.from_string(_extract_forklift_block()).render(
         forklift_advisor=short_model)
     assert "Recommend 4 dedicated" in rendered_short
-    assert "Short 3 — 1 dedicated of 4" in rendered_short
+    assert "Short 3 — 1 on Tablets of 4" in rendered_short

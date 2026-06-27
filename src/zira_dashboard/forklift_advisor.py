@@ -1,9 +1,9 @@
 """Assemble the forklift advisor render model for the scheduler card.
 
 Reads accumulated same-weekday snapshots, predicts demand, sizes drivers, and
-assesses coverage against the scheduled dedicated/certified/backup counts the
-caller passes in. Returns a dict with available=False when there is no signal
-so the template degrades quietly.
+assesses coverage against how many people are scheduled on the Tablets work
+center (the queue drivers) — passed in by the caller. Returns a dict with
+available=False when there is no signal so the template degrades quietly.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _today_hourly_shape_or_none() -> list | None:
         return None
 
 
-def build_advisor(target_day: date, dedicated: int, certified: int, backups: int) -> dict:
+def build_advisor(target_day: date, scheduled: int, backups: int) -> dict:
     weekday = target_day.weekday()  # Mon=0
     snaps = []
     try:
@@ -54,7 +54,7 @@ def build_advisor(target_day: date, dedicated: int, certified: int, backups: int
 
     if forecast.peak_calls > 0:
         recommended = forklift_demand.recommend_drivers(forecast.peak_calls)
-        coverage = forklift_demand.assess_coverage(recommended, dedicated, certified, backups)
+        coverage = forklift_demand.assess_coverage(recommended, scheduled, backups)
     else:
         recommended = None
         coverage = None

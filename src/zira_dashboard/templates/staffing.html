@@ -328,9 +328,9 @@
       {% if forklift_advisor.coverage.status == 'ok' %}
       <div style="color:#137333;font-weight:600">✅ Coverage OK</div>
       {% else %}
-      <div style="color:#b54708;font-weight:600">⚠️ Short {{ forklift_advisor.coverage.gap }} — {{ forklift_advisor.coverage.dedicated }} dedicated of {{ forklift_advisor.recommended }}</div>
+      <div style="color:#b54708;font-weight:600">⚠️ Short {{ forklift_advisor.coverage.gap }} — {{ forklift_advisor.coverage.scheduled }} on Tablets of {{ forklift_advisor.recommended }}</div>
       {% endif %}
-      <div style="opacity:.8;margin-top:2px">{{ forklift_advisor.coverage.certified }} certified scheduled{% if forklift_advisor.backup_names %} · backups: {{ forklift_advisor.backup_names|join(', ') }}{% endif %}</div>
+      <div style="opacity:.8;margin-top:2px">{{ forklift_advisor.coverage.scheduled }} scheduled on Tablets{% if forklift_advisor.backup_names %} · backups: {{ forklift_advisor.backup_names|join(', ') }}{% endif %}</div>
       {% else %}
       <div style="opacity:.7;margin:2px 0">Recommendation builds as history accrues</div>
       {% endif %}

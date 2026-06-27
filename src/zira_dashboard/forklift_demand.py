@@ -5,7 +5,7 @@ v1 model (calibrated as history accumulates):
     mean per-hour shape); fall back to bootstrapping from the app's weekly
     trends when there is no same-weekday history yet.
   - recommend = ceil(busiest-hour calls / per-driver hourly throughput), min 1.
-  - coverage compares the recommendation to dedicated drivers scheduled.
+  - coverage compares the recommendation to drivers scheduled on Tablets.
 """
 from __future__ import annotations
 
@@ -33,8 +33,7 @@ class DemandForecast:
 class Coverage:
     status: str                   # 'ok' | 'short'
     recommended: int
-    dedicated: int
-    certified: int
+    scheduled: int                # people scheduled on the Tablets work center
     backups: int
     gap: int
 
@@ -98,10 +97,12 @@ def recommend_drivers(peak_calls: float, throughput_per_hour: float = DEFAULT_TH
     return max(1, math.ceil(peak_calls / throughput_per_hour))
 
 
-def assess_coverage(recommended: int, dedicated: int, certified: int, backups: int) -> Coverage:
-    gap = max(0, recommended - dedicated)
+def assess_coverage(recommended: int, scheduled: int, backups: int) -> Coverage:
+    """Compare the recommended driver count to how many people are actually
+    scheduled on the Tablets work center (NOT how many are merely certified)."""
+    gap = max(0, recommended - scheduled)
     return Coverage(
         status="ok" if gap == 0 else "short",
-        recommended=recommended, dedicated=dedicated,
-        certified=certified, backups=backups, gap=gap,
+        recommended=recommended, scheduled=scheduled,
+        backups=backups, gap=gap,
     )
