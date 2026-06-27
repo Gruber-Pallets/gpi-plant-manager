@@ -775,11 +775,13 @@ _LATE_REPORT_CACHE: dict = {"value": None, "expires_at": 0.0}
 def late_report_payload() -> dict:
     """Snapshot for the global Late/Absence Report badge + modal.
 
-    Always for today. Returns four sections:
+    Always for today. Covers people who were on today's schedule only —
+    people not assigned today are never flagged for a missing punch. Returns
+    four sections:
       scheduled_late:   scheduled people who haven't punched in past threshold
-      unscheduled_late: active non-reserve people not assigned today + no_punch
-      needs_reason:     people who punched in past threshold + no late_arrivals
-                        record yet — manager fills in reason and saves
+      unscheduled_late: always empty (kept for the JSON/UI contract)
+      needs_reason:     scheduled people who punched in past threshold + no
+                        late_arrivals record yet — manager fills in reason
       snoozed:          silenced rows (no reason field; transient)
 
     `late` is an alias for `scheduled_late` for legacy clients.
@@ -826,12 +828,18 @@ def late_report_payload() -> dict:
                 staffing.load_roster(), name_to_id
             )
             scheduled_ids = [e for e in (attendance_pkg.get("scheduled_ids") or []) if e in eligible_emp_ids]
-            unscheduled_ids = [e for e in (attendance_pkg.get("unscheduled_ids") or []) if e in eligible_emp_ids]
+            # The report covers people who were on today's schedule only.
+            # "Unscheduled" people (active non-reserve roster members who simply
+            # weren't assigned today) are NOT flagged for a missing punch — they
+            # weren't expected in, so a no-punch isn't an exception. Passing an
+            # empty unscheduled set keeps both the unscheduled_late section and
+            # the unscheduled half of needs_reason empty. (Product decision
+            # 2026-06-27: not on the schedule → not flagged.)
 
             sections = late_report.late_people_for_day_v2(
                 day=today,
                 scheduled_emp_ids=scheduled_ids,
-                unscheduled_emp_ids=unscheduled_ids,
+                unscheduled_emp_ids=[],
                 attendance=by_id,
                 now_local=now_local,
                 shift_start_local=shift_start_local,
