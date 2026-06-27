@@ -1,18 +1,23 @@
-from datetime import datetime, timezone, time
+from datetime import datetime, date, time
 from types import SimpleNamespace
 
 import pytest
 
 pytest.importorskip("fastapi")  # routes import FastAPI; skip locally where it's absent
 
-from zira_dashboard import attendance, staffing, shift_config, staffing_attendance
+from zira_dashboard import attendance, staffing, shift_config, staffing_attendance, plant_day
 
 
 def test_safe_attendance_keys_by_odoo_id(monkeypatch):
     """_safe_attendance maps roster names -> Odoo ids via the people table,
     splits scheduled vs unscheduled, and returns a status dict keyed by
     str(person_odoo_id)."""
-    d = datetime.now(timezone.utc).date()
+    # Freeze the plant clock to noon on a fixed day so the "past shift start"
+    # guard is deterministic. _safe_attendance reads plant_day.now(), which
+    # diverges from the UTC date in the evening (Central tz) and made this
+    # test flaky when "now" was computed from real wall-clock.
+    d = date(2026, 6, 1)
+    monkeypatch.setattr(plant_day, "now", lambda: datetime.combine(d, time(12, 0), tzinfo=shift_config.SITE_TZ))
     monkeypatch.setattr(attendance, "name_to_person_id", lambda: {"Ana": "1", "Bob": "2"})
     monkeypatch.setattr(staffing_attendance, "_timeoff_names_with_fallback", lambda day: set())
     monkeypatch.setattr(staffing, "load_roster", lambda: [

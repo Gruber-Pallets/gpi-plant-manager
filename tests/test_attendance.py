@@ -54,9 +54,16 @@ def test_full_day_absent_union(monkeypatch):
 
 def test_derived_absent_flags_unpunched_after_buffer(monkeypatch):
     from types import SimpleNamespace
-    from zira_dashboard import staffing, scheduler_time_off, shift_config, live_cache
-    from datetime import datetime as _dt, timezone as _tz
-    today = _dt.now(_tz.utc).date()
+    from zira_dashboard import staffing, scheduler_time_off, shift_config, live_cache, plant_day
+    # Freeze the plant clock to noon on a fixed day so the wall-clock-dependent
+    # guards (today-only + "past shift_start + buffer") are deterministic no
+    # matter when the suite runs. derived_absent_names reads plant_day, so we
+    # pin that rather than real now() (which diverges from the Central date in
+    # the evening and made this test flaky).
+    day = date(2026, 6, 1)
+    frozen_now = datetime.combine(day, time(12, 0), tzinfo=TZ)
+    monkeypatch.setattr(plant_day, "today", lambda *a, **k: day)
+    monkeypatch.setattr(plant_day, "now", lambda: frozen_now)
     monkeypatch.setattr(staffing, "load_roster", lambda: [
         SimpleNamespace(name="Ana", active=True, reserve=False),   # no punch -> absent
         SimpleNamespace(name="Bob", active=True, reserve=False),   # punched -> present
@@ -69,16 +76,20 @@ def test_derived_absent_flags_unpunched_after_buffer(monkeypatch):
     monkeypatch.setattr(attendance, "punches_for_day", lambda d: {"2": {"first_check_in": "x", "currently_open": True}})
     # Force "well past shift start" by stubbing shift_start_for to midnight.
     monkeypatch.setattr(shift_config, "shift_start_for", lambda d: time(0, 0))
-    assert attendance.derived_absent_names(today) == {"Ana"}
+    assert attendance.derived_absent_names(day) == {"Ana"}
 
 
 def test_derived_absent_prefers_cached_punches(monkeypatch):
     """Cache-first: when live_cache has the warmer's payload, derived_absent_names
     must NOT make a direct Odoo pull."""
     from types import SimpleNamespace
-    from zira_dashboard import staffing, scheduler_time_off, shift_config, live_cache
-    from datetime import datetime as _dt, timezone as _tz
-    today = _dt.now(_tz.utc).date()
+    from zira_dashboard import staffing, scheduler_time_off, shift_config, live_cache, plant_day
+    # Freeze the plant clock (see sibling test) so the today/buffer guards are
+    # deterministic regardless of wall-clock time.
+    day = date(2026, 6, 1)
+    frozen_now = datetime.combine(day, time(12, 0), tzinfo=TZ)
+    monkeypatch.setattr(plant_day, "today", lambda *a, **k: day)
+    monkeypatch.setattr(plant_day, "now", lambda: frozen_now)
     monkeypatch.setattr(staffing, "load_roster", lambda: [
         SimpleNamespace(name="Ana", active=True, reserve=False),
         SimpleNamespace(name="Bob", active=True, reserve=False),
@@ -86,13 +97,13 @@ def test_derived_absent_prefers_cached_punches(monkeypatch):
     monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda d: [])
     monkeypatch.setattr(attendance, "name_to_person_id", lambda: {"Ana": "1", "Bob": "2"})
     monkeypatch.setattr(live_cache, "read_attendance", lambda d: (
-        {"2": {"first_check_in": "x", "currently_open": True}}, _dt.now(_tz.utc)))
+        {"2": {"first_check_in": "x", "currently_open": True}}, frozen_now))
 
     def _boom(d):
         raise AssertionError("punches_for_day must not be called on a cache hit")
     monkeypatch.setattr(attendance, "punches_for_day", _boom)
     monkeypatch.setattr(shift_config, "shift_start_for", lambda d: time(0, 0))
-    assert attendance.derived_absent_names(today) == {"Ana"}
+    assert attendance.derived_absent_names(day) == {"Ana"}
 
 
 def test_partial_off_intervals_builds_utc_spans(monkeypatch):

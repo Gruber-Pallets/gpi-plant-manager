@@ -7,10 +7,10 @@ yields an empty panel, not a 500. Extracted from routes/staffing.py.
 from __future__ import annotations
 
 import time as _time
-from datetime import datetime, timezone
+from datetime import datetime
 from threading import RLock
 
-from . import attendance, shift_config, staffing
+from . import attendance, plant_day, shift_config, staffing
 
 # One staffing render asks for the day's time-off entries 2-3 times
 # (_safe_time_off_entries from the route plus _timeoff_names_with_fallback
@@ -131,7 +131,7 @@ def _safe_attendance(d, sched, today):
     if d != today:
         return empty
     try:
-        now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+        now_local = plant_day.now()
         shift_start_local = datetime.combine(
             d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ
         )
@@ -201,7 +201,7 @@ def _late_emp_ids(d, today, attendance_pkg) -> set[str]:
         return set()
     try:
         from . import late_report
-        now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+        now_local = plant_day.now()
         shift_start_local = datetime.combine(
             d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ
         )
