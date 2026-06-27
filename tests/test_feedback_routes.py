@@ -112,7 +112,7 @@ def test_post_feedback_rejects_empty_description(monkeypatch):
 
 
 def test_post_feedback_drops_unsafe_page_url(monkeypatch):
-    calls = _patch_odoo(monkeypatch)
+    _patch_odoo(monkeypatch)
     captured = {}
     monkeypatch.setattr(
         feedback_store, "insert",
