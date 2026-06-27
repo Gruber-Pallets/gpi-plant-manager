@@ -108,7 +108,7 @@ def settings_page(
     saved: int = Query(default=0),
     section: str = Query(default="work_centers"),
 ):
-    if section not in ("work_centers", "integrations", "roster_filter", "tvs", "timeclock", "time_off"):
+    if section not in ("work_centers", "integrations", "roster_filter", "tvs", "timeclock", "time_off", "forklift"):
         section = "work_centers"
     roster_filter_active: list[dict] = []
     roster_filter_inactive: list[dict] = []
@@ -368,6 +368,31 @@ def settings_page(
         "flex_after_hours": _al.flex_after_hours,
         "flex_minutes": _al.flex_minutes,
     }
+    # Forklift demand-advisor settings + a live forecast summary for the next
+    # working day. Wrapped so the settings page never 500s if the forklift data
+    # source (or DB) is unavailable.
+    forklift_ctx: dict | None = None
+    try:
+        from .. import forklift_advisor, forklift_settings
+        from ..plant_day import today as plant_today
+        from .staffing import _next_working_day
+        _fl = forklift_settings.current()
+        _target_day = _next_working_day(plant_today())
+        forklift_ctx = {
+            "enabled": _fl.enabled,
+            "calls_per_hour": _fl.calls_per_hour,
+            "target_utilization": _fl.target_utilization,
+            "target_utilization_pct": round(_fl.target_utilization * 100),
+            "include_loading_jockeying": _fl.include_loading_jockeying,
+            "history_samples": _fl.history_samples,
+            "coldstart_calls_per_day": _fl.coldstart_calls_per_day,
+            "effective_throughput": round(_fl.effective_throughput, 2),
+            "target_day_label": _target_day.strftime("%a %b %-d"),
+            "weekday_label": _target_day.strftime("%A"),
+            **forklift_advisor.demand_summary(_target_day),
+        }
+    except Exception:
+        forklift_ctx = None
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -399,6 +424,7 @@ def settings_page(
             "kiosk_recent_variances": kiosk_recent_variances,
             "timeclock_sync_status": timeclock_sync_status,
             "time_off_settings": time_off_settings,
+            "forklift": forklift_ctx,
         },
     )
 
@@ -609,6 +635,50 @@ async def settings_save_auto_lunch(request: Request):
         if (request.headers.get("accept") or "").startswith("application/json"):
             return JSONResponse({"ok": True})
         return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+    return await asyncio.to_thread(_work)
+
+
+@router.post("/settings/forklift")
+async def settings_save_forklift(request: Request):
+    """Save the Forklift demand-advisor settings. Takes effect immediately (the
+    store updates its in-process cache), so no restart is needed. The form sends
+    target utilization as a PERCENT (1-100) for readability; we store it as a
+    fraction. Out-of-range / unparseable values clamp to a sane range rather than
+    rejecting the submission."""
+    from .. import forklift_settings
+    form = await request.form()
+
+    def _num(raw, lo, hi, fallback, *, integer):
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            return fallback
+        v = max(lo, min(hi, v))
+        return int(v) if integer else v
+
+    def _work():
+        current = forklift_settings.current()
+        # Utilization arrives as a percent 1-100 → store as a fraction 0.05-1.0.
+        util_pct = _num(form.get("target_utilization"),
+                        5.0, 100.0, current.target_utilization * 100.0,
+                        integer=False)
+        forklift_settings.save(forklift_settings.Settings(
+            enabled=bool(form.get("enabled")),
+            calls_per_hour=_num(form.get("calls_per_hour"), 0.1, 1000.0,
+                                current.calls_per_hour, integer=False),
+            target_utilization=round(util_pct / 100.0, 4),
+            include_loading_jockeying=bool(form.get("include_loading_jockeying")),
+            history_samples=_num(form.get("history_samples"), 1, 52,
+                                 current.history_samples, integer=True),
+            coldstart_calls_per_day=_num(form.get("coldstart_calls_per_day"),
+                                         0.0, 100000.0,
+                                         current.coldstart_calls_per_day,
+                                         integer=False),
+        ))
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True})
+        return RedirectResponse(url="/settings?saved=1&section=forklift", status_code=303)
 
     return await asyncio.to_thread(_work)
 

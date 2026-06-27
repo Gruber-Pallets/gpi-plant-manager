@@ -11,9 +11,23 @@ def test_scheduled_counts_helper_counts_tablets_and_backups():
         "Prosaw #4": ["Trent"],
     }
     counts = staffing._forklift_scheduled_counts(
-        assignments, overload_responders={"Juan", "Luke", "Louie"})
+        assignments, overload_responders={"Juan", "Luke", "Louie"},
+        wc_names=("Tablets",))
     assert counts["tablets"] == 2            # Luke + Pascual on the Tablets WC
     assert counts["backups"] == 2            # Juan + Luke scheduled & overload responders
+
+
+def test_scheduled_counts_helper_includes_loading_jockeying_when_configured():
+    from zira_dashboard.routes import staffing
+    assignments = {
+        "Loading/Jockeying": ["Juan", "Luke"],   # Luke also on Tablets → counted once
+        "Tablets": ["Luke", "Pascual"],
+        "Prosaw #4": ["Trent"],
+    }
+    counts = staffing._forklift_scheduled_counts(
+        assignments, overload_responders=set(),
+        wc_names=("Tablets", "Loading/Jockeying"))
+    assert counts["tablets"] == 3            # Juan, Luke, Pascual (unique across both WCs)
 
 
 def test_build_advisor_short_when_under_scheduled(monkeypatch):
