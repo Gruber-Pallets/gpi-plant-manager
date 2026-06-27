@@ -63,18 +63,24 @@ def _next_working_day(d: date) -> date:
 
 
 FORKLIFT_TABLETS_WC = "Tablets"
+FORKLIFT_LOADING_WC = "Loading/Jockeying"
 
 
-def _forklift_scheduled_counts(assignments, overload_responders):
+def _forklift_scheduled_counts(assignments, overload_responders, wc_names):
     """Derive forklift-driver coverage counts from the draft schedule.
-    - tablets: people assigned to the Tablets work center (the queue drivers we
-      size against -- NOT merely certified people).
+    - tablets: unique people assigned to the configured driver work centers
+      (the queue drivers we size against -- NOT merely certified people).
+      `wc_names` is a tuple of WC names to count as scheduled drivers
+      (e.g. ("Tablets",) or ("Tablets", "Loading/Jockeying")).
     - backups: scheduled people flagged as overload responders (can jump in).
     """
-    tablets = assignments.get(FORKLIFT_TABLETS_WC, []) or []
+    drivers = set()
+    for wc in wc_names:
+        for n in (assignments.get(wc, []) or []):
+            drivers.add(n)
     scheduled = {n for names in assignments.values() for n in (names or [])}
     backups = {n for n in scheduled if n in overload_responders}
-    return {"tablets": len(set(tablets)), "backups": len(backups)}
+    return {"tablets": len(drivers), "backups": len(backups)}
 
 
 @router.get("/staffing", response_class=HTMLResponse)
@@ -267,9 +273,14 @@ def staffing_page(
 
     # Forklift demand advisor (read-only; never blocks scheduling).
     try:
-        from .. import app_settings, forklift_advisor
+        from .. import app_settings, forklift_advisor, forklift_settings
         _overload = set(app_settings.get_setting("forklift_overload_responders") or [])
-        _counts = _forklift_scheduled_counts(sched.assignments, _overload)
+        _fcfg = forklift_settings.current()
+        _wc_names = (
+            (FORKLIFT_TABLETS_WC, FORKLIFT_LOADING_WC)
+            if _fcfg.include_loading_jockeying else (FORKLIFT_TABLETS_WC,)
+        )
+        _counts = _forklift_scheduled_counts(sched.assignments, _overload, _wc_names)
         forklift_advisor_model = forklift_advisor.build_advisor(
             target_day=d, scheduled=_counts["tablets"], backups=_counts["backups"],
         )

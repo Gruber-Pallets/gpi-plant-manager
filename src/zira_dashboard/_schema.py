@@ -783,6 +783,22 @@ CREATE TABLE IF NOT EXISTS auto_lunch_settings (
 );
 INSERT INTO auto_lunch_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
+-- Forklift demand-advisor settings (2026-06-27). Singleton row (id=1). Tunes
+-- the scheduler's forklift-driver recommendation: enabled toggle, per-driver
+-- throughput (calls_per_hour) trimmed by target_utilization to an effective
+-- rate, which work centers count toward coverage, how much same-weekday history
+-- to use, and a manual cold-start daily volume (0 = auto from weekly trends).
+CREATE TABLE IF NOT EXISTS forklift_settings (
+  id                        INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  enabled                   BOOLEAN NOT NULL DEFAULT TRUE,
+  calls_per_hour            NUMERIC NOT NULL DEFAULT 16,
+  target_utilization        NUMERIC NOT NULL DEFAULT 0.65,
+  include_loading_jockeying BOOLEAN NOT NULL DEFAULT FALSE,
+  history_samples           INTEGER NOT NULL DEFAULT 8,
+  coldstart_calls_per_day   NUMERIC NOT NULL DEFAULT 0
+);
+INSERT INTO forklift_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
 -- Department-driven rounding (2026-06-04). Named rounding "systems" (each a set
 -- of the four windows) are selected by the static department an employee works
 -- that day (staffing.Location.department). rounding_settings id=1 remains the

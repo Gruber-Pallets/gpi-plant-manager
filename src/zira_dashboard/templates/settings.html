@@ -43,6 +43,10 @@
        class="settings-nav-item {% if active_section == 'time_off' %}active{% endif %}">
       Time Off
     </a>
+    <a href="?section=forklift"
+       class="settings-nav-item {% if active_section == 'forklift' %}active{% endif %}">
+      Forklift
+    </a>
   </aside>
 
   <div class="settings-content">
@@ -700,6 +704,194 @@
         {% endif %}
       </div>
     </form>
+  </section>
+
+  <!-- Forklift -->
+  <section class="panel" id="forklift-panel"
+           {% if active_section != 'forklift' %}style="display:none"{% endif %}>
+    <h2>Forklift Demand Advisor</h2>
+    <p class="help">
+      The scheduler's right rail shows a forklift-driver recommendation for the
+      next working day. This page explains how that number is computed and lets
+      you tune it &mdash; no redeploy needed.
+    </p>
+
+    {% if not forklift %}
+      <p style="background:#fef3c7;border:1px solid #f59e0b;padding:0.6rem 0.8rem;
+                border-radius:0.4rem;font-size:0.88rem;color:#78350f">
+        The forklift forecast isn't available right now (the demand source or
+        database couldn't be reached). The controls below still save.
+      </p>
+    {% else %}
+
+    <!-- Algorithm (visibility) -->
+    <h3 style="margin-top:1rem">How the recommendation works</h3>
+    {% if forklift.enabled %}
+      <p class="help" style="line-height:1.6">
+        For <strong>{{ forklift.target_day_label }}</strong> we predict
+        <strong>{{ forklift.total_calls }}</strong> total forklift calls, with the
+        busiest hour around <strong>{{ forklift.peak_label }}</strong>
+        ({{ '%.1f'|format(forklift.peak_calls) }} calls that hour)
+        {% if forklift.basis == 'history' %}
+          &mdash; based on {{ forklift.n_days }} recent
+          {{ forklift.weekday_label }}s.
+        {% else %}
+          &mdash; an early estimate (real same-{{ forklift.weekday_label }} history
+          will sharpen this as it accrues).
+        {% endif %}
+      </p>
+      <p class="help" style="line-height:1.6">
+        A driver handles <strong>{{ '%g'|format(forklift.calls_per_hour) }}</strong>
+        calls/hr flat out; trimmed to
+        <strong>{{ (forklift.target_utilization * 100)|round|int }}%</strong>
+        target utilization that's an <strong>effective rate of
+        {{ '%g'|format(forklift.effective_throughput) }} calls/hr/driver</strong>.
+        So:
+      </p>
+      <p style="font-family:ui-monospace,Menlo,monospace;font-size:0.95rem;
+                background:var(--card,#f8fafc);border:1px solid var(--border,#e2e8f0);
+                border-radius:0.4rem;padding:0.6rem 0.8rem;margin:0.4rem 0">
+        recommended = ceil(peak ÷ effective rate)
+        = ceil({{ '%.1f'|format(forklift.peak_calls) }} ÷
+        {{ '%g'|format(forklift.effective_throughput) }})
+        =
+        {% if forklift.recommended is not none %}
+          <strong>{{ forklift.recommended }} drivers</strong>
+        {% else %}
+          <strong>—</strong> (builds as history accrues)
+        {% endif %}
+      </p>
+      <p class="help" style="line-height:1.6">
+        Coverage compares that to people scheduled on
+        <strong>Tablets</strong>{% if forklift.include_loading_jockeying %} and
+        <strong>Loading/Jockeying</strong>{% endif %}.
+      </p>
+    {% else %}
+      <p style="background:#f1f5f9;border:1px solid var(--border,#cbd5e1);
+                padding:0.6rem 0.8rem;border-radius:0.4rem;font-size:0.9rem">
+        The advisor is currently <strong>off</strong> — the scheduler hides the
+        forklift card. Turn it on below to show the recommendation.
+      </p>
+    {% endif %}
+
+    <!-- Controls -->
+    <form method="post" action="/settings/forklift" id="forklift-form"
+          style="margin-top:1.4rem">
+      <h3 style="margin-top:0">Controls</h3>
+
+      <label style="display:flex;align-items:center;gap:0.5rem;margin:0.6rem 0 1rem">
+        <input type="checkbox" name="enabled" value="1"
+               {% if forklift.enabled %}checked{% endif %}>
+        <span>Show the forklift demand advisor in the scheduler</span>
+      </label>
+
+      <div class="sched-grid" style="max-width:520px">
+        <label for="fl_calls_per_hour">Calls a driver handles per hour (flat out)</label>
+        <input id="fl_calls_per_hour" type="number" name="calls_per_hour"
+               min="0.1" max="1000" step="0.5"
+               value="{{ '%g'|format(forklift.calls_per_hour) }}">
+
+        <label for="fl_target_util">Target max utilization %</label>
+        <input id="fl_target_util" type="number" name="target_utilization"
+               min="5" max="100" step="1"
+               value="{{ (forklift.target_utilization * 100)|round|int }}">
+
+        <label>Effective rate</label>
+        <output id="fl_effective" style="font-weight:600">
+          {{ '%g'|format(forklift.effective_throughput) }} calls/hr/driver
+        </output>
+
+        <label for="fl_history">Same-weekday history samples</label>
+        <input id="fl_history" type="number" name="history_samples"
+               min="1" max="52" step="1"
+               value="{{ forklift.history_samples }}">
+
+        <label for="fl_coldstart">Cold-start assumed calls/day (0 = auto)</label>
+        <input id="fl_coldstart" type="number" name="coldstart_calls_per_day"
+               min="0" max="100000" step="1"
+               value="{{ '%g'|format(forklift.coldstart_calls_per_day) }}">
+      </div>
+
+      <label style="display:flex;align-items:center;gap:0.5rem;margin:1rem 0">
+        <input type="checkbox" name="include_loading_jockeying" value="1"
+               {% if forklift.include_loading_jockeying %}checked{% endif %}>
+        <span>Count Loading/Jockeying toward coverage too</span>
+      </label>
+
+      <!-- Live preview -->
+      <p style="margin:0.6rem 0;font-size:0.95rem"
+         data-peak="{{ forklift.peak_calls }}">
+        Live preview:
+        <span id="fl_preview" style="font-weight:600">
+          {% if forklift.recommended is not none %}
+            → recommends {{ forklift.recommended }} drivers
+          {% else %}
+            recommendation builds as history accrues
+          {% endif %}
+        </span>
+      </p>
+
+      <div style="display:flex;gap:0.6rem;align-items:center;margin-top:0.6rem">
+        <button type="submit">Save</button>
+        <button type="button" id="fl_reset"
+                style="background:transparent;border:1px solid var(--border,#cbd5e1);
+                       color:var(--muted,#475569);padding:0.45rem 0.9rem;
+                       border-radius:0.4rem;cursor:pointer">
+          Reset to defaults
+        </button>
+        {% if saved and active_section == 'forklift' %}
+          <span class="saved-flash">Saved.</span>
+        {% endif %}
+      </div>
+      <p class="effective-note">Effective immediately &mdash; no restart needed.</p>
+    </form>
+
+    <script>
+      (function () {
+        var form = document.getElementById('forklift-form');
+        if (!form) return;
+        var cph = document.getElementById('fl_calls_per_hour');
+        var util = document.getElementById('fl_target_util');
+        var eff = document.getElementById('fl_effective');
+        var preview = document.getElementById('fl_preview');
+        var previewWrap = preview ? preview.parentElement : null;
+        var peak = previewWrap ? parseFloat(previewWrap.getAttribute('data-peak')) : 0;
+
+        function effRate() {
+          var c = parseFloat(cph.value) || 0;
+          var u = (parseFloat(util.value) || 0) / 100;
+          return Math.max(0.1, c * u);
+        }
+        function recompute() {
+          var e = effRate();
+          if (eff) eff.textContent = (Math.round(e * 100) / 100) + ' calls/hr/driver';
+          if (!preview) return;
+          if (!peak || peak <= 0) {
+            preview.textContent = 'recommendation builds as history accrues';
+          } else {
+            var rec = Math.max(1, Math.ceil(peak / e));
+            preview.textContent = '→ recommends ' + rec + ' driver' + (rec === 1 ? '' : 's');
+          }
+        }
+        cph.addEventListener('input', recompute);
+        util.addEventListener('input', recompute);
+
+        var reset = document.getElementById('fl_reset');
+        if (reset) reset.addEventListener('click', function () {
+          form.elements['enabled'].checked = true;
+          cph.value = 16;
+          util.value = 65;
+          form.elements['include_loading_jockeying'].checked = false;
+          document.getElementById('fl_history').value = 8;
+          document.getElementById('fl_coldstart').value = 0;
+          recompute();
+        });
+
+        recompute();
+      })();
+    </script>
+
+    {% endif %}
   </section>
   </div>
 </div>
