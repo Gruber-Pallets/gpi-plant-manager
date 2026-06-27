@@ -735,7 +735,7 @@
     }
 
     if (!anyActionable) {
-      html += '<p class="late-help">No one is currently flagged. Anyone scheduled today who hasn\'t clocked in by 15 min past shift-start, anyone unscheduled in the same situation, or anyone who clocked in late without a recorded reason, will appear here.</p>';
+      html += '<p class="late-help">No one is currently flagged. Anyone scheduled today who hasn\'t clocked in by 15 min past shift-start, or who clocked in late without a recorded reason, will appear here.</p>';
     }
 
     if (d.snoozed && d.snoozed.length) {
