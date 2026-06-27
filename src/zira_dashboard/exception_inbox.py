@@ -239,6 +239,13 @@ def build_snapshot() -> dict:
         source_errors, "Pending Time Off", lambda: _pending_time_off(today), (0, [])
     )
     work_centers = _capture(source_errors, "Work Center List", _work_center_names, [])
+    # assignments_todo_payload / late_report_payload swallow their own internal
+    # errors and return an empty payload with degraded=True (so the page still
+    # renders). Surface that as a source error so the reconciler treats the
+    # category as "unknown this tick" and never auto-resolves its items.
+    for _payload, _label in ((assignments, "Assignments To Do"), (late, "Late / Absence")):
+        if isinstance(_payload, dict) and _payload.get("degraded"):
+            source_errors.append({"source": _label})
 
     late_rows: list[dict] = []
     for item in late.get("scheduled_late") or []:

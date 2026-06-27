@@ -752,7 +752,7 @@ def assignments_todo_payload() -> dict:
         out["people"] = sorted((p.name for p in roster if p.active), key=str.lower)
         out["count"] = len(out["items"])
     except Exception:
-        pass
+        out["degraded"] = True
     _ASSIGNMENTS_TODO_CACHE["value"] = out
     _ASSIGNMENTS_TODO_CACHE["expires_at"] = now_ts + 30.0
     return out
@@ -882,7 +882,7 @@ def late_report_payload() -> dict:
             + len(out["needs_reason"])
         )
     except Exception:
-        pass
+        out["degraded"] = True
     _LATE_REPORT_CACHE["value"] = out
     _LATE_REPORT_CACHE["expires_at"] = now_ts + 30.0
     return out
