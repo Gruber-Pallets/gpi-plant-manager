@@ -14,11 +14,11 @@ def test_build_advisor_with_history(monkeypatch):
 
     adv = forklift_advisor.build_advisor(
         target_day=date(2026, 6, 26),   # Friday
-        scheduled=3, backups=3,
+        scheduled=7, backups=3,
     )
     assert adv["available"] is True
     assert adv["total_calls"] == 420
-    assert adv["recommended"] == 3            # ceil(70/30)
+    assert adv["recommended"] == 7            # ceil(70/10)
     assert adv["coverage"].status == "ok"
     assert adv["basis"] == "history"
     assert "9" in adv["peak_label"] or "9" in str(adv["peak_label"])
@@ -28,14 +28,14 @@ def test_cold_start_uses_today_shape_for_recommendation(monkeypatch):
     monkeypatch.setattr(forklift_advisor.forklift_store, "calls_daily_for_weekday",
                         lambda wd, limit=8: [])
     monkeypatch.setattr(forklift_advisor, "_weekly_trends_or_none",
-                        lambda: {"weeks": [{"claimedCalls": 2250}]})  # /5 = 450/day
+                        lambda: {"weeks": [{"claimedCalls": 500}]})  # /5 = 100/day
     monkeypatch.setattr(forklift_advisor, "_today_hourly_shape_or_none",
                         lambda: [{"slot": 8, "calls": 30}, {"slot": 9, "calls": 70}])
     monkeypatch.setattr(forklift_advisor.app_settings, "get_setting", lambda k: [])
     adv = forklift_advisor.build_advisor(date(2026, 6, 26), scheduled=2, backups=1)
     assert adv["available"] is True and adv["basis"] == "bootstrap"
-    assert adv["total_calls"] == 450
-    assert adv["recommended"] == 11           # ceil(315/30)
+    assert adv["total_calls"] == 100
+    assert adv["recommended"] == 7            # ceil(70/10): 100/day * 70/100 peak = 70
     assert adv["coverage"].status == "short"
 
 

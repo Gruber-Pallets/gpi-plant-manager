@@ -23,7 +23,7 @@ def test_build_advisor_short_when_under_scheduled(monkeypatch):
                              "by_hour": {"9": {"calls": 120}}, "by_station": {}}])
     monkeypatch.setattr(forklift_advisor.app_settings, "get_setting", lambda k: [])
     adv = forklift_advisor.build_advisor(date(2026, 6, 26), scheduled=1, backups=0)
-    assert adv["recommended"] == 4 and adv["coverage"].status == "short" and adv["coverage"].gap == 3
+    assert adv["recommended"] == 12 and adv["coverage"].status == "short" and adv["coverage"].gap == 11
 
 
 # The full GET /staffing render fans out to live Zira/Odoo calls (and the

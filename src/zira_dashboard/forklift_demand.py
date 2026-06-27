@@ -13,10 +13,15 @@ import math
 from dataclasses import dataclass, field
 from statistics import median
 
-# Default per-driver throughput (calls/hour). Derived loosely from observed
-# data (~70 calls in the busiest hour handled by ~2-3 drivers). Override-able
-# later via settings; calibrated against overload/neglect history.
-DEFAULT_THROUGHPUT_PER_HOUR = 30.0
+# Effective per-driver throughput (calls/hour) used to size dedicated drivers.
+# Measured flat-out rate is ~16-17 calls/hr/driver, but at that pace the queue
+# backs up (avg ~7 min wait to claim, overload hours) -- overload sets in around
+# ~70% sustained utilization, and demand arrives in sub-hour bursts. So the
+# EFFECTIVE rate that keeps the busiest hour out of overload is lower; calibrated
+# to ~10/hr against live data + operational reality (4 dedicated being the
+# realistic floor). TODO: derive per-driver from forklift_driver_daily and
+# expose as a setting.
+DEFAULT_THROUGHPUT_PER_HOUR = 10.0
 
 
 @dataclass
