@@ -211,28 +211,8 @@
     color: var(--warn, #a16207);
   }
 
-  /* Global "Assignments to Do" nav badge + modal — appears on every page
-     when at least one metered WC produced today without a person assigned. */
-  .assign-todo-nav-badge {
-    display: inline-flex; align-items: center; gap: 0.3rem;
-    background: var(--warn-dim, #fef3c7); color: var(--warn, #a16207);
-    border: 1px solid var(--warn, #a16207); border-radius: 999px;
-    padding: 0.2rem 0.7rem;
-    font-size: 0.78rem; font-weight: 700; text-decoration: none;
-    margin-right: 0.2rem;
-    animation: atd-pulse 2.4s ease-in-out infinite;
-  }
-  .assign-todo-nav-badge:hover { background: var(--warn, #a16207); color: white; }
-  .assign-todo-nav-badge .cnt {
-    background: var(--warn, #a16207); color: white;
-    border-radius: 999px; padding: 0 0.45rem; font-size: 0.72rem;
-  }
-  .assign-todo-nav-badge:hover .cnt { background: white; color: var(--warn, #a16207); }
-  @keyframes atd-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 var(--warn, #a16207); }
-    50%      { box-shadow: 0 0 0 4px rgba(161,98,7,0.18); }
-  }
-
+  /* Global "Assignments to Do" modal — opened from the Exception Inbox's
+     "Manage" action. (The old pulsing nav badge was retired.) */
   .atd-modal[hidden] { display: none; }
   .atd-modal { position: fixed; inset: 0; z-index: 9100; display: flex; align-items: center; justify-content: center; }
   .atd-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
@@ -296,28 +276,9 @@
   .atd-transfer-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1f2937; color: #fff; padding: 10px 16px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 10000; font-size: 0.9rem; }
   .atd-transfer-toast .atd-transfer-undo { margin-left: 10px; background: #f59e0b; color: #1f2937; border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
 
-  /* Global "Late/Absence Report" badge — appears on every page when one or
-     more scheduled people are 15+ minutes past shift-start without a punch. */
-  .late-nav-badge {
-    display: inline-flex; align-items: center; gap: 0.3rem;
-    background: #fee2e2; color: #b91c1c;
-    border: 1px solid #b91c1c; border-radius: 999px;
-    padding: 0.2rem 0.7rem;
-    font-size: 0.78rem; font-weight: 700; text-decoration: none;
-    margin-right: 0.2rem;
-    animation: late-pulse 1.6s ease-in-out infinite;
-  }
-  .late-nav-badge:hover { background: #b91c1c; color: white; }
-  .late-nav-badge .cnt {
-    background: #b91c1c; color: white;
-    border-radius: 999px; padding: 0 0.45rem; font-size: 0.72rem;
-  }
-  .late-nav-badge:hover .cnt { background: white; color: #b91c1c; }
-  @keyframes late-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(185,28,28,0.7); }
-    50%      { box-shadow: 0 0 0 6px rgba(185,28,28,0.0); }
-  }
-
+  /* Global "Late/Absence Report" modal — opened from the Exception Inbox's
+     "Manage" action. (The old pulsing nav badge was retired.) The Missing
+     Work Center and Missed Punch Out modals reuse these .late-* styles. */
   .late-modal[hidden] { display: none; }
   .late-modal { position: fixed; inset: 0; z-index: 9100; display: flex; align-items: center; justify-content: center; }
   .late-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }

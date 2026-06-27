@@ -214,11 +214,13 @@
   }
 })();
 
-// Global nav badges + modals — present on every page. Four instances share
-// the makeBadgeModal factory below: "Assignments to Do", "Late/Absence
-// Report", "Missing Work Center", and "Missed Punch Out". Element IDs /
-// classes / endpoints are unchanged from the original per-feature IIFEs
-// (footer.css and the inline dashboard scripts depend on them).
+// Global nav Inbox count + management modals — present on every page. Four
+// instances share the makeBadgeModal factory below: "Assignments to Do",
+// "Late/Absence Report", "Missing Work Center", and "Missed Punch Out". The
+// old pulsing nav "bubble" badges these used to inject were retired in favour
+// of the unified Exception Inbox (the Inbox count is the only nav notification
+// now). Only the click-to-manage modals remain — opened from the Inbox via
+// window.gpiAlertBadges[key].openModal() and refreshed via .refreshCount().
 (function () {
   function settingsLink() {
     return document.querySelector('header nav a[href="/settings"]')
@@ -343,7 +345,6 @@
   // classes) + modalClass/ariaLabel/heading. cfg.render(body, data, api)
   // fills the modal body and wires its handlers.
   function makeBadgeModal(cfg) {
-    var navBadge = null;
     var modal = null;
     var data = null;
 
@@ -354,24 +355,12 @@
       }).catch(function () {});
     }
 
-    function injectOrUpdateBadge() {
-      if (!data || !cfg.badgeVisible(data)) {
-        if (navBadge) { navBadge.remove(); navBadge = null; }
-        return;
-      }
-      var anchor = settingsLink();
-      if (!anchor) return;
-      if (!navBadge) {
-        navBadge = document.createElement('a');
-        navBadge.href = '#';
-        navBadge.className = cfg.badgeClass;
-        navBadge.title = cfg.badgeTitle;
-        navBadge.addEventListener('click', function (e) { e.preventDefault(); openModal(); });
-        var ref = cfg.insertionPoint ? cfg.insertionPoint(anchor) : anchor.nextSibling;
-        anchor.parentNode.insertBefore(navBadge, ref);
-      }
-      cfg.updateBadge(navBadge, data);
-    }
+    // Nav "bubble" badge retired — the Exception Inbox is the only nav
+    // notification now. Kept as a no-op so refreshCount() (still called from
+    // the Inbox via window.gpiAlertBadges[key]) works unchanged without
+    // re-introducing the badge. cfg.badgeVisible / updateBadge /
+    // insertionPoint / badgeClass / badgeTitle are no longer used.
+    function injectOrUpdateBadge() {}
 
     function openModal() {
       closeModal();
@@ -416,22 +405,10 @@
       setData: function (d) { data = d; },
     };
 
-    if (cfg.initialDelay != null) {
-      setTimeout(refreshCount, cfg.initialDelay);
-    } else if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', refreshCount);
-    } else {
-      refreshCount();
-    }
-    if (cfg.pollMs) {
-      setInterval(function () {
-        if (document.hidden) return;  // don't poll background tabs
-        refreshCount();
-      }, cfg.pollMs);
-      document.addEventListener('visibilitychange', function () {
-        if (!document.hidden) refreshCount();
-      });
-    }
+    // No background polling or initial fetch: with the nav bubble gone the
+    // endpoint is only hit on demand — openModal() fetches fresh, and the
+    // Inbox calls refreshCount() after an action. (cfg.initialDelay / cfg.pollMs
+    // are no longer used.)
 
     return api;
   }
