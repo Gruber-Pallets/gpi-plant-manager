@@ -27,14 +27,27 @@ work-schedule would cause an absence/leave to be rejected on a plant workday.
 - Not an in-app page; a CLI script run on Railway, matching the existing
   `scripts/diagnose_*.py` diagnostics.
 
+## Run path (Postgres is optional)
+
+The script must be runnable from a laptop via `railway run`, which injects
+Odoo creds but **cannot reach the internal Railway Postgres**. So Odoo is the
+required data source and Postgres is optional enrichment, degrading gracefully
+(matching the existing `diagnose_*.py` scripts):
+
+- **Population:** active employees from Odoo (`fetch_employees()`).
+- **Plant work-week:** read from `schedule_store.current().work_weekdays` when
+  Postgres is reachable; otherwise default Mon–Fri and print a NOTE.
+- **Reserve filter:** when the local roster (`staffing.load_roster()`) is
+  reachable, restrict to rostered people and drop reserves (joined by Odoo
+  `employee_id`, **not by name** — display names differ from Odoo full names,
+  e.g. "Gerardo Vergara" vs "Gerardo Vergara Quintero"). When Postgres isn't
+  reachable, list all active Odoo employees and print a NOTE that reserves
+  aren't filtered.
+
 ## Detection
 
 - **Plant operating weekdays:** `schedule_store.current().work_weekdays`
   (fallback Mon–Fri = `{0,1,2,3,4}`; 0=Mon..6=Sun, Python `weekday()`).
-- **Population:** `staffing.load_roster()` filtered to `active and not
-  reserve`, joined to Odoo by `employee_id` (Odoo id) — **not by name**, since
-  display names differ from Odoo full names (e.g. "Gerardo Vergara" vs
-  "Gerardo Vergara Quintero").
 - **Odoo reads (read-only):**
   - `fetch_employees()` → `{id: resource_calendar_id}`
   - `fetch_work_schedules()` → `{cal_id: (name, is_flexible)}`

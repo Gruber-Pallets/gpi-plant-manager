@@ -6,10 +6,14 @@ refuses with "The following employees are not supposed to work during that
 period" when the employee's resource.calendar has no working hours that day —
 even though the plant schedule had them on. PR #7 made that sync best-effort so
 it no longer blocks the manager, but the absence then never reaches Odoo Time
-Off. This script finds every active, non-reserve employee whose Odoo calendar
-would trigger that rejection, so HR can fix the calendars in Odoo.
+Off. This script finds every active employee whose Odoo calendar would trigger
+that rejection, so HR can fix the calendars in Odoo.
 
-Run on Railway (needs ODOO_* creds; writes nothing):
+Population comes from Odoo (active employees); the local roster (Postgres) is
+used only as optional enrichment to drop reserves and read the real plant
+work-week. Both degrade gracefully when Postgres isn't reachable — so this runs
+from a laptop via `railway run`, which injects Odoo creds but can't reach the
+internal Postgres:
 
     railway run python scripts/diagnose_odoo_calendar_conflicts.py [--all]
 
@@ -26,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 _WD_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_DEFAULT_WEEKDAYS = frozenset({0, 1, 2, 3, 4})  # Mon–Fri
 
 # Conflict buckets, in report order. "ok" is intentionally absent.
 _BUCKETS = [
@@ -64,38 +69,80 @@ def _fmt_days(days) -> str:
     return ", ".join(_WD_ABBR[d] for d in sorted(days)) if days else "—"
 
 
+def _plant_weekdays():
+    """(weekdays, note). Reads the real plant work-week from Postgres; falls
+    back to Mon–Fri (with a note) when the DB isn't reachable."""
+    try:
+        from zira_dashboard import schedule_store
+
+        wd = schedule_store.current().work_weekdays
+        if wd:
+            return frozenset(wd), None
+        return _DEFAULT_WEEKDAYS, None
+    except Exception as e:  # noqa: BLE001 -- DB optional; default the work-week
+        return _DEFAULT_WEEKDAYS, (
+            f"Plant work-week unavailable ({type(e).__name__}); assuming Mon–Fri."
+        )
+
+
+def _load_roster_by_id():
+    """({odoo_id: Person}, note). Optional Postgres enrichment used to restrict
+    to rostered people and drop reserves. Returns (None, note) when the DB
+    isn't reachable, so the caller falls back to all active Odoo employees."""
+    try:
+        from zira_dashboard import staffing
+
+        by_id = {
+            int(p.employee_id): p
+            for p in staffing.load_roster()
+            if p.employee_id is not None
+        }
+        return by_id, None
+    except Exception as e:  # noqa: BLE001 -- roster is optional enrichment
+        return None, (
+            f"Local roster unavailable ({type(e).__name__}); listing ALL active "
+            "Odoo employees (reserves not filtered out)."
+        )
+
+
 def _gather_rows(plant_weekdays):
-    """Join the local roster to Odoo calendar data; classify each person.
+    """Classify active Odoo employees against the plant workdays.
 
-    Returns a list of row dicts. Imports zira_dashboard lazily so the pure
-    classifier above can be imported (and tested) without Odoo creds.
+    Returns (rows, notes). Odoo is the population; the local roster is optional.
+    Imports zira_dashboard lazily so the pure classifier above stays importable
+    (and testable) without Odoo creds.
     """
-    from zira_dashboard import odoo_client, schedule_store, staffing  # noqa: F401
+    from zira_dashboard import odoo_client
 
-    roster = [p for p in staffing.load_roster() if p.active and not p.reserve]
+    employees = odoo_client.fetch_employees()  # active only
+    roster_by_id, roster_note = _load_roster_by_id()
 
-    # Odoo employee id -> resource.calendar id (or None).
-    emp_cal: dict[int, int | None] = {}
-    for e in odoo_client.fetch_employees():
-        cal_id = odoo_client.unwrap_m2o(e.get("resource_calendar_id"))
-        valid = isinstance(cal_id, int) and not isinstance(cal_id, bool)
-        emp_cal[int(e["id"])] = cal_id if valid else None
-
-    # calendar id -> (name, is_flexible)
     cal_meta = {
         int(s["id"]): (s.get("name") or "(unnamed)", bool(s.get("is_flexible")))
         for s in odoo_client.fetch_work_schedules()
     }
 
+    emp_cal: dict[int, int | None] = {}
+    for e in employees:
+        cal_id = odoo_client.unwrap_m2o(e.get("resource_calendar_id"))
+        valid = isinstance(cal_id, int) and not isinstance(cal_id, bool)
+        emp_cal[int(e["id"])] = cal_id if valid else None
+
     cal_ids = {c for c in emp_cal.values() if c is not None}
-    cal_hours = odoo_client.fetch_calendar_hours(cal_ids)
-    covered = {cid: {int(wd) for wd in days} for cid, days in cal_hours.items()}
+    covered = {
+        cid: {int(wd) for wd in days}
+        for cid, days in odoo_client.fetch_calendar_hours(cal_ids).items()
+    }
 
     plant = set(plant_weekdays)
     rows = []
-    for p in roster:
-        eid = p.employee_id
-        cal_id = emp_cal.get(int(eid)) if eid is not None else None
+    for e in employees:
+        eid = int(e["id"])
+        if roster_by_id is not None:
+            p = roster_by_id.get(eid)
+            if p is None or p.reserve:
+                continue  # not on our roster, or a reserve — never declared absent
+        cal_id = emp_cal.get(eid)
         has_cal = cal_id is not None
         if has_cal:
             cal_name, is_flex = cal_meta.get(cal_id, ("(unknown)", False))
@@ -103,21 +150,25 @@ def _gather_rows(plant_weekdays):
         else:
             cal_name, is_flex, cov = "(no Odoo work schedule)", False, set()
         rows.append({
-            "name": p.name,
+            "name": e.get("name") or f"(id {eid})",
             "odoo_id": eid,
             "cal_name": cal_name,
             "covered": cov,
             "missing": plant - cov,
             "verdict": classify_conflict(plant, cov, is_flexible=is_flex, has_calendar=has_cal),
         })
-    return rows
+    return rows, [n for n in (roster_note,) if n]
 
 
-def _print_report(rows, plant_weekdays, show_all: bool) -> None:
+def _print_report(rows, plant_weekdays, show_all: bool, notes=()) -> None:
+    for note in notes:
+        print(f"NOTE: {note}")
+    if notes:
+        print()
     conflicts = [r for r in rows if r["verdict"] != "ok"]
     print(
-        f"{len(conflicts)} of {len(rows)} active non-reserve employees have an "
-        f"Odoo work-schedule conflict (plant runs {_fmt_days(plant_weekdays)})."
+        f"{len(conflicts)} of {len(rows)} employees have an Odoo work-schedule "
+        f"conflict (plant runs {_fmt_days(plant_weekdays)})."
     )
     print()
     for key, title in _BUCKETS:
@@ -153,11 +204,9 @@ def _parse_args(argv):
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
-    from zira_dashboard import schedule_store
-
-    plant_weekdays = schedule_store.current().work_weekdays or frozenset({0, 1, 2, 3, 4})
-    rows = _gather_rows(plant_weekdays)
-    _print_report(rows, plant_weekdays, show_all=args.all)
+    plant_weekdays, week_note = _plant_weekdays()
+    rows, notes = _gather_rows(plant_weekdays)
+    _print_report(rows, plant_weekdays, show_all=args.all, notes=([week_note] if week_note else []) + notes)
     return 0
 
 
