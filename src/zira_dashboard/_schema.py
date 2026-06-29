@@ -1011,4 +1011,14 @@ CREATE TABLE IF NOT EXISTS inbox_open_items (
   first_seen     TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 2026-06-29: weekly Odoo calendar-conflict monitor state (single row).
+-- reported_emp_ids is the conflict set last reported; last_run_at gates the
+-- ~weekly cadence so frequent redeploys only re-check the gate.
+CREATE TABLE IF NOT EXISTS calendar_conflict_monitor (
+  id                INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  odoo_task_id      INTEGER,
+  reported_emp_ids  INTEGER[] NOT NULL DEFAULT '{}',
+  last_run_at       TIMESTAMPTZ
+);
 """
