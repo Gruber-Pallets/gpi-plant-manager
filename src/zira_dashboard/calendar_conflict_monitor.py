@@ -7,6 +7,16 @@ See docs/superpowers/specs/2026-06-29-calendar-conflict-monitor-design.md
 
 from __future__ import annotations
 
+import logging
+from datetime import datetime, timedelta, timezone
+
+from . import calendar_conflicts, db, odoo_client
+
+_log = logging.getLogger(__name__)
+
+THROTTLE = timedelta(days=7)
+_TASK_NAME = "Odoo work-schedule conflicts"
+
 
 def decide(current_ids, reported_ids) -> dict:
     """Pure diff of the conflict employee-id sets.
@@ -25,3 +35,99 @@ def decide(current_ids, reported_ids) -> dict:
         # `if changed` branch. "changed AND current set empty" → archive.
         "now_empty": bool(added or removed) and len(current) == 0,
     }
+
+
+def _load_state() -> dict:
+    rows = db.query(
+        "SELECT odoo_task_id, reported_emp_ids, last_run_at "
+        "FROM calendar_conflict_monitor WHERE id = 1"
+    )
+    if not rows:
+        return {"odoo_task_id": None, "reported_emp_ids": [], "last_run_at": None}
+    r = rows[0]
+    return {
+        "odoo_task_id": r["odoo_task_id"],
+        "reported_emp_ids": list(r["reported_emp_ids"] or []),
+        "last_run_at": r["last_run_at"],
+    }
+
+
+def _save_state(odoo_task_id, reported_emp_ids, last_run_at) -> None:
+    db.execute(
+        "INSERT INTO calendar_conflict_monitor (id, odoo_task_id, reported_emp_ids, last_run_at) "
+        "VALUES (1, %s, %s, %s) "
+        "ON CONFLICT (id) DO UPDATE SET "
+        "  odoo_task_id = EXCLUDED.odoo_task_id, "
+        "  reported_emp_ids = EXCLUDED.reported_emp_ids, "
+        "  last_run_at = EXCLUDED.last_run_at",
+        (odoo_task_id, sorted(reported_emp_ids), last_run_at),
+    )
+
+
+def _build_task_body(conflicts) -> str:
+    rows = sorted(conflicts, key=lambda c: c["name"].lower())
+    items = []
+    for c in rows:
+        if c["verdict"] == "missing_days":
+            detail = f"calendar {c['cal_name']} missing {calendar_conflicts.fmt_days(c['missing'])}"
+        elif c["verdict"] == "flexible":
+            detail = f"calendar {c['cal_name']} is flexible / has no fixed hours"
+        else:
+            detail = "no Odoo work schedule"
+        items.append(f"<li>{c['name']} (id {c['odoo_id']}) — {detail}</li>")
+    return (
+        "<p>These employees' Odoo work schedule has no working hours on a plant "
+        "workday, so declaring them absent can't sync to Odoo Time Off. Fix each "
+        "one's Working Schedule in Odoo.</p><ul>" + "".join(items) + "</ul>"
+    )
+
+
+def _summary_comment(decision, names_by_id) -> str:
+    parts = []
+    if decision["added"]:
+        parts.append("New conflicts: " + ", ".join(names_by_id.get(i, f"id {i}") for i in decision["added"]))
+    if decision["removed"]:
+        parts.append("Resolved: " + ", ".join(f"id {i}" for i in decision["removed"]))
+    return "; ".join(parts) or "Updated."
+
+
+def run_once(force: bool = False) -> dict:
+    """Weekly check. Best-effort; raises propagate to the warmer (logged/swallowed)."""
+    state = _load_state()
+    now = datetime.now(timezone.utc)
+    if not force and state["last_run_at"] and (now - state["last_run_at"]) < THROTTLE:
+        return {"skipped": "throttled"}
+
+    conflicts = calendar_conflicts.current_conflicts()
+    names_by_id = {int(c["odoo_id"]): c["name"] for c in conflicts if c.get("odoo_id") is not None}
+    current_ids = set(names_by_id)
+    reported = set(state["reported_emp_ids"])
+    decision = decide(current_ids, reported)
+    task_id = state["odoo_task_id"]
+
+    if decision["changed"]:
+        if decision["now_empty"]:
+            if task_id:
+                odoo_client.post_task_message(task_id, "✅ All Odoo work-schedule conflicts resolved.")
+                odoo_client.update_task(task_id, active=False)
+            task_id = None
+        else:
+            if not task_id:
+                task_id = odoo_client.create_feedback_task(
+                    project_id=odoo_client.ensure_feedback_project(),
+                    name=_TASK_NAME,
+                    description_html=_build_task_body(conflicts),
+                    assignee_uid=odoo_client.authenticate(),
+                    tag_id=None,
+                    deadline=(now.date() + timedelta(days=7)).isoformat(),
+                )
+            else:
+                odoo_client.update_task(task_id, description=_build_task_body(conflicts))
+            odoo_client.post_task_message(task_id, _summary_comment(decision, names_by_id))
+
+    _save_state(odoo_task_id=task_id, reported_emp_ids=current_ids, last_run_at=now)
+    _log.info(
+        "calendar-conflict monitor: %d conflict(s), changed=%s, task=%s",
+        len(current_ids), decision["changed"], task_id,
+    )
+    return {"changed": decision["changed"], "now_empty": decision["now_empty"], "task_id": task_id, "count": len(current_ids)}
