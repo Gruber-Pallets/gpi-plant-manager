@@ -199,6 +199,34 @@ async def _tick_forklift():
     else:
         result = await asyncio.to_thread(forklift_snapshot.snapshot_today, None, plant_today())
         _log.warning("forklift warmer: snapshot today (history=%d days) -> %s", days, result)
+        await asyncio.to_thread(_capture_forklift_ontime)
+
+
+def _capture_forklift_ontime() -> None:
+    """Forward-capture today's on-time/utilization from the dashboard endpoint
+    into today's forklift_driver_daily row (the completions snapshot can't
+    supply these). Best-effort: logs and swallows; never raises into the warmer.
+    Leaves calls/avg_ms/max_ms (owned by snapshot_today) untouched."""
+    from . import (
+        forklift_client,
+        forklift_ingest,
+        forklift_snapshot,
+        forklift_store,
+    )
+    try:
+        today = plant_today()
+        start_ms = forklift_snapshot._day_start_ms(today)
+        dash = forklift_client.fetch_dashboard(since=start_ms)
+        id_to_name = {str(d.get("id")): d.get("name")
+                      for d in (forklift_client.fetch_drivers() or [])
+                      if d.get("id") is not None}
+        metric_rows = forklift_ingest.driver_metrics_from_dashboard(dash, id_to_name)
+        for r in metric_rows:
+            r["day"] = today
+        n = forklift_store.upsert_driver_metrics(metric_rows)
+        _log.warning("forklift warmer: captured on-time metrics -> %d drivers", n)
+    except Exception as exc:  # noqa: BLE001 - best-effort, never fatal
+        _log.warning("forklift warmer: on-time capture failed: %s", exc)
 
 
 async def _tick_inbox_reconcile():

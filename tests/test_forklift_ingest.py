@@ -132,3 +132,20 @@ def test_build_driver_daily_maps_leaderboard_rows():
 def test_build_calls_daily_handles_empty_payloads():
     row = forklift_ingest.build_calls_daily(date(2026, 6, 26), {}, [])
     assert row["total_calls"] == 0 and row["by_station"] == {} and row["by_hour"] == {}
+
+
+def test_driver_metrics_from_dashboard_maps_names_to_ids():
+    dashboard = {"driverLeaderboard": [
+        {"name": "Trent", "onTime": 18, "late": 2,
+         "totalOnCallMs": 700000, "availableMs": 3600000, "utilizationPct": 19.4},
+        {"name": "Ghost", "onTime": 5, "late": 0,
+         "totalOnCallMs": 1000, "availableMs": 2000, "utilizationPct": 50.0},
+    ]}
+    id_to_name = {"d1": "Trent"}
+    rows = forklift_ingest.driver_metrics_from_dashboard(dashboard, id_to_name)
+    trent = next(r for r in rows if r["name"] == "Trent")
+    assert trent["driver_id"] == "d1"      # resolved via name->id
+    assert trent["on_time"] == 18 and trent["late"] == 2
+    assert trent["on_call_ms"] == 700000 and trent["available_ms"] == 3600000
+    ghost = next(r for r in rows if r["name"] == "Ghost")
+    assert ghost["driver_id"] == "Ghost"   # fallback to name when unmapped

@@ -128,6 +128,32 @@ def aggregate_completions(items: list[dict], id_to_name: dict, tz) -> tuple[list
     return calls_rows, driver_rows
 
 
+def driver_metrics_from_dashboard(dashboard: dict, id_to_name: dict) -> list[dict]:
+    """Extract per-driver on-time/late/utilization rows from a /api/dashboard
+    payload. Resolves driver_id by reversing id_to_name on the display name;
+    falls back to the name itself when unmapped.
+
+    Only the on-time/utilization fields are returned (the columns
+    upsert_driver_metrics fills); calls/avg_ms/max_ms stay owned by the
+    completions snapshot."""
+    name_to_id = {v: k for k, v in (id_to_name or {}).items()}
+    out = []
+    for d in (dashboard or {}).get("driverLeaderboard", []) or []:
+        name = str(d.get("name") or "").strip()
+        if not name:
+            continue
+        out.append({
+            "driver_id": name_to_id.get(name, name),
+            "name": name,
+            "on_time": int(d.get("onTime") or 0),
+            "late": int(d.get("late") or 0),
+            "on_call_ms": int(d.get("totalOnCallMs") or 0),
+            "available_ms": int(d.get("availableMs") or 0),
+            "utilization_pct": float(d.get("utilizationPct") or 0),
+        })
+    return out
+
+
 def build_driver_daily(day: date, dashboard: dict) -> list[dict]:
     rows = []
     for d in (dashboard or {}).get("driverLeaderboard", []) or []:
