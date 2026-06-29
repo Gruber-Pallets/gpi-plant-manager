@@ -10,6 +10,7 @@ Routes:
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import time as _time
 
 from fastapi import APIRouter, Query, Request
@@ -396,7 +397,7 @@ def settings_page(
         try:
             forklift_ctx.update(_forklift_score_ctx(_fl))
         except Exception:
-            pass
+            logging.debug("forklift GOAT-Score context unavailable", exc_info=True)
     except Exception:
         # Never 500 the whole settings page if the forklift data source / DB is
         # unreachable; the template guards on these keys being absent.
@@ -673,6 +674,8 @@ def _forklift_score_ctx(settings) -> dict:
     (None = auto), and one sample scored day for the live worked example."""
     from .. import forklift_score, forklift_settings, forklift_store
 
+    # algo_throughput is a don't-care here: it only feeds the demand-advisor
+    # knobs, not score_config(), which is all we read off the resolved settings.
     resolved = forklift_settings.resolve(settings, algo_throughput=0.0)
     cfg = resolved.score_config()
     algo = forklift_score.DEFAULT_SCORE_CONFIG

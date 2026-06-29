@@ -128,9 +128,6 @@ def _aggregate_year(year: int) -> list[dict]:
     return out
 
 
-_EMPTY_LEADERBOARD = {"most_calls": [], "on_time": [], "fastest": [], "overall": []}
-
-
 def _metric_row(a: dict) -> dict:
     """Project an internal accumulator to a clean metric-row shape, dropping the
     bookkeeping keys (ms_weighted/score_sum/score_days) callers shouldn't see."""
@@ -182,7 +179,9 @@ def leaderboard(start: dt.date, end: dt.date,
                 "overall": overall}
     except Exception as exc:  # noqa: BLE001 - never raise into a request path
         _log.warning("forklift awards: leaderboard failed: %s", exc)
-        return dict(_EMPTY_LEADERBOARD)
+        # Fresh literal each call so a caller can't mutate a shared singleton's
+        # inner lists (a shallow dict copy of a module constant would alias them).
+        return {"most_calls": [], "on_time": [], "fastest": [], "overall": []}
 
 
 FORKLIFT_SCOPES = ("forklift_goat", "forklift_top_day",
