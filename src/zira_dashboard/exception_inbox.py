@@ -12,6 +12,7 @@ from datetime import date, time, timedelta
 
 from . import plant_day, schedule_store, staffing
 from . import inbox_keys
+from . import time_off_context
 
 _log = logging.getLogger(__name__)
 
@@ -119,6 +120,9 @@ def _pending_time_off(today: date, limit: int = 8) -> tuple[int, list[dict]]:
     shaped = [
         {
             "id": r["id"],
+            "person_odoo_id": r["person_odoo_id"],
+            "date_from": r["date_from"],
+            "date_to": r["date_to"],
             "name": r["name"],
             "label": _time_off_label(r),
             "detail": f"{r['leave_type']} · {str(r['state']).replace('_', ' ')}",
@@ -137,6 +141,9 @@ def _pending_time_off(today: date, limit: int = 8) -> tuple[int, list[dict]]:
         }
         for r in rows
     ]
+    coverage = time_off_context.coverage_breakdowns_for(shaped)
+    for row in shaped:
+        row["coverage"] = coverage.get(row["id"])
     return int(rows[0].get("total_count") or 0) if rows else 0, shaped
 
 

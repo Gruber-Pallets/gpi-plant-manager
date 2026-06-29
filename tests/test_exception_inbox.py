@@ -186,6 +186,8 @@ def test_pending_time_off_uses_window_count(monkeypatch):
         }]
 
     monkeypatch.setattr(db, "query", fake_query)
+    monkeypatch.setattr(exception_inbox.time_off_context,
+                        "coverage_breakdowns_for", lambda rows: {})
 
     count, rows = exception_inbox._pending_time_off(date(2026, 6, 19), limit=8)
 
@@ -195,6 +197,23 @@ def test_pending_time_off_uses_window_count(monkeypatch):
     assert count == 4
     assert rows[0]["name"] == "Eli"
     assert rows[0]["row_key"] == "time_off:20:confirm"
+
+
+def test_pending_time_off_attaches_coverage(monkeypatch):
+    monkeypatch.setattr(db, "query", lambda sql, params: [{
+        "id": 20, "person_odoo_id": 7, "odoo_leave_id": 99, "name": "Eli",
+        "shape": "full_day", "state": "confirm",
+        "date_from": date(2026, 6, 20), "date_to": date(2026, 6, 20),
+        "hour_from": None, "hour_to": None, "sync_error": None,
+        "leave_type": "Vacation", "total_count": 1,
+    }])
+    monkeypatch.setattr(
+        exception_inbox.time_off_context, "coverage_breakdowns_for",
+        lambda rows: {20: {"severity": "warn", "peak_count": 3}})
+
+    _count, rows = exception_inbox._pending_time_off(date(2026, 6, 19), limit=8)
+
+    assert rows[0]["coverage"] == {"severity": "warn", "peak_count": 3}
 
 
 def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
