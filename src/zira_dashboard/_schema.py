@@ -807,6 +807,19 @@ ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS throughput_override NUMER
 ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS utilization_override NUMERIC;
 ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS plan_for_percentile_override NUMERIC;
 ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS history_samples_override INTEGER;
+-- Forklift recognition / GOAT-score settings (2026-06-29): nullable overrides
+-- for the composite-score config (NULL = "auto" / use forklift_score's own
+-- DEFAULT_SCORE_CONFIG value). Weights stored raw (renormalized at compute
+-- time). Additive + idempotent for fresh and existing installs.
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS score_w_calls NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS score_w_ontime NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS score_w_speed NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS score_w_util NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS score_target_calls NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS score_ontime_floor NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS score_fast_secs NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS score_slow_secs NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS score_min_calls INTEGER;
 
 -- Department-driven rounding (2026-06-04). Named rounding "systems" (each a set
 -- of the four windows) are selected by the static department an employee works

@@ -37,6 +37,24 @@ def test_effective_throughput_floor():
     assert r.effective_throughput == pytest.approx(0.1)
 
 
+def test_score_config_defaults_when_unset():
+    from zira_dashboard import forklift_score as fscore
+    s = fs.Settings()  # all overrides None
+    cfg = fs.resolve(s, algo_throughput=16).score_config()
+    assert isinstance(cfg, fscore.ScoreConfig)
+    assert cfg.weights == {"calls": 40.0, "ontime": 30.0, "speed": 20.0, "util": 10.0}
+    assert cfg.min_calls == 8 and cfg.target_calls == 25.0
+    assert cfg.ontime_floor == 80.0 and cfg.fast_secs == 30.0 and cfg.slow_secs == 180.0
+
+
+def test_score_config_applies_overrides():
+    s = fs.Settings(score_w_calls=50, score_w_ontime=20, score_w_speed=20,
+                    score_w_util=10, score_min_calls=12, score_target_calls=30)
+    cfg = fs.resolve(s, algo_throughput=16).score_config()
+    assert cfg.weights["calls"] == 50.0 and cfg.min_calls == 12 and cfg.target_calls == 30.0
+    assert cfg.weights["ontime"] == 20.0 and cfg.weights["util"] == 10.0
+
+
 pytestmark_db = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"), reason="needs Postgres")
 

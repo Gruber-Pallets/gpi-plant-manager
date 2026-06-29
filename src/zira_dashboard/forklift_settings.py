@@ -6,6 +6,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import RLock
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from zira_dashboard import forklift_score as fs
 
 # The algorithm's own default values for the policy knobs (driver throughput is
 # data-derived elsewhere and passed in). These are the grey "tick" values.
@@ -24,6 +28,22 @@ class Settings:
     history_samples_override: int | None = None
     include_loading_jockeying: bool = False
     coldstart_calls_per_day: float = 0.0
+    # GOAT composite-score overrides (NULL = auto / forklift_score default).
+    # Weights stored raw (renormalized at compute time).
+    score_w_calls: float | None = None
+    score_w_ontime: float | None = None
+    score_w_speed: float | None = None
+    score_w_util: float | None = None
+    score_target_calls: float | None = None
+    score_ontime_floor: float | None = None
+    score_fast_secs: float | None = None
+    score_slow_secs: float | None = None
+    score_min_calls: int | None = None
+
+
+def _f(override, default):
+    """Override coerced to float when set, else the algorithm default."""
+    return float(override) if override is not None else default
 
 
 @dataclass(frozen=True)
@@ -32,19 +52,60 @@ class Resolved:
     utilization: float
     percentile: float
     history_samples: int
+    # Score-config overrides threaded from Settings (None = auto).
+    score_w_calls: float | None = None
+    score_w_ontime: float | None = None
+    score_w_speed: float | None = None
+    score_w_util: float | None = None
+    score_target_calls: float | None = None
+    score_ontime_floor: float | None = None
+    score_fast_secs: float | None = None
+    score_slow_secs: float | None = None
+    score_min_calls: int | None = None
 
     @property
     def effective_throughput(self) -> float:
         return max(0.1, self.throughput * self.utilization)
 
+    def score_config(self) -> "fs.ScoreConfig":
+        """The composite GOAT-score config: each field is the override when set,
+        else forklift_score's own DEFAULT_SCORE_CONFIG value."""
+        from zira_dashboard import forklift_score as fs
+        d = fs.DEFAULT_SCORE_CONFIG
+        weights = {
+            "calls": _f(self.score_w_calls, d.weights["calls"]),
+            "ontime": _f(self.score_w_ontime, d.weights["ontime"]),
+            "speed": _f(self.score_w_speed, d.weights["speed"]),
+            "util": _f(self.score_w_util, d.weights["util"]),
+        }
+        return fs.ScoreConfig(
+            weights=weights,
+            target_calls=_f(self.score_target_calls, d.target_calls),
+            ontime_floor=_f(self.score_ontime_floor, d.ontime_floor),
+            fast_secs=_f(self.score_fast_secs, d.fast_secs),
+            slow_secs=_f(self.score_slow_secs, d.slow_secs),
+            min_calls=int(_f(self.score_min_calls, d.min_calls)),
+        )
+
 
 def resolve(s: Settings, *, algo_throughput: float) -> Resolved:
-    """Effective parameters: each override if set, else the algorithm's value."""
+    """Effective parameters: each override if set, else the algorithm's value.
+    The score overrides are threaded through verbatim (None = auto); they're
+    resolved against forklift_score's defaults in Resolved.score_config()."""
     return Resolved(
         throughput=s.throughput_override if s.throughput_override is not None else algo_throughput,
         utilization=s.utilization_override if s.utilization_override is not None else DEFAULT_UTILIZATION,
         percentile=s.plan_for_percentile_override if s.plan_for_percentile_override is not None else DEFAULT_PLAN_FOR_PERCENTILE,
         history_samples=s.history_samples_override if s.history_samples_override is not None else DEFAULT_HISTORY_SAMPLES,
+        score_w_calls=s.score_w_calls,
+        score_w_ontime=s.score_w_ontime,
+        score_w_speed=s.score_w_speed,
+        score_w_util=s.score_w_util,
+        score_target_calls=s.score_target_calls,
+        score_ontime_floor=s.score_ontime_floor,
+        score_fast_secs=s.score_fast_secs,
+        score_slow_secs=s.score_slow_secs,
+        score_min_calls=s.score_min_calls,
     )
 
 
@@ -72,6 +133,15 @@ def _row_to_settings(row: dict) -> Settings:
         history_samples_override=_i(row.get("history_samples_override")),
         include_loading_jockeying=bool(row.get("include_loading_jockeying", False)),
         coldstart_calls_per_day=float(row.get("coldstart_calls_per_day") or 0.0),
+        score_w_calls=_f(row.get("score_w_calls")),
+        score_w_ontime=_f(row.get("score_w_ontime")),
+        score_w_speed=_f(row.get("score_w_speed")),
+        score_w_util=_f(row.get("score_w_util")),
+        score_target_calls=_f(row.get("score_target_calls")),
+        score_ontime_floor=_f(row.get("score_ontime_floor")),
+        score_fast_secs=_f(row.get("score_fast_secs")),
+        score_slow_secs=_f(row.get("score_slow_secs")),
+        score_min_calls=_i(row.get("score_min_calls")),
     )
 
 
@@ -80,7 +150,10 @@ def _load_from_db() -> Settings:
     rows = db.query(
         "SELECT enabled, throughput_override, utilization_override, "
         "plan_for_percentile_override, history_samples_override, "
-        "include_loading_jockeying, coldstart_calls_per_day "
+        "include_loading_jockeying, coldstart_calls_per_day, "
+        "score_w_calls, score_w_ontime, score_w_speed, score_w_util, "
+        "score_target_calls, score_ontime_floor, score_fast_secs, "
+        "score_slow_secs, score_min_calls "
         "FROM forklift_settings WHERE id = 1"
     )
     return _row_to_settings(rows[0]) if rows else DEFAULT
@@ -105,18 +178,33 @@ def save(s: Settings) -> None:
         "INSERT INTO forklift_settings "
         "(id, enabled, throughput_override, utilization_override, "
         "plan_for_percentile_override, history_samples_override, "
-        "include_loading_jockeying, coldstart_calls_per_day) "
-        "VALUES (1, %s, %s, %s, %s, %s, %s, %s) "
+        "include_loading_jockeying, coldstart_calls_per_day, "
+        "score_w_calls, score_w_ontime, score_w_speed, score_w_util, "
+        "score_target_calls, score_ontime_floor, score_fast_secs, "
+        "score_slow_secs, score_min_calls) "
+        "VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, "
         "throughput_override = EXCLUDED.throughput_override, "
         "utilization_override = EXCLUDED.utilization_override, "
         "plan_for_percentile_override = EXCLUDED.plan_for_percentile_override, "
         "history_samples_override = EXCLUDED.history_samples_override, "
         "include_loading_jockeying = EXCLUDED.include_loading_jockeying, "
-        "coldstart_calls_per_day = EXCLUDED.coldstart_calls_per_day",
+        "coldstart_calls_per_day = EXCLUDED.coldstart_calls_per_day, "
+        "score_w_calls = EXCLUDED.score_w_calls, "
+        "score_w_ontime = EXCLUDED.score_w_ontime, "
+        "score_w_speed = EXCLUDED.score_w_speed, "
+        "score_w_util = EXCLUDED.score_w_util, "
+        "score_target_calls = EXCLUDED.score_target_calls, "
+        "score_ontime_floor = EXCLUDED.score_ontime_floor, "
+        "score_fast_secs = EXCLUDED.score_fast_secs, "
+        "score_slow_secs = EXCLUDED.score_slow_secs, "
+        "score_min_calls = EXCLUDED.score_min_calls",
         (s.enabled, s.throughput_override, s.utilization_override,
          s.plan_for_percentile_override, s.history_samples_override,
-         s.include_loading_jockeying, s.coldstart_calls_per_day),
+         s.include_loading_jockeying, s.coldstart_calls_per_day,
+         s.score_w_calls, s.score_w_ontime, s.score_w_speed, s.score_w_util,
+         s.score_target_calls, s.score_ontime_floor, s.score_fast_secs,
+         s.score_slow_secs, s.score_min_calls),
     )
     with _lock:
         _cache = s
