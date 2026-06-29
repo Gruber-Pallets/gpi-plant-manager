@@ -62,6 +62,10 @@ def _render_reminder(row: dict[str, Any], target: date, today: date) -> dict:
         }
     hf = _fmt_hour(row.get("hour_from"))
     ht = _fmt_hour(row.get("hour_to"))
+    # In practice an approved (state='validate') row reaches here as 'midday_gap':
+    # the poller's _mirror_shape_and_hours collapses partial leaves to that shape
+    # on sync. The late_arrival/early_leave arms are kept as forward-compatible
+    # handling in case that mapping ever preserves the finer shapes.
     if shape == "late_arrival":
         detail = f"you're not due in until {ht}" if ht else "you have a late arrival"
     elif shape == "early_leave":
