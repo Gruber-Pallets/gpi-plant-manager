@@ -57,6 +57,49 @@ def upsert_driver_daily(rows: list[dict]) -> int:
     return len(rows)
 
 
+def upsert_driver_metrics(rows: list[dict]) -> int:
+    """Fill on-time/late/utilization columns for existing driver-day rows
+    without touching calls/avg_ms/max_ms. Rows missing in the table are
+    inserted with calls=0 (reconstruction may run before the snapshot).
+
+    Used by both write paths (the warmer's forward capture and the one-time
+    historical reconstruction); the per-call completions feed can't supply
+    these, so they come from the dashboard endpoint."""
+    from . import db
+    rows = list(rows)
+    if not rows:
+        return 0
+    with db.cursor() as cur:
+        for r in rows:
+            cur.execute(
+                """
+                INSERT INTO forklift_driver_daily
+                    (day, driver_id, name, calls, on_time, late,
+                     avg_ms, max_ms, utilization_pct, on_call_ms, available_ms,
+                     computed_at)
+                VALUES (%(day)s, %(driver_id)s, %(name)s, 0, %(on_time)s, %(late)s,
+                        0, 0, %(utilization_pct)s, %(on_call_ms)s, %(available_ms)s,
+                        now())
+                ON CONFLICT (day, driver_id) DO UPDATE SET
+                    on_time = EXCLUDED.on_time,
+                    late = EXCLUDED.late,
+                    utilization_pct = EXCLUDED.utilization_pct,
+                    on_call_ms = EXCLUDED.on_call_ms,
+                    available_ms = EXCLUDED.available_ms,
+                    computed_at = now()
+                """,
+                {"name": r.get("name", r["driver_id"]), **r},
+            )
+    return len(rows)
+
+
+def driver_rows_for_day(day) -> list[dict]:
+    from . import db
+    return db.query(
+        "SELECT * FROM forklift_driver_daily WHERE day = %s", (day,)
+    )
+
+
 def _coerce_json(value):
     """psycopg2 returns JSONB as dict already; tolerate str just in case."""
     return json.loads(value) if isinstance(value, str) else (value or {})

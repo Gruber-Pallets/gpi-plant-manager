@@ -73,3 +73,26 @@ def test_recent_driver_throughput_none_on_thin_data():
     db.bootstrap_schema()
     db.execute("DELETE FROM forklift_driver_daily")
     assert forklift_store.recent_driver_throughput(days=1) is None
+
+
+def test_upsert_driver_metrics_fills_ontime_without_clobbering_calls():
+    from zira_dashboard import db
+    db.bootstrap_schema()
+    day = date(2026, 4, 1)
+    db.execute("DELETE FROM forklift_driver_daily WHERE day = %s", (day,))
+    forklift_store.upsert_driver_daily([
+        {"day": day, "driver_id": "d1", "name": "Trent", "calls": 20,
+         "on_time": 0, "late": 0, "avg_ms": 50000, "max_ms": 90000,
+         "utilization_pct": 0, "on_call_ms": 600000, "available_ms": 0},
+    ])
+    forklift_store.upsert_driver_metrics([
+        {"day": day, "driver_id": "d1", "on_time": 18, "late": 2,
+         "on_call_ms": 700000, "available_ms": 3600000, "utilization_pct": 19.4},
+    ])
+    rows = forklift_store.driver_rows_for_day(day)
+    row = next(r for r in rows if r["driver_id"] == "d1")
+    assert row["calls"] == 20          # untouched
+    assert row["avg_ms"] == 50000      # untouched
+    assert row["on_time"] == 18
+    assert row["late"] == 2
+    assert round(float(row["utilization_pct"]), 1) == 19.4
