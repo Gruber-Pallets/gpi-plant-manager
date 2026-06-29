@@ -12,8 +12,9 @@ def test_schema_defines_employee_notifications_table():
 
 
 def test_schema_has_employee_notifications_indexes():
-    # Hard dedupe backstop: one notification per (request, kind).
-    assert "employee_notifications_dedupe" in SCHEMA_DDL
+    # Hard dedupe backstop: one notification per (request, kind). Uniqueness
+    # is the whole point of this index, so assert it explicitly.
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS employee_notifications_dedupe" in SCHEMA_DDL
     assert "(time_off_request_id, kind)" in SCHEMA_DDL
     # Fast unacknowledged lookup at sign-in.
     assert "employee_notifications_unack" in SCHEMA_DDL
