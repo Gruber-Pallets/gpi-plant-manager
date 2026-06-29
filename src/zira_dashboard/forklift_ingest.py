@@ -5,8 +5,8 @@ JSONB hour keys are stored as strings (slot number) for stable round-tripping.
 """
 from __future__ import annotations
 
-from collections import Counter
-from datetime import date
+from collections import Counter, defaultdict
+from datetime import date, datetime, timezone
 
 
 def build_calls_daily(day: date, dashboard: dict, history: list[dict]) -> dict:
@@ -38,6 +38,94 @@ def build_calls_daily(day: date, dashboard: dict, history: list[dict]) -> dict:
         "by_station": dict(by_station),
         "by_skill": dict(by_skill),
     }
+
+
+def _local_dt(ms: int, tz) -> datetime:
+    """Epoch milliseconds -> aware datetime in the plant timezone."""
+    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).astimezone(tz)
+
+
+def aggregate_completions(items: list[dict], id_to_name: dict, tz) -> tuple[list[dict], list[dict]]:
+    """Aggregate external-API completion items into the existing snapshot row
+    shapes, bucketed by plant-local day (and hour) from each item's createdAt.
+
+    Returns (calls_rows, driver_rows):
+      * calls_rows  - one row per plant-local day, matching forklift_calls_daily.
+      * driver_rows - one row per (day, completedBy), matching forklift_driver_daily.
+
+    Pure (no I/O). Items missing createdAt or completedBy are skipped. The feed
+    carries no priority/skill/late/utilization data, so those fields are 0/{}.
+    """
+    # Per-day aggregates.
+    day_total: dict[date, int] = defaultdict(int)
+    day_hour: dict[date, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    day_station: dict[date, Counter] = defaultdict(Counter)
+    # Per-(day, driver) aggregates.
+    drv_calls: dict[tuple, int] = defaultdict(int)
+    drv_response: dict[tuple, list[int]] = defaultdict(list)
+    drv_handling: dict[tuple, int] = defaultdict(int)
+
+    for it in items or []:
+        created = it.get("createdAt")
+        driver = it.get("completedBy")
+        if created is None or driver is None:
+            continue
+        local = _local_dt(int(created), tz)
+        day = local.date()
+        hour = local.hour
+
+        day_total[day] += 1
+        day_hour[day][hour] += 1
+        station = it.get("workstationName")
+        if station:
+            day_station[day][station] += 1
+
+        key = (day, driver)
+        drv_calls[key] += 1
+        resp = it.get("responseMs")
+        if resp is not None:
+            drv_response[key].append(int(resp))
+        handling = it.get("handlingMs")
+        if handling is not None:
+            drv_handling[key] += int(handling)
+
+    calls_rows: list[dict] = []
+    for day in sorted(day_total):
+        by_hour = {
+            str(h): {"calls": n, "overload": 0, "neglected": 0, "avg_minutes": 0}
+            for h, n in sorted(day_hour[day].items())
+        }
+        calls_rows.append({
+            "day": day,
+            "total_calls": day_total[day],
+            "urgent_calls": 0,
+            "overload_count": 0,
+            "neglected_count": 0,
+            "by_hour": by_hour,
+            "by_station": dict(day_station[day]),
+            "by_skill": {},
+        })
+
+    driver_rows: list[dict] = []
+    for (day, driver) in sorted(drv_calls, key=lambda k: (k[0], str(k[1]))):
+        responses = drv_response[(day, driver)]
+        avg_ms = round(sum(responses) / len(responses)) if responses else 0
+        max_ms = max(responses) if responses else 0
+        driver_rows.append({
+            "day": day,
+            "driver_id": str(driver),
+            "name": id_to_name.get(driver) or str(driver),
+            "calls": drv_calls[(day, driver)],
+            "on_time": 0,
+            "late": 0,
+            "avg_ms": avg_ms,
+            "max_ms": max_ms,
+            "utilization_pct": 0,
+            "on_call_ms": drv_handling[(day, driver)],
+            "available_ms": 0,
+        })
+
+    return calls_rows, driver_rows
 
 
 def build_driver_daily(day: date, dashboard: dict) -> list[dict]:
