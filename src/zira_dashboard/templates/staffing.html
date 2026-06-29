@@ -238,7 +238,7 @@
                     {% elif forklift_advisor.recommended %}
                       <span>{{ forklift_advisor.recommended }} Suggested</span>
                       {% if forklift_advisor.predicted_claim_seconds is not none %}
-                        <span>{{ '%.1f'|format(forklift_advisor.predicted_claim_seconds / 60.0) }} predicted TTC</span>
+                        <span>~{{ '%.1f'|format(forklift_advisor.predicted_claim_seconds / 60.0) }} Time-to-Claim</span>
                       {% else %}
                         <span>TTC building</span>
                       {% endif %}

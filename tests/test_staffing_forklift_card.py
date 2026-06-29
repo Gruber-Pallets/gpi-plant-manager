@@ -106,7 +106,7 @@ def test_forklift_bay_cell_renders_compact_advisor_summary():
     )
     assert "Forklift" in rendered
     assert "3 Suggested" in rendered
-    assert "2.9 predicted TTC" in rendered
+    assert "~2.9 Time-to-Claim" in rendered
     assert "✓" in rendered
     assert "forklift-bay-summary ok" in rendered
 
@@ -150,7 +150,7 @@ def test_forklift_bay_cell_renders_shortage_severity():
 
 
 def test_forklift_card_shows_time_to_claim_target():
-    """The compact bay summary keeps the recommended count and predicted TTC visible."""
+    """The compact bay summary keeps the recommended count and Time-to-Claim visible."""
     from zira_dashboard import forklift_demand
     from zira_dashboard.deps import templates
     model = {
@@ -166,7 +166,7 @@ def test_forklift_card_shows_time_to_claim_target():
         forklift_advisor=model,
     )
     assert "6 Suggested" in page
-    assert "2.9 predicted TTC" in page
+    assert "~2.9 Time-to-Claim" in page
     assert "algorithm:" not in page
 
 
