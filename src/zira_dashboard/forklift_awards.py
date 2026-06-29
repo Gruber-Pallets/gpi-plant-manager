@@ -131,3 +131,40 @@ def _aggregate_year(year: int) -> list[dict]:
         a["avg_ms"] = (a["ms_weighted"] / a["calls"]) if a["calls"] else 0
         out.append(a)
     return out
+
+
+def leaderboard(start: dt.date, end: dt.date,
+                cfg: fs.ScoreConfig = fs.DEFAULT_SCORE_CONFIG,
+                min_calls: int = 50) -> dict:
+    rows = driver_days(start, end)
+    by_driver: dict = {}
+    for r in rows:
+        a = by_driver.setdefault(r["driver_id"], {
+            "name": r["name"], "driver_id": r["driver_id"], "calls": 0,
+            "on_time": 0, "late": 0, "ms_weighted": 0,
+            "score_sum": 0.0, "score_days": 0})
+        a["calls"] += r["calls"]
+        a["on_time"] += r["on_time"] or 0
+        a["late"] += r["late"] or 0
+        a["ms_weighted"] += (r["avg_ms"] or 0) * r["calls"]
+        b = fs.daily_score(r, cfg)
+        if b is not None:
+            a["score_sum"] += b.score
+            a["score_days"] += 1
+    drivers = list(by_driver.values())
+    for a in drivers:
+        a["ontime_pct"] = (a["on_time"] / (a["on_time"] + a["late"]) * 100) if (a["on_time"] + a["late"]) else 0.0
+        a["avg_ms"] = (a["ms_weighted"] / a["calls"]) if a["calls"] else 0
+
+    most_calls = sorted(drivers, key=lambda a: (-a["calls"], a["name"]))
+    rate = [a for a in drivers if a["calls"] >= min_calls]
+    on_time = sorted(rate, key=lambda a: (-a["ontime_pct"], -a["calls"], a["name"]))
+    fastest = sorted(rate, key=lambda a: (a["avg_ms"], -a["calls"], a["name"]))
+    overall = sorted(
+        ({"name": a["name"], "driver_id": a["driver_id"],
+          "score": a["score_sum"] / a["score_days"], "days": a["score_days"],
+          "calls": a["calls"]}
+         for a in drivers if a["score_days"] > 0),
+        key=lambda a: (-a["score"], a["name"]))
+    return {"most_calls": most_calls, "on_time": on_time,
+            "fastest": fastest, "overall": overall}

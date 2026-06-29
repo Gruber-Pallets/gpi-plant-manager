@@ -47,3 +47,15 @@ def test_annual_fastest_respects_min_calls(rows):
     # Juan has the fastest avg (30s) but only 5 calls < min_calls -> excluded
     f = fa.annual_fastest(2026, min_calls=8)
     assert f["name"] != "Juan"
+
+
+def test_leaderboard_four_lists_with_gated_overall(rows):
+    lb = fa.leaderboard(dt.date(2026, 4, 1), dt.date(2026, 4, 30),
+                        fs.DEFAULT_SCORE_CONFIG, min_calls=8)
+    assert set(lb) == {"most_calls", "on_time", "fastest", "overall"}
+    # most_calls is volume-ranked, Trent's two days sum 41 -> top
+    assert lb["most_calls"][0]["name"] == "Trent"
+    # overall = avg of eligible daily scores; Juan (only sub-gate day) absent
+    assert all(r["name"] != "Juan" for r in lb["overall"])
+    # overall rows expose an average score and a day count
+    assert "score" in lb["overall"][0] and "days" in lb["overall"][0]
