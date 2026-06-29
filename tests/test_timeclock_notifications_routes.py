@@ -92,3 +92,58 @@ def test_notifications_screen_rejects_bad_token():
                       follow_redirects=False)
     assert resp.status_code == 303
     assert "/timeclock" in resp.headers["location"]
+
+
+def test_clock_out_shows_reminder_card(monkeypatch):
+    from datetime import datetime, timezone
+    from zira_dashboard import time_off_reminder, timeclock_sync, auto_lunch
+
+    monkeypatch.delenv("KIOSK_TIME_OFF_NOTIFY_ENABLED", raising=False)
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
+    monkeypatch.setattr(timeclock, "_time_off_redirect_if_salaried",
+                        lambda p, pid: None)
+    monkeypatch.setattr(
+        timeclock, "_open_log_row",
+        lambda *a, **k: (1, datetime(2026, 6, 29, 22, 0, tzinfo=timezone.utc)))
+    monkeypatch.setattr(auto_lunch, "note_employee_clock_out", lambda oid: None)
+    monkeypatch.setattr(timeclock_sync, "sync_one_by_id", lambda lid: None)
+    monkeypatch.setattr(
+        time_off_reminder, "reminder_for_person",
+        lambda oid, today: {"title": "Time off reminder 🌴",
+                            "body": "Heads up — you have approved time off "
+                                    "tomorrow (Tuesday, Jun 30). Enjoy!"})
+    token = timeclock._mint_token(1)
+
+    resp = client.post(f"/timeclock/clock-out/{token}")
+
+    assert resp.status_code == 200
+    assert "approved time off" in resp.text
+    assert "Got it" in resp.text
+    # Reminder present -> no 3s auto-redirect script. (The base template's
+    # idle-timeout script always contains location.href='/timeclock', so we
+    # key off the success-template's unique 3000ms delay instead.)
+    assert "}, 3000)" not in resp.text
+
+
+def test_clock_out_no_reminder_keeps_auto_redirect(monkeypatch):
+    from datetime import datetime, timezone
+    from zira_dashboard import time_off_reminder, timeclock_sync, auto_lunch
+
+    monkeypatch.delenv("KIOSK_TIME_OFF_NOTIFY_ENABLED", raising=False)
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
+    monkeypatch.setattr(timeclock, "_time_off_redirect_if_salaried",
+                        lambda p, pid: None)
+    monkeypatch.setattr(
+        timeclock, "_open_log_row",
+        lambda *a, **k: (1, datetime(2026, 6, 29, 22, 0, tzinfo=timezone.utc)))
+    monkeypatch.setattr(auto_lunch, "note_employee_clock_out", lambda oid: None)
+    monkeypatch.setattr(timeclock_sync, "sync_one_by_id", lambda lid: None)
+    monkeypatch.setattr(time_off_reminder, "reminder_for_person",
+                        lambda oid, today: None)
+    token = timeclock._mint_token(1)
+
+    resp = client.post(f"/timeclock/clock-out/{token}")
+
+    assert resp.status_code == 200
+    # No reminder -> success-template's 3s auto-redirect script is present.
+    assert "}, 3000)" in resp.text

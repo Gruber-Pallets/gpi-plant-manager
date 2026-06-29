@@ -660,6 +660,17 @@ def kiosk_clock_out(
     from .. import auto_lunch
     auto_lunch.note_employee_clock_out(odoo_id)
     background_tasks.add_task(timeclock_sync.sync_one_by_id, log_id)
+    # Day-before reminder: if today is the last working day before approved
+    # time off, the success screen shows a "time off tomorrow" card and skips
+    # the auto-redirect so they have to tap past it. Never block the clock-out
+    # on a reminder lookup failure.
+    time_off_reminder_card = None
+    if employee_notifications.notifications_enabled():
+        try:
+            time_off_reminder_card = time_off_reminder.reminder_for_person(
+                odoo_id, plant_today())
+        except Exception:
+            _log.exception("time-off reminder lookup failed for %s", odoo_id)
     return templates.TemplateResponse(
         request,
         "timeclock_success.html",
@@ -668,6 +679,7 @@ def kiosk_clock_out(
             "message": "Clocked out",
             "time": _fmt_time(rounded_at),
             "bilingual": bool(p.get("spanish_speaker")),
+            "time_off_reminder": time_off_reminder_card,
         },
     )
 
