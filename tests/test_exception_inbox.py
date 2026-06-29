@@ -1053,3 +1053,18 @@ def test_exceptions_page_renders_coverage_chip(monkeypatch):
     assert 'class="cov-tip"' in resp.text
     assert "Juan" in resp.text and "arrives 9:00am" in resp.text
     assert "pending" in resp.text
+
+
+def test_exceptions_css_has_coverage_chip_styles():
+    css = (STATIC_DIR / "exceptions.css").read_text(encoding="utf-8")
+
+    assert ".cov-wrap" in css
+    assert ".cov-warn" in css
+    assert ".cov-ok" in css
+    assert ".cov-clear" in css
+    assert ".cov-hol" in css
+    assert ".cov-tip" in css
+    # tooltip shows on hover and when tapped open
+    assert ".cov-wrap:hover .cov-tip" in css
+    assert ".cov-wrap.cov-open .cov-tip" in css
+    assert ".cov-same" in css

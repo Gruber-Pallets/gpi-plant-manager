@@ -556,3 +556,42 @@ header.app {
   .inline-input.time { flex: 0 1 130px; }
   .row-status { text-align: left; }
 }
+
+/* Time-off coverage chip + hover/tap tooltip (inbox time-off rows) */
+.cov-wrap { position: relative; display: inline-block; }
+.cov {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 650; line-height: 1;
+  padding: 2px 9px; border-radius: 999px; cursor: default; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.cov-warn  { background: #fff3e0; color: #b25b00; border-color: #f5d9b0; }
+.cov-ok    { background: #eef6ef; color: #2d7a44; border-color: #cfe6d4; }
+.cov-clear { background: #f3f6f4; color: #6a7d70; border-color: #e0e7e2; }
+.cov-hol   { background: #eef2fb; color: #3a55a8; border-color: #d4ddf3; }
+
+.cov-tip {
+  display: none; position: absolute; top: 135%; left: 0; z-index: 30;
+  width: 300px; max-width: 78vw; padding: 11px 13px;
+  background: #1f2733; color: #e7ecf2; border-radius: 9px;
+  font-size: 12.5px; line-height: 1.45; font-weight: 400;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .22); white-space: normal;
+}
+.cov-tip::before {
+  content: ""; position: absolute; top: -6px; left: 18px;
+  border: 6px solid transparent; border-top: 0; border-bottom-color: #1f2733;
+}
+.cov-wrap:hover .cov-tip,
+.cov-wrap:focus-within .cov-tip,
+.cov-wrap.cov-open .cov-tip { display: block; }
+
+.cov-tip-head {
+  display: block; margin-bottom: 6px; font-size: 11px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; color: #9fb0c3;
+}
+.cov-day { display: block; margin-bottom: 7px; }
+.cov-day b { color: #fff; font-weight: 650; }
+.cov-name { display: block; padding-left: 10px; color: #cdd8e4; }
+.cov-name.cov-same { color: #fff; font-weight: 600; }
+.cov-hol-line { display: block; padding-left: 10px; color: #f0b86c; }
+.cov-more { display: block; margin-top: 4px; color: #9fb0c3; font-style: italic; }
