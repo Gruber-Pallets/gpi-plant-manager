@@ -8,19 +8,21 @@ dashboard color (or any other computed value). Pure -- no backend needed.
 from zira_dashboard import recycling_data as rd
 
 
-def test_progress_color_none_and_on_goal_band():
+def test_progress_color_none_goal_and_near_miss_band():
     # None in -> None out.
     assert rd.progress_color(None) is None
-    # Within +/-1% of 100% -> neutral gray (the |delta| < 1.0 branch).
-    assert rd.progress_color(100.0) == "#9ca3af"
-    assert rd.progress_color(100.5) == "#9ca3af"
+    # At or over goal -> green, even when the overage is tiny.
+    assert rd.progress_color(100.0) == "hsl(130, 57%, 62%)"
+    assert rd.progress_color(100.5) == "hsl(130, 57%, 62%)"
+    # Close but still under goal -> neutral gray.
     assert rd.progress_color(99.5) == "#9ca3af"
+    assert rd.progress_color(99.0) == "#9ca3af"
 
 
 def test_progress_color_ramps_and_clamps():
-    # Just over/under the gray band: step 1 ramp. Green above, red below.
+    # Just over the target and just below the near-miss band.
     assert rd.progress_color(101.0) == "hsl(130, 57%, 62%)"
-    assert rd.progress_color(99.0) == "hsl(0, 57%, 62%)"
+    assert rd.progress_color(98.9) == "hsl(0, 57%, 62%)"
     # Mid ramp (50% off goal in either direction): step 6 bucket.
     assert rd.progress_color(150.0) == "hsl(130, 67%, 44%)"
     assert rd.progress_color(50.0) == "hsl(0, 67%, 44%)"
