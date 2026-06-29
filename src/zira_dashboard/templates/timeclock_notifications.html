@@ -1,0 +1,27 @@
+{% extends "timeclock_base.html" %}
+{% block title %}Updates{% endblock %}
+{% block content %}
+<div class="k-main" style="align-items: center; justify-content: center;">
+  <h1 style="font-size: 2.5rem; margin-bottom: 1.5rem;">{{ person.name }}</h1>
+  <div style="display: flex; flex-direction: column; gap: 1rem; width: 100%; max-width: 680px;">
+    {% for n in notifications %}
+      <div style="padding: 1.25rem 1.5rem; background: #fff; border-radius: 12px;
+                  box-shadow: 0 1px 4px rgba(0,0,0,.12);
+                  border-left: 10px solid
+                  {% if n.kind == 'time_off_approved' %}#16a34a
+                  {% elif n.kind == 'time_off_denied' %}#dc2626
+                  {% else %}#d97706{% endif %};">
+        <div style="font-size: 1.6rem; font-weight: 700; color: #0f172a;">{{ n.title }}</div>
+        <div style="font-size: 1.3rem; color: #334155; margin-top: .35rem;">{{ n.body }}</div>
+      </div>
+    {% endfor %}
+  </div>
+  <form method="post" action="/timeclock/notifications/ack/{{ token }}"
+        style="margin-top: 2.5rem;">
+    <button type="submit" class="k-btn"
+      style="font-size: 1.75rem; padding: 1rem 3rem;">
+      {{ t("Got it") }}
+    </button>
+  </form>
+</div>
+{% endblock %}

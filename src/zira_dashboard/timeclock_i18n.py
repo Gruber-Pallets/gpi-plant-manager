@@ -46,6 +46,8 @@ TRANSLATIONS: dict[str, str] = {
     "Transfer to…": "Transferir a…",
     # --- punch success ---
     "Returning home…": "Regresando al inicio…",
+    # --- sign-in notifications interstitial ---
+    "Got it": "Entendido",
     # --- time off: landing ---
     "Time Off — {name}": "Tiempo libre — {name}",
     "Request Time Off": "Solicitar tiempo libre",

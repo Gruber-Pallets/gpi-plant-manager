@@ -54,6 +54,7 @@ from fastapi import APIRouter, BackgroundTasks, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import db, timeclock_sync, shift_config, staffing, attendance_state
+from .. import employee_notifications, time_off_reminder  # noqa: F401
 # Not called directly here, but the state-reconciliation tests patch
 # timeclock.live_cache.read_open_attendance through this module — keep it
 # importable as part of the module surface.
@@ -431,6 +432,15 @@ def kiosk_start(person_id: int):
     p = _person_by_id(person_id)
     if not p:
         return RedirectResponse(url="/timeclock", status_code=303)
+    # Resolution popups take priority over everything else, including the
+    # salaried time-off bounce — the employee must not be able to tap past
+    # an approval/denial/cancellation.
+    if (employee_notifications.notifications_enabled()
+            and p.get("odoo_id")
+            and employee_notifications.has_unacknowledged(p["odoo_id"])):
+        token = _mint_token(person_id)
+        return RedirectResponse(
+            url=f"/timeclock/notifications/{token}", status_code=303)
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
@@ -509,6 +519,49 @@ def timeclock_dashboard(request: Request, token: str):
             "bilingual": bool(p.get("spanish_speaker")),
         },
     )
+
+
+@router.get("/timeclock/notifications/{token}", response_class=HTMLResponse)
+def timeclock_notifications(request: Request, token: str):
+    """Interstitial shown at sign-in when the employee has unacknowledged
+    resolution popups. A single 'Got it' clears the stack."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return _expired_redirect(request)
+    p = _person_by_id(person_id)
+    if not p or not p.get("odoo_id"):
+        return RedirectResponse(url="/timeclock", status_code=303)
+    notes = employee_notifications.list_unacknowledged(p["odoo_id"])
+    if not notes:
+        # Raced/empty (acked elsewhere) — continue to the dashboard.
+        return RedirectResponse(
+            url=f"/timeclock/dashboard/{_mint_token(person_id)}",
+            status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "timeclock_notifications.html",
+        {
+            "person": p,
+            "token": _mint_token(person_id),
+            "notifications": notes,
+            "bilingual": bool(p.get("spanish_speaker")),
+        },
+    )
+
+
+@router.post("/timeclock/notifications/ack/{token}", response_class=HTMLResponse)
+def timeclock_notifications_ack(request: Request, token: str):
+    """Mark all of this person's notifications acknowledged, then continue to
+    the dashboard (which itself bounces salaried staff to the time-off flow)."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return _expired_redirect(request)
+    p = _person_by_id(person_id)
+    if not p or not p.get("odoo_id"):
+        return RedirectResponse(url="/timeclock", status_code=303)
+    employee_notifications.acknowledge_all(p["odoo_id"])
+    return RedirectResponse(
+        url=f"/timeclock/dashboard/{_mint_token(person_id)}", status_code=303)
 
 
 @router.get("/timeclock/pick-wc/{token}", response_class=HTMLResponse)
