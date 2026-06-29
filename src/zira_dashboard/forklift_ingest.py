@@ -114,7 +114,7 @@ def aggregate_completions(items: list[dict], id_to_name: dict, tz) -> tuple[list
         driver_rows.append({
             "day": day,
             "driver_id": str(driver),
-            "name": id_to_name.get(driver) or str(driver),
+            "name": id_to_name.get(str(driver)) or str(driver),
             "calls": drv_calls[(day, driver)],
             "on_time": 0,
             "late": 0,
