@@ -537,6 +537,10 @@ def timeclock_notifications(request: Request, token: str):
         return RedirectResponse(
             url=f"/timeclock/dashboard/{_mint_token(person_id)}",
             status_code=303)
+    # The template renders each card's text via t() (keyed on kind) so it
+    # localizes for bilingual employees; it needs the formatted date span.
+    for n in notes:
+        n["span"] = employee_notifications.span_label(n)
     return templates.TemplateResponse(
         request,
         "timeclock_notifications.html",

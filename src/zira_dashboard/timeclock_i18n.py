@@ -48,6 +48,33 @@ TRANSLATIONS: dict[str, str] = {
     "Returning home…": "Regresando al inicio…",
     # --- sign-in notifications interstitial ---
     "Got it": "Entendido",
+    "Time off approved": "Tiempo libre aprobado",
+    "Time off denied": "Tiempo libre rechazado",
+    "Time off cancelled": "Tiempo libre cancelado",
+    "Your time off for {span} was approved. ✅":
+        "Tu tiempo libre del {span} fue aprobado. ✅",
+    "Your time off request for {span} was denied. ❌ See a supervisor if you have questions.":
+        "Tu solicitud de tiempo libre del {span} fue rechazada. ❌ "
+        "Habla con un supervisor si tienes preguntas.",
+    "Your approved time off for {span} was cancelled. ⚠️ See a supervisor if you have questions.":
+        "Tu tiempo libre aprobado del {span} fue cancelado. ⚠️ "
+        "Habla con un supervisor si tienes preguntas.",
+    # --- clock-out day-before reminder ---
+    "Time off reminder": "Recordatorio de tiempo libre",
+    "Heads up — you have approved time off {day}. Enjoy!":
+        "Atención — tienes tiempo libre aprobado {day}. ¡Que lo disfrutes!",
+    "Heads up — {day}, you're not due in until {ht} (approved).":
+        "Atención — {day}, no entras hasta las {ht} (aprobado).",
+    "Heads up — {day}, you have a late arrival (approved).":
+        "Atención — {day}, tienes una llegada tarde (aprobado).",
+    "Heads up — {day}, you can leave at {hf} (approved).":
+        "Atención — {day}, puedes salir a las {hf} (aprobado).",
+    "Heads up — {day}, you have an early leave (approved).":
+        "Atención — {day}, tienes una salida temprana (aprobado).",
+    "Heads up — {day}, you're off from {hf} to {ht} (approved).":
+        "Atención — {day}, estás libre de {hf} a {ht} (aprobado).",
+    "Heads up — {day}, you have partial time off (approved).":
+        "Atención — {day}, tienes tiempo libre parcial (aprobado).",
     # --- time off: landing ---
     "Time Off — {name}": "Tiempo libre — {name}",
     "Request Time Off": "Solicitar tiempo libre",

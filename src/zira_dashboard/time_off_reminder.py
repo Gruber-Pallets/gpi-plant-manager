@@ -52,36 +52,60 @@ def _day_label(target: date, today: date) -> str:
     return label
 
 
+def _body_key(shape: str | None, hf: str, ht: str) -> str:
+    """The English message template (also the `t()` glossary key) for a
+    partial-day reminder, chosen by shape + which hour bounds we have.
+
+    In practice an approved (state='validate') row reaches here as
+    'midday_gap': the poller's _mirror_shape_and_hours collapses partial
+    leaves to that shape on sync. The late_arrival/early_leave arms are kept
+    as forward-compatible handling in case that mapping ever preserves the
+    finer shapes.
+    """
+    if shape == "late_arrival":
+        return ("Heads up — {day}, you're not due in until {ht} (approved)."
+                if ht else "Heads up — {day}, you have a late arrival (approved).")
+    if shape == "early_leave":
+        return ("Heads up — {day}, you can leave at {hf} (approved)."
+                if hf else "Heads up — {day}, you have an early leave (approved).")
+    # midday_gap (and any partial we can't classify)
+    return ("Heads up — {day}, you're off from {hf} to {ht} (approved)."
+            if hf and ht else "Heads up — {day}, you have partial time off (approved).")
+
+
 def _render_reminder(row: dict[str, Any], target: date, today: date) -> dict:
+    """Return the structured pieces the success template renders via ``t()``.
+
+    Rendering happens in the template (not here) so the message can be shown
+    bilingually for Spanish-speaking employees, following the kiosk's
+    convention: the sentence frame is translated via ``t()`` while the
+    interpolated date/hour values (``day``/``hf``/``ht``) are shared across
+    both languages. ``body_key`` is the English template string AND the
+    glossary key; the template calls ``t(body_key, day=…, hf=…, ht=…)``.
+    """
     day = _day_label(target, today)
-    shape = row.get("shape")
-    if shape == "full_day":
+    if row.get("shape") == "full_day":
         return {
-            "title": "Time off reminder 🌴",
-            "body": f"Heads up — you have approved time off {day}. Enjoy!",
+            "full_day": True,
+            "title_key": "Time off reminder",
+            "body_key": "Heads up — you have approved time off {day}. Enjoy!",
+            "day": day, "hf": "", "ht": "",
         }
     hf = _fmt_hour(row.get("hour_from"))
     ht = _fmt_hour(row.get("hour_to"))
-    # In practice an approved (state='validate') row reaches here as 'midday_gap':
-    # the poller's _mirror_shape_and_hours collapses partial leaves to that shape
-    # on sync. The late_arrival/early_leave arms are kept as forward-compatible
-    # handling in case that mapping ever preserves the finer shapes.
-    if shape == "late_arrival":
-        detail = f"you're not due in until {ht}" if ht else "you have a late arrival"
-    elif shape == "early_leave":
-        detail = f"you can leave at {hf}" if hf else "you have an early leave"
-    else:  # midday_gap (and any partial we can't classify)
-        detail = (f"you're off from {hf} to {ht}"
-                  if hf and ht else "you have partial time off")
     return {
-        "title": "Time off reminder ⏰",
-        "body": f"Heads up — {day}, {detail} (approved).",
+        "full_day": False,
+        "title_key": "Time off reminder",
+        "body_key": _body_key(row.get("shape"), hf, ht),
+        "day": day, "hf": hf, "ht": ht,
     }
 
 
 def reminder_for_person(person_odoo_id: int, today: date) -> dict | None:
-    """Return a reminder card dict ({'title', 'body'}) if this person has
-    approved time off (full or partial) on their next working day, else None.
+    """Return the structured reminder dict (``full_day``/``title_key``/
+    ``body_key``/``day``/``hf``/``ht``) if this person has approved time off
+    (full or partial) on their next working day, else None. The success
+    template renders it via ``t()`` so it localizes for bilingual employees.
     """
     if not notifications_enabled():
         return None

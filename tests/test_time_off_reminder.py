@@ -37,7 +37,11 @@ def test_reminder_full_day(fake_db, monkeypatch):
     }]
     out = tor.reminder_for_person(5, today=date(2026, 6, 29))
     assert out is not None
-    assert "tomorrow" in out["body"].lower()
+    # Structured pieces the template renders via t(); the date value is shared.
+    assert out["full_day"] is True
+    assert out["title_key"] == "Time off reminder"
+    assert out["body_key"] == "Heads up — you have approved time off {day}. Enjoy!"
+    assert "tomorrow" in out["day"].lower()
     sql, params = fake_db["queries"][0]
     assert "state = 'validate'" in sql
     assert params == (5, date(2026, 6, 30), date(2026, 6, 30))
@@ -51,7 +55,9 @@ def test_reminder_partial_midday_gap(fake_db, monkeypatch):
     }]
     out = tor.reminder_for_person(5, today=date(2026, 6, 29))
     assert out is not None
-    assert "11:00" in out["body"] and "1:30" in out["body"]
+    assert out["full_day"] is False
+    assert out["body_key"] == "Heads up — {day}, you're off from {hf} to {ht} (approved)."
+    assert out["hf"] == "11:00 AM" and out["ht"] == "1:30 PM"
 
 
 def test_reminder_none_when_no_leave(fake_db, monkeypatch):

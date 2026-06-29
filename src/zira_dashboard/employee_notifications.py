@@ -54,6 +54,18 @@ def _date_span_label(date_from: date, date_to: date | None) -> str:
     return _md(date_from)
 
 
+def span_label(row: dict[str, Any]) -> str:
+    """Formatted date span for a stored notification row, from its snapshotted
+    ``leave_date_from``/``leave_date_to``. The interstitial passes this into
+    ``t()`` as the ``{span}`` value so the message localizes for bilingual
+    employees while the dates stay shared across both languages. Empty string
+    if the row has no start date."""
+    df = row.get("leave_date_from")
+    if df is None:
+        return ""
+    return _date_span_label(df, row.get("leave_date_to"))
+
+
 def _render(kind: str, req: dict[str, Any]) -> tuple[str, str]:
     """Return (title, body) for a resolution notification."""
     span = _date_span_label(req["date_from"], req.get("date_to"))

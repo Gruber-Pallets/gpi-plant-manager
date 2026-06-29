@@ -16,14 +16,15 @@
                 background: #fffbeb; border-radius: 12px;
                 border-left: 10px solid #d97706; text-align: left;">
       <div style="font-size: 1.5rem; font-weight: 700; color: #92400e;">
-        {{ time_off_reminder.title }}</div>
+        {{ "🌴" if time_off_reminder.full_day else "⏰" }}
+        {{ t(time_off_reminder.title_key) }}</div>
       <div style="font-size: 1.25rem; color: #334155; margin-top: .35rem;">
-        {{ time_off_reminder.body }}</div>
+        {{ t(time_off_reminder.body_key, day=time_off_reminder.day,
+              hf=time_off_reminder.hf, ht=time_off_reminder.ht) }}</div>
     </div>
-    <a href="/timeclock"
-       style="margin-top: 2rem; font-size: 1.5rem; padding: .85rem 2.5rem;
-              border-radius: 12px; background: #2563eb; color: #fff;
-              font-weight: 700; text-decoration: none;">{{ t("Got it") }}</a>
+    <a href="/timeclock" class="k-btn"
+       style="display: inline-block; text-decoration: none; margin-top: 2rem;
+              font-size: 1.75rem; padding: 1rem 3rem;">{{ t("Got it") }}</a>
   {% else %}
     <p style="font-size: 1rem; color: #64748b; margin-top: 2rem;">
       {{ t("Returning home…") }}
