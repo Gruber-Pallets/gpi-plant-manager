@@ -138,10 +138,61 @@
 </div>
 {% endif %}
 
-{% if awards_earned %}
+{% if forklift %}
+<section class="pc-forklift">
+  <h3>🚜 Forklift stats <span style="font-size:0.75rem;color:var(--muted);font-weight:500">(last 90 days)</span></h3>
+  <div class="pc-group-avgs">
+    <div class="stat">
+      <div class="lab">Calls</div>
+      <div class="v">{{ '{:,.0f}'.format(forklift.calls) }}</div>
+    </div>
+    <div class="stat">
+      <div class="lab">On-time %</div>
+      <div class="v">{{ '%.1f'|format(forklift.ontime_pct) }}<span style="font-size:0.85rem;color:var(--muted);font-weight:500">%</span></div>
+    </div>
+    <div class="stat">
+      <div class="lab">Avg response</div>
+      <div class="v">{{ '%.1f'|format((forklift.avg_ms or 0) / 1000.0) }}<span style="font-size:0.85rem;color:var(--muted);font-weight:500">s</span></div>
+    </div>
+    <div class="stat">
+      <div class="lab">Utilization</div>
+      <div class="v" style="color:var(--muted)">{{ '%.0f'|format(forklift.utilization_pct) }}<span style="font-size:0.85rem;font-weight:500">%</span></div>
+    </div>
+    {% if forklift.best_score is not none %}
+    <div class="stat">
+      <div class="lab">Best-day score</div>
+      <div class="v">{{ '%.0f'|format(forklift.best_score) }}</div>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+{% if awards_earned or (forklift and forklift.trophies) %}
 <section class="pc-trophy-case">
   <h3>Trophy case</h3>
   <div class="pc-trophy-icons">
+    {% if forklift and forklift.trophies %}
+      {% for a in forklift.trophies %}
+        {% if a.type == 'forklift_goat' %}
+          <a class="pc-trophy-icon" href="/trophies#forklift"
+             data-tip="🐐 Forklift GOAT — score {{ '%.0f'|format(a.score) }}{% if a.day %} ({{ a.day }}){% endif %}">🐐</a>
+        {% elif a.type == 'forklift_top_day' %}
+          <a class="pc-trophy-icon pc-trophy-{% if a.position == 1 %}gold{% elif a.position == 2 %}silver{% else %}bronze{% endif %}"
+             href="/trophies?year={{ a.year }}#forklift"
+             data-tip="🏆 Forklift top day {{ a.year }} — score {{ '%.0f'|format(a.score) }} ({{ a.day }})">🏆</a>
+        {% elif a.type == 'forklift_best_ontime' %}
+          <a class="pc-trophy-icon pc-trophy-gold" href="/trophies?year={{ a.year }}#forklift"
+             data-tip="⏱️ Best forklift on-time {{ a.year }} — {{ '%.1f'|format(a.value) }}%">🥇</a>
+        {% elif a.type == 'forklift_fastest' %}
+          <a class="pc-trophy-icon pc-trophy-gold" href="/trophies?year={{ a.year }}#forklift"
+             data-tip="⚡ Fastest forklift {{ a.year }} — {{ '%.1f'|format((a.value or 0) / 1000.0) }}s">🥇</a>
+        {% elif a.type == 'forklift_badge' %}
+          <a class="pc-trophy-icon" href="/trophies?year={{ a.year }}&month={{ a.month }}#forklift"
+             data-tip="🚜 {{ month_name(a.month) }} {{ a.year }} forklift ribbon — score {{ '%.0f'|format(a.score) }}">{% if a.position == 1 %}🥇{% elif a.position == 2 %}🥈{% else %}🥉{% endif %}</a>
+        {% endif %}
+      {% endfor %}
+    {% endif %}
     {% for a in awards_earned %}
       {% if a.type == 'goat' %}
         <a class="pc-trophy-icon"

@@ -97,3 +97,51 @@ def test_player_card_attendance_section_hidden_when_empty():
 
     # No section header.
     assert ">Attendance<" not in html
+
+
+# ---- Task 13: player-card forklift block --------------------------------
+
+def _bare_card_patches():
+    """The minimal set of patches that lets a player card render with no DB."""
+    return [
+        patch("zira_dashboard.production_history.attribution_per_day", return_value=[]),
+        patch("zira_dashboard.production_history.attribution_range", return_value={}),
+        patch("zira_dashboard.staffing.load_roster", return_value=[]),
+        patch("zira_dashboard.work_centers_store.registered_groups", return_value=[]),
+        patch("zira_dashboard.awards.awards_earned_by", return_value=[]),
+        patch("zira_dashboard.late_report.absences_history_for_name", return_value=[]),
+        patch("zira_dashboard.late_report.late_arrivals_history_for_name", return_value=[]),
+    ]
+
+
+def test_player_card_shows_forklift_block_when_mapped():
+    import contextlib
+
+    fk = {
+        "calls": 513, "ontime_pct": 97.5, "avg_ms": 42000,
+        "utilization_pct": 18.0, "best_score": 86.0,
+        "trophies": [{"type": "forklift_goat", "score": 86.0}],
+    }
+    with contextlib.ExitStack() as stack:
+        for p in _bare_card_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch(
+            "zira_dashboard.routes.people._forklift_for_person",
+            return_value=fk))
+        html = TestClient(app).get("/staffing/people/Trent").text
+
+    assert "Forklift" in html and "513" in html
+
+
+def test_player_card_no_forklift_block_when_unmapped():
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        for p in _bare_card_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch(
+            "zira_dashboard.routes.people._forklift_for_person",
+            return_value=None))
+        html = TestClient(app).get("/staffing/people/Nobody").text
+
+    assert "Forklift stats" not in html
