@@ -88,6 +88,27 @@ def _json_error(message: str, status_code: int) -> JSONResponse:
     return JSONResponse({"ok": False, "error": message}, status_code=status_code)
 
 
+def _friendly_odoo_error(e: Exception) -> str:
+    """Turn an Odoo/xmlrpc exception into a clean, user-facing message.
+
+    xmlrpc Faults stringify as the noisy ``<Fault N: '...'>`` repr (with
+    literal ``\\n``); the useful text lives on ``.faultString``. Collapse
+    whitespace so it fits the inbox's one-line status. For Odoo's
+    work-schedule rejection ("not supposed to work during that period"),
+    prepend a hint on how to resolve it — that one is a Working Schedule
+    data issue HR fixes in Odoo, not something the manager can force here.
+    """
+    msg = getattr(e, "faultString", None) or str(e)
+    msg = " ".join(str(msg).split())
+    if "not supposed to work during that period" in msg:
+        return (
+            "Odoo won't approve this — the employee's Working Schedule in "
+            "Odoo doesn't include the requested day(s). Ask HR to fix their "
+            "Working Schedule, then try again. Odoo said: " + msg
+        )
+    return msg
+
+
 def _actor_from(request: Request) -> tuple[str | None, str | None]:
     return (
         getattr(request.state, "user_upn", None),
@@ -293,7 +314,7 @@ def _approve_time_off_sync(
     try:
         final_state = odoo_client.approve_leave(int(synced["odoo_leave_id"])) or synced["state"]
     except Exception as e:
-        return _json_error(str(e), 500)
+        return _json_error(_friendly_odoo_error(e), 500)
     if final_state not in _TIME_OFF_STATES:
         return _json_error(f"unexpected Odoo state {final_state}", 500)
     _set_time_off_state(row, final_state)
@@ -387,7 +408,7 @@ def _refuse_time_off_sync(
         try:
             odoo_client.refuse_leave(int(leave_id))
         except Exception as e:
-            return _json_error(str(e), 500)
+            return _json_error(_friendly_odoo_error(e), 500)
         try:
             odoo_client.post_leave_message(int(leave_id), reason)
         except Exception as e:  # noqa: BLE001 -- denial already succeeded
@@ -504,7 +525,7 @@ def _undo_sync(
     try:
         _reverse_event(ev)
     except Exception as e:  # noqa: BLE001 -- surface reversal failure to caller
-        return _json_error(str(e), 500)
+        return _json_error(_friendly_odoo_error(e), 500)
     undo_id = inbox_log.log_event_safe(
         item_kind=ev["item_kind"],
         item_key=ev["item_key"],
