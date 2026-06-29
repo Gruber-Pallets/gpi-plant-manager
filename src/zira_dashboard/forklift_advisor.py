@@ -9,7 +9,16 @@ from __future__ import annotations
 
 from datetime import date
 
-from . import app_settings, forklift_demand, forklift_settings, forklift_store
+from . import (
+    app_settings,
+    forklift_demand,
+    forklift_queue,
+    forklift_settings,
+    forklift_store,
+)
+
+# Window (days) over which handling time + calibration samples are read.
+_CALIB_WINDOW_DAYS = 90
 
 
 def _cfg() -> "forklift_settings.Settings":
@@ -100,6 +109,34 @@ def _recommend_at(forecast: "forklift_demand.DemandForecast",
     return forklift_demand.recommend_drivers(demand, params.effective_throughput)
 
 
+def _mean_handle_or_none() -> float | None:
+    """History-derived mean handling time (seconds); None on no data / failure."""
+    try:
+        return forklift_store.mean_handle_seconds(_CALIB_WINDOW_DAYS)
+    except Exception:
+        return None
+
+
+def _fit_calibration(mean_handle: float) -> "forklift_queue.CalibResult":
+    """Calibrate the queue model against actual recorded waits. Defensive: a
+    store-read failure yields an uncalibrated (k=1.0) result, never raises."""
+    try:
+        samples = forklift_store.calibration_samples(_CALIB_WINDOW_DAYS)
+    except Exception:
+        samples = []
+    return forklift_queue.fit_calibration(samples, mean_handle)
+
+
+def _recommend_for_target(forecast: "forklift_demand.DemandForecast",
+                          params: "forklift_settings.Resolved",
+                          mean_handle: float, k: float,
+                          target_seconds: float) -> "forklift_queue.RecResult":
+    """SLA recommendation: smallest crew whose calibrated predicted time-to-claim
+    stays under `target_seconds`, sized to the chosen percentile's hour."""
+    _, lam = forklift_demand.demand_at_percentile(forecast.by_hour, params.percentile)
+    return forklift_queue.recommend_for_target(lam, mean_handle, target_seconds, k)
+
+
 def build_advisor(target_day: date, scheduled: int, backups: int) -> dict:
     cfg = _cfg()
     if not cfg.enabled:
@@ -107,21 +144,15 @@ def build_advisor(target_day: date, scheduled: int, backups: int) -> dict:
 
     algo_throughput = _algo_throughput()
     resolved = forklift_settings.resolve(cfg, algo_throughput=algo_throughput)
-    algo = forklift_settings.algorithm_values(cfg, algo_throughput=algo_throughput)
 
     # v1 simplification: build a single forecast from the *resolved* history
-    # window and size both recommendations from it. If the user overrides the
-    # window, algo_recommended technically should use the default window, but the
-    # window only affects demand smoothing (second-order for the baseline
-    # display), so reusing the same forecast is acceptable and keeps this cheap.
+    # window and size both recommendations from it. The window only affects
+    # demand smoothing (second-order for the baseline display), so reusing the
+    # same forecast is acceptable and keeps this cheap.
     forecast = _forecast(target_day, resolved.history_samples, cfg.coldstart_calls_per_day)
     if forecast.basis == "none" or forecast.total_calls <= 0:
         return {"available": False}
 
-    recommended = _recommend_at(forecast, resolved)
-    algo_recommended = _recommend_at(forecast, algo)
-    coverage = (forklift_demand.assess_coverage(recommended, scheduled, backups)
-                if recommended else None)
     backup_names = app_settings.get_setting("forklift_overload_responders") or []
 
     # sparkline data: list of (hour, fraction-of-peak) sorted by hour
@@ -132,19 +163,58 @@ def build_advisor(target_day: date, scheduled: int, backups: int) -> dict:
         if forecast.peak_hour is not None else "—"
     )
 
-    return {
+    base = {
         "available": True,
         "day_label": target_day.strftime("%a %b %-d"),
         "total_calls": int(round(forecast.total_calls)),
         "peak_label": peak_label,
         "hours": hours,
-        "recommended": recommended,
-        "algo_recommended": algo_recommended,
-        "coverage": coverage,
+        "coverage": None,
         "basis": forecast.basis,
         "n_days": forecast.n_days,
         "backup_names": backup_names,
+        # SLA fields (default to the no-data / cold-start shape; filled below).
+        "recommended": None,
+        "algo_recommended": None,
+        "overloaded": False,
+        "predicted_claim_seconds": None,
+        "target_seconds": resolved.target_claim_seconds,
+        "backtest": None,
     }
+
+    # SLA recommendation: needs handling time + a forecast with hourly shape.
+    mean_handle = _mean_handle_or_none()
+    if mean_handle is None or not forecast.by_hour:
+        # No signal yet for the queue model: degrade quietly (recommendation
+        # "builds as history accrues"), but keep the demand summary above.
+        return base
+
+    calib = _fit_calibration(mean_handle)
+    rec = _recommend_for_target(forecast, resolved, mean_handle, calib.k,
+                                resolved.target_claim_seconds)
+    # Algorithm baseline = same calc at the DEFAULT target (the discreet tick).
+    algo_rec = _recommend_for_target(
+        forecast, resolved, mean_handle, calib.k,
+        forklift_settings.DEFAULT_TARGET_CLAIM_SECONDS)
+
+    coverage = (forklift_demand.assess_coverage(rec.drivers, scheduled, backups)
+                if rec.drivers else None)
+
+    base.update({
+        "recommended": rec.drivers,
+        "algo_recommended": algo_rec.drivers,
+        "overloaded": rec.overloaded,
+        "predicted_claim_seconds": rec.predicted_seconds,
+        "target_seconds": resolved.target_claim_seconds,
+        "coverage": coverage,
+        "backtest": {
+            "n_samples": calib.n_samples,
+            "mean_actual_seconds": calib.mean_actual_seconds,
+            "mean_pred_seconds": calib.mean_pred_seconds,
+            "uncalibrated": calib.uncalibrated,
+        },
+    })
+    return base
 
 
 def _resolved_dict(r: "forklift_settings.Resolved") -> dict:
