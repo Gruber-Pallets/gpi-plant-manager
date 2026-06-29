@@ -115,6 +115,15 @@ def run_once(force: bool = False) -> dict:
                 odoo_client.update_task(task_id, active=False)
             task_id = None
         else:
+            if task_id:
+                try:
+                    odoo_client.update_task(task_id, description=_build_task_body(conflicts))
+                except Exception:  # noqa: BLE001 -- stored task may have been deleted in Odoo
+                    _log.warning(
+                        "calendar-conflict task %s update failed; creating a fresh task",
+                        task_id, exc_info=True,
+                    )
+                    task_id = None
             if not task_id:
                 task_id = odoo_client.create_feedback_task(
                     project_id=odoo_client.ensure_feedback_project(),
@@ -124,8 +133,6 @@ def run_once(force: bool = False) -> dict:
                     tag_id=None,
                     deadline=(now.date() + timedelta(days=7)).isoformat(),
                 )
-            else:
-                odoo_client.update_task(task_id, description=_build_task_body(conflicts))
             odoo_client.post_task_message(task_id, _summary_comment(decision, names_by_id))
 
     _save_state(odoo_task_id=task_id, reported_emp_ids=current_ids, last_run_at=now)

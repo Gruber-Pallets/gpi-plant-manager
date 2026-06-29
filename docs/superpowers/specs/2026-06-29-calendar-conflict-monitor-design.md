@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS calendar_conflict_monitor (
 );
 ```
 
-A tiny store module reads/writes the row (`get_state()`, `save_state(...)`).
+A tiny store module reads/writes the row (`_load_state()`, `_save_state(...)`).
 
 ### 4. Monitor — `src/zira_dashboard/calendar_conflict_monitor.py`
 
@@ -110,6 +110,7 @@ create/update/comment/archive via `odoo_client` → persist state.
   run, so a transient Odoo failure simply retries on the next tick (no false
   "resolved", no lost state).
 - A failed Odoo task op leaves state unchanged so the next run re-attempts.
+- If the stored Odoo task was deleted, the next changed run's update fails and the monitor falls back to creating a fresh task (a transient update failure can therefore create at most one duplicate task — acceptable for a weekly check).
 
 ## Testing
 

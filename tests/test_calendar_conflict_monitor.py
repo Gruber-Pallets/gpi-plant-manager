@@ -171,3 +171,30 @@ def test_run_once_updates_existing_task_when_set_changes(fake_state, monkeypatch
     comment.assert_called_once()
     assert saved["odoo_task_id"] == 111
     assert saved["reported_emp_ids"] == [7, 8]
+
+
+def test_run_once_recreates_task_when_stored_task_update_fails(fake_state, monkeypatch):
+    # The stored task was deleted in Odoo, so updating it raises. The monitor
+    # must fall back to creating a fresh task rather than wedging forever.
+    state, saved = fake_state
+    state["last_run_at"] = datetime.now(timezone.utc) - timedelta(days=8)  # due
+    state["reported_emp_ids"] = [7]
+    state["odoo_task_id"] = 111
+    _patch_conflicts(monkeypatch, [_conflict(7, "Gerardo", {4}), _conflict(8, "Maria", {4})])
+    update = MagicMock(side_effect=RuntimeError("task 111 no longer exists"))
+    monkeypatch.setattr(mon.odoo_client, "update_task", update)
+    monkeypatch.setattr(mon.odoo_client, "ensure_feedback_project", lambda: 3)
+    monkeypatch.setattr(mon.odoo_client, "authenticate", lambda: 9)
+    create = MagicMock(return_value=222)
+    monkeypatch.setattr(mon.odoo_client, "create_feedback_task", create)
+    comment = MagicMock()
+    monkeypatch.setattr(mon.odoo_client, "post_task_message", comment)
+
+    result = mon.run_once()
+
+    update.assert_called_once()              # attempted the stored task first
+    create.assert_called_once()              # then fell back to create
+    comment.assert_called_once()
+    assert saved["odoo_task_id"] == 222      # new task id persisted
+    assert saved["reported_emp_ids"] == [7, 8]
+    assert result["changed"] is True
