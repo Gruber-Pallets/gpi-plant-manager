@@ -88,6 +88,8 @@ def test_demand_summary_keys_and_recommendation(monkeypatch):
     assert set(summary) == {
         "total_calls", "peak_calls", "peak_hour", "peak_label", "basis",
         "n_days", "effective_throughput", "recommended", "enabled",
+        "algo_recommended", "algo_values", "resolved_values", "overrides",
+        "hour_values", "ranges",
     }
     assert summary["enabled"] is True
     assert summary["total_calls"] == 420
@@ -106,3 +108,43 @@ def test_demand_summary_no_signal_has_none_recommendation(monkeypatch):
     assert summary["recommended"] is None
     assert summary["peak_calls"] == 0.0
     assert summary["peak_label"] == "—"
+
+
+def test_build_advisor_reports_algo_and_user_recommendations(monkeypatch):
+    monkeypatch.setattr(forklift_advisor.forklift_store, "calls_daily_for_weekday",
+                        lambda wd, limit=8: [{"day": date(2026, 6, 19), "total_calls": 420,
+                                              "by_hour": {"9": {"calls": 70}, "8": {"calls": 30}},
+                                              "by_station": {}}])
+    monkeypatch.setattr(forklift_advisor.forklift_store, "recent_driver_throughput",
+                        lambda days=28: None)  # -> DEFAULT_THROUGHPUT 16
+    monkeypatch.setattr(forklift_advisor.app_settings, "get_setting", lambda k: [])
+    # user overrides driver speed way up -> their recommendation drops below algo's
+    monkeypatch.setattr(forklift_advisor, "_cfg",
+                        lambda: forklift_advisor.forklift_settings.Settings(throughput_override=70.0))
+    adv = forklift_advisor.build_advisor(date(2026, 6, 26), scheduled=2, backups=0)
+    assert adv["available"] is True
+    assert adv["algo_recommended"] == 7      # ceil(70 / (16*0.65=10.4))
+    assert adv["recommended"] == 2           # ceil(70 / (70*0.65=45.5)) = 2
+    assert adv["recommended"] < adv["algo_recommended"]
+
+
+def test_demand_summary_carries_algo_and_overrides_and_hour_values(monkeypatch):
+    monkeypatch.setattr(forklift_advisor.forklift_store, "calls_daily_for_weekday",
+                        lambda wd, limit=8: [{"day": date(2026, 6, 19), "total_calls": 420,
+                                              "by_hour": {"9": {"calls": 70}, "8": {"calls": 30}},
+                                              "by_station": {}}])
+    monkeypatch.setattr(forklift_advisor.forklift_store, "recent_driver_throughput",
+                        lambda days=28: None)  # -> DEFAULT_THROUGHPUT 16
+    s = forklift_advisor.demand_summary(date(2026, 6, 26))
+    # all-auto: user recommendation matches the algorithm baseline.
+    assert s["recommended"] == s["algo_recommended"] == 7
+    assert s["hour_values"] == [30.0, 70.0]          # sorted ascending for JS preview
+    assert s["algo_values"]["throughput"] == 16.0
+    assert s["algo_values"]["utilization"] == 0.65
+    assert s["algo_values"]["percentile"] == 1.0
+    assert s["algo_values"]["history_samples"] == 8
+    # overrides all None when auto.
+    assert s["overrides"]["throughput"] is None
+    assert s["overrides"]["utilization"] is None
+    # slider ranges present.
+    assert set(s["ranges"]) == {"throughput", "utilization_pct", "plan_for", "history_samples"}
