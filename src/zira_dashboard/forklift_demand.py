@@ -64,6 +64,19 @@ def predict_from_history(snapshots: list[dict]) -> DemandForecast:
     )
 
 
+def demand_at_percentile(by_hour: dict[int, float], pct: float) -> tuple[int | None, float]:
+    """Per-hour demand at percentile `pct` of the day's hourly call counts.
+    pct=1.0 -> busiest hour; 0.5 -> median hour; 0.0 -> quietest. Nearest-rank.
+    Returns (hour, calls); (None, 0.0) when there's no data."""
+    items = sorted(by_hour.items(), key=lambda kv: (kv[1], kv[0]))
+    if not items:
+        return (None, 0.0)
+    pct = max(0.0, min(1.0, pct))
+    idx = round(pct * (len(items) - 1))
+    hour, calls = items[idx]
+    return (hour, float(calls))
+
+
 def bootstrap_from_trends(weekly_trends: dict, operating_days: int = 5) -> DemandForecast:
     weeks = (weekly_trends or {}).get("weeks") or []
     claimed = [float(w.get("claimedCalls") or 0) for w in weeks if w.get("claimedCalls")]

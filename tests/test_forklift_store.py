@@ -51,3 +51,25 @@ def test_name_map_overrides():
         "VALUES ('driver', 'Luke', 'Luke Gruber')"
     )
     assert forklift_store.name_map("driver")["Luke"] == "Luke Gruber"
+
+
+def test_recent_driver_throughput_from_driver_daily():
+    from zira_dashboard import db
+    db.bootstrap_schema()
+    d = date(2026, 6, 25)
+    db.execute("DELETE FROM forklift_driver_daily WHERE day = %s", (d,))
+    # 80 calls over 4 on-call hours (14_400_000 ms) -> 20 calls/hr fleet
+    forklift_store.upsert_driver_daily([
+        {"day": d, "driver_id": "fk-a", "name": "A", "calls": 80, "on_time": 70,
+         "late": 10, "avg_ms": 200000, "max_ms": 700000, "utilization_pct": 90,
+         "on_call_ms": 14_400_000, "available_ms": 16_000_000},
+    ])
+    rate = forklift_store.recent_driver_throughput(days=3650)
+    assert rate is not None and 19.0 < rate < 21.0
+
+
+def test_recent_driver_throughput_none_on_thin_data():
+    from zira_dashboard import db
+    db.bootstrap_schema()
+    db.execute("DELETE FROM forklift_driver_daily")
+    assert forklift_store.recent_driver_throughput(days=1) is None

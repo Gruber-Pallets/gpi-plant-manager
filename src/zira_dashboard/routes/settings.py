@@ -380,19 +380,19 @@ def settings_page(
         _target_day = _next_working_day(plant_today())
         forklift_ctx = {
             "enabled": _fl.enabled,
-            "calls_per_hour": _fl.calls_per_hour,
-            "target_utilization": _fl.target_utilization,
-            "target_utilization_pct": round(_fl.target_utilization * 100),
             "include_loading_jockeying": _fl.include_loading_jockeying,
-            "history_samples": _fl.history_samples,
             "coldstart_calls_per_day": _fl.coldstart_calls_per_day,
-            "effective_throughput": round(_fl.effective_throughput, 2),
             "target_day_label": _target_day.strftime("%a %b %-d"),
             "weekday_label": _target_day.strftime("%A"),
+            # demand_summary carries both recommendations, the algorithm baseline
+            # values (grey ticks), the current overrides (None=auto), the sorted
+            # per-hour call counts (JS preview), and the slider ranges.
             **forklift_advisor.demand_summary(_target_day),
         }
     except Exception:
-        forklift_ctx = None
+        # Never 500 the whole settings page if the forklift data source / DB is
+        # unreachable; the template guards on these keys being absent.
+        forklift_ctx = {"enabled": True}
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -639,43 +639,48 @@ async def settings_save_auto_lunch(request: Request):
     return await asyncio.to_thread(_work)
 
 
+def _parse_forklift_overrides(form) -> "forklift_settings.Settings":  # noqa: F821
+    """Build a forklift_settings.Settings (nullable overrides) from POST form
+    values. Each numeric knob: the literal string "auto" or blank → None (follow
+    the algorithm); otherwise parse + clamp. "Reset all to algorithm" is just a
+    submit with every numeric field = "auto". Utilization arrives as a PERCENT
+    (5-100) → stored as a fraction (0.05-1.0). Checkboxes via truthiness."""
+    from .. import forklift_settings
+
+    def _override(key, lo, hi, *, integer, scale=1.0):
+        raw = form.get(key)
+        if raw is None or str(raw).strip().lower() in ("", "auto"):
+            return None
+        try:
+            v = float(raw) * scale
+        except (TypeError, ValueError):
+            return None
+        v = max(lo, min(hi, v))
+        return int(round(v)) if integer else round(v, 4)
+
+    coldstart = _override("coldstart_calls_per_day", 0.0, 100000.0, integer=False)
+    return forklift_settings.Settings(
+        enabled=bool(form.get("enabled")),
+        throughput_override=_override("throughput", 5.0, 30.0, integer=False),
+        utilization_override=_override("utilization_pct", 0.05, 1.0,
+                                       integer=False, scale=0.01),
+        plan_for_percentile_override=_override("plan_for", 0.5, 1.0, integer=False),
+        history_samples_override=_override("history_samples", 2, 20, integer=True),
+        include_loading_jockeying=bool(form.get("include_loading_jockeying")),
+        coldstart_calls_per_day=coldstart if coldstart is not None else 0.0,
+    )
+
+
 @router.post("/settings/forklift")
 async def settings_save_forklift(request: Request):
-    """Save the Forklift demand-advisor settings. Takes effect immediately (the
-    store updates its in-process cache), so no restart is needed. The form sends
-    target utilization as a PERCENT (1-100) for readability; we store it as a
-    fraction. Out-of-range / unparseable values clamp to a sane range rather than
-    rejecting the submission."""
+    """Save the Forklift demand-advisor settings (nullable overrides). Takes
+    effect immediately (the store updates its in-process cache), so no restart is
+    needed. "Reset all to algorithm" posts every numeric field as "auto"."""
     from .. import forklift_settings
     form = await request.form()
 
-    def _num(raw, lo, hi, fallback, *, integer):
-        try:
-            v = float(raw)
-        except (TypeError, ValueError):
-            return fallback
-        v = max(lo, min(hi, v))
-        return int(v) if integer else v
-
     def _work():
-        current = forklift_settings.current()
-        # Utilization arrives as a percent 1-100 → store as a fraction 0.05-1.0.
-        util_pct = _num(form.get("target_utilization"),
-                        5.0, 100.0, current.target_utilization * 100.0,
-                        integer=False)
-        forklift_settings.save(forklift_settings.Settings(
-            enabled=bool(form.get("enabled")),
-            calls_per_hour=_num(form.get("calls_per_hour"), 0.1, 1000.0,
-                                current.calls_per_hour, integer=False),
-            target_utilization=round(util_pct / 100.0, 4),
-            include_loading_jockeying=bool(form.get("include_loading_jockeying")),
-            history_samples=_num(form.get("history_samples"), 1, 52,
-                                 current.history_samples, integer=True),
-            coldstart_calls_per_day=_num(form.get("coldstart_calls_per_day"),
-                                         0.0, 100000.0,
-                                         current.coldstart_calls_per_day,
-                                         integer=False),
-        ))
+        forklift_settings.save(_parse_forklift_overrides(form))
         if (request.headers.get("accept") or "").startswith("application/json"):
             return JSONResponse({"ok": True})
         return RedirectResponse(url="/settings?saved=1&section=forklift", status_code=303)

@@ -86,6 +86,7 @@ def test_forklift_block_renders_card_from_advisor_model():
         "peak_label": "9:00–10:00",
         "hours": [(8, 0.5), (9, 1.0)],
         "recommended": 3,
+        "algo_recommended": 6,                    # differs -> show "algorithm: 6"
         "coverage": coverage,
         "basis": "history",
         "n_days": 4,
@@ -95,6 +96,7 @@ def test_forklift_block_renders_card_from_advisor_model():
         forklift_advisor=model)
     assert "Forklift demand" in rendered
     assert "Recommend 3 dedicated" in rendered
+    assert "algorithm: 6" in rendered         # discreet baseline beside the rec
     assert "Coverage OK" in rendered          # status == "ok" branch
     assert "based on 4 recent Sats" in rendered   # history-basis footer
     assert "backups: Louie, Juan" in rendered

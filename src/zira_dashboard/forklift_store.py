@@ -78,6 +78,30 @@ def calls_daily_for_weekday(weekday: int, limit: int = 8) -> list[dict]:
     return rows
 
 
+# Below this many total on-call hours in the window, the derived rate is too
+# noisy to trust -> caller falls back to the default throughput.
+_MIN_ONCALL_HOURS = 2.0
+
+
+def recent_driver_throughput(days: int = 28) -> float | None:
+    """Data-derived per-driver throughput (calls/hour) = total completed calls
+    / total on-call hours across forklift_driver_daily in the last `days`.
+    None when there isn't enough on-call time to be meaningful."""
+    from . import db
+    rows = db.query(
+        "SELECT COALESCE(SUM(calls),0) AS calls, COALESCE(SUM(on_call_ms),0) AS ms "
+        "FROM forklift_driver_daily WHERE day >= (CURRENT_DATE - %s::int)",
+        (days,),
+    )
+    if not rows:
+        return None
+    calls = float(rows[0]["calls"] or 0)
+    hours = float(rows[0]["ms"] or 0) / 3.6e6
+    if hours < _MIN_ONCALL_HOURS or calls <= 0:
+        return None
+    return calls / hours
+
+
 def name_map(kind: str) -> dict[str, str]:
     from . import db
     rows = db.query(

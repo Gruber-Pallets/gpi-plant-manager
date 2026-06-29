@@ -324,7 +324,7 @@
         {% endfor %}
       </div>
       {% if forklift_advisor.recommended %}
-      <div style="font-size:14px;margin:2px 0"><strong>Recommend {{ forklift_advisor.recommended }} dedicated driver{{ forklift_advisor.recommended != 1 and 's' or '' }}</strong></div>
+      <div style="font-size:14px;margin:2px 0"><strong>Recommend {{ forklift_advisor.recommended }} dedicated driver{{ forklift_advisor.recommended != 1 and 's' or '' }}</strong>{% if forklift_advisor.algo_recommended and forklift_advisor.algo_recommended != forklift_advisor.recommended %}<span style="color:#888;font-weight:400"> · algorithm: {{ forklift_advisor.algo_recommended }}</span>{% endif %}</div>
       {% if forklift_advisor.coverage.status == 'ok' %}
       <div style="color:#137333;font-weight:600">✅ Coverage OK</div>
       {% else %}

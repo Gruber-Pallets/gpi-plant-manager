@@ -798,6 +798,15 @@ CREATE TABLE IF NOT EXISTS forklift_settings (
   coldstart_calls_per_day   NUMERIC NOT NULL DEFAULT 0
 );
 INSERT INTO forklift_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+-- Forklift settings redesign (2026-06-27): each tunable is now a NULLABLE
+-- OVERRIDE (NULL = "auto" / follow the algorithm's own value). Additive +
+-- idempotent for fresh and existing installs. The prior non-null param columns
+-- (calls_per_hour / target_utilization / history_samples) are superseded and
+-- left in place, unread; a later cleanup can drop them.
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS throughput_override NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS utilization_override NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS plan_for_percentile_override NUMERIC;
+ALTER TABLE forklift_settings ADD COLUMN IF NOT EXISTS history_samples_override INTEGER;
 
 -- Department-driven rounding (2026-06-04). Named rounding "systems" (each a set
 -- of the four windows) are selected by the static department an employee works
