@@ -36,8 +36,14 @@ def test_build_advisor_short_when_under_scheduled(monkeypatch):
                             {"day": date(2026, 6, 19), "total_calls": 500,
                              "by_hour": {"9": {"calls": 120}}, "by_station": {}}])
     monkeypatch.setattr(forklift_advisor.app_settings, "get_setting", lambda k: [])
+    # SLA model: 120 calls/hr @ 180s handle, target 240s, k=1 -> 7 drivers.
+    monkeypatch.setattr("zira_dashboard.forklift_store.mean_handle_seconds",
+                        lambda window_days=90: 180.0)
+    monkeypatch.setattr("zira_dashboard.forklift_store.calibration_samples",
+                        lambda window_days=90: [])
     adv = forklift_advisor.build_advisor(date(2026, 6, 26), scheduled=1, backups=0)
-    assert adv["recommended"] == 12 and adv["coverage"].status == "short" and adv["coverage"].gap == 11
+    assert adv["recommended"] == 7
+    assert adv["coverage"].status == "short" and adv["coverage"].gap == 6
 
 
 # The full GET /staffing render fans out to live Zira/Odoo calls (and the
