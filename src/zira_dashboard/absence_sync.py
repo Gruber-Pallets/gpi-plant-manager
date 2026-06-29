@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from datetime import date
 
-from . import odoo_client
+from . import db, odoo_client
 
 
 class AbsenceSyncError(RuntimeError):
@@ -83,6 +83,68 @@ def create_absence_for_day(
         "leave_id": int(leave_id),
         "state": state,
     }
+
+
+def mirror_approved_absence(
+    *,
+    employee_odoo_id: int,
+    holiday_status_id: int,
+    leave_id: int,
+    day: date,
+    employee_name: str,
+    reason: str,
+) -> None:
+    """Mirror a manager-declared absence as approved local Time Off."""
+    note = _absence_note(employee_name, reason)
+    rows = db.query(
+        "SELECT id, state, person_odoo_id, shape, holiday_status_id, "
+        "date_from, date_to, hour_from, hour_to, working_hours_json, odoo_leave_id "
+        "FROM time_off_requests "
+        "WHERE odoo_leave_id = %s OR (person_odoo_id = %s "
+        "AND holiday_status_id = %s AND date_from = %s AND date_to = %s "
+        "AND state IN ('draft','draft_edit','confirm','validate1')) "
+        "ORDER BY CASE WHEN odoo_leave_id = %s THEN 0 ELSE 1 END, id "
+        "LIMIT 1",
+        (leave_id, employee_odoo_id, holiday_status_id, day, day, leave_id),
+    )
+    new_row = {
+        "state": "validate",
+        "person_odoo_id": employee_odoo_id,
+        "shape": "full_day",
+        "holiday_status_id": holiday_status_id,
+        "date_from": day,
+        "date_to": day,
+        "hour_from": None,
+        "hour_to": None,
+        "working_hours_json": None,
+        "odoo_leave_id": leave_id,
+    }
+    if rows:
+        old = rows[0]
+        db.execute(
+            "UPDATE time_off_requests SET originating_kiosk_user = FALSE, "
+            "shape = 'full_day', holiday_status_id = %s, date_from = %s, date_to = %s, "
+            "hour_from = NULL, hour_to = NULL, note = %s, state = 'validate', "
+            "odoo_leave_id = %s, synced_to_odoo = TRUE, sync_error = NULL, "
+            "last_pulled_at = now(), last_pushed_at = now(), updated_at = now() "
+            "WHERE id = %s",
+            (holiday_status_id, day, day, note, leave_id, old["id"]),
+        )
+        new_row["id"] = old["id"]
+        from . import time_off_sync
+        time_off_sync.cascade_on_state_change(old, new_row)
+        return
+
+    db.execute(
+        "INSERT INTO time_off_requests "
+        "(person_odoo_id, originating_kiosk_user, shape, holiday_status_id, "
+        "date_from, date_to, hour_from, hour_to, note, state, odoo_leave_id, "
+        "synced_to_odoo, last_pulled_at, last_pushed_at) "
+        "VALUES (%s, FALSE, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, TRUE, now(), now())",
+        (employee_odoo_id, "full_day", holiday_status_id, day, day, note, "validate", leave_id),
+    )
+    from . import time_off_sync
+    time_off_sync.cascade_on_state_change({"state": "draft"}, new_row)
 
 
 def describe_sync_failure(exc: Exception) -> str:

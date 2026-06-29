@@ -444,6 +444,34 @@ def _hours_eq(a: Any, b: Any) -> bool:
     return round(float(a), 2) == round(float(b), 2)
 
 
+def _coerce_odoo_float(value: Any) -> float | None:
+    """Odoo uses False for empty numeric fields; preserve real 0.0."""
+    if value is None or isinstance(value, bool) or value == "":
+        return None
+    return float(value)
+
+
+def _mirror_shape_and_hours(leave: dict[str, Any]) -> tuple[str, float | None, float | None]:
+    """Normalize Odoo's hour-unit metadata into our mirror shape.
+
+    ``request_unit_hours`` alone is not enough to mean "partial": Odoo can
+    still send it on full-day/hour-unit leaves, and some rows only populate
+    one bound (e.g. ``request_hour_to=3.5``). If Odoo's computed duration is
+    a full day, or if the hour window is incomplete/invalid, mirror it as
+    full-day so downstream reports do not render bogus partial-hour absence.
+    """
+    number_of_days = _coerce_odoo_float(leave.get("number_of_days"))
+    if number_of_days is not None and number_of_days >= 1:
+        return "full_day", None, None
+    if not bool(leave.get("request_unit_hours")):
+        return "full_day", None, None
+    hour_from = _coerce_odoo_float(leave.get("request_hour_from"))
+    hour_to = _coerce_odoo_float(leave.get("request_hour_to"))
+    if hour_from is None or hour_to is None or hour_to <= hour_from:
+        return "full_day", None, None
+    return "midday_gap", hour_from, hour_to
+
+
 def _upsert_one(leave: dict[str, Any], existing: dict[str, Any] | None) -> None:
     """Insert or update one Odoo hr.leave into the local mirror.
 
@@ -463,17 +491,7 @@ def _upsert_one(leave: dict[str, Any], existing: dict[str, Any] | None) -> None:
     holiday_status_id = odoo_client.unwrap_m2o(leave["holiday_status_id"])
     date_from = _parse_date(leave["request_date_from"])
     date_to = _parse_date(leave["request_date_to"])
-    request_unit_hours = bool(leave.get("request_unit_hours"))
-    hour_from = (
-        float(leave["request_hour_from"])
-        if request_unit_hours and leave.get("request_hour_from")
-        else None
-    )
-    hour_to = (
-        float(leave["request_hour_to"])
-        if request_unit_hours and leave.get("request_hour_to")
-        else None
-    )
+    shape, hour_from, hour_to = _mirror_shape_and_hours(leave)
     note = leave.get("name") or None
 
     if existing is not None:
@@ -481,6 +499,7 @@ def _upsert_one(leave: dict[str, Any], existing: dict[str, Any] | None) -> None:
         # tick has nothing to do for this row — skip the write.
         unchanged = (
             existing["state"] == state
+            and existing["shape"] == shape
             and existing["date_from"] == date_from
             and existing["date_to"] == date_to
             and _hours_eq(existing["hour_from"], hour_from)
@@ -490,23 +509,22 @@ def _upsert_one(leave: dict[str, Any], existing: dict[str, Any] | None) -> None:
             return
         new_row = dict(existing)
         new_row["state"] = state
+        new_row["shape"] = shape
         new_row["date_from"] = date_from
         new_row["date_to"] = date_to
         new_row["hour_from"] = hour_from
         new_row["hour_to"] = hour_to
         db.execute(
-            "UPDATE time_off_requests SET state = %s, date_from = %s, "
+            "UPDATE time_off_requests SET state = %s, shape = %s, date_from = %s, "
             "date_to = %s, hour_from = %s, hour_to = %s, "
             "last_pulled_at = now(), updated_at = now() WHERE id = %s",
-            (state, date_from, date_to, hour_from, hour_to, existing["id"]),
+            (state, shape, date_from, date_to, hour_from, hour_to, existing["id"]),
         )
         if existing["state"] != state:
             cascade_on_state_change(existing, new_row)
     else:
-        # Infer shape: full_day if no hour bounds; otherwise we can't be
-        # sure of late/early/midday from Odoo alone, so call it
-        # midday_gap (most permissive partial-day shape).
-        shape = "midday_gap" if request_unit_hours else "full_day"
+        # We can't tell late/early/midday from Odoo alone, so valid partial
+        # windows use midday_gap, the most permissive partial-day shape.
         db.execute(
             "INSERT INTO time_off_requests "
             "(person_odoo_id, originating_kiosk_user, shape, "

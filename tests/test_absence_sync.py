@@ -108,3 +108,53 @@ def test_refuse_absence_ignores_missing_leave_id(monkeypatch):
     absence_sync.refuse_absence_leave(None)
 
     refuse_leave.assert_not_called()
+
+
+def test_mirror_approved_absence_updates_existing_pending_row(monkeypatch):
+    existing = {
+        "id": 12,
+        "state": "confirm",
+        "person_odoo_id": 5,
+        "shape": "full_day",
+        "holiday_status_id": 42,
+        "date_from": date(2026, 6, 17),
+        "date_to": date(2026, 6, 17),
+        "hour_from": None,
+        "hour_to": None,
+        "working_hours_json": None,
+        "odoo_leave_id": None,
+    }
+    query = MagicMock(return_value=[existing])
+    execute = MagicMock()
+    cascade = MagicMock()
+    monkeypatch.setattr(absence_sync.db, "query", query)
+    monkeypatch.setattr(absence_sync.db, "execute", execute)
+    monkeypatch.setattr(
+        "zira_dashboard.time_off_sync.cascade_on_state_change",
+        cascade,
+    )
+
+    absence_sync.mirror_approved_absence(
+        employee_odoo_id=5,
+        holiday_status_id=42,
+        leave_id=777,
+        day=date(2026, 6, 17),
+        employee_name="Test Person",
+        reason="No call no show",
+    )
+
+    update_sql, update_params = execute.call_args.args
+    assert "UPDATE time_off_requests" in update_sql
+    assert update_params == (
+        42,
+        date(2026, 6, 17),
+        date(2026, 6, 17),
+        "Absent - Test Person: No call no show",
+        777,
+        12,
+    )
+    old, new = cascade.call_args.args
+    assert old is existing
+    assert new["id"] == 12
+    assert new["state"] == "validate"
+    assert new["odoo_leave_id"] == 777

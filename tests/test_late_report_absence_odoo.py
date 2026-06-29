@@ -16,9 +16,11 @@ def test_declare_absent_sync_posts_absence_to_odoo_before_local_write(monkeypatc
         "state": "validate",
     })
     declare_absent = MagicMock()
+    mirror_absence = MagicMock()
     db_execute = MagicMock()
     monkeypatch.setattr(late_report_routes, "plant_today", lambda: FIXED_DAY)
     monkeypatch.setattr(late_report_routes.absence_sync, "create_absence_for_day", create_absence)
+    monkeypatch.setattr(late_report_routes.absence_sync, "mirror_approved_absence", mirror_absence)
     monkeypatch.setattr(late_report_routes.late_report, "declare_absent", declare_absent)
     monkeypatch.setattr(late_report_routes.db, "execute", db_execute)
     monkeypatch.setattr(late_report_routes, "_bust_caches", lambda: None)
@@ -43,7 +45,50 @@ def test_declare_absent_sync_posts_absence_to_odoo_before_local_write(monkeypatc
         reason="No call no show",
         odoo_leave_id=777,
     )
+    mirror_absence.assert_called_once()
     db_execute.assert_called_once()
+
+
+def test_declare_absent_sync_mirrors_approved_absence_locally(monkeypatch):
+    create_absence = MagicMock(return_value={
+        "holiday_status_id": 42,
+        "leave_id": 777,
+        "state": "validate",
+    })
+    db_query = MagicMock(return_value=[])
+    db_execute = MagicMock()
+    monkeypatch.setattr(late_report_routes, "plant_today", lambda: FIXED_DAY)
+    monkeypatch.setattr(late_report_routes.absence_sync, "create_absence_for_day", create_absence)
+    monkeypatch.setattr(late_report_routes.late_report, "declare_absent", MagicMock())
+    monkeypatch.setattr(late_report_routes.absence_sync.db, "query", db_query)
+    monkeypatch.setattr(late_report_routes.absence_sync.db, "execute", db_execute)
+    monkeypatch.setattr(late_report_routes.db, "execute", db_execute)
+    monkeypatch.setattr(late_report_routes.inbox_log, "log_event_safe", lambda **k: 123)
+    monkeypatch.setattr(late_report_routes, "_bust_caches", lambda: None)
+
+    response = late_report_routes._declare_absent_sync({
+        "emp_id": "5",
+        "name": "Test Person",
+        "reason": "No call no show",
+    })
+
+    assert response.status_code == 200
+    insert_calls = [
+        call for call in db_execute.call_args_list
+        if "INSERT INTO time_off_requests" in call.args[0]
+    ]
+    assert insert_calls, "expected approved absence to be mirrored into time_off_requests"
+    params = insert_calls[0].args[1]
+    assert params == (
+        5,
+        "full_day",
+        42,
+        FIXED_DAY,
+        FIXED_DAY,
+        "Absent - Test Person: No call no show",
+        "validate",
+        777,
+    )
 
 
 def test_declare_absent_sync_records_locally_when_odoo_rejects(monkeypatch):
@@ -66,9 +111,11 @@ def test_declare_absent_sync_records_locally_when_odoo_rejects(monkeypatch):
         raise _OdooFault()
 
     declare_absent = MagicMock()
+    mirror_absence = MagicMock()
     db_execute = MagicMock()
     monkeypatch.setattr(late_report_routes, "plant_today", lambda: FIXED_DAY)
     monkeypatch.setattr(late_report_routes.absence_sync, "create_absence_for_day", _reject)
+    monkeypatch.setattr(late_report_routes.absence_sync, "mirror_approved_absence", mirror_absence)
     monkeypatch.setattr(late_report_routes.late_report, "declare_absent", declare_absent)
     monkeypatch.setattr(late_report_routes.db, "execute", db_execute)
     monkeypatch.setattr(late_report_routes.inbox_log, "log_event_safe", lambda **k: 123)
@@ -93,6 +140,7 @@ def test_declare_absent_sync_records_locally_when_odoo_rejects(monkeypatch):
         reason="No call no show",
         odoo_leave_id=None,
     )
+    mirror_absence.assert_not_called()
     db_execute.assert_called_once()
 
 

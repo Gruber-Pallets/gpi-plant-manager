@@ -27,6 +27,28 @@ def test_time_off_key_is_skipped():
     assert _resolve(assignments={"__time_off": ["Whoever"]}) == []
 
 
+def test_excluded_people_are_omitted_from_all_segment_sources():
+    attrs = [
+        {"wc_name": "Repair 3", "person_name": "Bob", "start_utc": t(14), "end_utc": None},
+        {"wc_name": "Repair 4", "person_name": "Cara", "start_utc": t(14), "end_utc": None},
+    ]
+    punches = {
+        "Bob": [("Repair 2", t(13), None)],
+        "Dana": [("Repair 5", t(13), None)],
+    }
+    segs = _resolve(
+        assignments={"Repair 1": ["Ana", "Bob"]},
+        attributions=attrs,
+        punch_windows=punches,
+        excluded_people={"Bob"},
+    )
+    assert {(s.wc_name, s.person_name) for s in segs} == {
+        ("Repair 1", "Ana"),
+        ("Repair 4", "Cara"),
+        ("Repair 5", "Dana"),
+    }
+
+
 def test_open_attribution_starts_midday_ends_at_cap():
     attrs = [{"wc_name": "Dismantler 4", "person_name": "Eulogio Mendez",
               "start_utc": t(15), "end_utc": None}]

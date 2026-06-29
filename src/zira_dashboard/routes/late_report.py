@@ -78,6 +78,26 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
     except Exception as e:  # noqa: BLE001 -- sync is best-effort; record locally regardless
         odoo_warning = absence_sync.describe_sync_failure(e)
         _log.warning("absence Odoo sync failed for %s (emp %s): %s", name, emp_id, e)
+    if odoo_leave_id is not None:
+        try:
+            absence_sync.mirror_approved_absence(
+                employee_odoo_id=employee_odoo_id,
+                holiday_status_id=absence["holiday_status_id"],
+                leave_id=odoo_leave_id,
+                day=today,
+                employee_name=name,
+                reason=reason,
+            )
+        except Exception as e:  # noqa: BLE001 -- manual absence remains authoritative
+            odoo_warning = (
+                "absence approved in Odoo, but the local Time Off mirror "
+                f"wasn't updated — {e}"
+            )
+            _log.warning(
+                "absence local mirror failed for %s (emp %s, leave %s): %s",
+                name, emp_id, odoo_leave_id, e,
+                exc_info=True,
+            )
     try:
         late_report.declare_absent(
             today,

@@ -41,16 +41,22 @@ def resolve_segments(
     shift_start_utc: datetime,
     cap_utc: datetime,
     time_off_key: str = "__time_off",
+    excluded_people: set[str] | None = None,
 ) -> list[WorkSegment]:
     """Merge schedule + punches + attributions into closed work segments.
 
     `attributions`: rows with keys wc_name, person_name, start_utc, end_utc(None ok).
     `punch_windows`: {person_name: [(wc_name, start_utc, end_utc|None), ...]}.
+    `excluded_people`: roster names to omit from every source, used by live
+    dashboards for full-day absent people without mutating the saved schedule.
     """
+    excluded = set(excluded_people or ())
     punched = set(punch_windows)
     raw: dict[str, list[tuple]] = {}
 
     def _add(person, wc, start, end, source):
+        if person in excluded:
+            return
         raw.setdefault(person, []).append((wc, start, end, source))
 
     # 1. Schedule -- only for people WITHOUT punches (punches win).

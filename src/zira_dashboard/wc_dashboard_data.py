@@ -66,15 +66,23 @@ def wc_by_slug(slug: str):
 
 def assigned_operators_for_wc(wc_name: str, day: date) -> list[str]:
     """Return the names assigned to this specific WC in the published
-    schedule for `day`. Empty list if unassigned. Only this WC — not
-    the whole group.
+    schedule for `day`, excluding full-day absent people for live display.
+    Empty list if unassigned. Only this WC — not the whole group.
     """
     from . import staffing
     try:
         sched = staffing.load_schedule(day)
     except Exception:
         return []
-    return list(sched.assignments.get(wc_name, []) or [])
+    names = list(sched.assignments.get(wc_name, []) or [])
+    try:
+        from . import attendance
+        absent = set(attendance.full_day_absent_names(day))
+    except Exception:
+        absent = set()
+    if not absent:
+        return names
+    return [name for name in names if name not in absent]
 
 
 def _shift_elapsed_fraction(day: date) -> float:

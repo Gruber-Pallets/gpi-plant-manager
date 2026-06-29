@@ -462,6 +462,78 @@ def test_poll_skips_update_when_row_unchanged(monkeypatch, fake_db):
     assert cascades == []
 
 
+def test_poll_self_heals_one_day_leave_with_incomplete_hour_bounds(monkeypatch, fake_db):
+    """Odoo can mark a one-day leave as hour-unit while only returning one
+    request-hour bound (observed as 3.5h). That is not a valid partial window,
+    so the mirror should clear the bounds and keep the request full-day."""
+    _reset_poll_state()
+    existing_row = {
+        "id": 1, "person_odoo_id": 5, "odoo_leave_id": 555,
+        "state": "validate", "shape": "midday_gap",
+        "holiday_status_id": 1,
+        "date_from": date(2026, 6, 1), "date_to": date(2026, 6, 1),
+        "hour_from": None, "hour_to": 3.5,
+        "working_hours_json": None,
+    }
+    fake_db["query_result"] = [existing_row]
+    monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leaves_for_range",
+        lambda s, e, **kw: [{
+            "id": 555, "employee_id": [5, "Bob"],
+            "holiday_status_id": [1, "PTO"], "state": "validate",
+            "request_date_from": "2026-06-01",
+            "request_date_to": "2026-06-01",
+            "request_hour_from": False, "request_hour_to": 3.5,
+            "request_unit_hours": True, "number_of_days": 1.0,
+            "number_of_hours": 8.0, "name": "PTO",
+        }])
+    monkeypatch.setattr(time_off_sync, "cascade_on_state_change",
+                        lambda old, new: None)
+
+    time_off_sync.poll_odoo_leaves()
+
+    updates = [e for e in fake_db["executes"]
+               if "UPDATE time_off_requests" in e[0]]
+    assert updates, "expected stale partial mirror row to be corrected"
+    sql, params = updates[0]
+    assert "shape = %s" in sql
+    assert params[:6] == (
+        "validate", "full_day", date(2026, 6, 1), date(2026, 6, 1), None, None,
+    )
+
+
+def test_poll_keeps_hour_unit_full_day_with_complete_bounds_full_day(monkeypatch, fake_db):
+    """Full-day requests against hour-unit leave types can round-trip from
+    Odoo with full-shift request-hour bounds. If Odoo's computed duration is
+    still at least a day, keep the local mirror full-day."""
+    _reset_poll_state()
+    existing_row = {
+        "id": 1, "person_odoo_id": 5, "odoo_leave_id": 555,
+        "state": "validate", "shape": "full_day",
+        "holiday_status_id": 1,
+        "date_from": date(2026, 6, 1), "date_to": date(2026, 6, 1),
+        "hour_from": None, "hour_to": None,
+        "working_hours_json": None,
+    }
+    fake_db["query_result"] = [existing_row]
+    monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leaves_for_range",
+        lambda s, e, **kw: [{
+            "id": 555, "employee_id": [5, "Bob"],
+            "holiday_status_id": [1, "Unpaid Time Off"], "state": "validate",
+            "request_date_from": "2026-06-01",
+            "request_date_to": "2026-06-01",
+            "request_hour_from": 6.0, "request_hour_to": 14.5,
+            "request_unit_hours": True, "number_of_days": 1.0,
+            "number_of_hours": 8.0, "name": "Unpaid full day",
+        }])
+    monkeypatch.setattr(time_off_sync, "cascade_on_state_change",
+                        lambda old, new: None)
+
+    time_off_sync.poll_odoo_leaves()
+
+    assert not any("UPDATE time_off_requests" in e[0]
+                   for e in fake_db["executes"])
+
+
 def test_poll_incremental_tick_filters_by_write_date_and_skips_deletes(
         monkeypatch, fake_db):
     """Tick 1 after boot is a FULL pass (no write_date filter, deletion

@@ -82,6 +82,20 @@ def test_assigned_operators_for_wc(monkeypatch):
     assert out == ["Christian", "Jose L"]
 
 
+def test_assigned_operators_for_wc_excludes_full_day_absent(monkeypatch):
+    from zira_dashboard import attendance, wc_dashboard_data, staffing
+
+    monkeypatch.setattr(staffing, "load_schedule", lambda d: staffing.Schedule(
+        day=d, published=True,
+        assignments={"Repair 1": ["Christian", "Jose L"], "Repair 2": ["Alice"]},
+    ))
+    monkeypatch.setattr(attendance, "full_day_absent_names", lambda d: {"Jose L"})
+
+    out = wc_dashboard_data.assigned_operators_for_wc("Repair 1", _date(2026, 5, 13))
+
+    assert out == ["Christian"]
+
+
 def test_assigned_operators_unassigned_returns_empty(monkeypatch):
     from zira_dashboard import wc_dashboard_data, staffing
     monkeypatch.setattr(staffing, "load_schedule", lambda d: staffing.Schedule(

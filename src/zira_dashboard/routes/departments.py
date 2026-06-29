@@ -38,27 +38,47 @@ router = APIRouter()
 _RANGE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="dept-range")
 
 
-def _who_by_wc(assignments: dict[str, list[str]], day) -> dict[str, str]:
+def _present_assignments(
+    assignments: dict[str, list[str]],
+    absent_names: set[str] | None,
+) -> dict[str, list[str]]:
+    absent = set(absent_names or ())
+    return {
+        wc_name: [name for name in (ops or []) if name not in absent]
+        for wc_name, ops in (assignments or {}).items()
+    }
+
+
+def _who_by_wc(
+    assignments: dict[str, list[str]],
+    day,
+    absent_names: set[str] | None = None,
+) -> dict[str, str]:
     """Map work-center name → " + "-joined operator string for the dashboard
     `who` labels. Starts from the schedule assignments, then layers in retro
     WC attributions on top so saved attributions appear immediately on the
-    bar / downtime widgets. Dedupes scheduled-then-attributed people, keeps
-    scheduled order first.
+    bar / downtime widgets. Full-day absent people are filtered from both
+    sources without changing the saved schedule. Dedupes scheduled-then-
+    attributed people, keeps scheduled order first.
     """
+    absent = set(_absent_names(day) if absent_names is None else absent_names)
     out: dict[str, str] = {}
     for wc_name, ops in assignments.items():
         if wc_name == staffing.TIME_OFF_KEY or not ops:
             continue
-        out[wc_name] = " + ".join(ops)
+        present_ops = [name for name in ops if name not in absent]
+        if present_ops:
+            out[wc_name] = " + ".join(present_ops)
     try:
         from .. import wc_attributions
         for wc_name, names in wc_attributions.people_by_wc(day).items():
-            if not names:
+            present_names = [name for name in (names or []) if name not in absent]
+            if not present_names:
                 continue
             existing = out.get(wc_name, "")
             existing_names = [n.strip() for n in existing.split(" + ") if n.strip()] if existing else []
             seen, combined = set(), []
-            for n in existing_names + list(names):
+            for n in existing_names + present_names:
                 if n and n not in seen:
                     seen.add(n)
                     combined.append(n)
@@ -127,6 +147,11 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     results = leaderboard(client, stations, d, now_utc=now if is_today_d else None)
 
     sched = staffing.load_schedule(d)
+    # Full-day absences (approved full-day off, manual absences, derived
+    # no-punch). Use a present-only copy for live dashboard display/goal math
+    # while preserving the saved schedule for undo/history.
+    _absent_today = _absent_names(d)
+    present_assignments = _present_assignments(sched.assignments, _absent_today)
 
     # Resolve the day's shift bounds first; reused for the man-hours window,
     # the grace interval, the productive-intervals math below, AND the work
@@ -150,12 +175,13 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     # records fall back to their schedule.
     from .. import assignment_windows, timeclock_windows, wc_attributions
     segments = assignment_windows.resolve_segments(
-        assignments=sched.assignments,
+        assignments=present_assignments,
         attributions=wc_attributions.creditable_for_day(d),
         punch_windows=timeclock_windows.attendance_windows_for_day(d),
         shift_start_utc=window_start_utc,
         cap_utc=window_end_utc,
         time_off_key=staffing.TIME_OFF_KEY,
+        excluded_people=_absent_today,
     )
     who_by_wc = assignment_windows.who_by_wc(segments)
 
@@ -171,11 +197,6 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     elapsed = shift_elapsed_minutes(d, now)
     available = elapsed * len(active_stations)
     uptime_minutes = max(0, available - total_downtime)
-
-    # Full-day absences (approved full-day off, manual absences, derived
-    # no-punch). Scheduled-but-absent people shouldn't count toward
-    # man-hours — otherwise pph/hr/person collapses by the absent share.
-    _absent_today = _absent_names(d)
 
     # Partial-day off intervals fetched ONCE per day and passed into
     # effective_minutes_worked below (it used to re-query per person).
@@ -196,9 +217,7 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
         # production-line labor on the recycling line.
         if loc.department != "Recycled":
             continue
-        for person_name in sched.assignments.get(loc.name, []):
-            if person_name in _absent_today:
-                continue
+        for person_name in present_assignments.get(loc.name, []):
             total_recycling_people += 1
             total_man_minutes += staffing.effective_minutes_worked(
                 person_name, d, window_start_utc, window_end_utc,
@@ -229,7 +248,7 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
         grace_end_capped_local.astimezone(timezone.utc),
     )
     people_by_wc: dict[str, int] = {
-        wc: len(ops) for wc, ops in sched.assignments.items()
+        wc: len(ops) for wc, ops in present_assignments.items()
         if wc != staffing.TIME_OFF_KEY and ops
     }
 
@@ -362,7 +381,7 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
         "per_wc_category": per_wc_category,
         "per_wc_station_obj": per_wc_station_obj,
         "active_wc_names": active_wc_names,
-        "schedule_assignments": dict(sched.assignments),
+        "schedule_assignments": present_assignments,
         "dism_buckets": dism_buckets,
         "repair_buckets": repair_buckets,
         "shift_start_label": shift_start_local.strftime("%H:%M"),
@@ -751,6 +770,7 @@ def _render_new_dept(
     # Full-day absences excluded from man-hours — see _recycling_day_data
     # for the full rationale.
     _absent_today = _absent_names(d)
+    present_assignments = _present_assignments(sched_for_labels.assignments, _absent_today)
 
     # Partial-day off intervals fetched ONCE per day (see _recycling_day_data).
     try:
@@ -761,12 +781,10 @@ def _render_new_dept(
 
     total_man_minutes_new = 0
     total_new_vs_people = 0
-    for wc_name, ops in sched_for_labels.assignments.items():
+    for wc_name, ops in present_assignments.items():
         if wc_name == staffing.TIME_OFF_KEY or not ops or wc_name not in station_names:
             continue
         for person_name in ops:
-            if person_name in _absent_today:
-                continue
             total_new_vs_people += 1
             total_man_minutes_new += staffing.effective_minutes_worked(
                 person_name, d, window_start_utc, window_end_utc,
@@ -775,7 +793,7 @@ def _render_new_dept(
     total_man_hours = total_man_minutes_new / 60.0
     pph_per_person = (total_units / total_man_hours) if total_man_hours > 0 else 0.0
 
-    who_by_wc = _who_by_wc(sched_for_labels.assignments, d)
+    who_by_wc = _who_by_wc(sched_for_labels.assignments, d, absent_names=_absent_today)
 
     bars: list[dict] = []
     for r in results:
@@ -872,11 +890,11 @@ def _render_new_dept(
             "new_dism_group_target": new_dism_group_target,
             "new_repair_group_target": new_repair_group_target,
             "new_dism_people": sum(
-                len(sched_for_labels.assignments.get(r.station.name, []))
+                len(present_assignments.get(r.station.name, []))
                 for r in new_dismantlers
             ),
             "new_repair_people": sum(
-                len(sched_for_labels.assignments.get(r.station.name, []))
+                len(present_assignments.get(r.station.name, []))
                 for r in new_repairs
             ),
             "refreshed_at": now.strftime("%H:%M:%S UTC"),
@@ -915,4 +933,3 @@ def tv_new_vs_redirect(request: Request):
     q = request.url.query
     target = "/tv/new" + (f"?{q}" if q else "")
     return RedirectResponse(url=target, status_code=301)
-
