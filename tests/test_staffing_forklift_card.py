@@ -93,6 +93,9 @@ def test_forklift_block_renders_card_from_advisor_model():
         "hours": [(8, 0.5), (9, 1.0)],
         "recommended": 3,
         "algo_recommended": 6,                    # differs -> show "algorithm: 6"
+        "overloaded": False,
+        "target_seconds": 240.0,                  # 4 min target
+        "predicted_claim_seconds": 174.0,         # ~2.9 min predicted
         "coverage": coverage,
         "basis": "history",
         "n_days": 4,
@@ -101,7 +104,11 @@ def test_forklift_block_renders_card_from_advisor_model():
     rendered = templates.env.from_string(_extract_forklift_block()).render(
         forklift_advisor=model)
     assert "Forklift demand" in rendered
-    assert "Recommend 3 dedicated" in rendered
+    # New SLA copy: time-to-claim target + predicted wait.
+    assert "Recommend 3" in rendered
+    assert "time-to-claim" in rendered.lower()
+    assert "under 4 min" in rendered          # 240s -> 4 min
+    assert "predicted" in rendered.lower()
     assert "algorithm: 6" in rendered         # discreet baseline beside the rec
     assert "Coverage OK" in rendered          # status == "ok" branch
     assert "based on 4 recent Sats" in rendered   # history-basis footer
@@ -114,5 +121,42 @@ def test_forklift_block_renders_card_from_advisor_model():
     short_model["recommended"] = 4
     rendered_short = templates.env.from_string(_extract_forklift_block()).render(
         forklift_advisor=short_model)
-    assert "Recommend 4 dedicated" in rendered_short
+    assert "Recommend 4" in rendered_short
     assert "Short 3 — 1 on Tablets of 4" in rendered_short
+
+
+def test_forklift_card_shows_time_to_claim_target():
+    """Task 8: the card recommendation reads 'time-to-claim' + the target minutes."""
+    from zira_dashboard import forklift_demand
+    from zira_dashboard.deps import templates
+    model = {
+        "available": True, "day_label": "Sat Jun 27", "total_calls": 420,
+        "peak_label": "9:00–10:00", "hours": [(9, 1.0)],
+        "recommended": 6, "algo_recommended": 6, "overloaded": False,
+        "target_seconds": 240.0, "predicted_claim_seconds": 174.0,
+        "coverage": forklift_demand.assess_coverage(recommended=6, scheduled=6, backups=0),
+        "basis": "history", "n_days": 5, "backup_names": [],
+    }
+    page = templates.env.from_string(_extract_forklift_block()).render(
+        forklift_advisor=model)
+    assert "time-to-claim" in page.lower()
+    assert "under 4 min" in page
+    # algorithm baseline equals the rec here -> the discreet "algorithm: N" hides.
+    assert "algorithm:" not in page
+
+
+def test_forklift_card_overloaded_branch():
+    """When the busiest hour can't hit the target even with the max crew, the card
+    shows the overloaded message instead of a fabricated number."""
+    from zira_dashboard.deps import templates
+    model = {
+        "available": True, "day_label": "Sat Jun 27", "total_calls": 900,
+        "peak_label": "9:00–10:00", "hours": [(9, 1.0)],
+        "recommended": None, "algo_recommended": None, "overloaded": True,
+        "target_seconds": 240.0, "predicted_claim_seconds": None,
+        "coverage": None, "basis": "history", "n_days": 5, "backup_names": [],
+    }
+    page = templates.env.from_string(_extract_forklift_block()).render(
+        forklift_advisor=model)
+    assert "overloaded" in page.lower()
+    assert "12" in page          # "even with 12 drivers"

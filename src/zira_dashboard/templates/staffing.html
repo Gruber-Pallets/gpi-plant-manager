@@ -323,8 +323,11 @@
         <div title="{{ hour }}:00 — {{ (frac * 100)|round|int }}% of peak" style="flex:1;background:#f5c518;height:{{ (frac * 100)|round|int }}%;min-height:2px"></div>
         {% endfor %}
       </div>
-      {% if forklift_advisor.recommended %}
-      <div style="font-size:14px;margin:2px 0"><strong>Recommend {{ forklift_advisor.recommended }} dedicated driver{{ forklift_advisor.recommended != 1 and 's' or '' }}</strong>{% if forklift_advisor.algo_recommended and forklift_advisor.algo_recommended != forklift_advisor.recommended %}<span style="color:#888;font-weight:400"> · algorithm: {{ forklift_advisor.algo_recommended }}</span>{% endif %}</div>
+      {% set _tmin = '%g'|format((forklift_advisor.target_seconds or 240) / 60.0) %}
+      {% if forklift_advisor.overloaded %}
+      <div style="color:#b54708;font-weight:600;font-size:13px;margin:2px 0">⚠️ Busiest hour is overloaded — can't hit the {{ _tmin }} min time-to-claim target even with 12 drivers</div>
+      {% elif forklift_advisor.recommended %}
+      <div style="font-size:14px;margin:2px 0"><strong>Recommend {{ forklift_advisor.recommended }}</strong> driver{{ forklift_advisor.recommended != 1 and 's' or '' }} to keep time-to-claim under {{ _tmin }} min{% if forklift_advisor.predicted_claim_seconds is not none %} · predicted <strong>~{{ '%.1f'|format(forklift_advisor.predicted_claim_seconds / 60.0) }} min</strong>{% endif %}{% if forklift_advisor.algo_recommended and forklift_advisor.algo_recommended != forklift_advisor.recommended %}<span style="color:#888;font-weight:400"> · algorithm: {{ forklift_advisor.algo_recommended }}</span>{% endif %}</div>
       {% if forklift_advisor.coverage.status == 'ok' %}
       <div style="color:#137333;font-weight:600">✅ Coverage OK</div>
       {% else %}
