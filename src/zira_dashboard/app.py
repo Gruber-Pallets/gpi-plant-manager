@@ -185,6 +185,13 @@ async def _tick_inbox_reconcile():
     await asyncio.to_thread(inbox_reconcile.run_once)
 
 
+async def _tick_calendar_conflicts():
+    """Weekly Odoo calendar-conflict check. Interval is short; run_once()
+    self-throttles to ~weekly via its persisted last_run_at gate."""
+    from . import calendar_conflict_monitor
+    await asyncio.to_thread(calendar_conflict_monitor.run_once)
+
+
 # (name, tick coroutine, interval seconds). `name` is used only in the
 # "warmer tick failed" log line. Intervals are unchanged from the original
 # per-loop functions this registry replaced.
@@ -203,6 +210,7 @@ _WARMERS = [
     ("missed punch-out", _tick_missed_punch_out, 60),
     ("forklift snapshot", _tick_forklift, 600),
     ("Inbox reconcile", _tick_inbox_reconcile, 60),
+    ("calendar conflicts", _tick_calendar_conflicts, 21600),
 ]
 
 
