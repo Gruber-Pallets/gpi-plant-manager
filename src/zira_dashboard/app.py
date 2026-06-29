@@ -184,9 +184,11 @@ async def _tick_forklift():
     except Exception:
         days = _FORKLIFT_MIN_HISTORY_DAYS  # can't tell -> just refresh today
     if days < _FORKLIFT_MIN_HISTORY_DAYS:
-        await asyncio.to_thread(forklift_backfill.backfill_history, None, 0)
+        result = await asyncio.to_thread(forklift_backfill.backfill_history, None, 0)
+        _log.warning("forklift warmer: backfill (had %d days) -> %s", days, result)
     else:
-        await asyncio.to_thread(forklift_snapshot.snapshot_today, None, plant_today())
+        result = await asyncio.to_thread(forklift_snapshot.snapshot_today, None, plant_today())
+        _log.warning("forklift warmer: snapshot today (history=%d days) -> %s", days, result)
 
 
 async def _tick_inbox_reconcile():
