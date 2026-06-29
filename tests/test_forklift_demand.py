@@ -57,3 +57,11 @@ def test_assess_coverage_ok_and_short():
     assert ok.status == "ok" and ok.gap == 0 and ok.scheduled == 3
     short = fd.assess_coverage(recommended=4, scheduled=2, backups=3)
     assert short.status == "short" and short.gap == 2
+
+
+def test_demand_at_percentile_busiest_typical_and_empty():
+    by_hour = {8: 30.0, 9: 70.0, 10: 50.0}  # sorted by calls: 30(8),50(10),70(9)
+    assert fd.demand_at_percentile(by_hour, 1.0) == (9, 70.0)   # busiest
+    assert fd.demand_at_percentile(by_hour, 0.5) == (10, 50.0)  # median hour
+    assert fd.demand_at_percentile(by_hour, 0.0) == (8, 30.0)   # quietest
+    assert fd.demand_at_percentile({}, 1.0) == (None, 0.0)
