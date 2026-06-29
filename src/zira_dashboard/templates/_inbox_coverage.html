@@ -1,0 +1,29 @@
+{% set cov = row.coverage %}
+{% set hol_only = cov.peak_count == 0 and cov.has_holiday %}
+<span class="cov-wrap" data-cov>
+  <span class="cov cov-{{ 'hol' if hol_only else cov.severity }}"
+        tabindex="0" role="button" aria-label="Coverage during this time off">
+    {% if hol_only %}
+      Plant closed
+    {% elif cov.peak_count == 0 %}
+      ✓ no overlap
+    {% else %}
+      ▲ {{ cov.peak_count }} off peak{% if cov.scope == 'department' and cov.peak_dept_count and cov.dept_label %} · {{ cov.peak_dept_count }} in {{ cov.dept_label }}{% endif %}
+    {% endif %}
+  </span>
+  {% if cov.by_day %}
+  <span class="cov-tip" role="tooltip">
+    <span class="cov-tip-head">Others off during this window{% if cov.peak_date %} · peak {{ cov.peak_date.strftime('%a %b %-d') }}{% endif %}</span>
+    {% for day in cov.by_day %}
+      <span class="cov-day">
+        <b>{{ day.date.strftime('%a %b %-d') }}{% if day.count %} — {{ day.count }} off{% endif %}</b>
+        {% if day.holiday %}<span class="cov-hol-line">Plant closed — {{ day.holiday }}</span>{% endif %}
+        {% for p in day.people %}
+          <span class="cov-name{% if p.same_dept %} cov-same{% endif %}">{{ p.name }}{% if p.dept %} · {{ p.dept }}{% endif %}{% if p.label and p.label != 'full day' %} ({{ p.label }}){% endif %}{% if p.pending %} · pending{% endif %}</span>
+        {% endfor %}
+      </span>
+    {% endfor %}
+    {% if cov.more_days %}<span class="cov-more">+ {{ cov.more_days }} more days</span>{% endif %}
+  </span>
+  {% endif %}
+</span>

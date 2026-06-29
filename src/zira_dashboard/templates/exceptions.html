@@ -87,7 +87,7 @@
               <span class="priority-pill {{ row.get('priority', 'normal') }}">{{ row.badge }}</span>
             {% endif %}
           </div>
-          <div class="exception-detail">{{ row.label }}{% if row.detail %} · {{ row.detail }}{% endif %}</div>
+          <div class="exception-detail">{{ row.label }}{% if row.detail %} · {{ row.detail }}{% endif %}{% if row.coverage %} · {% include "_inbox_coverage.html" %}{% endif %}</div>
         </div>
         <div class="row-actions">
           {% if action and action.type == 'assignment' %}
