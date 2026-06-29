@@ -94,15 +94,18 @@ Two new functions, keeping logic and I/O separate so the logic is unit-testable:
   ```
 
 - **`coverage_breakdowns_for(rows)`** — **I/O.** Takes the inbox's shown time-off
-  rows and runs **three batched queries** over the union date-range of all rows:
+  rows and runs **three batched DB queries** over the union date-range of all rows,
+  plus one cached holiday fetch:
   1. approved leaves (`state='validate'`) overlapping the union range, joined to
-     `people` and to work-center department;
-  2. other pending requests overlapping the union range, same joins;
-  3. public holidays via `odoo_client.fetch_public_holidays` (cached; fail-soft to
-     `[]` on error, matching `_approved_by_day`).
+     `people` for the name;
+  2. other pending requests overlapping the union range, same join;
+  3. departments for every involved person (requesters + everyone off), one
+     `work_center_default_people → work_centers` lookup keyed by `odoo_id = ANY(...)`;
+  4. public holidays via `odoo_client.fetch_public_holidays` (cached; fail-soft to
+     `[]` on error, matching `_approved_by_day`) — not a DB query.
 
   Then calls the pure helper per row (excluding that row's requester) and returns a
-  `{request_id: breakdown}` map. Three queries total regardless of row count.
+  `{request_id: breakdown}` map. Fixed query count regardless of row count.
 
 `time_off_context.coverage_for` (used by the approvals page) stays untouched.
 
