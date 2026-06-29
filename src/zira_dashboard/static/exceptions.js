@@ -743,6 +743,19 @@
     }
   });
 
+  // Coverage chip: hover shows the tooltip on desktop (CSS); on touch, a tap
+  // toggles it open and a tap elsewhere closes it.
+  document.addEventListener('click', function (event) {
+    var wrap = event.target.closest('[data-cov]');
+    document.querySelectorAll('[data-cov].cov-open').forEach(function (open) {
+      if (open !== wrap) open.classList.remove('cov-open');
+    });
+    if (wrap) {
+      event.stopPropagation();
+      wrap.classList.toggle('cov-open');
+    }
+  });
+
   try { currentFocus = sessionStorage.getItem('exceptions_focus') || 'all'; } catch (e) {}
   applyFocus(currentFocus);
   updateQueueEmpty();

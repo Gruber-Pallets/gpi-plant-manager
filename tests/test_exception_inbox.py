@@ -1055,6 +1055,15 @@ def test_exceptions_page_renders_coverage_chip(monkeypatch):
     assert "pending" in resp.text
 
 
+def test_exceptions_js_toggles_coverage_tooltip_on_tap():
+    js = (STATIC_DIR / "exceptions.js").read_text(encoding="utf-8")
+
+    assert "closest('[data-cov]')" in js
+    assert "classList.toggle('cov-open')" in js
+    # tapping outside closes any open coverage tooltip
+    assert "cov-open" in js
+
+
 def test_exceptions_css_has_coverage_chip_styles():
     css = (STATIC_DIR / "exceptions.css").read_text(encoding="utf-8")
 
