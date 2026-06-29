@@ -128,6 +128,102 @@ def coverage_breakdown(
     }
 
 
+_PENDING_STATES = ("draft", "draft_edit", "confirm", "validate1")
+
+_OVERLAP_SELECT = (
+    "SELECT r.person_odoo_id, "
+    "COALESCE(p.name, '#' || r.person_odoo_id::text) AS name, "
+    "r.shape, r.date_from, r.date_to, r.hour_from, r.hour_to "
+    "FROM time_off_requests r "
+    "LEFT JOIN people p ON p.odoo_id = r.person_odoo_id "
+)
+
+
+def _departments_by_person(ids: list[int]) -> dict[int, set[str]]:
+    """Map each person_odoo_id to the set of departments they default into."""
+    if not ids:
+        return {}
+    rows = db.query(
+        "SELECT pe.odoo_id AS person_odoo_id, wc.department AS department "
+        "FROM work_center_default_people wcdp "
+        "JOIN work_centers wc ON wc.id = wcdp.wc_id "
+        "JOIN people pe ON pe.id = wcdp.person_id "
+        "WHERE pe.odoo_id = ANY(%s) AND wc.department IS NOT NULL "
+        "AND wc.department <> ''",
+        (ids,),
+    )
+    out: dict[int, set[str]] = {}
+    for r in rows:
+        out.setdefault(r["person_odoo_id"], set()).add(r["department"])
+    return out
+
+
+def _holiday_names(start_d: date, end_d: date) -> dict[date, str]:
+    """Public-holiday closures fanned out to {date: name}. Cached via
+    odoo_client; a failing fetch degrades to {} so coverage still renders."""
+    from . import odoo_client
+
+    try:
+        rows = odoo_client.fetch_public_holidays(start_d, end_d)
+    except Exception:  # noqa: BLE001 — never let the holiday fetch break the inbox
+        return {}
+    out: dict[date, str] = {}
+    for h in rows:
+        hs = time_off_calendar.parse_holiday_date(h.get("date_from"))
+        he = time_off_calendar.parse_holiday_date(h.get("date_to"))
+        if not hs or not he:
+            continue
+        cur = max(hs, start_d)
+        end = min(he, end_d)
+        while cur <= end:
+            out.setdefault(cur, h.get("name") or "Plant closed")
+            cur = cur + timedelta(days=1)
+    return out
+
+
+def coverage_breakdowns_for(rows: list[dict]) -> dict[int, dict]:
+    """For each pending inbox row, compute its coverage breakdown.
+
+    Three batched DB queries (approved leaves, other pending requests, and
+    departments for everyone involved) over the union date-range of all rows,
+    plus one cached holiday fetch — independent of the row count. Returns
+    ``{request_id: breakdown}``."""
+    if not rows:
+        return {}
+    window_start = min(r["date_from"] for r in rows)
+    window_end = max(r["date_to"] for r in rows)
+
+    approved = db.query(
+        _OVERLAP_SELECT + "WHERE r.state = 'validate' "
+        "AND r.date_to >= %s AND r.date_from <= %s",
+        (window_start, window_end),
+    )
+    pending = db.query(
+        _OVERLAP_SELECT + "WHERE r.state IN ('draft', 'draft_edit', "
+        "'confirm', 'validate1') AND r.date_to >= %s AND r.date_from <= %s",
+        (window_start, window_end),
+    )
+    holiday_names = _holiday_names(window_start, window_end)
+
+    ids = {r["person_odoo_id"] for r in rows}
+    ids |= {a["person_odoo_id"] for a in approved}
+    ids |= {p["person_odoo_id"] for p in pending}
+    dept_map = _departments_by_person(list(ids))
+    for a in approved:
+        a["depts"] = dept_map.get(a["person_odoo_id"], set())
+    for p in pending:
+        p["depts"] = dept_map.get(p["person_odoo_id"], set())
+
+    out: dict[int, dict] = {}
+    for r in rows:
+        out[r["id"]] = coverage_breakdown(
+            approved, pending, holiday_names,
+            dept_map.get(r["person_odoo_id"], set()),
+            r["date_from"], r["date_to"], r["person_odoo_id"],
+        )
+    return out
+
+
 def coverage_for(person_odoo_id: int, date_from: date, date_to: date) -> dict:
     """Count OTHER people with an approved leave overlapping [date_from,
     date_to]. Scoped to the requester's department when known, else

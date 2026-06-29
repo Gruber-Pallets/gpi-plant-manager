@@ -136,3 +136,54 @@ def test_coverage_breakdown_caps_long_windows():
     assert len(result["by_day"]) == 10
     assert result["more_days"] == 4
     assert result["peak_count"] == 1           # peak computed over all days before the cap
+
+
+def test_coverage_breakdowns_for_batches_queries(monkeypatch):
+    calls = []
+
+    def fake_query(sql, params):
+        calls.append(sql)
+        if "state = 'validate'" in sql:
+            return [{"person_odoo_id": 2, "name": "Juan", "shape": "full_day",
+                     "date_from": date(2026, 7, 6), "date_to": date(2026, 7, 6),
+                     "hour_from": None, "hour_to": None}]
+        if "IN ('draft'" in sql:
+            return [{"person_odoo_id": 3, "name": "Lee", "shape": "full_day",
+                     "date_from": date(2026, 7, 6), "date_to": date(2026, 7, 6),
+                     "hour_from": None, "hour_to": None}]
+        # departments lookup
+        return [{"person_odoo_id": 2, "department": "Recycling"},
+                {"person_odoo_id": 1, "department": "Recycling"}]
+
+    monkeypatch.setattr(ctx.db, "query", fake_query)
+    monkeypatch.setattr(ctx, "_holiday_names", lambda s, e: {})
+
+    rows = [{"id": 55, "person_odoo_id": 1,
+             "date_from": date(2026, 7, 6), "date_to": date(2026, 7, 6)}]
+    out = ctx.coverage_breakdowns_for(rows)
+
+    assert len(calls) == 3                       # approved, pending, departments
+    cov = out[55]
+    assert cov["peak_count"] == 2                # Juan + Lee
+    assert cov["peak_dept_count"] == 1           # Juan shares requester's Recycling
+    assert cov["scope"] == "department"
+
+
+def test_coverage_breakdowns_for_empty_rows_does_nothing(monkeypatch):
+    monkeypatch.setattr(ctx.db, "query",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("no query")))
+    assert ctx.coverage_breakdowns_for([]) == {}
+
+
+def test_holiday_names_fan_out_and_fail_soft(monkeypatch):
+    from zira_dashboard import odoo_client
+    monkeypatch.setattr(odoo_client, "fetch_public_holidays",
+                        lambda s, e: [{"name": "July 4", "date_from": "2026-07-03",
+                                       "date_to": "2026-07-03"}])
+    names = ctx._holiday_names(date(2026, 7, 1), date(2026, 7, 6))
+    assert names == {date(2026, 7, 3): "July 4"}
+
+    def boom(s, e):
+        raise RuntimeError("odoo down")
+    monkeypatch.setattr(odoo_client, "fetch_public_holidays", boom)
+    assert ctx._holiday_names(date(2026, 7, 1), date(2026, 7, 6)) == {}
