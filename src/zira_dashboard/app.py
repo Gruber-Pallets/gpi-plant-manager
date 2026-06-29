@@ -167,14 +167,26 @@ async def _tick_missed_punch_out():
     await asyncio.to_thread(missed_punch_out.run_close, today)
 
 
+# Run the one-time full-history backfill until we have at least this many days
+# of demand snapshots; after that, each tick just refreshes today.
+_FORKLIFT_MIN_HISTORY_DAYS = 14
+
+
 async def _tick_forklift():
-    """Snapshot today's forklift demand + driver performance into Postgres.
-    No-ops gracefully (logs+swallows via _run_warmer) if the forklift API is
-    unreachable. Runs off the event loop because the client makes blocking
-    HTTP calls."""
-    from . import forklift_snapshot
-    today = plant_today()
-    await asyncio.to_thread(forklift_snapshot.snapshot_today, None, today)
+    """Keep forklift demand/performance snapshots fresh. On the first run(s)
+    after deploy — while our stored history is sparse — pull the FULL history
+    from the external completions API; once enough days are stored, just refresh
+    today. No-ops gracefully (logs+swallows via _run_warmer; degrades to no data
+    if FORKLIFT_API_KEY isn't set). Runs off the event loop (blocking HTTP)."""
+    from . import forklift_backfill, forklift_snapshot, forklift_store
+    try:
+        days = await asyncio.to_thread(forklift_store.history_day_count)
+    except Exception:
+        days = _FORKLIFT_MIN_HISTORY_DAYS  # can't tell -> just refresh today
+    if days < _FORKLIFT_MIN_HISTORY_DAYS:
+        await asyncio.to_thread(forklift_backfill.backfill_history, None, 0)
+    else:
+        await asyncio.to_thread(forklift_snapshot.snapshot_today, None, plant_today())
 
 
 async def _tick_inbox_reconcile():

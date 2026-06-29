@@ -4,8 +4,10 @@ The forklift app runs a call-and-dispatch queue; this client pulls demand and
 driver-performance data into the Plant Manager. GET-only — we never write.
 
 Config (read per-call, so importing this module has no side effects):
-  FORKLIFT_API_KEY   - sent as the X-API-Key header (best-effort; the API
-                       currently serves reads without auth).
+  FORKLIFT_API_KEY   - the internal endpoints accept it as the X-API-Key header
+                       (best-effort; they currently serve reads without auth).
+                       The external completions feed REQUIRES it as a
+                       `Authorization: Bearer <key>` header.
   FORKLIFT_BASE_URL  - defaults to https://www.gpiforklift.com
 """
 from __future__ import annotations
@@ -61,3 +63,38 @@ def fetch_drivers() -> list[dict]:
 def fetch_weekly_trends() -> dict:
     """8-week aggregate trends (cold-start demand source)."""
     return _get("/api/report/weekly-trends")
+
+
+def _external_get(path: str, params: dict) -> dict:
+    """GET an authenticated external API endpoint (Bearer). Raises ForkliftError
+    if the key is missing or the call fails."""
+    key = os.environ.get("FORKLIFT_API_KEY")
+    if not key:
+        raise ForkliftError("FORKLIFT_API_KEY required for the external API")
+    url = f"{_base_url()}{path}"
+    try:
+        r = requests.get(url, headers={"Authorization": f"Bearer {key}"},
+                         params=params, timeout=_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except ForkliftError:
+        raise
+    except Exception as e:  # noqa: BLE001 - normalize to one error type
+        raise ForkliftError(f"external GET {path} failed: {e}") from e
+
+
+def fetch_completions(since: int = 0, limit: int = 500, max_pages: int = 400) -> list[dict]:
+    """All completed calls from the external API since `since` (epoch ms),
+    walking nextCursor. max_pages is a safety cap."""
+    out: list[dict] = []
+    cursor = None
+    for _ in range(max_pages):
+        params = {"since": since, "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        data = _external_get("/api/external/v1/completions", params)
+        out.extend(data.get("items") or [])
+        cursor = data.get("nextCursor")
+        if not cursor:
+            break
+    return out

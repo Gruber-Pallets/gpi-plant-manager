@@ -102,6 +102,14 @@ def recent_driver_throughput(days: int = 28) -> float | None:
     return calls / hours
 
 
+def history_day_count() -> int:
+    """How many distinct days of demand history we've snapshotted. Used to
+    decide whether to run the one-time full-history backfill."""
+    from . import db
+    rows = db.query("SELECT COUNT(*) AS n FROM forklift_calls_daily")
+    return int(rows[0]["n"]) if rows else 0
+
+
 def name_map(kind: str) -> dict[str, str]:
     from . import db
     rows = db.query(
