@@ -49,6 +49,14 @@ def test_annual_fastest_respects_min_calls(rows):
     assert f["name"] != "Juan"
 
 
+def test_awards_earned_by_driver_lists_goat(rows, monkeypatch):
+    monkeypatch.setattr(fa, "_apply_overrides", lambda items: items)  # no overrides in test
+    earned = fa.awards_earned_by_driver("Trent", dt.date(2026, 6, 1),
+                                        fs.DEFAULT_SCORE_CONFIG)
+    types = {e["type"] for e in earned}
+    assert "forklift_goat" in types
+
+
 def test_leaderboard_four_lists_with_gated_overall(rows):
     lb = fa.leaderboard(dt.date(2026, 4, 1), dt.date(2026, 4, 30),
                         fs.DEFAULT_SCORE_CONFIG, min_calls=8)

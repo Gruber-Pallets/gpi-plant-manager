@@ -275,6 +275,55 @@ def apply_overrides_single(slot: dict | None, *, scope: str,
     return slot
 
 
+# ---- Forklift override scopes ------------------------------------------
+
+# Forklift awards live in the same award_overrides table as production, with
+# group_name/wc_name always NULL — all drivers compete in one pool. Matching
+# keys off (scope, year, month, position) just like the production scopes.
+FORKLIFT_SCOPES = ("forklift_goat", "forklift_top_day", "forklift_best_ontime",
+                   "forklift_fastest", "forklift_badge")
+
+
+def apply_forklift_overrides(items: list[dict],
+                             overrides: list[dict] | None = None) -> list[dict]:
+    """Apply the manual override layer to a player card's earned forklift
+    awards. `items` are already name-filtered (one driver's awards); each
+    carries its holder `name` plus its slot keys (type/year/month/position).
+
+    Reuses the SAME award_overrides table read + replace/delete/reset
+    semantics as apply_overrides_single: an override on a slot can delete the
+    award (drop it) or replace the holder (drop it for this driver unless the
+    replacement names them). No override / replace-to-same-name = passthrough.
+    """
+    if overrides is None:
+        overrides = _load_overrides()
+    out: list[dict] = []
+    for item in items:
+        scope = item.get("type")
+        if scope not in FORKLIFT_SCOPES:
+            out.append(item)
+            continue
+        match = next(
+            (o for o in overrides if _override_matches(
+                o, scope=scope, group_name=None, wc_name=None,
+                year=item.get("year"), month=item.get("month"),
+                position=item.get("position", 1))),
+            None,
+        )
+        if match is None:
+            out.append(item)
+            continue
+        if match["action"] == "delete":
+            continue
+        if match["action"] == "replace":
+            # Slot reassigned — this driver keeps it only if named as holder.
+            if match.get("name") == item.get("name"):
+                out.append(item)
+            continue
+        out.append(item)
+    return out
+
+
 # ---- Reverse lookup for player card -----------------------------------
 
 def awards_earned_by(name: str, today: date) -> list[dict]:

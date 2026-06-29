@@ -382,3 +382,61 @@ def test_awards_earned_by_aggregates_across_types(monkeypatch):
     assert "goat" in types
     assert any(e["type"] == "badge" and e["position"] == 1 and e["group"] == "Repairs"
                for e in earned)
+
+
+def test_apply_forklift_overrides_passthrough_when_no_override(monkeypatch):
+    """No matching override -> items returned unchanged."""
+    from zira_dashboard import awards
+    monkeypatch.setattr(awards, "_load_overrides", lambda: [])
+    items = [{"type": "forklift_goat", "name": "Trent", "score": 90.0,
+              "day": date(2026, 4, 14)}]
+    out = awards.apply_forklift_overrides(items)
+    assert out == items
+
+
+def test_apply_forklift_overrides_delete_drops_item(monkeypatch):
+    """A 'delete' override on a forklift scope removes the held award."""
+    from zira_dashboard import awards
+    monkeypatch.setattr(awards, "_load_overrides", lambda: [
+        {"scope": "forklift_goat", "group_name": None, "wc_name": None,
+         "year": None, "month": None, "position": 1,
+         "action": "delete", "name": None},
+    ])
+    items = [{"type": "forklift_goat", "name": "Trent", "score": 90.0,
+              "day": date(2026, 4, 14)}]
+    out = awards.apply_forklift_overrides(items)
+    assert out == []
+
+
+def test_apply_forklift_overrides_replace_to_other_removes_holder(monkeypatch):
+    """A 'replace' to a different person drops this driver's award; a
+    replace to the same name keeps it (reset/identity)."""
+    from zira_dashboard import awards
+    monkeypatch.setattr(awards, "_load_overrides", lambda: [
+        {"scope": "forklift_top_day", "group_name": None, "wc_name": None,
+         "year": 2026, "month": None, "position": 1,
+         "action": "replace", "name": "Isidro"},
+    ])
+    items = [
+        {"type": "forklift_top_day", "name": "Trent", "year": 2026,
+         "position": 1, "score": 88.0, "day": date(2026, 4, 14)},
+        {"type": "forklift_top_day", "name": "Trent", "year": 2026,
+         "position": 2, "score": 80.0, "day": date(2026, 4, 15)},
+    ]
+    out = awards.apply_forklift_overrides(items)
+    # position 1 was reassigned to Isidro -> Trent loses it; position 2 untouched
+    assert [(o["position"]) for o in out] == [2]
+
+
+def test_apply_forklift_overrides_ignores_nonforklift_scopes(monkeypatch):
+    """A non-forklift override never touches forklift items."""
+    from zira_dashboard import awards
+    monkeypatch.setattr(awards, "_load_overrides", lambda: [
+        {"scope": "award_goat", "group_name": "Repairs", "wc_name": None,
+         "year": None, "month": None, "position": 1,
+         "action": "delete", "name": None},
+    ])
+    items = [{"type": "forklift_goat", "name": "Trent", "score": 90.0,
+              "day": date(2026, 4, 14)}]
+    out = awards.apply_forklift_overrides(items)
+    assert out == items

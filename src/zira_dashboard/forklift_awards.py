@@ -168,3 +168,47 @@ def leaderboard(start: dt.date, end: dt.date,
         key=lambda a: (-a["score"], a["name"]))
     return {"most_calls": most_calls, "on_time": on_time,
             "fastest": fastest, "overall": overall}
+
+
+FORKLIFT_SCOPES = ("forklift_goat", "forklift_top_day",
+                   "forklift_best_ontime", "forklift_fastest", "forklift_badge")
+
+
+def awards_earned_by_driver(name: str, today: dt.date,
+                            cfg: fs.ScoreConfig = fs.DEFAULT_SCORE_CONFIG) -> list[dict]:
+    """Reverse lookup for the player card: every forklift award `name`
+    currently holds, parallel to awards.awards_earned_by. Defensive — never
+    raises (the underlying award computations swallow data errors)."""
+    earned: list[dict] = []
+    g = goat(cfg)
+    if g and g["name"] == name:
+        earned.append({"type": "forklift_goat", "name": name,
+                       "score": g["score"], "day": g["day"]})
+    for yr in (today.year, today.year - 1):
+        for i, t in enumerate(annual_top_days(yr, cfg)):
+            if t["name"] == name:
+                earned.append({"type": "forklift_top_day", "name": name,
+                               "year": yr, "position": i + 1,
+                               "score": t["score"], "day": t["day"]})
+        bo = annual_best_ontime(yr)
+        if bo and bo["name"] == name:
+            earned.append({"type": "forklift_best_ontime", "name": name,
+                           "year": yr, "value": bo["ontime_pct"]})
+        ff = annual_fastest(yr)
+        if ff and ff["name"] == name:
+            earned.append({"type": "forklift_fastest", "name": name,
+                           "year": yr, "value": ff["avg_ms"]})
+        for m in range(1, 13):
+            for i, b in enumerate(monthly_badges(yr, m, cfg)):
+                if b["name"] == name:
+                    earned.append({"type": "forklift_badge", "name": name,
+                                   "year": yr, "month": m, "position": i + 1,
+                                   "score": b["score"], "day": b["day"]})
+    return _apply_overrides(earned)
+
+
+def _apply_overrides(items):
+    # Delegate to awards.apply_forklift_overrides so manual replace/delete/reset
+    # behaves identically to production awards. Tests monkeypatch this seam.
+    from zira_dashboard import awards
+    return awards.apply_forklift_overrides(items)
