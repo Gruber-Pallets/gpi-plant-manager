@@ -196,6 +196,28 @@ def mean_handle_seconds(window_days: int = 90) -> float | None:
 _MIN_DAY_CALLS = 20
 
 
+def _operating_hours(raw_by_hour) -> int:
+    """Count of hours with calls > 0 in a day's raw `by_hour` JSONB payload.
+    Total and never raises: a non-JSON-string, a non-dict payload, or a
+    non-dict hour entry all coerce to "no operating hours" / "skip the hour"
+    rather than propagating (honors calibration_samples' "never raises" docstring).
+    Parses the value itself (handles psycopg2's dict or a stray JSON string)."""
+    try:
+        by_hour = _coerce_json(raw_by_hour)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+    if not isinstance(by_hour, dict):
+        return 0
+    op_hours = 0
+    for payload in by_hour.values():
+        try:
+            if float((payload or {}).get("calls") or 0) > 0:
+                op_hours += 1
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return op_hours
+
+
 def calibration_samples(window_days: int = 90) -> list[dict]:
     """One row per eligible historical day for fitting the queue model:
       - avg_lambda: total calls / operating hours (hours with calls > 0 that day,
@@ -213,14 +235,7 @@ def calibration_samples(window_days: int = 90) -> list[dict]:
     )
     cmap: dict = {}
     for r in calls_rows:
-        by_hour = _coerce_json(r["by_hour"])
-        op_hours = 0
-        for payload in by_hour.values():
-            try:
-                if float((payload or {}).get("calls") or 0) > 0:
-                    op_hours += 1
-            except (TypeError, ValueError):
-                continue
+        op_hours = _operating_hours(r["by_hour"])
         cmap[r["day"]] = {"total": int(r["total_calls"] or 0), "op_hours": op_hours}
 
     drv = db.query(
