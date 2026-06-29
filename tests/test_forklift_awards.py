@@ -67,3 +67,24 @@ def test_leaderboard_four_lists_with_gated_overall(rows):
     assert all(r["name"] != "Juan" for r in lb["overall"])
     # overall rows expose an average score and a day count
     assert "score" in lb["overall"][0] and "days" in lb["overall"][0]
+
+
+def test_leaderboard_metric_rows_drop_internal_bookkeeping_keys(rows):
+    lb = fa.leaderboard(dt.date(2026, 4, 1), dt.date(2026, 4, 30),
+                        fs.DEFAULT_SCORE_CONFIG, min_calls=8)
+    internal = {"ms_weighted", "score_sum", "score_days"}
+    for key in ("most_calls", "on_time", "fastest"):
+        for row in lb[key]:
+            assert internal.isdisjoint(row), f"{key} row leaks {internal & row.keys()}"
+            # The clean projected shape is exactly these fields.
+            assert set(row) == {"name", "driver_id", "calls", "on_time",
+                                "late", "ontime_pct", "avg_ms"}
+
+
+def test_leaderboard_returns_empty_shape_on_store_failure(monkeypatch):
+    def _boom(start, end):
+        raise RuntimeError("store down")
+    monkeypatch.setattr(fa, "driver_days", _boom)
+    fa.invalidate()
+    lb = fa.leaderboard(dt.date(2026, 4, 1), dt.date(2026, 4, 30))
+    assert lb == {"most_calls": [], "on_time": [], "fastest": [], "overall": []}

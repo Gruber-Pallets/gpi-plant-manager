@@ -87,11 +87,6 @@ def monthly_badges(year: int, month: int, cfg: fs.ScoreConfig = fs.DEFAULT_SCORE
     return _cache(("monthly", year, month, _cfg_fp(cfg)), _f, default=[])
 
 
-def _ontime_pct(r):
-    denom = (r["on_time"] or 0) + (r["late"] or 0)
-    return (r["on_time"] / denom * 100) if denom else 0.0
-
-
 def annual_best_ontime(year: int, min_calls: int = 50):
     def _f():
         agg = _aggregate_year(year)
@@ -133,41 +128,61 @@ def _aggregate_year(year: int) -> list[dict]:
     return out
 
 
+_EMPTY_LEADERBOARD = {"most_calls": [], "on_time": [], "fastest": [], "overall": []}
+
+
+def _metric_row(a: dict) -> dict:
+    """Project an internal accumulator to a clean metric-row shape, dropping the
+    bookkeeping keys (ms_weighted/score_sum/score_days) callers shouldn't see."""
+    return {"name": a["name"], "driver_id": a["driver_id"], "calls": a["calls"],
+            "on_time": a["on_time"], "late": a["late"],
+            "ontime_pct": a["ontime_pct"], "avg_ms": a["avg_ms"]}
+
+
 def leaderboard(start: dt.date, end: dt.date,
                 cfg: fs.ScoreConfig = fs.DEFAULT_SCORE_CONFIG,
                 min_calls: int = 50) -> dict:
-    rows = driver_days(start, end)
-    by_driver: dict = {}
-    for r in rows:
-        a = by_driver.setdefault(r["driver_id"], {
-            "name": r["name"], "driver_id": r["driver_id"], "calls": 0,
-            "on_time": 0, "late": 0, "ms_weighted": 0,
-            "score_sum": 0.0, "score_days": 0})
-        a["calls"] += r["calls"]
-        a["on_time"] += r["on_time"] or 0
-        a["late"] += r["late"] or 0
-        a["ms_weighted"] += (r["avg_ms"] or 0) * r["calls"]
-        b = fs.daily_score(r, cfg)
-        if b is not None:
-            a["score_sum"] += b.score
-            a["score_days"] += 1
-    drivers = list(by_driver.values())
-    for a in drivers:
-        a["ontime_pct"] = (a["on_time"] / (a["on_time"] + a["late"]) * 100) if (a["on_time"] + a["late"]) else 0.0
-        a["avg_ms"] = (a["ms_weighted"] / a["calls"]) if a["calls"] else 0
+    """Four ranked lists over [start, end]. Defensive (mirrors the award
+    siblings): any failure reading the store / computing logs at WARNING and
+    yields the empty-lists shape rather than raising into a request path."""
+    try:
+        rows = driver_days(start, end)
+        by_driver: dict = {}
+        for r in rows:
+            a = by_driver.setdefault(r["driver_id"], {
+                "name": r["name"], "driver_id": r["driver_id"], "calls": 0,
+                "on_time": 0, "late": 0, "ms_weighted": 0,
+                "score_sum": 0.0, "score_days": 0})
+            a["calls"] += r["calls"]
+            a["on_time"] += r["on_time"] or 0
+            a["late"] += r["late"] or 0
+            a["ms_weighted"] += (r["avg_ms"] or 0) * r["calls"]
+            b = fs.daily_score(r, cfg)
+            if b is not None:
+                a["score_sum"] += b.score
+                a["score_days"] += 1
+        drivers = list(by_driver.values())
+        for a in drivers:
+            a["ontime_pct"] = (a["on_time"] / (a["on_time"] + a["late"]) * 100) if (a["on_time"] + a["late"]) else 0.0
+            a["avg_ms"] = (a["ms_weighted"] / a["calls"]) if a["calls"] else 0
 
-    most_calls = sorted(drivers, key=lambda a: (-a["calls"], a["name"]))
-    rate = [a for a in drivers if a["calls"] >= min_calls]
-    on_time = sorted(rate, key=lambda a: (-a["ontime_pct"], -a["calls"], a["name"]))
-    fastest = sorted(rate, key=lambda a: (a["avg_ms"], -a["calls"], a["name"]))
-    overall = sorted(
-        ({"name": a["name"], "driver_id": a["driver_id"],
-          "score": a["score_sum"] / a["score_days"], "days": a["score_days"],
-          "calls": a["calls"]}
-         for a in drivers if a["score_days"] > 0),
-        key=lambda a: (-a["score"], a["name"]))
-    return {"most_calls": most_calls, "on_time": on_time,
-            "fastest": fastest, "overall": overall}
+        most_calls = sorted(drivers, key=lambda a: (-a["calls"], a["name"]))
+        rate = [a for a in drivers if a["calls"] >= min_calls]
+        on_time = sorted(rate, key=lambda a: (-a["ontime_pct"], -a["calls"], a["name"]))
+        fastest = sorted(rate, key=lambda a: (a["avg_ms"], -a["calls"], a["name"]))
+        overall = sorted(
+            ({"name": a["name"], "driver_id": a["driver_id"],
+              "score": a["score_sum"] / a["score_days"], "days": a["score_days"],
+              "calls": a["calls"]}
+             for a in drivers if a["score_days"] > 0),
+            key=lambda a: (-a["score"], a["name"]))
+        return {"most_calls": [_metric_row(a) for a in most_calls],
+                "on_time": [_metric_row(a) for a in on_time],
+                "fastest": [_metric_row(a) for a in fastest],
+                "overall": overall}
+    except Exception as exc:  # noqa: BLE001 - never raise into a request path
+        _log.warning("forklift awards: leaderboard failed: %s", exc)
+        return dict(_EMPTY_LEADERBOARD)
 
 
 FORKLIFT_SCOPES = ("forklift_goat", "forklift_top_day",
