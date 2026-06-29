@@ -49,37 +49,36 @@ def test_build_advisor_short_when_under_scheduled(monkeypatch):
 # The full GET /staffing render fans out to live Zira/Odoo calls (and the
 # DATABASE_URL-gated CI Postgres still hits those — see _KNOWN_DB_TEST_DEBT in
 # conftest, where the analogous "render the whole page" tests are skipped as
-# flaky). So instead of a TestClient route hit, we render the real
-# forklift-advisor template block through the app's own Jinja2 environment with
-# a deterministic stub model. This runs everywhere (no DB, no network) and still
-# exercises the exact markup the route feeds. (Substitution per Task 10 Step 7.)
-def _extract_forklift_block() -> str:
-    """Pull the `forklift-advisor` {% if %}...{% endif %} block out of
-    staffing.html so we render exactly the markup that ships, in isolation
-    from the page's hundreds of other context variables."""
-    import re
+# flaky). So instead of a TestClient route hit, we render the real Forklift bay
+# cell through the app's own Jinja2 environment with a deterministic stub model.
+# This runs everywhere (no DB, no network) and still exercises the exact markup
+# the route feeds.
+def _staffing_template() -> str:
+    """Read staffing.html in the tests that render isolated template snippets."""
     from pathlib import Path
-    html = Path("src/zira_dashboard/templates/staffing.html").read_text()
-    # The block nests several inner {% if %}...{% endif %} tags, so match
-    # greedily from the outer guard to the LAST {% endif %} that immediately
-    # precedes the aside's closing tag (the outer block's endif).
+
+    return Path("src/zira_dashboard/templates/staffing.html").read_text()
+
+
+def _extract_bay_cell() -> str:
+    import re
+
     m = re.search(
-        r"\{%\s*if forklift_advisor and forklift_advisor\.available\s*%\}"
-        r".*\{%\s*endif\s*%\}(?=\s*</aside>)",
-        html,
+        r"<td class=\"bay\" rowspan=\"\{\{ bay\.rows\|length \}\}\">.*?</td>",
+        _staffing_template(),
         re.DOTALL,
     )
-    assert m, "forklift-advisor block missing from staffing.html"
+    assert m, "bay cell block missing from staffing.html"
     return m.group(0)
 
 
 def test_staffing_template_contains_forklift_block():
-    block = _extract_forklift_block()
-    assert 'class="forklift-advisor"' in block
-    assert "Forklift demand" in block
+    html = _staffing_template()
+    assert 'class="forklift-advisor"' not in html
+    assert "Forklift demand" not in html
 
 
-def test_forklift_block_renders_card_from_advisor_model():
+def test_forklift_bay_cell_renders_compact_advisor_summary():
     from zira_dashboard import forklift_demand
     from zira_dashboard.deps import templates
 
@@ -101,33 +100,57 @@ def test_forklift_block_renders_card_from_advisor_model():
         "n_days": 4,
         "backup_names": ["Louie", "Juan"],
     }
-    rendered = templates.env.from_string(_extract_forklift_block()).render(
-        forklift_advisor=model)
-    assert "Forklift demand" in rendered
-    # New SLA copy: time-to-claim target + predicted wait.
-    assert "Recommend 3" in rendered
-    assert "time-to-claim" in rendered.lower()
-    assert "under 4 min" in rendered          # 240s -> 4 min
-    assert "predicted" in rendered.lower()
-    assert "algorithm: 6" in rendered         # discreet baseline beside the rec
-    assert "Coverage OK" in rendered          # status == "ok" branch
-    assert "based on 4 recent Sats" in rendered   # history-basis footer
-    assert "backups: Louie, Juan" in rendered
+    rendered = templates.env.from_string(_extract_bay_cell()).render(
+        bay={"name": "Forklift", "rows": [1, 2], "subtitle": None},
+        forklift_advisor=model,
+    )
+    assert "Forklift" in rendered
+    assert "3 Suggested" in rendered
+    assert "2.9 predicted TTC" in rendered
+    assert "✓" in rendered
+    assert "forklift-bay-summary ok" in rendered
 
-    # And the short-coverage branch renders the gap message.
+
+def test_forklift_bay_cell_renders_shortage_severity():
+    from zira_dashboard import forklift_demand
+    from zira_dashboard.deps import templates
+
+    model = {
+        "available": True,
+        "day_label": "Sat Jun 27",
+        "total_calls": 420,
+        "peak_label": "9:00–10:00",
+        "hours": [(8, 0.5), (9, 1.0)],
+        "recommended": 4,
+        "algo_recommended": 6,
+        "overloaded": False,
+        "target_seconds": 240.0,
+        "predicted_claim_seconds": 174.0,
+        "coverage": forklift_demand.assess_coverage(recommended=4, scheduled=3, backups=0),
+        "basis": "history",
+        "n_days": 4,
+        "backup_names": [],
+    }
+    rendered_warn = templates.env.from_string(_extract_bay_cell()).render(
+        bay={"name": "Forklift", "rows": [1, 2], "subtitle": None},
+        forklift_advisor=model,
+    )
+    assert "⚠" in rendered_warn
+    assert "forklift-bay-summary warn" in rendered_warn
+
     short_model = dict(model)
     short_model["coverage"] = forklift_demand.assess_coverage(
         recommended=4, scheduled=1, backups=0)  # gap == 3
-    short_model["recommended"] = 4
-    rendered_short = templates.env.from_string(_extract_forklift_block()).render(
-        forklift_advisor=short_model)
-    assert "Recommend 4" in rendered_short
-    assert "Short 3" in rendered_short              # the gap is still shown
-    assert "on Tablets of" not in rendered_short    # redundant detail removed
+    rendered_short = templates.env.from_string(_extract_bay_cell()).render(
+        bay={"name": "Forklift", "rows": [1, 2], "subtitle": None},
+        forklift_advisor=short_model,
+    )
+    assert "!!" in rendered_short
+    assert "forklift-bay-summary danger" in rendered_short
 
 
 def test_forklift_card_shows_time_to_claim_target():
-    """Task 8: the card recommendation reads 'time-to-claim' + the target minutes."""
+    """The compact bay summary keeps the recommended count and predicted TTC visible."""
     from zira_dashboard import forklift_demand
     from zira_dashboard.deps import templates
     model = {
@@ -138,17 +161,17 @@ def test_forklift_card_shows_time_to_claim_target():
         "coverage": forklift_demand.assess_coverage(recommended=6, scheduled=6, backups=0),
         "basis": "history", "n_days": 5, "backup_names": [],
     }
-    page = templates.env.from_string(_extract_forklift_block()).render(
-        forklift_advisor=model)
-    assert "time-to-claim" in page.lower()
-    assert "under 4 min" in page
-    # algorithm baseline equals the rec here -> the discreet "algorithm: N" hides.
+    page = templates.env.from_string(_extract_bay_cell()).render(
+        bay={"name": "Forklift", "rows": [1, 2], "subtitle": None},
+        forklift_advisor=model,
+    )
+    assert "6 Suggested" in page
+    assert "2.9 predicted TTC" in page
     assert "algorithm:" not in page
 
 
 def test_forklift_card_overloaded_branch():
-    """When the busiest hour can't hit the target even with the max crew, the card
-    shows the overloaded message instead of a fabricated number."""
+    """When the busiest hour cannot hit the target, the bay does not fabricate a count."""
     from zira_dashboard.deps import templates
     model = {
         "available": True, "day_label": "Sat Jun 27", "total_calls": 900,
@@ -157,7 +180,9 @@ def test_forklift_card_overloaded_branch():
         "target_seconds": 240.0, "predicted_claim_seconds": None,
         "coverage": None, "basis": "history", "n_days": 5, "backup_names": [],
     }
-    page = templates.env.from_string(_extract_forklift_block()).render(
-        forklift_advisor=model)
+    page = templates.env.from_string(_extract_bay_cell()).render(
+        bay={"name": "Forklift", "rows": [1, 2], "subtitle": None},
+        forklift_advisor=model,
+    )
     assert "overloaded" in page.lower()
-    assert "12" in page          # "even with 12 drivers"
+    assert "Suggested" not in page

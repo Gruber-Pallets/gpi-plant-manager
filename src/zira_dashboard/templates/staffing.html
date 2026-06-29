@@ -227,6 +227,27 @@
             {% if loop.first %}
               <td class="bay" rowspan="{{ bay.rows|length }}">
                 <div>{{ bay.name }}</div>
+                {% if bay.name == 'Forklift' and forklift_advisor and forklift_advisor.available %}
+                  {% set _fk_gap = forklift_advisor.coverage.gap if forklift_advisor.coverage else 2 %}
+                  {% set _fk_status = 'ok' if _fk_gap <= 0 else ('warn' if _fk_gap == 1 else 'danger') %}
+                  <div class="forklift-bay-summary {{ _fk_status }}" title="{% if _fk_status == 'ok' %}Coverage satisfied{% elif forklift_advisor.coverage %}{{ forklift_advisor.coverage.gap }} driver{{ forklift_advisor.coverage.gap != 1 and 's' or '' }} short{% elif forklift_advisor.overloaded %}Busiest hour overloaded{% else %}Forklift recommendation pending{% endif %}">
+                    <span class="forklift-bay-status" aria-hidden="true">{% if _fk_status == 'ok' %}✓{% elif _fk_status == 'warn' %}⚠{% else %}!!{% endif %}</span>
+                    {% if forklift_advisor.overloaded %}
+                      <span>Overloaded</span>
+                      <span>Target missed</span>
+                    {% elif forklift_advisor.recommended %}
+                      <span>{{ forklift_advisor.recommended }} Suggested</span>
+                      {% if forklift_advisor.predicted_claim_seconds is not none %}
+                        <span>{{ '%.1f'|format(forklift_advisor.predicted_claim_seconds / 60.0) }} predicted TTC</span>
+                      {% else %}
+                        <span>TTC building</span>
+                      {% endif %}
+                    {% else %}
+                      <span>History building</span>
+                      <span>TTC pending</span>
+                    {% endif %}
+                  </div>
+                {% endif %}
                 {% if bay.subtitle %}<div class="bay-sub">{{ bay.subtitle }}</div>{% endif %}
               </td>
             {% endif %}
@@ -314,32 +335,6 @@
       <label class="notes-label" for="notes-textarea">Notes for the day <span class="hint">— shown with the published schedule</span></label>
       <textarea id="notes-textarea" name="notes" rows="6" placeholder="">{{ notes }}</textarea>
     </div>
-    {% if forklift_advisor and forklift_advisor.available %}
-    <div class="forklift-advisor" style="border:1px solid #f5c518;border-top:4px solid #f5c518;border-radius:8px;padding:9px;margin-top:12px;background:rgba(245,197,24,.10)">
-      <div style="display:flex;align-items:center;gap:6px"><span style="font-size:16px">🚜</span><strong>Forklift demand</strong></div>
-      <div style="opacity:.85;margin-top:3px">~{{ forklift_advisor.total_calls }} calls · busiest {{ forklift_advisor.peak_label }}</div>
-      <div style="display:flex;align-items:flex-end;gap:2px;height:30px;margin:7px 0">
-        {% for hour, frac in forklift_advisor.hours %}
-        <div title="{{ hour }}:00 — {{ (frac * 100)|round|int }}% of peak" style="flex:1;background:#f5c518;height:{{ (frac * 100)|round|int }}%;min-height:2px"></div>
-        {% endfor %}
-      </div>
-      {% set _tmin = '%g'|format((forklift_advisor.target_seconds or 240) / 60.0) %}
-      {% if forklift_advisor.overloaded %}
-      <div style="color:#b54708;font-weight:600;font-size:13px;margin:2px 0">⚠️ Busiest hour is overloaded — can't hit the {{ _tmin }} min time-to-claim target even with 12 drivers</div>
-      {% elif forklift_advisor.recommended %}
-      <div style="font-size:14px;margin:2px 0"><strong>Recommend {{ forklift_advisor.recommended }}</strong> driver{{ forklift_advisor.recommended != 1 and 's' or '' }} to keep time-to-claim under {{ _tmin }} min{% if forklift_advisor.predicted_claim_seconds is not none %} · predicted <strong>~{{ '%.1f'|format(forklift_advisor.predicted_claim_seconds / 60.0) }} min</strong>{% endif %}{% if forklift_advisor.algo_recommended and forklift_advisor.algo_recommended != forklift_advisor.recommended %}<span style="color:#888;font-weight:400"> · algorithm: {{ forklift_advisor.algo_recommended }}</span>{% endif %}</div>
-      {% if forklift_advisor.coverage.status == 'ok' %}
-      <div style="color:#137333;font-weight:600">✅ Coverage OK</div>
-      {% else %}
-      <div style="color:#b54708;font-weight:600">⚠️ Short {{ forklift_advisor.coverage.gap }}</div>
-      {% endif %}
-      <div style="opacity:.8;margin-top:2px">{{ forklift_advisor.coverage.scheduled }} scheduled on Tablets{% if forklift_advisor.backup_names %} · backups: {{ forklift_advisor.backup_names|join(', ') }}{% endif %}</div>
-      {% else %}
-      <div style="opacity:.7;margin:2px 0">Recommendation builds as history accrues</div>
-      {% endif %}
-      <div style="opacity:.55;margin-top:5px;font-size:11px">{% if forklift_advisor.basis == 'history' %}based on {{ forklift_advisor.n_days }} recent {{ forklift_advisor.day_label.split(' ')[0] }}s{% else %}early estimate (building history){% endif %}</div>
-    </div>
-    {% endif %}
   </aside>
 
 </div>

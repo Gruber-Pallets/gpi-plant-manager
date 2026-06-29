@@ -301,6 +301,25 @@
     color: var(--fg);
   }
   table.sched td.bay .bay-sub { font-weight: 400; font-size: 0.65rem; font-style: italic; color: var(--muted); margin-top: 0.25rem; }
+  table.sched td.bay .forklift-bay-summary {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.08rem;
+    margin-top: 0.42rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 1.12;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  table.sched td.bay .forklift-bay-status {
+    font-size: 0.9rem;
+    line-height: 1;
+  }
+  table.sched td.bay .forklift-bay-summary.ok { color: var(--accent); }
+  table.sched td.bay .forklift-bay-summary.warn { color: var(--warn); }
+  table.sched td.bay .forklift-bay-summary.danger { color: var(--bad); }
   table.sched td.station .name { font-weight: 500; }
   table.sched td.station .sub { font-size: 0.7rem; font-style: italic; color: var(--muted); margin-top: 0.15rem; }
   table.sched td.dept { color: var(--muted); font-size: 0.85rem; }
