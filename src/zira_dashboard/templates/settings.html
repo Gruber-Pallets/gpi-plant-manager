@@ -756,14 +756,41 @@
             <span id="fl_no_signal">recommendation builds as history accrues</span>
           {% endif %}
         </div>
-        {% if forklift.recommended is not none %}
-        <div style="color:#666;font-size:0.78rem;margin-top:0.4rem">
+        {% set _tmin = '%g'|format(forklift.target_minutes if forklift.target_minutes is defined else 4) %}
+        {% if forklift.overloaded %}
+        <div style="color:#b54708;font-weight:600;font-size:0.85rem;margin-top:0.4rem">
+          Busiest hour is overloaded &mdash; can't hit the {{ _tmin }} min
+          time-to-claim target even with 12 drivers.
+        </div>
+        {% elif forklift.recommended is not none %}
+        <div style="color:#666;font-size:0.82rem;margin-top:0.4rem">
+          Recommend <strong>{{ forklift.recommended }}</strong> to keep
+          time-to-claim under {{ _tmin }} min
+          {% if forklift.predicted_claim_seconds is not none %}
+            &middot; predicted ~{{ '%.1f'|format(forklift.predicted_claim_seconds / 60.0) }} min
+          {% endif %}
+        </div>
+        {% endif %}
+        {% if forklift.recommended is not none and not forklift.overloaded %}
+        <div style="color:#666;font-size:0.78rem;margin-top:0.3rem">
           Predicting ~{{ forklift.total_calls }} calls, busiest hour
           ~{{ '%.0f'|format(forklift.peak_calls) }}
           {% if forklift.basis == 'history' %}
             &middot; based on {{ forklift.n_days }} recent {{ forklift.weekday_label }}s
           {% else %}
             &middot; early estimate (history will sharpen this)
+          {% endif %}
+        </div>
+        {% endif %}
+        {# Read-only back-test: how the calibrated model lines up with reality. #}
+        {% if forklift.backtest is defined and forklift.backtest %}
+        <div style="color:#888;font-size:0.76rem;margin-top:0.35rem;border-top:1px dashed rgba(184,134,11,.35);padding-top:0.35rem">
+          {% if forklift.backtest.uncalibrated %}
+            Back-test: <em>(uncalibrated &mdash; building history)</em>
+          {% else %}
+            Over the last {{ forklift.backtest.n_samples }} days: model predicts
+            ~{{ '%.1f'|format(forklift.backtest.mean_pred_seconds / 60.0) }} min
+            vs. actual ~{{ '%.1f'|format(forklift.backtest.mean_actual_seconds / 60.0) }} min
           {% endif %}
         </div>
         {% endif %}
@@ -811,18 +838,39 @@
       </div>
       {% endmacro %}
 
-      {{ fl_slider('throughput', 'Driver speed',
-            'How many calls one driver clears per hour. Higher → fewer drivers needed.',
-            forklift.resolved_values.throughput, forklift.overrides.throughput,
-            forklift.algo_values.throughput, forklift.ranges.throughput,
-            fmt='%g', unit=' calls/hr') }}
-
-      {{ fl_slider('utilization_pct', 'Safety slack',
-            'Spare capacity so the queue doesn\'t back up. Lower utilization → more drivers.',
-            (forklift.resolved_values.utilization * 100)|round|int,
-            forklift.overrides.utilization,
-            (forklift.algo_values.utilization * 100)|round|int,
-            forklift.ranges.utilization_pct, fmt='%g', unit='%') }}
+      {#
+        Target time-to-claim slider. Works in MINUTES (the POST parser converts
+        minutes→seconds and clamps 30–1200s). Its own .fl-target handler keeps the
+        "X min" readout + hidden value live; the grey ▽ tick sits at 4 min (the
+        algorithm default). NO client-side Erlang-C — the recommendation/predicted/
+        back-test numbers above are server-rendered for the saved settings.
+      #}
+      {% set _t_min = forklift.target_minutes if forklift.target_minutes is defined else 4 %}
+      {% set _t_override = forklift.overrides.target if forklift.overrides.target is defined else none %}
+      <div class="fl-slider fl-target" data-field="target_claim_seconds"
+           data-algo="4" data-min="{{ forklift.ranges.target_minutes.min }}"
+           data-max="{{ forklift.ranges.target_minutes.max }}"
+           data-step="{{ forklift.ranges.target_minutes.step }}"
+           data-auto="{{ 'true' if _t_override is none else 'false' }}"
+           style="margin:1rem 0">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <strong>Target time-to-claim</strong>
+          <span style="color:#999;font-size:0.85rem">
+            <output class="fl-readout">{% if _t_override is none %}(auto){% else %}{{ '%g'|format(_t_min) }} min{% endif %}</output>
+            <a href="#" class="fl-reset" title="Reset to algorithm (4 min)" style="text-decoration:underline">&#8635;</a>
+          </span>
+        </div>
+        <div style="font-size:0.78rem;color:#777;margin:0.1rem 0 0.3rem">The longest average wait you'll tolerate before a forklift claims a call. Tighter → more drivers.</div>
+        <div style="position:relative">
+          <input class="fl-range" type="range"
+                 min="{{ forklift.ranges.target_minutes.min }}"
+                 max="{{ forklift.ranges.target_minutes.max }}"
+                 step="{{ forklift.ranges.target_minutes.step }}"
+                 value="{{ '%g'|format(_t_min) }}" style="width:100%;margin:0">
+          <input class="fl-input" type="hidden" name="target_claim_seconds"
+                 value="{% if _t_override is none %}auto{% else %}{{ '%g'|format(_t_min) }}{% endif %}">
+        </div>
+      </div>
 
       {{ fl_slider('plan_for', 'Plan for',
             'Size for a typical hour, or the busiest. Toward typical → fewer drivers.',
@@ -1046,6 +1094,7 @@
           if (field === 'utilization_pct') out.textContent = v + '%';
           else if (field === 'throughput') out.textContent = v + ' calls/hr';
           else if (field === 'history_samples') out.textContent = v + ' weeks';
+          else if (field === 'target_claim_seconds') out.textContent = v + ' min';
           else out.textContent = v;
         }
         function syncHidden(slider) {

@@ -25,6 +25,32 @@ def test_parse_forklift_overrides_clamps():
     assert s.throughput_override == 0.1 or s.throughput_override >= 1  # clamp >0 (floor 5)
 
 
+def test_parse_forklift_overrides_target_claim_minutes_to_seconds():
+    # UI posts MINUTES; parser converts to seconds. 4 min -> 240s.
+    s = settings_route._parse_forklift_overrides({"target_claim_seconds": "4"})
+    assert s.target_claim_seconds == 240.0
+    s2 = settings_route._parse_forklift_overrides({"target_claim_seconds": "2.5"})
+    assert s2.target_claim_seconds == 150.0
+
+
+def test_parse_forklift_overrides_target_claim_auto_clears():
+    # blank / "auto" -> None (follow the algorithm's default 240s).
+    assert settings_route._parse_forklift_overrides(
+        {"target_claim_seconds": "auto"}).target_claim_seconds is None
+    assert settings_route._parse_forklift_overrides(
+        {"target_claim_seconds": ""}).target_claim_seconds is None
+    assert settings_route._parse_forklift_overrides(
+        {}).target_claim_seconds is None
+
+
+def test_parse_forklift_overrides_target_claim_clamps_seconds():
+    # clamp 30-1200s (0.5-20 min). 0.1 min = 6s -> 30s; 100 min = 6000s -> 1200s.
+    assert settings_route._parse_forklift_overrides(
+        {"target_claim_seconds": "0.1"}).target_claim_seconds == 30.0
+    assert settings_route._parse_forklift_overrides(
+        {"target_claim_seconds": "100"}).target_claim_seconds == 1200.0
+
+
 def test_parse_forklift_overrides_disabled_and_unchecked():
     s = settings_route._parse_forklift_overrides({})  # nothing checked
     assert s.enabled is False
@@ -138,23 +164,29 @@ def _stub_forklift_ctx(recommended=4, algo_recommended=6):
         "coldstart_calls_per_day": 0.0,
         "recommended": recommended,
         "algo_recommended": algo_recommended,
+        "overloaded": False,
+        "target_seconds": 240.0,
+        "target_minutes": 4.0,
+        "predicted_claim_seconds": 174.0,
+        "backtest": {"n_samples": 40, "mean_actual_seconds": 165.0,
+                     "mean_pred_seconds": 170.0, "uncalibrated": False},
         "total_calls": 500,
         "peak_calls": 97.0,
         "peak_label": "9:00–10:00",
         "basis": "history",
         "n_days": 6,
-        "effective_throughput": 10.4,
         "algo_values": {"throughput": 16.0, "utilization": 0.65, "percentile": 1.0,
                         "history_samples": 8, "effective_throughput": 10.4},
         "resolved_values": {"throughput": 22.0, "utilization": 0.5, "percentile": 0.9,
                             "history_samples": 4, "effective_throughput": 11.0},
         "overrides": {"throughput": 22.0, "utilization": 0.5, "plan_for": 0.9,
-                      "history_samples": 4},
+                      "history_samples": 4, "target": None},
         "hour_values": [30.0, 50.0, 97.0],
         "ranges": {"throughput": {"min": 5, "max": 30, "step": 1},
                    "utilization_pct": {"min": 40, "max": 100, "step": 1},
                    "plan_for": {"min": 0.5, "max": 1.0, "step": 0.05},
-                   "history_samples": {"min": 2, "max": 20, "step": 1}},
+                   "history_samples": {"min": 2, "max": 20, "step": 1},
+                   "target_minutes": {"min": 1, "max": 10, "step": 0.5}},
     }
 
 
@@ -162,8 +194,8 @@ def test_forklift_settings_section_renders_sliders_and_both_numbers():
     from zira_dashboard.deps import templates
     rendered = templates.env.from_string(_extract_forklift_section()).render(
         forklift=_stub_forklift_ctx(), saved=False, active_section="forklift")
-    # The four named slider fields are present.
-    for field in ("throughput", "utilization_pct", "plan_for", "history_samples"):
+    # The surviving advisor sliders are present.
+    for field in ("plan_for", "history_samples"):
         assert 'data-field="%s"' % field in rendered
         assert 'name="%s"' % field in rendered
     assert 'type="range"' in rendered
@@ -174,6 +206,54 @@ def test_forklift_settings_section_renders_sliders_and_both_numbers():
     # Live-preview data + algorithm tick data are embedded.
     assert "data-hour-values" in rendered
     assert "Reset all to algorithm" in rendered
+
+
+def test_forklift_panel_has_target_slider_not_capacity_sliders():
+    """Task 7: the panel shows a 'Target time-to-claim' slider and has retired the
+    Driver-speed (throughput) and Safety-slack (utilization) capacity knobs."""
+    from zira_dashboard.deps import templates
+    rendered = templates.env.from_string(_extract_forklift_section()).render(
+        forklift=_stub_forklift_ctx(), saved=False, active_section="forklift")
+    assert 'name="target_claim_seconds"' in rendered
+    assert "Target time-to-claim" in rendered
+    # capacity knobs retired from the panel
+    assert "Driver speed" not in rendered and "Safety slack" not in rendered
+    assert 'data-field="throughput"' not in rendered
+    assert 'data-field="utilization_pct"' not in rendered
+
+
+def test_forklift_panel_shows_backtest_and_recommendation_line():
+    """The panel surfaces the read-only back-test and the SLA recommendation line
+    ('under 4 min · predicted ~X min'), server-rendered."""
+    from zira_dashboard.deps import templates
+    rendered = templates.env.from_string(_extract_forklift_section()).render(
+        forklift=_stub_forklift_ctx(), saved=False, active_section="forklift")
+    assert "time-to-claim" in rendered.lower()
+    assert "under 4 min" in rendered          # target 240s -> 4 min
+    assert "predicted" in rendered.lower()
+    # back-test: predicts ~X min vs. actual ~Y min over N days (calibrated).
+    assert "predicts" in rendered.lower() and "actual" in rendered.lower()
+    assert "uncalibrated" not in rendered.lower()  # backtest.uncalibrated is False
+
+
+def test_forklift_panel_shows_uncalibrated_note_when_building_history():
+    from zira_dashboard.deps import templates
+    ctx = _stub_forklift_ctx()
+    ctx["backtest"] = {"n_samples": 2, "mean_actual_seconds": 0.0,
+                       "mean_pred_seconds": 0.0, "uncalibrated": True}
+    rendered = templates.env.from_string(_extract_forklift_section()).render(
+        forklift=ctx, saved=False, active_section="forklift")
+    assert "uncalibrated" in rendered.lower()
+
+
+def test_forklift_panel_shows_overloaded_message():
+    from zira_dashboard.deps import templates
+    ctx = _stub_forklift_ctx(recommended=None)
+    ctx["overloaded"] = True
+    ctx["predicted_claim_seconds"] = None
+    rendered = templates.env.from_string(_extract_forklift_section()).render(
+        forklift=ctx, saved=False, active_section="forklift")
+    assert "overloaded" in rendered.lower()
 
 
 def test_forklift_settings_section_unavailable_still_saves():

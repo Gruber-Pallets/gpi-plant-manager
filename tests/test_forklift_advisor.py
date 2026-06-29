@@ -156,27 +156,41 @@ def test_build_advisor_unavailable_when_disabled(monkeypatch):
 
 
 def test_demand_summary_keys_and_recommendation(monkeypatch):
-    """demand_summary returns the documented keys with a sane recommended
-    derived from the predicted peak and the effective throughput (16*0.65=10.4)."""
+    """demand_summary returns the documented keys and the SAME SLA recommendation
+    the scheduler card shows: smallest crew whose predicted time-to-claim stays
+    under the target (NOT the old capacity ratio). The user-facing capacity number
+    is gone."""
     monkeypatch.setattr(forklift_advisor.forklift_store, "calls_daily_for_weekday",
                         lambda wd, limit=8: [
                             {"day": date(2026, 6, 19), "total_calls": 420,
                              "by_hour": {"9": {"calls": 70}, "8": {"calls": 30}},
                              "by_station": {}}])
+    monkeypatch.setattr("zira_dashboard.forklift_store.mean_handle_seconds",
+                        lambda window_days=90: 180.0)
+    monkeypatch.setattr("zira_dashboard.forklift_store.calibration_samples",
+                        lambda window_days=90: [])
     summary = forklift_advisor.demand_summary(date(2026, 6, 26))  # Friday
     assert set(summary) == {
         "total_calls", "peak_calls", "peak_hour", "peak_label", "basis",
-        "n_days", "effective_throughput", "recommended", "enabled",
+        "n_days", "recommended", "enabled", "overloaded",
+        "target_seconds", "predicted_claim_seconds", "backtest", "target_minutes",
         "algo_recommended", "algo_values", "resolved_values", "overrides",
         "hour_values", "ranges",
     }
+    # The retired capacity-ratio number must not surface.
+    assert "effective_throughput" not in summary
     assert summary["enabled"] is True
     assert summary["total_calls"] == 420
     assert summary["peak_calls"] == 70.0
     assert summary["peak_hour"] == 9
     assert summary["basis"] == "history"
-    assert summary["effective_throughput"] == 10.4
-    assert summary["recommended"] == 7            # ceil(70 / 10.4) = 7
+    # SLA model: 70 calls/hr @ 180s handle, target 240s, k=1 -> 5 drivers.
+    assert summary["recommended"] == 5
+    assert summary["overloaded"] is False
+    assert summary["target_seconds"] == 240.0
+    assert summary["predicted_claim_seconds"] is not None
+    assert summary["predicted_claim_seconds"] <= 240.0
+    assert summary["backtest"]["uncalibrated"] is True
 
 
 def test_demand_summary_no_signal_has_none_recommendation(monkeypatch):
@@ -221,16 +235,21 @@ def test_demand_summary_carries_algo_and_overrides_and_hour_values(monkeypatch):
                                               "by_station": {}}])
     monkeypatch.setattr(forklift_advisor.forklift_store, "recent_driver_throughput",
                         lambda days=28: None)  # -> DEFAULT_THROUGHPUT 16
+    monkeypatch.setattr("zira_dashboard.forklift_store.mean_handle_seconds",
+                        lambda window_days=90: 180.0)
+    monkeypatch.setattr("zira_dashboard.forklift_store.calibration_samples",
+                        lambda window_days=90: [])
     s = forklift_advisor.demand_summary(date(2026, 6, 26))
-    # all-auto: user recommendation matches the algorithm baseline.
-    assert s["recommended"] == s["algo_recommended"] == 7
+    # all-auto (default 240s target): user recommendation matches the baseline.
+    assert s["recommended"] == s["algo_recommended"] == 5
+    assert s["target_seconds"] == 240.0
     assert s["hour_values"] == [30.0, 70.0]          # sorted ascending for JS preview
-    assert s["algo_values"]["throughput"] == 16.0
-    assert s["algo_values"]["utilization"] == 0.65
+    # plan-for + history sliders survive; their algorithm ticks are still carried.
     assert s["algo_values"]["percentile"] == 1.0
     assert s["algo_values"]["history_samples"] == 8
-    # overrides all None when auto.
-    assert s["overrides"]["throughput"] is None
-    assert s["overrides"]["utilization"] is None
-    # slider ranges present.
-    assert set(s["ranges"]) == {"throughput", "utilization_pct", "plan_for", "history_samples"}
+    # overrides for the surviving knobs all None when auto.
+    assert s["overrides"]["plan_for"] is None
+    assert s["overrides"]["history_samples"] is None
+    # slider ranges present (capacity knobs retired but ranges dict keeps its keys
+    # so the JS live-preview still resolves plan_for/history).
+    assert {"plan_for", "history_samples"} <= set(s["ranges"])

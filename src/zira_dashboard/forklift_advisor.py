@@ -56,6 +56,8 @@ SLIDER_RANGES = {
     "utilization_pct": {"min": 40, "max": 100, "step": 1},
     "plan_for": {"min": 0.5, "max": 1.0, "step": 0.05},
     "history_samples": {"min": 2, "max": 20, "step": 1},
+    # Target time-to-claim slider works in MINUTES (1-10, half-min steps).
+    "target_minutes": {"min": 1, "max": 10, "step": 0.5},
 }
 
 
@@ -97,16 +99,6 @@ def _forecast(target_day: date, history_samples: int,
                     forecast = forklift_demand.forecast_from_total_and_shape(
                         base.total_calls, shape or [])
     return forecast
-
-
-def _recommend_at(forecast: "forklift_demand.DemandForecast",
-                  params: "forklift_settings.Resolved") -> int | None:
-    """Drivers needed to keep the chosen percentile's hour out of overload.
-    None when there's no demand to size to."""
-    _, demand = forklift_demand.demand_at_percentile(forecast.by_hour, params.percentile)
-    if demand <= 0:
-        return None
-    return forklift_demand.recommend_drivers(demand, params.effective_throughput)
 
 
 def _mean_handle_or_none() -> float | None:
@@ -228,15 +220,17 @@ def _resolved_dict(r: "forklift_settings.Resolved") -> dict:
 
 
 def demand_summary(target_day: date) -> dict:
-    """Read-only forecast summary for the Forklift settings page. Reuses the
-    same _forecast + resolver the scheduler card uses, so the page shows exactly
-    what drives the recommendation. Never raises into the request path — returns
-    a safe (empty) summary if anything fails.
+    """Read-only forecast + SLA summary for the Forklift settings page. Reuses the
+    same _forecast + SLA recommender the scheduler card uses, so the settings page
+    and the card never disagree. Never raises into the request path — returns a
+    safe summary if anything fails.
 
-    Carries BOTH recommendations (resolved + algorithm baseline), the algorithm's
-    own knob values (the grey ticks), the current overrides (None = auto), the
-    sorted per-hour call counts (for the JS live preview's nearest-rank math),
-    and the slider ranges."""
+    Carries the SLA recommendation (smallest crew under the time-to-claim target):
+    `recommended` / `target_seconds` / `predicted_claim_seconds` / `overloaded`
+    plus the `backtest`, the algorithm baseline (the same calc at the DEFAULT
+    target), the surviving knobs' algorithm ticks + overrides (plan-for, history;
+    None = auto), the sorted per-hour call counts (JS live preview), and the
+    slider ranges. The OLD user-facing capacity number is intentionally gone."""
     cfg = _cfg()
     algo_throughput = _algo_throughput()
     resolved = forklift_settings.resolve(cfg, algo_throughput=algo_throughput)
@@ -248,13 +242,38 @@ def demand_summary(target_day: date) -> dict:
         forecast = forklift_demand.DemandForecast()
 
     peak = float(forecast.peak_calls or 0.0)
-    recommended = _recommend_at(forecast, resolved)
-    algo_recommended = _recommend_at(forecast, algo)
     peak_label = (
         f"{forecast.peak_hour}:00–{forecast.peak_hour + 1}:00"
         if forecast.peak_hour is not None else "—"
     )
     hour_values = sorted(float(c) for c in forecast.by_hour.values())
+
+    # SLA recommendation (same model as the scheduler card). Needs handling time
+    # + a forecast with hourly shape; otherwise the recommendation degrades to
+    # None ("builds as history accrues") while the demand summary still renders.
+    recommended = algo_recommended = predicted = None
+    overloaded = False
+    backtest = None
+    target_seconds = resolved.target_claim_seconds
+    mean_handle = _mean_handle_or_none()
+    if mean_handle is not None and forecast.by_hour:
+        calib = _fit_calibration(mean_handle)
+        rec = _recommend_for_target(forecast, resolved, mean_handle, calib.k,
+                                    resolved.target_claim_seconds)
+        algo_rec = _recommend_for_target(
+            forecast, resolved, mean_handle, calib.k,
+            forklift_settings.DEFAULT_TARGET_CLAIM_SECONDS)
+        recommended = rec.drivers
+        predicted = rec.predicted_seconds
+        overloaded = rec.overloaded
+        algo_recommended = algo_rec.drivers
+        backtest = {
+            "n_samples": calib.n_samples,
+            "mean_actual_seconds": calib.mean_actual_seconds,
+            "mean_pred_seconds": calib.mean_pred_seconds,
+            "uncalibrated": calib.uncalibrated,
+        }
+
     return {
         "total_calls": int(round(forecast.total_calls)),
         "peak_calls": round(peak, 1),
@@ -262,9 +281,12 @@ def demand_summary(target_day: date) -> dict:
         "peak_label": peak_label,
         "basis": forecast.basis,
         "n_days": forecast.n_days,
-        "effective_throughput": round(resolved.effective_throughput, 2),
         "recommended": recommended,
         "algo_recommended": algo_recommended,
+        "overloaded": overloaded,
+        "target_seconds": target_seconds,
+        "predicted_claim_seconds": predicted,
+        "backtest": backtest,
         "algo_values": _resolved_dict(algo),
         "resolved_values": _resolved_dict(resolved),
         "overrides": {
@@ -272,7 +294,12 @@ def demand_summary(target_day: date) -> dict:
             "utilization": cfg.utilization_override,
             "plan_for": cfg.plan_for_percentile_override,
             "history_samples": cfg.history_samples_override,
+            # Target time-to-claim override (None = auto / the 240s default). The
+            # settings slider works in MINUTES, so carry both the override flag
+            # and the resolved value in minutes.
+            "target": cfg.target_claim_seconds,
         },
+        "target_minutes": round(target_seconds / 60.0, 2),
         "hour_values": hour_values,
         "ranges": SLIDER_RANGES,
         "enabled": cfg.enabled,
