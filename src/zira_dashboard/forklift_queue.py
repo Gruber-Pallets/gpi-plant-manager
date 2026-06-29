@@ -75,8 +75,11 @@ def fit_calibration(samples: list[dict], mean_handle_seconds: float) -> CalibRes
     back to k=1.0 (uncalibrated) when fewer than MIN_CALIB_SAMPLES are usable."""
     ratios, preds, actuals = [], [], []
     for s in samples or []:
-        pred = erlang_c_wait_seconds(int(s["crew"]), float(s["avg_lambda"]), mean_handle_seconds)
-        actual = float(s["actual_wait_seconds"])
+        try:
+            pred = erlang_c_wait_seconds(int(s["crew"]), float(s["avg_lambda"]), mean_handle_seconds)
+            actual = float(s["actual_wait_seconds"])
+        except (KeyError, TypeError, ValueError):
+            continue
         if not math.isfinite(pred) or pred <= 0:
             continue
         ratios.append(actual / pred)

@@ -82,3 +82,24 @@ def test_unstable_samples_are_skipped():
     # crew below offered load -> inf prediction -> skipped, leaving too few -> uncalibrated
     s = [{"avg_lambda": 500, "crew": 1, "actual_wait_seconds": 100.0}] * 8
     assert q.fit_calibration(s, handle).uncalibrated is True
+
+
+def test_malformed_sample_is_skipped_not_fatal():
+    # One malformed row (missing/garbage fields) among good ones is skipped,
+    # leaving enough good samples to calibrate -> no raise.
+    handle = 180
+    good = []
+    for lam, crew in [(60, 5), (70, 6), (80, 6), (50, 5), (65, 6)]:
+        pred = q.erlang_c_wait_seconds(crew, lam, handle)
+        good.append({"avg_lambda": lam, "crew": crew, "actual_wait_seconds": 2.0 * pred})
+    bad = {"avg_lambda": "not-a-number", "crew": None}  # missing actual_wait_seconds too
+    res = q.fit_calibration(good + [bad], handle)
+    assert res.n_samples == 5 and res.uncalibrated is False
+    assert abs(res.k - 2.0) < 1e-6
+
+
+def test_only_malformed_samples_is_uncalibrated_not_fatal():
+    handle = 180
+    s = [{"avg_lambda": "x", "crew": "y", "actual_wait_seconds": "z"}] * 8
+    res = q.fit_calibration(s, handle)
+    assert res.uncalibrated is True and res.n_samples == 0
