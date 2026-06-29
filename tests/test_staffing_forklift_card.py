@@ -122,7 +122,8 @@ def test_forklift_block_renders_card_from_advisor_model():
     rendered_short = templates.env.from_string(_extract_forklift_block()).render(
         forklift_advisor=short_model)
     assert "Recommend 4" in rendered_short
-    assert "Short 3 — 1 on Tablets of 4" in rendered_short
+    assert "Short 3" in rendered_short              # the gap is still shown
+    assert "on Tablets of" not in rendered_short    # redundant detail removed
 
 
 def test_forklift_card_shows_time_to_claim_target():
