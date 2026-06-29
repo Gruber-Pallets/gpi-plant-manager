@@ -64,3 +64,26 @@ def test_backfill_history_swallows_errors(monkeypatch):
 
     out = forklift_backfill.backfill_history()
     assert out["days"] == 0 and out["calls"] == 0 and "error" in out
+
+
+def test_diff_cumulative_days_clamps_and_subtracts():
+    # cum_by_day[d] = {driver_id: {"on_time":.., "late":.., "on_call_ms":.., "available_ms":..}}
+    cum = {
+        "2026-04-01": {"d1": {"on_time": 100, "late": 10, "on_call_ms": 5000, "available_ms": 9000}},
+        "2026-04-02": {"d1": {"on_time": 82,  "late": 8,  "on_call_ms": 4300, "available_ms": 7000}},
+    }
+    # day 2026-04-01 = cum(04-01) - cum(04-02)
+    rows = forklift_backfill.diff_day("2026-04-01", "2026-04-02", cum)
+    r = rows[0]
+    assert r["on_time"] == 18 and r["late"] == 2
+    assert r["on_call_ms"] == 700 and r["available_ms"] == 2000
+    assert round(r["utilization_pct"], 1) == 35.0  # 700/2000
+
+
+def test_diff_day_clamps_negative_to_zero():
+    cum = {
+        "2026-04-01": {"d1": {"on_time": 5, "late": 0, "on_call_ms": 0, "available_ms": 0}},
+        "2026-04-02": {"d1": {"on_time": 9, "late": 0, "on_call_ms": 0, "available_ms": 0}},
+    }
+    rows = forklift_backfill.diff_day("2026-04-01", "2026-04-02", cum)
+    assert rows[0]["on_time"] == 0  # clamp, never negative
