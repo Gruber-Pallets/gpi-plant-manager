@@ -39,6 +39,81 @@ def test_parse_forklift_overrides_history_and_plan_clamp():
     assert s.plan_for_percentile_override == 0.5  # clamp 0.5-1.0
 
 
+# --- GOAT-score overrides (Task 10) ------------------------------------------
+def test_parse_forklift_overrides_score_auto_vs_set():
+    s = settings_route._parse_forklift_overrides({
+        "score_w_calls": "50", "score_w_ontime": "auto", "score_min_calls": "12",
+        "score_target_calls": "", "score_fast_secs": "45"})
+    assert s.score_w_calls == 50.0
+    assert s.score_w_ontime is None            # "auto" -> follow algorithm
+    assert s.score_min_calls == 12
+    assert s.score_target_calls is None        # blank -> auto
+    assert s.score_fast_secs == 45.0
+
+
+def test_parse_forklift_overrides_score_clamps():
+    s = settings_route._parse_forklift_overrides({
+        "score_w_calls": "999", "score_target_calls": "0", "score_ontime_floor": "150",
+        "score_fast_secs": "0", "score_slow_secs": "9999", "score_min_calls": "0"})
+    assert s.score_w_calls == 100.0            # weights clamp 0-100
+    assert s.score_target_calls == 1           # target_calls clamp 1-100
+    assert s.score_ontime_floor == 99          # ontime_floor clamp 0-99
+    assert s.score_fast_secs == 1              # fast/slow secs clamp 1-600
+    assert s.score_slow_secs == 600
+    assert s.score_min_calls == 1              # min_calls clamp 1-100
+
+
+def _stub_score_ctx():
+    """The extra GOAT-Score subsection context the panel needs (resolved config,
+    the algorithm defaults for the grey ticks, the overrides=None map, and a
+    sample scored day for the live worked example)."""
+    return {
+        "score": {"weights": {"calls": 50.0, "ontime": 30.0, "speed": 20.0,
+                              "util": 10.0},
+                  "target_calls": 25.0, "ontime_floor": 80.0, "fast_secs": 30.0,
+                  "slow_secs": 180.0, "min_calls": 8},
+        "score_algo": {"weights": {"calls": 40.0, "ontime": 30.0, "speed": 20.0,
+                                  "util": 10.0},
+                       "target_calls": 25.0, "ontime_floor": 80.0, "fast_secs": 30.0,
+                       "slow_secs": 180.0, "min_calls": 8},
+        "score_overrides": {"calls": 50.0, "ontime": None, "speed": None,
+                            "util": None, "target_calls": None, "ontime_floor": None,
+                            "fast_secs": None, "slow_secs": None, "min_calls": None},
+        "score_sample": {"name": "Trent", "day_label": "Apr 14",
+                         "calls": 31, "on_time": 30, "late": 1, "avg_ms": 40000,
+                         "utilization_pct": 22.0},
+    }
+
+
+def test_forklift_settings_section_renders_goat_score_panel():
+    from zira_dashboard.deps import templates
+    ctx = _stub_forklift_ctx()
+    ctx.update(_stub_score_ctx())
+    rendered = templates.env.from_string(_extract_forklift_section()).render(
+        forklift=ctx, saved=False, active_section="forklift")
+    assert "GOAT Score" in rendered
+    # The four weight sliders are present with their named POST fields + ids.
+    for field in ("score_w_calls", "score_w_ontime", "score_w_speed", "score_w_util"):
+        assert 'name="%s"' % field in rendered
+    assert 'id="score-w-calls"' in rendered
+    # Advanced targets + gate sliders present.
+    for field in ("score_target_calls", "score_ontime_floor", "score_fast_secs",
+                  "score_slow_secs", "score_min_calls"):
+        assert 'name="%s"' % field in rendered
+    # The live worked-example shows the sample day + a live score readout.
+    assert "Trent" in rendered
+    assert "score-example" in rendered
+
+
+def test_forklift_settings_goat_score_absent_when_no_score_ctx():
+    # When the score context is missing (forklift data unavailable), the GOAT
+    # Score panel simply doesn't render — the rest of the form still does.
+    from zira_dashboard.deps import templates
+    rendered = templates.env.from_string(_extract_forklift_section()).render(
+        forklift={"enabled": True}, saved=False, active_section="forklift")
+    assert "GOAT Score" not in rendered
+
+
 # --- Settings page render (Jinja env, no DB / network) -----------------------
 # Like tests/test_staffing_forklift_card.py, render just the forklift <section>
 # from settings.html through the app's Jinja2 environment with a stub ctx, so we

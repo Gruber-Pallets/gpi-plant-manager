@@ -837,6 +837,125 @@
             fmt='%g', unit=' weeks') }}
       {% endif %}
 
+      {% if forklift.score is defined %}
+      {#
+        GOAT Score subsection. Same auto/override slider mechanic as the advisor
+        sliders above (.fl-slider / .fl-readout / .fl-reset / .fl-range /
+        .fl-input + the grey algorithm tick), but each knob also carries an
+        explicit id so the live worked example can read it, and the JS recomputes
+        the 0-100 composite client-side with the SAME normalization as
+        forklift_score (banker's-rounded via the existing pyRound helper).
+      #}
+      {% macro fl_score_slider(eid, field, title, help, value, override, algo, lo, hi, step, fmt='%g', unit='') %}
+      <div class="fl-slider fl-score-slider" data-field="{{ field }}" data-knob="{{ eid }}"
+           data-algo="{{ algo }}" data-min="{{ lo }}" data-max="{{ hi }}"
+           data-step="{{ step }}" data-auto="{{ 'true' if override is none else 'false' }}"
+           style="margin:1rem 0">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <strong><label for="{{ eid }}">{{ title }}</label></strong>
+          <span style="color:#999;font-size:0.85rem">
+            <output class="fl-readout">{% if override is none %}(auto){% else %}{{ fmt|format(value) }}{{ unit }}{% endif %}</output>
+            <a href="#" class="fl-reset" title="Reset to algorithm" style="text-decoration:underline">&#8635;</a>
+          </span>
+        </div>
+        <div style="font-size:0.78rem;color:#777;margin:0.1rem 0 0.3rem">{{ help }}</div>
+        <div style="position:relative">
+          <input class="fl-range" type="range" id="{{ eid }}"
+                 min="{{ lo }}" max="{{ hi }}" step="{{ step }}"
+                 value="{{ value }}" style="width:100%;margin:0">
+          <input class="fl-input" type="hidden" name="{{ field }}"
+                 value="{% if override is none %}auto{% else %}{{ value }}{% endif %}">
+        </div>
+      </div>
+      {% endmacro %}
+
+      <div style="border-top:1px solid var(--border,#eee);margin:1.4rem 0 0;padding-top:1rem">
+        <h3 style="margin:0 0 0.2rem">GOAT Score</h3>
+        <p class="help" style="margin:0 0 0.4rem">
+          The forklift <strong>GOAT</strong> and the leaderboard's Overall card rank
+          drivers by a weighted 0&ndash;100 daily score blending calls, on-time %,
+          response speed, and utilization. Each weight/target below is
+          <strong>auto</strong> by default (grey &#9662; = the algorithm's value);
+          drag to override or tap &#8635; to snap back.
+        </p>
+
+        <p class="help" style="margin:0.4rem 0 0.1rem">Weights (relative &mdash; normalized to 100% at scoring time)</p>
+
+        {{ fl_score_slider('score-w-calls', 'score_w_calls', 'Calls weight',
+              'How much daily call volume counts toward the score.',
+              forklift.score.weights.calls, forklift.score_overrides.calls,
+              forklift.score_algo.weights.calls, 0, 100, 1, fmt='%g', unit='') }}
+
+        {{ fl_score_slider('score-w-ontime', 'score_w_ontime', 'On-time weight',
+              'How much on-time % counts toward the score.',
+              forklift.score.weights.ontime, forklift.score_overrides.ontime,
+              forklift.score_algo.weights.ontime, 0, 100, 1, fmt='%g', unit='') }}
+
+        {{ fl_score_slider('score-w-speed', 'score_w_speed', 'Speed weight',
+              'How much response speed (time-to-claim) counts.',
+              forklift.score.weights.speed, forklift.score_overrides.speed,
+              forklift.score_algo.weights.speed, 0, 100, 1, fmt='%g', unit='') }}
+
+        {{ fl_score_slider('score-w-util', 'score_w_util', 'Utilization weight',
+              'How much on-call utilization counts toward the score.',
+              forklift.score.weights.util, forklift.score_overrides.util,
+              forklift.score_algo.weights.util, 0, 100, 1, fmt='%g', unit='') }}
+
+        <details style="margin:0.6rem 0">
+          <summary style="cursor:pointer;color:#666;font-size:0.85rem">Advanced targets &amp; gate</summary>
+
+          {{ fl_score_slider('score-target-calls', 'score_target_calls', 'Target calls/day',
+                'Calls in a day that earn full marks on the calls component.',
+                forklift.score.target_calls, forklift.score_overrides.target_calls,
+                forklift.score_algo.target_calls, 1, 100, 1, fmt='%g', unit=' calls') }}
+
+          {{ fl_score_slider('score-ontime-floor', 'score_ontime_floor', 'On-time floor',
+                'On-time % below this scores 0; the floor&ndash;100% band spreads to 0&ndash;100.',
+                forklift.score.ontime_floor, forklift.score_overrides.ontime_floor,
+                forklift.score_algo.ontime_floor, 0, 99, 1, fmt='%g', unit='%') }}
+
+          {{ fl_score_slider('score-fast-secs', 'score_fast_secs', 'Fast response',
+                'Avg response at/under this (seconds) scores 100 on speed.',
+                forklift.score.fast_secs, forklift.score_overrides.fast_secs,
+                forklift.score_algo.fast_secs, 1, 600, 1, fmt='%g', unit='s') }}
+
+          {{ fl_score_slider('score-slow-secs', 'score_slow_secs', 'Slow response',
+                'Avg response at/over this (seconds) scores 0 on speed.',
+                forklift.score.slow_secs, forklift.score_overrides.slow_secs,
+                forklift.score_algo.slow_secs, 1, 600, 1, fmt='%g', unit='s') }}
+
+          {{ fl_score_slider('score-min-calls', 'score_min_calls', 'Eligibility gate',
+                'A day needs at least this many calls to earn any score.',
+                forklift.score.min_calls, forklift.score_overrides.min_calls,
+                forklift.score_algo.min_calls, 1, 100, 1, fmt='%g', unit=' calls') }}
+        </details>
+
+        {# Live worked example: recomputes the 0-100 score client-side as sliders
+           move (same normalization as forklift_score); grey baseline stays fixed. #}
+        <div id="score-example"
+             data-sample="{{ forklift.score_sample|tojson }}"
+             style="border:1px solid var(--border,#e5e7eb);border-radius:0.5rem;
+                    padding:0.7rem 0.9rem;margin:0.6rem 0;background:rgba(0,0,0,.02)">
+          <div style="font-size:0.82rem;color:#555">
+            Worked example &mdash; <strong>{{ forklift.score_sample.name }}</strong>,
+            {{ forklift.score_sample.day_label }}
+            ({{ forklift.score_sample.calls }} calls,
+            {{ forklift.score_sample.on_time }} on-time / {{ forklift.score_sample.late }} late,
+            ~{{ (forklift.score_sample.avg_ms / 1000)|round|int }}s avg,
+            {{ forklift.score_sample.utilization_pct|round|int }}% util)
+          </div>
+          <div style="display:flex;align-items:baseline;gap:0.6rem;margin-top:0.3rem">
+            <span id="score-example-num"
+                  style="font-size:1.7rem;font-weight:700;color:#b8860b">&mdash;</span>
+            <span style="color:#888;font-size:0.8rem">/ 100 with your weights
+              &nbsp;&middot;&nbsp; algorithm baseline
+              <strong id="score-example-algo">&mdash;</strong></span>
+          </div>
+          <div id="score-example-parts" style="color:#666;font-size:0.78rem;margin-top:0.25rem"></div>
+        </div>
+      </div>
+      {% endif %}
+
       <label style="display:flex;justify-content:space-between;align-items:center;
                     margin:1rem 0;border-top:1px solid var(--border,#eee);padding-top:0.8rem">
         <span>Count <strong>Loading/Jockeying</strong> toward coverage too</span>
@@ -943,7 +1062,10 @@
           syncHidden(slider);
         }
 
-        var sliders = form.querySelectorAll('.fl-slider');
+        // Advisor sliders only; GOAT-Score sliders are driven by their own
+        // script (they carry .fl-score-slider) so this generic readout doesn't
+        // mislabel them.
+        var sliders = form.querySelectorAll('.fl-slider:not(.fl-score-slider)');
         sliders.forEach(function (slider) {
           var range = slider.querySelector('.fl-range');
           range.addEventListener('input', function () {
@@ -973,6 +1095,140 @@
         }
         if (matchAlgo) matchAlgo.addEventListener('click', resetAllToAlgo);
         if (resetAll) resetAll.addEventListener('click', resetAllToAlgo);
+
+        recompute();
+      })();
+    </script>
+
+    <script>
+      // GOAT-Score live worked example. Self-contained: owns its sliders'
+      // readout/hidden/reset and recomputes the 0-100 composite client-side with
+      // the SAME normalization + banker's rounding as forklift_score.daily_score.
+      (function () {
+        var form = document.getElementById('forklift-form');
+        var box = document.getElementById('score-example');
+        if (!form || !box) return;
+
+        var sample = {};
+        try { sample = JSON.parse(box.getAttribute('data-sample') || '{}'); }
+        catch (e) { sample = {}; }
+
+        var sliders = form.querySelectorAll('.fl-score-slider');
+        if (!sliders.length) return;
+
+        function pyRound(x) {
+          var f = Math.floor(x);
+          if (Math.abs(x - f - 0.5) < 1e-9) { return (f % 2 === 0) ? f : f + 1; }
+          return Math.round(x);
+        }
+        function clamp(x, lo, hi) {
+          lo = (lo === undefined) ? 0 : lo; hi = (hi === undefined) ? 100 : hi;
+          return Math.max(lo, Math.min(hi, x));
+        }
+        // Field value: the algorithm tick when auto, else the slider value.
+        function val(field) {
+          var s = form.querySelector('.fl-score-slider[data-field="' + field + '"]');
+          if (!s) return null;
+          if (s.getAttribute('data-auto') === 'true') return parseFloat(s.getAttribute('data-algo'));
+          return parseFloat(s.querySelector('.fl-range').value);
+        }
+        function unitFor(field) {
+          if (field === 'score_ontime_floor') return '%';
+          if (field === 'score_fast_secs' || field === 'score_slow_secs') return 's';
+          if (field === 'score_target_calls' || field === 'score_min_calls') return ' calls';
+          return '';
+        }
+        function readout(slider) {
+          var out = slider.querySelector('.fl-readout');
+          if (!out) return;
+          if (slider.getAttribute('data-auto') === 'true') { out.textContent = '(auto)'; return; }
+          var v = parseFloat(slider.querySelector('.fl-range').value);
+          out.textContent = v + unitFor(slider.getAttribute('data-field'));
+        }
+        function syncHidden(slider) {
+          var hidden = slider.querySelector('.fl-input');
+          if (!hidden) return;
+          hidden.value = (slider.getAttribute('data-auto') === 'true')
+            ? 'auto' : slider.querySelector('.fl-range').value;
+        }
+        function setAuto(slider) {
+          slider.setAttribute('data-auto', 'true');
+          slider.querySelector('.fl-range').value = slider.getAttribute('data-algo');
+          readout(slider); syncHidden(slider);
+        }
+
+        // Mirrors forklift_score._subscores + the weighted blend (with zero-weight
+        // fallback to equal weighting), reading from a value-getter so we can
+        // score both the user's config and the fixed algorithm baseline.
+        function scoreWith(get) {
+          var calls = +sample.calls || 0, onTime = +sample.on_time || 0,
+              late = +sample.late || 0, avgSecs = (+sample.avg_ms || 0) / 1000,
+              util = +sample.utilization_pct || 0;
+          var targetCalls = get('score_target_calls'),
+              floor = get('score_ontime_floor'),
+              fast = get('score_fast_secs'), slow = get('score_slow_secs');
+          var sCalls = targetCalls ? clamp(calls / targetCalls * 100) : 0;
+          var denom = onTime + late, pct = denom ? (onTime / denom * 100) : 0;
+          var spread = (100 - floor) || 1;
+          var sOntime = clamp((pct - floor) / spread * 100);
+          var span = (slow - fast) || 1;
+          var sSpeed = clamp((slow - avgSecs) / span * 100);
+          var sUtil = clamp(util);
+          var subs = {calls: sCalls, ontime: sOntime, speed: sSpeed, util: sUtil};
+          var w = {calls: get('score_w_calls'), ontime: get('score_w_ontime'),
+                   speed: get('score_w_speed'), util: get('score_w_util')};
+          var tw = w.calls + w.ontime + w.speed + w.util;
+          if (!(tw > 0)) { w = {calls: 1, ontime: 1, speed: 1, util: 1}; tw = 4; }
+          var score = 0, parts = [];
+          ['calls', 'ontime', 'speed', 'util'].forEach(function (k) {
+            score += w[k] / tw * subs[k];
+            parts.push(k + ' ' + pyRound(subs[k]));
+          });
+          return {score: score, parts: parts};
+        }
+
+        var numEl = document.getElementById('score-example-num');
+        var algoEl = document.getElementById('score-example-algo');
+        var partsEl = document.getElementById('score-example-parts');
+        function algoVal(field) {
+          var s = form.querySelector('.fl-score-slider[data-field="' + field + '"]');
+          return s ? parseFloat(s.getAttribute('data-algo')) : 0;
+        }
+        var gate = +sample.calls >= 0;  // sample exists
+        function recompute() {
+          if (!sample || !gate) return;
+          var minCalls = val('score_min_calls') || 0;
+          if ((+sample.calls || 0) < minCalls) {
+            numEl.textContent = '—';
+            partsEl.textContent = 'below the ' + minCalls + '-call gate (no score)';
+          } else {
+            var r = scoreWith(val);
+            numEl.textContent = pyRound(r.score);
+            partsEl.textContent = 'sub-scores: ' + r.parts.join(' · ');
+          }
+          if (algoEl) algoEl.textContent =
+            ((+sample.calls || 0) < (algoVal('score_min_calls') || 0))
+              ? '—' : pyRound(scoreWith(algoVal).score);
+        }
+
+        sliders.forEach(function (slider) {
+          var range = slider.querySelector('.fl-range');
+          range.addEventListener('input', function () {
+            slider.setAttribute('data-auto', 'false');
+            readout(slider); syncHidden(slider); recompute();
+          });
+          var reset = slider.querySelector('.fl-reset');
+          if (reset) reset.addEventListener('click', function (e) {
+            e.preventDefault(); setAuto(slider); recompute();
+          });
+          readout(slider); syncHidden(slider);
+        });
+
+        // The page-level "Reset all to algorithm" should also snap the score knobs.
+        var resetAll = document.getElementById('fl_reset_all');
+        if (resetAll) resetAll.addEventListener('click', function () {
+          sliders.forEach(setAuto); recompute();
+        });
 
         recompute();
       })();

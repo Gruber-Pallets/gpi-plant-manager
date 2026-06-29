@@ -389,6 +389,14 @@ def settings_page(
             # per-hour call counts (JS preview), and the slider ranges.
             **forklift_advisor.demand_summary(_target_day),
         }
+        # GOAT-Score subsection context: the resolved score config (current
+        # slider values), the algorithm defaults (grey ticks), the per-knob
+        # overrides (None = auto), and one sample scored day for the live
+        # worked example. Best-effort so a data hiccup just hides the panel.
+        try:
+            forklift_ctx.update(_forklift_score_ctx(_fl))
+        except Exception:
+            pass
     except Exception:
         # Never 500 the whole settings page if the forklift data source / DB is
         # unreachable; the template guards on these keys being absent.
@@ -639,6 +647,76 @@ async def settings_save_auto_lunch(request: Request):
     return await asyncio.to_thread(_work)
 
 
+def _score_cfg_dict(cfg) -> dict:
+    """Flatten a forklift_score.ScoreConfig to a plain dict for the template."""
+    return {
+        "weights": dict(cfg.weights),
+        "target_calls": cfg.target_calls,
+        "ontime_floor": cfg.ontime_floor,
+        "fast_secs": cfg.fast_secs,
+        "slow_secs": cfg.slow_secs,
+        "min_calls": cfg.min_calls,
+    }
+
+
+# A static fallback sample day for the live worked example when no eligible day
+# is in the store yet (fresh install / data source down).
+_SCORE_SAMPLE_FALLBACK = {
+    "name": "Example", "day_label": "—", "calls": 25, "on_time": 24, "late": 1,
+    "avg_ms": 45000, "utilization_pct": 60.0,
+}
+
+
+def _forklift_score_ctx(settings) -> dict:
+    """Build the GOAT-Score subsection context: the resolved config (current
+    values), the algorithm defaults (grey ticks), the per-knob overrides
+    (None = auto), and one sample scored day for the live worked example."""
+    from .. import forklift_score, forklift_settings, forklift_store
+
+    resolved = forklift_settings.resolve(settings, algo_throughput=0.0)
+    cfg = resolved.score_config()
+    algo = forklift_score.DEFAULT_SCORE_CONFIG
+
+    # The most recent GOAT-eligible day (>= min_calls) makes the liveliest
+    # example; fall back to a static sample if none is available.
+    sample = dict(_SCORE_SAMPLE_FALLBACK)
+    try:
+        import datetime as _dt
+        today = _dt.date.today()
+        rows = forklift_store.driver_days_between(today - _dt.timedelta(days=120), today)
+        eligible = [r for r in rows if (r.get("calls") or 0) >= cfg.min_calls]
+        if eligible:
+            r = max(eligible, key=lambda r: r["day"])
+            sample = {
+                "name": r.get("name") or r.get("driver_id") or "Driver",
+                "day_label": r["day"].strftime("%b %-d") if hasattr(r["day"], "strftime") else str(r["day"]),
+                "calls": int(r.get("calls") or 0),
+                "on_time": int(r.get("on_time") or 0),
+                "late": int(r.get("late") or 0),
+                "avg_ms": int(r.get("avg_ms") or 0),
+                "utilization_pct": float(r.get("utilization_pct") or 0.0),
+            }
+    except Exception:
+        pass
+
+    return {
+        "score": _score_cfg_dict(cfg),
+        "score_algo": _score_cfg_dict(algo),
+        "score_overrides": {
+            "calls": settings.score_w_calls,
+            "ontime": settings.score_w_ontime,
+            "speed": settings.score_w_speed,
+            "util": settings.score_w_util,
+            "target_calls": settings.score_target_calls,
+            "ontime_floor": settings.score_ontime_floor,
+            "fast_secs": settings.score_fast_secs,
+            "slow_secs": settings.score_slow_secs,
+            "min_calls": settings.score_min_calls,
+        },
+        "score_sample": sample,
+    }
+
+
 def _parse_forklift_overrides(form) -> "forklift_settings.Settings":  # noqa: F821
     """Build a forklift_settings.Settings (nullable overrides) from POST form
     values. Each numeric knob: the literal string "auto" or blank → None (follow
@@ -668,6 +746,17 @@ def _parse_forklift_overrides(form) -> "forklift_settings.Settings":  # noqa: F8
         history_samples_override=_override("history_samples", 2, 20, integer=True),
         include_loading_jockeying=bool(form.get("include_loading_jockeying")),
         coldstart_calls_per_day=coldstart if coldstart is not None else 0.0,
+        # GOAT composite-score overrides (blank/"auto" -> None; clamp per knob).
+        # Weights are stored raw (renormalized at compute time).
+        score_w_calls=_override("score_w_calls", 0.0, 100.0, integer=False),
+        score_w_ontime=_override("score_w_ontime", 0.0, 100.0, integer=False),
+        score_w_speed=_override("score_w_speed", 0.0, 100.0, integer=False),
+        score_w_util=_override("score_w_util", 0.0, 100.0, integer=False),
+        score_target_calls=_override("score_target_calls", 1.0, 100.0, integer=False),
+        score_ontime_floor=_override("score_ontime_floor", 0.0, 99.0, integer=False),
+        score_fast_secs=_override("score_fast_secs", 1.0, 600.0, integer=False),
+        score_slow_secs=_override("score_slow_secs", 1.0, 600.0, integer=False),
+        score_min_calls=_override("score_min_calls", 1, 100, integer=True),
     )
 
 
