@@ -1174,6 +1174,15 @@
     form.addEventListener('submit', (event) => {
       const submitter = event.submitter;
       if (!submitter || submitter.name !== 'action' || submitter.value !== 'publish') return;
+      let publishIntent = form.querySelector('input[type="hidden"][data-publish-intent="1"]');
+      if (!publishIntent) {
+        publishIntent = document.createElement('input');
+        publishIntent.type = 'hidden';
+        publishIntent.dataset.publishIntent = '1';
+        publishIntent.name = 'action';
+        form.appendChild(publishIntent);
+      }
+      publishIntent.value = 'publish';
       document.querySelectorAll('.publish-submit').forEach((button) => {
         button.disabled = true;
         button.setAttribute('aria-busy', 'true');

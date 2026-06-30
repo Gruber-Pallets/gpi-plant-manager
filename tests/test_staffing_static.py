@@ -72,6 +72,14 @@ def test_staffing_publish_submit_buttons_expose_busy_state():
     assert "button.setAttribute('aria-busy', 'true');" in js
 
 
+def test_staffing_publish_busy_state_preserves_publish_action():
+    js = _script()
+
+    assert "publishIntent.name = 'action';" in js
+    assert "publishIntent.value = 'publish';" in js
+    assert "form.appendChild(publishIntent);" in js
+
+
 def test_staffing_slack_post_button_exposes_busy_state():
     html = _template()
     js = _script()
