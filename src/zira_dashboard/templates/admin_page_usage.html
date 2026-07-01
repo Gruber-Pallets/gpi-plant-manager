@@ -1,0 +1,63 @@
+{% extends "_staffing_base.html" %}
+{% block title %}Page usage{% endblock %}
+{% block content %}
+<main class="admin-page-usage" style="max-width:900px;margin:0 auto;padding:1rem">
+  <h1>Page usage</h1>
+  <p class="muted">
+    Which pages get used, based on real traffic recorded by the app. Route
+    patterns are shown (e.g. <code>/staffing/people/&#123;name&#125;</code>),
+    not individual URLs. Anonymous kiosk/TV traffic counts toward views but not
+    the distinct-user total.
+  </p>
+
+  <form method="get" action="/admin/page-usage" style="margin:1rem 0">
+    <label>Window:
+      <select name="days" onchange="this.form.submit()">
+        {% for d in [1, 7, 14, 30, 90] %}
+        <option value="{{ d }}" {% if d == days %}selected{% endif %}>last {{ d }} day{{ 's' if d != 1 }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <noscript><button type="submit">Go</button></noscript>
+  </form>
+
+  <h2>Used pages <span class="muted">({{ report|length }} routes · {{ total_views }} views)</span></h2>
+  {% if report %}
+  <table style="width:100%;border-collapse:collapse">
+    <thead>
+      <tr style="text-align:left;border-bottom:2px solid #ccc">
+        <th>Route</th><th style="text-align:right">Views</th>
+        <th style="text-align:right">Distinct users</th><th style="text-align:right">Last seen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in report %}
+      <tr style="border-bottom:1px solid #eee">
+        <td><code>{{ row.route }}</code></td>
+        <td style="text-align:right">{{ row.views }}</td>
+        <td style="text-align:right">{{ row.users }}</td>
+        <td style="text-align:right">{{ row.last_day.strftime('%b %-d') if row.last_day else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No page views recorded in this window yet.</p>
+  {% endif %}
+
+  <h2 style="margin-top:2rem">Never hit in this window <span class="muted">({{ never|length }})</span></h2>
+  <p class="muted">
+    User-navigable pages the app defines that got <strong>zero</strong> views in
+    the last {{ days }} day{{ 's' if days != 1 }}. Candidates to retire — but
+    confirm over a longer window first, and note kiosk/TV pages
+    (<code>/timeclock/*</code>, <code>/tv/*</code>) are machine-driven.
+  </p>
+  {% if never %}
+  <ul>
+    {% for route in never %}<li><code>{{ route }}</code></li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">Every defined page was hit in this window.</p>
+  {% endif %}
+</main>
+{% endblock %}

@@ -643,6 +643,32 @@ def precompute_run(
     })
 
 
+# ---------- Page-usage report ----------
+
+
+@router.get("/admin/page-usage", response_class=HTMLResponse)
+def page_usage(request: Request, days: int = Query(7, ge=1, le=365)):
+    """Which pages get used, over the last ``days``. Ranks observed pages by
+    views + distinct users, and lists user-navigable pages with zero views in
+    the window (the dead-page candidates), diffed against the live route
+    table."""
+    from .. import page_views
+
+    report = page_views.usage_report(days)
+    observed = {row["route"] for row in report}
+    inventory = page_views.page_inventory(request.app)
+    never = page_views.never_hit(observed, inventory)
+    return templates.TemplateResponse(
+        request, "admin_page_usage.html",
+        {
+            "report": report,
+            "never": never,
+            "days": days,
+            "total_views": sum(row["views"] for row in report),
+        },
+    )
+
+
 # ---------- Device tokens admin ----------
 
 

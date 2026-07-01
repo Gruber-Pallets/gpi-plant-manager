@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db
+from . import page_views
 from .plant_day import today as plant_today
 from .routes import (
     admin,
@@ -273,6 +274,14 @@ async def _tick_inbox_reconcile():
     await asyncio.to_thread(inbox_reconcile.run_once)
 
 
+async def _tick_page_usage():
+    """Drain the in-memory page-view counter to Postgres in one batched upsert.
+    Keeps per-request cost at a dict increment; this is the only DB work the
+    feature does."""
+    from . import page_views
+    await asyncio.to_thread(page_views.flush)
+
+
 async def _tick_calendar_conflicts():
     """Weekly Odoo calendar-conflict check. Interval is short; run_once()
     self-throttles to ~weekly via its persisted last_run_at gate."""
@@ -300,6 +309,7 @@ _WARMERS = [
     ("forklift snapshot", _tick_forklift, 600),
     ("Inbox reconcile", _tick_inbox_reconcile, 60),
     ("calendar conflicts", _tick_calendar_conflicts, 21600),
+    ("page-usage flush", _tick_page_usage, 60),
 ]
 
 
@@ -438,6 +448,9 @@ async def _security_and_cache_headers(request, call_next):
             "Cache-Control",
             "public, max-age=31536000, immutable",
         )
+    # Page-usage tracking rides this same middleware (no extra layer, per the
+    # note above). Cost is a dict increment; it never raises into the response.
+    page_views.record_view(request)
     return response
 
 

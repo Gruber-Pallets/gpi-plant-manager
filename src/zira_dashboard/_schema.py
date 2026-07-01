@@ -1067,4 +1067,21 @@ CREATE TABLE IF NOT EXISTS calendar_conflict_monitor (
   reported_emp_ids  INTEGER[] NOT NULL DEFAULT '{}',
   last_run_at       TIMESTAMPTZ
 );
+
+-- 2026-07-01: page-usage tracking. One row per (day, matched route pattern,
+-- method, signed-in user) with a running view count, upserted from an
+-- in-memory counter on the warmer tick (never per-request). Storing the route
+-- *pattern* (e.g. /staffing/people/{name}) not the concrete URL is what makes
+-- the counts aggregable; a row per user gives distinct-user counts exactly.
+-- user_email is '' for anonymous kiosk/TV traffic. Feeds /admin/page-usage.
+CREATE TABLE IF NOT EXISTS page_views (
+  day         DATE NOT NULL,
+  route       TEXT NOT NULL,
+  method      TEXT NOT NULL,
+  user_email  TEXT NOT NULL DEFAULT '',
+  views       INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, route, method, user_email)
+);
+-- Report scans a recent day-window then groups by route.
+CREATE INDEX IF NOT EXISTS page_views_day ON page_views (day);
 """
