@@ -109,7 +109,7 @@ def settings_page(
     saved: int = Query(default=0),
     section: str = Query(default="work_centers"),
 ):
-    if section not in ("work_centers", "integrations", "roster_filter", "tvs", "timeclock", "time_off", "forklift"):
+    if section not in ("work_centers", "integrations", "roster_filter", "tvs", "timeclock", "time_off", "forklift", "diagnostics"):
         section = "work_centers"
     roster_filter_active: list[dict] = []
     roster_filter_inactive: list[dict] = []

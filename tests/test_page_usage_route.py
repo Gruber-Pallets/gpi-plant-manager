@@ -24,3 +24,25 @@ def test_page_usage_page_shows_used_and_never_hit(monkeypatch):
     assert "42" in body
     # a real page absent from the report is listed as never-hit
     assert "/trophies" in body
+
+
+import os as _os
+import re
+
+import pytest
+
+
+@pytest.mark.skipif(
+    not _os.environ.get("DATABASE_URL"), reason="needs Postgres (/settings loads DB)"
+)
+def test_settings_has_diagnostics_section_linking_to_report():
+    resp = client.get("/settings?section=diagnostics")
+    assert resp.status_code == 200
+    body = resp.text
+    # the report is linked from Settings
+    assert 'href="/admin/page-usage"' in body
+    # and 'diagnostics' is an accepted section (nav item goes active, i.e. the
+    # allowlist didn't fall back to work_centers)
+    assert re.search(
+        r'\?section=diagnostics"\s+class="settings-nav-item active"', body
+    )

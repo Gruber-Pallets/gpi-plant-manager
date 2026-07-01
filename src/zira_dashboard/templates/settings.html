@@ -47,6 +47,10 @@
        class="settings-nav-item {% if active_section == 'forklift' %}active{% endif %}">
       Forklift
     </a>
+    <a href="?section=diagnostics"
+       class="settings-nav-item {% if active_section == 'diagnostics' %}active{% endif %}">
+      Diagnostics
+    </a>
   </aside>
 
   <div class="settings-content">
@@ -1284,6 +1288,29 @@
     </script>
 
   </section>
+
+  <!-- Diagnostics -->
+  <section class="panel" id="diagnostics-panel"
+           {% if active_section != 'diagnostics' %}style="display:none"{% endif %}>
+    <h2>Diagnostics</h2>
+    <p class="help">
+      Internal reports for understanding how the app is being used.
+    </p>
+
+    <h3 style="margin-top:1rem">Page usage</h3>
+    <p class="help">
+      Which pages actually get used — ranked by views and distinct users —
+      plus a list of pages nobody has visited (candidates to retire). Give it
+      about a week of normal use before trusting the "never hit" list.
+    </p>
+    <p>
+      <a href="/admin/page-usage" target="_blank" rel="noopener"
+         class="settings-nav-item active" style="display:inline-block">
+        Open page-usage report &rarr;
+      </a>
+    </p>
+  </section>
+
   </div>
 </div>
 </main>
