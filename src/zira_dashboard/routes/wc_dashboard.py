@@ -78,6 +78,9 @@ def _render_wc_dashboard(
     wc_group = groups[0] if groups else None
 
     pallets = wc_dashboard_data.pallets_banner(wc_name, today)
+    # Nobody scheduled AND nothing produced yet → a calm "not staffed" view,
+    # not red zeros and a "-246 BEHIND" GOAT delta against an empty station.
+    no_activity = not operators and int(pallets.get("units_today") or 0) == 0
     progress = wc_dashboard_data.fifteen_min_progress_buckets(wc_name, today)
     kpi = wc_dashboard_data.kpi_tiles(wc_name, today)
     report = wc_dashboard_data.downtime_report(wc_name, today) or {}
@@ -112,6 +115,7 @@ def _render_wc_dashboard(
             "wc_group": wc_group,
             "operators": operators,
             "operators_display": operators_display,
+            "no_activity": no_activity,
             "today": today.isoformat(),
             "year": today.year,
             "month": today.month,
@@ -184,5 +188,13 @@ def operator_default():
             {"error": "no work centers configured — set them up in Settings"},
             status_code=404,
         )
-    first = staffing.LOCATIONS[0]
-    return RedirectResponse(url=f"/wc/{wc_dashboard_data.slug_for_wc(first.name)}", status_code=302)
+    # Prefer the first WC that actually has someone scheduled today, so the
+    # operator doesn't land on an empty "(unassigned)" station by default.
+    # Fall back to the first WC when nobody is scheduled anywhere yet.
+    today = plant_today()
+    target = next(
+        (l for l in staffing.LOCATIONS
+         if wc_dashboard_data.assigned_operators_for_wc(l.name, today)),
+        staffing.LOCATIONS[0],
+    )
+    return RedirectResponse(url=f"/wc/{wc_dashboard_data.slug_for_wc(target.name)}", status_code=302)

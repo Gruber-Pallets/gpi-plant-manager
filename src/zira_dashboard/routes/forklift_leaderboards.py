@@ -21,6 +21,24 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _apply_display_names(lb: dict) -> None:
+    """Set `display_name` on every leaderboard row, resolving the forklift
+    first-name to its full plant name via the driver name-map. Best-effort:
+    on any failure every row falls back to its raw `name`."""
+    try:
+        from .. import forklift_store
+        nm = forklift_store.name_map("driver") or {}
+    except Exception as exc:  # noqa: BLE001 - display sugar, never 500
+        _log.warning("forklift leaderboard: name-map lookup failed: %s", exc)
+        nm = {}
+    for rows in lb.values():
+        if not isinstance(rows, list):
+            continue
+        for r in rows:
+            if isinstance(r, dict):
+                r["display_name"] = nm.get(r.get("name"), r.get("name"))
+
 FORKLIFT_MIN_CALLS = forklift_awards.DEFAULT_MIN_CALLS
 
 _WINDOW_LABELS = {
@@ -51,6 +69,12 @@ def forklift_leaderboards(
     except Exception as exc:  # noqa: BLE001 - never 500 the page on a data hiccup
         _log.warning("forklift leaderboard: render context failed: %s", exc)
         lb = forklift_awards.empty_leaderboard()
+
+    # Disambiguate first-name-only forklift names (the plant has three
+    # "Jesus"es) by resolving each through the driver name-map to its full
+    # plant name. Unmapped names fall through unchanged. `display_name` also
+    # drives the player-card link, which resolves plant→forklift internally.
+    _apply_display_names(lb)
 
     label = "Custom" if custom_range_active else _WINDOW_LABELS.get(window, window)
     return templates.TemplateResponse(

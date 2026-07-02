@@ -54,7 +54,7 @@
           {% for r in lb.overall %}
             <tr class="{% if loop.index <= 3 %}fk-medal-{{ loop.index }}{% endif %}">
               <td class="rank">{{ loop.index }}</td>
-              <td class="op"><a href="/staffing/people/{{ r.name }}">{{ r.name }}</a></td>
+              <td class="op"><a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a></td>
               <td class="num">{{ '%.0f'|format(r.score) }}</td>
               <td class="num">{{ r.days }}</td>
             </tr>
@@ -75,7 +75,7 @@
           {% for r in lb.most_calls %}
             <tr class="{% if loop.index <= 3 %}fk-medal-{{ loop.index }}{% endif %}">
               <td class="rank">{{ loop.index }}</td>
-              <td class="op"><a href="/staffing/people/{{ r.name }}">{{ r.name }}</a></td>
+              <td class="op"><a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a></td>
               <td class="num">{{ r.calls }}</td>
               <td class="num"><span class="fk-ontime">{{ r.on_time }}</span> / <span class="fk-late">{{ r.late }}</span></td>
             </tr>
@@ -95,7 +95,7 @@
           {% for r in lb.on_time %}
             <tr class="{% if loop.index <= 3 %}fk-medal-{{ loop.index }}{% endif %}">
               <td class="rank">{{ loop.index }}</td>
-              <td class="op"><a href="/staffing/people/{{ r.name }}">{{ r.name }}</a></td>
+              <td class="op"><a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a></td>
               <td class="num pct">{{ '%.1f'|format(r.ontime_pct) }}%</td>
               <td class="num">{{ r.calls }}</td>
             </tr>
@@ -116,7 +116,7 @@
           {% for r in lb.fastest %}
             <tr class="{% if loop.index <= 3 %}fk-medal-{{ loop.index }}{% endif %}">
               <td class="rank">{{ loop.index }}</td>
-              <td class="op"><a href="/staffing/people/{{ r.name }}">{{ r.name }}</a></td>
+              <td class="op"><a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a></td>
               <td class="num">{{ '%.1f'|format((r.avg_ms or 0) / 1000.0) }}s</td>
               <td class="num">{{ r.calls }}</td>
             </tr>

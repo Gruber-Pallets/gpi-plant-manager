@@ -51,7 +51,7 @@
                 {% for r in s.rows %}
                   <tr>
                     <td class="rank">{{ r.rank }}</td>
-                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count" title="Days worked in this range">({{ r.name_count }})</span></td>
                     <td>{{ r.day_label }}</td>
                     {% if is_group %}<td>{{ r.wc }}</td>{% endif %}
                     <td class="num">{{ r.units|round|int }}</td>
@@ -70,7 +70,7 @@
                     <td class="op"><button type="button" class="lb-name-btn"
    data-name="{{ r.name }}" {% if is_group %}data-group{% else %}data-wc{% endif %}="{{ s.loc_name }}"
    data-start="{{ start }}" data-end="{{ end }}"
-   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count">({{ r.name_count }})</span></td>
+   onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count" title="Days worked in this range">({{ r.name_count }})</span></td>
                     {% if is_group %}<td>{{ r.top_wc }}</td>{% endif %}
                     <td class="num">{{ r.avg_units|round|int }}</td>
                     <td class="num pct">{% if r.avg_pct is none %}<span class="lb-no-goal" title="No goal configured for this work center">&mdash;</span>{% else %}{{ '%.0f' % (r.avg_pct * 100) }}%{% endif %}</td>
@@ -130,6 +130,13 @@
   <a href="/staffing/leaderboards?window={{ window }}&metric=pct{% if custom_range_active %}&start={{ start }}&end={{ end }}{% endif %}"
      class="lb-chip{% if metric == 'pct' %} lb-chip-on{% endif %}">% of goal</a>
 </form>
+
+<p class="lb-legend">
+  <b>(n)</b> = days worked in range &nbsp;·&nbsp;
+  🐐 = current all-time record holder &nbsp;·&nbsp;
+  <span class="lb-no-goal">&mdash;</span> = no goal set for that work center &nbsp;·&nbsp;
+  hover a badge for what it means
+</p>
 
 <div class="lb-page-panes">
 

@@ -445,6 +445,20 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
   font-weight: 500;
 }
 
+/* Calm "nobody scheduled here" notice — deliberately neutral (not red) so an
+   idle station reads as idle, not failing. */
+.wc-idle-notice {
+  margin: 0.5rem 1rem 0;
+  padding: 0.7rem 1rem;
+  background: var(--panel-2, #f1f4f7);
+  border: 1px solid var(--border, #d8dee5);
+  border-radius: 10px;
+  color: var(--muted, #6b7280);
+  font-size: 0.95rem;
+}
+.wc-idle-notice .wc-idle-icon { margin-right: 0.4rem; }
+.wc-idle-notice b { color: var(--fg, #1f2937); font-weight: 600; }
+
 /* Pallets banner axis row — borrows recycling's .axis-row layout. */
 .wc-dashboard .pallets-banner .pallets-axis {
   margin-top: 0.35rem;

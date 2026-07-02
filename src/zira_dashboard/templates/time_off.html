@@ -40,6 +40,9 @@
   .off-pill.odoo { background: #dcfce7; color: #166534; border: 1px solid #16a34a; }
   .off-pill.holiday { background: #dc2626; color: #ffffff; border: 1px solid #b91c1c; font-weight: 700; }
   .off-none { color: var(--muted); font-size: 0.7rem; font-style: italic; }
+  .cal-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: 0.6rem 0 0.9rem; }
+  .cal-legend .off-pill { cursor: default; }
+  .cal-legend-note { color: var(--muted); font-size: 0.78rem; margin-left: 0.3rem; }
 
   /* day view */
   .day-view-list { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
@@ -67,6 +70,13 @@
       <a href="?scale={{ s }}&date={{ cursor_iso }}" class="{% if scale == s %}active{% endif %}">{{ s|title }}</a>
     {% endfor %}
   </div>
+</div>
+
+<div class="cal-legend">
+  <span class="off-pill odoo">Full day off</span>
+  <span class="off-pill partial">Partial day</span>
+  <span class="off-pill holiday">Plant closed</span>
+  <span class="cal-legend-note">All entries are approved time off.</span>
 </div>
 
 {% if scale == 'day' %}
@@ -196,6 +206,7 @@
 {% endif %}
 
 <p class="hint" style="margin-top:1rem">
-  Source is the Odoo time-off mirror (state = <em>approved</em>).
+  Source is the Odoo time-off mirror. Pending requests appear on the Plant
+  Scheduler (tagged <em>pending</em>) until HR approves them.
 </p>
 {% endblock %}

@@ -49,6 +49,10 @@
       <button type="submit" class="rc-chip rc-custom-apply">Apply</button>
     </div>
   </details>
+  <div class="edit-bar">
+    <span class="save-indicator" id="save-indicator">Drag / resize — layout auto-saves</span>
+    <button type="button" id="reset-layout">Reset Layout</button>
+  </div>
 </form>
 {% endif %}
 {% macro widget_attrs(id, dx, dy, dw, dh) -%}
@@ -153,12 +157,6 @@
   {%- if c -%}style="--wc: {{ c }}; {{ role }}: {{ c }} !important"{%- endif -%}
 {%- endmacro %}
 
-{% if not tv_mode %}
-<div class="edit-bar">
-  <span class="save-indicator" id="save-indicator">Drag / resize — layout auto-saves</span>
-  <button type="button" id="reset-layout">Reset Layout</button>
-</div>
-{% endif %}
 
 {# TV mode seats the banner in the header center (tv_header {% call %}
    above); screen mode keeps it here below the edit bar. #}

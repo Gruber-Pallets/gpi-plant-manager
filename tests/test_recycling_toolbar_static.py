@@ -16,11 +16,15 @@ def test_recycling_range_toolbar_sits_below_subnav_not_header():
     assert toolbar > subnav
 
 
-def test_recycling_range_toolbar_is_standalone_row():
-    css = CSS.read_text(encoding="utf-8")
+def test_recycling_edit_bar_shares_toolbar_row():
+    # 2026-07-02: the edit bar (save indicator + Reset Layout) moved into
+    # the range-chip toolbar row to reclaim vertical space.
+    html = TEMPLATE.read_text(encoding="utf-8")
+    form_start = html.index('<form class="rc-toolbar"')
+    form_end = html.index("</form>", form_start)
+    assert '<div class="edit-bar">' in html[form_start:form_end]
 
-    start = css.index(".rc-toolbar")
+    css = CSS.read_text(encoding="utf-8")
+    start = css.index(".edit-bar {")
     block = css[start:css.index("}", start)]
-    assert "margin-left" not in block
-    assert "margin:" in block
-    assert "padding:" in block
+    assert "margin-left: auto" in block  # pushed to the right of the chips

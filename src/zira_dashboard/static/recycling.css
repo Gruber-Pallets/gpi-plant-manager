@@ -184,7 +184,8 @@
     border: 1px dashed var(--accent);
     border-radius: 12px;
   }
-  .edit-bar { display: flex; gap: 0.5rem; align-items: center; justify-content: flex-end; padding: 0.5rem 1rem 0; font-size: 0.8rem; color: var(--muted); }
+  /* Lives inside .rc-toolbar (same row as the range chips), pushed right. */
+  .edit-bar { display: flex; gap: 0.5rem; align-items: center; justify-content: flex-end; margin-left: auto; padding: 0; font-size: 0.8rem; color: var(--muted); }
   .edit-bar button { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0.35rem 0.7rem; font: inherit; font-size: 0.8rem; cursor: pointer; }
   .edit-bar button:hover { color: var(--fg); border-color: var(--muted); }
   .edit-bar .save-indicator { font-style: italic; opacity: 0.7; }
@@ -677,7 +678,6 @@
     header { padding: 0.7rem 0.9rem; }
     .sub-nav { padding-left: 0.9rem; padding-right: 0.9rem; }
     main { padding: 0.6rem 0.85rem 0.85rem; }
-    .edit-bar { padding-left: 0.85rem; padding-right: 0.85rem; }
     .kpi { padding: 0.75rem 0.85rem; }
     .kpi .val { font-size: clamp(1.6rem, 2.6vw, 2.4rem); }
     .panel { padding: 0.75rem 0.85rem; }

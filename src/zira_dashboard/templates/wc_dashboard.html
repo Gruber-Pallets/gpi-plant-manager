@@ -85,6 +85,14 @@
    {% call %} above); on screen it stays here, below the chrome strip. #}
 {% if not tv_mode %}{% include "_goat_watch_banner.html" %}{% endif %}
 
+{% if no_activity %}
+<div class="wc-idle-notice">
+  <span class="wc-idle-icon" aria-hidden="true">🌙</span>
+  No one is scheduled on <b>{{ wc_name }}</b> today — the numbers below stay at
+  zero until someone clocks in here.
+</div>
+{% endif %}
+
 <main>
 <div class="grid-stack" data-layout-page="operator" data-tv-mode="{{ '1' if tv_mode else '0' }}" data-fallback-rows="25">
 
@@ -106,7 +114,8 @@
     <div class="grid-stack-item-content">
       {% if not tv_mode %}{{ edit_controls('pallets-banner', 'Today · Pallets', 'kpi') }}{% endif %}
       <h3>{{ widget_title('pallets-banner', 'Today · Pallets') }}</h3>
-      {% set behind = pallets.target_today and pallets.units_today < pallets.target_today %}
+      {# An empty, unstaffed station isn't "behind" — don't paint it red. #}
+      {% set behind = (not no_activity) and pallets.target_today and pallets.units_today < pallets.target_today %}
       <div class="pallets-banner">
         <div class="pallets-numbers">
           <span class="units {{ 'behind' if behind else 'ahead' }}" {{ widget_color_style('pallets-banner', 'color') }}>{{ pallets.units_today }}</span>
@@ -227,7 +236,7 @@
         {% set units = goat_race.units_today %}
         {% set delta = units - pace_now %}
         <div class="goat-race-v2">
-          {% if goat_race.goat and pace_now > 0 %}
+          {% if goat_race.goat and pace_now > 0 and not no_activity %}
             <div class="gr-delta {{ 'ahead' if delta > 5 else ('behind' if delta < -5 else 'on-pace') }}">
               {% if delta > 5 %}
                 <span class="gr-num">+{{ delta }}</span><span class="gr-label">AHEAD</span><span class="gr-icon" aria-hidden="true">🐐</span>
