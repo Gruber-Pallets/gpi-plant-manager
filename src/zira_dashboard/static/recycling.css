@@ -14,10 +14,6 @@
     --warn: #a16207;
     --warn-dim: #fef3c7;
     --bad-dim: #fee2e2;
-    /* Cumulative-progress bars are informational, not pass/fail — a neutral
-       blue so being "behind the linear pace line" mid-shift doesn't read as
-       failure (the pace line already carries the ahead/behind signal). */
-    --cum-bar: #3b82f6;
   }
   * { box-sizing: border-box; }
   body {
@@ -745,13 +741,12 @@
   }
   .cum-progress .bar {
     width: 100%;
-    background: var(--cum-bar);
+    background: var(--good);
     border-radius: 2px 2px 0 0;
     min-height: 1px;
     position: relative;
   }
-  /* hit/miss no longer recolor the bar (see --cum-bar); the pace line shows
-     ahead vs behind. Classes kept for the tooltip/JS contract. */
+  .cum-progress .col.miss .bar { background: var(--bad); }
   .cum-progress .col.in-progress .bar { opacity: 0.7; }
   .cum-progress .bar-label {
     position: absolute;
@@ -782,8 +777,7 @@
   }
   .cum-progress .target-line polyline {
     fill: none;
-    stroke: var(--fg);
-    stroke-dasharray: 4 3;
+    stroke: var(--muted);
     stroke-width: 1.5;
     stroke-linecap: round;
     stroke-linejoin: round;
