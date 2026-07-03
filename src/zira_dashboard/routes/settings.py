@@ -103,19 +103,41 @@ def _roster_filter_lists() -> tuple[list[dict], list[dict]]:
     return _split_roster_rows(rows)
 
 
+def _parse_api_key_scopes(form) -> list[str]:
+    if form.get("scope_admin"):
+        return ["admin:*"]
+    scopes: list[str] = []
+    if form.get("scope_read"):
+        scopes.append("object:read")
+    if form.get("scope_write"):
+        scopes.append("object:write")
+    if form.get("scope_unlink"):
+        scopes.append("object:unlink")
+    return scopes or ["object:read"]
+
+
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(
     request: Request,
     saved: int = Query(default=0),
     section: str = Query(default="work_centers"),
 ):
-    if section not in ("work_centers", "integrations", "roster_filter", "tvs", "timeclock", "time_off", "forklift", "diagnostics"):
+    if section not in ("work_centers", "integrations", "api", "roster_filter", "tvs", "timeclock", "time_off", "forklift", "diagnostics"):
         section = "work_centers"
     roster_filter_active: list[dict] = []
     roster_filter_inactive: list[dict] = []
     if section == "roster_filter":
         roster_filter_active, roster_filter_inactive = _roster_filter_lists()
     integration_status = None
+    api_keys_rows: list[dict] = []
+    new_api_key = None
+    if section == "api":
+        from .. import api_keys as _api_keys
+        try:
+            new_api_key = request.session.pop("new_api_key", None)
+        except AssertionError:
+            new_api_key = None
+        api_keys_rows = _api_keys.list_keys()
     kiosk_recent_punches: list[dict] = []
     kiosk_recent_variances: list[dict] = []
     timeclock_sync_status: dict | None = None
@@ -426,6 +448,8 @@ def settings_page(
             "work_schedules": work_schedules_ctx,
             "available_schedules": available_schedules,
             "integration_status": integration_status,
+            "api_keys_rows": api_keys_rows,
+            "new_api_key": new_api_key,
             "tv_displays_rows": tv_displays_rows,
             "all_dashboards_for_picker": all_dashboards_for_picker,
             "wc_locations_for_picker": [{"name": loc.name} for loc in staffing.LOCATIONS],
@@ -436,6 +460,43 @@ def settings_page(
             "forklift": forklift_ctx,
         },
     )
+
+
+@router.post("/settings/api-keys")
+async def settings_create_api_key(request: Request):
+    from .. import api_keys as _api_keys
+
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
+    allowed_ips = [
+        item.strip()
+        for item in str(form.get("allowed_ips") or "").split(",")
+        if item.strip()
+    ]
+    created_by = getattr(request.state, "user_upn", None) or "settings"
+    key_id, token = await asyncio.to_thread(
+        _api_keys.create_key,
+        name,
+        _parse_api_key_scopes(form),
+        created_by,
+        allowed_ips,
+    )
+    request.session["new_api_key"] = token
+    if (request.headers.get("accept") or "").startswith("application/json"):
+        return JSONResponse({"ok": True, "id": key_id, "token": token})
+    return RedirectResponse(url="/settings?saved=1&section=api", status_code=303)
+
+
+@router.post("/settings/api-keys/{key_id}/revoke")
+async def settings_revoke_api_key(key_id: int, request: Request):
+    from .. import api_keys as _api_keys
+
+    await asyncio.to_thread(_api_keys.revoke_key, key_id)
+    if (request.headers.get("accept") or "").startswith("application/json"):
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url="/settings?saved=1&section=api", status_code=303)
 
 
 @router.post("/settings/schedule")

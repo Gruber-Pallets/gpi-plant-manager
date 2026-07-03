@@ -229,6 +229,43 @@ header .page-actions .redo-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .save-toast .undo-btn:hover { background: rgba(96,165,250,0.12); }
 
+.api-token-once {
+  border: 1px solid #16a34a;
+  background: #dcfce7;
+  color: #14532d;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  margin: 0.4rem 0 0.9rem;
+}
+.api-token-once code {
+  display: block;
+  margin-top: 0.35rem;
+  word-break: break-all;
+}
+.api-key-form {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 1.5fr) auto;
+  gap: 0.6rem;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+.api-key-form input[type=text] {
+  width: 100%;
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+}
+.api-scope-grid {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+.api-keys-table code { font-size: 0.8rem; }
+
 /* External × button next to a native <select> (Group + Department).
    Pickers (Required Skills + Default People) get an internal × in their
    summary instead — see .dd-clear below. Both fade in on cell hover. */
