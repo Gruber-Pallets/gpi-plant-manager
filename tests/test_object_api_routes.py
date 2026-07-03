@@ -87,3 +87,34 @@ def test_cookie_does_not_authenticate_object_api():
     cookie_client = TestClient(app, cookies={"gpi_session": "not-used"})
     r = cookie_client.get("/api/v1/object/models")
     assert r.status_code == 401
+
+
+def test_ip_allowlist_rejects_unlisted_client(monkeypatch):
+    monkeypatch.setattr(
+        api_keys,
+        "verify_key",
+        lambda token: {
+            "id": 1,
+            "name": "Locked",
+            "scopes": ["admin:*"],
+            "allowed_ips": ["10.0.0.1"],
+        },
+    )
+    r = client.get("/api/v1/object/models", headers={"Authorization": "Bearer gpi_live_good"})
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "ip_not_allowed"
+
+
+def test_https_required_in_production(monkeypatch):
+    monkeypatch.setenv("REQUIRE_API_HTTPS", "1")
+    monkeypatch.setattr(
+        api_keys,
+        "verify_key",
+        lambda token: {"id": 1, "name": "CRM", "scopes": ["admin:*"], "allowed_ips": []},
+    )
+    r = client.get(
+        "/api/v1/object/models",
+        headers={"Authorization": "Bearer gpi_live_good", "x-forwarded-proto": "http"},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "https_required"

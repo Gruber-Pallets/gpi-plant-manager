@@ -105,11 +105,17 @@ def apply_domain(
     ]
 
 
-def apply_order(records: list[dict], order: str | None) -> list[dict]:
+def apply_order(
+    records: list[dict],
+    order: str | None,
+    fields: dict[str, FieldSpec],
+) -> list[dict]:
     if not order:
         return list(records)
     parts = order.split()
     field = parts[0]
+    if field not in fields:
+        raise ObjectAPIError("invalid_field", f"Unknown order field: {field}", 400)
     desc = len(parts) > 1 and parts[1].lower() == "desc"
     return sorted(records, key=lambda row: (row.get(field) is None, row.get(field)), reverse=desc)
 
@@ -250,7 +256,7 @@ def execute(
         if method in {"search", "search_count", "search_read"}:
             domain = args[0] if args else []
             records = apply_domain(model.all_records(context), domain, model.fields)
-            records = apply_order(records, kwargs.get("order") or model.default_order)
+            records = apply_order(records, kwargs.get("order") or model.default_order, model.fields)
             if method == "search_count":
                 return _ok(len(records))
             offset = max(0, int(kwargs.get("offset") or 0))

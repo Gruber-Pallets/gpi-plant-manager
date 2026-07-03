@@ -40,6 +40,12 @@ def test_select_fields_rejects_private_fields():
     assert e.value.code == "invalid_field"
 
 
+def test_apply_order_rejects_unknown_field():
+    with pytest.raises(object_api.ObjectAPIError) as e:
+        object_api.apply_order([{"id": 1}], "secret desc", FIELDS)
+    assert e.value.code == "invalid_field"
+
+
 class DemoModel(object_api.ObjectModel):
     name = "demo.model"
     display_name = "Demo"

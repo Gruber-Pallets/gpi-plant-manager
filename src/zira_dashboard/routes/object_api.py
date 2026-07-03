@@ -1,6 +1,8 @@
 """Server-to-server Odoo-like object API routes."""
 from __future__ import annotations
 
+import ipaddress
+import os
 import time
 
 from fastapi import APIRouter, Request
@@ -29,6 +31,39 @@ def _bearer(request: Request) -> str | None:
     return raw.split(" ", 1)[1].strip()
 
 
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _https_ok(request: Request) -> bool:
+    if os.environ.get("REQUIRE_API_HTTPS", "").strip().lower() not in ("1", "true", "yes"):
+        return True
+    return (request.headers.get("x-forwarded-proto") or request.url.scheme) == "https"
+
+
+def _ip_allowed(row: dict, request: Request) -> bool:
+    allowed = row.get("allowed_ips") or []
+    if not allowed:
+        return True
+    raw = _client_ip(request)
+    if not raw:
+        return False
+    try:
+        addr = ipaddress.ip_address(raw)
+    except ValueError:
+        return False
+    for item in allowed:
+        try:
+            if "/" in item:
+                if addr in ipaddress.ip_network(item, strict=False):
+                    return True
+            elif addr == ipaddress.ip_address(item):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _key_row(request: Request) -> dict | JSONResponse:
     token = _bearer(request)
     if not token:
@@ -36,6 +71,10 @@ def _key_row(request: Request) -> dict | JSONResponse:
     row = api_keys.verify_key(token)
     if row is None:
         return _auth_error("invalid_api_key", "Invalid API key", 401)
+    if not _https_ok(request):
+        return _auth_error("https_required", "Object API requires HTTPS", 403)
+    if not _ip_allowed(row, request):
+        return _auth_error("ip_not_allowed", "Client IP is not allowed for this key", 403)
     return row
 
 
