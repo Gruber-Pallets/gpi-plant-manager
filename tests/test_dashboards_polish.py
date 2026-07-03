@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, time, timezone
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +15,35 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
     reason="DATABASE_URL not set; dashboard render tests need Postgres",
 )
+
+
+def _freeze_route_clock_mid_shift(monkeypatch):
+    """Pin the departments route's `now` to 13:00 plant time today.
+
+    The recycling page resolves its who-worked-where labels from assignment
+    windows capped at min(now, shift_end). When the suite runs before the
+    07:00 America/Chicago shift start (CI pushes early in the morning),
+    every schedule segment collapses to zero length and today's view renders
+    "(no assignment)" in place of the operators' names. Freezing `now`
+    mid-shift keeps the today-view name assertions independent of the
+    wall-clock hour the tests happen to run at.
+    """
+    from zira_dashboard import shift_config
+    from zira_dashboard.plant_day import today as plant_today
+    from zira_dashboard.routes import departments
+
+    frozen_utc = datetime.combine(
+        plant_today(), time(13, 0), tzinfo=shift_config.SITE_TZ
+    ).astimezone(timezone.utc)
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return frozen_utc.replace(tzinfo=None)
+            return frozen_utc.astimezone(tz)
+
+    monkeypatch.setattr(departments, "datetime", _FrozenDatetime)
 
 
 def test_recycling_headline_uses_per_person_rate(monkeypatch):
@@ -46,6 +76,7 @@ def test_recycling_headline_uses_per_person_rate(monkeypatch):
 
 
 def test_recycling_bar_row_renders_person_and_wc_stacked(monkeypatch):
+    _freeze_route_clock_mid_shift(monkeypatch)
     monkeypatch.setattr(staffing, "load_schedule", lambda d: staffing.Schedule(
         day=d, published=True,
         assignments={"Repair-1": ["Alice"]},
@@ -112,6 +143,7 @@ def test_recycling_past_day_view_shows_assigned_names(monkeypatch):
 
 
 def test_recycling_downtime_row_renders_person_and_wc_stacked(monkeypatch):
+    _freeze_route_clock_mid_shift(monkeypatch)
     monkeypatch.setattr(staffing, "load_schedule", lambda d: staffing.Schedule(
         day=d, published=True,
         assignments={"Repair-1": ["Alice"]},
