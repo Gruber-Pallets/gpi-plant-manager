@@ -50,4 +50,5 @@ Pure-logic tests run anywhere; tests that touch Postgres are skipped unless
   (Odoo); `*_client.py` = API clients.
 - `src/zira_probe/` — standalone Zira API capability-probe CLI; its
   `client.py` is also the dashboard's Zira client.
+- `docs/object-api.md` — server-to-server Odoo-like API for internal apps.
 - `docs/superpowers/` — design specs and implementation plans.
