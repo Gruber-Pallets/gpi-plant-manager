@@ -35,3 +35,55 @@ def test_models_lists_registered_models(monkeypatch):
     r = client.get("/api/v1/object/models", headers={"Authorization": "Bearer gpi_live_good"})
     assert r.status_code == 200
     assert any(model["model"] == "plant.person" for model in r.json()["models"])
+
+
+def test_execute_search_read_dispatches_and_audits(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        api_keys,
+        "verify_key",
+        lambda token: {"id": 1, "name": "CRM", "scopes": ["admin:*"], "allowed_ips": []},
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.object_models.PersonModel.all_records",
+        lambda self, ctx: [{"id": 1, "name": "Dale", "active": True}],
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.object_api.db.execute",
+        lambda sql, params=None: calls.append((sql, params)),
+    )
+    r = client.post(
+        "/api/v1/object/execute",
+        headers={"Authorization": "Bearer gpi_live_good"},
+        json={
+            "model": "plant.person",
+            "method": "search_read",
+            "args": [[["active", "=", True]]],
+            "kwargs": {"fields": ["id", "name"]},
+            "context": {"actor": "Dale"},
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["result"] == [{"id": 1, "name": "Dale"}]
+    assert calls and "api_audit_log" in calls[0][0]
+
+
+def test_write_denied_without_scope(monkeypatch):
+    monkeypatch.setattr(
+        api_keys,
+        "verify_key",
+        lambda token: {"id": 1, "name": "Reader", "scopes": ["object:read"], "allowed_ips": []},
+    )
+    r = client.post(
+        "/api/v1/object/execute",
+        headers={"Authorization": "Bearer gpi_live_good"},
+        json={"model": "plant.person", "method": "write", "args": [[1], {"active": False}]},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "access_denied"
+
+
+def test_cookie_does_not_authenticate_object_api():
+    cookie_client = TestClient(app, cookies={"gpi_session": "not-used"})
+    r = cookie_client.get("/api/v1/object/models")
+    assert r.status_code == 401
