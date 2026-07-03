@@ -505,35 +505,39 @@ def _mirror_shape_and_hours(leave: dict[str, Any]) -> tuple[str, float | None, f
 
     Resolution order:
 
-    1. ``number_of_days >= 1`` → full-day, whatever hour metadata rides along
-       (hour-unit leave types round-trip full days with full-shift bounds).
-    2. A valid ``request_hour_from``/``request_hour_to`` window (hour-unit
-       partials, including everything the kiosk pushes). Incomplete/invalid
-       bounds (e.g. only ``request_hour_to=3.5``) are ignored, not trusted.
+    1. A valid ``request_hour_from``/``request_hour_to`` window (hour-unit
+       leaves — how HR enters partials, and everything the kiosk pushes),
+       classified against the company shift. This deliberately outranks
+       ``number_of_days``: this Odoo instance reports ``number_of_days=1.0``
+       for a 45-minute hour-unit leave (and 3.0 for another one-day leave),
+       so the day count cannot veto an explicit window. Whole-shift windows
+       still come out ``full_day`` via the classifier's span rule, which is
+       what keeps hour-unit *full* days full. Incomplete/invalid bounds
+       (e.g. only ``request_hour_to=3.5``) are ignored, not trusted.
+    2. ``number_of_days >= 1`` → full-day (day-unit leaves; no hour window
+       to consult).
     3. The ``date_from``/``date_to`` datetime window — the only signal
-       half-day (am/pm) leaves carry.
+       half-day (am/pm) leaves carry. Least trustworthy (per-employee Odoo
+       calendar timezones are inconsistent), hence last.
     4. Nothing usable → full-day (there's no timing to show anyway).
 
-    Any window from steps 2–3 is then classified against the company shift
-    (``classify_off_window``): whole-shift windows come out ``full_day``, and
-    genuine partials come out ``late_arrival``/``early_leave``/``midday_gap``
-    so the screens read "arrives 9:00am" / "leaves 2:00pm" / "gone 10–12"
-    instead of a shapeless time range. Shift-relative classification is also
-    what keeps kiosk-originated shapes stable across Odoo round-trips."""
-    number_of_days = _coerce_odoo_float(leave.get("number_of_days"))
-    if number_of_days is not None and number_of_days >= 1:
-        return "full_day", None, None
-    window: tuple[float, float] | None = None
+    Classification (``classify_off_window``) turns windows into
+    ``late_arrival``/``early_leave``/``midday_gap`` so the screens read
+    "arrives 9:00am" / "leaves 2:00pm" / "gone 10–12" instead of a shapeless
+    time range, and is also what keeps kiosk-originated shapes stable across
+    Odoo round-trips."""
+    shift_from, shift_to = _company_shift_bounds()
     if bool(leave.get("request_unit_hours")):
         hour_from = _coerce_odoo_float(leave.get("request_hour_from"))
         hour_to = _coerce_odoo_float(leave.get("request_hour_to"))
         if hour_from is not None and hour_to is not None and hour_to > hour_from:
-            window = (hour_from, hour_to)
-    if window is None:
-        window = _local_day_window(leave)
+            return classify_off_window(hour_from, hour_to, shift_from, shift_to)
+    number_of_days = _coerce_odoo_float(leave.get("number_of_days"))
+    if number_of_days is not None and number_of_days >= 1:
+        return "full_day", None, None
+    window = _local_day_window(leave)
     if window is None:
         return "full_day", None, None
-    shift_from, shift_to = _company_shift_bounds()
     return classify_off_window(window[0], window[1], shift_from, shift_to)
 
 

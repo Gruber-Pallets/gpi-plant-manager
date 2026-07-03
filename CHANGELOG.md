@@ -12,6 +12,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Fixes
 
 - **Partial-day time off now shows its real hours on every screen.** Half days entered in Odoo used to appear as plain full days (no times, no partial color), full days entered with hour bounds could show up as bogus partials, and kiosk "arrives late"/"leaves early" requests degraded into bare time ranges after syncing. Every leave is now classified against the plant shift, so the Time Off calendar, the Plant Scheduler, and the kiosk Who's Out calendar all show amber partial styling with plain wording — "arrives 11:30am", "leaves 2:00pm", or "gone 10:00am–12:00pm" — while genuine full days keep their solid full-day color with no time. The scheduler's badge next to a partial person's name uses the same wording, and the day-before kiosk reminder now says "you're not due in until 11:30am" instead of a generic partial notice.
+- **Hour-based partial days are no longer masked by Odoo's day count.** Follow-up to this morning's fix, verified against the live data: Odoo reports a full "1.0 days" even for a 45-minute hour-based leave, which was still forcing genuine partials to render as plain full days. The explicit from/to hours on a leave now always win, so an appointment like 1:30–2:15pm shows as an amber partial ("gone 1:30pm–2:15pm") on the scheduler, both calendars, and the kiosk — full days are unaffected.
 
 ## 2026-06-24
 

@@ -121,3 +121,29 @@ TDD; all pure-function level plus template static checks:
 
 Single deploy; no schema change; no new Odoo fields; poller self-heals
 existing rows on the first full pass after boot.
+
+## Addendum (2026-07-03): field reliability, measured against prod Odoo
+
+Live inspection of all 15 leaves overlapping 07-01..07-17 (read-only replay
+against the prod DB + Odoo) corrected two assumptions:
+
+1. **`number_of_days` is unreliable and must not veto an hour window.** This
+   Odoo instance reported `number_of_days=1.0` for a 45-minute hour-unit
+   leave (leave 99 — the partial that stayed invisible) and `3.0` for a
+   different one-day leave. The original "rule 1: `days >= 1` → full_day"
+   ate every genuine partial, because HR enters partials as hour-unit
+   leaves. Fixed order: a valid `request_hour_from/to` window is classified
+   FIRST (the classifier's span rule still maps whole-shift windows to
+   `full_day`); `number_of_days >= 1` only decides when no usable hour
+   window exists.
+2. **`date_from`/`date_to` timezones are inconsistent per employee.** Some
+   employees' windows convert correctly from UTC (13:00 → 8:00am CDT), others
+   come back already in wall-clock local time — matching the known broken
+   per-employee Odoo Working Schedules (see calendar-conflict monitor). The
+   datetime-derived window therefore stays the LAST resort (half-days only,
+   which carry no hour fields); `request_hour_from/to` are wall-clock local
+   and trustworthy.
+
+Replay of the fixed order over the same 15 leaves: exactly one row changes
+(leave 99 → `midday_gap` 13.5–14.25, "gone 1:30pm–2:15pm"); all 14 genuine
+full days stay `full_day`.

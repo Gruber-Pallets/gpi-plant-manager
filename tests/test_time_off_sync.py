@@ -874,12 +874,35 @@ def _odoo_leave(**over):
     return base
 
 
-def test_mirror_full_day_duration_short_circuits(company_shift):
-    # number_of_days >= 1 is authoritative full-day, whatever else rides along.
+def test_mirror_partial_hour_window_beats_number_of_days(company_shift):
+    # REAL prod data (leave 99, seen 2026-07-03): a 45-minute appointment
+    # entered as an hour-unit leave came back with number_of_days=1.0 — this
+    # Odoo's day count is unreliable for sub-day leaves (another one-day
+    # leave reported 3.0). A valid explicit hour window must win over the
+    # day count, or every genuine partial mirrors as a bare full day.
     leave = _odoo_leave(
         number_of_days=1.0, request_unit_hours=True,
-        request_hour_from=6.0, request_hour_to=14.5,
+        request_hour_from=13.5, request_hour_to=14.25)
+    assert time_off_sync._mirror_shape_and_hours(leave) == (
+        "midday_gap", 13.5, 14.25)
+
+
+def test_mirror_full_day_duration_wins_without_usable_window(company_shift):
+    # number_of_days >= 1 is still authoritative when the hour window is
+    # absent/invalid — a day-unit full day must never become a partial.
+    leave = _odoo_leave(
+        number_of_days=1.0, request_unit_hours=True,
+        request_hour_from=False, request_hour_to=3.5,
         date_from="2026-07-06 12:00:00", date_to="2026-07-06 20:30:00")
+    assert time_off_sync._mirror_shape_and_hours(leave) == ("full_day", None, None)
+
+
+def test_mirror_full_shift_hour_window_with_days_ge_1_is_full_day(company_shift):
+    # Hour-unit leave types round-trip full days with full-shift bounds and
+    # number_of_days >= 1; the span rule (not the day count) keeps them full.
+    leave = _odoo_leave(
+        number_of_days=1.0, request_unit_hours=True,
+        request_hour_from=7.0, request_hour_to=15.5)
     assert time_off_sync._mirror_shape_and_hours(leave) == ("full_day", None, None)
 
 
