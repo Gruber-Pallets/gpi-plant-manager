@@ -43,9 +43,9 @@
   }
 
   // ---------- Reset to defaults ----------
-  // Replaces every Scheduled cell with that work center's stored defaults.
-  // Defaults are managed in Settings → Work Centers and rendered into the page
-  // via __defaultsByLoc — they are not editable from the scheduler.
+  // Replaces every Scheduled cell using the page-rendered default map: smart
+  // defaults first, with stored Work Center defaults as the route fallback.
+  // These values are not editable from the scheduler.
   const __defaultsByLoc = window.SMART_DEFAULTS_BY_LOC || window.DEFAULTS_BY_LOC;
   const __clearBtn = document.getElementById('clear-schedule-btn');
   if (__clearBtn) {
