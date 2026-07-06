@@ -197,6 +197,24 @@
 {% block scripts %}{% endblock %}
 </div>
 <script>
+  // hx-boost is on the <body>, so every kiosk form (including the time-off
+  // request/edit form) submits via htmx. By default htmx does NOT swap
+  // responses with a 4xx/5xx status — it fires htmx:responseError and leaves
+  // the DOM untouched. Two time-off submit outcomes intentionally re-render
+  // the *same* screen with a non-2xx status: 409 (the request overlaps time
+  // off you already have -> conflict modal) and 422 (partial-day times fall
+  // outside your shift -> error banner). Without this handler those responses
+  // are silently dropped and the green Submit button looks like it does
+  // nothing. Opt just those two statuses back into a normal swap so the
+  // returned screen replaces the form exactly like a 200 would.
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    var status = evt.detail.xhr.status;
+    if (status === 409 || status === 422) {
+      evt.detail.shouldSwap = true;
+      evt.detail.isError = false;
+    }
+  });
+
   // Idle timeout: return to the home screen after a period of no input.
   // The delay is recomputed from the URL on every reset (never cached) so it
   // can't leak across htmx screen swaps:

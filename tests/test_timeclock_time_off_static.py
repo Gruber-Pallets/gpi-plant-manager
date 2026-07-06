@@ -13,6 +13,26 @@ def _script():
     return Path("src/zira_dashboard/static/timeclock_time_off.js").read_text()
 
 
+def _base_template():
+    return Path("src/zira_dashboard/templates/timeclock_base.html").read_text()
+
+
+def test_htmx_swaps_time_off_conflict_and_validation_rerenders():
+    # The kiosk is hx-boost="true", so forms submit via htmx. htmx does NOT
+    # swap 4xx/5xx responses by default — it fires htmx:responseError and
+    # leaves the DOM untouched. That silently swallowed the time-off request/
+    # edit form's 409 (overlap conflict modal) and 422 (invalid times) HTML
+    # re-renders, so the green Submit button appeared to do nothing. A
+    # beforeSwap handler must opt those two statuses back into the swap so the
+    # returned screen (with its modal / error banner) replaces the form.
+    base = _base_template()
+    assert "htmx:beforeSwap" in base
+    assert "=== 409" in base
+    assert "=== 422" in base
+    assert "shouldSwap = true" in base
+    assert "isError = false" in base
+
+
 def test_time_off_request_submit_exposes_busy_state():
     html = _template()
     js = _script()

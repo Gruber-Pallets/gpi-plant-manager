@@ -1,5 +1,6 @@
 # Secrets
 .env
+pg_uri.txt
 
 # Local superpowers session state (brainstorm artifacts etc.) — committed
 # specs and plans live under docs/superpowers/.
@@ -22,6 +23,9 @@ Plant Scheduler*.csv
 # Probe output
 results/
 CAPABILITY_REPORT.md
+
+# Local Postgres scratch data
+pgdata_review/
 
 # Generated preview (regenerate with scripts/render_kiosk_preview.py)
 kiosk_preview.html
