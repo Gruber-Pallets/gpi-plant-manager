@@ -6,7 +6,7 @@ balances, department-scoped coverage, and recent in-app decisions.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -64,7 +64,7 @@ def _decision_time_label(value: Any) -> str:
         except ValueError:
             return value
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     local = value.astimezone(SITE_TZ)
     return local.strftime("%-m/%-d %-I:%M %p")
 

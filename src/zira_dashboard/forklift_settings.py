@@ -71,7 +71,7 @@ class Resolved:
     def effective_throughput(self) -> float:
         return max(0.1, self.throughput * self.utilization)
 
-    def score_config(self) -> "fs.ScoreConfig":
+    def score_config(self) -> fs.ScoreConfig:
         """The composite GOAT-score config: each field is the override when set,
         else forklift_score's own DEFAULT_SCORE_CONFIG value."""
         from zira_dashboard import forklift_score as fs

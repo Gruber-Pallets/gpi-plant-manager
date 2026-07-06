@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from threading import Lock
 
 from starlette.requests import Request
@@ -37,7 +37,7 @@ def tracking_enabled() -> bool:
 
 
 def _plant_today() -> date:
-    return datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ).date()
+    return datetime.now(UTC).astimezone(shift_config.SITE_TZ).date()
 
 
 def route_pattern(request: Request) -> str | None:

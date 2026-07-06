@@ -13,7 +13,7 @@ Default window: the last 60 days ending today.
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 
 
 def main() -> int:
@@ -27,7 +27,7 @@ def main() -> int:
     from zira_dashboard.deps import client
 
     db.init_pool()
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     end = date.fromisoformat(args.end) if args.end else today
     start = date.fromisoformat(args.start) if args.start else end - timedelta(days=args.days)
 

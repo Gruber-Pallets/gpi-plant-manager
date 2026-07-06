@@ -7,7 +7,7 @@ dashboards so evening Central time does not roll the app into tomorrow early.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 
 from .shift_config import SITE_TZ
 
@@ -18,15 +18,15 @@ def today(now: datetime | None = None) -> date:
     ``now`` is accepted for tests and may be naive or timezone-aware. Naive
     datetimes are treated as UTC to match the app's server-side timestamps.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=UTC)
     return now.astimezone(SITE_TZ).date()
 
 
 def now() -> datetime:
     """Current plant-local datetime."""
-    return datetime.now(timezone.utc).astimezone(SITE_TZ)
+    return datetime.now(UTC).astimezone(SITE_TZ)
 
 
 def parse_day(value: str | None) -> date:

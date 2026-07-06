@@ -11,7 +11,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -79,7 +79,7 @@ async def _tick_zira_cache():
     stations = recycling_stations()
     if stations:
         today = plant_today()
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         # Run the (sync, blocking) leaderboard fetch off the event loop.
         await asyncio.to_thread(
             cached_leaderboard, _zira_client(), stations, today, now_utc
@@ -166,7 +166,7 @@ async def _tick_missing_wc():
     kiosk WC field isn't configured."""
     from datetime import timedelta
     from . import missing_wc, odoo_client
-    since = datetime.now(timezone.utc) - timedelta(days=14)
+    since = datetime.now(UTC) - timedelta(days=14)
     rows = await asyncio.to_thread(odoo_client.fetch_attendances_missing_wc, since)
     await asyncio.to_thread(missing_wc.write_cache, rows)
 

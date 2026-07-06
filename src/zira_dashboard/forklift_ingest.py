@@ -6,7 +6,7 @@ JSONB hour keys are stored as strings (slot number) for stable round-tripping.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 
 
 def build_calls_daily(day: date, dashboard: dict, history: list[dict]) -> dict:
@@ -42,7 +42,7 @@ def build_calls_daily(day: date, dashboard: dict, history: list[dict]) -> dict:
 
 def _local_dt(ms: int, tz) -> datetime:
     """Epoch milliseconds -> aware datetime in the plant timezone."""
-    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).astimezone(tz)
+    return datetime.fromtimestamp(ms / 1000.0, tz=UTC).astimezone(tz)
 
 
 def aggregate_completions(items: list[dict], id_to_name: dict, tz) -> tuple[list[dict], list[dict]]:

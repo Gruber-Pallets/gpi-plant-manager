@@ -54,7 +54,7 @@ row at ``synced_to_odoo=FALSE`` so the sweep retries it.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from typing import Any
 
 from . import db, employee_notifications, odoo_client, schedule_store, time_off_balances
@@ -375,7 +375,7 @@ def poll_odoo_leaves() -> int:
     _poll_tick_count += 1
     full_pass = (_last_poll_started_at is None
                  or _poll_tick_count % _FULL_POLL_EVERY_TICKS == 0)
-    poll_started_at = datetime.now(timezone.utc)
+    poll_started_at = datetime.now(UTC)
     today = date.today()
     start_d = today - timedelta(days=_POLL_PAST_DAYS)
     end_d = today + timedelta(days=_POLL_FUTURE_DAYS)
@@ -507,9 +507,9 @@ def _local_day_window(leave: dict[str, Any]) -> tuple[float, float] | None:
         return None
     try:
         dt_from = datetime.fromisoformat(raw_from).replace(
-            tzinfo=timezone.utc).astimezone(SITE_TZ)
+            tzinfo=UTC).astimezone(SITE_TZ)
         dt_to = datetime.fromisoformat(raw_to).replace(
-            tzinfo=timezone.utc).astimezone(SITE_TZ)
+            tzinfo=UTC).astimezone(SITE_TZ)
     except ValueError:
         return None
     if dt_to <= dt_from or dt_from.date() != dt_to.date():

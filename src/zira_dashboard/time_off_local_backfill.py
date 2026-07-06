@@ -29,7 +29,7 @@ the absence stays app-only.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from typing import Any
 
 from . import db, employee_notifications, odoo_client
@@ -88,8 +88,8 @@ def _holiday_scopes(start_d: date, end_d: date) -> list[tuple[int | None, set[da
         except (KeyError, TypeError, ValueError):
             _log.warning("skipping malformed holiday record %s", h.get("id"))
             continue
-        first = df.replace(tzinfo=timezone.utc).astimezone(SITE_TZ).date()
-        last = dt.replace(tzinfo=timezone.utc).astimezone(SITE_TZ).date()
+        first = df.replace(tzinfo=UTC).astimezone(SITE_TZ).date()
+        last = dt.replace(tzinfo=UTC).astimezone(SITE_TZ).date()
         days: set[date] = set()
         d = first
         while d <= last:

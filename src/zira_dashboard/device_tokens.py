@@ -12,7 +12,6 @@ from __future__ import annotations
 import hmac
 import secrets
 from hashlib import sha256
-from typing import Optional
 
 from . import auth, db
 from ._cache import TTLCache
@@ -73,7 +72,7 @@ def mint(name: str, created_by: str) -> tuple[int, str]:
     return int(row["id"]), signed
 
 
-def lookup_active(signed: str | None) -> Optional[dict]:
+def lookup_active(signed: str | None) -> dict | None:
     """Validate signature, then look up an un-revoked DB row. Returns
     the row dict or None. Bumps `last_used_at` as a side effect when a
     valid match is found. Rows are cached in-process for 60s, so a

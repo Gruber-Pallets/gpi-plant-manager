@@ -48,7 +48,7 @@ import logging
 import os
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from fastapi import APIRouter, BackgroundTasks, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -475,7 +475,7 @@ def timeclock_dashboard(request: Request, token: str):
     if p.get("odoo_id"):
         try:
             from .. import auto_lunch
-            now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+            now_local = datetime.now(UTC).astimezone(shift_config.SITE_TZ)
             lunch_run = auto_lunch.active_lunch_run(p["odoo_id"], now_local)
             if lunch_run is not None:
                 state = {**state, "is_clocked_in": True,

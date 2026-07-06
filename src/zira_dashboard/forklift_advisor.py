@@ -22,7 +22,7 @@ from . import (
 _CALIB_WINDOW_DAYS = 90
 
 
-def _cfg() -> "forklift_settings.Settings":
+def _cfg() -> forklift_settings.Settings:
     """Current forklift settings, falling back to DEFAULT if the store can't be
     read (no DB in unit tests, transient failure, etc.). Never raises."""
     try:
@@ -73,7 +73,7 @@ def _algo_throughput() -> float:
 
 
 def _forecast(target_day: date, history_samples: int,
-              coldstart_calls_per_day: float) -> "forklift_demand.DemandForecast":
+              coldstart_calls_per_day: float) -> forklift_demand.DemandForecast:
     """Build the demand forecast for `target_day`: same-weekday history first,
     then a cold-start fallback (manual daily volume if configured, else weekly
     trends), distributed across today's hourly shape. All I/O is wrapped so this
@@ -110,7 +110,7 @@ def _mean_handle_or_none() -> float | None:
         return None
 
 
-def _fit_calibration(mean_handle: float) -> "forklift_queue.CalibResult":
+def _fit_calibration(mean_handle: float) -> forklift_queue.CalibResult:
     """Calibrate the queue model against actual recorded waits. Defensive: a
     store-read failure yields an uncalibrated (k=1.0) result, never raises."""
     try:
@@ -120,10 +120,10 @@ def _fit_calibration(mean_handle: float) -> "forklift_queue.CalibResult":
     return forklift_queue.fit_calibration(samples, mean_handle)
 
 
-def _recommend_for_target(forecast: "forklift_demand.DemandForecast",
-                          params: "forklift_settings.Resolved",
+def _recommend_for_target(forecast: forklift_demand.DemandForecast,
+                          params: forklift_settings.Resolved,
                           mean_handle: float, k: float,
-                          target_seconds: float) -> "forklift_queue.RecResult":
+                          target_seconds: float) -> forklift_queue.RecResult:
     """SLA recommendation: smallest crew whose calibrated predicted time-to-claim
     stays under `target_seconds`, sized to the chosen percentile's hour."""
     _, lam = forklift_demand.demand_at_percentile(forecast.by_hour, params.percentile)
@@ -252,7 +252,7 @@ def build_advisor(target_day: date, scheduled: int, backups: int) -> dict:
     return base
 
 
-def _resolved_dict(r: "forklift_settings.Resolved") -> dict:
+def _resolved_dict(r: forklift_settings.Resolved) -> dict:
     return {
         "throughput": r.throughput,
         "utilization": r.utilization,

@@ -7,7 +7,7 @@ existing TV bookmarks and external links keep working after the
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
@@ -161,8 +161,8 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     shift_end_local = datetime.combine(d, shift_config.shift_end_for(d), tzinfo=shift_config.SITE_TZ)
     now_local = now.astimezone(shift_config.SITE_TZ)
     window_end_local = min(now_local, shift_end_local) if is_today_d else shift_end_local
-    window_start_utc = shift_start_local.astimezone(timezone.utc)
-    window_end_utc = window_end_local.astimezone(timezone.utc)
+    window_start_utc = shift_start_local.astimezone(UTC)
+    window_end_utc = window_end_local.astimezone(UTC)
 
     # Merge timeclock attendance + open-ended attributions + schedule into closed
     # work segments. The TIMECLOCK is the source of truth for where each operator
@@ -244,8 +244,8 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     grace_end_local = shift_start_local + timedelta(minutes=60)
     grace_end_capped_local = min(grace_end_local, now_local) if is_today_d else grace_end_local
     grace_interval_utc = (
-        shift_start_local.astimezone(timezone.utc),
-        grace_end_capped_local.astimezone(timezone.utc),
+        shift_start_local.astimezone(UTC),
+        grace_end_capped_local.astimezone(UTC),
     )
     people_by_wc: dict[str, int] = {
         wc: len(ops) for wc, ops in present_assignments.items()
@@ -266,8 +266,8 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
 
     breaks_utc: list[tuple[datetime, datetime]] = []
     for b in shift_config.breaks_for(d):
-        bs = datetime.combine(d, b.start, tzinfo=shift_config.SITE_TZ).astimezone(timezone.utc)
-        be = datetime.combine(d, b.end, tzinfo=shift_config.SITE_TZ).astimezone(timezone.utc)
+        bs = datetime.combine(d, b.start, tzinfo=shift_config.SITE_TZ).astimezone(UTC)
+        be = datetime.combine(d, b.end, tzinfo=shift_config.SITE_TZ).astimezone(UTC)
         if be > bs:
             breaks_utc.append((bs, be))
 
@@ -436,7 +436,7 @@ def _render_recycling(
     if cached is not None:
         return cached
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Walk every day in the range, computing per-day data.
     days: list = []
@@ -727,7 +727,7 @@ def _render_new_dept(
     cached = get_cached_response(cache_key, includes_today=is_today)
     if cached is not None:
         return cached
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     new_locs = [
         loc for loc in staffing.LOCATIONS
@@ -764,8 +764,8 @@ def _render_new_dept(
         min(now.astimezone(shift_config.SITE_TZ), shift_end_local_for_mh)
         if is_today else shift_end_local_for_mh
     )
-    window_start_utc = shift_start_local_for_mh.astimezone(timezone.utc)
-    window_end_utc = window_end_local.astimezone(timezone.utc)
+    window_start_utc = shift_start_local_for_mh.astimezone(UTC)
+    window_end_utc = window_end_local.astimezone(UTC)
 
     # Full-day absences excluded from man-hours — see _recycling_day_data
     # for the full rationale.

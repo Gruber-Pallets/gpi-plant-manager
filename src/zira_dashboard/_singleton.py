@@ -12,7 +12,8 @@ loader; the stores keep their public module-level API (current/save/reload).
 from __future__ import annotations
 
 from threading import RLock
-from typing import Callable, Generic, TypeVar
+from typing import Generic, TypeVar
+from collections.abc import Callable
 
 T = TypeVar("T")
 

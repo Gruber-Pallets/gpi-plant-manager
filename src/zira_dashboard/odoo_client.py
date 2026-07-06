@@ -23,7 +23,7 @@ import os
 import threading
 import time
 import xmlrpc.client
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any
 
 
@@ -656,7 +656,7 @@ def _to_odoo_dt(ts: datetime) -> str:
     """Odoo expects naive UTC strings in 'YYYY-MM-DD HH:MM:SS' format.
     Accepts aware or naive datetimes; aware ones are converted to UTC."""
     if ts.tzinfo is not None:
-        ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+        ts = ts.astimezone(UTC).replace(tzinfo=None)
     return ts.strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -735,7 +735,7 @@ def _odoo_dt_to_iso(value: Any) -> str | None:
         return None
     if isinstance(value, str):
         dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc)
+            tzinfo=UTC)
         return dt.isoformat()
     if hasattr(value, "isoformat"):
         return value.isoformat()

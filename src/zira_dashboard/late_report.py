@@ -10,8 +10,8 @@ Everything else is straightforward CRUD.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from datetime import datetime, timedelta, UTC
+from collections.abc import Iterable
 
 from . import db
 
@@ -95,7 +95,7 @@ def absent_emp_ids_for_day(day) -> set[str]:
 
 
 def snooze(day, emp_id: str, name: str, minutes: int = DEFAULT_SNOOZE_MINUTES) -> None:
-    until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    until = datetime.now(UTC) + timedelta(minutes=minutes)
     db.execute(
         """
         INSERT INTO late_snoozes (day, emp_id, name, until_utc)

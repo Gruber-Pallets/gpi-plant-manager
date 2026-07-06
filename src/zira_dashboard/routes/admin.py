@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from threading import Lock
 
 from fastapi import APIRouter, Form, Query, Request
@@ -79,7 +79,7 @@ def data_status(
     """
     from .. import db
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     try:
         start_d = date.fromisoformat(start)
         end_d = date.fromisoformat(end) if end else today
@@ -155,7 +155,7 @@ def ribbon_vs_widget(
     """
     from .. import db
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     try:
         d = date.fromisoformat(day) if day else today - timedelta(days=1)
     except ValueError:
@@ -256,7 +256,7 @@ def pph_debug(day: str | None = Query(default=None)):
 def _pph_debug_impl(day: str | None):
     from .. import staffing, work_centers_store, attendance
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     try:
         d = date.fromisoformat(day) if day else today
     except ValueError:
@@ -268,10 +268,10 @@ def _pph_debug_impl(day: str | None):
     # Same window math as _recycling_day_data.
     shift_start_local = datetime.combine(d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ)
     shift_end_local = datetime.combine(d, shift_config.shift_end_for(d), tzinfo=shift_config.SITE_TZ)
-    now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+    now_local = datetime.now(UTC).astimezone(shift_config.SITE_TZ)
     window_end_local = min(now_local, shift_end_local) if is_today else shift_end_local
-    window_start_utc = shift_start_local.astimezone(timezone.utc)
-    window_end_utc = window_end_local.astimezone(timezone.utc)
+    window_start_utc = shift_start_local.astimezone(UTC)
+    window_end_utc = window_end_local.astimezone(UTC)
 
     try:
         absent_today = sorted(attendance.full_day_absent_names(d))
@@ -487,7 +487,7 @@ def zira_backfill(
                      f"call multiple times with smaller windows."
         }, status_code=400)
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     stations = _metered_stations()
     if not stations:
         return JSONResponse({"error": "no metered stations configured"}, status_code=500)
@@ -591,7 +591,7 @@ def precompute_run(
     if not _check_admin_secret(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     if from_ or to:
         if not (from_ and to):
             return JSONResponse(

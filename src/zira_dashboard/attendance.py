@@ -10,8 +10,8 @@ Odoo-era stack and the string-keyed late_report helpers.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import Iterable
+from datetime import datetime, timedelta, UTC
+from collections.abc import Iterable
 
 GRACE_MINUTES = 7
 ABSENT_BUFFER_MINUTES = 30
@@ -168,7 +168,7 @@ def partial_off_intervals(day) -> dict:
     staffing.effective_minutes_worked. Full-day shapes are excluded. Source
     is the Odoo time_off_requests mirror via scheduler_time_off._rows_for_day.
     Replaces stratustime_client.partial_off_intervals_for_day. Never raises."""
-    from datetime import datetime, timezone, timedelta, time as _time
+    from datetime import datetime, timedelta, time as _time
     from . import shift_config, scheduler_time_off
     out: dict = {}
     try:
@@ -190,6 +190,6 @@ def partial_off_intervals(day) -> dict:
         s_local = datetime.combine(day, _time(0, 0), tzinfo=site_tz) + timedelta(hours=hf)
         e_local = datetime.combine(day, _time(0, 0), tzinfo=site_tz) + timedelta(hours=ht)
         out.setdefault(r["name"], []).append(
-            (s_local.astimezone(timezone.utc), e_local.astimezone(timezone.utc))
+            (s_local.astimezone(UTC), e_local.astimezone(UTC))
         )
     return out

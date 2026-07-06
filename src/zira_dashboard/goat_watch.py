@@ -25,7 +25,7 @@ group's all-time best.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, UTC
 
 CONTENDER_THRESHOLD = 0.98  # 98 % of GOAT → show in live banner
 
@@ -316,7 +316,7 @@ def maybe_finalize_today(today: date) -> None:
         return
     from . import shift_config
     try:
-        now_local = datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ)
+        now_local = datetime.now(UTC).astimezone(shift_config.SITE_TZ)
         shift_end = shift_config.shift_end_for(today)
     except Exception:
         return

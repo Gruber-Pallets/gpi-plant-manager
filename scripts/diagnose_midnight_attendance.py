@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 
@@ -23,9 +23,9 @@ def _parse_odoo_dt(value):
     if not value:
         return None
     if isinstance(value, str):
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
     if hasattr(value, "astimezone"):
-        return value.astimezone(timezone.utc)
+        return value.astimezone(UTC)
     return None
 
 
@@ -46,7 +46,7 @@ def _m2o_name(value):
 def _fetch_rows(days: int, limit: int) -> list[dict]:
     from zira_dashboard import odoo_client
 
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since = datetime.now(UTC) - timedelta(days=days)
     fields = [
         "id",
         "employee_id",

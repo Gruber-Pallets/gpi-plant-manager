@@ -791,7 +791,7 @@ def _forklift_score_ctx(settings) -> dict:
     }
 
 
-def _parse_forklift_overrides(form) -> "forklift_settings.Settings":  # noqa: F821
+def _parse_forklift_overrides(form) -> forklift_settings.Settings:  # noqa: F821
     """Build a forklift_settings.Settings (nullable overrides) from POST form
     values. Each numeric knob: the literal string "auto" or blank → None (follow
     the algorithm); otherwise parse + clamp. "Reset all to algorithm" is just a

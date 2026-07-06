@@ -12,7 +12,6 @@ redeploys.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from .wc_dashboard_data import slug_for_wc
 
@@ -34,7 +33,7 @@ _SEED_LIST = [
 ]
 
 
-def _unique_slug(base: str, *, exclude_id: Optional[int] = None) -> str:
+def _unique_slug(base: str, *, exclude_id: int | None = None) -> str:
     """Return `base` if no other row owns it; else suffix -2, -3, ...
 
     `exclude_id` lets a row keep its own slug when saving with no name change.
@@ -57,9 +56,9 @@ def save(
     *,
     name: str,
     kind: str,
-    wc_name: Optional[str],
+    wc_name: str | None,
     theme: str,
-    id: Optional[int] = None,
+    id: int | None = None,
 ) -> dict:
     """Insert a new row or update an existing one (when `id` given).
 
@@ -113,7 +112,7 @@ def delete(id: int) -> None:
     db.execute("DELETE FROM tv_displays WHERE id = %s", (id,))
 
 
-def by_slug(slug: str) -> Optional[dict]:
+def by_slug(slug: str) -> dict | None:
     from . import db
     rows = db.query(
         "SELECT id, name, slug, kind, wc_name, theme, sort_order "

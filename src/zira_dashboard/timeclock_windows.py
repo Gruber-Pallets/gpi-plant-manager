@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time as _time
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import date, datetime, UTC
 from threading import RLock
 
 # In-module cache for attendance_windows_for_day. Past days are immutable
@@ -56,12 +56,12 @@ def punch_windows_for_day(day: date) -> dict[str, list[tuple[str, datetime, date
     log for `day` (site-local day bounds). Never raises -- returns {} on error."""
     try:
         from . import db, attendance, shift_config
-        from datetime import datetime as _dt, time as _time, timezone as _tz, timedelta as _td
+        from datetime import datetime as _dt, time as _time, timedelta as _td
         site = shift_config.SITE_TZ
         start_local = _dt.combine(day, _time(0, 0), tzinfo=site)   # local midnight
         end_local = start_local + _td(days=1)                      # next local midnight
-        start_utc = start_local.astimezone(_tz.utc)
-        end_utc = end_local.astimezone(_tz.utc)
+        start_utc = start_local.astimezone(UTC)
+        end_utc = end_local.astimezone(UTC)
         id_to_name = attendance.person_id_to_name()
         rows = db.query(
             "SELECT person_odoo_id, action, wc_name, "

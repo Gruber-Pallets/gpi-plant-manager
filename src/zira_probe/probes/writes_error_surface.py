@@ -7,7 +7,7 @@ got information about validation behavior.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 import requests
@@ -17,7 +17,7 @@ from zira_probe.config import Config
 from zira_probe.results import ProbeResult, redact_api_key, write_raw_log
 
 
-WRITE_MARKER_BASE = datetime(2099, 6, 1, tzinfo=timezone.utc)
+WRITE_MARKER_BASE = datetime(2099, 6, 1, tzinfo=UTC)
 
 
 def _iso(dt: datetime) -> str:
@@ -153,7 +153,7 @@ def probe_write_duplicate_timestamp(client, config, results_dir):
 
 
 def probe_write_future_timestamp(client, config, results_dir):
-    future = datetime(2199, 1, 1, tzinfo=timezone.utc)
+    future = datetime(2199, 1, 1, tzinfo=UTC)
     payload = [
         {
             "meterId": config.test_ds_meter_id,

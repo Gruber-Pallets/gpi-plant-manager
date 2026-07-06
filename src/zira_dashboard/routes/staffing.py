@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -38,7 +38,7 @@ class _Phase:
         self.store = store
         self.name = name
 
-    def __enter__(self) -> "_Phase":
+    def __enter__(self) -> _Phase:
         self._t0 = time.perf_counter()
         return self
 
@@ -932,7 +932,7 @@ def late_report_payload(force: bool = False) -> dict:
             out["late"] = list(out["scheduled_late"])  # legacy alias
 
         # Snoozed list (independent of attendance).
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         for s in late_report.active_snoozes(today):
             until = s["until_utc"]
             mins_remaining = max(0, int((until - now_utc).total_seconds() // 60))

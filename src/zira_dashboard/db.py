@@ -22,7 +22,8 @@ from __future__ import annotations
 import os
 import time
 from contextlib import contextmanager
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any
+from collections.abc import Iterable, Sequence
 
 from psycopg2.extras import RealDictCursor, execute_values
 from psycopg2.pool import PoolError, ThreadedConnectionPool
@@ -30,7 +31,7 @@ from psycopg2.pool import PoolError, ThreadedConnectionPool
 from ._schema import SCHEMA_DDL
 
 
-_pool: Optional[ThreadedConnectionPool] = None
+_pool: ThreadedConnectionPool | None = None
 
 
 def init_pool(minconn: int = 10, maxconn: int = 30) -> None:
@@ -133,14 +134,14 @@ def cursor():
         pool.putconn(conn)
 
 
-def query(sql: str, params: Optional[Sequence[Any]] = None) -> list[dict]:
+def query(sql: str, params: Sequence[Any] | None = None) -> list[dict]:
     """Run a SELECT and return rows as a list of dicts."""
     with cursor() as cur:
         cur.execute(sql, params)
         return list(cur.fetchall())
 
 
-def execute(sql: str, params: Optional[Sequence[Any]] = None) -> None:
+def execute(sql: str, params: Sequence[Any] | None = None) -> None:
     """Run a single write statement in its own short transaction."""
     with cursor() as cur:
         cur.execute(sql, params)

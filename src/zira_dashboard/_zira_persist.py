@@ -26,7 +26,7 @@ station sets (e.g., /recycling and /new may share some stations).
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 
 from .leaderboard import StationTotal
 from .stations import Station
@@ -134,7 +134,7 @@ def save_day(totals: list[StationTotal], day: date) -> None:
     from . import db
     if not totals:
         return
-    now_ts = datetime.now(timezone.utc)
+    now_ts = datetime.now(UTC)
     rows = [
         (
             total.station.meter_id,
