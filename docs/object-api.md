@@ -14,6 +14,10 @@ browser, mobile app, spreadsheet, or public repository.
 3. Copy the key once and store it in the calling app's server-side environment.
 4. Revoke the key immediately if it is exposed.
 
+Only configured super admins can see Settings -> API or create/revoke keys.
+By default that is `dale@gruberpallets.com`. Override with the
+comma-separated `SUPER_ADMIN_UPNS` environment variable.
+
 Optional allowed IPs can be a comma-separated list of exact IPs or CIDR ranges.
 When `REQUIRE_API_HTTPS=1`, calls must arrive over HTTPS or through a proxy that
 sets `X-Forwarded-Proto: https`.

@@ -22,6 +22,7 @@ SESSION_REFRESH_AT = timedelta(days=6)
 _JWT_ALG = "HS256"
 
 ALLOWED_DOMAIN = "gruberpallets.com"
+DEFAULT_SUPER_ADMIN_UPNS = ("dale@gruberpallets.com",)
 
 
 def _session_secret() -> str:
@@ -43,6 +44,25 @@ def _jwt_key(secret: str) -> OctKey:
 def auth_disabled() -> bool:
     """True when AUTH_DISABLED=1/true/yes (local dev or staged rollout)."""
     return os.environ.get("AUTH_DISABLED", "").strip().lower() in ("1", "true", "yes")
+
+
+def super_admin_upns() -> set[str]:
+    """Configured UPNs allowed to manage sensitive admin-only surfaces."""
+    raw = os.environ.get("SUPER_ADMIN_UPNS", "").strip()
+    if not raw:
+        return set(DEFAULT_SUPER_ADMIN_UPNS)
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+def is_super_admin_upn(upn: str | None) -> bool:
+    if not upn:
+        return False
+    return upn.strip().lower() in super_admin_upns()
+
+
+def request_is_super_admin(request) -> bool:
+    """True for a signed-in configured super admin."""
+    return is_super_admin_upn(getattr(request.state, "user_upn", None))
 
 
 def mint_session(*, sub: str, upn: str, name: str) -> str:

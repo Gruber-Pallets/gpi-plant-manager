@@ -31,10 +31,12 @@
        class="settings-nav-item {% if active_section == 'integrations' %}active{% endif %}">
       Integrations
     </a>
-    <a href="?section=api"
-       class="settings-nav-item {% if active_section == 'api' %}active{% endif %}">
-      API
-    </a>
+    {% if can_manage_api_keys %}
+      <a href="?section=api"
+         class="settings-nav-item {% if active_section == 'api' %}active{% endif %}">
+        API
+      </a>
+    {% endif %}
     <a href="?section=tvs"
        class="settings-nav-item {% if active_section == 'tvs' %}active{% endif %}">
       TVs
@@ -261,56 +263,58 @@
     <p style="color:var(--muted)">Time clock and time off run through Odoo. See the <strong>Timeclock</strong> and <strong>Time Off</strong> panels for sync status.</p>
   </section>
 
-  <section class="panel" id="api-panel"
-           {% if active_section != 'api' %}style="display:none"{% endif %}>
-    <h2>API Keys</h2>
-    {% if new_api_key %}
-      <div class="api-token-once">
-        <strong>New key:</strong>
-        <code>{{ new_api_key }}</code>
-      </div>
-    {% endif %}
-    <form method="post" action="/settings/api-keys" class="api-key-form">
-      <label>Name
-        <input type="text" name="name" maxlength="120" required placeholder="New CRM">
-      </label>
-      <label>Allowed IPs
-        <input type="text" name="allowed_ips" placeholder="optional comma-separated IPs/CIDRs">
-      </label>
-      <div class="api-scope-grid">
-        <label><input type="checkbox" name="scope_admin" checked> Admin</label>
-        <label><input type="checkbox" name="scope_read"> Read</label>
-        <label><input type="checkbox" name="scope_write"> Write</label>
-        <label><input type="checkbox" name="scope_unlink"> Delete</label>
-      </div>
-      <button type="submit">Create key</button>
-    </form>
-    <table class="api-keys-table">
-      <thead>
-        <tr><th>Name</th><th>Prefix</th><th>Scopes</th><th>Last used</th><th>Status</th><th></th></tr>
-      </thead>
-      <tbody>
-        {% for k in api_keys_rows %}
-          <tr>
-            <td>{{ k.name }}</td>
-            <td><code>{{ k.key_prefix }}</code></td>
-            <td>{{ k.scopes | join(', ') }}</td>
-            <td>{{ k.last_used_at or '—' }}</td>
-            <td>{% if k.revoked_at %}Revoked{% else %}Active{% endif %}</td>
-            <td>
-              {% if not k.revoked_at %}
-                <form method="post" action="/settings/api-keys/{{ k.id }}/revoke">
-                  <button type="submit">Revoke</button>
-                </form>
-              {% endif %}
-            </td>
-          </tr>
-        {% else %}
-          <tr><td colspan="6" class="hint">No API keys yet.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+  {% if can_manage_api_keys %}
+    <section class="panel" id="api-panel"
+             {% if active_section != 'api' %}style="display:none"{% endif %}>
+      <h2>API Keys</h2>
+      {% if new_api_key %}
+        <div class="api-token-once">
+          <strong>New key:</strong>
+          <code>{{ new_api_key }}</code>
+        </div>
+      {% endif %}
+      <form method="post" action="/settings/api-keys" class="api-key-form">
+        <label>Name
+          <input type="text" name="name" maxlength="120" required placeholder="New CRM">
+        </label>
+        <label>Allowed IPs
+          <input type="text" name="allowed_ips" placeholder="optional comma-separated IPs/CIDRs">
+        </label>
+        <div class="api-scope-grid">
+          <label><input type="checkbox" name="scope_admin" checked> Admin</label>
+          <label><input type="checkbox" name="scope_read"> Read</label>
+          <label><input type="checkbox" name="scope_write"> Write</label>
+          <label><input type="checkbox" name="scope_unlink"> Delete</label>
+        </div>
+        <button type="submit">Create key</button>
+      </form>
+      <table class="api-keys-table">
+        <thead>
+          <tr><th>Name</th><th>Prefix</th><th>Scopes</th><th>Last used</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for k in api_keys_rows %}
+            <tr>
+              <td>{{ k.name }}</td>
+              <td><code>{{ k.key_prefix }}</code></td>
+              <td>{{ k.scopes | join(', ') }}</td>
+              <td>{{ k.last_used_at or '—' }}</td>
+              <td>{% if k.revoked_at %}Revoked{% else %}Active{% endif %}</td>
+              <td>
+                {% if not k.revoked_at %}
+                  <form method="post" action="/settings/api-keys/{{ k.id }}/revoke">
+                    <button type="submit">Revoke</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="6" class="hint">No API keys yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  {% endif %}
 
   {% include "_settings_tvs.html" %}
 

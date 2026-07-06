@@ -69,6 +69,22 @@ def test_auth_disabled_reads_env(monkeypatch):
     assert auth.auth_disabled() is False
 
 
+def test_super_admin_upns_default_to_dale(monkeypatch):
+    monkeypatch.delenv("SUPER_ADMIN_UPNS", raising=False)
+    assert auth.is_super_admin_upn("dale@gruberpallets.com") is True
+    assert auth.is_super_admin_upn("DALE@GRUBERPALLETS.COM") is True
+    assert auth.is_super_admin_upn("ian@gruberpallets.com") is False
+
+
+def test_super_admin_upns_can_be_configured(monkeypatch):
+    monkeypatch.setenv(
+        "SUPER_ADMIN_UPNS",
+        "dale@gruberpallets.com, e@gruberpallets.com",
+    )
+    assert auth.is_super_admin_upn("e@gruberpallets.com") is True
+    assert auth.is_super_admin_upn("ian@gruberpallets.com") is False
+
+
 def test_session_rejects_alg_none_token(monkeypatch):
     """Regression: a JWT with `alg: none` (unsigned) must be rejected
     even if the rest of the payload looks valid. authlib's HS256

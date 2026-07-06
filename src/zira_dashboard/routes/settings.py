@@ -16,7 +16,7 @@ from datetime import time as _time
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import schedule_store, settings_store, shift_config, staffing, work_centers_store
+from .. import auth, schedule_store, settings_store, shift_config, staffing, work_centers_store
 from ..deps import templates
 from ..stations import CATEGORIES, STATIONS
 
@@ -116,6 +116,17 @@ def _parse_api_key_scopes(form) -> list[str]:
     return scopes or ["object:read"]
 
 
+def _can_manage_api_keys(request: Request) -> bool:
+    return auth.request_is_super_admin(request)
+
+
+def _api_settings_forbidden() -> JSONResponse:
+    return JSONResponse(
+        {"ok": False, "error": "super_admin_required"},
+        status_code=403,
+    )
+
+
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(
     request: Request,
@@ -124,6 +135,9 @@ def settings_page(
 ):
     if section not in ("work_centers", "integrations", "api", "roster_filter", "tvs", "timeclock", "time_off", "forklift", "diagnostics"):
         section = "work_centers"
+    can_manage_api_keys = _can_manage_api_keys(request)
+    if section == "api" and not can_manage_api_keys:
+        return HTMLResponse("Forbidden", status_code=403)
     roster_filter_active: list[dict] = []
     roster_filter_inactive: list[dict] = []
     if section == "roster_filter":
@@ -450,6 +464,7 @@ def settings_page(
             "integration_status": integration_status,
             "api_keys_rows": api_keys_rows,
             "new_api_key": new_api_key,
+            "can_manage_api_keys": can_manage_api_keys,
             "tv_displays_rows": tv_displays_rows,
             "all_dashboards_for_picker": all_dashboards_for_picker,
             "wc_locations_for_picker": [{"name": loc.name} for loc in staffing.LOCATIONS],
@@ -464,6 +479,8 @@ def settings_page(
 
 @router.post("/settings/api-keys")
 async def settings_create_api_key(request: Request):
+    if not _can_manage_api_keys(request):
+        return _api_settings_forbidden()
     from .. import api_keys as _api_keys
 
     form = await request.form()
@@ -491,6 +508,8 @@ async def settings_create_api_key(request: Request):
 
 @router.post("/settings/api-keys/{key_id}/revoke")
 async def settings_revoke_api_key(key_id: int, request: Request):
+    if not _can_manage_api_keys(request):
+        return _api_settings_forbidden()
     from .. import api_keys as _api_keys
 
     await asyncio.to_thread(_api_keys.revoke_key, key_id)
