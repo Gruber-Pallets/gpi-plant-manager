@@ -56,7 +56,7 @@ Add this file:
 ```python
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date
 
 from zira_dashboard import staffing
 from zira_dashboard.rotation_suggestions import (
@@ -934,7 +934,7 @@ Expected: PASS.
 Append to `tests/test_staffing_trim_saw_defaults.py`:
 
 ```python
-from datetime import date
+from datetime import date, time
 
 
 def test_staffing_page_seeds_empty_day_with_smart_defaults(monkeypatch):
