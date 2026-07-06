@@ -46,7 +46,7 @@
   // Replaces every Scheduled cell with that work center's stored defaults.
   // Defaults are managed in Settings → Work Centers and rendered into the page
   // via __defaultsByLoc — they are not editable from the scheduler.
-  const __defaultsByLoc = window.DEFAULTS_BY_LOC;
+  const __defaultsByLoc = window.SMART_DEFAULTS_BY_LOC || window.DEFAULTS_BY_LOC;
   const __clearBtn = document.getElementById('clear-schedule-btn');
   if (__clearBtn) {
     __clearBtn.addEventListener('click', () => {
