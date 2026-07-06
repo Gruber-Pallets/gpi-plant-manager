@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import time
-from threading import RLock
 
+from ._singleton import CachedSingleton
 from .schedule_store import Break, _parse_time, _format_time
 
 
@@ -50,10 +50,6 @@ def _row_to_schedule(row: dict) -> SaturdaySchedule:
     return SaturdaySchedule(start, end, tuple(brks))
 
 
-_lock = RLock()
-_cache: SaturdaySchedule | None = None
-
-
 def _load_from_db() -> SaturdaySchedule:
     from . import db
     rows = db.query(
@@ -64,17 +60,15 @@ def _load_from_db() -> SaturdaySchedule:
     return _row_to_schedule(rows[0])
 
 
+_store: CachedSingleton[SaturdaySchedule] = CachedSingleton(_load_from_db)
+
+
 def current() -> SaturdaySchedule:
     """Cached singleton; DEFAULT until the first save() writes a row."""
-    global _cache
-    with _lock:
-        if _cache is None:
-            _cache = _load_from_db()
-        return _cache
+    return _store.current()
 
 
 def save(sched: SaturdaySchedule) -> None:
-    global _cache
     from . import db
     db.execute(
         "INSERT INTO saturday_schedule (id, shift_start, shift_end, breaks, updated_at) "
@@ -90,12 +84,8 @@ def save(sched: SaturdaySchedule) -> None:
             ]),
         ),
     )
-    with _lock:
-        _cache = sched
+    _store.set(sched)
 
 
 def reload() -> SaturdaySchedule:
-    global _cache
-    with _lock:
-        _cache = _load_from_db()
-        return _cache
+    return _store.reload()

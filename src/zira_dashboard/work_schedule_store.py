@@ -18,8 +18,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import time
-from threading import RLock
 
+from ._singleton import CachedSingleton
 from .rounding import RoundingSettings
 from .schedule_store import _parse_time
 
@@ -67,10 +67,6 @@ def _row_to_override(row: dict) -> WorkScheduleOverride:
     )
 
 
-_lock = RLock()
-_cache: dict[int, WorkScheduleOverride] | None = None
-
-
 def _load_from_db() -> dict[int, WorkScheduleOverride]:
     from . import db
     rows = db.query(
@@ -81,12 +77,8 @@ def _load_from_db() -> dict[int, WorkScheduleOverride]:
     return {int(r["resource_calendar_id"]): _row_to_override(r) for r in rows}
 
 
-def _all_cached() -> dict[int, WorkScheduleOverride]:
-    global _cache
-    with _lock:
-        if _cache is None:
-            _cache = _load_from_db()
-        return _cache
+_store: CachedSingleton[dict[int, WorkScheduleOverride]] = CachedSingleton(_load_from_db)
+_all_cached = _store.current
 
 
 def get(resource_calendar_id: int) -> WorkScheduleOverride | None:
@@ -162,7 +154,4 @@ def delete(resource_calendar_id: int) -> None:
 
 def reload() -> dict[int, WorkScheduleOverride]:
     """Force a fresh read from Postgres, bypassing the cache."""
-    global _cache
-    with _lock:
-        _cache = _load_from_db()
-        return _cache
+    return _store.reload()

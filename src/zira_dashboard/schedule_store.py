@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import time
-from threading import RLock
+
+from ._singleton import CachedSingleton
 
 WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -93,10 +94,6 @@ def _row_to_schedule(row: dict) -> Schedule:
     return Schedule(start, end, wd, tuple(brks))
 
 
-_lock = RLock()
-_cache: Schedule | None = None
-
-
 def _load_from_db() -> Schedule:
     from . import db
     rows = db.query(
@@ -107,20 +104,18 @@ def _load_from_db() -> Schedule:
     return _row_to_schedule(rows[0])
 
 
+_store: CachedSingleton[Schedule] = CachedSingleton(_load_from_db)
+
+
 def current() -> Schedule:
     """Return the singleton global_schedule. Cached in process memory after
     first read; invalidated on save(). Falls back to DEFAULT_SCHEDULE if the
     table has no row yet."""
-    global _cache
-    with _lock:
-        if _cache is None:
-            _cache = _load_from_db()
-        return _cache
+    return _store.current()
 
 
 def save(sched: Schedule) -> None:
     """Persist + invalidate the cache so the next current() call re-reads."""
-    global _cache
     from . import db
     db.execute(
         "INSERT INTO global_schedule (id, shift_start, shift_end, work_weekdays, breaks, updated_at) "
@@ -138,13 +133,9 @@ def save(sched: Schedule) -> None:
             ]),
         ),
     )
-    with _lock:
-        _cache = sched
+    _store.set(sched)
 
 
 def reload() -> Schedule:
     """Force a fresh read from Postgres, bypassing the cache."""
-    global _cache
-    with _lock:
-        _cache = _load_from_db()
-        return _cache
+    return _store.reload()
