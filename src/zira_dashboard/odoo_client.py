@@ -1273,8 +1273,11 @@ def fetch_public_holidays(start_d, end_d) -> list[dict]:
     """Company-wide public holidays from Odoo's resource.calendar.leaves
     (rows with resource_id=False), cached in-process for 10 minutes per
     requested range (the Who's-Out calendar calls this on every render).
-    Returns [{id, name, date_from, date_to}, ...]
+    Returns [{id, name, date_from, date_to, calendar_id}, ...]
     for any holiday whose [date_from, date_to] overlaps the requested range.
+    ``calendar_id`` is False for company-wide records, or [id, name] when the
+    holiday is scoped to one working schedule (the backfill reconciler uses
+    this to decide whether a holiday blocks a given employee).
 
     ``resource.calendar.leaves.date_from`` is a datetime field (not date), so
     the domain needs the time component. ``resource_id=False`` means the row
@@ -1294,7 +1297,7 @@ def fetch_public_holidays(start_d, end_d) -> list[dict]:
     rows = execute(
         "resource.calendar.leaves", "search_read",
         domain,
-        fields=["id", "name", "date_from", "date_to"],
+        fields=["id", "name", "date_from", "date_to", "calendar_id"],
     )
     # Drop expired entries so navigating many ranges can't grow the dict.
     for k in [k for k, (_, exp) in _public_holidays_cache.items() if exp <= now]:

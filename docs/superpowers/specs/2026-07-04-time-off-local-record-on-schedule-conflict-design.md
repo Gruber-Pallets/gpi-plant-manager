@@ -138,18 +138,26 @@ prepends the decision row, whose reason spells out the local-only recording).
 Dale wants these absences visible in Odoo. Root-cause diagnosis showed the real
 trigger for the first live case was not a Working Schedule gap but Odoo's global
 "4th of July" holiday record covering 2026-07-03 while the plant actually ran
-(17 people punched in). New module `time_off_local_backfill` (hourly warmer):
-for each `local_record` row it predicts whether Odoo would accept the leave now
-(≥1 day in the span is a covered weekday with no public holiday — Odoo only
-needs `number_of_days > 0`), and only then replays it: `action_draft` on the
-refused copy (or `create_leave` if HR deleted it, linking the new id to the row
-*before* the workflow so a concurrent poll maps it onto the flagged row), then
-confirm + approve. On success the row hands ownership back to the poller
-(`local_record = FALSE`) and the suppression row is retired
-(`unsuppress_resolution`). On any failure the Odoo copy is re-refused so it
-never lingers pending. Zero RPCs on ticks with no local records. Making Odoo
-*able* to accept a given day (scoping/removing a holiday record, fixing a
-calendar) stays a human data decision — the backfill reacts to it.
+(17 people punched in). New module `time_off_local_backfill` (hourly warmer),
+hardened by a second adversarial review (13 confirmed findings):
+for each approved `local_record` row it predicts whether Odoo would accept the
+leave now — ≥1 day in the span is a covered weekday not blocked by a holiday
+record *that applies to this employee* (company-wide, or scoped to their
+calendar via `calendar_id`; bounds converted UTC→plant time so day-after-holiday
+absences aren't frozen) — and only then replays it: `action_draft` on the
+refused/cancelled copy, then confirm + approve. Adoption is a guarded UPDATE
+(`WHERE local_record AND state='validate' RETURNING id`): a kiosk cancel or
+manager deny that settled the row mid-replay wins, and the replayed Odoo
+approval is rolled back to refused. On success the denied-popup suppression is
+retired and a pre-acked approved-suppression is armed (a poll tick that
+photographed a stale mid-replay state can't fire a spurious popup). Bounded by
+design: prediction skips defer the row (`backfill_next_at`, rotating it out of
+the LIMIT window so dead rows can't starve replayable ones); real failures
+re-refuse the Odoo copy and back off exponentially (`backfill_attempts`, capped
+weekly). There is deliberately NO recreate path — if HR deleted the refused
+copy, the absence stays app-only. Zero RPCs on ticks with no local records.
+Making Odoo *able* to accept a given day (scoping/removing a holiday record,
+fixing a calendar) stays a human data decision — the backfill reacts to it.
 
 ## Known limitations (accepted)
 

@@ -14,3 +14,19 @@ def test_schema_defines_local_record_column():
         "ALTER TABLE time_off_requests ADD COLUMN IF NOT EXISTS "
         "local_record BOOLEAN NOT NULL DEFAULT FALSE" in SCHEMA_DDL
     )
+
+
+def test_schema_defines_backfill_columns():
+    # Per-row backoff state for the Odoo backfill reconciler: attempts
+    # count (exponential backoff) and next-eligible timestamp (also rotates
+    # prediction-skipped rows out of the LIMIT window).
+    assert "backfill_attempts" in SCHEMA_DDL
+    assert "backfill_next_at" in SCHEMA_DDL
+    assert (
+        "ALTER TABLE time_off_requests ADD COLUMN IF NOT EXISTS "
+        "backfill_attempts INTEGER NOT NULL DEFAULT 0" in SCHEMA_DDL
+    )
+    assert (
+        "ALTER TABLE time_off_requests ADD COLUMN IF NOT EXISTS "
+        "backfill_next_at TIMESTAMPTZ" in SCHEMA_DDL
+    )

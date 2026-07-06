@@ -711,6 +711,8 @@ CREATE TABLE IF NOT EXISTS time_off_requests (
   synced_to_odoo           BOOLEAN NOT NULL DEFAULT FALSE,
   sync_error               TEXT,
   local_record             BOOLEAN NOT NULL DEFAULT FALSE,
+  backfill_attempts        INTEGER NOT NULL DEFAULT 0,
+  backfill_next_at         TIMESTAMPTZ,
   last_pulled_at           TIMESTAMPTZ,
   last_pushed_at           TIMESTAMPTZ,
   created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -722,6 +724,11 @@ CREATE TABLE IF NOT EXISTS time_off_requests (
 -- poller must neither overwrite nor delete such rows (their Odoo copy was
 -- settled as refused).
 ALTER TABLE time_off_requests ADD COLUMN IF NOT EXISTS local_record BOOLEAN NOT NULL DEFAULT FALSE;
+-- Backoff state for the Odoo backfill reconciler (time_off_local_backfill):
+-- failed replays retry exponentially (attempts) and prediction-skipped rows
+-- rotate out of the candidate window until backfill_next_at.
+ALTER TABLE time_off_requests ADD COLUMN IF NOT EXISTS backfill_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE time_off_requests ADD COLUMN IF NOT EXISTS backfill_next_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS time_off_requests_person_date_idx
   ON time_off_requests (person_odoo_id, date_from);
 CREATE INDEX IF NOT EXISTS time_off_requests_range_idx
