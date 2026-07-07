@@ -112,6 +112,32 @@ def test_page_inventory_keeps_get_pages_drops_api_and_noise():
     assert page_views.page_inventory(app) == ["/staffing", "/wc/{slug}"]
 
 
+def test_page_inventory_descends_into_included_routers():
+    # Every real route mounts via include_router (see app.py). Modern FastAPI
+    # (>=0.139) wraps each include_router() in an _IncludedRouter instead of
+    # splicing its routes flat into app.routes — a flat scan sees nothing and
+    # the never-hit report goes silently empty (bit prod on 2026-07-07).
+    from fastapi import APIRouter
+
+    app = FastAPI()
+    router = APIRouter()
+
+    @router.get("/staffing")
+    def _s():
+        return "ok"
+
+    nested = APIRouter()
+
+    @nested.get("/trophies")
+    def _t():
+        return "ok"
+
+    router.include_router(nested)
+    app.include_router(router)
+
+    assert page_views.page_inventory(app) == ["/staffing", "/trophies"]
+
+
 def test_flush_drains_counter_into_persist_and_skips_when_empty(monkeypatch):
     captured = []
     monkeypatch.setattr(page_views, "_persist", lambda rows: captured.append(rows))

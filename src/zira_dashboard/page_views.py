@@ -71,13 +71,27 @@ def should_track(pattern: str) -> bool:
     )
 
 
+def _leaf_routes(routes):
+    """Yield leaf routes, descending through include_router() wrappers.
+    Modern FastAPI (>=0.139) mounts each included router as a wrapper
+    exposing the original APIRouter via ``original_router`` instead of
+    splicing its routes flat into ``app.routes`` — a flat scan sees none of
+    the app's real pages and the never-hit report goes silently empty."""
+    for route in routes:
+        original = getattr(route, "original_router", None)
+        if original is not None:
+            yield from _leaf_routes(original.routes)
+        else:
+            yield route
+
+
 def page_inventory(app) -> list[str]:
     """Every user-navigable page the app defines: GET routes that pass
     ``should_track`` and aren't JSON APIs (``/api/*``). This is the
     denominator for the never-hit report — diff it against observed routes to
     find pages nobody visited."""
     pages: set[str] = set()
-    for route in app.routes:
+    for route in _leaf_routes(app.routes):
         methods = getattr(route, "methods", None) or set()
         path = getattr(route, "path", None)
         if not path or "GET" not in methods:
