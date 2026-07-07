@@ -55,3 +55,6 @@ skill_columns_meta.json
 skill_filter.json
 .worktrees/
 tz_backup.json
+
+# Recycling scaling QA render output (scripts/preview_recycling.py)
+scripts/_preview_out/
