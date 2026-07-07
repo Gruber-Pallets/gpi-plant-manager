@@ -136,8 +136,9 @@ async def _tick_time_off_balance():
 
 
 async def _tick_staffing_pages():
-    """Keep today's hot staffing pages pre-rendered in the response cache so the
-    first human load (including the first after a Railway deploy) is a warm hit."""
+    """Keep the staffing day view pre-rendered in the response cache so the
+    first human load (including the first after a Railway deploy) is a warm hit.
+    (Leaderboards were dropped from this tick 2026-07-07 — see warm_once.)"""
     from . import page_warmer
     await asyncio.to_thread(page_warmer.warm_once)
 

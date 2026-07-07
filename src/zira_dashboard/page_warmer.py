@@ -47,10 +47,15 @@ def _synthetic_get_request(path: str, query_string: bytes = b"") -> Request:
 
 
 def warm_once() -> None:
-    """Render today's hot, frequently-changing staffing pages so their
-    handlers repopulate the response cache. Each page is warmed
-    independently; a failure in one must never block the others or crash
-    the caller (the warmer loop must never die)."""
+    """Render the staffing day view so its handler repopulates the response
+    cache. A failure must never crash the caller (the warmer loop must
+    never die).
+
+    /staffing/leaderboards was warmed here too until 2026-07-07: a week of
+    page-usage data showed ~2 human views against ~13k warm renders, and
+    its 60s response-cache TTL means no slower cadence could keep it warm.
+    The rare visitor now pays the ~2s cold render; the page's data
+    sub-caches stay fresh via the Zira/live_cache warmer ticks."""
     # Day-view: a bare /staffing nav resolves day=None -> next working day,
     # view="draft", publish_blocked=0. Pass them explicitly (not via Query
     # defaults) so the handler sees real values, reproducing the exact
@@ -65,19 +70,6 @@ def warm_once() -> None:
         )
     except Exception as e:  # noqa: BLE001 — warmer must never bubble
         _log.warning("page_warmer: day-view warm failed: %s", e)
-
-    # Leaderboards: bare nav -> window="week", metric="pct".
-    try:
-        from .routes.leaderboards import staffing_leaderboards
-        staffing_leaderboards(
-            _synthetic_get_request("/staffing/leaderboards"),
-            window="week",
-            metric="pct",
-            start=None,
-            end=None,
-        )
-    except Exception as e:  # noqa: BLE001 — warmer must never bubble
-        _log.warning("page_warmer: leaderboards warm failed: %s", e)
 
 
 def warm_inbox_once() -> None:

@@ -12,7 +12,9 @@ def test_synthetic_get_request_shape():
     assert req.query_params["day"] == "2026-05-29"
 
 
-def test_warm_once_calls_day_view_and_leaderboards(monkeypatch):
+def test_warm_once_calls_day_view_only(monkeypatch):
+    # Leaderboards were dropped from the 45s warm loop 2026-07-07 (2 human
+    # views/week vs ~13k warm renders; see page_warmer.warm_once docstring).
     calls = []
 
     def fake_day(request, *, day, publish_blocked, view):
@@ -20,7 +22,7 @@ def test_warm_once_calls_day_view_and_leaderboards(monkeypatch):
         return object()
 
     def fake_lb(request, *, window, metric, start, end):
-        calls.append(("lb", window, metric, start, end))
+        calls.append("lb")
         return object()
 
     monkeypatch.setattr("zira_dashboard.routes.staffing.staffing_page", fake_day)
@@ -31,28 +33,17 @@ def test_warm_once_calls_day_view_and_leaderboards(monkeypatch):
     from zira_dashboard import page_warmer
     page_warmer.warm_once()
 
-    assert ("day", None, 0, "draft") in calls
-    assert ("lb", "week", "pct", None, None) in calls
+    assert calls == [("day", None, 0, "draft")]
 
 
 def test_warm_once_swallows_a_failing_handler(monkeypatch):
-    called = []
-
     def boom(*a, **k):
         raise RuntimeError("stratustime down")
 
-    def ok_lb(request, *, window, metric, start, end):
-        called.append("lb")
-        return object()
-
     monkeypatch.setattr("zira_dashboard.routes.staffing.staffing_page", boom)
-    monkeypatch.setattr(
-        "zira_dashboard.routes.leaderboards.staffing_leaderboards", ok_lb
-    )
 
     from zira_dashboard import page_warmer
-    page_warmer.warm_once()
-    assert called == ["lb"]
+    page_warmer.warm_once()  # must not raise
 
 
 import asyncio
