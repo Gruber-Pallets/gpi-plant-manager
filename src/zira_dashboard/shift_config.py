@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, UTC
 from zoneinfo import ZoneInfo
 
 from . import schedule_store
@@ -271,8 +271,8 @@ def productive_minutes_in_window(day: date, start_utc: datetime, end_utc: dateti
         return 0
     total = int((end_utc - start_utc).total_seconds() // 60)
     for b in breaks_for(day):
-        bs = datetime.combine(day, b.start, tzinfo=SITE_TZ).astimezone(timezone.utc)
-        be = datetime.combine(day, b.end, tzinfo=SITE_TZ).astimezone(timezone.utc)
+        bs = datetime.combine(day, b.start, tzinfo=SITE_TZ).astimezone(UTC)
+        be = datetime.combine(day, b.end, tzinfo=SITE_TZ).astimezone(UTC)
         lo = max(bs, start_utc)
         hi = min(be, end_utc)
         if hi > lo:

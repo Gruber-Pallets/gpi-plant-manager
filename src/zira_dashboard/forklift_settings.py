@@ -5,8 +5,9 @@ in process, invalidated on save() — same pattern as auto_lunch_settings.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from threading import RLock
 from typing import TYPE_CHECKING
+
+from ._singleton import CachedSingleton
 
 if TYPE_CHECKING:
     from zira_dashboard import forklift_score as fs
@@ -70,7 +71,7 @@ class Resolved:
     def effective_throughput(self) -> float:
         return max(0.1, self.throughput * self.utilization)
 
-    def score_config(self) -> "fs.ScoreConfig":
+    def score_config(self) -> fs.ScoreConfig:
         """The composite GOAT-score config: each field is the override when set,
         else forklift_score's own DEFAULT_SCORE_CONFIG value."""
         from zira_dashboard import forklift_score as fs
@@ -120,9 +121,6 @@ def algorithm_values(s: Settings, *, algo_throughput: float) -> Resolved:
 
 DEFAULT = Settings()
 
-_lock = RLock()
-_cache: Settings | None = None
-
 
 def _row_to_settings(row: dict) -> Settings:
     def _f(v):
@@ -165,20 +163,18 @@ def _load_from_db() -> Settings:
     return _row_to_settings(rows[0]) if rows else DEFAULT
 
 
+_store: CachedSingleton[Settings] = CachedSingleton(_load_from_db)
+
+
 def current() -> Settings:
     """Return the singleton settings. Cached in process after first read;
     invalidated on save(). Falls back to DEFAULT if the table has no row."""
-    global _cache
-    with _lock:
-        if _cache is None:
-            _cache = _load_from_db()
-        return _cache
+    return _store.current()
 
 
 def save(s: Settings) -> None:
     """Persist the settings (UPSERT id=1) and update the in-process cache so
     the next current() returns the saved value without a re-read."""
-    global _cache
     from . import db
     db.execute(
         "INSERT INTO forklift_settings "
@@ -215,13 +211,9 @@ def save(s: Settings) -> None:
          s.score_target_calls, s.score_ontime_floor, s.score_fast_secs,
          s.score_slow_secs, s.score_min_calls),
     )
-    with _lock:
-        _cache = s
+    _store.set(s)
 
 
 def reload() -> Settings:
     """Force a fresh read from Postgres, bypassing the cache."""
-    global _cache
-    with _lock:
-        _cache = _load_from_db()
-        return _cache
+    return _store.reload()

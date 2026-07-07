@@ -14,8 +14,8 @@ rounded — the punch path records the raw punch as-is.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from threading import RLock
 
+from ._singleton import CachedSingleton
 from .rounding import RoundingSettings
 
 
@@ -24,11 +24,6 @@ class RoundingSystem:
     id: int
     name: str
     rounding: RoundingSettings
-
-
-_lock = RLock()
-# (systems_by_id, windows_by_department)
-_cache: tuple[dict[int, RoundingSystem], dict[str, RoundingSettings]] | None = None
 
 
 def _load_from_db() -> tuple[dict[int, RoundingSystem], dict[str, RoundingSettings]]:
@@ -60,12 +55,11 @@ def _load_from_db() -> tuple[dict[int, RoundingSystem], dict[str, RoundingSettin
     return systems, by_dept
 
 
-def _cached() -> tuple[dict[int, RoundingSystem], dict[str, RoundingSettings]]:
-    global _cache
-    with _lock:
-        if _cache is None:
-            _cache = _load_from_db()
-        return _cache
+# (systems_by_id, windows_by_department)
+_store: CachedSingleton[tuple[dict[int, RoundingSystem], dict[str, RoundingSettings]]] = (
+    CachedSingleton(_load_from_db)
+)
+_cached = _store.current
 
 
 def windows_for_department(department: str | None) -> RoundingSettings | None:
@@ -135,7 +129,4 @@ def set_department_system(department: str, system_id: int | None) -> None:
 
 def reload() -> tuple[dict[int, RoundingSystem], dict[str, RoundingSettings]]:
     """Force a fresh read from Postgres, bypassing the cache."""
-    global _cache
-    with _lock:
-        _cache = _load_from_db()
-        return _cache
+    return _store.reload()

@@ -14,13 +14,14 @@ from zira_probe.probes.writes_error_surface import ALL_WRITE_ERROR_PROBES
 from zira_probe.probes.writes_happy import ALL_WRITE_HAPPY_PROBES
 from zira_probe.report import render_report
 from zira_probe.results import ProbeResult
+from datetime import UTC
 
 
 def _auth_preflight(client: ZiraClient, meter_id: str) -> bool:
     """Hit one cheap read to confirm the API key works."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    end = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         client.get_readings(meter_id=meter_id, end_time=end, limit=1)
         return True

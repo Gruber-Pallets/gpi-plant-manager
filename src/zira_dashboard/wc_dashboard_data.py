@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import re
 
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
 
 def slug_for_wc(name: str) -> str:
     """URL-safe slug derived from a work-center name.
@@ -27,12 +29,12 @@ def slug_for_wc(name: str) -> str:
     """
     s = (name or "").strip().lower()
     # Replace every run of non-alphanumeric chars with a single hyphen.
-    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = _NON_ALNUM.sub("-", s)
     # Strip leading + trailing hyphens.
     return s.strip("-")
 
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 
 
 def _load_wc(name: str):
@@ -102,7 +104,7 @@ def _shift_elapsed_fraction(day: date) -> float:
         return 1.0
     if day > today_local:
         return 0.0
-    elapsed = shift_config.shift_elapsed_minutes(day, datetime.now(timezone.utc))
+    elapsed = shift_config.shift_elapsed_minutes(day, datetime.now(UTC))
     total = shift_config.productive_minutes_for(day) or 1
     return max(0.0, min(1.0, elapsed / total))
 
@@ -269,7 +271,7 @@ def daily_progress(wc_name: str, day: date) -> list[dict]:
     shift_start_local = datetime.combine(
         day, shift_config.shift_start_for(day), tzinfo=shift_config.SITE_TZ,
     )
-    shift_start_utc = shift_start_local.astimezone(timezone.utc)
+    shift_start_utc = shift_start_local.astimezone(UTC)
 
     per_bucket = [0] * n_buckets
     for r in readings:
@@ -314,7 +316,7 @@ def fifteen_min_increments(wc_name: str, day: date) -> list[dict]:
     shift_start_local = datetime.combine(
         day, shift_config.shift_start_for(day), tzinfo=shift_config.SITE_TZ,
     )
-    shift_start_utc = shift_start_local.astimezone(timezone.utc)
+    shift_start_utc = shift_start_local.astimezone(UTC)
 
     # Identify which bucket indices fall inside a break window. Those get
     # target=0 below — no work is expected during a break.

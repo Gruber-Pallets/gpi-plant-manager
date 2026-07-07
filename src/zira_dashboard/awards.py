@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time as _time
 from collections import defaultdict
-from datetime import date
+from datetime import date, UTC
 from calendar import monthrange
 
 # Earliest possible production data — production_daily starts in 2024. A
@@ -133,8 +133,8 @@ def goat(group_name: str) -> dict | None:
     cached = _GOAT_CACHE.get(group_name)
     if cached is not None and now < cached[1]:
         return cached[0]
-    from datetime import datetime, timezone
-    today = datetime.now(timezone.utc).date()
+    from datetime import datetime
+    today = datetime.now(UTC).date()
     rows = person_days_in_group(group_name, _ALL_TIME_FLOOR, today)
     if not rows:
         result = None

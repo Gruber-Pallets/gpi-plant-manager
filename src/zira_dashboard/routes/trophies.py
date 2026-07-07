@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -36,7 +36,7 @@ def trophies_page(
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
 ):
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     y = year or today.year
     m = month or today.month
 

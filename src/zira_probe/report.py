@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from zira_probe.results import ProbeResult
 
@@ -47,7 +47,7 @@ def _format_result(r: ProbeResult) -> str:
 
 
 def render_report(results: list[ProbeResult]) -> str:
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         "# Zira API Capability Report",
         "",

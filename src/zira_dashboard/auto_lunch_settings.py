@@ -5,7 +5,8 @@ same pattern as schedule_store.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from threading import RLock
+
+from ._singleton import CachedSingleton
 
 
 @dataclass(frozen=True)
@@ -17,9 +18,6 @@ class Settings:
 
 
 DEFAULT = Settings()
-
-_lock = RLock()
-_cache: Settings | None = None
 
 
 def _row_to_settings(row: dict) -> Settings:
@@ -40,20 +38,18 @@ def _load_from_db() -> Settings:
     return _row_to_settings(rows[0]) if rows else DEFAULT
 
 
+_store: CachedSingleton[Settings] = CachedSingleton(_load_from_db)
+
+
 def current() -> Settings:
     """Return the singleton settings. Cached in process after first read;
     invalidated on save(). Falls back to DEFAULT if the table has no row."""
-    global _cache
-    with _lock:
-        if _cache is None:
-            _cache = _load_from_db()
-        return _cache
+    return _store.current()
 
 
 def save(s: Settings) -> None:
     """Persist the settings (UPSERT id=1) and update the in-process cache so
     the next current() returns the saved value without a re-read."""
-    global _cache
     from . import db
     db.execute(
         "INSERT INTO auto_lunch_settings "
@@ -65,13 +61,9 @@ def save(s: Settings) -> None:
         "flex_minutes = EXCLUDED.flex_minutes",
         (s.enabled, s.observe_only, s.flex_after_hours, s.flex_minutes),
     )
-    with _lock:
-        _cache = s
+    _store.set(s)
 
 
 def reload() -> Settings:
     """Force a fresh read from Postgres, bypassing the cache."""
-    global _cache
-    with _lock:
-        _cache = _load_from_db()
-        return _cache
+    return _store.reload()

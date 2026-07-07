@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 import requests
@@ -14,7 +14,7 @@ from zira_probe.results import ProbeResult, redact_api_key, write_raw_log
 
 # All happy-path writes use timestamps in a clearly-labeled future range so
 # they're easy to spot in the Zira UI and ignore for real analytics.
-WRITE_MARKER_BASE = datetime(2099, 1, 1, tzinfo=timezone.utc)
+WRITE_MARKER_BASE = datetime(2099, 1, 1, tzinfo=UTC)
 
 
 def _iso(dt: datetime) -> str:

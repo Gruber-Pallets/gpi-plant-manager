@@ -7,7 +7,7 @@ lives at /work-centers and is reachable from the Dashboards subnav.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -69,7 +69,7 @@ def index(
     if cached is not None:
         return cached
     stations = _filter_stations(category)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     results = leaderboard(client, stations, d, now_utc=now if is_today else None)
 
     enriched = []
@@ -132,7 +132,7 @@ def api_leaderboard(
     today = plant_today()
     is_today = d == today
     stations = _filter_stations(category)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     results = leaderboard(client, stations, d, now_utc=now if is_today else None)
     return JSONResponse(
         {

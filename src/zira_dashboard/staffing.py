@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import json
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, UTC
 from pathlib import Path
 from threading import RLock
 
@@ -266,7 +266,7 @@ class Schedule:
     custom_hours: dict | None = None
 
 
-def snapshot_of(sched: "Schedule") -> dict:
+def snapshot_of(sched: Schedule) -> dict:
     """Return a serializable snapshot of the schedule's posted-visible fields."""
     return {
         "assignments": {k: list(v) for k, v in (sched.assignments or {}).items()},
@@ -280,7 +280,7 @@ def snapshot_of(sched: "Schedule") -> dict:
 # call load_schedule(d) inside hot loops (per-sample, per-bucket), so a
 # naive Postgres round-trip per call exhausts the connection pool. We
 # cache by day; save_schedule() invalidates the matching entry.
-_schedule_cache: dict[date, "Schedule"] = {}
+_schedule_cache: dict[date, Schedule] = {}
 _schedule_cache_lock = RLock()
 
 
@@ -320,7 +320,7 @@ def iter_saved_schedules():
         yield day_val, load_schedule(day_val)
 
 
-def _load_schedule_from_db(day: date) -> "Schedule":
+def _load_schedule_from_db(day: date) -> Schedule:
     from . import db
     rows = db.query(
         "SELECT day, published, testing_day, notes, custom_hours, published_snapshot "
@@ -365,7 +365,7 @@ def load_schedules_bulk(
     start: date | None = None,
     end: date | None = None,
     published_only: bool = False,
-) -> list[tuple[date, "Schedule"]]:
+) -> list[tuple[date, Schedule]]:
     """Hydrate many saved schedules in ONE set-based pass (3 queries total:
     schedules + schedule_assignments + schedule_wc_notes), newest first.
     Optional date/published filters are pushed into SQL.
@@ -549,7 +549,7 @@ def effective_minutes_worked(name: str, day, window_start_utc, window_end_utc,
     so this doesn't re-query per person; omit it for the fetch-per-call
     behavior.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
     from . import shift_config, attendance
     if window_end_utc <= window_start_utc:
         return 0
@@ -562,8 +562,8 @@ def effective_minutes_worked(name: str, day, window_start_utc, window_end_utc,
         for b in shift_config.breaks_for(day):
             bs_local = datetime.combine(day, b.start, tzinfo=shift_config.SITE_TZ)
             be_local = datetime.combine(day, b.end, tzinfo=shift_config.SITE_TZ)
-            bs_utc = bs_local.astimezone(timezone.utc)
-            be_utc = be_local.astimezone(timezone.utc)
+            bs_utc = bs_local.astimezone(UTC)
+            be_utc = be_local.astimezone(UTC)
             lo = max(bs_utc, window_start_utc)
             hi = min(be_utc, window_end_utc)
             if hi > lo:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 from . import calendar_conflicts, db, odoo_client
 
@@ -102,7 +102,7 @@ def run_once(force: bool = False) -> dict:
     """Weekly check. Best-effort; raises propagate to the warmer (logged/swallowed)."""
     global _throttle_logged
     state = _load_state()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if not force and state["last_run_at"] and (now - state["last_run_at"]) < THROTTLE:
         if not _throttle_logged:
             _log.warning(

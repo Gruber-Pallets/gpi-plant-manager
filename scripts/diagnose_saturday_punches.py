@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, UTC
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,7 +68,7 @@ def _fmt(dt) -> str:
         except ValueError:
             return dt
     if getattr(dt, "tzinfo", None) is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(shift_config.SITE_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
@@ -89,8 +89,8 @@ def main() -> int:
 
     start_local = datetime.combine(day, time.min, tzinfo=site)
     end_local = start_local + timedelta(days=1)
-    start_utc = start_local.astimezone(timezone.utc)
-    end_utc = end_local.astimezone(timezone.utc)
+    start_utc = start_local.astimezone(UTC)
+    end_utc = end_local.astimezone(UTC)
 
     print(f"Diagnosing {day} ({day.strftime('%A')})  [site tz: {site}]")
     print(f"Local day window: {start_local}  ->  {end_local}")

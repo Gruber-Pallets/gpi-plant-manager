@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, time as _time, timedelta, timezone
+from datetime import datetime, time as _time, timedelta, UTC
 
 from .shift_config import SITE_TZ
 
@@ -30,7 +30,7 @@ def _parse_check_in(value):
     else:
         dt = value
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 

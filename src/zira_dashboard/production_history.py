@@ -13,7 +13,7 @@ data and is fully testable. The wrappers (`attribution_for`,
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, UTC
 
 
 def attribute_for_day(
@@ -162,9 +162,9 @@ def _apply_testing_offsets(
 
 def _elapsed_minutes_for(d: date) -> int:
     """Productive minutes available on day d, evaluated as of right now."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     from .shift_config import shift_elapsed_minutes  # local — pulls tzdata
-    return shift_elapsed_minutes(d, datetime.now(timezone.utc))
+    return shift_elapsed_minutes(d, datetime.now(UTC))
 
 
 def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
@@ -180,10 +180,10 @@ def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
     Days with no saved assignments at all naturally produce {} via
     `attribute_for_day` (empty merged dict).
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
     from . import staffing, wc_attributions
     sched = staffing.load_schedule(d)
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     if d >= today and not sched.published:
         return {}
     wc_totals = _fetch_wc_totals(client, d)

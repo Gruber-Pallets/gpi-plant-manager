@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ def is_stale(refreshed_at: datetime | None) -> bool:
     """True if the row is missing or older than STALE_THRESHOLD."""
     if refreshed_at is None:
         return True
-    return (datetime.now(timezone.utc) - refreshed_at) > STALE_THRESHOLD
+    return (datetime.now(UTC) - refreshed_at) > STALE_THRESHOLD
 
 
 def refresh_attendance(day: date) -> None:

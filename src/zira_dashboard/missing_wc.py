@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from .shift_config import SITE_TZ
 
@@ -108,7 +108,7 @@ def _check_in_label(check_in_iso) -> str:
     except (TypeError, ValueError):
         return ""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     local = dt.astimezone(SITE_TZ)
     fmt = "%#I:%M %p %a" if os.name == "nt" else "%-I:%M %p %a"
     return local.strftime(fmt)

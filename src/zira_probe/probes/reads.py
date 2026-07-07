@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 import json
 
@@ -16,9 +16,9 @@ from zira_probe.results import ProbeResult, redact_api_key, write_raw_log
 def _iso_utc(dt: datetime) -> str:
     """Zira-friendly ISO 8601 with trailing Z, millisecond precision."""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     else:
-        dt = dt.astimezone(timezone.utc)
+        dt = dt.astimezone(UTC)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
@@ -41,7 +41,7 @@ def probe_read_ds_single_window(
     client: ZiraClient, config: Config, results_dir: Path
 ) -> list[ProbeResult]:
     out: list[ProbeResult] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     end_time = _iso_utc(now)
     start_time = _iso_utc(now - timedelta(days=config.read_window_days))
 
@@ -106,7 +106,7 @@ def probe_read_ds_paginated(
     client: ZiraClient, config: Config, results_dir: Path
 ) -> list[ProbeResult]:
     out: list[ProbeResult] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     end_time = _iso_utc(now)
     start_time = _iso_utc(now - timedelta(days=config.read_window_days))
 
@@ -213,8 +213,8 @@ def probe_read_ds_empty_window(
     client: ZiraClient, config: Config, results_dir: Path
 ) -> list[ProbeResult]:
     out: list[ProbeResult] = []
-    far_past_end = _iso_utc(datetime(2000, 1, 1, 0, 1, tzinfo=timezone.utc))
-    far_past_start = _iso_utc(datetime(2000, 1, 1, 0, 0, tzinfo=timezone.utc))
+    far_past_end = _iso_utc(datetime(2000, 1, 1, 0, 1, tzinfo=UTC))
+    far_past_start = _iso_utc(datetime(2000, 1, 1, 0, 0, tzinfo=UTC))
 
     for ds in config.read_data_sources:
         name = f"read_ds_empty_window[{ds.label}]"
@@ -254,7 +254,7 @@ def probe_read_channel_analysis_intervals(
     client: ZiraClient, config: Config, results_dir: Path
 ) -> list[ProbeResult]:
     out: list[ProbeResult] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     to_time = _iso_utc(now)
     from_time = _iso_utc(now - timedelta(days=config.read_window_days))
     intervals = ["5 minutes", "1 hours", "1 days", "1 weeks"]
@@ -299,7 +299,7 @@ def probe_read_channel_analysis_too_many_points(
     client: ZiraClient, config: Config, results_dir: Path
 ) -> list[ProbeResult]:
     out: list[ProbeResult] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     to_time = _iso_utc(now)
     from_time = _iso_utc(now - timedelta(days=90))
 

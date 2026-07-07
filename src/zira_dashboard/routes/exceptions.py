@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -145,7 +145,7 @@ def _iso_day(value: Any) -> str | None:
 
 def _decision_time_label(value: datetime) -> str:
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     return value.astimezone(plant_day.SITE_TZ).strftime("%-m/%-d %-I:%M %p")
 
 
@@ -158,7 +158,7 @@ def _group_archive_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for r in rows:
         resolved = r["resolved_at"]
         if resolved.tzinfo is None:
-            resolved = resolved.replace(tzinfo=timezone.utc)
+            resolved = resolved.replace(tzinfo=UTC)
         local = resolved.astimezone(plant_day.SITE_TZ)
         day = local.date()
         if day == today:
@@ -689,7 +689,7 @@ def _undo_sync(
         return _json_error("this action can't be undone", 400)
     resolved = ev["resolved_at"]
     if resolved.tzinfo is None:
-        resolved = resolved.replace(tzinfo=timezone.utc)
+        resolved = resolved.replace(tzinfo=UTC)
     if plant_day.now() - resolved > _UNDO_WINDOW:
         return _json_error("undo window expired", 409)
     try:

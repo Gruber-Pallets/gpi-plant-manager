@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from itertools import combinations
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from . import staffing
 

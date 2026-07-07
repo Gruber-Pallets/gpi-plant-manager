@@ -5,7 +5,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, UTC
 from time import monotonic as _monotonic
 from typing import Any
 
@@ -40,8 +40,8 @@ class StationTotal:
 
 
 def day_window_utc(day: date) -> tuple[str, str]:
-    start = datetime.combine(day, time.min, tzinfo=timezone.utc)
-    end = datetime.combine(day, time.max, tzinfo=timezone.utc)
+    start = datetime.combine(day, time.min, tzinfo=UTC)
+    end = datetime.combine(day, time.max, tzinfo=UTC)
     return _iso_z(start), _iso_z(end)
 
 
@@ -287,7 +287,7 @@ def fetch_station_day(
     end_of_day = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
     day_local = end_of_day.astimezone(SITE_TZ).date()
     shift_end_local = datetime.combine(day_local, shift_end_for(day_local), tzinfo=SITE_TZ)
-    eval_end = min(shift_end_local.astimezone(timezone.utc), end_of_day)
+    eval_end = min(shift_end_local.astimezone(UTC), end_of_day)
     if now_utc is not None:
         eval_end = min(eval_end, now_utc)
     intervals = _active_intervals(samples, eval_end)
@@ -391,21 +391,23 @@ def cached_leaderboard(
     so only the missing/expired meters of a request are fetched. For 'today'
     the TTL is 30s; for past days it's 1h. Past-day results are also
     persisted to Postgres so they survive Railway redeploys."""
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     is_today = day == today
     cache = _TODAY_CACHE if is_today else _PAST_CACHE
     day_key = day.isoformat()
 
     by_meter: dict[str, StationTotal] = {}
     missing: list[Station] = []
+    missing_meters: set[str] = set()
     for s in stations:
-        if s.meter_id in by_meter or any(m.meter_id == s.meter_id for m in missing):
+        if s.meter_id in by_meter or s.meter_id in missing_meters:
             continue
         hit = cache.peek((s.meter_id, day_key))
         if hit is not None:
             by_meter[s.meter_id] = hit
         else:
             missing.append(s)
+            missing_meters.add(s.meter_id)
 
     if missing:
         fetched: list[StationTotal] | None = None

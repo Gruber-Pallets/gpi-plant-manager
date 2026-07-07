@@ -10,7 +10,7 @@ leaderboards and dashboards via ``production_history.attribute_for_day``'s
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 
 TESTING_PERSON = "Testing"
 """Sentinel person_name for ``source='testing'`` rows. These rows mark a
@@ -147,7 +147,7 @@ def unattributed_for_day(day: date, client) -> list[dict]:
     # Don't pass now_utc for past days; for today use now.
     from .plant_day import today as plant_today
     today = plant_today()
-    now_arg = datetime.now(timezone.utc) if day == today else None
+    now_arg = datetime.now(UTC) if day == today else None
     results = _lb.cached_leaderboard(client, stations, day, now_utc=now_arg)
 
     out: list[dict] = []

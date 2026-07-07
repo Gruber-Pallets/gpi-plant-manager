@@ -7,14 +7,10 @@ the cache so the next current() reflects the new values.
 
 from __future__ import annotations
 
-from threading import RLock
-
+from ._singleton import CachedSingleton
 from .rounding import RoundingSettings
 
 DEFAULT_SETTINGS = RoundingSettings(0, 0, 0, 0)
-
-_lock = RLock()
-_cache: RoundingSettings | None = None
 
 
 def _load_from_db() -> RoundingSettings:
@@ -34,19 +30,17 @@ def _load_from_db() -> RoundingSettings:
     )
 
 
+_store: CachedSingleton[RoundingSettings] = CachedSingleton(_load_from_db)
+
+
 def current() -> RoundingSettings:
     """Return the cached singleton. Loads from DB on first call; subsequent
     calls hit the cache until save() or reload()."""
-    global _cache
-    with _lock:
-        if _cache is None:
-            _cache = _load_from_db()
-        return _cache
+    return _store.current()
 
 
 def save(settings: RoundingSettings) -> None:
     """Persist + update the cache so the next current() returns the new values."""
-    global _cache
     from . import db
     db.execute(
         "INSERT INTO rounding_settings "
@@ -65,13 +59,9 @@ def save(settings: RoundingSettings) -> None:
             settings.out_after_min,
         ),
     )
-    with _lock:
-        _cache = settings
+    _store.set(settings)
 
 
 def reload() -> RoundingSettings:
     """Force a fresh read from Postgres, bypassing the cache."""
-    global _cache
-    with _lock:
-        _cache = _load_from_db()
-        return _cache
+    return _store.reload()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 from . import shift_config
 from .leaderboard import StationTotal

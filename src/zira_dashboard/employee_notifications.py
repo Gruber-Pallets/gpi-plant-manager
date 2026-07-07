@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 from typing import Any
 
 from . import db, shift_config
@@ -40,7 +40,7 @@ def notifications_enabled() -> bool:
 
 
 def _plant_today() -> date:
-    return datetime.now(timezone.utc).astimezone(shift_config.SITE_TZ).date()
+    return datetime.now(UTC).astimezone(shift_config.SITE_TZ).date()
 
 
 def _md(d: date) -> str:

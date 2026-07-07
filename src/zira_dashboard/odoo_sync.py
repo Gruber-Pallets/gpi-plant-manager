@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 from . import odoo_client
 
@@ -140,7 +140,7 @@ def _merge_legacy_skill_name_collision(cur, *, skill_odoo_id: int, skill_name: s
 
 def sync(force: bool = False) -> SyncResult:
     last = _read_last_sync()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if not force and last is not None and (now - last) < TTL:
         return SyncResult(
             ok=True, refreshed=False, employee_count=0,
