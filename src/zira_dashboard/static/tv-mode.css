@@ -91,16 +91,17 @@ html[data-tv-theme] .ui-resizable-e,
 html[data-tv-theme] .ui-resizable-w {
   display: none !important;
 }
-/* When a widget has many bar-rows (e.g. 6 dismantlers), the per-row
-   slice can drop below the screen-mode 0.9rem font floor. Lower the
-   floor to 0.4rem in TV mode so names shrink to fit instead of
-   stacking on top of each other. */
+/* When a widget has many bar-rows (e.g. 6 dismantlers), the per-row slice
+   can get very short. The floor must stay below that slice so names/values
+   shrink to fit instead of stacking on top of each other. 0.5rem is rem-based
+   so it still scales with the TV (≈10px on 1080p → ≈20px on 4K); the 5cqh
+   middle term grows the text on taller widgets. */
 html[data-tv-theme] .grid-stack-item-content .bar-row .name,
 html[data-tv-theme] .grid-stack-item-content .bar-row .val,
 html[data-tv-theme] .grid-stack-item-content .bar-row .name .name-primary,
 html[data-tv-theme] .grid-stack-item-content .bar-row .name .name-secondary {
-  font-size: clamp(0.75rem, 5cqh, 1.5rem);
-  line-height: 1.05;
+  font-size: clamp(0.5rem, 5cqh, 1.5rem);
+  line-height: 1.0;
 }
 html[data-tv-theme] .grid-stack-item-content .bar-row {
   margin-block: 0;
@@ -110,6 +111,33 @@ html[data-tv-theme] .grid-stack-item-content .bar-row {
    (applies to both screen and TV mode now — Dale's request). */
 html[data-tv-theme] .kpi .label { font-size: 0.85rem; }
 html[data-tv-theme] .kpi .val { font-size: 3.4rem; font-weight: 800; }
+
+/* ---- Widget padding/gap must not balloon on TVs ----
+ * The screen-mode content padding/gap are `clamp(..., 3cqh, 1rem)` /
+ * `clamp(..., 2cqh, 0.6rem)`. On a TV two things break them: (1) the rem
+ * ceiling is ~21px at the large TV root font, and (2) `cqh` on the content
+ * box resolves against the VIEWPORT (an element can't query itself), so the
+ * middle term is huge and the clamp always hits its rem ceiling. Result:
+ * ~21px padding + ~13px gap wasted in every widget — fatal in the h2 KPI
+ * cards (they had ~12px left for label+number, so the number was clipped
+ * away). Re-express in viewport-height units: bounded, predictable, and
+ * scaling with the TV (7px/5px on 1080p → 14px/10px on 4K). */
+html[data-tv-theme] .grid-stack-item-content {
+  padding: clamp(4px, 0.7vh, 14px) clamp(6px, 0.9vw, 18px);
+  gap: clamp(2px, 0.5vh, 10px);
+}
+
+/* ---- KPI cards scale to fit any TV ----
+ * Drive the KPI label + value off the container's own height (cqh, which the
+ * CHILDREN resolve against this box correctly) with low rem floors so they
+ * always fit — small on a short 1080p card, large on 4K. cqw stays in the
+ * value's min() so a narrow card can't render a number wider than itself. */
+html[data-tv-theme] .grid-stack-item-content > .label {
+  font-size: clamp(0.5rem, 10cqh, 1.25rem);
+}
+html[data-tv-theme] .grid-stack-item-content > .val {
+  font-size: clamp(0.85rem, min(48cqh, 26cqw), 12rem);
+}
 /* widget-total is intentionally small in TV mode now — it sat hardcoded
    at 1.6rem (~34px on 1080p root) which dominated the widget and forced
    the bar-rows above it to collapse, stacking operator names on top of
