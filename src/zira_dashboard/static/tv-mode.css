@@ -123,17 +123,20 @@ html[data-tv-theme] .kpi .val { font-size: 3.4rem; font-weight: 800; }
  * away). Re-express in viewport-height units: bounded, predictable, and
  * scaling with the TV (7px/5px on 1080p → 14px/10px on 4K). */
 html[data-tv-theme] .grid-stack-item-content {
-  padding: clamp(4px, 0.7vh, 14px) clamp(6px, 0.9vw, 18px);
-  gap: clamp(2px, 0.5vh, 10px);
+  padding: clamp(3px, 0.6vh, 14px) clamp(6px, 0.9vw, 18px);
+  gap: clamp(1px, 0.4vh, 10px);
 }
 
 /* ---- KPI cards scale to fit any TV ----
  * Drive the KPI label + value off the container's own height (cqh, which the
  * CHILDREN resolve against this box correctly) with low rem floors so they
  * always fit — small on a short 1080p card, large on 4K. cqw stays in the
- * value's min() so a narrow card can't render a number wider than itself. */
+ * value's min() so a narrow card can't render a number wider than itself.
+ * line-height:1.05 keeps the label from claiming the body's 1.4 leading,
+ * which was enough to clip the number on a very short card (e.g. 720p). */
 html[data-tv-theme] .grid-stack-item-content > .label {
   font-size: clamp(0.5rem, 10cqh, 1.25rem);
+  line-height: 1.05;
 }
 html[data-tv-theme] .grid-stack-item-content > .val {
   font-size: clamp(0.85rem, min(48cqh, 26cqw), 12rem);
