@@ -59,9 +59,11 @@
   <div class="queue" data-queue>
     {% for row in queue %}
       {% set action = row.get('action') %}
+      {% set dismiss_action = row.get('dismiss_action') %}
+      {% set row_action_type = action.type if action else ('breakdown_header' if dismiss_action else '') %}
       <div class="exception-row priority-{{ row.get('priority', 'normal') }}"
            data-section-id="{{ row.section_id }}"
-           data-action-type="{{ action.type if action else '' }}"
+           data-action-type="{{ row_action_type }}"
            data-priority="{{ row.get('priority', 'normal') }}"
            data-row-key="{{ row.get('row_key', '') }}"
            data-item-key="{{ row.get('item_key', '') }}"
@@ -77,6 +79,11 @@
              data-attendance-id="{{ action.attendance_id or '' }}"
            {% elif action and action.type == 'time_off' %}
              data-request-id="{{ action.request_id or '' }}"
+           {% elif action and action.type == 'breakdown' %}
+             data-incident-id="{{ action.incident_id }}"
+             data-wc-name="{{ action.wc_name }}"
+           {% elif dismiss_action and dismiss_action.type == 'breakdown_dismiss' %}
+             data-incident-id="{{ dismiss_action.incident_id }}"
            {% endif %}
       >
         <div class="exception-main">
@@ -136,6 +143,17 @@
             <button type="button" class="row-btn primary js-time-off-approve">Approve</button>
             <input type="text" class="inline-input js-time-off-reason" aria-label="Reason to deny time off" placeholder="Reason to deny" hidden>
             <button type="button" class="row-btn danger js-time-off-refuse">Deny</button>
+          {% elif action and action.type == 'breakdown' %}
+            <select class="inline-select js-wc" aria-label="Work center to transfer to">
+              <option value="">Transfer to...</option>
+              {% for wc in work_centers %}
+                <option value="{{ wc }}">{{ wc }}</option>
+              {% endfor %}
+            </select>
+            <button type="button" class="row-btn primary js-breakdown-transfer">Transfer</button>
+            <button type="button" class="row-btn js-breakdown-snooze">Snooze 15m</button>
+          {% elif dismiss_action and dismiss_action.type == 'breakdown_dismiss' %}
+            <button type="button" class="row-btn js-breakdown-dismiss">Not a breakdown</button>
           {% elif row.get('href') %}
             <a class="row-btn" href="{{ row.href }}">Open</a>
           {% endif %}
