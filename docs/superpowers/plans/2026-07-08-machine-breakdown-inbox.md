@@ -1972,17 +1972,6 @@ def _punch_windows_for_day(day: date) -> dict:
     return timeclock_windows.attendance_windows_for_day(day)
 
 
-def _station_for_wc(wc_name: str):
-    """The stations.Station whose name (via the LOCATIONS meter_id mapping,
-    same as wc_attributions.unattributed_for_day) matches wc_name."""
-    from . import staffing
-    from .stations import STATIONS
-    meter = next((loc.meter_id for loc in staffing.LOCATIONS if loc.name == wc_name), None)
-    if not meter:
-        return None
-    return next((s for s in STATIONS if s.meter_id == meter), None)
-
-
 def _station_signals(day: date, now: datetime) -> list[StationSignal]:
     """One StationSignal per metered recycling station with an operator
     currently on it."""
