@@ -2015,7 +2015,12 @@ def _station_signals(day: date, now: datetime) -> list[StationSignal]:
     out: list[StationSignal] = []
     for total in totals:
         wc_name = meter_to_loc_name.get(total.station.meter_id, total.station.name)
-        last_output = total.active_intervals[-1][1] if total.active_intervals else None
+        # samples[-1][0] is the timestamp of the last REAL unit produced.
+        # active_intervals[-1][1] is NOT that -- leaderboard._active_intervals
+        # pads the tail to min(last_real_unit + TRANSFER_GAP(60min), now), so
+        # using it here would silently inflate detection latency from the
+        # spec's 15 minutes to ~75 minutes (60min padding + 15min threshold).
+        last_output = total.samples[-1][0] if total.samples else None
         has_operator = bool(_operators_on_wc(wc_name, day))
         out.append(StationSignal(wc_name=wc_name, last_output_utc=last_output, has_operator=has_operator))
     return out
