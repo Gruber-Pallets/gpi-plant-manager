@@ -2642,13 +2642,17 @@ Follows the existing `_approve_time_off_sync`/`approve_time_off_request` pattern
 
 ```python
 """POST /api/exceptions/breakdown/{transfer,snooze,dismiss,report}."""
+from datetime import datetime, timezone
+
 from zira_dashboard.routes import exceptions as exceptions_route
+
+_STOP = datetime(2026, 7, 8, 18, 2, tzinfo=timezone.utc)
 
 
 def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
     from zira_dashboard import machine_breakdown, wc_attributions, staffing_transfer, inbox_log
     monkeypatch.setattr(machine_breakdown, "get_incident", lambda iid: {
-        "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08",
+        "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08", "detected_stop_utc": _STOP,
     })
     monkeypatch.setattr(wc_attributions, "open_breakdown_row",
                         lambda day, wc, person: {"id": 10})
@@ -2696,7 +2700,7 @@ def test_snooze_sync_calls_snooze_operator(monkeypatch):
 def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
     from zira_dashboard import machine_breakdown, wc_attributions, inbox_log
     monkeypatch.setattr(machine_breakdown, "get_incident", lambda iid: {
-        "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08",
+        "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08", "detected_stop_utc": _STOP,
     })
     snapshot_rows = [{"id": 10, "day": "2026-07-08", "wc_name": "Dismantler 2",
                       "person_name": "Juan", "start_utc": "2026-07-08T18:02:00+00:00",
