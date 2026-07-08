@@ -30,6 +30,7 @@ _SECTION_KIND = {
     "missing_wc": "missing_wc",
     "missed_punch_out": "missed_punch_out",
     "time_off": "time_off",
+    "breakdown": "breakdown",
 }
 
 # item_kind -> the build_snapshot source label (matches _capture(...) names),
@@ -41,6 +42,7 @@ _KIND_SOURCE = {
     "missing_wc": "Missing Work Center",
     "missed_punch_out": "Missed Punch Out",
     "time_off": "Pending Time Off",
+    "breakdown": "Machine Breakdown",
 }
 
 

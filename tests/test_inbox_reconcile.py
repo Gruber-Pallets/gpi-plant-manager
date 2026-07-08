@@ -186,3 +186,29 @@ def test_reconcile_tick_is_registered():
     assert "Inbox reconcile" in names
     entry = next(w for w in app._WARMERS if w[0] == "Inbox reconcile")
     assert entry[2] == 60  # seconds
+
+
+def test_run_once_auto_resolves_departed_breakdown_row(monkeypatch):
+    from zira_dashboard import exception_inbox, inbox_log
+
+    def _snap():
+        return {"queue": [], "source_errors": [],
+                "sections": [{"id": "breakdown", "count": 0, "rows": []}]}
+
+    monkeypatch.setattr(exception_inbox, "build_snapshot", _snap)
+    monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {
+        "breakdown:Dismantler 2:x": _mirror_row(
+            item_key="breakdown:Dismantler 2:x", item_kind="breakdown",
+            category_label="Machine Breakdown"),
+    })
+    deleted, logged = [], []
+    monkeypatch.setattr(inbox_reconcile, "_upsert", lambda k, i: None)
+    monkeypatch.setattr(inbox_reconcile, "_delete", lambda k: deleted.append(k))
+    monkeypatch.setattr(inbox_log, "has_human_event_since", lambda k, s: False)
+    monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 1)
+
+    inbox_reconcile.run_once()
+
+    assert deleted == ["breakdown:Dismantler 2:x"]
+    assert logged[0]["item_kind"] == "breakdown"
+    assert logged[0]["action"] == "auto_resolved"
