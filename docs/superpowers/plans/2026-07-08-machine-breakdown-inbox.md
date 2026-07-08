@@ -2338,7 +2338,7 @@ git commit -m "feat(breakdown): register the 45s machine-breakdown detection war
 ## Task 11: `inbox_keys.breakdown` + snapshot section
 
 **Files:**
-- Modify: `src/zira_dashboard/inbox_keys.py`
+- Modify: `src/zira_dashboard/inbox_keys.py` (already done in Task 9 — this task just adds its regression test, see Step 1)
 - Modify: `src/zira_dashboard/exception_inbox.py`
 - Test: `tests/test_inbox_keys_breakdown.py`
 - Test: `tests/test_exception_inbox_breakdown.py`
