@@ -184,7 +184,7 @@
       </div>
     {% endfor %}
 
-    <div class="grid-stack-item" {{ widget_attrs('dismantler-bars', 0, 2, 6, 6) }}>
+    <div class="grid-stack-item" {{ widget_attrs('dismantler-bars', 0, 2, 6, 8) }}>
       <div class="grid-stack-item-content">
         {% if not tv_mode %}{{ edit_controls('dismantler-bars', 'Pallets by Work Center — Dismantlers', 'bars') }}{% endif %}
         <h3>{{ widget_title('dismantler-bars', 'Pallets by Work Center — Dismantlers') }}</h3>
@@ -194,7 +194,7 @@
       </div>
     </div>
 
-    <div class="grid-stack-item" {{ widget_attrs('repair-bars', 6, 2, 6, 6) }}>
+    <div class="grid-stack-item" {{ widget_attrs('repair-bars', 6, 2, 6, 8) }}>
       <div class="grid-stack-item-content">
         {% if not tv_mode %}{{ edit_controls('repair-bars', 'Pallets by Work Center — Repairs', 'bars') }}{% endif %}
         <h3>{{ widget_title('repair-bars', 'Pallets by Work Center — Repairs') }}</h3>
@@ -245,7 +245,7 @@
 
   {% from "_cumulative_progress_chart.html" import cumulative_progress_chart %}
 
-    <div class="grid-stack-item" {{ widget_attrs('dismantler-progress', 0, 8, 12, 5) }}>
+    <div class="grid-stack-item" {{ widget_attrs('dismantler-progress', 0, 10, 12, 4) }}>
       <div class="grid-stack-item-content" {% set pc = customs.get('dismantler-progress', {}).get('color') %}{% if pc %}style="--hit: {{ pc }}"{% endif %}>
         {% if not tv_mode %}{{ edit_controls('dismantler-progress', 'All Dismantlers — 15-minute progress', 'progress') }}{% endif %}
         <span class="people-count" title="{% if is_range %}Total person-days in this group across the range{% else %}People scheduled in this group{% endif %}">{{ dismantler_people }}{% if is_range %} pd{% endif %}</span>
@@ -263,7 +263,7 @@
       </div>
     </div>
 
-    <div class="grid-stack-item" {{ widget_attrs('repair-progress', 0, 13, 12, 5) }}>
+    <div class="grid-stack-item" {{ widget_attrs('repair-progress', 0, 14, 12, 4) }}>
       <div class="grid-stack-item-content" {% set pc = customs.get('repair-progress', {}).get('color') %}{% if pc %}style="--hit: {{ pc }}"{% endif %}>
         {% if not tv_mode %}{{ edit_controls('repair-progress', 'All Repairs — 15-minute progress', 'progress') }}{% endif %}
         <span class="people-count" title="{% if is_range %}Total person-days in this group across the range{% else %}People scheduled in this group{% endif %}">{{ repair_people }}{% if is_range %} pd{% endif %}</span>

@@ -166,27 +166,15 @@
   }
   /* Name column doesn't overflow / wrap into the bar at small widget sizes. */
   .grid-stack-item-content .bar-row .name { min-width: 0; overflow: hidden; }
+  /* Employee (primary) always stacks OVER the work center (secondary) — each
+     line ellipsizes independently so a long name never pushes the WC off.
+     line-height:1.05 keeps the two lines tight enough to fit a many-row
+     widget on a TV without colliding. */
   .grid-stack-item-content .bar-row .name .name-primary,
   .grid-stack-item-content .bar-row .name .name-secondary {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     display: block;
-  }
-  /* When a bars widget is too short to stack the operator (primary) over the
-     work-center (secondary) without the two lines colliding — e.g. 6
-     dismantlers in an h4 widget on a 1080p TV — lay the name out on a single
-     line (operator, then the muted WC, which ellipsizes first) so every row
-     stays legible. Gated by widget height, so tall widgets (the editor, big
-     TVs) keep the roomier two-line stack. `widget` is the container declared
-     on .grid-stack-item-content (container-type: size). */
-  @container widget (max-height: 260px) {
-    .grid-stack-item-content .bar-row .name {
-      flex-direction: row;
-      align-items: baseline;
-      gap: 0.3em;
-      overflow: hidden;
-    }
-    .grid-stack-item-content .bar-row .name .name-primary { flex: 0 0 auto; max-width: 60%; }
-    .grid-stack-item-content .bar-row .name .name-secondary { flex: 0 1 auto; min-width: 0; }
+    line-height: 1.05;
   }
   .grid-stack-item-content .bar-row .val .pct,
   .grid-stack-item-content .vbar-val .pct {

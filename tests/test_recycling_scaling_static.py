@@ -43,7 +43,8 @@ def test_wc_kpi_value_has_low_font_floor():
 
 
 def test_recycling_bar_widgets_default_taller():
-    # The two "Pallets by Work Center" bar widgets need >4 rows so 6 operators
-    # fit legibly on a TV; default height was bumped to 6.
-    assert "widget_attrs('dismantler-bars', 0, 2, 6, 6)" in RECYCLING_HTML
-    assert "widget_attrs('repair-bars', 6, 2, 6, 6)" in RECYCLING_HTML
+    # The two "Pallets by Work Center" bar widgets need enough rows that 6
+    # operators fit as legible two-line (name over work-center) entries on a
+    # TV without colliding; default height was bumped to 8.
+    assert "widget_attrs('dismantler-bars', 0, 2, 6, 8)" in RECYCLING_HTML
+    assert "widget_attrs('repair-bars', 6, 2, 6, 8)" in RECYCLING_HTML
