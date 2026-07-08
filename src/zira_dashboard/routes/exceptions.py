@@ -716,3 +716,155 @@ def _undo_sync(
 async def undo_inbox_event(event_id: int, request: Request):
     actor_upn, actor_name = _actor_from(request)
     return await asyncio.to_thread(_undo_sync, event_id, actor_upn, actor_name)
+
+
+def _breakdown_transfer_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
+    """Blocking half of /api/exceptions/breakdown/transfer: caps the
+    operator's breakdown exclusion at transfer time (precise, doesn't wait
+    for the next detection tick), then runs the normal transfer chokepoint."""
+    from .. import inbox_keys, inbox_log, machine_breakdown, staffing_transfer, wc_attributions
+
+    incident_id = body.get("incident_id")
+    person_name = str(body.get("person_name") or "").strip()
+    to_wc = str(body.get("to_wc") or "").strip()
+    if not incident_id or not person_name or not to_wc:
+        return _json_error("incident_id, person_name, and to_wc are required", 400)
+
+    incident = machine_breakdown.get_incident(incident_id)
+    if incident is None:
+        return _json_error("incident not found", 404)
+
+    now = plant_day.now()
+    row = wc_attributions.open_breakdown_row(incident["day"], incident["wc_name"], person_name)
+    if row is not None:
+        wc_attributions.cap_breakdown(row["id"], now)
+
+    result = staffing_transfer.decide_and_apply(person_name, to_wc, now)
+
+    eid = inbox_log.log_event_safe(
+        item_kind="breakdown",
+        item_key=inbox_keys.breakdown(incident["wc_name"], incident["detected_stop_utc"].isoformat(), person_name),
+        person_name=person_name,
+        category_label="Machine Breakdown",
+        action="transfer",
+        outcome=f"Transferred to {to_wc}",
+        after_value=to_wc,
+        actor_upn=actor_upn,
+        actor_name=actor_name,
+        source="inbox",
+        reversible=True,
+        detail={
+            "closed_id": result.get("closed_id"),
+            "new_id": result.get("new_id"),
+            "attribution_id": row["id"] if row is not None else None,
+        },
+    )
+    return JSONResponse({"ok": True, "event_id": eid, "transfer": result.get("transfer")})
+
+
+@router.post("/api/exceptions/breakdown/transfer")
+async def breakdown_transfer(request: Request):
+    """Transfer an operator off a broken machine.
+
+    Body (JSON): {incident_id, person_name, to_wc}
+    """
+    from .. import inbox_log
+    body = await request.json()
+    actor_upn, actor_name = inbox_log.actor_from(request)
+    return await asyncio.to_thread(_breakdown_transfer_sync, body, actor_upn, actor_name)
+
+
+def _breakdown_snooze_sync(body: dict) -> JSONResponse:
+    """Blocking half of /api/exceptions/breakdown/snooze."""
+    from .. import machine_breakdown
+
+    incident_id = body.get("incident_id")
+    person_name = str(body.get("person_name") or "").strip()
+    if not incident_id or not person_name:
+        return _json_error("incident_id and person_name are required", 400)
+    machine_breakdown.snooze_operator(incident_id, person_name)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/api/exceptions/breakdown/snooze")
+async def breakdown_snooze(request: Request):
+    """Silence one operator's row on a breakdown card for 15 minutes.
+
+    Body (JSON): {incident_id, person_name}
+    """
+    body = await request.json()
+    return await asyncio.to_thread(_breakdown_snooze_sync, body)
+
+
+def _breakdown_dismiss_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
+    """Blocking half of /api/exceptions/breakdown/dismiss ("Not a
+    breakdown"): snapshots the incident's exclusion rows into the undo
+    detail BEFORE deleting them, then resolves the incident."""
+    from .. import inbox_keys, inbox_log, machine_breakdown, wc_attributions
+
+    incident_id = body.get("incident_id")
+    if not incident_id:
+        return _json_error("incident_id is required", 400)
+    incident = machine_breakdown.get_incident(incident_id)
+    if incident is None:
+        return _json_error("incident not found", 404)
+
+    # for_day()'s SELECT does not include `day` (it's the WHERE filter, not a
+    # returned column) -- stamp it back on before storing, since undo needs
+    # the full row shape to re-insert via wc_attributions.add().
+    snapshot_rows = [
+        {**r, "day": incident["day"]}
+        for r in wc_attributions.for_day(incident["day"])
+        if r.get("wc_name") == incident["wc_name"] and r.get("source") == wc_attributions.BREAKDOWN_SOURCE
+    ]
+    wc_attributions.delete_breakdown_rows_for_incident(incident_id)
+    machine_breakdown.resolve_incident(incident_id, "dismissed")
+
+    eid = inbox_log.log_event_safe(
+        item_kind="breakdown",
+        item_key=inbox_keys.breakdown(incident["wc_name"], incident["detected_stop_utc"].isoformat()),
+        person_name=None,
+        category_label="Machine Breakdown",
+        action="dismiss",
+        outcome="Not a breakdown",
+        actor_upn=actor_upn,
+        actor_name=actor_name,
+        source="inbox",
+        reversible=True,
+        detail={"rows": snapshot_rows, "incident_id": incident_id},
+    )
+    return JSONResponse({"ok": True, "event_id": eid})
+
+
+@router.post("/api/exceptions/breakdown/dismiss")
+async def breakdown_dismiss(request: Request):
+    """"Not a breakdown": resolve the incident and delete its exclusion rows.
+
+    Body (JSON): {incident_id}
+    """
+    from .. import inbox_log
+    body = await request.json()
+    actor_upn, actor_name = inbox_log.actor_from(request)
+    return await asyncio.to_thread(_breakdown_dismiss_sync, body, actor_upn, actor_name)
+
+
+def _breakdown_report_sync(body: dict) -> JSONResponse:
+    """Blocking half of /api/exceptions/breakdown/report (the manual
+    "+ Report a breakdown" button)."""
+    from .. import machine_breakdown, staffing
+
+    wc_name = str(body.get("wc_name") or "").strip()
+    if wc_name not in {loc.name for loc in staffing.LOCATIONS}:
+        return _json_error("unknown work center", 400)
+    result = machine_breakdown.report_manual(wc_name)
+    return JSONResponse(result)
+
+
+@router.post("/api/exceptions/breakdown/report")
+async def breakdown_report(request: Request):
+    """Manually report a machine as broken down.
+
+    Body (JSON): {wc_name}
+    """
+    body = await request.json()
+    return await asyncio.to_thread(_breakdown_report_sync, body)
