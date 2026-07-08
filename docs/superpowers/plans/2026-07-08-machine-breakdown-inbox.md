@@ -747,14 +747,19 @@ from zira_dashboard import production_history
 def test_excluded_minutes_by_person_wc_sums_closed_and_caps_open(monkeypatch):
     from zira_dashboard import wc_attributions
     day = date(2026, 7, 8)
+    # Times are picked to fall strictly before the plant's default 9:00-9:15
+    # America/Chicago "Morning break" (13:00/13:30 UTC = 8:00/8:30 CDT;
+    # 12:30/12:50 UTC = 7:30/7:50 CDT) so `productive_minutes_in_window`'s
+    # real break-subtraction logic doesn't eat into either window -- this
+    # test is about the closed/open-window handling, not break math.
     s = datetime(2026, 7, 8, 13, 0, tzinfo=timezone.utc)
     e = datetime(2026, 7, 8, 13, 30, tzinfo=timezone.utc)
-    open_s = datetime(2026, 7, 8, 14, 0, tzinfo=timezone.utc)
+    open_s = datetime(2026, 7, 8, 12, 30, tzinfo=timezone.utc)
     monkeypatch.setattr(
         wc_attributions, "breakdown_windows_for_day",
         lambda d: {("Juan", "Dismantler 2"): [(s, e)], ("Benjamin", "Dismantler 2"): [(open_s, None)]},
     )
-    now = datetime(2026, 7, 8, 14, 20, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 8, 12, 50, tzinfo=timezone.utc)
     out = production_history._excluded_minutes_by_person_wc(day, now)
     assert out["Juan"]["Dismantler 2"] == 30.0
     assert out["Benjamin"]["Dismantler 2"] == 20.0  # open window capped at `now`
@@ -783,7 +788,7 @@ def _effective_now(day: date, now: datetime) -> datetime:
     """`now`, clamped to `day`'s shift end. Used to cap an OPEN breakdown
     exclusion window for a past day (or a today read taken after hours) so
     excluded-minutes math never runs past the shift that actually happened."""
-    from datetime import UTC
+    from datetime import datetime, UTC
     from .shift_config import shift_end_for, SITE_TZ
     shift_end_utc = datetime.combine(day, shift_end_for(day), tzinfo=SITE_TZ).astimezone(UTC)
     return min(now, shift_end_utc)
