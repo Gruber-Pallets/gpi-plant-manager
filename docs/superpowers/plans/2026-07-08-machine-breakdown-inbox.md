@@ -1735,6 +1735,7 @@ git commit -m "feat(breakdown): incident store CRUD and per-operator snooze"
 
 **Files:**
 - Modify: `src/zira_dashboard/machine_breakdown.py`
+- Modify: `src/zira_dashboard/inbox_keys.py` (a forward dependency pulled in from Task 11 — see Step 2b)
 - Test: `tests/test_machine_breakdown_rows.py`
 
 This is the I/O glue: pulls Zira station data + live operator resolution, calls the pure `detect()`/`departed_at()`, opens/caps/resolves incidents, and shapes the snapshot rows the inbox will render.
@@ -1763,8 +1764,15 @@ def test_run_detect_tick_opens_new_incident(monkeypatch):
     ))
     monkeypatch.setattr(machine_breakdown, "get_open_incident", lambda wc, day: None)
     opened = {}
-    monkeypatch.setattr(machine_breakdown, "open_incident",
-                        lambda wc, day, stop_utc, source: opened.setdefault("args", (wc, day, stop_utc, source)) or 1)
+
+    def _open_incident(wc, day, stop_utc, source):
+        # NB: `opened.setdefault(...) or 1` looks tempting here but always
+        # returns the (truthy) tuple, never 1 -- setdefault returns the
+        # stored value, not a success flag.
+        opened["args"] = (wc, day, stop_utc, source)
+        return 1
+
+    monkeypatch.setattr(machine_breakdown, "open_incident", _open_incident)
     monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: ["Juan"])
     from zira_dashboard import wc_attributions
     added = []
@@ -1863,7 +1871,10 @@ def test_current_rows_shapes_header_and_operator_rows(monkeypatch):
 
     rows = machine_breakdown.current_rows(day=date(2026, 7, 8), now=_now())
 
-    header = [r for r in rows if r["action"] is None]
+    # The header (machine) row is the only row carrying a dismiss_action --
+    # both it and a snoozed operator row have action=None, so that alone
+    # can't distinguish them.
+    header = [r for r in rows if r.get("dismiss_action") is not None]
     assert len(header) == 1
     assert header[0]["name"] == "Dismantler 2"
     assert header[0]["priority"] == "urgent"
@@ -1881,8 +1892,12 @@ def test_report_manual_opens_incident_with_operators(monkeypatch):
     monkeypatch.setattr(machine_breakdown, "get_open_incident", lambda wc, day: None)
     monkeypatch.setattr(machine_breakdown, "_last_output_before", lambda wc, day, now: None)
     opened = {}
-    monkeypatch.setattr(machine_breakdown, "open_incident",
-                        lambda wc, day, stop_utc, source: opened.setdefault("args", (wc, day, stop_utc, source)) or 1)
+
+    def fake_open_incident(wc, day, stop_utc, source):
+        opened["args"] = (wc, day, stop_utc, source)
+        return 1
+
+    monkeypatch.setattr(machine_breakdown, "open_incident", fake_open_incident)
     monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: ["Juan"])
     from zira_dashboard import wc_attributions
     monkeypatch.setattr(wc_attributions, "add_breakdown", lambda day, wc, person, start, breakdown_id: 5)
@@ -1931,6 +1946,22 @@ def test_report_manual_noop_when_already_open(monkeypatch):
 Run: `ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_machine_breakdown_rows.py -v`
 Expected: FAIL — `AttributeError: module 'zira_dashboard.machine_breakdown' has no attribute '_station_signals'`
 
+- [ ] **Step 2b: Add `inbox_keys.breakdown` — a forward dependency from Task 11**
+
+`current_rows()` (added in Step 5 below) calls `inbox_keys.breakdown(...)`, but that function was originally scheduled for Task 11, which comes AFTER this task. Add it now so this task is actually testable; Task 11 will find it already present and skip re-adding it (see the note in Task 11's own Step 3).
+
+Add to `src/zira_dashboard/inbox_keys.py`:
+
+```python
+def breakdown(wc_name, stop_iso, person_name=None) -> str:
+    """The incident's own key when person_name is None (the card header /
+    dismiss target); a distinct per-operator key otherwise (the Transfer /
+    snooze / auto-resolve target for one operator's row)."""
+    if person_name:
+        return f"breakdown:{wc_name}:{stop_iso}:{person_name}"
+    return f"breakdown:{wc_name}:{stop_iso}"
+```
+
 - [ ] **Step 3: Add the I/O collaborator functions**
 
 Add to `src/zira_dashboard/machine_breakdown.py`:
@@ -1978,8 +2009,7 @@ def _station_signals(day: date, now: datetime) -> list[StationSignal]:
     from . import staffing
     from .leaderboard import cached_leaderboard
     from .stations import recycling_stations
-    from .zira_client import ZiraClient  # local import: avoid a hard dep at module load
-    client = ZiraClient()
+    from .deps import client  # local import: avoid a hard dep at module load
     totals = cached_leaderboard(client, recycling_stations(), day, now_utc=now)
     meter_to_loc_name = {loc.meter_id: loc.name for loc in staffing.LOCATIONS if loc.meter_id}
     out: list[StationSignal] = []
@@ -2025,7 +2055,15 @@ def run_detect_tick(day: date | None = None, now: datetime | None = None) -> Non
     now = now or datetime.now(UTC)
     shift_start, shift_end = _shift_bounds(day)
 
-    for incident in all_open_incidents(day):
+    try:
+        open_incidents = all_open_incidents(day)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "machine breakdown: failed to load open incidents", exc_info=True)
+        open_incidents = []
+
+    for incident in open_incidents:
         try:
             _cap_departed_operators(incident, day, now)
             _maybe_auto_resolve(incident, day, now)
@@ -2186,7 +2224,7 @@ def report_manual(wc_name: str, day: date | None = None, now: datetime | None = 
 - [ ] **Step 6: Run test to verify it passes**
 
 Run: `ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_machine_breakdown_rows.py -v`
-Expected: 10 passed
+Expected: 9 passed
 
 - [ ] **Step 7: Run the full suite**
 
@@ -2300,7 +2338,9 @@ git commit -m "feat(breakdown): register the 45s machine-breakdown detection war
 - Test: `tests/test_inbox_keys_breakdown.py`
 - Test: `tests/test_exception_inbox_breakdown.py`
 
-- [ ] **Step 1: Write the failing test for the key builder**
+- [ ] **Step 1: Write the test for the key builder — should already pass**
+
+`inbox_keys.breakdown` was already implemented in Task 9 (Step 2b of that task), since `machine_breakdown.current_rows()` needed it as a forward dependency. Confirm it's there before writing this test: `grep -n "^def breakdown" src/zira_dashboard/inbox_keys.py` should find it. This step is now a regression-lock test, not new-feature TDD — write it anyway for permanent coverage, but don't expect it to fail first.
 
 ```python
 from zira_dashboard import inbox_keys
@@ -2316,24 +2356,12 @@ def test_breakdown_key_with_person():
         "breakdown:Dismantler 2:2026-07-08T18:02:00+00:00:Juan"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run test to verify it passes immediately**
 
 Run: `ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_inbox_keys_breakdown.py -v`
-Expected: FAIL — `AttributeError: module 'zira_dashboard.inbox_keys' has no attribute 'breakdown'`
+Expected: 2 passed right away (the function already exists from Task 9). If instead you see `AttributeError: module 'zira_dashboard.inbox_keys' has no attribute 'breakdown'`, Task 9 wasn't completed as planned — stop and check Task 9's Step 2b was actually applied before proceeding.
 
-- [ ] **Step 3: Add the key builder**
-
-Add to `src/zira_dashboard/inbox_keys.py`:
-
-```python
-def breakdown(wc_name, stop_iso, person_name=None) -> str:
-    """The incident's own key when person_name is None (the card header /
-    dismiss target); a distinct per-operator key otherwise (the Transfer /
-    snooze / auto-resolve target for one operator's row)."""
-    if person_name:
-        return f"breakdown:{wc_name}:{stop_iso}:{person_name}"
-    return f"breakdown:{wc_name}:{stop_iso}"
-```
+- [ ] **Step 3: (Skip — already done in Task 9)** No implementation step needed here; `inbox_keys.breakdown` already exists byte-for-byte as specified. Continue to Step 4.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2893,7 +2921,12 @@ def test_get_event_includes_detail(monkeypatch):
     """get_event's SELECT must include `detail` for breakdown undo to work."""
     from zira_dashboard import db, inbox_log
     captured = {}
-    monkeypatch.setattr(db, "query", lambda sql, params: captured.setdefault("sql", sql) or [_ev(id=7)])
+
+    def fake_query(sql, params):
+        captured["sql"] = sql
+        return [_ev(id=7)]
+
+    monkeypatch.setattr(db, "query", fake_query)
     inbox_log.get_event(7)
     assert "detail" in captured["sql"]
 
