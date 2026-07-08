@@ -1134,4 +1134,48 @@ CREATE TABLE IF NOT EXISTS page_views (
 );
 -- Report scans a recent day-window then groups by route.
 CREATE INDEX IF NOT EXISTS page_views_day ON page_views (day);
+
+-- 2026-07-08: machine breakdown incidents (Exception Inbox). One open
+-- incident per (wc_name, day) at a time — a card stays open until it's
+-- resolved (recovered / handled / dismissed) before a new one for the same
+-- machine can open. No FK to keep this denormalized like the rest of the
+-- inbox tables (a resolved incident's row must survive independently).
+CREATE TABLE IF NOT EXISTS machine_breakdowns (
+  id                BIGSERIAL PRIMARY KEY,
+  wc_name           TEXT NOT NULL,
+  day               DATE NOT NULL,
+  detected_stop_utc TIMESTAMPTZ NOT NULL,
+  source            TEXT NOT NULL DEFAULT 'auto',  -- 'auto' | 'manual'
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at       TIMESTAMPTZ,
+  resolution        TEXT,  -- 'recovered' | 'handled' | 'dismissed'; NULL while open
+  resume_utc        TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS machine_breakdowns_open_idx
+  ON machine_breakdowns (wc_name, day) WHERE resolved_at IS NULL;
+
+-- 2026-07-08: per-operator 15-minute deferral on a breakdown card row.
+-- Mirrors late_snoozes.
+CREATE TABLE IF NOT EXISTS breakdown_snoozes (
+  breakdown_id  BIGINT NOT NULL,
+  person_name   TEXT NOT NULL,
+  snooze_until  TIMESTAMPTZ NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (breakdown_id, person_name)
+);
+
+-- 2026-07-08: link wc_time_attributions rows back to the machine_breakdowns
+-- incident that created them, so a dismiss ("Not a breakdown") can delete
+-- exactly this incident's exclusion rows without touching a different,
+-- already-resolved incident on the same machine/day.
+ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS breakdown_id BIGINT;
+CREATE INDEX IF NOT EXISTS wc_time_attributions_breakdown_idx
+  ON wc_time_attributions (breakdown_id) WHERE breakdown_id IS NOT NULL;
+
+-- 2026-07-08: per-record minutes excluded from a person's expected due to a
+-- machine breakdown (source='breakdown' wc_time_attributions windows). Written
+-- by precompute alongside units/downtime/hours; read by the leaderboard
+-- averages and the recycling per-WC expected calc to shrink the expected
+-- denominator without touching units.
+ALTER TABLE production_daily ADD COLUMN IF NOT EXISTS excluded_minutes NUMERIC NOT NULL DEFAULT 0;
 """
