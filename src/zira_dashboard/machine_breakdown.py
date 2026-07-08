@@ -268,7 +268,15 @@ def _station_signals(day: date, now: datetime) -> list[StationSignal]:
     out: list[StationSignal] = []
     for total in totals:
         wc_name = meter_to_loc_name.get(total.station.meter_id, total.station.name)
-        last_output = total.active_intervals[-1][1] if total.active_intervals else None
+        # NB: total.active_intervals[-1][1] is NOT the last real production
+        # timestamp -- leaderboard._active_intervals pads the tail interval
+        # forward by up to TRANSFER_GAP (60 min) so a lunch-adjacent gap
+        # doesn't wrongly split a shift for uptime-display purposes. Using
+        # that padded value here would silently push effective breakdown
+        # detection out to ~75 min of real silence instead of the intended
+        # 15. samples is the actual (event_dt_utc, units) production log --
+        # samples[-1][0] is the true last-unit timestamp.
+        last_output = total.samples[-1][0] if total.samples else None
         has_operator = bool(_operators_on_wc(wc_name, day))
         out.append(StationSignal(wc_name=wc_name, last_output_utc=last_output, has_operator=has_operator))
     return out

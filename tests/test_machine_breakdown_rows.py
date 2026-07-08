@@ -1,12 +1,48 @@
 """Tests for current_rows()/run_detect_tick()/report_manual() -- the I/O glue.
 Heavy monkeypatching of collaborators, following tests/test_inbox_reconcile.py's style."""
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from zira_dashboard import machine_breakdown
 
 
 def _now():
     return datetime(2026, 7, 8, 18, 22, tzinfo=timezone.utc)  # 1:22 PM Central
+
+
+def test_station_signals_uses_last_sample_not_padded_active_interval(monkeypatch):
+    """Regression: leaderboard._active_intervals pads its tail interval end
+    forward by up to TRANSFER_GAP (60 min) so a lunch-adjacent gap doesn't
+    wrongly split a shift for uptime-display purposes. _station_signals must
+    read the real last-production timestamp off `samples`, not the padded
+    `active_intervals` tail -- otherwise a station silent for 40 min still
+    reads as having produced ~20 min ago (since last_unit + 60min > now),
+    and breakdown detection's 15-minute SLA silently balloons to ~75 min."""
+    from zira_dashboard import leaderboard, staffing
+    from zira_dashboard.stations import Station
+
+    real_last_unit = _now() - timedelta(minutes=40)
+    padded_tail_end = real_last_unit + timedelta(minutes=60)  # TRANSFER_GAP padding
+    station = Station(meter_id="42713", name="Dismantler 2", category="Dismantler", cell="Recycling")
+    fake_total = SimpleNamespace(
+        station=station,
+        samples=((real_last_unit, 5),),
+        active_intervals=((real_last_unit - timedelta(hours=1), padded_tail_end),),
+    )
+    monkeypatch.setattr(leaderboard, "cached_leaderboard",
+                        lambda client, stations, day, now_utc=None: [fake_total])
+    monkeypatch.setattr(staffing, "LOCATIONS", [
+        staffing.Location("Dismantler 2", "Dismantler", "Bay 2", "Recycled", "42713"),
+    ])
+    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: [])
+
+    signals = machine_breakdown._station_signals(date(2026, 7, 8), _now())
+
+    assert len(signals) == 1
+    # Must report the real last-sample time, not the padded active_intervals
+    # tail (which would read as if the station had just produced ~20 min ago).
+    assert signals[0].last_output_utc == real_last_unit
+    assert signals[0].last_output_utc != padded_tail_end
 
 
 def test_run_detect_tick_opens_new_incident(monkeypatch):
@@ -147,8 +183,15 @@ def test_report_manual_opens_incident_with_operators(monkeypatch):
     monkeypatch.setattr(machine_breakdown, "get_open_incident", lambda wc, day: None)
     monkeypatch.setattr(machine_breakdown, "_last_output_before", lambda wc, day, now: None)
     opened = {}
-    monkeypatch.setattr(machine_breakdown, "open_incident",
-                        lambda wc, day, stop_utc, source: opened.setdefault("args", (wc, day, stop_utc, source)) or 1)
+
+    def fake_open_incident(wc, day, stop_utc, source):
+        # NB: `opened.setdefault(...) or 1` looks tempting here but always
+        # returns the (truthy) tuple, never 1 -- setdefault returns the
+        # stored value, not a success flag.
+        opened["args"] = (wc, day, stop_utc, source)
+        return 1
+
+    monkeypatch.setattr(machine_breakdown, "open_incident", fake_open_incident)
     monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: ["Juan"])
     from zira_dashboard import wc_attributions
     monkeypatch.setattr(wc_attributions, "add_breakdown", lambda day, wc, person, start, breakdown_id: 5)
