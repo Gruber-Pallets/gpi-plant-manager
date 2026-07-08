@@ -80,10 +80,10 @@
            {% elif action and action.type == 'time_off' %}
              data-request-id="{{ action.request_id or '' }}"
            {% elif action and action.type == 'breakdown' %}
-             data-incident-id="{{ action.incident_id }}"
-             data-wc-name="{{ action.wc_name }}"
+             data-incident-id="{{ action.incident_id or '' }}"
+             data-wc-name="{{ action.wc_name or '' }}"
            {% elif dismiss_action and dismiss_action.type == 'breakdown_dismiss' %}
-             data-incident-id="{{ dismiss_action.incident_id }}"
+             data-incident-id="{{ dismiss_action.incident_id or '' }}"
            {% endif %}
       >
         <div class="exception-main">
