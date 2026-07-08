@@ -262,7 +262,12 @@ def test_breakdown_windows_for_day_groups_by_person_and_wc():
 def test_add_breakdown_and_cap_and_reopen(monkeypatch):
     from zira_dashboard import db
     calls = {}
-    monkeypatch.setattr(db, "query", lambda sql, params: calls.setdefault("insert", (sql, params)) or [{"id": 5}])
+
+    def fake_query(sql, params):
+        calls["insert"] = (sql, params)
+        return [{"id": 5}]
+
+    monkeypatch.setattr(db, "query", fake_query)
     day = date(2026, 7, 8)
     start = datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc)
     row_id = wc_attributions.add_breakdown(day, "Dismantler 2", "Juan", start, breakdown_id=42)
@@ -271,7 +276,10 @@ def test_add_breakdown_and_cap_and_reopen(monkeypatch):
     assert "source" in sql.lower()
     assert params == (day, "Dismantler 2", "Juan", start, None, wc_attributions.BREAKDOWN_SOURCE, 42)
 
-    monkeypatch.setattr(db, "execute", lambda sql, params: calls.setdefault("cap", (sql, params)))
+    def fake_execute(sql, params):
+        calls["cap"] = (sql, params)
+
+    monkeypatch.setattr(db, "execute", fake_execute)
     end = datetime(2026, 7, 8, 13, 30, tzinfo=timezone.utc)
     wc_attributions.cap_breakdown(5, end)
     assert calls["cap"][1] == (end, 5, wc_attributions.BREAKDOWN_SOURCE)
@@ -452,7 +460,7 @@ def delete_breakdown_rows_for_incident(breakdown_id: int) -> None:
 - [ ] **Step 7: Run test to verify it passes**
 
 Run: `ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_wc_attributions_breakdown.py -v`
-Expected: 7 passed
+Expected: 6 passed
 
 - [ ] **Step 8: Run the full suite**
 
