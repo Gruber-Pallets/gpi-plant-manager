@@ -32,7 +32,8 @@ def averages_for_wc(
     """Per-person averages across the records (already filtered to one WC).
 
     `records` is a list of dicts with keys: day, person, wc, units,
-    downtime, hours — same shape as production_history.daily_records().
+    downtime, hours, excluded_minutes -- same shape as
+    production_history.daily_records().
 
     `target_per_hour` is the hourly target for this WC.
 
@@ -60,8 +61,8 @@ def averages_for_wc(
         # with no goal-days at all gets avg_pct=None (renders "—", not "0%").
         pct_per_day: list[float] = []
         for r in recs:
-            prod_hr = productive_minutes_for(r["day"]) / 60.0
-            expected = target_per_hour * prod_hr
+            prod_min = productive_minutes_for(r["day"]) - r.get("excluded_minutes", 0.0)
+            expected = target_per_hour * max(0.0, prod_min) / 60.0
             if expected > 0:
                 pct_per_day.append(r["units"] / expected)
         avg_pct = sum(pct_per_day) / len(pct_per_day) if pct_per_day else None
@@ -115,9 +116,9 @@ def averages_for_group(
         wc_counts: dict[str, int] = {}
         for r in recs:
             wc_counts[r["wc"]] = wc_counts.get(r["wc"], 0) + 1
-            prod_hr = productive_minutes_for(r["day"]) / 60.0
+            prod_min = productive_minutes_for(r["day"]) - r.get("excluded_minutes", 0.0)
             target = target_per_hour_by_wc.get(r["wc"], 0.0)
-            expected = target * prod_hr
+            expected = target * max(0.0, prod_min) / 60.0
             if expected > 0:
                 pct_per_day.append(r["units"] / expected)
         avg_pct = sum(pct_per_day) / len(pct_per_day) if pct_per_day else None

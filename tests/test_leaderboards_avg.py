@@ -180,3 +180,42 @@ def test_group_averages_filters_zero_unit_records():
     rows = averages_for_group(records, target_by_wc, _const_productive, "units")
     assert rows[0]["name_count"] == 1
     assert rows[0]["avg_units"] == 200.0
+
+
+def _rec_excl(d, person, wc, units, excluded_minutes=0.0):
+    return {"day": d, "person": person, "wc": wc, "units": units,
+            "downtime": 0.0, "hours": 7.0, "excluded_minutes": excluded_minutes}
+
+
+def test_averages_for_wc_shrinks_expected_by_excluded_minutes():
+    # Expected without exclusion: 7h * 30/h = 210. With 60 excluded minutes,
+    # productive hours drop to 6h -> expected 180. units 180 -> pct == 1.0.
+    records = [_rec_excl(date(2026, 4, 27), "Alice", "WC1", 180, excluded_minutes=60.0)]
+    rows = averages_for_wc(records, 30.0, _const_productive, "pct")
+    assert abs(rows[0]["avg_pct"] - 1.0) < 1e-9
+
+
+def test_averages_for_wc_zero_exclusion_matches_pre_existing_behavior():
+    """Regression guard: with excluded_minutes == 0 for every record, the
+    result is bit-for-bit identical to before this feature existed."""
+    records = [
+        _rec_excl(date(2026, 4, 27), "Alice", "WC1", 200, excluded_minutes=0.0),
+        _rec_excl(date(2026, 4, 28), "Alice", "WC1", 220, excluded_minutes=0.0),
+    ]
+    rows = averages_for_wc(records, 30.0, _const_productive, "pct")
+    assert rows[0]["avg_units"] == 210.0
+    assert abs(rows[0]["avg_pct"] - (200/210 + 220/210) / 2) < 1e-9
+
+
+def test_averages_for_wc_missing_excluded_minutes_key_defaults_zero():
+    """Records without an excluded_minutes key (e.g. old cached data) behave
+    exactly like excluded_minutes=0 -- .get() with a default, never a KeyError."""
+    records = [_rec(date(2026, 4, 27), "Alice", "WC1", 200)]  # no excluded_minutes key
+    rows = averages_for_wc(records, 30.0, _const_productive, "pct")
+    assert abs(rows[0]["avg_pct"] - 200 / 210) < 1e-9
+
+
+def test_averages_for_group_shrinks_expected_by_excluded_minutes():
+    records = [_rec_excl(date(2026, 4, 27), "Alice", "WC1", 180, excluded_minutes=60.0)]
+    rows = averages_for_group(records, {"WC1": 30.0}, _const_productive, "pct")
+    assert abs(rows[0]["avg_pct"] - 1.0) < 1e-9
