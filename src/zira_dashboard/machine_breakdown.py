@@ -218,3 +218,249 @@ def active_snooze_until(incident_id: int, person_name: str) -> datetime | None:
         (incident_id, person_name),
     )
     return rows[0]["until_utc"] if rows else None
+
+
+def _enabled() -> bool:
+    import os
+    return os.environ.get("MACHINE_BREAKDOWN_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+
+
+def _shift_bounds(day: date) -> tuple[datetime, datetime]:
+    from .shift_config import shift_start_for, shift_end_for, SITE_TZ
+    start = datetime.combine(day, shift_start_for(day), tzinfo=SITE_TZ).astimezone(UTC)
+    end = datetime.combine(day, shift_end_for(day), tzinfo=SITE_TZ).astimezone(UTC)
+    return start, end
+
+
+def _operators_on_wc(wc_name: str, day: date) -> list[str]:
+    """Names of people currently resolved onto wc_name and clocked in, via
+    the same assignment_windows machinery the recycling dashboard uses."""
+    from . import staffing, wc_attributions, assignment_windows, timeclock_windows
+    now = datetime.now(UTC)
+    sched = staffing.load_schedule(day)
+    punch_windows = timeclock_windows.attendance_windows_for_day(day)
+    attributions = wc_attributions.creditable_for_day(day)
+    shift_start, _ = _shift_bounds(day)
+    segments = assignment_windows.resolve_segments(
+        assignments=sched.assignments,
+        attributions=attributions,
+        punch_windows=punch_windows,
+        shift_start_utc=shift_start,
+        cap_utc=now,
+    )
+    return sorted({s.person_name for s in segments if s.wc_name == wc_name})
+
+
+def _punch_windows_for_day(day: date) -> dict:
+    from . import timeclock_windows
+    return timeclock_windows.attendance_windows_for_day(day)
+
+
+def _station_signals(day: date, now: datetime) -> list[StationSignal]:
+    """One StationSignal per metered recycling station with an operator
+    currently on it."""
+    from . import staffing
+    from .leaderboard import cached_leaderboard
+    from .stations import recycling_stations
+    from .deps import client  # local import: avoid a hard dep at module load
+    totals = cached_leaderboard(client, recycling_stations(), day, now_utc=now)
+    meter_to_loc_name = {loc.meter_id: loc.name for loc in staffing.LOCATIONS if loc.meter_id}
+    out: list[StationSignal] = []
+    for total in totals:
+        wc_name = meter_to_loc_name.get(total.station.meter_id, total.station.name)
+        last_output = total.active_intervals[-1][1] if total.active_intervals else None
+        has_operator = bool(_operators_on_wc(wc_name, day))
+        out.append(StationSignal(wc_name=wc_name, last_output_utc=last_output, has_operator=has_operator))
+    return out
+
+
+def _last_output_after(wc_name: str, day: date, stop_utc: datetime) -> datetime | None:
+    """The most recent output time for wc_name strictly after `stop_utc`, or
+    None if it's still silent -- used to detect recovery."""
+    for sig in _station_signals(day, datetime.now(UTC)):
+        if sig.wc_name == wc_name and sig.last_output_utc and sig.last_output_utc > stop_utc:
+            return sig.last_output_utc
+    return None
+
+
+def _last_output_before(wc_name: str, day: date, now: datetime) -> datetime | None:
+    """The station's last output time as of `now` (or None if it hasn't
+    produced today) -- used by the manual report button."""
+    for sig in _station_signals(day, now):
+        if sig.wc_name == wc_name:
+            return sig.last_output_utc
+    return None
+
+
+def run_detect_tick(day: date | None = None, now: datetime | None = None) -> None:
+    """One detection pass: open new incidents, cap operators who've left a
+    broken machine, and auto-resolve incidents whose machine is producing
+    again. Called from the warmer; best-effort per incident so one bad
+    incident never blocks the others."""
+    if not _enabled():
+        return
+    from . import wc_attributions
+    from .plant_day import today as plant_today
+    day = day or plant_today()
+    now = now or datetime.now(UTC)
+    shift_start, shift_end = _shift_bounds(day)
+
+    try:
+        open_incidents = all_open_incidents(day)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "machine breakdown: failed to load open incidents", exc_info=True)
+        open_incidents = []
+
+    for incident in open_incidents:
+        try:
+            _cap_departed_operators(incident, day, now)
+            _maybe_auto_resolve(incident, day, now)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "machine breakdown tick failed for incident %s", incident["id"], exc_info=True)
+
+    candidates = detect(_station_signals(day, now), now, shift_start, shift_end)
+    for candidate in candidates:
+        if get_open_incident(candidate.wc_name, day) is not None:
+            continue
+        try:
+            incident_id = open_incident(candidate.wc_name, day, candidate.stop_utc, source="auto")
+            for person in _operators_on_wc(candidate.wc_name, day):
+                wc_attributions.add_breakdown(day, candidate.wc_name, person, candidate.stop_utc, incident_id)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "machine breakdown open failed for %s", candidate.wc_name, exc_info=True)
+
+
+def _cap_departed_operators(incident: dict, day: date, now: datetime) -> None:
+    """Cap any operator's open breakdown row the moment they leave the
+    broken machine (transfer or self-punch-out) -- detected via their punch
+    windows, not via the Transfer button (which caps immediately itself;
+    this is the passive/punch-out path)."""
+    from . import wc_attributions
+    wc_name = incident["wc_name"]
+    stop = incident["detected_stop_utc"]
+    punch_windows = _punch_windows_for_day(day)
+    for person in _operators_on_wc(wc_name, day) or list(punch_windows.keys()):
+        dep = departed_at(person, wc_name, punch_windows, stop)
+        if dep is None:
+            continue
+        row = wc_attributions.open_breakdown_row(day, wc_name, person)
+        if row is not None:
+            wc_attributions.cap_breakdown(row["id"], dep)
+
+
+def _maybe_auto_resolve(incident: dict, day: date, now: datetime) -> None:
+    """Resolve an incident as 'recovered' once its station has produced
+    output again, capping any operator still open at the resume time."""
+    from . import wc_attributions
+    resume = _last_output_after(incident["wc_name"], day, incident["detected_stop_utc"])
+    if resume is None:
+        return
+    for person in _operators_on_wc(incident["wc_name"], day):
+        row = wc_attributions.open_breakdown_row(day, incident["wc_name"], person)
+        if row is not None:
+            wc_attributions.cap_breakdown(row["id"], resume)
+    resolve_incident(incident["id"], "recovered", resume_utc=resume)
+
+
+def current_rows(day: date | None = None, now: datetime | None = None) -> list[dict]:
+    """Snapshot rows for every open incident today: one header row (machine
+    info + dismiss) followed by one row per operator (Transfer/Snooze, or a
+    muted no-action row while snoozed). Header and operator rows share the
+    same item_kind ("breakdown") but differ by action/absence of action --
+    see inbox_keys.breakdown and routes/exceptions.py's undo wiring."""
+    from . import inbox_keys
+    from .plant_day import today as plant_today
+    day = day or plant_today()
+    now = now or datetime.now(UTC)
+
+    rows: list[dict] = []
+    for incident in all_open_incidents(day):
+        wc_name = incident["wc_name"]
+        stop = incident["detected_stop_utc"]
+        stop_iso = stop.isoformat()
+        elapsed_min = int((now - stop).total_seconds() // 60)
+        rows.append({
+            "name": wc_name,
+            "label": "Stopped producing",
+            "detail": f"No output since {_local_time_label(stop)} ({elapsed_min} min)",
+            "priority": "urgent",
+            "badge": "AUTO-DETECTED" if incident["source"] == "auto" else "MANUAL",
+            "row_key": f"breakdown_header:{wc_name}:{stop_iso}",
+            "item_key": inbox_keys.breakdown(wc_name, stop_iso),
+            "action": None,
+            "dismiss_action": {
+                "type": "breakdown_dismiss",
+                "incident_id": incident["id"],
+            },
+        })
+        for person in _operators_on_wc(wc_name, day):
+            snoozed_until = active_snooze_until(incident["id"], person)
+            item_key = inbox_keys.breakdown(wc_name, stop_iso, person)
+            if snoozed_until is not None:
+                mins_left = max(1, int((snoozed_until - now).total_seconds() // 60))
+                rows.append({
+                    "name": person,
+                    "label": "Snoozed",
+                    "detail": f"Re-checks in {mins_left} min",
+                    "priority": "muted",
+                    "badge": "Follow-up",
+                    "row_key": f"breakdown_snoozed:{wc_name}:{stop_iso}:{person}",
+                    "item_key": item_key,
+                    "action": None,
+                })
+                continue
+            rows.append({
+                "name": person,
+                "label": f"Idle — {wc_name} is down",
+                "detail": "",
+                "priority": "urgent",
+                "badge": "Needs decision",
+                "row_key": f"breakdown_op:{wc_name}:{stop_iso}:{person}",
+                "item_key": item_key,
+                "action": {
+                    "type": "breakdown",
+                    "incident_id": incident["id"],
+                    "person_name": person,
+                    "wc_name": wc_name,
+                },
+            })
+    return rows
+
+
+def _local_time_label(dt: datetime) -> str:
+    import os
+    from .shift_config import SITE_TZ
+    local = dt.astimezone(SITE_TZ)
+    fmt = "%#I:%M %p" if os.name == "nt" else "%-I:%M %p"
+    return local.strftime(fmt)
+
+
+def report_manual(wc_name: str, day: date | None = None, now: datetime | None = None) -> dict:
+    """Open (or find) a breakdown incident for wc_name on demand -- the
+    "+ Report a breakdown" button. Returns {ok, incident_id, already_open?}."""
+    from . import wc_attributions
+    from .plant_day import today as plant_today
+    day = day or plant_today()
+    now = now or datetime.now(UTC)
+
+    existing = get_open_incident(wc_name, day)
+    if existing is not None:
+        return {"ok": True, "incident_id": existing["id"], "already_open": True}
+
+    stop = _last_output_before(wc_name, day, now) or now
+    incident_id = open_incident(wc_name, day, stop, source="manual")
+    operators = _operators_on_wc(wc_name, day)
+    for person in operators:
+        wc_attributions.add_breakdown(day, wc_name, person, stop, incident_id)
+    if not operators:
+        # Nothing to act on -- resolve immediately rather than leaving an
+        # empty, un-actionable card in the queue (mirrors the "informational
+        # only, auto-resolves" edge case in the design spec).
+        resolve_incident(incident_id, "handled")
+    return {"ok": True, "incident_id": incident_id}
