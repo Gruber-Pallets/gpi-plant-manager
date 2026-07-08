@@ -36,6 +36,32 @@ def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
     assert logged[0]["detail"]["attribution_id"] == 10
 
 
+def test_transfer_sync_500_with_friendly_error_when_decide_and_apply_raises(monkeypatch):
+    from zira_dashboard import machine_breakdown, wc_attributions, staffing_transfer, inbox_log
+
+    monkeypatch.setattr(machine_breakdown, "get_incident", lambda iid: {
+        "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08", "detected_stop_utc": _STOP,
+    })
+    monkeypatch.setattr(wc_attributions, "open_breakdown_row",
+                        lambda day, wc, person: {"id": 10})
+    monkeypatch.setattr(wc_attributions, "cap_breakdown", lambda rid, end: None)
+
+    def _raise(person, wc, ts):
+        raise RuntimeError("xmlrpc boom")
+
+    monkeypatch.setattr(staffing_transfer, "decide_and_apply", _raise)
+    logged = []
+    monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 99)
+
+    resp = exceptions_route._breakdown_transfer_sync(
+        {"incident_id": 1, "person_name": "Juan", "to_wc": "Repair 3"},
+        actor_upn="dale@gruberpallets.com", actor_name="Dale",
+    )
+
+    assert resp.status_code == 500
+    assert not logged  # no inbox event logged on a failed transfer
+
+
 def test_transfer_sync_404_when_incident_missing(monkeypatch):
     from zira_dashboard import machine_breakdown
     monkeypatch.setattr(machine_breakdown, "get_incident", lambda iid: None)

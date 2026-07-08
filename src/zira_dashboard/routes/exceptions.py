@@ -739,7 +739,18 @@ def _breakdown_transfer_sync(body: dict, actor_upn=None, actor_name=None) -> JSO
     if row is not None:
         wc_attributions.cap_breakdown(row["id"], now)
 
-    result = staffing_transfer.decide_and_apply(person_name, to_wc, now)
+    # Note: the breakdown-row cap above is not rolled back if decide_and_apply
+    # fails below; a failed transfer leaves the operator's exclusion capped
+    # as-if-departed. Retrying the transfer re-caps harmlessly (cap_breakdown
+    # is idempotent on an already-closed row) but does not reopen the
+    # exclusion -- a manual wc_attributions.reopen_breakdown would be needed
+    # if this matters in practice. Matches this file's existing convention
+    # for Odoo-calling handlers (_approve_time_off_sync, _refuse_time_off_sync):
+    # log and return a friendly error, no rollback.
+    try:
+        result = staffing_transfer.decide_and_apply(person_name, to_wc, now)
+    except Exception as e:
+        return _json_error(_friendly_odoo_error(e), 500)
 
     eid = inbox_log.log_event_safe(
         item_kind="breakdown",
