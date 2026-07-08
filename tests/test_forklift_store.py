@@ -199,3 +199,11 @@ def test_ontime_history_day_count_counts_only_days_with_ontime():
          "utilization_pct": 50, "on_call_ms": 600000, "available_ms": 1200000},
     ])
     assert forklift_store.ontime_history_day_count() == 2
+    # ontime_history_day_count() scans the whole table, so this test needs the
+    # unscoped DELETE above for a clean baseline -> clean up its own rows after,
+    # or they leak into other tests' wide-window queries (e.g.
+    # recent_driver_throughput(days=3650)) on a shared/persistent DB.
+    db.execute(
+        "DELETE FROM forklift_driver_daily WHERE day IN (%s, %s, %s)",
+        (has_ontime, has_late, no_ontime),
+    )
