@@ -24,7 +24,16 @@
         </span>
       </p>
     </div>
-    <a class="refresh-btn" href="/exceptions">Refresh</a>
+    <div class="inbox-title-actions">
+      <select class="inline-select js-report-breakdown-wc" aria-label="Machine to report">
+        <option value="">Report a breakdown...</option>
+        {% for wc in work_centers %}
+          <option value="{{ wc }}">{{ wc }}</option>
+        {% endfor %}
+      </select>
+      <button type="button" class="row-btn js-report-breakdown">+ Report a breakdown</button>
+      <a class="refresh-btn" href="/exceptions">Refresh</a>
+    </div>
   </div>
 
   <div class="freshness-banner" data-refresh-notice hidden>

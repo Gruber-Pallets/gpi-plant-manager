@@ -813,6 +813,30 @@
     }
   });
 
+  // Manual "+ Report a breakdown" control (page header, not a row action).
+  var reportBreakdownBtn = document.querySelector('.js-report-breakdown');
+  if (reportBreakdownBtn) {
+    reportBreakdownBtn.addEventListener('click', function () {
+      var select = document.querySelector('.js-report-breakdown-wc');
+      var wcName = select ? select.value : '';
+      if (!wcName) {
+        if (select) select.focus();
+        return;
+      }
+      reportBreakdownBtn.disabled = true;
+      postJson('/api/exceptions/breakdown/report', {wc_name: wcName})
+        .then(function (resp) {
+          reportBreakdownBtn.disabled = false;
+          if (resp && resp.ok) {
+            window.location.reload();
+          }
+        })
+        .catch(function () {
+          reportBreakdownBtn.disabled = false;
+        });
+    });
+  }
+
   try { currentFocus = sessionStorage.getItem('exceptions_focus') || 'all'; } catch (e) {}
   applyFocus(currentFocus);
   updateQueueEmpty();
