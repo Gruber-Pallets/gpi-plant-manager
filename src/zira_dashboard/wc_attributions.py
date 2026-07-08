@@ -22,19 +22,28 @@ TESTING_SOURCE = "testing"
 Referenced by the write side (routes) and both read-side filters so the string
 can't drift out of sync."""
 
+BREAKDOWN_SOURCE = "breakdown"
+"""``wc_time_attributions.source`` value marking a machine-breakdown exclusion
+window for one operator. Like ``TESTING_SOURCE``, these rows are excluded from
+crediting (``people_by_wc`` / ``creditable_for_day``) -- they exist only to
+carry excluded-minutes math (``breakdown_windows_for_day``), the mirror of how
+testing rows carry no-credit unit offsets."""
+
 
 def add(day: date, wc_name: str, person_name: str,
         start_utc: datetime, end_utc: datetime | None = None,
-        source: str = "manual") -> int:
+        source: str = "manual", breakdown_id: int | None = None) -> int:
     """Insert one attribution row. `end_utc=None` means the assignment is
     OPEN -- it stays running until the person clocks out, transfers, or is
-    reassigned (resolved downstream by assignment_windows). Returns row id."""
+    reassigned (resolved downstream by assignment_windows). `breakdown_id`
+    links a source=BREAKDOWN_SOURCE row back to the machine_breakdowns
+    incident that created it. Returns row id."""
     from . import db
     rows = db.query(
         "INSERT INTO wc_time_attributions "
-        "(day, wc_name, person_name, start_utc, end_utc, source) "
-        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-        (day, wc_name, person_name, start_utc, end_utc, source),
+        "(day, wc_name, person_name, start_utc, end_utc, source, breakdown_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (day, wc_name, person_name, start_utc, end_utc, source, breakdown_id),
     )
     return rows[0]["id"] if rows else 0
 
@@ -66,7 +75,7 @@ def people_by_wc(day: date, rows: list[dict] | None = None) -> dict[str, list[st
             return {}
     out: dict[str, list[str]] = {}
     for r in rows:
-        if r.get("source") == TESTING_SOURCE:
+        if r.get("source") in (TESTING_SOURCE, BREAKDOWN_SOURCE):
             continue
         out.setdefault(r["wc_name"], []).append(r["person_name"])
     return out
@@ -88,17 +97,95 @@ def testing_windows_for_day(day: date, rows: list[dict] | None = None) -> dict[s
     return out
 
 
+def breakdown_windows_for_day(day: date, rows: list[dict] | None = None) -> dict[tuple, list[tuple]]:
+    """``{(person_name, wc_name): [(start_utc, end_utc|None), ...]}`` for
+    ``source=BREAKDOWN_SOURCE`` rows. Swallows DB errors like people_by_wc;
+    same optional ``rows`` param to skip a re-query."""
+    if rows is None:
+        try:
+            rows = for_day(day)
+        except Exception:
+            return {}
+    out: dict[tuple, list[tuple]] = {}
+    for r in rows:
+        if r.get("source") != BREAKDOWN_SOURCE:
+            continue
+        key = (r["person_name"], r["wc_name"])
+        out.setdefault(key, []).append((r["start_utc"], r.get("end_utc")))
+    return out
+
+
 def creditable_for_day(day: date) -> list[dict]:
-    """Attributions for ``day`` EXCLUDING no-credit testing rows (``source ==
-    TESTING_SOURCE``). This is the set that should drive both credited operators
-    and dashboard GOALS -- a testing window credits no one and must not inflate
-    a goal. Mirrors the testing filter in ``people_by_wc``."""
-    return [r for r in for_day(day) if r.get("source") != TESTING_SOURCE]
+    """Attributions for ``day`` EXCLUDING no-credit testing rows and
+    breakdown-exclusion rows (``source in (TESTING_SOURCE, BREAKDOWN_SOURCE)``).
+    This is the set that should drive both credited operators and dashboard
+    GOALS -- neither a testing window nor a breakdown-exclusion window should
+    inflate a goal or appear as a credited operator. Mirrors the testing
+    filter in ``people_by_wc``."""
+    return [r for r in for_day(day)
+            if r.get("source") not in (TESTING_SOURCE, BREAKDOWN_SOURCE)]
 
 
 def delete(attribution_id: int) -> None:
     from . import db
     db.execute("DELETE FROM wc_time_attributions WHERE id = %s", (attribution_id,))
+
+
+def add_breakdown(day: date, wc_name: str, person_name: str,
+                   start_utc: datetime, breakdown_id: int) -> int:
+    """Open a new breakdown exclusion window for one operator. end_utc is
+    left NULL (open) until the operator leaves the machine (see
+    cap_breakdown)."""
+    return add(day, wc_name, person_name, start_utc, end_utc=None,
+               source=BREAKDOWN_SOURCE, breakdown_id=breakdown_id)
+
+
+def cap_breakdown(attribution_id: int, end_utc: datetime) -> None:
+    """Close an open breakdown row at the operator's departure/incident-
+    resolution time. No-op if already closed (idempotent against a
+    detection tick re-processing the same incident)."""
+    from . import db
+    db.execute(
+        "UPDATE wc_time_attributions SET end_utc = %s "
+        "WHERE id = %s AND source = %s",
+        (end_utc, attribution_id, BREAKDOWN_SOURCE),
+    )
+
+
+def reopen_breakdown(attribution_id: int) -> None:
+    """Undo a cap: clear end_utc so the window is open again (breakdown
+    transfer-undo)."""
+    from . import db
+    db.execute(
+        "UPDATE wc_time_attributions SET end_utc = NULL "
+        "WHERE id = %s AND source = %s",
+        (attribution_id, BREAKDOWN_SOURCE),
+    )
+
+
+def open_breakdown_row(day: date, wc_name: str, person_name: str) -> dict | None:
+    """The operator's currently-OPEN breakdown row for (day, wc_name), if
+    any. Returns {id, start_utc} or None. Used by the detection tick to find
+    the row to cap when an operator leaves the machine."""
+    from . import db
+    rows = db.query(
+        "SELECT id, start_utc FROM wc_time_attributions "
+        "WHERE day = %s AND wc_name = %s AND person_name = %s "
+        "AND source = %s AND end_utc IS NULL",
+        (day, wc_name, person_name, BREAKDOWN_SOURCE),
+    )
+    return rows[0] if rows else None
+
+
+def delete_breakdown_rows_for_incident(breakdown_id: int) -> None:
+    """Delete every wc_time_attributions row tied to one breakdown incident
+    -- the "Not a breakdown" dismiss, which restores normal averages by
+    removing the exclusion entirely."""
+    from . import db
+    db.execute(
+        "DELETE FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s",
+        (breakdown_id, BREAKDOWN_SOURCE),
+    )
 
 
 UNATTRIBUTED_MIN_UNITS = 5
