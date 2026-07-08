@@ -26,6 +26,7 @@ def test_solo_operator_gets_full_credit():
                 "downtime": 12.0,
                 "hours": 8.0,
                 "days_worked": 1,
+                "excluded_minutes": 0.0,
             }
         }
     }

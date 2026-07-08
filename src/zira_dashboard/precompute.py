@@ -27,8 +27,9 @@ def flatten_attribution(
     attribution: dict[str, dict[str, dict[str, float]]],
     name_to_emp_id: dict[str, str],
 ) -> list[dict]:
-    """Turn {person: {wc: {units, downtime, hours, days_worked}}} into
-    a flat list of rows ready for UPSERT into production_daily.
+    """Turn {person: {wc: {units, downtime, hours, days_worked,
+    excluded_minutes}}} into a flat list of rows ready for UPSERT into
+    production_daily.
 
     Rows where units == 0 are dropped (the attribution dict can carry
     zero-unit rows for multi-person WCs with no production; they add
@@ -54,6 +55,7 @@ def flatten_attribution(
                 "downtime": float(totals.get("downtime") or 0),
                 "hours": float(totals.get("hours") or 0),
                 "days_worked": float(totals.get("days_worked") or 0),
+                "excluded_minutes": float(totals.get("excluded_minutes") or 0),
             })
     return rows
 
@@ -63,6 +65,10 @@ def upsert_production_daily(rows: Iterable[dict]) -> int:
 
     Idempotent: PK conflict triggers an UPDATE of every non-PK column
     and bumps `computed_at`. Re-running the same day overwrites cleanly.
+
+    `excluded_minutes` is read with a default of 0 (rather than a bare
+    index) so callers that still build rows without the key -- pre-dating
+    the machine-breakdown feature -- keep working unchanged.
     """
     from . import db
     rows = list(rows)
@@ -71,15 +77,16 @@ def upsert_production_daily(rows: Iterable[dict]) -> int:
     sql = """
         INSERT INTO production_daily (
             day, emp_id, name, wc_name,
-            units, downtime, hours, days_worked, computed_at
+            units, downtime, hours, days_worked, excluded_minutes, computed_at
         ) VALUES %s
         ON CONFLICT (day, emp_id, wc_name) DO UPDATE SET
-            name        = EXCLUDED.name,
-            units       = EXCLUDED.units,
-            downtime    = EXCLUDED.downtime,
-            hours       = EXCLUDED.hours,
-            days_worked = EXCLUDED.days_worked,
-            computed_at = now()
+            name             = EXCLUDED.name,
+            units            = EXCLUDED.units,
+            downtime         = EXCLUDED.downtime,
+            hours            = EXCLUDED.hours,
+            days_worked      = EXCLUDED.days_worked,
+            excluded_minutes = EXCLUDED.excluded_minutes,
+            computed_at      = now()
     """
     with db.cursor() as cur:
         # execute_values folds every row into one statement — a single
@@ -87,9 +94,10 @@ def upsert_production_daily(rows: Iterable[dict]) -> int:
         # every 45s from the live warmer).
         db.execute_values(cur, sql, [
             (r["day"], r["emp_id"], r["name"], r["wc_name"],
-             r["units"], r["downtime"], r["hours"], r["days_worked"])
+             r["units"], r["downtime"], r["hours"], r["days_worked"],
+             r.get("excluded_minutes", 0))
             for r in rows
-        ], template="(%s, %s, %s, %s, %s, %s, %s, %s, now())")
+        ], template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, now())")
     return len(rows)
 
 
@@ -163,13 +171,13 @@ def daily_records_in_range(start: date, end: date) -> list[dict]:
     of the existing `production_history.daily_records` so awards/trophy
     code can swap over with no behavior change.
 
-    Each row: {day, person, wc, units, downtime, hours}.
+    Each row: {day, person, wc, units, downtime, hours, excluded_minutes}.
     """
     from . import db
     rows = db.query(
         """
         SELECT day, name AS person, wc_name AS wc,
-               units, downtime, hours
+               units, downtime, hours, excluded_minutes
         FROM production_daily
         WHERE day BETWEEN %s AND %s AND units > 0
           AND NOT EXISTS (
@@ -188,6 +196,7 @@ def daily_records_in_range(start: date, end: date) -> list[dict]:
             "units": float(r["units"]),
             "downtime": float(r["downtime"]),
             "hours": float(r["hours"]),
+            "excluded_minutes": float(r["excluded_minutes"]),
         }
         for r in rows
     ]

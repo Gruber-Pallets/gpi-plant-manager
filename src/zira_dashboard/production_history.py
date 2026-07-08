@@ -21,6 +21,7 @@ def attribute_for_day(
     wc_totals: dict[str, tuple[int, int]],
     elapsed_minutes: int,
     extra_assignments: dict[str, list[str]] | None = None,
+    excluded_minutes: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, dict[str, dict[str, float]]]:
     """Attribute one day's WC output to the operators on each WC.
 
@@ -36,15 +37,20 @@ def attribute_for_day(
             (a WC already present in ``assignments`` with people is left
             alone -- the published schedule wins). Used to flow retro
             attributions into leaderboards and dashboards.
+        excluded_minutes: optional ``{person: {wc_name: minutes}}`` of
+            machine-breakdown-excluded minutes (the mirror of testing's unit
+            offset -- this zeroes EXPECTED minutes, not units). Missing
+            entries default to 0.0.
 
     Returns:
         {person: {wc_name: {"units": float, "downtime": float, "hours": float,
-                            "days_worked": int}}}
+                            "days_worked": int, "excluded_minutes": float}}}
     """
     from .staffing import TIME_OFF_KEY  # local import avoids circular at module load
 
     out: dict[str, dict[str, dict[str, float]]] = {}
     hours = elapsed_minutes / 60.0
+    excluded_minutes = excluded_minutes or {}
 
     # Merge: scheduled wins; extras only fire when a WC has no scheduled people.
     merged: dict[str, list[str]] = {}
@@ -72,6 +78,7 @@ def attribute_for_day(
                 "downtime": per_downtime,
                 "hours": hours,
                 "days_worked": 1,
+                "excluded_minutes": excluded_minutes.get(person, {}).get(wc_name, 0.0),
             }
     return out
 
@@ -167,6 +174,36 @@ def _elapsed_minutes_for(d: date) -> int:
     return shift_elapsed_minutes(d, datetime.now(UTC))
 
 
+def _effective_now(day: date, now: datetime) -> datetime:
+    """`now`, clamped to `day`'s shift end. Used to cap an OPEN breakdown
+    exclusion window for a past day (or a today read taken after hours) so
+    excluded-minutes math never runs past the shift that actually happened."""
+    from datetime import datetime, UTC
+    from .shift_config import shift_end_for, SITE_TZ
+    shift_end_utc = datetime.combine(day, shift_end_for(day), tzinfo=SITE_TZ).astimezone(UTC)
+    return min(now, shift_end_utc)
+
+
+def _excluded_minutes_by_person_wc(day: date, now: datetime) -> dict[str, dict[str, float]]:
+    """{person: {wc_name: minutes}} of machine-breakdown-excluded minutes for
+    `day`. Open breakdown windows are capped at `now` (already clamped to
+    shift end by the caller) so a live in-progress breakdown is reflected
+    immediately, matching the design's "today's live averages are correct
+    during the outage" requirement."""
+    from . import wc_attributions, machine_breakdown
+    from .shift_config import productive_minutes_in_window
+    windows_by_key = wc_attributions.breakdown_windows_for_day(day)
+    out: dict[str, dict[str, float]] = {}
+    for (person, wc), windows in windows_by_key.items():
+        closed = [(s, e if e is not None else now) for (s, e) in windows]
+        minutes = machine_breakdown.excluded_minutes_for_windows(
+            closed, day, productive_minutes_in_window
+        )
+        if minutes > 0:
+            out.setdefault(person, {})[wc] = minutes
+    return out
+
+
 def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
     """Attribute production on a single day.
 
@@ -193,8 +230,10 @@ def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
     if testing:
         samples_by_wc = _fetch_wc_samples(client, d)
         wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)
+    excluded = _excluded_minutes_by_person_wc(d, _effective_now(d, datetime.now(UTC)))
     return attribute_for_day(
-        sched.assignments, wc_totals, elapsed, extra_assignments=extra
+        sched.assignments, wc_totals, elapsed,
+        extra_assignments=extra, excluded_minutes=excluded,
     )
 
 

@@ -31,6 +31,7 @@ def test_flatten_attribution_solo_operator():
         "downtime": 12.0,
         "hours": 8.0,
         "days_worked": 1.0,
+        "excluded_minutes": 0.0,
     }]
 
 
