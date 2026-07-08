@@ -100,22 +100,24 @@ def resolve_segments(
 def expected_by_wc(
     segments: list[WorkSegment],
     target_per_hour: dict[str, float],
-    productive_minutes: Callable[[str, datetime, datetime], float],
+    productive_minutes: Callable[[str, str, datetime, datetime], float],
 ) -> dict[str, float]:
     """Sum prorated expected pallets per WC.
 
-    `productive_minutes(person, start, end)` returns the working minutes in the
-    window. Since the June 2026 pace-goal fix the route passes a closure over
-    shift_config.productive_minutes_in_window (with the `day` bound), which
-    subtracts breaks only -- deliberately NOT effective_minutes_worked, since
-    netting out partial time-off would wrongly shrink the pace goal on
-    partial-leave days."""
+    `productive_minutes(person, wc_name, start, end)` returns the working
+    minutes in the window. Since the June 2026 pace-goal fix the route passes
+    a closure over shift_config.productive_minutes_in_window (with the `day`
+    bound), which subtracts breaks only -- deliberately NOT
+    effective_minutes_worked, since netting out partial time-off would
+    wrongly shrink the pace goal on partial-leave days. The July 2026
+    breakdown feature added `wc_name` to this signature so the closure can
+    also subtract a machine-breakdown exclusion window scoped to this WC."""
     out: dict[str, float] = {}
     for s in segments:
         thr = target_per_hour.get(s.wc_name, 0.0)
         if thr <= 0:
             continue
-        mins = productive_minutes(s.person_name, s.start_utc, s.end_utc)
+        mins = productive_minutes(s.person_name, s.wc_name, s.start_utc, s.end_utc)
         if mins <= 0:
             continue
         out[s.wc_name] = out.get(s.wc_name, 0.0) + thr * mins / 60.0

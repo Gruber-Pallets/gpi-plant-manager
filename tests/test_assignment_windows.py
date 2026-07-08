@@ -110,7 +110,7 @@ def test_expected_by_wc_prorates_per_segment():
         aw.WorkSegment("Dismantler 1", "Jose", SHIFT_START, CAP, "schedule"),
         aw.WorkSegment("Dismantler 4", "Eulogio", t(15), CAP, "attribution"),
     ]
-    def prod(name, s, e): return (e - s).total_seconds() / 60.0
+    def prod(name, wc_name, s, e): return (e - s).total_seconds() / 60.0
     out = aw.expected_by_wc(segs, {"Dismantler 1": 60.0, "Dismantler 4": 60.0}, prod)
     assert out["Dismantler 1"] == 360.0
     assert out["Dismantler 4"] == 180.0

@@ -164,7 +164,7 @@ def compute_per_wc_expected(*, segments, active_wc_names, target_per_hour, produ
     Mirrors the route wiring exactly: filter segments to the active WCs, sum via
     assignment_windows.expected_by_wc, then default every active WC to 0.0 so the
     dashboard shows a goal even before production. `productive_minutes(name,
-    start, end)` MUST be the breaks-only shift_config.productive_minutes_in_window
+    wc_name, start, end)` MUST be the breaks-only shift_config.productive_minutes_in_window
     closure -- NOT effective_minutes_worked, which would wrongly shrink the pace
     goal on partial-leave days (the June 2026 regression)."""
     from . import assignment_windows

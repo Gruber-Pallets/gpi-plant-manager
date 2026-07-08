@@ -225,7 +225,7 @@ def test_compute_per_wc_expected_filters_active_and_defaults_zero():
     out = rd.compute_per_wc_expected(
         segments=segs, active_wc_names={"Dismantler 1", "Dismantler 4"},
         target_per_hour={"Dismantler 1": 6.0, "Inactive WC": 6.0},
-        productive_minutes=lambda n, s, e: (e - s).total_seconds() / 60.0)
+        productive_minutes=lambda n, wc, s, e: (e - s).total_seconds() / 60.0)
     assert out["Dismantler 1"] == 48.0      # active + worked (8h * 6/hr)
     assert out["Dismantler 4"] == 0.0       # active, no segment -> defaulted
     assert "Inactive WC" not in out          # not in active set -> filtered

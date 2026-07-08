@@ -173,7 +173,7 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     # fallback for production at a WC the operator never transferred into. Per
     # person, the timeclock wins over the schedule; people with no attendance
     # records fall back to their schedule.
-    from .. import assignment_windows, timeclock_windows, wc_attributions
+    from .. import assignment_windows, timeclock_windows, wc_attributions, machine_breakdown
     segments = assignment_windows.resolve_segments(
         assignments=present_assignments,
         attributions=wc_attributions.creditable_for_day(d),
@@ -353,12 +353,22 @@ def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
     # time-off, which wrongly shrinks a station's pace goal when someone takes
     # leave. The per-segment window still makes a mid-day assignment (e.g.
     # Dismantler 4) accrue only from its own start.
+    breakdown_windows = wc_attributions.breakdown_windows_for_day(d)
+
+    def _productive_minutes_less_breakdown(name, wc_name, s_utc, e_utc):
+        raw = shift_config.productive_minutes_in_window(d, s_utc, e_utc)
+        excluded = machine_breakdown.excluded_minutes_overlapping(
+            breakdown_windows.get((name, wc_name), []),
+            s_utc, e_utc, now, d,
+            shift_config.productive_minutes_in_window,
+        )
+        return max(0.0, raw - excluded)
+
     per_wc_expected = compute_per_wc_expected(
         segments=segments,
         active_wc_names=active_wc_names,
         target_per_hour=target_per_hour,
-        productive_minutes=lambda name, s_utc, e_utc:
-            shift_config.productive_minutes_in_window(d, s_utc, e_utc),
+        productive_minutes=_productive_minutes_less_breakdown,
     )
     per_wc_state = {r.station.name: _state(r, now, is_today_d) for r in active_results}
     per_wc_who = {r.station.name: who_by_wc.get(r.station.name) for r in active_results}

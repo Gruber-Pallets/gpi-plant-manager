@@ -19,7 +19,7 @@ def _utc(h, m=0):
     return datetime(2026, 6, 2, h, m, tzinfo=timezone.utc)
 
 
-def _minutes(_name, s, e):
+def _minutes(_name, _wc_name, s, e):
     """Breaks-only productive minutes stub = full window span (no breaks)."""
     return (e - s).total_seconds() / 60.0
 
@@ -77,7 +77,7 @@ def test_expected_uses_breaks_only_not_timeoff_adjusted_minutes():
         shift_start_utc=_utc(12), cap_utc=_utc(20))
     breaks_only = aw.expected_by_wc(segs, {"Dismantler 1": 6.0}, _minutes)
     timeoff_adjusted = aw.expected_by_wc(
-        segs, {"Dismantler 1": 6.0}, lambda n, s, e: 240.0)
+        segs, {"Dismantler 1": 6.0}, lambda n, wc, s, e: 240.0)
     assert breaks_only["Dismantler 1"] == 48.0
     assert timeoff_adjusted["Dismantler 1"] == 24.0
     assert breaks_only["Dismantler 1"] != timeoff_adjusted["Dismantler 1"]
