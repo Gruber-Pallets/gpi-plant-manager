@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from zira_dashboard import db, exception_inbox, missing_wc, missed_punch_out, staffing
+from zira_dashboard import db, exception_inbox, machine_breakdown, missing_wc, missed_punch_out, staffing
 from zira_dashboard.app import app
 from zira_dashboard.routes import exceptions as exceptions_route
 from zira_dashboard.routes import staffing as staffing_routes
@@ -81,6 +81,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [
         {"attendance_id": 11, "name": "Dee", "check_in_label": "1:00 PM Thu"},
     ])
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: ["Repair 1"])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (
         1,
@@ -143,6 +144,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     })
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [{"attendance_id": 10}])
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [{"attendance_id": 11}])
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off_counts", lambda today: (4, 2))
 
     summary = exception_inbox.build_summary()
@@ -289,6 +291,7 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     monkeypatch.setattr(staffing_routes, "late_report_payload", lambda: {"count": 0})
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
 
