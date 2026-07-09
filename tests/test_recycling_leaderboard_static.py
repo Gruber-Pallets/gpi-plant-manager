@@ -10,6 +10,7 @@ SETTINGS_ROUTE = (ROOT / "src/zira_dashboard/routes/settings.py").read_text()
 
 def test_tv_leaderboard_copy_uses_days_not_q_days_or_actual_times():
     assert "q-days" not in TEMPLATE
+    assert "qualified days" not in TEMPLATE
     assert "actual times" not in TEMPLATE
     assert "not enough days" in TEMPLATE
 
