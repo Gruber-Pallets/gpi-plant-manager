@@ -1,7 +1,7 @@
-# Recycling Leaderboard TV Dashboard
+# Recycling Leaderboard TV And Normalized Production Averages
 
 **Date:** 2026-07-09
-**Status:** Design approved visually, awaiting written spec review
+**Status:** Design approved visually; expanded metric scope awaiting written spec review
 
 ## Goal
 
@@ -9,27 +9,37 @@ Add a new TV dashboard for the recycling area that shows a fair, easy-to-read
 leaderboard for Repairs and Dismantlers, plus monthly gold ribbon holders for
 both roles over the last 12 months.
 
+Also make the same normalized full-day average available across production
+leaderboards and employee/player cards so every personal production average uses
+the same fairness rule.
+
 The TV uses the approved three-column layout:
 
 1. Repairs leaderboard
 2. Dismantlers leaderboard
 3. Gold ribbons for Repairs and Dismantlers by month
 
-The screen is meant for a wall TV, so it should be dense enough to be useful but
-simple enough to read from a distance.
+The TV screen is meant for a wall display, so it must be dense enough to be
+useful and simple enough to read from a distance.
 
 ## Core Metric
 
-The displayed average is **normalized pallets per full standard day**.
+The displayed production average is **normalized pallets per full standard
+day**. It replaces simple units-per-appearance or raw pallets-per-hour wherever
+the app is showing a personal production average.
 
-For each person, role, and date:
+For each person, metric scope, and date:
 
-1. Sum all production rows for that role on that date.
-   - Repairs includes every work center whose skill/category is `Repair`.
-   - Dismantlers includes every work center whose skill/category is
+1. Sum all production rows for that scope on that date.
+   - A work-center scope includes only that work center.
+   - A group scope includes all member work centers in that group.
+   - The Repairs role scope includes every work center whose skill/category is
+     `Repair`.
+   - The Dismantlers role scope includes every work center whose skill/category is
      `Dismantler`.
-2. If credited role hours are under 4.0 hours, disregard that person-role-day.
-3. If credited role hours are 4.0 or more, normalize production to a full
+2. If credited scope hours are under 4.0 hours, disregard that
+   person-scope-day.
+3. If credited scope hours are 4.0 or more, normalize production to a full
    standard day:
 
    ```text
@@ -44,10 +54,32 @@ The dashboard average is:
 average = sum(normalized_units for qualified days) / qualified_day_count
 ```
 
-`standard_full_day_hours` should come from
+`standard_full_day_hours` comes from
 `shift_config.productive_minutes_per_day() / 60`, not the specific day's custom
 hours. This makes short Saturdays and partial custom-hour days comparable to a
 normal full day.
+
+## Shared Metric Consumers
+
+Use this normalized full-day metric in:
+
+- New Recycling Leaderboard TV.
+- Existing `/staffing/leaderboards` Best Averages tables:
+  - per-WC averages
+  - group averages
+- Employee/player cards:
+  - production group stat bubbles
+  - per-work-center average column
+
+Do not change live throughput KPIs such as `/recycling` `pallets/hr/person`.
+Those are live operational rates, not personal historical averages.
+
+Do not change raw totals such as total units, total downtime, days absent, or
+days late.
+
+Do not change Trophy Case awards in this pass. Trophy/award scoring currently
+uses its own pph-based rules and manual override workflows. Trophy normalized
+averages are deferred to a separate future design.
 
 ## Eligibility Rules
 
@@ -66,7 +98,7 @@ For each role and span:
 4. A person's cell for that span is eligible only if their qualified day count
    is at least that minimum.
 
-Rows should include the union of people who qualify in either span. This allows
+Rows include the union of people who qualify in either span. This allows
 someone who has enough recent L30 days to appear even if their YTD sample is too
 small.
 
@@ -77,8 +109,9 @@ unqualified cell shows:
 not enough days
 ```
 
-The visible count label should be plain `days`, not `qualified days`, `q-days`,
-or `actual times`.
+The visible count label is plain `days`, not `qualified days`, `q-days`,
+or `actual times`. For shared non-TV surfaces, the same rule applies: `days`
+means days that met the 4-hour cutoff for that metric scope.
 
 ## Sorting
 
@@ -88,7 +121,7 @@ Each role table is sorted by YTD first:
 2. YTD qualified day count descending.
 3. Name ascending.
 
-People who only qualify for L30 but not YTD should still appear after YTD
+People who only qualify for L30 but not YTD appear after YTD
 qualified people. Within that lower group, sort by:
 
 1. L30 eligible average descending.
@@ -118,7 +151,7 @@ Use the approved Layout A mockup:
   - `YTD min 13 days`
   - `L30 min 2 days`
 
-The final route should rely on app CSS/templates, not the brainstorming mockup
+The final route relies on app CSS/templates, not the brainstorming mockup
 file under `.superpowers/`.
 
 ## Gold Ribbons
@@ -138,10 +171,10 @@ Each ribbon cell shows:
 - Person name
 - Day and amount, for example `Jul 2 - 118`
 
-The amount shown should be the normalized full-day amount, rounded for display.
+The amount shown is the normalized full-day amount, rounded for display.
 
-Manual trophy override behavior is not part of this v1. This dashboard should
-use computed production history as its source of truth.
+Manual trophy override behavior is not part of this v1. This dashboard uses
+computed production history as its source of truth.
 
 ## Data Source
 
@@ -158,7 +191,39 @@ source. It already provides per-day, per-person, per-work-center:
 Use `staffing.LOCATIONS` to map work centers to role/category (`Repair` or
 `Dismantler`).
 
-The data helper should be pure and unit-testable. Recommended shape:
+Create a shared pure helper module for normalized production metrics:
+
+```text
+src/zira_dashboard/production_metrics.py
+```
+
+The helper accepts explicit records, scope definitions, and standard-day
+hours so it can be unit-tested without the database.
+
+Use this lower-level shape:
+
+```python
+normalized_average_by_person(
+    records: list[dict],
+    *,
+    wc_names: set[str],
+    standard_full_day_hours: float,
+    min_hours: float = 4.0,
+) -> list[dict]
+```
+
+This returns one row per person:
+
+- `name`
+- `avg_units`
+- `days`
+- `total_units`
+- `total_hours`
+
+It groups records by `(person, day)` before applying the 4-hour cutoff, so
+multiple work centers inside the same scope combine into one qualified day.
+
+The Recycling Leaderboard TV can use a route-specific wrapper:
 
 ```python
 build_recycling_leaderboard(
@@ -210,13 +275,13 @@ will not be reseeded, matching the current store behavior.
 Add a new Jinja template and CSS file rather than overloading
 `recycling.html`.
 
-Suggested files:
+Files:
 
 - `src/zira_dashboard/routes/recycling_leaderboard.py`
 - `src/zira_dashboard/templates/recycling_leaderboard_tv.html`
 - `src/zira_dashboard/static/recycling_leaderboard.css`
 
-The template should include:
+The template includes:
 
 - `/static/tv-mode.css`
 - `/static/tv-refresh.js`, matching the existing `/tv/recycling`,
@@ -225,6 +290,53 @@ The template should include:
   crumb so it matches the existing TV chrome
 
 The dashboard is TV-only in v1. No interactive screen-mode editor is needed.
+
+## Existing Leaderboards
+
+Update `/staffing/leaderboards` Best Averages to use the shared normalized
+metric for `Avg/day`.
+
+Per-WC averages:
+
+- Scope is one work center.
+- Multiple records for the same person/date/WC collapse into one day.
+- Under 4 hours in that WC on that date is ignored.
+- `name_count` becomes the normalized metric's `days`.
+- `avg_units` becomes normalized full-day pallets/day.
+
+Group averages:
+
+- Scope is all member work centers in the group.
+- A person can work multiple group member WCs on the same date; sum the group's
+  units and hours before applying the 4-hour cutoff.
+- `top_wc` remains the work center the person most often worked in the raw
+  records for that range. It is descriptive only and does not affect the
+  normalized average.
+
+Keep `Avg %` behavior as-is for now. It is goal-relative and already uses
+per-day productive minutes; changing it is separate from normalized pallets/day.
+
+## Employee / Player Cards
+
+Update the player card production metrics to use normalized full-day averages.
+
+Group stat bubbles:
+
+- Replace pph values with normalized full-day averages.
+- Label them `Full-day avg`.
+- Unit suffix is `pallets/day` or `per day`, not `pph`.
+- Days shown, when shown, use the 4-hour qualified-day count.
+
+Per-work-center table:
+
+- Replace `Avg (pph)` with `Full-day avg`.
+- Use the same per-WC normalized helper as the leaderboards.
+- The existing `Days` column shows qualified days for that work center in
+  the selected range.
+- Keep `Units` and `Downtime` as raw totals.
+
+The per-day breakdown table remains raw production by date and work
+center. It is an audit trail, not an average metric.
 
 ## Empty And Edge States
 
@@ -252,6 +364,23 @@ Unit tests for the pure helper:
 - A person who qualifies in L30 but not YTD appears with YTD `not enough days`.
 - Sorting puts YTD-qualified rows first, then L30-only rows.
 - Monthly ribbons use the same cutoff and normalized score.
+- Shared helper groups by `(person, day)` before applying the 4-hour cutoff.
+- Shared helper ignores under-4-hour days.
+- Shared helper normalizes exactly-4-hour and longer days to standard full-day
+  hours.
+
+Existing leaderboard tests:
+
+- Best Averages `Avg/day` normalizes 4+ hour short days.
+- Best Averages excludes under-4-hour days from both average and day count.
+- Group Best Averages sum multiple group WCs on the same date before the cutoff.
+
+Player card tests:
+
+- Group stat bubbles show normalized full-day averages, not pph.
+- Per-WC table shows `Full-day avg`, not `Avg (pph)`.
+- Per-WC `Days` uses qualified days.
+- Raw units and downtime totals are unchanged.
 
 Route/render tests:
 
