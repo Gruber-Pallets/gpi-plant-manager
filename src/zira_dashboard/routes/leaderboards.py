@@ -9,7 +9,7 @@ from datetime import date
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from .. import settings_store, staffing
+from .. import production_metrics, settings_store, staffing
 from ..deps import resolve_range, templates
 from ..plant_day import today as plant_today
 from ..production_history import attribution_per_day
@@ -28,6 +28,8 @@ def averages_for_wc(
     target_per_hour: float,
     productive_minutes_for,
     mode: str,
+    *,
+    standard_full_day_hours: float | None = None,
 ) -> list[dict]:
     """Per-person averages across the records (already filtered to one WC).
 
@@ -47,15 +49,25 @@ def averages_for_wc(
     drag down the average. Tiebreak: more days_worked ranks higher.
     """
     rows = [r for r in records if r["units"] > 0]
+    if standard_full_day_hours is None:
+        standard_full_day_hours = max(
+            (productive_minutes_for(r["day"]) for r in rows),
+            default=0.0,
+        ) / 60.0
+    normalized_rows = production_metrics.normalized_average_by_person(
+        rows,
+        wc_names={r["wc"] for r in rows},
+        standard_full_day_hours=standard_full_day_hours,
+    )
+    normalized_by_name = {r["name"]: r for r in normalized_rows}
     by_person: dict[str, list[dict]] = {}
     for r in rows:
-        by_person.setdefault(r["person"], []).append(r)
+        if r["person"] in normalized_by_name:
+            by_person.setdefault(r["person"], []).append(r)
 
     out: list[dict] = []
     for person, recs in by_person.items():
-        days_worked = len(recs)
-        total_units = sum(r["units"] for r in recs)
-        avg_units = total_units / days_worked
+        norm = normalized_by_name[person]
 
         # Days without a configured goal contribute no pct sample; a person
         # with no goal-days at all gets avg_pct=None (renders "—", not "0%").
@@ -69,8 +81,8 @@ def averages_for_wc(
 
         out.append({
             "name": person,
-            "name_count": days_worked,
-            "avg_units": avg_units,
+            "name_count": norm["days"],
+            "avg_units": norm["avg_units"],
             "avg_pct": avg_pct,
         })
 
@@ -90,6 +102,8 @@ def averages_for_group(
     target_per_hour_by_wc: dict[str, float],
     productive_minutes_for,
     mode: str,
+    *,
+    standard_full_day_hours: float | None = None,
 ) -> list[dict]:
     """Per-person averages across a group's WCs.
 
@@ -101,15 +115,25 @@ def averages_for_group(
     Same filtering, sorting, and tiebreak rules as averages_for_wc.
     """
     rows = [r for r in records if r["units"] > 0]
+    if standard_full_day_hours is None:
+        standard_full_day_hours = max(
+            (productive_minutes_for(r["day"]) for r in rows),
+            default=0.0,
+        ) / 60.0
+    normalized_rows = production_metrics.normalized_average_by_person(
+        rows,
+        wc_names=set(target_per_hour_by_wc.keys()),
+        standard_full_day_hours=standard_full_day_hours,
+    )
+    normalized_by_name = {r["name"]: r for r in normalized_rows}
     by_person: dict[str, list[dict]] = {}
     for r in rows:
-        by_person.setdefault(r["person"], []).append(r)
+        if r["person"] in normalized_by_name:
+            by_person.setdefault(r["person"], []).append(r)
 
     out: list[dict] = []
     for person, recs in by_person.items():
-        days_worked = len(recs)
-        total_units = sum(r["units"] for r in recs)
-        avg_units = total_units / days_worked
+        norm = normalized_by_name[person]
 
         # Same None-means-no-goal convention as averages_for_wc.
         pct_per_day: list[float] = []
@@ -128,9 +152,9 @@ def averages_for_group(
 
         out.append({
             "name": person,
-            "name_count": days_worked,
+            "name_count": norm["days"],
             "top_wc": top_wc,
-            "avg_units": avg_units,
+            "avg_units": norm["avg_units"],
             "avg_pct": avg_pct,
         })
 
@@ -208,6 +232,8 @@ def staffing_leaderboards(
             _pm_by_day[day] = v
         return v
 
+    standard_full_day_hours = shift_config.productive_minutes_per_day() / 60.0
+
     sections = []
     avg_sections = []
     for loc in staffing.LOCATIONS:
@@ -267,7 +293,11 @@ def staffing_leaderboards(
         wc_avg_settings = wc_avg_settings_dict.get(loc.name, {"sort_order": 0, "is_inactive": False})
         avg_auto_inactive = not wc_records
         avg_rows = averages_for_wc(
-            wc_records, target_per_hour, _productive_minutes_cached, metric,
+            wc_records,
+            target_per_hour,
+            _productive_minutes_cached,
+            metric,
+            standard_full_day_hours=standard_full_day_hours,
         )
         avg_sections.append({
             "loc_name": loc.name,
@@ -353,7 +383,11 @@ def staffing_leaderboards(
         g_avg_set = group_avg_settings_dict.get(group_name, {"sort_order": 0, "is_inactive": False})
         avg_auto_inactive = not g_records
         avg_rows = averages_for_group(
-            g_records, target_per_hour_by_wc, _productive_minutes_cached, metric,
+            g_records,
+            target_per_hour_by_wc,
+            _productive_minutes_cached,
+            metric,
+            standard_full_day_hours=standard_full_day_hours,
         )
         avg_group_sections.append({
             "loc_name": group_name,

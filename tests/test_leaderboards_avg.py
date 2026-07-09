@@ -160,7 +160,8 @@ def test_group_averages_sort_and_rank():
 def test_group_averages_unknown_wc_target_excluded_from_pct():
     # If a record's WC isn't in target_by_wc there is no goal to measure
     # against — the day contributes no pct sample (it must not read as a
-    # 0% day and drag the average down). Units math is unaffected.
+    # 0% day and drag the average down). Avg/day follows the same scoped
+    # target WCs used by the normalized average helper.
     target_by_wc = {"WC1": 30.0}
     records = [
         _rec(date(2026, 4, 27), "Alice", "WC1",      210),  # pct = 1.0
@@ -168,7 +169,7 @@ def test_group_averages_unknown_wc_target_excluded_from_pct():
     ]
     rows = averages_for_group(records, target_by_wc, _const_productive, "pct")
     assert abs(rows[0]["avg_pct"] - 1.0) < 1e-9
-    assert rows[0]["avg_units"] == 155.0
+    assert rows[0]["avg_units"] == 210.0
 
 
 def test_group_averages_filters_zero_unit_records():
@@ -229,3 +230,47 @@ def test_averages_for_wc_excluded_minutes_exceeding_day_floors_at_zero():
     rows = averages_for_wc(records, 30.0, _const_productive, "pct")
     # expected floors to 0 -> no pct sample contributed -> avg_pct is None
     assert rows[0]["avg_pct"] is None
+
+
+def test_averages_for_wc_units_normalizes_4_hour_day():
+    records = [
+        {"day": date(2026, 7, 1), "person": "Alice", "wc": "WC1", "units": 80, "downtime": 0.0, "hours": 4.0},
+    ]
+    rows = averages_for_wc(
+        records,
+        30.0,
+        _const_productive,
+        "units",
+        standard_full_day_hours=7.0,
+    )
+    assert rows[0]["avg_units"] == 140.0
+    assert rows[0]["name_count"] == 1
+
+
+def test_averages_for_wc_units_excludes_under_4_hour_day():
+    records = [
+        {"day": date(2026, 7, 1), "person": "Alice", "wc": "WC1", "units": 200, "downtime": 0.0, "hours": 3.99},
+    ]
+    assert averages_for_wc(
+        records,
+        30.0,
+        _const_productive,
+        "units",
+        standard_full_day_hours=7.0,
+    ) == []
+
+
+def test_averages_for_group_units_sums_same_day_wcs_before_cutoff():
+    records = [
+        {"day": date(2026, 7, 1), "person": "Alice", "wc": "Repair-1", "units": 40, "downtime": 0.0, "hours": 2.0},
+        {"day": date(2026, 7, 1), "person": "Alice", "wc": "Repair-2", "units": 50, "downtime": 0.0, "hours": 3.0},
+    ]
+    rows = averages_for_group(
+        records,
+        {"Repair-1": 30.0, "Repair-2": 30.0},
+        _const_productive,
+        "units",
+        standard_full_day_hours=7.0,
+    )
+    assert rows[0]["avg_units"] == 126.0
+    assert rows[0]["name_count"] == 1
