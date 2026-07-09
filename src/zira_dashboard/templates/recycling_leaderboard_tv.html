@@ -66,14 +66,21 @@
       {% endfor %}
       <section class="rlb-panel rlb-ribbons">
         <header class="rlb-panel-head"><div><h2>Gold Ribbons</h2><p>Best single qualifying day</p></div></header>
-        <div class="rlb-months">
-        {% for m in data.ribbons %}
-          <div class="rlb-month-row">
-            <div class="month">{{ m.month_label }}</div>
-            <div class="ribbon"><b>Repair</b>{% if m.repair %}<span>{{ m.repair.name }}</span><em>{{ m.repair.day.strftime('%b %-d') }} - {{ "%.0f"|format(m.repair.amount) }}</em>{% else %}<span>-</span>{% endif %}</div>
-            <div class="ribbon"><b>Dism</b>{% if m.dismantler %}<span>{{ m.dismantler.name }}</span><em>{{ m.dismantler.day.strftime('%b %-d') }} - {{ "%.0f"|format(m.dismantler.amount) }}</em>{% else %}<span>-</span>{% endif %}</div>
+        <div class="rlb-ribbon-board">
+          <div class="rlb-ribbon-cols">
+            <span></span>
+            <span>Repair</span>
+            <span>Dismantler</span>
           </div>
-        {% endfor %}
+          <div class="rlb-months">
+          {% for m in data.ribbons %}
+            <div class="rlb-month-row">
+              <div class="month">{{ m.month_label }}</div>
+              <div class="ribbon">{% if m.repair %}<span>{{ m.repair.name }}</span><em>{{ m.repair.day.strftime('%b %-d') }} - {{ "%.0f"|format(m.repair.amount) }}</em>{% else %}<span>-</span>{% endif %}</div>
+              <div class="ribbon">{% if m.dismantler %}<span>{{ m.dismantler.name }}</span><em>{{ m.dismantler.day.strftime('%b %-d') }} - {{ "%.0f"|format(m.dismantler.amount) }}</em>{% else %}<span>-</span>{% endif %}</div>
+            </div>
+          {% endfor %}
+          </div>
         </div>
       </section>
     </section>

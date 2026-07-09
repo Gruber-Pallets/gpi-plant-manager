@@ -38,3 +38,11 @@ def test_recycling_leaderboard_display_name_stays_hyphenated():
 
 def test_recycling_leaderboard_document_title_is_exact_name():
     assert "<title>Recycling-leaderboard</title>" in TEMPLATE
+
+
+def test_gold_ribbons_use_column_headers_not_repeated_card_labels():
+    assert 'class="rlb-ribbon-cols"' in TEMPLATE
+    assert "<span>Repair</span>" in TEMPLATE
+    assert "<span>Dismantler</span>" in TEMPLATE
+    assert "<b>Repair</b>" not in TEMPLATE
+    assert "<b>Dism" not in TEMPLATE
