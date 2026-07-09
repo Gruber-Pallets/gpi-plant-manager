@@ -9,7 +9,7 @@ SHIFT_END = datetime(2026, 7, 8, 20, 30, tzinfo=timezone.utc)    # 3:30 PM Centr
 
 def test_detect_flags_station_with_no_output_past_threshold():
     last_output = SHIFT_START + timedelta(hours=2)
-    now = last_output + timedelta(minutes=16)
+    now = last_output + timedelta(minutes=60)
     signals = [StationSignal(wc_name="Dismantler 2", last_output_utc=last_output, has_operator=True)]
     out = detect(signals, now, SHIFT_START, SHIFT_END)
     assert out == [BreakdownCandidate(wc_name="Dismantler 2", stop_utc=last_output)]
@@ -17,7 +17,7 @@ def test_detect_flags_station_with_no_output_past_threshold():
 
 def test_detect_ignores_station_under_threshold():
     last_output = SHIFT_START + timedelta(hours=2)
-    now = last_output + timedelta(minutes=10)
+    now = last_output + timedelta(minutes=59)
     signals = [StationSignal(wc_name="Dismantler 2", last_output_utc=last_output, has_operator=True)]
     assert detect(signals, now, SHIFT_START, SHIFT_END) == []
 
@@ -30,7 +30,7 @@ def test_detect_ignores_station_with_no_operator():
 
 
 def test_detect_treats_never_produced_as_stopped_since_shift_start():
-    now = SHIFT_START + timedelta(minutes=20)
+    now = SHIFT_START + timedelta(minutes=60)
     signals = [StationSignal(wc_name="Dismantler 2", last_output_utc=None, has_operator=True)]
     out = detect(signals, now, SHIFT_START, SHIFT_END)
     assert out == [BreakdownCandidate(wc_name="Dismantler 2", stop_utc=SHIFT_START)]
@@ -50,6 +50,36 @@ def test_detect_respects_custom_threshold():
     assert detect(signals, now, SHIFT_START, SHIFT_END, no_output_minutes=5) == [
         BreakdownCandidate(wc_name="Dismantler 2", stop_utc=last_output)
     ]
+
+
+def test_detect_uses_productive_elapsed_minutes_when_provided():
+    last_output = SHIFT_START + timedelta(hours=2)
+    now = last_output + timedelta(minutes=75)
+    signals = [StationSignal(wc_name="Dismantler 2", last_output_utc=last_output, has_operator=True)]
+
+    assert detect(
+        signals,
+        now,
+        SHIFT_START,
+        SHIFT_END,
+        elapsed_minutes=lambda start, end: 45,
+    ) == []
+
+    assert detect(
+        signals,
+        now,
+        SHIFT_START,
+        SHIFT_END,
+        elapsed_minutes=lambda start, end: 60,
+    ) == [BreakdownCandidate(wc_name="Dismantler 2", stop_utc=last_output)]
+
+
+def test_detect_suppresses_when_current_time_is_not_productive():
+    last_output = SHIFT_START + timedelta(hours=2)
+    now = last_output + timedelta(minutes=90)
+    signals = [StationSignal(wc_name="Dismantler 2", last_output_utc=last_output, has_operator=True)]
+
+    assert detect(signals, now, SHIFT_START, SHIFT_END, now_is_productive=False) == []
 
 
 def test_departed_at_returns_none_when_open_punch_exists():

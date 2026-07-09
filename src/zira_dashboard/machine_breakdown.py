@@ -11,10 +11,11 @@ breakdown are kept).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
-BREAKDOWN_NO_OUTPUT_MINUTES = 15
+BREAKDOWN_NO_OUTPUT_MINUTES = 60
 """Default minutes of no output (while an operator is clocked in) before a
 station is flagged as broken down."""
 
@@ -38,25 +39,32 @@ def detect(
     shift_start_utc: datetime,
     shift_end_utc: datetime,
     no_output_minutes: int = BREAKDOWN_NO_OUTPUT_MINUTES,
+    *,
+    elapsed_minutes: Callable[[datetime, datetime], float] | None = None,
+    now_is_productive: bool = True,
 ) -> list[BreakdownCandidate]:
     """Pure. Which stations should open a NEW breakdown incident this tick.
 
     A station is a candidate when it has an operator clocked in AND has
     produced nothing for >= no_output_minutes (measured from its last output,
-    or from shift start if it has never produced today) AND `now` is within
-    shift hours. The caller is responsible for excluding stations that
-    already have an open incident, an active testing window, or were
-    recently dismissed without new output since -- this function only
-    applies the no-output-while-staffed rule."""
-    if now < shift_start_utc or now > shift_end_utc:
+    or from shift start if it has never produced today, using
+    elapsed_minutes when provided) AND `now` is productive shift time. The
+    caller is responsible for excluding stations that already have an open
+    incident, an active testing window, or were recently dismissed without
+    new output since -- this function only applies the no-output-while-
+    staffed rule."""
+    if not now_is_productive or now < shift_start_utc or now > shift_end_utc:
         return []
-    threshold = timedelta(minutes=no_output_minutes)
     out: list[BreakdownCandidate] = []
     for sig in signals:
         if not sig.has_operator:
             continue
         stop = sig.last_output_utc or shift_start_utc
-        if now - stop < threshold:
+        if elapsed_minutes is None:
+            elapsed = (now - stop).total_seconds() / 60.0
+        else:
+            elapsed = elapsed_minutes(stop, now)
+        if elapsed < no_output_minutes:
             continue
         out.append(BreakdownCandidate(wc_name=sig.wc_name, stop_utc=stop))
     return out
@@ -330,7 +338,17 @@ def run_detect_tick(day: date | None = None, now: datetime | None = None) -> Non
             logging.getLogger(__name__).warning(
                 "machine breakdown tick failed for incident %s", incident["id"], exc_info=True)
 
-    candidates = detect(_station_signals(day, now), now, shift_start, shift_end)
+    from . import shift_config
+    candidates = detect(
+        _station_signals(day, now),
+        now,
+        shift_start,
+        shift_end,
+        elapsed_minutes=lambda start, end: shift_config.productive_minutes_in_window(
+            day, start, end
+        ),
+        now_is_productive=shift_config.in_shift_on(now.astimezone(shift_config.SITE_TZ)),
+    )
     for candidate in candidates:
         if get_open_incident(candidate.wc_name, day) is not None:
             continue
