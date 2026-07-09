@@ -15,9 +15,12 @@ def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
                         lambda day, wc, person: {"id": 10})
     capped = []
     monkeypatch.setattr(wc_attributions, "cap_breakdown", lambda rid, end: capped.append((rid, end)))
-    monkeypatch.setattr(staffing_transfer, "decide_and_apply",
-                        lambda person, wc, ts: {"transfer": "moved", "person": person,
-                                                "closed_id": 5, "new_id": 6, "to_dept": "Recycled"})
+    applied = {}
+    def _decide_and_apply(person, wc, ts):
+        applied.update(person=person, wc=wc, ts=ts)
+        return {"transfer": "moved", "person": person,
+                "closed_id": 5, "new_id": 6, "to_dept": "Recycled"}
+    monkeypatch.setattr(staffing_transfer, "decide_and_apply", _decide_and_apply)
     logged = []
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 42)
 
@@ -27,7 +30,8 @@ def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
     )
 
     assert resp.status_code == 200
-    assert capped and capped[0][0] == 10
+    assert capped == [(10, _STOP)]
+    assert applied == {"person": "Juan", "wc": "Repair 3", "ts": _STOP}
     assert logged[0]["item_kind"] == "breakdown"
     assert logged[0]["action"] == "transfer"
     assert logged[0]["reversible"] is True

@@ -755,8 +755,8 @@ async def undo_inbox_event(event_id: int, request: Request):
 
 def _breakdown_transfer_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     """Blocking half of /api/exceptions/breakdown/transfer: caps the
-    operator's breakdown exclusion at transfer time (precise, doesn't wait
-    for the next detection tick), then runs the normal transfer chokepoint."""
+    operator's breakdown exclusion at the detected stop time, then runs the
+    normal transfer chokepoint from that same timestamp."""
     from .. import inbox_keys, inbox_log, machine_breakdown, staffing_transfer, wc_attributions
 
     incident_id = body.get("incident_id")
@@ -769,10 +769,10 @@ def _breakdown_transfer_sync(body: dict, actor_upn=None, actor_name=None) -> JSO
     if incident is None:
         return _json_error("incident not found", 404)
 
-    now = plant_day.now()
+    transfer_at = incident["detected_stop_utc"]
     row = wc_attributions.open_breakdown_row(incident["day"], incident["wc_name"], person_name)
     if row is not None:
-        wc_attributions.cap_breakdown(row["id"], now)
+        wc_attributions.cap_breakdown(row["id"], transfer_at)
 
     # Note: the breakdown-row cap above is not rolled back if decide_and_apply
     # fails below; a failed transfer leaves the operator's exclusion capped
@@ -783,7 +783,7 @@ def _breakdown_transfer_sync(body: dict, actor_upn=None, actor_name=None) -> JSO
     # for Odoo-calling handlers (_approve_time_off_sync, _refuse_time_off_sync):
     # log and return a friendly error, no rollback.
     try:
-        result = staffing_transfer.decide_and_apply(person_name, to_wc, now)
+        result = staffing_transfer.decide_and_apply(person_name, to_wc, transfer_at)
     except Exception as e:
         return _json_error(_friendly_odoo_error(e), 500)
 

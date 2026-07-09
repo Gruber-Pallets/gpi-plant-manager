@@ -46,14 +46,19 @@ def test_station_signals_uses_last_sample_not_padded_active_interval(monkeypatch
 
 
 def test_run_detect_tick_opens_new_incident(monkeypatch):
-    stop = _now() - timedelta(minutes=20)
+    stop = _now() - timedelta(minutes=60)
     monkeypatch.setattr(machine_breakdown, "_station_signals", lambda day, now: [
         machine_breakdown.StationSignal("Dismantler 2", stop, True)
     ])
     monkeypatch.setattr(machine_breakdown, "_shift_bounds", lambda day: (
         _now() - timedelta(hours=6), _now() + timedelta(hours=2)
     ))
+    monkeypatch.setattr(machine_breakdown, "all_open_incidents", lambda day: [])
     monkeypatch.setattr(machine_breakdown, "get_open_incident", lambda wc, day: None)
+    from zira_dashboard import shift_config
+    monkeypatch.setattr(shift_config, "in_shift_on", lambda local_dt: True)
+    monkeypatch.setattr(shift_config, "productive_minutes_in_window",
+                        lambda day, start, end: 60)
     opened = {}
 
     def _open_incident(wc, day, stop_utc, source):
@@ -79,14 +84,19 @@ def test_run_detect_tick_opens_new_incident(monkeypatch):
 
 
 def test_run_detect_tick_skips_wc_with_open_incident(monkeypatch):
-    stop = _now() - timedelta(minutes=20)
+    stop = _now() - timedelta(minutes=60)
     monkeypatch.setattr(machine_breakdown, "_station_signals", lambda day, now: [
         machine_breakdown.StationSignal("Dismantler 2", stop, True)
     ])
     monkeypatch.setattr(machine_breakdown, "_shift_bounds", lambda day: (
         _now() - timedelta(hours=6), _now() + timedelta(hours=2)
     ))
+    monkeypatch.setattr(machine_breakdown, "all_open_incidents", lambda day: [])
     monkeypatch.setattr(machine_breakdown, "get_open_incident", lambda wc, day: {"id": 5})
+    from zira_dashboard import shift_config
+    monkeypatch.setattr(shift_config, "in_shift_on", lambda local_dt: True)
+    monkeypatch.setattr(shift_config, "productive_minutes_in_window",
+                        lambda day, start, end: 60)
     called = []
     monkeypatch.setattr(machine_breakdown, "open_incident", lambda *a, **k: called.append(1))
     monkeypatch.setattr(machine_breakdown, "_cap_departed_operators", lambda incident, day, now: None)
@@ -95,6 +105,57 @@ def test_run_detect_tick_skips_wc_with_open_incident(monkeypatch):
     machine_breakdown.run_detect_tick(day=date(2026, 7, 8), now=_now())
 
     assert called == []
+
+
+def test_run_detect_tick_does_not_open_during_break(monkeypatch):
+    stop = _now() - timedelta(minutes=90)
+    monkeypatch.setattr(machine_breakdown, "_station_signals", lambda day, now: [
+        machine_breakdown.StationSignal("Dismantler 2", stop, True)
+    ])
+    monkeypatch.setattr(machine_breakdown, "_shift_bounds", lambda day: (
+        _now() - timedelta(hours=6), _now() + timedelta(hours=2)
+    ))
+    monkeypatch.setattr(machine_breakdown, "all_open_incidents", lambda day: [])
+    monkeypatch.setattr(machine_breakdown, "get_open_incident", lambda wc, day: None)
+    from zira_dashboard import shift_config
+    monkeypatch.setattr(shift_config, "in_shift_on", lambda local_dt: False)
+    monkeypatch.setattr(shift_config, "productive_minutes_in_window",
+                        lambda day, start, end: 90)
+    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: [])
+    opened = []
+    monkeypatch.setattr(machine_breakdown, "open_incident", lambda *a, **k: opened.append(a))
+
+    machine_breakdown.run_detect_tick(day=date(2026, 7, 8), now=_now())
+
+    assert opened == []
+
+
+def test_run_detect_tick_uses_break_aware_elapsed_minutes(monkeypatch):
+    stop = _now() - timedelta(minutes=75)
+    monkeypatch.setattr(machine_breakdown, "_station_signals", lambda day, now: [
+        machine_breakdown.StationSignal("Dismantler 2", stop, True)
+    ])
+    monkeypatch.setattr(machine_breakdown, "_shift_bounds", lambda day: (
+        _now() - timedelta(hours=6), _now() + timedelta(hours=2)
+    ))
+    monkeypatch.setattr(machine_breakdown, "all_open_incidents", lambda day: [])
+    monkeypatch.setattr(machine_breakdown, "get_open_incident", lambda wc, day: None)
+    from zira_dashboard import shift_config
+    monkeypatch.setattr(shift_config, "in_shift_on", lambda local_dt: True)
+    calls = []
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda day, start, end: calls.append((day, start, end)) or 45,
+    )
+    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: [])
+    opened = []
+    monkeypatch.setattr(machine_breakdown, "open_incident", lambda *a, **k: opened.append(a))
+
+    machine_breakdown.run_detect_tick(day=date(2026, 7, 8), now=_now())
+
+    assert calls == [(date(2026, 7, 8), stop, _now())]
+    assert opened == []
 
 
 def test_cap_departed_operators_caps_and_leaves_still_present_untouched(monkeypatch):
