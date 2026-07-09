@@ -10,7 +10,12 @@ need to migrate. All functions are pure pass-throughs to SQL.
 from __future__ import annotations
 
 from .shift_config import TARGET_PER_DAY, productive_minutes_per_day
-from .staffing import LOCATIONS, Location, required_skills_for
+from .staffing import (
+    LOADING_JOCKEYING_REQUIRED_SKILLS,
+    LOCATIONS,
+    Location,
+    required_skills_for,
+)
 
 GROUP_KINDS = ("group", "department")
 
@@ -151,6 +156,10 @@ def _shape_effective(loc: Location, rec: dict, req: list[str],
         # (Row exists but no required-skill rows → user explicitly cleared:
         # keep the empty list.)
         req = list(required_skills_for(loc))
+    if loc.name == "Loading/Jockeying":
+        # Operationally this row is always color-coded by the three
+        # loading/jockeying skills; ignore stale saved rows such as Heat Treat.
+        req = list(LOADING_JOCKEYING_REQUIRED_SKILLS)
     goal = rec.get("goal_per_day_override")
     return {
         "goal_per_day": int(goal) if goal is not None else _default_goal_for(loc),

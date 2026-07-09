@@ -29,6 +29,12 @@ SKILLS: tuple[str, ...] = (
     "Mechanic",
 )
 
+LOADING_JOCKEYING_REQUIRED_SKILLS: tuple[str, ...] = (
+    "Loading",
+    "CPUs/VDOs",
+    "Trailer Jockeying",
+)
+
 
 @dataclass(frozen=True)
 class Location:
@@ -74,7 +80,14 @@ LOCATIONS: tuple[Location, ...] = (
     Location("Junior #2", "Junior", "Bay 17", "New", "42345"),
     Location("Junior #3", "Junior", "Bay 17", "New", None),
     # Forklift
-    Location("Loading/Jockeying", "Forklift: Load/Jockey", "Forklift", "Supervisor", None),
+    Location(
+        "Loading/Jockeying",
+        "Forklift: Load/Jockey",
+        "Forklift",
+        "Supervisor",
+        None,
+        required_skills=LOADING_JOCKEYING_REQUIRED_SKILLS,
+    ),
     Location("Tablets", "Forklift: Tablets", "Forklift", "Supervisor", None, min_ops=1, max_ops=None),
     # Maint.
     Location("Work Orders", "Mechanic", "Maint.", "Maintenance", None, min_ops=1, max_ops=None),
