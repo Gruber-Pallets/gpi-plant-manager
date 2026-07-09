@@ -32,6 +32,7 @@ from .routes import (
     feedback,
     forklift_leaderboards,
     goat_watch,
+    recycling_leaderboard,
     timeclock,
     timeclock_time_off,
     late_report,
@@ -505,6 +506,7 @@ app.include_router(dashboard.router)
 app.include_router(exceptions.router)
 app.include_router(departments.router)
 app.include_router(wc_dashboard.router)
+app.include_router(recycling_leaderboard.router)
 app.include_router(tv_displays.router)
 app.include_router(staffing.router)
 app.include_router(late_report.router)

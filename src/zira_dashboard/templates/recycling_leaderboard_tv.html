@@ -1,0 +1,82 @@
+{% from "_tv_header.html" import tv_header %}
+<!doctype html>
+<html lang="en" data-tv-theme="{{ tv_theme or 'dark' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/static/gpi-logo.png">
+<title>TV · Recycling-leaderboard — GPI Plant Manager</title>
+<link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
+<link rel="stylesheet" href="/static/recycling_leaderboard.css?v={{ static_v('recycling_leaderboard.css') }}">
+<script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>
+</head>
+<body class="recycling-leaderboard-tv">
+  {{ tv_header("Recycling-leaderboard", crumb="RECYCLING") }}
+  <main class="rlb-main">
+    <div class="rlb-range">
+      <span>YTD: {{ data.ytd_start.strftime('%b %-d') }}-{{ data.ytd_end.strftime('%b %-d') }}</span>
+      <span>L30: {{ data.l30_start.strftime('%b %-d') }}-{{ data.l30_end.strftime('%b %-d') }}</span>
+    </div>
+    <section class="rlb-grid">
+      {% for role in ["Repair", "Dismantler"] %}
+      {% set block = data.roles[role] %}
+      <section class="rlb-panel">
+        <header class="rlb-panel-head">
+          <div>
+            <h2>{{ "Repairs" if role == "Repair" else "Dismantlers" }}</h2>
+            <p>Sorted by YTD full-day avg</p>
+          </div>
+          <div class="rlb-thresholds">
+            <div>YTD min {{ block.thresholds.ytd }} days</div>
+            <div>L30 min {{ block.thresholds.l30 }} days</div>
+          </div>
+        </header>
+        {% if block.rows %}
+        <table class="rlb-table">
+          <thead><tr><th>#</th><th>Name</th><th class="num">YTD Avg</th><th class="num">L30 Avg</th></tr></thead>
+          <tbody>
+          {% for r in block.rows %}
+            <tr>
+              <td class="rank">{{ r.rank }}</td>
+              <td class="name">{{ r.name }}</td>
+              <td class="num">
+                {% if r.ytd.eligible %}
+                  <span class="score">{{ "%.1f"|format(r.ytd.avg_units) }}</span>
+                  <span class="days">{{ r.ytd.days }} days</span>
+                {% else %}
+                  <span class="not-enough">not enough days</span>
+                {% endif %}
+              </td>
+              <td class="num">
+                {% if r.l30.eligible %}
+                  <span class="score l30">{{ "%.1f"|format(r.l30.avg_units) }}</span>
+                  <span class="days">{{ r.l30.days }} days</span>
+                {% else %}
+                  <span class="not-enough">not enough days</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="rlb-empty">No qualified days yet.</div>
+        {% endif %}
+      </section>
+      {% endfor %}
+      <section class="rlb-panel rlb-ribbons">
+        <header class="rlb-panel-head"><div><h2>Gold Ribbons</h2><p>Best single qualifying day</p></div></header>
+        <div class="rlb-months">
+        {% for m in data.ribbons %}
+          <div class="rlb-month-row">
+            <div class="month">{{ m.month_label }}</div>
+            <div class="ribbon"><b>Repair</b>{% if m.repair %}<span>{{ m.repair.name }}</span><em>{{ m.repair.day.strftime('%b %-d') }} - {{ "%.0f"|format(m.repair.amount) }}</em>{% else %}<span>-</span>{% endif %}</div>
+            <div class="ribbon"><b>Dism</b>{% if m.dismantler %}<span>{{ m.dismantler.name }}</span><em>{{ m.dismantler.day.strftime('%b %-d') }} - {{ "%.0f"|format(m.dismantler.amount) }}</em>{% else %}<span>-</span>{% endif %}</div>
+          </div>
+        {% endfor %}
+        </div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

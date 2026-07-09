@@ -1,0 +1,159 @@
+.recycling-leaderboard-tv {
+  background: var(--bg);
+  color: var(--fg);
+}
+.rlb-main {
+  padding: 0 clamp(16px, 2vw, 40px) clamp(14px, 1.6vh, 30px);
+}
+.rlb-range {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  color: var(--muted);
+  font-size: clamp(0.75rem, 1vw, 1.1rem);
+  margin-bottom: 0.6rem;
+}
+.rlb-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1.15fr 0.9fr;
+  gap: clamp(10px, 1.2vw, 24px);
+  height: calc(100vh - 7.2rem);
+  min-height: 0;
+}
+.rlb-panel {
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: clamp(10px, 1.2vw, 22px);
+  overflow: hidden;
+}
+.rlb-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+}
+.rlb-panel h2 {
+  margin: 0;
+  color: var(--fg);
+  font-size: clamp(1.4rem, 2.4vw, 3rem);
+  line-height: 1;
+}
+.rlb-panel p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-weight: 700;
+}
+.rlb-thresholds {
+  color: #86efac;
+  text-align: right;
+  font-weight: 800;
+  font-size: clamp(0.72rem, 1vw, 1.2rem);
+  white-space: nowrap;
+}
+.rlb-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.rlb-table th {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: clamp(0.65rem, 0.85vw, 1rem);
+  padding: 0.35rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.rlb-table td {
+  padding: clamp(0.35rem, 1vh, 0.85rem) 0.4rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+.rlb-table .rank {
+  width: 2.5rem;
+  color: var(--muted);
+  font-size: clamp(1.4rem, 2vw, 2.4rem);
+  font-weight: 900;
+}
+.rlb-table .name {
+  color: var(--fg);
+  font-size: clamp(1rem, 1.6vw, 2rem);
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rlb-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.rlb-table .score {
+  display: block;
+  color: var(--fg);
+  font-size: clamp(1.25rem, 2vw, 2.6rem);
+  font-weight: 950;
+  line-height: 1;
+}
+.rlb-table .score.l30 {
+  color: #86efac;
+}
+.rlb-table .days,
+.rlb-table .not-enough {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: clamp(0.65rem, 0.9vw, 1.05rem);
+  font-weight: 800;
+}
+.rlb-months {
+  display: grid;
+  grid-template-rows: repeat(12, minmax(0, 1fr));
+  gap: 0.35rem;
+  height: calc(100% - 3rem);
+}
+.rlb-month-row {
+  display: grid;
+  grid-template-columns: 2.4rem 1fr 1fr;
+  gap: 0.35rem;
+  min-height: 0;
+}
+.rlb-month-row .month {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fbbf24;
+  font-weight: 950;
+}
+.rlb-month-row .ribbon {
+  min-width: 0;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(251, 191, 36, 0.08);
+  border-radius: 6px;
+  padding: 0.3rem 0.4rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.rlb-month-row .ribbon b {
+  color: #fbbf24;
+  font-size: clamp(0.55rem, 0.7vw, 0.85rem);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.rlb-month-row .ribbon span {
+  color: var(--fg);
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rlb-month-row .ribbon em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: clamp(0.6rem, 0.75vw, 0.9rem);
+}
+.rlb-empty {
+  color: var(--muted);
+  font-style: italic;
+}
