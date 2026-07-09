@@ -273,6 +273,8 @@ def build_snapshot() -> dict:
                 "kind": "scheduled",
                 "emp_id": item.get("emp_id"),
                 "name": item.get("name"),
+                "scheduled_wc": item.get("scheduled_wc"),
+                "scheduled_start_time": item.get("scheduled_start_time"),
             },
         })
     for item in late.get("unscheduled_late") or []:

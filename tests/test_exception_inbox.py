@@ -70,7 +70,15 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
     })
     monkeypatch.setattr(staffing_routes, "late_report_payload", lambda: {
         "count": 2,
-        "scheduled_late": [{"emp_id": 1, "name": "Ana", "minutes_late": 12}],
+        "scheduled_late": [
+            {
+                "emp_id": 1,
+                "name": "Ana",
+                "minutes_late": 12,
+                "scheduled_wc": "Baler",
+                "scheduled_start_time": "06:00",
+            }
+        ],
         "unscheduled_late": [{"emp_id": 2, "name": "Ben"}],
         "needs_reason": [],
         "snoozed": [{"emp_id": 3, "name": "Cal", "mins_remaining": 18}],
@@ -115,6 +123,8 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
     assert sections["assignments"]["rows"][0]["row_key"].startswith("assignment:Repair 1:")
     assert sections["assignments"]["rows"][0]["action"]["start_utc"].startswith("2026")
     assert sections["late"]["rows"][0]["action"]["emp_id"] == 1
+    assert sections["late"]["rows"][0]["action"]["scheduled_wc"] == "Baler"
+    assert sections["late"]["rows"][0]["action"]["scheduled_start_time"] == "06:00"
     assert sections["late"]["rows"][0]["row_key"] == "late:scheduled:1"
     assert sections["late"]["rows"][-1]["label"] == "Snoozed"
     assert sections["late"]["rows"][-1]["priority"] == "muted"
@@ -744,7 +754,13 @@ def test_exceptions_page_renders_forgot_punch_in_controls(monkeypatch):
         "badge": "Needs decision",
         "row_key": "late:scheduled:5",
         "item_key": "late:5:2026-06-19",
-        "action": {"type": "late_absence", "emp_id": 5, "name": "Lauro Benitez"},
+        "action": {
+            "type": "late_absence",
+            "emp_id": 5,
+            "name": "Lauro Benitez",
+            "scheduled_wc": "Tablets",
+            "scheduled_start_time": "06:00",
+        },
     }
     snapshot = {
         "today": "2026-06-19",
@@ -753,7 +769,7 @@ def test_exceptions_page_renders_forgot_punch_in_controls(monkeypatch):
         "urgent_total": 1,
         "follow_up_total": 0,
         "source_errors": [],
-        "work_centers": ["Trim Saw", "Repair 1"],
+        "work_centers": ["Trim Saw", "Tablets", "Repair 1"],
         "people": [],
         "sections": [],
         "queue": [
@@ -771,8 +787,10 @@ def test_exceptions_page_renders_forgot_punch_in_controls(monkeypatch):
     assert ">Missed Punch</button>" in resp.text
     assert 'class="row-btn warn js-absent"' in resp.text
     assert 'class="inline-input time js-forgot-punch-time"' in resp.text
+    assert 'value="06:00"' in resp.text
     assert 'class="inline-select js-forgot-wc"' in resp.text
     assert '<option value="Trim Saw">Trim Saw</option>' in resp.text
+    assert '<option value="Tablets" selected>Tablets</option>' in resp.text
     assert 'class="row-btn primary js-forgot-punch-save"' in resp.text
     assert ">Clock in</button>" in resp.text
 

@@ -108,11 +108,11 @@
               <option value="">Other</option>
             </select>
             <input type="text" class="inline-input js-reason-input" aria-label="Late or absence reason" placeholder="Reason required">
-            <input type="time" class="inline-input time js-forgot-punch-time" aria-label="Forgotten punch-in time" hidden>
+            <input type="time" class="inline-input time js-forgot-punch-time" aria-label="Forgotten punch-in time" value="{{ action.scheduled_start_time or '' }}" hidden>
             <select class="inline-select js-forgot-wc" aria-label="Forgotten punch-in work center" hidden>
               <option value="">Work center...</option>
               {% for wc in work_centers %}
-                <option value="{{ wc }}">{{ wc }}</option>
+                <option value="{{ wc }}"{% if action.scheduled_wc == wc %} selected{% endif %}>{{ wc }}</option>
               {% endfor %}
             </select>
             <button type="button" class="row-btn primary js-forgot-punch-save" hidden>Clock in</button>

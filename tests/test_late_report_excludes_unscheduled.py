@@ -74,6 +74,8 @@ def test_late_report_payload_excludes_unscheduled_no_punch(monkeypatch):
 
     # The scheduled person who didn't punch in is still flagged...
     assert [r["emp_id"] for r in out["scheduled_late"]] == ["1"]
+    assert out["scheduled_late"][0]["scheduled_wc"] == "Baler"
+    assert out["scheduled_late"][0]["scheduled_start_time"] == "06:00"
     # ...but the unscheduled person is NOT flagged at all.
     assert out["unscheduled_late"] == []
     # Badge count reflects only the scheduled person.

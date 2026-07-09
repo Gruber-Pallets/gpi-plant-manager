@@ -907,16 +907,23 @@ def late_report_payload(force: bool = False) -> dict:
             )
 
             id_to_name = attendance.person_id_to_name(attendance_pkg.get("name_to_id") or {})
+            scheduled_wc_by_name = {}
+            for wc_name, names in (sched.assignments or {}).items():
+                for person_name in names or []:
+                    scheduled_wc_by_name.setdefault(person_name, wc_name)
 
             def _resolve(emp_id):
                 # id_to_name covers all active people (Odoo). No StratusTime fallback.
                 return id_to_name.get(emp_id) or f"Unknown ({emp_id})"
 
             for r in sections["scheduled_late"]:
+                name = _resolve(r["emp_id"])
                 out["scheduled_late"].append({
                     "emp_id": r["emp_id"],
-                    "name": _resolve(r["emp_id"]),
+                    "name": name,
                     "minutes_late": r["minutes_late"],
+                    "scheduled_wc": scheduled_wc_by_name.get(name),
+                    "scheduled_start_time": shift_start_local.strftime("%H:%M"),
                 })
             for r in sections["unscheduled_late"]:
                 out["unscheduled_late"].append({
