@@ -472,12 +472,12 @@ CREATE TABLE IF NOT EXISTS odoo_open_attendance_cache (
 -- name, the dashboard it shows (kind + optional wc_name), and the theme
 -- (light/dark) for that physical display. The /tv/{slug} route looks
 -- up the row and dispatches to the underlying dashboard with the row's
--- theme. Seed list of 10 rows inserts on first boot only.
+-- theme. Seed list of 11 rows inserts on first boot only.
 CREATE TABLE IF NOT EXISTS tv_displays (
   id                  SERIAL PRIMARY KEY,
   name                TEXT NOT NULL,
   slug                TEXT NOT NULL UNIQUE,
-  kind                TEXT NOT NULL CHECK (kind IN ('vs_recycling', 'vs_new', 'wc')),
+  kind                TEXT NOT NULL CHECK (kind IN ('vs_recycling', 'vs_new', 'vs_recycling_leaderboard', 'wc')),
   wc_name             TEXT,
   theme               TEXT NOT NULL DEFAULT 'dark' CHECK (theme IN ('light', 'dark')),
   sort_order          INTEGER NOT NULL DEFAULT 0,
@@ -505,10 +505,19 @@ DROP TABLE IF EXISTS widget_definitions;
 DROP TABLE IF EXISTS tv_dashboard_templates;
 DROP TABLE IF EXISTS pinned_dashboards;
 
--- Tighten tv_displays.kind CHECK back down to the live kinds. Guarded so
--- the constraint is only added when missing — an unconditional DROP + ADD
--- takes an ACCESS EXCLUSIVE lock and re-validates the table on every boot.
+-- Tighten tv_displays.kind CHECK back down to the live kinds.
 DELETE FROM tv_displays WHERE kind = 'custom';
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'tv_displays_kind_check'
+      AND conrelid = 'tv_displays'::regclass
+  ) THEN
+    ALTER TABLE tv_displays DROP CONSTRAINT tv_displays_kind_check;
+  END IF;
+END $$;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -517,7 +526,7 @@ BEGIN
       AND conrelid = 'tv_displays'::regclass
   ) THEN
     ALTER TABLE tv_displays ADD CONSTRAINT tv_displays_kind_check
-      CHECK (kind IN ('vs_recycling', 'vs_new', 'wc'));
+      CHECK (kind IN ('vs_recycling', 'vs_new', 'vs_recycling_leaderboard', 'wc'));
   END IF;
 END $$;
 

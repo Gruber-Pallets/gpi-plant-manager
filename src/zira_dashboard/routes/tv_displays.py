@@ -51,6 +51,12 @@ def tv_display(request: Request, slug: str, theme: str | None = Query(default=No
         return _render_new_dept(
             request, day=None, tv_mode=True, tv_theme=tv_theme,
         )
+    if kind == "vs_recycling_leaderboard":
+        from . import recycling_leaderboard
+        return recycling_leaderboard.render_recycling_leaderboard_tv(
+            request,
+            tv_theme=tv_theme,
+        )
     if kind == "wc":
         from .. import staffing
         wc_name = row["wc_name"]
@@ -106,7 +112,7 @@ async def post_display(request: Request):
     row_id = body.get("id")
     if not isinstance(name, str) or not name.strip():
         return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
-    if kind not in ("vs_recycling", "vs_new", "wc"):
+    if kind not in ("vs_recycling", "vs_new", "vs_recycling_leaderboard", "wc"):
         return JSONResponse({"ok": False, "error": "kind invalid"}, status_code=400)
     if kind == "wc":
         from .. import staffing

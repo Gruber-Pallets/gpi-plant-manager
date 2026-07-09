@@ -248,6 +248,11 @@ def settings_page(
         all_dashboards_for_picker = [
             {"kind": "vs_recycling", "ref": "", "name": "Recycling"},
             {"kind": "vs_new", "ref": "", "name": "New"},
+            {
+                "kind": "vs_recycling_leaderboard",
+                "ref": "",
+                "name": "Recycling-leaderboard",
+            },
             {"kind": "vs_work_centers", "ref": "", "name": "Work Centers"},
         ]
         for loc in staffing.LOCATIONS:

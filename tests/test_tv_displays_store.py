@@ -35,6 +35,18 @@ def test_save_inserts_and_returns_slug():
     assert isinstance(row["id"], int)
 
 
+def test_save_recycling_leaderboard_kind():
+    from zira_dashboard import tv_displays_store
+    row = tv_displays_store.save(
+        name="st-recycling-leaderboard",
+        kind="vs_recycling_leaderboard",
+        wc_name=None,
+        theme="dark",
+    )
+    assert row["kind"] == "vs_recycling_leaderboard"
+    assert row["wc_name"] is None
+
+
 def test_save_collision_suffixes_slug():
     from zira_dashboard import tv_displays_store
     a = tv_displays_store.save(name="st-clash", kind="wc", wc_name="Repair 1", theme="dark")
@@ -115,13 +127,14 @@ def test_seed_defaults_if_empty_seeds_when_empty(monkeypatch):
     tv_displays_store.seed_defaults_if_empty()
     rows = tv_displays_store.list_displays()
     names = [r["name"] for r in rows]
-    assert "Recycling VS" in names
-    assert "New VS" in names
+    assert "Recycling" in names
+    assert "New" in names
+    assert "Recycling-leaderboard" in names
     assert "Repair 1" in names
     assert "Dismantler 4" in names
-    assert len(rows) == 10
+    assert len(rows) == 11
     tv_displays_store.seed_defaults_if_empty()
-    assert len(tv_displays_store.list_displays()) == 10
+    assert len(tv_displays_store.list_displays()) == 11
 
 
 def test_save_custom_kind_rejected():
@@ -148,9 +161,10 @@ def test_seed_defaults_skips_missing_wc(monkeypatch, caplog):
         tv_displays_store.seed_defaults_if_empty()
     rows = tv_displays_store.list_displays()
     names = [r["name"] for r in rows]
-    assert "Recycling VS" in names
-    assert "New VS" in names
+    assert "Recycling" in names
+    assert "New" in names
+    assert "Recycling-leaderboard" in names
     assert "Repair 1" in names
     assert "Junior 2" not in names
     assert "Dismantler 1" not in names
-    assert len(rows) == 3
+    assert len(rows) == 4

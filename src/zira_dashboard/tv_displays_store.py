@@ -1,11 +1,12 @@
 """Persistence layer for TV display registry.
 
 Each row is a physical TV in the plant: a friendly name, which dashboard
-it shows (kind = vs_recycling / vs_new / wc, plus wc_name when kind=wc),
+it shows (kind = vs_recycling / vs_new / vs_recycling_leaderboard / wc,
+plus wc_name when kind=wc),
 and a light/dark theme. The /tv/{slug} route looks up the row and
 dispatches to the appropriate render helper with the row's theme.
 
-Seed list of 10 rows inserts on first boot only — once the table has
+Seed list of 11 rows inserts on first boot only — once the table has
 any rows, seeding is a no-op. Deleting a seeded row stays deleted across
 redeploys.
 """
@@ -18,10 +19,14 @@ from .wc_dashboard_data import slug_for_wc
 _log = logging.getLogger(__name__)
 
 
+_VALID_KINDS = ("vs_recycling", "vs_new", "vs_recycling_leaderboard", "wc")
+
+
 # (name, kind, wc_name) — order matters for sort_order assignment at seed.
 _SEED_LIST = [
     ("Recycling", "vs_recycling", None),
     ("New",       "vs_new",        None),
+    ("Recycling-leaderboard", "vs_recycling_leaderboard", None),
     ("Junior 2",     "wc",            "Junior 2"),
     ("Repair 1",     "wc",            "Repair 1"),
     ("Repair 2",     "wc",            "Repair 2"),
@@ -72,7 +77,7 @@ def save(
         raise ValueError("name must produce a non-empty slug")
     if theme not in ("light", "dark"):
         theme = "dark"
-    if kind not in ("vs_recycling", "vs_new", "wc"):
+    if kind not in _VALID_KINDS:
         raise ValueError(f"invalid kind: {kind}")
     slug = _unique_slug(slug_base, exclude_id=id)
     if id is None:
@@ -133,7 +138,7 @@ def list_displays() -> list[dict]:
 
 
 def seed_defaults_if_empty() -> None:
-    """Insert the 10-row seed list if `tv_displays` is empty.
+    """Insert the 11-row seed list if `tv_displays` is empty.
 
     Rows whose `wc_name` is not present in `staffing.LOCATIONS` are
     skipped with a warning log so a partial WC roster doesn't fail

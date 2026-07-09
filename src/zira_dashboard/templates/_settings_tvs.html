@@ -27,7 +27,7 @@
               {% for dash in all_dashboards_for_picker %}
                 <option value="{{ dash.kind }}|{{ dash.ref }}"
                         {% if d.kind == dash.kind and (
-                          (d.kind in ('vs_recycling','vs_new','vs_work_centers')) or
+                          (d.kind in ('vs_recycling','vs_new','vs_work_centers','vs_recycling_leaderboard')) or
                           (d.kind == 'wc' and d.wc_name == dash.ref)
                         ) %}selected{% endif %}>
                   {{ dash.name }}
