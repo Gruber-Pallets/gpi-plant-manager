@@ -43,6 +43,13 @@ def test_tv_leaderboard_horizontal_spacing_stays_compact():
     assert "padding: 0.25rem 0.25rem" in CSS
 
 
+def test_tv_leaderboard_role_titles_are_not_header_elements():
+    assert '<header class="rlb-panel-head">' not in TEMPLATE
+    assert '<div class="rlb-panel-head">' in TEMPLATE
+    assert "Repairs" in TEMPLATE
+    assert "Dismantlers" in TEMPLATE
+
+
 def test_player_card_no_longer_labels_production_average_as_pph():
     assert "Avg (pph)" not in PLAYER_CARD
     assert ">pph<" not in PLAYER_CARD

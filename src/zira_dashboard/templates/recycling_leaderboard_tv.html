@@ -36,7 +36,7 @@
       {% for role in ["Repair", "Dismantler"] %}
       {% set block = data.roles[role] %}
       <section class="rlb-panel">
-        <header class="rlb-panel-head">
+        <div class="rlb-panel-head">
           <div>
             <h2>{{ "Repairs" if role == "Repair" else "Dismantlers" }}</h2>
             <p>Sorted by YTD full-day avg</p>
@@ -45,7 +45,7 @@
             <div>YTD min {{ block.thresholds.ytd }} days</div>
             <div>L30 min {{ block.thresholds.l30 }} days</div>
           </div>
-        </header>
+        </div>
         {% if block.rows %}
         <table class="rlb-table">
           <colgroup>
@@ -86,7 +86,7 @@
       </section>
       {% endfor %}
       <section class="rlb-panel rlb-ribbons">
-        <header class="rlb-panel-head"><div><h2>Gold Ribbons</h2><p>Best single qualifying day</p></div></header>
+        <div class="rlb-panel-head"><div><h2>Gold Ribbons</h2><p>Best single qualifying day</p></div></div>
         <div class="rlb-ribbon-board">
           <div class="rlb-ribbon-cols">
             <span></span>
