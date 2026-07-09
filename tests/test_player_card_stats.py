@@ -45,7 +45,7 @@ def _stub_route_dependencies(monkeypatch, *, person_data, registered, members_ma
     )
     monkeypatch.setattr(
         production_history,
-        "daily_records",
+        "normalized_daily_records",
         lambda s, e: list(daily_records),
     )
     monkeypatch.setattr(

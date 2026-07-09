@@ -6,9 +6,9 @@ plus wc_name when kind=wc),
 and a light/dark theme. The /tv/{slug} route looks up the row and
 dispatches to the appropriate render helper with the row's theme.
 
-Seed list of 11 rows inserts on first boot only — once the table has
-any rows, seeding is a no-op. Deleting a seeded row stays deleted across
-redeploys.
+Seed list inserts on first boot. New seeded display types can also be
+backfilled once on existing installs with an app_settings marker, so deleting
+one after the backfill stays respected across redeploys.
 """
 from __future__ import annotations
 
@@ -20,13 +20,19 @@ _log = logging.getLogger(__name__)
 
 
 _VALID_KINDS = ("vs_recycling", "vs_new", "vs_recycling_leaderboard", "wc")
+_RECYCLING_LEADERBOARD_SEED_MARKER = "tv_displays:seed_recycling_leaderboard_v1"
+_RECYCLING_LEADERBOARD_SEED = (
+    "Recycling-leaderboard",
+    "vs_recycling_leaderboard",
+    None,
+)
 
 
 # (name, kind, wc_name) — order matters for sort_order assignment at seed.
 _SEED_LIST = [
     ("Recycling", "vs_recycling", None),
     ("New",       "vs_new",        None),
-    ("Recycling-leaderboard", "vs_recycling_leaderboard", None),
+    _RECYCLING_LEADERBOARD_SEED,
     ("Junior 2",     "wc",            "Junior 2"),
     ("Repair 1",     "wc",            "Repair 1"),
     ("Repair 2",     "wc",            "Repair 2"),
@@ -138,16 +144,15 @@ def list_displays() -> list[dict]:
 
 
 def seed_defaults_if_empty() -> None:
-    """Insert the 11-row seed list if `tv_displays` is empty.
+    """Insert the default seed list and one-time backfills.
 
     Rows whose `wc_name` is not present in `staffing.LOCATIONS` are
-    skipped with a warning log so a partial WC roster doesn't fail
-    boot. Once any row exists, this is a no-op — deleting a seeded
-    row keeps it deleted across redeploys.
+    skipped with a warning log so a partial WC roster doesn't fail boot.
     """
-    from . import db, staffing
+    from . import app_settings, db, staffing
     existing = db.query("SELECT 1 FROM tv_displays LIMIT 1")
     if existing:
+        _backfill_recycling_leaderboard_seed()
         return
     valid_wc_names = {loc.name for loc in staffing.LOCATIONS}
     inserted = 0
@@ -164,7 +169,30 @@ def seed_defaults_if_empty() -> None:
             (name, slug, kind, wc_name, "dark", idx),
         )
         inserted += 1
+    app_settings.set_setting(_RECYCLING_LEADERBOARD_SEED_MARKER, {"done": True})
     _log.info("tv_displays seeded %d default rows", inserted)
+
+
+def _backfill_recycling_leaderboard_seed() -> None:
+    from . import app_settings, db
+
+    if app_settings.get_setting(_RECYCLING_LEADERBOARD_SEED_MARKER):
+        return
+    existing = db.query(
+        "SELECT 1 FROM tv_displays WHERE kind = %s LIMIT 1",
+        ("vs_recycling_leaderboard",),
+    )
+    if not existing:
+        sort_rows = db.query("SELECT COALESCE(MAX(sort_order), -1) AS sort_order FROM tv_displays")
+        sort_order = int(sort_rows[0]["sort_order"]) + 1 if sort_rows else 0
+        name, kind, wc_name = _RECYCLING_LEADERBOARD_SEED
+        slug = _unique_slug(slug_for_wc(name))
+        db.execute(
+            "INSERT INTO tv_displays (name, slug, kind, wc_name, theme, sort_order) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (name, slug, kind, wc_name, "dark", sort_order),
+        )
+    app_settings.set_setting(_RECYCLING_LEADERBOARD_SEED_MARKER, {"done": True})
 
 
 def _hydrate(row) -> dict:

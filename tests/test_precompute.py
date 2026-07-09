@@ -35,11 +35,26 @@ def test_flatten_attribution_solo_operator():
     }]
 
 
-def test_flatten_skips_zero_units():
+def test_flatten_skips_zero_units_without_qualified_time():
     from zira_dashboard.precompute import flatten_attribution
     attribution = {"Bob": {"Repair 1": {"units": 0.0, "downtime": 0.0, "hours": 0.0, "days_worked": 0}}}
     out = flatten_attribution(date(2026, 5, 1), attribution, name_to_emp_id={"Bob": "E1"})
     assert out == []
+
+
+def test_flatten_keeps_zero_units_with_qualified_time():
+    from zira_dashboard.precompute import flatten_attribution
+    attribution = {
+        "Bob": {
+            "Repair 1": {
+                "units": 0.0, "downtime": 0.0, "hours": 7.0, "days_worked": 1,
+            }
+        }
+    }
+    out = flatten_attribution(date(2026, 5, 1), attribution, name_to_emp_id={"Bob": "E1"})
+    assert len(out) == 1
+    assert out[0]["units"] == 0.0
+    assert out[0]["hours"] == 7.0
 
 
 def test_flatten_keeps_unknown_name_using_name():
@@ -211,3 +226,19 @@ def test_daily_records_in_range_returns_per_row():
     assert out_sorted[0]["units"] == 10.0
     assert out_sorted[1]["units"] == 20.0
     assert out_sorted[0]["person"] == "Alice"
+
+
+@pytestmark_pg
+def test_normalized_daily_records_in_range_includes_zero_unit_qualified_days():
+    from zira_dashboard import db
+    from zira_dashboard.precompute import normalized_daily_records_in_range
+    db.init_pool(); db.bootstrap_schema()
+    _seed([
+        {"day": date(2099, 6, 1), "emp_id": "E1", "name": "Alice", "wc_name": "WC1",
+         "units": 0.0, "downtime": 0.0, "hours": 7.0, "days_worked": 1.0},
+        {"day": date(2099, 6, 2), "emp_id": "E1", "name": "Alice", "wc_name": "WC1",
+         "units": 20.0, "downtime": 2.0, "hours": 4.0, "days_worked": 1.0},
+    ])
+
+    out = normalized_daily_records_in_range(date(2099, 6, 1), date(2099, 6, 30))
+    assert [r["units"] for r in sorted(out, key=lambda r: r["day"])] == [0.0, 20.0]

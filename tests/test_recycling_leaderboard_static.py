@@ -34,3 +34,7 @@ def test_recycling_leaderboard_display_name_stays_hyphenated():
     assert "Recycling Leaderboard" not in TEMPLATE
     assert "Recycling Leaderboard" not in TV_DISPLAYS_STORE
     assert "Recycling Leaderboard" not in SETTINGS_ROUTE
+
+
+def test_recycling_leaderboard_document_title_is_exact_name():
+    assert "<title>Recycling-leaderboard</title>" in TEMPLATE

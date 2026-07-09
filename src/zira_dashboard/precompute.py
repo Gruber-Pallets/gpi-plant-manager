@@ -31,9 +31,9 @@ def flatten_attribution(
     excluded_minutes}}} into a flat list of rows ready for UPSERT into
     production_daily.
 
-    Rows where units == 0 are dropped (the attribution dict can carry
-    zero-unit rows for multi-person WCs with no production; they add
-    no value in the table).
+    Zero-unit rows are kept when they carry qualified worked time so
+    normalized average metrics can count those days fairly. Rows with
+    neither units nor worked time are dropped.
 
     Operators not found in the name->id map fall back to using their name
     as the row key (the column is TEXT and every production_daily read is
@@ -44,7 +44,9 @@ def flatten_attribution(
         emp_id = name_to_emp_id.get(person) or person  # fall back to name; never drop
         for wc_name, totals in wc_map.items():
             units = float(totals.get("units") or 0)
-            if units <= 0:
+            hours = float(totals.get("hours") or 0)
+            days_worked = float(totals.get("days_worked") or 0)
+            if units <= 0 and (hours <= 0 or days_worked <= 0):
                 continue
             rows.append({
                 "day": day,
@@ -53,8 +55,8 @@ def flatten_attribution(
                 "wc_name": wc_name,
                 "units": units,
                 "downtime": float(totals.get("downtime") or 0),
-                "hours": float(totals.get("hours") or 0),
-                "days_worked": float(totals.get("days_worked") or 0),
+                "hours": hours,
+                "days_worked": days_worked,
                 "excluded_minutes": float(totals.get("excluded_minutes") or 0),
             })
     return rows
@@ -180,6 +182,43 @@ def daily_records_in_range(start: date, end: date) -> list[dict]:
                units, downtime, hours, excluded_minutes
         FROM production_daily
         WHERE day BETWEEN %s AND %s AND units > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM manual_absences ma
+            WHERE ma.day = production_daily.day
+              AND ma.name = production_daily.name
+          )
+        """,
+        (start, end),
+    )
+    return [
+        {
+            "day": r["day"],
+            "person": r["person"],
+            "wc": r["wc"],
+            "units": float(r["units"]),
+            "downtime": float(r["downtime"]),
+            "hours": float(r["hours"]),
+            "excluded_minutes": float(r["excluded_minutes"]),
+        }
+        for r in rows
+    ]
+
+
+def normalized_daily_records_in_range(start: date, end: date) -> list[dict]:
+    """Records for normalized production averages.
+
+    Unlike ``daily_records_in_range`` this intentionally includes zero-unit
+    rows, because a 4+ hour day with no output should count as a qualified day
+    with a zero normalized score. Trophy/award paths keep using the legacy
+    positive-units reader.
+    """
+    from . import db
+    rows = db.query(
+        """
+        SELECT day, name AS person, wc_name AS wc,
+               units, downtime, hours, excluded_minutes
+        FROM production_daily
+        WHERE day BETWEEN %s AND %s
           AND NOT EXISTS (
             SELECT 1 FROM manual_absences ma
             WHERE ma.day = production_daily.day

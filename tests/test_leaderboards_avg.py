@@ -71,11 +71,12 @@ def test_averages_tiebreak_more_days_ranks_higher():
     assert [r["name"] for r in rows] == ["Alice", "Bob"]
 
 
-def test_averages_zero_unit_records_filtered():
-    # Days where units=0 (e.g., time off) should NOT drag down the average.
+def test_averages_zero_hour_records_filtered():
+    # Days with no qualified time (e.g., time off) should NOT drag down the average.
     records = [
         _rec(date(2026, 4, 27), "Alice", "WC1", 200),
-        _rec(date(2026, 4, 28), "Alice", "WC1", 0),
+        {"day": date(2026, 4, 28), "person": "Alice", "wc": "WC1", "units": 0,
+         "downtime": 0.0, "hours": 0.0},
     ]
     rows = averages_for_wc(records, 30.0, _const_productive, "units")
     assert rows[0]["avg_units"] == 200.0
@@ -172,11 +173,12 @@ def test_group_averages_unknown_wc_target_excluded_from_pct():
     assert rows[0]["avg_units"] == 210.0
 
 
-def test_group_averages_filters_zero_unit_records():
+def test_group_averages_filters_zero_hour_records():
     target_by_wc = {"WC1": 30.0}
     records = [
         _rec(date(2026, 4, 27), "Alice", "WC1", 200),
-        _rec(date(2026, 4, 28), "Alice", "WC1", 0),
+        {"day": date(2026, 4, 28), "person": "Alice", "wc": "WC1", "units": 0,
+         "downtime": 0.0, "hours": 0.0},
     ]
     rows = averages_for_group(records, target_by_wc, _const_productive, "units")
     assert rows[0]["name_count"] == 1
@@ -245,6 +247,22 @@ def test_averages_for_wc_units_normalizes_4_hour_day():
     )
     assert rows[0]["avg_units"] == 140.0
     assert rows[0]["name_count"] == 1
+
+
+def test_averages_for_wc_units_counts_zero_unit_qualified_day():
+    records = [
+        {"day": date(2026, 7, 1), "person": "Alice", "wc": "WC1", "units": 140, "downtime": 0.0, "hours": 7.0},
+        {"day": date(2026, 7, 2), "person": "Alice", "wc": "WC1", "units": 0, "downtime": 0.0, "hours": 7.0},
+    ]
+    rows = averages_for_wc(
+        records,
+        30.0,
+        _const_productive,
+        "units",
+        standard_full_day_hours=7.0,
+    )
+    assert rows[0]["avg_units"] == 70.0
+    assert rows[0]["name_count"] == 2
 
 
 def test_averages_for_wc_units_excludes_under_4_hour_day():

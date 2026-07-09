@@ -54,3 +54,31 @@ def test_tv_recycling_leaderboard_renders(monkeypatch):
     assert "q-days" not in r.text
     assert "actual times" not in r.text
     assert "tv-refresh.js" in r.text
+
+
+def test_direct_tv_recycling_leaderboard_uses_saved_theme(monkeypatch):
+    from zira_dashboard import tv_displays_store
+    from zira_dashboard.routes import recycling_leaderboard
+
+    monkeypatch.setattr(
+        tv_displays_store,
+        "by_slug",
+        lambda slug: {
+            "id": 1,
+            "name": "Recycling-leaderboard",
+            "slug": slug,
+            "kind": "vs_recycling_leaderboard",
+            "wc_name": None,
+            "theme": "light",
+            "sort_order": 2,
+        },
+    )
+
+    def _fake_render(request, *, tv_theme="dark"):
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(f'<html data-tv-theme="{tv_theme}">ok</html>')
+
+    monkeypatch.setattr(recycling_leaderboard, "render_recycling_leaderboard_tv", _fake_render)
+    r = TestClient(app).get("/tv/recycling-leaderboard")
+    assert r.status_code == 200
+    assert 'data-tv-theme="light"' in r.text

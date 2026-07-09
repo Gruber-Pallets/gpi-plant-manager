@@ -21,7 +21,10 @@ def _wc_role_by_name() -> dict[str, str]:
 
 
 def _leaderboard_payload(today: date) -> dict:
-    records = production_history.daily_records(date(today.year - 1, 1, 1), today)
+    records = production_history.normalized_daily_records(
+        date(today.year - 1, 1, 1),
+        today,
+    )
     return production_metrics.build_recycling_leaderboard(
         records,
         today=today,
@@ -49,5 +52,12 @@ def render_recycling_leaderboard_tv(
 
 @router.get("/tv/recycling-leaderboard", response_class=HTMLResponse)
 def tv_recycling_leaderboard(request: Request, theme: str | None = Query(default=None)):
-    tv_theme = "light" if theme == "light" else "dark"
+    from .. import tv_displays_store
+
+    try:
+        row = tv_displays_store.by_slug("recycling-leaderboard")
+    except Exception:  # noqa: BLE001 - keep the TV route usable during DB outages/local tests
+        row = None
+    stored_theme = row["theme"] if row is not None else "dark"
+    tv_theme = "light" if theme == "light" else ("dark" if theme == "dark" else stored_theme)
     return render_recycling_leaderboard_tv(request, tv_theme=tv_theme)

@@ -35,7 +35,7 @@ def averages_for_wc(
 
     `records` is a list of dicts with keys: day, person, wc, units,
     downtime, hours, excluded_minutes -- same shape as
-    production_history.daily_records().
+    production_history.normalized_daily_records().
 
     `target_per_hour` is the hourly target for this WC.
 
@@ -45,10 +45,11 @@ def averages_for_wc(
     `mode` is 'units' or 'pct' — drives the sort.
 
     Returns rows sorted by the active metric desc, with rank assigned.
-    Days where the operator earned zero units are excluded so they don't
-    drag down the average. Tiebreak: more days_worked ranks higher.
+    Days under the normalized-time cutoff are excluded. Qualified zero-output
+    days remain, so full days with no output fairly reduce the average.
+    Tiebreak: more qualified days ranks higher.
     """
-    rows = [r for r in records if r["units"] > 0]
+    rows = list(records)
     if standard_full_day_hours is None:
         standard_full_day_hours = max(
             (productive_minutes_for(r["day"]) for r in rows),
@@ -114,7 +115,7 @@ def averages_for_group(
 
     Same filtering, sorting, and tiebreak rules as averages_for_wc.
     """
-    rows = [r for r in records if r["units"] > 0]
+    rows = list(records)
     if standard_full_day_hours is None:
         standard_full_day_hours = max(
             (productive_minutes_for(r["day"]) for r in rows),
@@ -205,7 +206,7 @@ def staffing_leaderboards(
 
     person_certs = cert_lookup.load_person_certs()
 
-    records = production_history.daily_records(start_d, end_d)
+    records = production_history.normalized_daily_records(start_d, end_d)
     # Bucket once by WC so the per-WC and per-group sections below reuse the
     # buckets instead of rescanning the full record list per section.
     records_by_wc: dict[str, list[dict]] = defaultdict(list)

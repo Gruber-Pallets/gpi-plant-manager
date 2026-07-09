@@ -21,6 +21,7 @@ def test_player_card_renders_per_day_breakdown_table():
     ]
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=fake), \
          patch("zira_dashboard.production_history.daily_records", return_value=[]), \
+         patch("zira_dashboard.production_history.normalized_daily_records", return_value=[]), \
          patch("zira_dashboard.production_history.attribution_range",
                return_value={"Carlos": {"Repair-1": {"units": 175.0, "downtime": 0.0,
                                                      "hours": 16.0, "days_worked": 2},
@@ -64,6 +65,7 @@ def test_player_card_renders_attendance_section_with_reasons():
 
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=[]), \
          patch("zira_dashboard.production_history.daily_records", return_value=[]), \
+         patch("zira_dashboard.production_history.normalized_daily_records", return_value=[]), \
          patch("zira_dashboard.production_history.attribution_range", return_value={}), \
          patch("zira_dashboard.staffing.load_roster", return_value=[]), \
          patch("zira_dashboard.shift_config.productive_minutes_per_day", return_value=420), \
@@ -91,6 +93,7 @@ def test_player_card_attendance_section_hidden_when_empty():
 
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=[]), \
          patch("zira_dashboard.production_history.daily_records", return_value=[]), \
+         patch("zira_dashboard.production_history.normalized_daily_records", return_value=[]), \
          patch("zira_dashboard.production_history.attribution_range", return_value={}), \
          patch("zira_dashboard.staffing.load_roster", return_value=[]), \
          patch("zira_dashboard.shift_config.productive_minutes_per_day", return_value=420), \
@@ -112,6 +115,7 @@ def _bare_card_patches():
     return [
         patch("zira_dashboard.production_history.attribution_per_day", return_value=[]),
         patch("zira_dashboard.production_history.daily_records", return_value=[]),
+        patch("zira_dashboard.production_history.normalized_daily_records", return_value=[]),
         patch("zira_dashboard.production_history.attribution_range", return_value={}),
         patch("zira_dashboard.staffing.load_roster", return_value=[]),
         patch("zira_dashboard.shift_config.productive_minutes_per_day", return_value=420),

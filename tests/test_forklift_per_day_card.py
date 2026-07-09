@@ -76,6 +76,7 @@ def _stub_player_card(monkeypatch, *, driver_days):
     monkeypatch.setattr(production_history, "attribution_range", lambda s, e: {})
     monkeypatch.setattr(production_history, "attribution_per_day", lambda s, e: [])
     monkeypatch.setattr(production_history, "daily_records", lambda s, e: [])
+    monkeypatch.setattr(production_history, "normalized_daily_records", lambda s, e: [])
     monkeypatch.setattr(shift_config, "productive_minutes_per_day", lambda: 420)
     monkeypatch.setattr(work_centers_store, "registered_groups", lambda: [])
     monkeypatch.setattr(late_report, "absences_history_for_name", lambda *a, **k: [])

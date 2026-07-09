@@ -349,6 +349,17 @@ def daily_records(start_d: date, end_d: date) -> list[dict]:
     return precompute.daily_records_in_range(start_d, end_d)
 
 
+def normalized_daily_records(start_d: date, end_d: date) -> list[dict]:
+    """Return records for normalized production averages.
+
+    Includes zero-unit worked days so 4+ hour days count fairly in normalized
+    average denominators. Award/trophy paths should keep using
+    ``daily_records``.
+    """
+    from . import precompute
+    return precompute.normalized_daily_records_in_range(start_d, end_d)
+
+
 def rank_by_category(
     range_attribution: dict[str, dict[str, dict[str, float]]],
     category_wcs: list[str],

@@ -185,7 +185,7 @@ def staffing_player_card(
 
     range_out = production_history.attribution_range(start_d, end_d)
     person = range_out.get(name, {})
-    metric_records_all = production_history.daily_records(start_d, end_d)
+    metric_records_all = production_history.normalized_daily_records(start_d, end_d)
     metric_records = [r for r in metric_records_all if r["person"] == name]
     standard_full_day_hours = shift_config.productive_minutes_per_day() / 60.0
     rows = sorted(
