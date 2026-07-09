@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import staffing
+from .. import production_metrics, shift_config, staffing
 from ..deps import templates
 from ..plant_day import today as plant_today
 
@@ -185,19 +185,31 @@ def staffing_player_card(
 
     range_out = production_history.attribution_range(start_d, end_d)
     person = range_out.get(name, {})
+    metric_records_all = production_history.daily_records(start_d, end_d)
+    metric_records = [r for r in metric_records_all if r["person"] == name]
+    standard_full_day_hours = shift_config.productive_minutes_per_day() / 60.0
     rows = sorted(
         ({"wc": wc, **t} for wc, t in person.items()),
         key=lambda r: -r["units"],
     )
     for r in rows:
-        hrs = r.get("hours", 0.0)
-        r["avg_pph"] = round(r["units"] / hrs, 1) if hrs > 0 else 0
+        metric = production_metrics.normalized_average_by_person(
+            metric_records,
+            wc_names={r["wc"]},
+            standard_full_day_hours=standard_full_day_hours,
+        )
+        if metric:
+            r["full_day_avg"] = round(metric[0]["avg_units"], 1)
+            r["days_worked"] = metric[0]["days"]
+        else:
+            r["full_day_avg"] = None
+            r["days_worked"] = 0
     total_units    = sum(r["units"] for r in rows)
     total_downtime = sum(r["downtime"] for r in rows)
     total_days     = sum(r["days_worked"] for r in rows)
 
-    # Group averages — one entry per registered group with hours > 0.
-    # Hours-weighted pph across the group's WCs. Order follows
+    # Group averages — one entry per registered group with qualified days.
+    # Order follows
     # registered_groups() (which sorts by lower(name)).
     from .. import work_centers_store
     group_avgs: list[dict] = []
@@ -205,16 +217,17 @@ def staffing_player_card(
         wc_names = {loc.name for loc in work_centers_store.members("group", group_name)}
         if not wc_names:
             continue
-        units_sum = 0.0
-        hours_sum = 0.0
-        for wc_name, totals in person.items():
-            if wc_name in wc_names:
-                units_sum += totals.get("units", 0.0)
-                hours_sum += totals.get("hours", 0.0)
-        if hours_sum > 0:
+        metric = production_metrics.normalized_average_by_person(
+            metric_records,
+            wc_names=wc_names,
+            standard_full_day_hours=standard_full_day_hours,
+        )
+        mine = next((m for m in metric if m["name"] == name), None)
+        if mine:
             group_avgs.append({
                 "name": group_name,
-                "pph": round(units_sum / hours_sum, 1),
+                "avg_units": round(mine["avg_units"], 1),
+                "days": mine["days"],
             })
     roster = {p.name: p for p in staffing.load_roster()}
     p = roster.get(name)

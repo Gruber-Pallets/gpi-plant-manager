@@ -20,12 +20,14 @@ def test_player_card_renders_per_day_breakdown_table():
         (date(2026, 4, 29), {"Other": {"Repair-1": _attr(50)}}),
     ]
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=fake), \
+         patch("zira_dashboard.production_history.daily_records", return_value=[]), \
          patch("zira_dashboard.production_history.attribution_range",
                return_value={"Carlos": {"Repair-1": {"units": 175.0, "downtime": 0.0,
                                                      "hours": 16.0, "days_worked": 2},
                                         "Repair-2": {"units": 70.0, "downtime": 0.0,
                                                      "hours": 8.0, "days_worked": 1}}}), \
          patch("zira_dashboard.staffing.load_roster", return_value=[]), \
+         patch("zira_dashboard.shift_config.productive_minutes_per_day", return_value=420), \
          patch("zira_dashboard.work_centers_store.registered_groups", return_value=[]), \
          patch("zira_dashboard.awards.awards_earned_by", return_value=[]), \
          patch("zira_dashboard.late_report.absences_history_for_name", return_value=[]), \
@@ -61,8 +63,10 @@ def test_player_card_renders_attendance_section_with_reasons():
     late_rows = [{"day": date(2026, 5, 7), "reason": "car issues"}]
 
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=[]), \
+         patch("zira_dashboard.production_history.daily_records", return_value=[]), \
          patch("zira_dashboard.production_history.attribution_range", return_value={}), \
          patch("zira_dashboard.staffing.load_roster", return_value=[]), \
+         patch("zira_dashboard.shift_config.productive_minutes_per_day", return_value=420), \
          patch("zira_dashboard.work_centers_store.registered_groups", return_value=[]), \
          patch("zira_dashboard.awards.awards_earned_by", return_value=[]), \
          patch("zira_dashboard.late_report.absences_history_for_name", return_value=abs_rows), \
@@ -86,8 +90,10 @@ def test_player_card_attendance_section_hidden_when_empty():
     from zira_dashboard.app import app
 
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=[]), \
+         patch("zira_dashboard.production_history.daily_records", return_value=[]), \
          patch("zira_dashboard.production_history.attribution_range", return_value={}), \
          patch("zira_dashboard.staffing.load_roster", return_value=[]), \
+         patch("zira_dashboard.shift_config.productive_minutes_per_day", return_value=420), \
          patch("zira_dashboard.work_centers_store.registered_groups", return_value=[]), \
          patch("zira_dashboard.awards.awards_earned_by", return_value=[]), \
          patch("zira_dashboard.late_report.absences_history_for_name", return_value=[]), \
@@ -105,8 +111,10 @@ def _bare_card_patches():
     """The minimal set of patches that lets a player card render with no DB."""
     return [
         patch("zira_dashboard.production_history.attribution_per_day", return_value=[]),
+        patch("zira_dashboard.production_history.daily_records", return_value=[]),
         patch("zira_dashboard.production_history.attribution_range", return_value={}),
         patch("zira_dashboard.staffing.load_roster", return_value=[]),
+        patch("zira_dashboard.shift_config.productive_minutes_per_day", return_value=420),
         patch("zira_dashboard.work_centers_store.registered_groups", return_value=[]),
         patch("zira_dashboard.awards.awards_earned_by", return_value=[]),
         patch("zira_dashboard.late_report.absences_history_for_name", return_value=[]),
