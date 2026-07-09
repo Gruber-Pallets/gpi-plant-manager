@@ -70,11 +70,13 @@ def _stub_player_card(monkeypatch, *, driver_days):
     """
     from zira_dashboard import (
         awards, forklift_awards, forklift_store, late_report,
-        production_history, staffing, work_centers_store,
+        production_history, shift_config, staffing, work_centers_store,
     )
 
     monkeypatch.setattr(production_history, "attribution_range", lambda s, e: {})
     monkeypatch.setattr(production_history, "attribution_per_day", lambda s, e: [])
+    monkeypatch.setattr(production_history, "daily_records", lambda s, e: [])
+    monkeypatch.setattr(shift_config, "productive_minutes_per_day", lambda: 420)
     monkeypatch.setattr(work_centers_store, "registered_groups", lambda: [])
     monkeypatch.setattr(late_report, "absences_history_for_name", lambda *a, **k: [])
     monkeypatch.setattr(late_report, "late_arrivals_history_for_name", lambda *a, **k: [])
