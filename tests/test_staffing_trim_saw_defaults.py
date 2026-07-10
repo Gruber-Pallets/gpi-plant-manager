@@ -275,10 +275,21 @@ def test_route_smart_defaults_falls_back_to_raw_defaults(monkeypatch):
     from zira_dashboard.routes import staffing as staffing_routes
     from zira_dashboard import rotation_suggestions
 
-    def boom(*args, **kwargs):
-        raise RuntimeError("history unavailable")
+    # _smart_defaults_for_day now runs the Recycled rotation engine. Let the
+    # (mocked) recommendation-data reads succeed but make the engine itself
+    # raise; the route must still fall back to the raw stored defaults.
+    monkeypatch.setattr(staffing_routes.rotation_store, "load_preferences_by_name", lambda: {})
+    monkeypatch.setattr(
+        rotation_suggestions, "_load_recycled_history",
+        lambda d: rotation_suggestions.RecycledHistory(),
+    )
+    monkeypatch.setattr(staffing_routes.rotation_training, "reconcile_blocks", lambda as_of: [])
+    monkeypatch.setattr(staffing_routes.rotation_store, "active_blocks_for_day", lambda d: [])
 
-    monkeypatch.setattr(rotation_suggestions, "smart_defaults_for_day", boom)
+    def boom(*args, **kwargs):
+        raise RuntimeError("engine unavailable")
+
+    monkeypatch.setattr(rotation_suggestions, "suggest_recycled_assignments", boom)
 
     out = staffing_routes._smart_defaults_for_day(
         date(2026, 7, 6),

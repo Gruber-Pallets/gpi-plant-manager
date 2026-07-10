@@ -73,6 +73,28 @@ def load_preferences() -> dict[tuple[int, str], str]:
     return {(int(row["person_id"]), row["rotation_group"]): row["preference"] for row in rows}
 
 
+def load_preferences_by_name() -> dict[str, dict[str, str]]:
+    """Load saved preferences keyed by person NAME for the rotation engine.
+
+    Returns ``{person_name: {rotation_group: preference}}``. The engine takes
+    name-keyed preferences (rosters carry names, not local ``people.id``), so
+    this joins ``people`` to translate the id-keyed table. Missing people/groups
+    simply don't appear; the engine treats an absent entry as ``regular``.
+    """
+    rows = db.query(
+        "SELECT p.name AS name, r.rotation_group AS rotation_group, r.preference AS preference "
+        "FROM person_rotation_preferences r "
+        "JOIN people p ON p.id = r.person_id"
+    )
+    out: dict[str, dict[str, str]] = {}
+    for row in rows:
+        name = row["name"]
+        if not name:
+            continue
+        out.setdefault(name, {})[row["rotation_group"]] = row["preference"]
+    return out
+
+
 def save_preference(person_id: int, group: str, preference: str) -> RotationPreference:
     """Upsert one person's preference for a recycled rotation group."""
     _validate_preference(group, preference)

@@ -43,6 +43,7 @@ from .routes import (
     object_api,
     past_schedules,
     people,
+    rotations,
     settings,
     share,
     skills,
@@ -511,6 +512,7 @@ app.include_router(recycling_leaderboard.router)
 app.include_router(new_leaderboard.router)
 app.include_router(tv_displays.router)
 app.include_router(staffing.router)
+app.include_router(rotations.router)
 app.include_router(late_report.router)
 app.include_router(missing_wc.router)
 app.include_router(missed_punch_out.router)

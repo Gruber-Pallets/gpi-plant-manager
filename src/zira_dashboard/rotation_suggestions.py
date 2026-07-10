@@ -349,6 +349,101 @@ def _load_trim_saw_history(day: date) -> TrimSawHistory:
 _LOCATIONS_BY_NAME = {loc.name: loc for loc in staffing.LOCATIONS}
 
 
+def _assignments_from_row(row: dict) -> dict:
+    """Prefer a row's posted snapshot assignments, else its live assignments.
+
+    Mirrors ``_history_from_schedule_rows`` (the Trim Saw loader convention):
+    posted schedule data wins over the working draft when it exists.
+    """
+    snapshot = row.get("published_snapshot")
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("assignments"), dict):
+        return snapshot["assignments"]
+    assignments = row.get("assignments")
+    return assignments if isinstance(assignments, dict) else {}
+
+
+def _recycled_history_from_rows(
+    rows: Sequence[dict], group_locations: dict[str, Sequence[str]]
+) -> RecycledHistory:
+    """Aggregate bounded Recycled history across every managed center.
+
+    ``rows`` are recent, non-testing schedules ordered newest first (idx 0 is
+    the most recent). Sibling to ``_history_from_schedule_rows`` but tallies all
+    Recycled centers instead of just Trim Saw, producing the per-center and
+    per-group counts the fair-rotation logic reads.
+    """
+    center_to_group: dict[str, str] = {}
+    for group, centers in group_locations.items():
+        for center in centers:
+            center_to_group[center] = group
+
+    center_counts: dict[tuple[str, str], int] = {}
+    group_counts: dict[tuple[str, str], int] = {}
+    last_center_by_person_group: dict[tuple[str, str], str] = {}
+    most_recent_group_names: dict[str, set[str]] = {}
+
+    for idx, row in enumerate(rows):
+        assignments = _assignments_from_row(row)
+        for center, names in assignments.items():
+            group = center_to_group.get(center)
+            if group is None:
+                continue
+            for raw in names or []:
+                name = str(raw or "").strip()
+                if not name:
+                    continue
+                center_counts[(name, center)] = center_counts.get((name, center), 0) + 1
+                group_counts[(name, group)] = group_counts.get((name, group), 0) + 1
+                # Rows are newest-first, so the first center we see for a
+                # (name, group) pair is the most recent one they worked.
+                last_center_by_person_group.setdefault((name, group), center)
+                if idx == 0:
+                    most_recent_group_names.setdefault(group, set()).add(name)
+
+    return RecycledHistory(
+        center_counts=center_counts,
+        last_center_by_person_group=last_center_by_person_group,
+        group_counts=group_counts,
+        most_recent_group_names=most_recent_group_names,
+    )
+
+
+def _load_recycled_history(day: date) -> RecycledHistory:
+    """Load bounded Recycled center/group history for ``day``.
+
+    Impure sibling of ``_load_trim_saw_history``: same bounded, testing-day-
+    excluding window and snapshot-preferring convention, but aggregated across
+    all Recycled centers (from ``staffing.LOCATIONS``) instead of Trim Saw only.
+    """
+    from . import db
+
+    rows = db.query(
+        "SELECT s.day, s.published_snapshot, "
+        "       COALESCE(jsonb_object_agg(wc.name, names.people) "
+        "                FILTER (WHERE wc.name IS NOT NULL), '{}'::jsonb) AS assignments "
+        "FROM ("
+        "  SELECT day, published_snapshot "
+        "  FROM schedules "
+        "  WHERE day < %s "
+        "    AND COALESCE((published_snapshot->>'testing_day')::boolean, testing_day, FALSE) = FALSE "
+        "  ORDER BY day DESC "
+        "  LIMIT %s"
+        ") s "
+        "LEFT JOIN LATERAL ("
+        "  SELECT sa.day, sa.wc_id, jsonb_agg(pe.name ORDER BY sa.sort_order) AS people "
+        "  FROM schedule_assignments sa "
+        "  JOIN people pe ON pe.id = sa.person_id "
+        "  WHERE sa.day = s.day "
+        "  GROUP BY sa.day, sa.wc_id"
+        ") names ON TRUE "
+        "LEFT JOIN work_centers wc ON wc.id = names.wc_id "
+        "GROUP BY s.day, s.published_snapshot "
+        "ORDER BY s.day DESC",
+        (day, LOOKBACK_SCHEDULE_COUNT),
+    )
+    return _recycled_history_from_rows(rows, _default_group_locations())
+
+
 def _group_for_center(center: str) -> str | None:
     loc = _LOCATIONS_BY_NAME.get(center)
     if loc is not None:

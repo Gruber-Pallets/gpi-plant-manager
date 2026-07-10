@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta, UTC
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import _http_cache, attendance, rotation_suggestions, schedule_store, shift_config, staffing, staffing_view, time_format, work_centers_store
+from .. import _http_cache, attendance, rotation_store, rotation_suggestions, rotation_training, schedule_store, shift_config, staffing, staffing_view, time_format, work_centers_store
 from .._http_cache import invalidate_today_cache
 from ..deps import templates
 from ..plant_day import today as plant_today, now as plant_now
@@ -84,9 +84,213 @@ def _forklift_scheduled_counts(assignments, overload_responders, wc_names):
     return {"tablets": len(drivers), "backups": len(backups)}
 
 
-def _smart_defaults_for_day(d: date, roster, defaults: dict[str, list[str]], time_off_entries):
+# Recycled rotation is scoped to the three groups the design covers; the daily
+# development cap defaults to the engine's own default (two) for Task 4.
+_RECYCLED_TRAINING_CAP = 2
+
+
+def _roster_minus_full_day_off(roster, time_off_entries):
+    """Drop people on a full-day absence so the pure engine never seats them.
+
+    The engine is absence-agnostic by design (it's pure); absence is enforced by
+    pruning the candidate roster here. Manual locks and training-block people are
+    placed by name inside the engine and are unaffected by this filter.
+    """
+    unavailable = rotation_suggestions._full_day_time_off_names(time_off_entries or [])
+    if not unavailable:
+        return roster
+    return [p for p in roster if p.name not in unavailable]
+
+
+def _manual_locks_from_sources(assignment_sources, assignments=None):
+    """Return ``{wc: [names]}`` for entries whose source is ``manual``.
+
+    A rebuild preserves exactly these; every other Recycled slot is regenerated.
+    Order follows the current assignment list when available so locks come back
+    in their on-screen order.
+    """
+    locks: dict[str, list[str]] = {}
+    for wc, sources in (assignment_sources or {}).items():
+        manual = [name for name, src in (sources or {}).items() if src == "manual"]
+        if not manual:
+            continue
+        current = (assignments or {}).get(wc)
+        if current:
+            manual_set = set(manual)
+            ordered = [n for n in current if n in manual_set]
+            ordered += [n for n in manual if n not in ordered]
+            manual = ordered
+        locks[wc] = manual
+    return locks
+
+
+def _absence_by_day_for_block(block, d: date):
+    """Full-day-off names per date across ``[block.start_day .. d]``.
+
+    ``rotation_training.effect_for_day`` re-derives the block's planned days over
+    this map to decide day-one vs. later pairing, so it must cover the window up
+    to ``d``. The window is a handful of days, so the per-day lookups are bounded.
+    """
+    from .. import scheduler_time_off
+
+    absence_by_day: dict[date, set[str]] = {}
+    cursor = block.start_day
+    while cursor <= d:
+        try:
+            names = scheduler_time_off.full_day_off_names(cursor)
+        except Exception:
+            names = set()
+        if names:
+            absence_by_day[cursor] = set(names)
+        cursor += timedelta(days=1)
+    return absence_by_day
+
+
+def _gather_recycled_inputs(d: date, time_off_entries):
+    """Reconcile completed blocks, then read the pure engine's inputs.
+
+    Returns ``(preferences, history, block_effects, active_blocks)``. Impure —
+    reads preferences, bounded history, and active blocks (with their per-day
+    absences). ``reconcile_blocks`` runs first, per the design, so a finished
+    block is promoted and no longer counts as active for the day. Callers wrap
+    this in try/except so any read failure degrades to the stored defaults.
+    """
+    preferences = rotation_store.load_preferences_by_name()
+    history = rotation_suggestions._load_recycled_history(d)
+    rotation_training.reconcile_blocks(plant_today())
+    active_blocks = rotation_store.active_blocks_for_day(d)
+    block_effects = []
+    for block in active_blocks:
+        absence_by_day = _absence_by_day_for_block(block, d)
+        block_effects.append(
+            rotation_training.effect_for_day(block, d, absence_by_day=absence_by_day)
+        )
+    return preferences, history, block_effects, active_blocks
+
+
+def _recycled_suggestion_for_day(
+    d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries
+):
+    """Compute the pure Recycled suggestion for ``d``, or ``None`` on any failure.
+
+    Loads preferences/history/block effects, prunes absent people, and runs
+    ``suggest_recycled_assignments``. Every read is behind one try/except so the
+    scheduler always has a stored-defaults fallback (see ``_smart_defaults_for_day``).
+    """
     try:
-        return rotation_suggestions.smart_defaults_for_day(d, roster, defaults, time_off_entries)
+        preferences, history, block_effects, _blocks = _gather_recycled_inputs(d, time_off_entries)
+        available = _roster_minus_full_day_off(roster, time_off_entries)
+        return rotation_suggestions.suggest_recycled_assignments(
+            day=d,
+            mode=mode,
+            roster=available,
+            preferences=preferences,
+            base_assignments=base_assignments,
+            history=history,
+            locked_assignments=locked_assignments,
+            block_effects=block_effects,
+            training_cap=_RECYCLED_TRAINING_CAP,
+        )
+    except Exception:
+        return None
+
+
+def _merge_recycled_assignments(defaults, suggestion) -> dict[str, list[str]]:
+    """Overlay the engine's Recycled centers onto a copy of ``defaults``.
+
+    Managed (Recycled) centers are replaced wholesale by the engine's output;
+    non-Recycled centers are left exactly as the defaults had them.
+    """
+    merged = {k: list(v) for k, v in (defaults or {}).items()}
+    managed = {c for centers in suggestion.group_locations.values() for c in centers}
+    for center in managed:
+        merged.pop(center, None)
+    for center, names in suggestion.assignments.items():
+        merged[center] = list(names)
+    return merged
+
+
+def _training_blocks_context(active_blocks, d: date):
+    """Render active blocks into template-friendly dicts with remaining days."""
+    out = []
+    for block in active_blocks:
+        try:
+            attended = sum(
+                1 for rec in rotation_store.resolved_days(block.id) if rec.status == "attended"
+            )
+        except Exception:
+            attended = 0
+        out.append({
+            "id": block.id,
+            "trainee": block.trainee_name,
+            "trainer": block.trainer_name,
+            "group": block.skill,
+            "skill": block.skill,
+            "start_day": block.start_day.isoformat(),
+            "planned_attended_days": block.planned_attended_days,
+            "remaining_attended_days": max(0, block.planned_attended_days - attended),
+        })
+    return out
+
+
+def _recycled_context_for_day(
+    d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries
+):
+    """Recycled template context: mode, per-assignment reasons, warnings, blocks.
+
+    Computed once per GET and derived from a single engine run. Any failure
+    degrades to safe empty defaults so the staffing page never 500s on a
+    recommendation-data problem.
+    """
+    ctx = {
+        "recycled_rotation_mode": mode or "normal",
+        "rotation_reasons": {},
+        "rotation_warnings": [],
+        "active_training_blocks": [],
+    }
+    try:
+        preferences, history, block_effects, active_blocks = _gather_recycled_inputs(
+            d, time_off_entries
+        )
+        available = _roster_minus_full_day_off(roster, time_off_entries)
+        suggestion = rotation_suggestions.suggest_recycled_assignments(
+            day=d,
+            mode=mode,
+            roster=available,
+            preferences=preferences,
+            base_assignments=base_assignments,
+            history=history,
+            locked_assignments=locked_assignments,
+            block_effects=block_effects,
+            training_cap=_RECYCLED_TRAINING_CAP,
+        )
+        ctx["rotation_reasons"] = {wc: dict(r) for wc, r in suggestion.reasons.items()}
+        ctx["rotation_warnings"] = list(suggestion.warnings)
+        ctx["active_training_blocks"] = _training_blocks_context(active_blocks, d)
+    except Exception:
+        pass
+    return ctx
+
+
+def _smart_defaults_for_day(d: date, roster, defaults: dict[str, list[str]], time_off_entries, mode: str = "normal"):
+    """Merge the Recycled rotation suggestion into the per-WC default map.
+
+    Overlays the engine's Recycled centers onto ``defaults`` (non-Recycled
+    centers untouched). On any failure reading recommendation data, returns the
+    raw stored defaults — the same safe fallback the Trim Saw seeding had.
+    """
+    suggestion = _recycled_suggestion_for_day(
+        d,
+        roster,
+        mode,
+        base_assignments=defaults,
+        locked_assignments={},
+        time_off_entries=time_off_entries,
+    )
+    if suggestion is None:
+        return {k: list(v) for k, v in (defaults or {}).items()}
+    try:
+        return _merge_recycled_assignments(defaults, suggestion)
     except Exception:
         return {k: list(v) for k, v in (defaults or {}).items()}
 
@@ -330,12 +534,27 @@ def staffing_page(
         forklift_advisor_model = {"available": False}
         forklift_live_model = {"available": False}
 
+    # Recycled rotation context: effective mode, per-assignment reasons,
+    # warnings, and active training blocks. Computed once from a single engine
+    # run; failures degrade to safe empty defaults so the page never 500s.
+    recycled_ctx = _recycled_context_for_day(
+        d,
+        roster,
+        sched.rotation_mode or "normal",
+        base_assignments=sched.assignments,
+        locked_assignments=_manual_locks_from_sources(
+            sched.assignment_sources, sched.assignments
+        ),
+        time_off_entries=time_off_entries,
+    )
+
     with _Phase(phases, "render"):
         response = templates.TemplateResponse(
             request,
             "staffing.html",
             {
                 "active": "plant",
+                **recycled_ctx,
                 "day": d.isoformat(),
                 "day_short": d.strftime("%m/%d/%y"),
                 "day_pretty": f"{d.strftime('%A, %B')} {d.day}, {d.year}",
