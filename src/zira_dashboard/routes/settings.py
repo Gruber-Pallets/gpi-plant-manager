@@ -203,22 +203,23 @@ def settings_page(
         # kiosk picker sees, and stays usable during an Odoo outage. We
         # map holiday_status_id -> id for the template (which iterates
         # `t.id`/`t.name`).
-        leave_types: list[dict] = []
         cache_rows = db.query(
             "SELECT holiday_status_id, name, request_unit, "
             "requires_allocation, color, active "
             "FROM leave_types_cache WHERE active = TRUE "
             "ORDER BY name"
         )
-        for r in cache_rows:
-            leave_types.append({
+        leave_types = [
+            {
                 "id": r["holiday_status_id"],
                 "name": r["name"],
                 "request_unit": r["request_unit"],
                 "requires_allocation": r["requires_allocation"],
                 "color": r["color"],
                 "active": r["active"],
-            })
+            }
+            for r in cache_rows
+        ]
         # Fallback: if the table is empty (poller hasn't run yet on a
         # fresh box) AND Odoo is wired up, hit Odoo directly so the
         # panel isn't blank on first load.
@@ -1129,11 +1130,17 @@ def time_off_diagnostics(request: Request):
                     {"id": lt["id"], "name": lt["name"],
                      "issue": "present in Odoo, missing from local cache"})
                 continue
-            for f in ("requires_allocation", "request_unit", "active"):
-                if str(ct.get(f)) != str(lt.get(f)):
-                    mismatches.append(
-                        {"id": lt["id"], "name": lt["name"], "field": f,
-                         "cache": ct.get(f), "odoo": lt.get(f)})
+            mismatches.extend(
+                {
+                    "id": lt["id"],
+                    "name": lt["name"],
+                    "field": field,
+                    "cache": ct.get(field),
+                    "odoo": lt.get(field),
+                }
+                for field in ("requires_allocation", "request_unit", "active")
+                if str(ct.get(field)) != str(lt.get(field))
+            )
 
     # Optional per-employee balance probe. Pass ?person=<name substr> or
     # ?employee_odoo_id=<n> to see (a) what's cached in time_off_balances and

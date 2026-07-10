@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 from fastapi.testclient import TestClient
 
 from zira_dashboard import api_keys, auth
@@ -45,6 +47,15 @@ def _session_cookie(upn: str, name: str = "User") -> dict[str, str]:
     return {
         auth.SESSION_COOKIE_NAME: auth.mint_session(sub="test-user", upn=upn, name=name)
     }
+
+
+@contextmanager
+def _authenticated_client(upn: str, name: str = "User"):
+    client.cookies.update(_session_cookie(upn, name))
+    try:
+        yield client
+    finally:
+        client.cookies.clear()
 
 
 def _stub_settings_page_context(monkeypatch):
@@ -110,10 +121,8 @@ def test_api_settings_page_route_renders(monkeypatch):
         ],
     )
 
-    response = client.get(
-        "/settings?section=api",
-        cookies=_session_cookie("dale@gruberpallets.com", "Dale"),
-    )
+    with _authenticated_client("dale@gruberpallets.com", "Dale") as session_client:
+        response = session_client.get("/settings?section=api")
 
     assert response.status_code == 200
     assert 'id="api-panel"' in response.text
@@ -127,10 +136,8 @@ def test_super_admin_session_can_render_api_settings(monkeypatch):
     monkeypatch.setenv("AUTH_DISABLED", "0")
     monkeypatch.setattr(api_keys, "list_keys", lambda: [])
 
-    response = client.get(
-        "/settings?section=api",
-        cookies=_session_cookie("dale@gruberpallets.com", "Dale"),
-    )
+    with _authenticated_client("dale@gruberpallets.com", "Dale") as session_client:
+        response = session_client.get("/settings?section=api")
 
     assert response.status_code == 200
     assert "API Keys" in response.text
@@ -140,10 +147,8 @@ def test_super_admin_session_can_render_api_settings(monkeypatch):
 def test_non_super_admin_cannot_render_api_settings(monkeypatch):
     monkeypatch.setenv("AUTH_DISABLED", "0")
 
-    response = client.get(
-        "/settings?section=api",
-        cookies=_session_cookie("ian@gruberpallets.com", "Ian"),
-    )
+    with _authenticated_client("ian@gruberpallets.com", "Ian") as session_client:
+        response = session_client.get("/settings?section=api")
 
     assert response.status_code == 403
     assert "API Keys" not in response.text
@@ -160,20 +165,19 @@ def test_auth_disabled_does_not_expose_api_settings(monkeypatch):
 
 def test_non_super_admin_cannot_create_or_revoke_api_keys(monkeypatch):
     monkeypatch.setenv("AUTH_DISABLED", "0")
-    cookies = _session_cookie("ian@gruberpallets.com", "Ian")
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError("API key store should not be called")
 
     monkeypatch.setattr(api_keys, "create_key", fail_if_called)
-    create = client.post(
-        "/settings/api-keys",
-        data={"name": "Other App", "scope_admin": "on"},
-        cookies=cookies,
-    )
+    with _authenticated_client("ian@gruberpallets.com", "Ian") as session_client:
+        create = session_client.post(
+            "/settings/api-keys",
+            data={"name": "Other App", "scope_admin": "on"},
+        )
 
-    monkeypatch.setattr(api_keys, "revoke_key", fail_if_called)
-    revoke = client.post("/settings/api-keys/1/revoke", cookies=cookies)
+        monkeypatch.setattr(api_keys, "revoke_key", fail_if_called)
+        revoke = session_client.post("/settings/api-keys/1/revoke")
 
     assert create.status_code == 403
     assert revoke.status_code == 403

@@ -386,7 +386,7 @@ def test_fetch_public_holidays_uses_cache_within_ttl(monkeypatch):
     assert len(calls) == 1
     second = odoo_client.fetch_public_holidays(date(2026, 7, 1), date(2026, 7, 31))
     assert len(calls) == 1  # cache hit
-    assert second == first
+    assert second is first
     odoo_client.fetch_public_holidays(date(2026, 8, 1), date(2026, 8, 31))
     assert len(calls) == 2  # different range → fresh fetch
 
@@ -439,6 +439,34 @@ def test_approve_leave_advances_pending_leave_to_validated(monkeypatch):
 
     assert odoo_client.approve_leave(555) == "validate"
     assert [c[1] for c in calls] == ["read", "action_approve", "read"]
+
+
+def test_approve_leave_draft_path_preserves_call_order(monkeypatch):
+    calls = []
+    states = iter(["draft", "draft", "confirm", "validate"])
+
+    def fake_execute(model, method, *args, **kwargs):
+        calls.append((model, method, args, kwargs))
+        if (model, method) == ("hr.leave", "read"):
+            return [{"state": next(states)}]
+        if (model, method) in {
+            ("hr.leave", "action_confirm"),
+            ("hr.leave", "action_approve"),
+        }:
+            return True
+        raise AssertionError(f"unexpected call: {(model, method)}")
+
+    monkeypatch.setattr(odoo_client, "execute", fake_execute)
+
+    assert odoo_client.approve_leave(555) == "validate"
+    assert [call[1] for call in calls] == [
+        "read",
+        "read",
+        "action_confirm",
+        "read",
+        "action_approve",
+        "read",
+    ]
 
 
 def test_write_leave_passes_fields(monkeypatch):

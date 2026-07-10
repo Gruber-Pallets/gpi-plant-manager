@@ -36,12 +36,16 @@ def fetch_skill_columns_with_types(
         by_type.setdefault(tid, []).append(s)
     out: list[dict] = []
     for tid in type_ids:
-        for skill in sorted(by_type.get(tid, []), key=lambda row: str(row["name"]).lower()):
-            out.append({
+        out.extend(
+            {
                 "id": skill["id"],
                 "name": skill["name"],
                 "type": type_name_by_id[tid],
-            })
+            }
+            for skill in sorted(
+                by_type.get(tid, []), key=lambda row: str(row["name"]).lower()
+            )
+        )
     return out
 
 

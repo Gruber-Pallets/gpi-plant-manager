@@ -1,7 +1,7 @@
 # Codebase architecture refactor — design
 
-**Date:** 2026-07-09  
-**Branch:** `codex/codebase-architecture-refactor`  
+**Date:** 2026-07-09<br>
+**Branch:** `codex/codebase-architecture-refactor`<br>
 **Goal:** Make GPI Plant Manager easier and safer to extend by decomposing its
 highest-friction internals while preserving every user-visible behavior, route,
 integration contract, and rendered appearance.

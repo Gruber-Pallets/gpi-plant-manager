@@ -247,13 +247,15 @@ def staffing_page(
             # request-id / non-work-shift clears are retired (StratusTime is
             # off) — and fetching them is exactly what used to blank this
             # whole footer once StratusTime stopped responding.
-            for row in _lr.cleared_partial_names_today_list(d):
-                cleared_partials_today.append({
+            cleared_partials_today.extend(
+                {
                     "request_id": None,
                     "emp_id": None,
                     "name": row["name"],
                     "time_range": "",
-                })
+                }
+                for row in _lr.cleared_partial_names_today_list(d)
+            )
     except Exception:
         cleared_partials_today = []
 
@@ -584,7 +586,7 @@ async def staffing_hours_save(request: Request):
         ends   = form.getlist("break_end")
         names  = form.getlist("break_name")
         breaks_out: list[dict] = []
-        for bs, be, bn in zip(starts, ends, names):
+        for bs, be, bn in zip(starts, ends, names, strict=False):
             bs, be = bs.strip(), be.strip()
             if not bs or not be or bs >= be:
                 return JSONResponse({"ok": False, "error": f"bad break: {bs}-{be}"}, status_code=400)

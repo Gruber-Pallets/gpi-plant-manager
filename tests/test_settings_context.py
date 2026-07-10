@@ -38,11 +38,16 @@ def test_work_center_rows_keep_skill_default_people_and_identity_rules():
         SimpleNamespace(meter_id="meter-2", name="Repair 2", bay="R2"),
     ]
     levels = {
+        "alpha": {"Repair": 3, "Quality": 3},
         "zoe": {"Repair": 4, "Quality": 2},
         "ana": {"Repair": 3, "Quality": 3},
+        "zebra": {"Repair": 3, "Quality": 3},
         "luis": {"Repair": 4, "Quality": 4},
     }
     people = [
+        SimpleNamespace(
+            name="Zebra", reserve=False, level=lambda skill: levels["zebra"][skill]
+        ),
         SimpleNamespace(
             name="Zoe", reserve=False, level=lambda skill: levels["zoe"][skill]
         ),
@@ -51,6 +56,9 @@ def test_work_center_rows_keep_skill_default_people_and_identity_rules():
         ),
         SimpleNamespace(
             name="Ana", reserve=False, level=lambda skill: levels["ana"][skill]
+        ),
+        SimpleNamespace(
+            name="alpha", reserve=False, level=lambda skill: levels["alpha"][skill]
         ),
     ]
     effective = {
@@ -87,7 +95,9 @@ def test_work_center_rows_keep_skill_default_people_and_identity_rules():
         "department": "Recycled",
         "default_people": default_people,
         "default_pool": [
+            {"name": "alpha", "level": 3, "reserve": False},
             {"name": "Ana", "level": 3, "reserve": False},
+            {"name": "Zebra", "level": 3, "reserve": False},
             {"name": "Zoe", "level": 2, "reserve": False},
             {"name": "Luis", "level": 4, "reserve": True},
         ],
@@ -97,7 +107,7 @@ def test_work_center_rows_keep_skill_default_people_and_identity_rules():
     assert rows[0]["default_people"] is default_people
     assert rows[1]["key"] == "meter-2"
     assert rows[1]["max_ops"] == 2
-    assert [person["level"] for person in rows[1]["default_pool"]] == [2, 2, 2]
+    assert [person["level"] for person in rows[1]["default_pool"]] == [2] * 5
 
 
 def test_group_summary_preserves_override_display_and_store_call_order():
