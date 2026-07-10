@@ -68,6 +68,10 @@ class RecycledSuggestion:
     sources: dict[str, dict[str, str]]
     reasons: dict[str, dict[str, str]]
     warnings: Sequence[str]
+    # The resolved group -> centers map the suggestion was built with. Not part
+    # of the planned public fields; it exists so the helpers below report group
+    # membership exactly as the engine scheduled it.
+    group_locations: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def assigned_people(self) -> set[str]:
@@ -75,6 +79,14 @@ class RecycledSuggestion:
 
     def people_for_group(self, group: str) -> list[str]:
         out: list[str] = []
+        if self.group_locations:
+            centers = set(self.group_locations.get(group, ()))
+            for center, names in self.assignments.items():
+                if center in centers:
+                    out.extend(names)
+            return out
+        # Suggestions built by hand (without the map) fall back to the
+        # authoritative staffing.LOCATIONS lookup.
         for center, names in self.assignments.items():
             if _group_for_center(center) == group:
                 out.extend(names)
@@ -373,7 +385,9 @@ def _default_group_locations() -> dict[str, tuple[str, ...]]:
     return {group: tuple(centers) for group, centers in grouped.items()}
 
 
-def _preference_for(preferences, name: str, group: str) -> str:
+def _preference_for(
+    preferences: dict[str, dict[str, str]] | None, name: str, group: str
+) -> str:
     pref = ((preferences or {}).get(name) or {}).get(group, "regular")
     return pref if pref in PREFERENCE_POINTS else "regular"
 
@@ -395,14 +409,17 @@ def _candidate_rank_key(
     mode: str,
     person: staffing.Person,
     group: str,
-    preferences,
+    preferences: dict[str, dict[str, str]] | None,
     history: RecycledHistory,
+    green_supply: dict[str, int] | None = None,
 ) -> tuple:
     """Deterministic candidate ordering; lower sorts first.
 
-    ``optimized`` ranks strictly by skill and only breaks ties with preference
-    and rotation history. ``normal`` weighs skill, preference, and time since
-    the group comparably. ``training`` fills ordinary slots with the normal
+    ``optimized`` ranks strictly by skill, steers each level-3 toward the
+    group with the fewest available greens (so a multi-group green covers the
+    group nobody else can), and only then breaks ties with preference and
+    rotation history. ``normal`` weighs skill, preference, and time since the
+    group comparably. ``training`` fills ordinary slots with the normal
     ranking (same green coverage) and adds development placements separately.
     """
     name = person.name
@@ -412,14 +429,15 @@ def _candidate_rank_key(
     ranking_mode = "normal" if mode == "training" else mode
     skill_points = MODE_SKILL_POINTS[ranking_mode][level]
     if ranking_mode == "optimized":
-        return (-skill_points, -tiebreak, name.lower(), group.lower())
+        scarcity = green_supply.get(group, 0) if green_supply and level == 3 else 0
+        return (-skill_points, scarcity, -tiebreak, name.lower(), group.lower())
     return (-(skill_points + tiebreak), -level, name.lower(), group.lower())
 
 
 def _development_rank_key(
     person: staffing.Person,
     group: str,
-    preferences,
+    preferences: dict[str, dict[str, str]] | None,
     history: RecycledHistory,
 ) -> tuple:
     name = person.name
@@ -456,8 +474,10 @@ def suggest_recycled_assignments(
     Pure and deterministic: no clock or database reads (``day`` is part of the
     stable interface for callers and future reasons). Non-Recycled assignments
     and manual locks pass through unchanged; validated training-block effects
-    are reserved first; level 0 is only placed through a block effect; and no
-    person ever appears at two locations.
+    are reserved first; level 0 is only placed through a block effect; and
+    generated placements never seat a person at a second location. (Manual
+    inputs are trusted as given: a name that appears both in a lock and in a
+    pass-through base center is preserved in both places, not policed here.)
     """
     if mode not in MODE_SKILL_POINTS:
         raise ValueError(f"Unknown recycled rotation mode: {mode!r}")
@@ -503,10 +523,17 @@ def suggest_recycled_assignments(
     for effect in block_effects or ():
         warnings.extend(str(w) for w in (getattr(effect, "warnings", None) or ()))
         block_center_by_group: dict[str, str] = {}
+        warned_groups: set[str] = set()
+
+        def _warn_missing_group(group: str) -> None:
+            if group not in warned_groups:
+                warned_groups.add(group)
+                warnings.append(f"Training block for {group} has no schedulable work centers.")
+
         for group, names in (getattr(effect, "locked_people", None) or {}).items():
             centers = groups.get(group)
             if not centers:
-                warnings.append(f"Training block for {group} has no schedulable work centers.")
+                _warn_missing_group(group)
                 continue
             for name in names or []:
                 name = str(name)
@@ -521,7 +548,7 @@ def suggest_recycled_assignments(
         for group, names in (getattr(effect, "temporary_extra_people", None) or {}).items():
             centers = groups.get(group)
             if not centers:
-                warnings.append(f"Training block for {group} has no schedulable work centers.")
+                _warn_missing_group(group)
                 continue
             for name in names or []:
                 name = str(name)
@@ -546,8 +573,21 @@ def suggest_recycled_assignments(
         for group in groups
         if _eligible(person, group)
     ]
+
+    # Optimized mode steers each green toward the group with the fewest other
+    # available greens so multi-group greens maximize level-3 coverage.
+    green_supply: dict[str, int] = {}
+    if mode == "optimized":
+        greens_by_group: dict[str, set[str]] = {}
+        for person, group in candidate_pairs:
+            if person.name not in assigned and _recycled_level(person, group) == 3:
+                greens_by_group.setdefault(group, set()).add(person.name)
+        green_supply = {group: len(names) for group, names in greens_by_group.items()}
+
     candidate_pairs.sort(
-        key=lambda pair: _candidate_rank_key(mode, pair[0], pair[1], preferences, resolved_history)
+        key=lambda pair: _candidate_rank_key(
+            mode, pair[0], pair[1], preferences, resolved_history, green_supply
+        )
     )
 
     def _level_of(name: str, group: str) -> int:
@@ -561,39 +601,47 @@ def suggest_recycled_assignments(
         open_centers = [c for c in centers if len(assignments.get(c, [])) < _center_capacity(c)]
         if not open_centers:
             continue
-        center = choose_center(person.name, group, open_centers, resolved_history)
         level = _recycled_level(person, group)
         pref = _preference_for(preferences, person.name, group)
         reason = _generated_reason(level, pref, group, len(centers))
         if group != TRIM_SAW_SKILL:
+            center = choose_center(person.name, group, open_centers, resolved_history)
             _place(center, person.name, GENERATED_SOURCE, reason)
             continue
         # Trim Saw keeps its pairing guarantee: never generate an unsafe pair.
-        occupants = assignments.get(center, [])
-        if occupants:
-            if all(_valid_trim_saw_pair(level, _level_of(name, group)) for name in occupants):
-                _place(center, person.name, GENERATED_SOURCE, reason)
-            continue
-        if _center_capacity(center) < 2:
-            continue
-        partner = None
-        for other, other_group in candidate_pairs:
-            if other_group != group or other.name == person.name or other.name in assigned:
+        # Try the candidate's open centers in fairness order so one unsafe
+        # center does not discard them while another center could seat them.
+        remaining = list(open_centers)
+        while remaining:
+            center = choose_center(person.name, group, remaining, resolved_history)
+            remaining.remove(center)
+            occupants = assignments.get(center, [])
+            if occupants:
+                if all(_valid_trim_saw_pair(level, _level_of(name, group)) for name in occupants):
+                    _place(center, person.name, GENERATED_SOURCE, reason)
+                    break
                 continue
-            if _valid_trim_saw_pair(level, _recycled_level(other, group)):
-                partner = other
-                break
-        if partner is None:
-            continue  # no safe pairing from this anchor; warned about below
-        _place(center, person.name, GENERATED_SOURCE, reason)
-        partner_level = _recycled_level(partner, group)
-        partner_pref = _preference_for(preferences, partner.name, group)
-        _place(
-            center,
-            partner.name,
-            GENERATED_SOURCE,
-            _generated_reason(partner_level, partner_pref, group, len(centers)),
-        )
+            if _center_capacity(center) < 2:
+                continue
+            partner = None
+            for other, other_group in candidate_pairs:
+                if other_group != group or other.name == person.name or other.name in assigned:
+                    continue
+                if _valid_trim_saw_pair(level, _recycled_level(other, group)):
+                    partner = other
+                    break
+            if partner is None:
+                continue  # no safe pairing from this anchor; warned about below
+            _place(center, person.name, GENERATED_SOURCE, reason)
+            partner_level = _recycled_level(partner, group)
+            partner_pref = _preference_for(preferences, partner.name, group)
+            _place(
+                center,
+                partner.name,
+                GENERATED_SOURCE,
+                _generated_reason(partner_level, partner_pref, group, len(centers)),
+            )
+            break
 
     # 5. Training mode adds capped development placements: level-1/2 people
     # paired into a center that already has a level-3 operator.
@@ -617,6 +665,20 @@ def suggest_recycled_assignments(
                 for c in groups[group]
                 if any(_level_of(name, group) == 3 for name in assignments.get(c, []))
             ]
+            if group == TRIM_SAW_SKILL:
+                # Trim Saw is a hard-capacity paired center: development
+                # placements may not overfill it or create an unsafe pair,
+                # unlike single-operator centers where the pairing is the point.
+                level = _recycled_level(person, group)
+                green_centers = [
+                    c
+                    for c in green_centers
+                    if len(assignments.get(c, [])) < _center_capacity(c)
+                    and all(
+                        _valid_trim_saw_pair(level, _level_of(name, group))
+                        for name in assignments.get(c, [])
+                    )
+                ]
             if not green_centers:
                 continue
             center = choose_center(person.name, group, green_centers, resolved_history)
@@ -643,4 +705,5 @@ def suggest_recycled_assignments(
         sources=sources,
         reasons=reasons,
         warnings=tuple(warnings),
+        group_locations=groups,
     )

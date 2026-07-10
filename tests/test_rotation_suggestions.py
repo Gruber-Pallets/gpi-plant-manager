@@ -627,6 +627,143 @@ def test_trim_saw_locked_single_without_safe_partner_warns():
     assert any("Trim Saw 1" in warning for warning in out.warnings)
 
 
+def test_training_mode_never_seats_third_person_on_trim_saw():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Green", 3), _person("One A", 1), _person("One B", 1)],
+        preferences={}, base_assignments={},
+        group_locations={"Trim Saw": ("Trim Saw 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    # Trim Saw 1 is a hard two-operator center: development placements must
+    # not overfill it the way they may overfill single-operator centers.
+    assert out.assignments["Trim Saw 1"] == ["Green", "One A"]
+    assert "One B" not in out.assigned_people
+
+
+def test_training_mode_never_creates_invalid_trim_saw_pair():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Green", 3), _person("Two", 2), _person("One", 1)],
+        preferences={}, base_assignments={},
+        group_locations={"Trim Saw": ("Trim Saw 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    # Adding the level-1 learner would create a forbidden (2, 1) co-presence.
+    assert out.assignments["Trim Saw 1"] == ["Green", "Two"]
+    assert "One" not in out.assigned_people
+    levels = {"Green": 3, "Two": 2, "One": 1}
+    seated = out.assignments["Trim Saw 1"]
+    assert all(
+        _valid_trim_saw_pair(levels[a], levels[b])
+        for i, a in enumerate(seated)
+        for b in seated[i + 1:]
+    )
+
+
+def test_optimized_covers_multiple_groups_with_multi_skill_green():
+    roster = [
+        staffing.Person(name="Alice", skills={"Repair": 3, "Dismantler": 3}),
+        staffing.Person(name="Bob", skills={"Dismantler": 3}),
+        staffing.Person(name="Carl", skills={"Repair": 2}),
+    ]
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="optimized", roster=roster, preferences={},
+        base_assignments={},
+        group_locations={"Repair": ("Repair 1",), "Dismantler": ("Dismantler 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    # Alice is the only green who can cover Repair, so optimized sends her
+    # there and lets Bob cover Dismantler instead of leaving Repair to Carl.
+    assert out.assignments["Repair 1"] == ["Alice"]
+    assert out.assignments["Dismantler 1"] == ["Bob"]
+
+
+def test_block_effect_with_unknown_group_warns_once():
+    effect = _BlockEffect(
+        locked_people={"Ghost Group": ["Trainee"]},
+        temporary_extra_people={"Ghost Group": ["Trainer"]},
+    )
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Trainee", 0), _person("Trainer", 3)],
+        preferences={}, base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(effect,),
+    )
+    block_warnings = [w for w in out.warnings if "Ghost Group" in w]
+    assert len(block_warnings) == 1
+
+
+def test_block_effect_overfills_when_every_center_is_full():
+    effect = _BlockEffect(locked_people={"Repair": ["Trainee"]})
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Trainee", 0), _person("Occupier", 3)],
+        preferences={}, base_assignments={"Repair 1": ["Occupier"]},
+        group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(),
+        locked_assignments={"Repair 1": ["Occupier"]},
+        block_effects=(effect,),
+    )
+    # The block reservation must be honored even when the group is full.
+    assert out.assignments["Repair 1"] == ["Occupier", "Trainee"]
+    assert out.sources["Repair 1"]["Trainee"] == "generated"
+    assert out.reasons["Repair 1"]["Trainee"] == "training block"
+
+
+def test_training_cap_zero_blocks_all_development_placements():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Green", 3), _person("Learner", 1)],
+        preferences={}, base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(), training_cap=0,
+    )
+    assert out.assignments["Repair 1"] == ["Green"]
+    assert "Learner" not in out.assigned_people
+
+
+def test_dismantler_group_schedules_end_to_end():
+    roster = [
+        staffing.Person(name="Dee", skills={"Dismantler": 3}),
+        staffing.Person(name="Dan", skills={"Dismantler": 2}),
+    ]
+    history = RecycledHistory(
+        center_counts={
+            ("Dee", "Dismantler 1"): 2,
+            ("Dee", "Dismantler 2"): 1,
+            ("Dee", "Dismantler 3"): 1,
+            ("Dee", "Dismantler 4"): 1,
+        },
+        last_center_by_person_group={("Dee", "Dismantler"): "Dismantler 4"},
+    )
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal", roster=roster,
+        preferences={"Dan": {"Dismantler": "primary"}},
+        base_assignments={},
+        group_locations={
+            "Dismantler": ("Dismantler 4", "Dismantler 3", "Dismantler 2", "Dismantler 1"),
+        },
+        history=history, locked_assignments={}, block_effects=(),
+    )
+    # Dee rotates onto a least-worked center that is not her most recent one.
+    assert out.assignments["Dismantler 2"] == ["Dee"]
+    assert out.assignments["Dismantler 1"] == ["Dan"]
+    assert out.reasons["Dismantler 2"]["Dee"] == "green coverage"
+    assert out.reasons["Dismantler 1"]["Dan"] == "primary Dismantler operator"
+    assert set(out.people_for_group("Dismantler")) == {"Dee", "Dan"}
+
+
+def test_people_for_group_uses_the_engine_group_locations():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal", roster=[_person("Solo", 3)], preferences={},
+        base_assignments={}, group_locations={"Repair": ("Custom Bench",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    # The suggestion reports groups from the map it was built with, even for
+    # center names that do not exist in staffing.LOCATIONS.
+    assert out.people_for_group("Repair") == ["Solo"]
+
+
 def test_generated_assignments_carry_reasons():
     out = suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="normal",
