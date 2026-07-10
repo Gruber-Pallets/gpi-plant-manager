@@ -81,7 +81,8 @@ def test_new_week_fans_out_inclusive_days(monkeypatch):
     response = TestClient(app).get("/new?start=2026-07-06&end=2026-07-08")
 
     assert response.status_code == 200
-    assert seen == [date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8)]
+    # Fan-out is concurrent; order of completion is not guaranteed.
+    assert sorted(seen) == [date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8)]
     assert rendered["start"] == "2026-07-06"
     assert rendered["end"] == "2026-07-08"
     assert rendered["is_range"] is True
