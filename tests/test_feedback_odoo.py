@@ -18,6 +18,17 @@ def _stub(monkeypatch):
     return calls, responses
 
 
+def test_feedback_operations_live_in_private_module():
+    from zira_dashboard import _odoo_feedback
+
+    assert odoo_client.FEEDBACK_PROJECT_NAME == _odoo_feedback.FEEDBACK_PROJECT_NAME
+    assert odoo_client.FEEDBACK_STAGES is _odoo_feedback.FEEDBACK_STAGES
+    assert odoo_client.FEEDBACK_DONE_STAGE == _odoo_feedback.FEEDBACK_DONE_STAGE
+    assert odoo_client.FEEDBACK_REJECTED_STAGE == _odoo_feedback.FEEDBACK_REJECTED_STAGE
+    assert callable(_odoo_feedback.find_or_create_feedback_project)
+    assert callable(_odoo_feedback.ensure_feedback_stages)
+
+
 def test_ensure_feedback_project_reuses_existing(monkeypatch):
     calls, responses = _stub(monkeypatch)
     responses.extend([

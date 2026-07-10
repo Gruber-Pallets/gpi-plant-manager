@@ -18,7 +18,6 @@ Never log or echo these values.
 
 from __future__ import annotations
 
-import base64
 import os
 import threading
 import time
@@ -26,7 +25,13 @@ import xmlrpc.client
 from datetime import datetime, timezone
 from typing import Any
 
-from . import _odoo_attendance, _odoo_calendars, _odoo_skills, _odoo_time_off
+from . import (
+    _odoo_attendance,
+    _odoo_calendars,
+    _odoo_feedback,
+    _odoo_skills,
+    _odoo_time_off,
+)
 
 
 UTC = timezone.utc
@@ -151,10 +156,10 @@ def execute(model: str, method: str, *args: Any, **kwargs: Any) -> Any:
 
 SKILL_TYPE_NAMES = _odoo_skills.SKILL_TYPE_NAMES
 
-FEEDBACK_PROJECT_NAME = "Plant Manager"
-FEEDBACK_STAGES = ("New", "In Progress", "Done", "Rejected")
-FEEDBACK_DONE_STAGE = "Done"
-FEEDBACK_REJECTED_STAGE = "Rejected"
+FEEDBACK_PROJECT_NAME = _odoo_feedback.FEEDBACK_PROJECT_NAME
+FEEDBACK_STAGES = _odoo_feedback.FEEDBACK_STAGES
+FEEDBACK_DONE_STAGE = _odoo_feedback.FEEDBACK_DONE_STAGE
+FEEDBACK_REJECTED_STAGE = _odoo_feedback.FEEDBACK_REJECTED_STAGE
 
 _feedback_project_id: int | None = None
 
@@ -842,50 +847,17 @@ def find_duplicate_leave(
     )
 
 
-def _ensure_feedback_stages(project_id: int) -> None:
-    existing = execute(
-        "project.task.type", "search_read",
-        [("project_ids", "in", [project_id])], fields=["name"],
-    ) or []
-    have = {r["name"] for r in existing}
-    for seq, name in enumerate(FEEDBACK_STAGES):
-        if name in have:
-            continue
-        execute("project.task.type", "create", {
-            "name": name,
-            "sequence": seq,
-            "fold": name in (FEEDBACK_DONE_STAGE, FEEDBACK_REJECTED_STAGE),
-            "project_ids": [(4, project_id)],
-        })
-
-
 def ensure_feedback_project() -> int:
     """Find-or-create the 'Plant Manager' project (+ its stages); cache the id."""
     global _feedback_project_id
-    if _feedback_project_id is not None:
-        return _feedback_project_id
-    found = execute(
-        "project.project", "search_read",
-        [("name", "=", FEEDBACK_PROJECT_NAME)], fields=["id"], limit=1,
-    )
-    if found:
-        project_id = found[0]["id"]
-    else:
-        project_id = execute("project.project", "create", {"name": FEEDBACK_PROJECT_NAME})
-    _ensure_feedback_stages(project_id)
-    _feedback_project_id = project_id
-    return project_id
+    if _feedback_project_id is None:
+        _feedback_project_id = _odoo_feedback.find_or_create_feedback_project(execute)
+        _odoo_feedback.ensure_feedback_stages(execute, _feedback_project_id)
+    return _feedback_project_id
 
 
 def ensure_feedback_tag(name: str) -> int:
-    """Find-or-create a project.tags row by name; return its id."""
-    found = execute(
-        "project.tags", "search_read",
-        [("name", "=", name)], fields=["id"], limit=1,
-    )
-    if found:
-        return found[0]["id"]
-    return execute("project.tags", "create", {"name": name})
+    return _odoo_feedback.ensure_feedback_tag(execute, name)
 
 
 def create_feedback_task(
@@ -896,76 +868,36 @@ def create_feedback_task(
     tag_id: int | None,
     deadline: str,
 ) -> int:
-    """Create a project.task. Tries Odoo 16/17 `user_ids` (m2m), falls back to
-    legacy `user_id` (m2o) if the field is rejected."""
-    base = {
-        "name": name,
-        "project_id": project_id,
-        "description": description_html,
-        "date_deadline": deadline,
-    }
-    if tag_id:
-        base["tag_ids"] = [(6, 0, [tag_id])]
-    try:
-        return execute("project.task", "create",
-                       dict(base, user_ids=[(6, 0, [assignee_uid])]))
-    except xmlrpc.client.Fault as fault:
-        # Only retry when Odoo rejected the `user_ids` field itself (older
-        # versions expose the m2o `user_id` instead). Any other Fault — access
-        # rights, validation, a transient server error — is a real failure and
-        # must propagate, not trigger a second create attempt.
-        if "user_ids" not in (fault.faultString or ""):
-            raise
-        return execute("project.task", "create",
-                       dict(base, user_id=assignee_uid))
+    return _odoo_feedback.create_feedback_task(
+        execute,
+        project_id,
+        name,
+        description_html,
+        assignee_uid,
+        tag_id,
+        deadline,
+    )
 
 
 def update_task(task_id: int, **fields: Any) -> None:
-    """Write fields on a project.task (e.g. description=..., active=False)."""
-    execute("project.task", "write", [task_id], fields)
+    _odoo_feedback.update_task(execute, task_id, **fields)
 
 
 def post_task_message(task_id: int, body: str) -> None:
-    """Post a message to a project.task's chatter (mirrors post_leave_message:
-    `body` is forwarded as Odoo's keyword arg by `execute`)."""
-    execute("project.task", "message_post", [task_id], body=body)
+    _odoo_feedback.post_task_message(execute, task_id, body)
 
 
 def add_task_attachment(
     task_id: int, filename: str, mimetype: str | None, raw_bytes: bytes
 ) -> int:
-    """Attach a file to a project.task as an ir.attachment."""
-    return execute("ir.attachment", "create", {
-        "name": filename,
-        "datas": base64.b64encode(raw_bytes).decode("ascii"),
-        "res_model": "project.task",
-        "res_id": task_id,
-        "mimetype": mimetype or "application/octet-stream",
-    })
+    return _odoo_feedback.add_task_attachment(
+        execute, task_id, filename, mimetype, raw_bytes
+    )
 
 
 def fetch_task_stage_names(task_ids) -> dict[int, str | None]:
-    """Return {task_id: stage name} for the given project.task ids."""
-    ids = [int(t) for t in task_ids if t]
-    if not ids:
-        return {}
-    rows = execute("project.task", "read", ids, fields=["id", "stage_id"]) or []
-    out: dict[int, str | None] = {}
-    for r in rows:
-        stage = r.get("stage_id")
-        out[r["id"]] = stage[1] if isinstance(stage, (list, tuple)) and len(stage) > 1 else None
-    return out
+    return _odoo_feedback.fetch_task_stage_names(execute, task_ids)
 
 
 def feedback_status_bucket(stage_name: str | None) -> str:
-    """Collapse an Odoo stage name to open / done / rejected.
-
-    Matching is by exact stage name, so renaming the "Done"/"Rejected" stages
-    in the Odoo UI would make those tasks read as "open" here. The stages are
-    seeded by `_ensure_feedback_stages`; leave their names as-is.
-    """
-    if stage_name == FEEDBACK_DONE_STAGE:
-        return "done"
-    if stage_name == FEEDBACK_REJECTED_STAGE:
-        return "rejected"
-    return "open"
+    return _odoo_feedback.feedback_status_bucket(stage_name)
