@@ -43,6 +43,41 @@ def test_tv_leaderboard_horizontal_spacing_stays_compact():
     assert "padding: 0.25rem 0.25rem" in CSS
 
 
+def test_tv_range_and_goat_group_have_scoped_responsive_styles():
+    title_start = CSS.index("html[data-tv-theme] .tv-header-title-line")
+    title_end = CSS.index(
+        "html[data-tv-theme] .tv-header-title-meta", title_start
+    )
+    title_block = CSS[title_start:title_end]
+    assert "display: flex" in title_block
+    assert "align-items: baseline" in title_block
+
+    meta_start = title_end
+    meta_end = CSS.index(
+        "html[data-tv-theme] .tv-header .right.rlb-goat-banner", meta_start
+    )
+    meta_block = CSS[meta_start:meta_end]
+    assert "opacity: 0.7" in meta_block
+    assert "white-space: nowrap" in meta_block
+    assert "font-size: clamp(" in meta_block
+
+    icon_selector = (
+        "html[data-tv-theme] .tv-header .right.rlb-goat-banner"
+        ".tv-header-right-has-icon"
+    )
+    icon_layout_start = CSS.index(icon_selector)
+    icon_layout_end = CSS.index("}", icon_layout_start)
+    icon_layout = CSS[icon_layout_start:icon_layout_end]
+    assert "grid-template-columns: auto minmax(0, 1fr)" in icon_layout
+    assert "align-items: center" in icon_layout
+
+    icon_start = CSS.index("html[data-tv-theme] .rlb-goat-banner .tv-header-right-icon")
+    icon_end = CSS.index("}", icon_start)
+    assert "font-size: clamp(" in CSS[icon_start:icon_end]
+
+    assert "body.recycling-leaderboard-tv:not(.new-leaderboard-tv)" in CSS
+
+
 def test_tv_leaderboard_role_titles_are_not_header_elements():
     assert '<header class="rlb-panel-head">' not in TEMPLATE
     assert '<div class="rlb-panel-head">' in TEMPLATE
