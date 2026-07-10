@@ -166,6 +166,11 @@ def staffing_page(
         sched.notes = str(snap.get("notes") or "")
         sched.wc_notes = dict(snap.get("wc_notes") or {})
         sched.testing_day = bool(snap.get("testing_day", False))
+        sched.rotation_mode = str(snap.get("rotation_mode") or "normal")
+        sched.assignment_sources = {
+            wc_name: dict(sources or {})
+            for wc_name, sources in (snap.get("assignment_sources") or {}).items()
+        }
     # If the day has no saved assignments, pre-fill from per-work-center defaults.
     seeded_from_defaults = False
     if not sched.assignments:
@@ -441,7 +446,8 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
     # Notes-only update on a published schedule. Lets supervisors edit the
     # day's notes (or per-WC notes) after publishing without dropping the
     # schedule back to draft. Preserves assignments, published_snapshot,
-    # testing_day, and custom_hours — only `notes` and `wc_notes` change.
+    # testing_day, custom_hours, and rotation metadata — only `notes` and
+    # `wc_notes` change.
     if action == "save_notes":
         staffing.save_schedule(staffing.Schedule(
             day=d,
@@ -452,6 +458,11 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             testing_day=existing.testing_day,
             published_snapshot=existing.published_snapshot,
             custom_hours=existing.custom_hours,
+            rotation_mode=existing.rotation_mode,
+            assignment_sources={
+                wc_name: dict(sources or {})
+                for wc_name, sources in existing.assignment_sources.items()
+            },
         ))
         _http_cache.invalidate_today_cache()
         if (request.headers.get("accept") or "").startswith("application/json"):
@@ -472,6 +483,11 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             # Discard-draft only reverts the schedule grid; custom_hours are
             # managed independently via the Hours editor and persist.
             custom_hours=existing.custom_hours,
+            rotation_mode=str(snap.get("rotation_mode") or "normal"),
+            assignment_sources={
+                wc_name: dict(sources or {})
+                for wc_name, sources in (snap.get("assignment_sources") or {}).items()
+            },
         )
         staffing.save_schedule(restored)
         _http_cache.invalidate_today_cache()
@@ -511,6 +527,11 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         # the dedicated /staffing/hours route. Preserve them through every
         # publish / save / unpublish so the user's overrides aren't dropped.
         custom_hours=existing.custom_hours,
+        rotation_mode=existing.rotation_mode,
+        assignment_sources={
+            wc_name: dict(sources or {})
+            for wc_name, sources in existing.assignment_sources.items()
+        },
     ))
     # Bust the today response cache so the next GET sees fresh data.
     _http_cache.invalidate_today_cache()
@@ -1070,6 +1091,11 @@ async def staffing_clear_testing_day(request: Request):
             testing_day=False,
             published_snapshot=existing.published_snapshot,
             custom_hours=existing.custom_hours,
+            rotation_mode=existing.rotation_mode,
+            assignment_sources={
+                wc_name: dict(sources or {})
+                for wc_name, sources in existing.assignment_sources.items()
+            },
         ))
         _bust_after_mutation()
         return JSONResponse({"ok": True})

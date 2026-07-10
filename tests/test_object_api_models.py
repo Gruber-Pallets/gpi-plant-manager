@@ -67,7 +67,12 @@ def test_schedule_model_create_saves_schedule(monkeypatch):
     monkeypatch.setattr(
         object_models.staffing,
         "load_schedule",
-        lambda day: object_models.staffing.Schedule(day=day, assignments={}),
+        lambda day: object_models.staffing.Schedule(
+            day=day,
+            assignments={},
+            rotation_mode="training",
+            assignment_sources={"Repair 1": {"Dale": "manual"}},
+        ),
     )
     monkeypatch.setattr(
         object_models.staffing,
@@ -86,6 +91,8 @@ def test_schedule_model_create_saves_schedule(monkeypatch):
     assert new_id == "2026-07-06"
     assert saved["schedule"].assignments == {"Repair 1": ["Dale"]}
     assert saved["schedule"].testing_day is True
+    assert saved["schedule"].rotation_mode == "training"
+    assert saved["schedule"].assignment_sources == {"Repair 1": {"Dale": "manual"}}
 
 
 def test_skill_model_reads_skill_definitions(monkeypatch):

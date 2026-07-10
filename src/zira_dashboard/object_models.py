@@ -292,6 +292,11 @@ class ScheduleModel(object_api.ObjectModel):
             testing_day=bool(values.get("testing_day", current.testing_day)),
             custom_hours=current.custom_hours,
             published_snapshot=current.published_snapshot,
+            rotation_mode=current.rotation_mode,
+            assignment_sources={
+                wc_name: dict(sources or {})
+                for wc_name, sources in current.assignment_sources.items()
+            },
         )
         staffing.save_schedule(sched)
         return day.isoformat()
