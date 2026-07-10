@@ -147,7 +147,7 @@ def test_super_admin_session_can_render_api_settings(monkeypatch):
 def test_non_super_admin_cannot_render_api_settings(monkeypatch):
     monkeypatch.setenv("AUTH_DISABLED", "0")
 
-    with _authenticated_client("ian@gruberpallets.com", "Ian") as session_client:
+    with _authenticated_client("nonadmin@example.com", "Non Admin") as session_client:
         response = session_client.get("/settings?section=api")
 
     assert response.status_code == 403
@@ -170,7 +170,7 @@ def test_non_super_admin_cannot_create_or_revoke_api_keys(monkeypatch):
         raise AssertionError("API key store should not be called")
 
     monkeypatch.setattr(api_keys, "create_key", fail_if_called)
-    with _authenticated_client("ian@gruberpallets.com", "Ian") as session_client:
+    with _authenticated_client("nonadmin@example.com", "Non Admin") as session_client:
         create = session_client.post(
             "/settings/api-keys",
             data={"name": "Other App", "scope_admin": "on"},
