@@ -18,17 +18,28 @@
      {% endcall %}
 #}
 
-{% macro tv_header(name, crumb=None, right=None, right_label="OPERATORS", right_items=None, right_class=None) -%}
+{% macro tv_header(name, crumb=None, right=None, right_label="OPERATORS", right_items=None, right_class=None, title_meta=None, right_icon=None) -%}
 <div class="tv-header">
   <div class="tv-header-main">
     {%- if crumb %}<div class="crumb">{{ crumb }}</div>{% endif %}
+    {%- if title_meta %}
+    <div class="tv-header-title-line">
+      <div class="name">{{ name }}</div>
+      <div class="tv-header-title-meta">{{ title_meta }}</div>
+    </div>
+    {%- else %}
     <div class="name">{{ name }}</div>
+    {%- endif %}
   </div>
   {# Center slot. Always emitted (even when empty) so the header keeps its
      three-column grid shape whether or not a caller passes content. #}
   <div class="tv-header-center">{% if caller %}{{ caller() }}{% endif %}</div>
   {%- if right or right_items %}
-  <div class="right{% if right_items %} tv-header-right-items{% endif %}{% if right_class %} {{ right_class }}{% endif %}">
+  <div class="right{% if right_items %} tv-header-right-items{% endif %}{% if right_class %} {{ right_class }}{% endif %}{% if right_icon %} tv-header-right-has-icon{% endif %}">
+    {%- if right_icon %}
+    <span class="tv-header-right-icon" aria-hidden="true">{{ right_icon }}</span>
+    <div class="tv-header-right-content">
+    {%- endif %}
     <div class="crumb">{{ right_label }}</div>
     {%- if right_items %}
     <div class="tv-header-right-list">
@@ -44,6 +55,9 @@
     </div>
     {%- else %}
     <div class="name">{{ right }}</div>
+    {%- endif %}
+    {%- if right_icon %}
+    </div>
     {%- endif %}
   </div>
   {%- endif %}

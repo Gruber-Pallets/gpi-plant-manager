@@ -12,6 +12,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Fixes
 
 - **Operator dashboards now keep every downtime minute readable.** When the red downtime portion of the working/down bar was narrower than its label, the left side of the value was cut off. Wide values can now extend onto the adjacent green portion while staying right-aligned inside the overall bar, in both editor and TV views.
+- **The Recycling leaderboard TV header is tighter and easier to scan.** YTD and L30 ranges now sit beside the page title with lower visual emphasis, while one large goat icon groups the two Current GOAT tiles in the top-right corner. The desktop leaderboard and New leaderboard layouts are unchanged.
 
 ## 2026-07-04
 

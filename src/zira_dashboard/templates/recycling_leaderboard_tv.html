@@ -20,12 +20,18 @@
 </head>
 <body class="{% if is_tv %}recycling-leaderboard-tv{% else %}recycling-leaderboard-page{% endif %}">
   {% if is_tv %}
+  {% set range_meta -%}
+    <span>YTD: {{ data.ytd_start.strftime('%b %-d') }}-{{ data.ytd_end.strftime('%b %-d') }}</span>
+    <span>L30: {{ data.l30_start.strftime('%b %-d') }}-{{ data.l30_end.strftime('%b %-d') }}</span>
+  {%- endset %}
   {{ tv_header(
       "Recycling-leaderboard",
       crumb="RECYCLING",
       right_label="CURRENT GOATS",
       right_items=data.current_goats | default([]),
       right_class="rlb-goat-banner",
+      title_meta=range_meta,
+      right_icon="🐐",
   ) }}
   {% else %}
   <header>
@@ -34,10 +40,12 @@
   {% include "_dashboards_subnav.html" %}
   {% endif %}
   <main class="rlb-main">
+    {% if not is_tv %}
     <div class="rlb-range">
       <span>YTD: {{ data.ytd_start.strftime('%b %-d') }}-{{ data.ytd_end.strftime('%b %-d') }}</span>
       <span>L30: {{ data.l30_start.strftime('%b %-d') }}-{{ data.l30_end.strftime('%b %-d') }}</span>
     </div>
+    {% endif %}
     <section class="rlb-grid">
       {% for role in ["Repair", "Dismantler"] %}
       {% set block = data.roles[role] %}
