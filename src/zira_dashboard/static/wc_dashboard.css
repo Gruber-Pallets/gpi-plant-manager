@@ -495,8 +495,8 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
 .wc-dashboard .grid-stack-item[gs-id="downtime-row"] .stacked-track .bad {
   display: flex;
   align-items: center;
-  justify-content: flex-end;   /* 12m stays on the RIGHT edge of red */
-  overflow: hidden;
+  justify-content: flex-end;   /* value stays on the RIGHT edge of red */
+  overflow: visible;          /* wide values may extend left over green */
 }
 .wc-dashboard .grid-stack-item[gs-id="downtime-row"] .up-label,
 .wc-dashboard .grid-stack-item[gs-id="downtime-row"] .down-label {
