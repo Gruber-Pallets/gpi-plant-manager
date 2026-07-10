@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any, Callable
 
 
@@ -119,33 +118,17 @@ def fetch_calendar_hours(
     return calendar_hours_from_lines(rows)
 
 
-_calendar_lunch_windows_cache: dict[tuple[int, ...], tuple[dict, float]] = {}
-_CALENDAR_LUNCH_TTL_SECONDS = 10 * 60
-
-
 def fetch_calendar_lunch_windows(
     execute_fn: Callable[..., Any], calendar_ids
 ) -> dict:
-    """Return briefly cached per-weekday lunch windows for calendars."""
-    ids = tuple(sorted({int(i) for i in (calendar_ids or []) if i is not None}))
-    if not ids:
-        return {}
-    now = time.monotonic()
-    cached = _calendar_lunch_windows_cache.get(ids)
-    if cached is not None and cached[1] > now:
-        return cached[0]
+    """Query and reduce per-weekday lunch windows for calendars."""
     rows = execute_fn(
         "resource.calendar.attendance",
         "search_read",
-        [("calendar_id", "in", list(ids))],
+        [("calendar_id", "in", list(calendar_ids))],
         fields=["calendar_id", "dayofweek", "hour_from", "hour_to", "day_period"],
     )
-    out = calendar_lunch_windows_from_lines(rows)
-    _calendar_lunch_windows_cache[ids] = (
-        out,
-        now + _CALENDAR_LUNCH_TTL_SECONDS,
-    )
-    return out
+    return calendar_lunch_windows_from_lines(rows)
 
 
 def fetch_resource_calendar(

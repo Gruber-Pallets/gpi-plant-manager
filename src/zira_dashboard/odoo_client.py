@@ -240,8 +240,24 @@ def fetch_calendar_hours(calendar_ids) -> dict:
     return _odoo_calendars.fetch_calendar_hours(execute, calendar_ids)
 
 
+_calendar_lunch_windows_cache: dict[tuple[int, ...], tuple[dict, float]] = {}
+_CALENDAR_LUNCH_TTL_SECONDS = 10 * 60
+
+
 def fetch_calendar_lunch_windows(calendar_ids) -> dict:
-    return _odoo_calendars.fetch_calendar_lunch_windows(execute, calendar_ids)
+    ids = tuple(sorted({int(i) for i in (calendar_ids or []) if i is not None}))
+    if not ids:
+        return {}
+    now = time.monotonic()
+    cached = _calendar_lunch_windows_cache.get(ids)
+    if cached is not None and cached[1] > now:
+        return cached[0]
+    out = _odoo_calendars.fetch_calendar_lunch_windows(execute, ids)
+    _calendar_lunch_windows_cache[ids] = (
+        out,
+        now + _CALENDAR_LUNCH_TTL_SECONDS,
+    )
+    return out
 
 
 def fetch_employees() -> list[dict]:

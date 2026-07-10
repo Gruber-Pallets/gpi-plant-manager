@@ -54,6 +54,74 @@ def test_facade_leave_cache_remains_assignable(monkeypatch):
     assert odoo_client.fetch_leave_types() is expected
 
 
+def test_facade_lunch_cache_remains_assignable(monkeypatch):
+    calendar_id = 987_654
+    expected = {calendar_id: {"0": ["11:00", "11:30"]}}
+    monkeypatch.setattr(
+        odoo_client,
+        "_calendar_lunch_windows_cache",
+        {(calendar_id,): (expected, float("inf"))},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "execute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cache miss")),
+    )
+
+    assert odoo_client.fetch_calendar_lunch_windows([calendar_id]) is expected
+
+
+def test_facade_lunch_cache_miss_uses_current_execute_and_ttl(monkeypatch):
+    calendar_id = 987_655
+    calls = []
+
+    def fake(model, method, *args, **kwargs):
+        calls.append((model, method, args, kwargs))
+        return [
+            {
+                "calendar_id": [calendar_id, "Plant"],
+                "dayofweek": "0",
+                "day_period": "lunch",
+                "hour_from": 11.0,
+                "hour_to": 11.5,
+            }
+        ]
+
+    facade_cache = {}
+    monkeypatch.setattr(
+        odoo_client,
+        "_calendar_lunch_windows_cache",
+        facade_cache,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        odoo_client, "_CALENDAR_LUNCH_TTL_SECONDS", 0, raising=False
+    )
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    expected = {calendar_id: {"0": ["11:00", "11:30"]}}
+    assert odoo_client.fetch_calendar_lunch_windows([calendar_id, calendar_id]) == expected
+    assert odoo_client.fetch_calendar_lunch_windows([calendar_id]) == expected
+
+    assert len(calls) == 2
+    assert calls[0] == (
+        "resource.calendar.attendance",
+        "search_read",
+        ([("calendar_id", "in", [calendar_id])],),
+        {
+            "fields": [
+                "calendar_id",
+                "dayofweek",
+                "hour_from",
+                "hour_to",
+                "day_period",
+            ]
+        },
+    )
+    assert facade_cache[(calendar_id,)][0] == expected
+
+
 def test_facade_department_helper_is_resolved_at_call_time(monkeypatch):
     calls = []
     monkeypatch.setenv("ODOO_KIOSK_DEPARTMENT_FIELD", "x_kiosk_department_id")
