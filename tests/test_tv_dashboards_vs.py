@@ -100,7 +100,12 @@ def test_tv_new_vs_renders_with_default_dark_theme(monkeypatch):
 
 def test_tv_new_uses_static_new_grid(monkeypatch):
     _stub_data(monkeypatch)
-    with patch("zira_dashboard.routes.departments._new_day_data", return_value=_empty_new_day()):
+    # A configured New meter must exist for the "no readings" empty-state to
+    # render (otherwise `configured_new_meter_count == 0` takes the
+    # "configure a meter" branch). Stub it so the assertion below is
+    # deterministic on a fresh DB (e.g. CI) that has no seeded New work centers.
+    with patch("zira_dashboard.routes.departments._new_day_data", return_value=_empty_new_day()), \
+         patch("zira_dashboard.routes.departments._new_stations", return_value=[object()]):
         response = TestClient(app).get("/tv/new")
     assert response.status_code == 200
     assert 'data-layout-page="new"' in response.text
