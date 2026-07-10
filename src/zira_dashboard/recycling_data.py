@@ -131,6 +131,7 @@ def build_downtime_rows(
     total_elapsed: float,
     agg_who_today: dict,
     is_range: bool,
+    categories: tuple[str, ...] = ("Dismantler", "Repair"),
 ) -> list[dict]:
     """Working/down split per WC for the downtime widget.
 
@@ -140,7 +141,7 @@ def build_downtime_rows(
     """
     names = sorted(
         n for n in agg_active_names
-        if agg_category.get(n) in ("Dismantler", "Repair")
+        if agg_category.get(n) in categories
     )
     out = []
     for name in names:

@@ -22,7 +22,7 @@ from .. import (
     widget_customizer,
     work_centers_store,
 )
-from ..deps import _parse_day, _state, client, templates
+from ..deps import _state, client, templates
 from ..leaderboard import cached_leaderboard as leaderboard
 from ..plant_day import today as plant_today
 from ..progress import progress_buckets
@@ -32,7 +32,6 @@ from ..recycling_data import (
     build_downtime_rows,
     compute_per_wc_expected,
     group_goal,
-    progress_color,
     sort_bars,
 )
 from ..shift_config import shift_elapsed_minutes
@@ -738,12 +737,23 @@ def tv_recycling(request: Request, theme: str | None = Query(default=None)):
 
 
 @router.get("/new", response_class=HTMLResponse)
-def new_dept(request: Request, day: str | None = Query(default=None)):
+def new_dept(
+    request: Request,
+    window: str = Query(default="today"),
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+    day: str | None = Query(default=None),
+):
     """Departments → New subtab. Shows only work centers whose Settings
     department is "New" and that have a meter ID. Sparse data is the norm
     here today since most "New" stations aren't metered yet."""
+    if day and not (start and end):
+        start = end = day
     return _render_new_dept(
         request,
+        window=window,
+        start=start,
+        end=end,
         day=day,
         tv_mode=False,
         tv_theme="dark",
@@ -764,6 +774,9 @@ def new_vs_redirect(request: Request):
 def _render_new_dept(
     request: Request,
     *,
+    window: str,
+    start: str | None,
+    end: str | None,
     day: str | None,
     tv_mode: bool,
     tv_theme: str,
@@ -772,144 +785,88 @@ def _render_new_dept(
     Cache key includes tv_mode + tv_theme so screen and TV variants have
     separate cache entries.
     """
-    d = _parse_day(day)
+    from ..deps import resolve_range
+
     today = plant_today()
-    is_today = d == today
-    # Try cached HTML response.
+    start_d, end_d, custom_range_active = resolve_range(window, start, end, today)
+    is_today = start_d == end_d == today
+    is_range = start_d != end_d
+    range_includes_today = start_d <= today <= end_d
+
     from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
-    cache_key = ("new_dept", d.isoformat(), tv_mode, tv_theme)
-    cached = get_cached_response(cache_key, includes_today=is_today)
+    cache_key = (
+        "new_dept", start_d.isoformat(), end_d.isoformat(), tv_mode, tv_theme
+    )
+    cached = get_cached_response(cache_key, includes_today=range_includes_today)
     if cached is not None:
         return cached
+
     now = datetime.now(UTC)
 
-    new_locs = [
-        loc for loc in staffing.LOCATIONS
-        if work_centers_store.department(loc) == "New" and loc.meter_id
-    ]
-    stations = [
-        Station(
-            meter_id=loc.meter_id,
-            name=loc.name,
-            category=loc.skill or "Other",
-            cell="New",
-        )
-        for loc in new_locs
-    ]
-    results = leaderboard(client, stations, d, now_utc=now if is_today else None) if stations else []
+    days: list = []
+    cursor = start_d
+    while cursor <= end_d:
+        days.append(cursor)
+        cursor += timedelta(days=1)
 
-    total_units = sum(r.units for r in results)
-    total_downtime = sum(r.downtime_minutes for r in results)
-    elapsed = shift_elapsed_minutes(d, now)
-    available = elapsed * len(stations)
-    uptime_minutes = max(0, available - total_downtime)
-    uptime_pct = (uptime_minutes / available * 100.0) if available > 0 else 0.0
-    pallets_per_hour = (total_units / (elapsed / 60.0)) if elapsed > 0 else 0.0
-    elapsed_hours = elapsed / 60.0 if elapsed else 0.0
+    def _compute_day(d):
+        return _new_day_data(d, now, d == today, align_to_standard=is_range)
 
-    sched_for_labels = staffing.load_schedule(d)
-    station_names = {s.name for s in stations}
+    if len(days) > 1:
+        per_day = list(_RANGE_POOL.map(_compute_day, days))
+    else:
+        per_day = [_compute_day(d) for d in days]
 
-    # Per-person effective minutes during [shift_start, now-or-shift-end],
-    # subtracting Odoo partial-off intervals.
-    shift_start_local_for_mh = datetime.combine(d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ)
-    shift_end_local_for_mh = datetime.combine(d, shift_config.shift_end_for(d), tzinfo=shift_config.SITE_TZ)
-    window_end_local = (
-        min(now.astimezone(shift_config.SITE_TZ), shift_end_local_for_mh)
-        if is_today else shift_end_local_for_mh
+    aggregate = recycling_range.aggregate_range(per_day, days, is_range=is_range)
+    new_progress = aggregate_buckets([
+        item["group_buckets"]["New"] for item in per_day
+    ])
+    customs_all = widget_customizer.load_all("new")
+    new_bars = build_bars(
+        "New",
+        agg_active_names=aggregate.agg_active_names,
+        agg_category=aggregate.agg_category,
+        agg_units=aggregate.agg_units,
+        agg_expected=aggregate.agg_expected,
+        agg_who_today=aggregate.agg_who_today,
+        is_range=is_range,
+        agg_downtime=aggregate.agg_downtime,
     )
-    window_start_utc = shift_start_local_for_mh.astimezone(UTC)
-    window_end_utc = window_end_local.astimezone(UTC)
-
-    # Full-day absences excluded from man-hours — see _recycling_day_data
-    # for the full rationale.
-    _absent_today = _absent_names(d)
-    present_assignments = _present_assignments(sched_for_labels.assignments, _absent_today)
-
-    # Partial-day off intervals fetched ONCE per day (see _recycling_day_data).
-    try:
-        from .. import attendance as _attendance
-        _partials = _attendance.partial_off_intervals(d)
-    except Exception:
-        _partials = None
-
-    total_man_minutes_new = 0
-    total_new_vs_people = 0
-    for wc_name, ops in present_assignments.items():
-        if wc_name == staffing.TIME_OFF_KEY or not ops or wc_name not in station_names:
-            continue
-        for person_name in ops:
-            total_new_vs_people += 1
-            total_man_minutes_new += staffing.effective_minutes_worked(
-                person_name, d, window_start_utc, window_end_utc,
-                partials=_partials,
-            )
-    total_man_hours = total_man_minutes_new / 60.0
-    pph_per_person = (total_units / total_man_hours) if total_man_hours > 0 else 0.0
-
-    who_by_wc = _who_by_wc(sched_for_labels.assignments, d, absent_names=_absent_today)
-
-    bars: list[dict] = []
-    for r in results:
-        station_tgt_hr = settings_store.station_target(r.station)
-        expected = station_tgt_hr * elapsed_hours
-        pct_of_target = (r.units / expected * 100.0) if expected > 0 else None
-        bars.append({
-            "name": r.station.name,
-            "who": who_by_wc.get(r.station.name, r.station.name),
-            "units": r.units,
-            "expected": int(round(expected)),
-            "color": progress_color(pct_of_target),
-            "pct_of_target": round(pct_of_target, 1) if pct_of_target is not None else None,
-        })
-    base = max((max(b["units"], b["expected"]) for b in bars), default=0)
-    scale = (base * 1.1) if base > 0 else 1.0
-    for b in bars:
-        b["pct"] = (b["units"] / scale * 100.0) if scale else 0.0
-    bars.sort(key=lambda x: -x["units"])
-
-    # ---- Per-bucket dismantler / repair progress (cumulative widgets) ----
-    # The New department has sparse metering, so we use a flat target function instead of
-    # the full break-aware machinery the Recycling route uses. Each 15-min
-    # bucket gets a target of (sum of group hourly targets) * (bucket_min/60).
-    new_dismantlers = [r for r in results if r.station.category == "Dismantler"]
-    new_repairs    = [r for r in results if r.station.category == "Repair"]
-
-    def _flat_target_fn(group):
-        def fn(b_start_local, b_end_local):
-            bucket_min = (b_end_local - b_start_local).total_seconds() / 60.0
-            total_hourly = sum(settings_store.station_target(r.station) for r in group)
-            return total_hourly * bucket_min / 60.0
-        return fn
-
-    new_dism_progress = (
-        progress_buckets(new_dismantlers, d, now, target_fn=_flat_target_fn(new_dismantlers))
-        if new_dismantlers else []
-    )
-    new_repair_progress = (
-        progress_buckets(new_repairs, d, now, target_fn=_flat_target_fn(new_repairs))
-        if new_repairs else []
+    new_bars = sort_bars(new_bars, "new-bars", customs_all=customs_all)
+    downtime_rows = build_downtime_rows(
+        agg_active_names=aggregate.agg_active_names,
+        agg_category=aggregate.agg_category,
+        agg_downtime=aggregate.agg_downtime,
+        total_elapsed=aggregate.total_elapsed,
+        agg_who_today=aggregate.agg_who_today,
+        is_range=is_range,
+        categories=("New",),
     )
 
-    def _flat_group_goal(rows):
-        if not rows:
-            return 0.0
-        return sum(settings_store.station_target(r.station) for r in rows)
-    new_dism_group_target = _flat_group_goal(new_dismantlers)
-    new_repair_group_target = _flat_group_goal(new_repairs)
-
-    downtime_rows = []
-    for r in results:
-        working = max(0, elapsed - r.downtime_minutes)
-        total = elapsed if elapsed else 1
-        downtime_rows.append({
-            "name": r.station.name,
-            "who": who_by_wc.get(r.station.name),
-            "working": working,
-            "down": r.downtime_minutes,
-            "working_pct": working / total * 100.0,
-            "down_pct": r.downtime_minutes / total * 100.0,
-        })
+    total_units = aggregate.total_units
+    total_elapsed = aggregate.total_elapsed
+    total_available = aggregate.total_available
+    total_uptime_minutes = aggregate.total_uptime_minutes
+    total_man_hours = aggregate.total_man_hours
+    uptime_pct = (
+        total_uptime_minutes / total_available * 100.0
+        if total_available > 0 else 0.0
+    )
+    pph_per_person = (
+        total_units / total_man_hours if total_man_hours > 0 else 0.0
+    )
+    elapsed_hours_total = total_elapsed / 60.0 if total_elapsed else 0.0
+    new_group_target = group_goal(
+        "New",
+        elapsed_hours_total=elapsed_hours_total,
+        agg_expected=aggregate.agg_expected,
+        agg_category=aggregate.agg_category,
+    )
+    new_people = sum(item["total_recycling_people"] for item in per_day)
+    operator_links_by_wc = {
+        wc_name: wc_dashboard_data.dashboard_url_for_wc_day(wc_name, end_d)
+        for wc_name in aggregate.agg_active_names
+    }
 
     # Inline-assign popover: today only. Mirrors the recycling route so the
     # "(no assignment)" bars on /new-vs become click-to-attribute buttons.
@@ -926,31 +883,44 @@ def _render_new_dept(
             "active_dashboard_key": "vs_new",
             "assignments_todo_by_wc": assignments_todo_by_wc,
             "all_active_people": all_active_people,
-            "day": d.isoformat(),
+            "window": window,
+            "start": start_d.isoformat(),
+            "end": end_d.isoformat(),
             "today": today.isoformat(),
             "is_today": is_today,
+            "is_range": is_range,
+            "range_includes_today": range_includes_today,
+            "custom_range_active": custom_range_active,
+            "operator_links_by_wc": operator_links_by_wc,
             "total_units": total_units,
-            "total_downtime_display": f"{total_downtime / 60:.1f} h",
-            "uptime_pct": round(uptime_pct, 1),
-            "pallets_per_hour": round(pallets_per_hour, 1),
             "pph_per_person": round(pph_per_person, 1),
-            "elapsed_minutes": elapsed,
-            "bars": bars,
+            "new_bars": new_bars,
+            "new_progress": new_progress,
+            "new_group_target": new_group_target,
+            "new_people": new_people,
             "downtime_rows": downtime_rows,
-            "has_dismantlers": bool(new_dismantlers),
-            "has_repairs": bool(new_repairs),
-            "new_dism_progress": new_dism_progress,
-            "new_repair_progress": new_repair_progress,
-            "new_dism_group_target": new_dism_group_target,
-            "new_repair_group_target": new_repair_group_target,
-            "new_dism_people": sum(
-                len(present_assignments.get(r.station.name, []))
-                for r in new_dismantlers
+            "uptime_pct": uptime_pct,
+            "layout": layout_store.layout_map("new"),
+            "layout_key": "new",
+            "customs": customs_all,
+            # Compatibility values for the legacy New template. Task 4 will
+            # consume the range-aware values above directly.
+            "day": end_d.isoformat(),
+            "total_downtime_display": f"{aggregate.total_downtime / 60:.1f} h",
+            "pallets_per_hour": round(
+                total_units / elapsed_hours_total if elapsed_hours_total > 0 else 0.0,
+                1,
             ),
-            "new_repair_people": sum(
-                len(present_assignments.get(r.station.name, []))
-                for r in new_repairs
-            ),
+            "elapsed_minutes": total_elapsed,
+            "bars": new_bars,
+            "has_dismantlers": False,
+            "has_repairs": False,
+            "new_dism_progress": [],
+            "new_repair_progress": [],
+            "new_dism_group_target": 0.0,
+            "new_repair_group_target": 0.0,
+            "new_dism_people": 0,
+            "new_repair_people": 0,
             "refreshed_at": now.astimezone(shift_config.SITE_TZ).strftime("%-I:%M:%S %p"),
             "tv_mode": tv_mode,
             "tv_theme": tv_theme,
@@ -961,8 +931,8 @@ def _render_new_dept(
             "goat_contenders": [],
         },
     )
-    set_cache_headers(response, includes_today=is_today)
-    store_cached_response(cache_key, includes_today=is_today, response=response)
+    set_cache_headers(response, includes_today=range_includes_today)
+    store_cached_response(cache_key, includes_today=range_includes_today, response=response)
     return response
 
 
@@ -972,6 +942,9 @@ def tv_new_dept(request: Request, theme: str | None = Query(default=None)):
     tv_theme = "light" if theme == "light" else "dark"
     return _render_new_dept(
         request,
+        window="today",
+        start=None,
+        end=None,
         day=None,
         tv_mode=True,
         tv_theme=tv_theme,
