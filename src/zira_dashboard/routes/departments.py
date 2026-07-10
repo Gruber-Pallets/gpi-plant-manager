@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse
 
 from .. import (
     layout_store,
+    recycling_range,
     settings_store,
     shift_config,
     staffing,
@@ -479,47 +480,24 @@ def _render_recycling(
     else:
         per_day = [_compute_day(d) for d in days]
 
-    # Aggregate top-line stats.
-    total_units = sum(p["total_units"] for p in per_day)
-    total_downtime = sum(p["total_downtime"] for p in per_day)
-    total_elapsed = sum(p["elapsed"] for p in per_day)
-    total_available = sum(p["available"] for p in per_day)
-    total_uptime_minutes = sum(p["uptime_minutes"] for p in per_day)
-    total_man_hours = sum(p["total_man_hours"] for p in per_day)
+    aggregate = recycling_range.aggregate_range(per_day, days, is_range=is_range)
+    total_units = aggregate.total_units
+    total_downtime = aggregate.total_downtime
+    total_elapsed = aggregate.total_elapsed
+    total_available = aggregate.total_available
+    total_uptime_minutes = aggregate.total_uptime_minutes
+    total_man_hours = aggregate.total_man_hours
+    agg_units = aggregate.agg_units
+    agg_downtime = aggregate.agg_downtime
+    agg_expected = aggregate.agg_expected
+    agg_who_today = aggregate.agg_who_today
+    agg_category = aggregate.agg_category
+    agg_active_names = aggregate.agg_active_names
+    schedule_today_assignments = aggregate.schedule_today_assignments
 
     uptime_pct = (total_uptime_minutes / total_available * 100.0) if total_available > 0 else 0.0
     pallets_per_hour = (total_units / (total_elapsed / 60.0)) if total_elapsed > 0 else 0.0
     pph_per_person = (total_units / total_man_hours) if total_man_hours > 0 else 0.0
-
-    # Per-WC aggregation.
-    agg_units: dict[str, int] = {}
-    agg_downtime: dict[str, int] = {}
-    agg_expected: dict[str, float] = {}
-    agg_who_today: dict[str, str | None] = {}
-    agg_category: dict[str, str] = {}
-    agg_station_obj: dict[str, object] = {}
-    agg_active_names: set[str] = set()
-    schedule_today_assignments: dict[str, list[str]] = {}
-
-    for p, d in zip(per_day, days):
-        agg_active_names |= p["active_wc_names"]
-        for name, units in p["per_wc_units"].items():
-            agg_units[name] = agg_units.get(name, 0) + units
-        for name, dt in p["per_wc_downtime"].items():
-            agg_downtime[name] = agg_downtime.get(name, 0) + dt
-        for name, exp in p["per_wc_expected"].items():
-            agg_expected[name] = agg_expected.get(name, 0.0) + exp
-        for name, cat in p["per_wc_category"].items():
-            agg_category[name] = cat
-        for name, obj in p["per_wc_station_obj"].items():
-            agg_station_obj[name] = obj
-        # Capture this day's who-labels + raw assignments whenever the page
-        # is a single-day view — today OR a past day. The earlier `d == today`
-        # check left past-day views with empty dicts, dropping every "who"
-        # label into "(no assignment)". Range views ignore both anyway.
-        if not is_range:
-            agg_who_today = p["per_wc_who"]
-            schedule_today_assignments = p["schedule_assignments"]
 
     # Dismantler 4 secondary metric: same denominator (we still pay for the
     # operator labor) but the numerator drops D4's pallets. D4 reprocesses
