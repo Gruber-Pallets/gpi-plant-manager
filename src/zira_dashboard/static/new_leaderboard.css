@@ -119,6 +119,38 @@ body.new-leaderboard-page .nlb-ribbons {
   min-height: 22rem;
 }
 
+/* Three family GOATs need one header row on wide TVs. The inherited
+   recycling banner is a two-column grid, which adds a second header row and
+   pushes the fixed-height ribbon grid below the clipped TV viewport. */
+html[data-tv-theme] body.new-leaderboard-tv .tv-header .right.rlb-goat-banner {
+  min-width: min(48vw, 46rem);
+  max-width: min(56vw, 58rem);
+}
+
+html[data-tv-theme] body.new-leaderboard-tv .rlb-goat-banner .tv-header-right-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+html[data-tv-theme] body.new-leaderboard-tv .rlb-goat-banner .tv-header-right-chip {
+  padding: 0.3rem 0.4rem;
+}
+
+html[data-tv-theme] body.new-leaderboard-tv .rlb-goat-banner .tv-header-right-name {
+  font-size: clamp(0.9rem, 1.1vw, 1.3rem);
+}
+
+@media (max-width: 1400px) {
+  html[data-tv-theme] body.new-leaderboard-tv .tv-header .right.rlb-goat-banner {
+    min-width: min(42vw, 34rem);
+    max-width: min(50vw, 38rem);
+  }
+
+  html[data-tv-theme] body.new-leaderboard-tv .rlb-goat-banner .tv-header-right-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1100px) {
   .nlb-grid,
   .nlb-family-count-1,

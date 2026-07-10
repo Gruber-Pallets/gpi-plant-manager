@@ -42,3 +42,16 @@ def test_new_leaderboard_has_mobile_stack_and_name_safety():
     name_end = RECYCLING_CSS.index(".rlb-table .num", name_start)
     assert "text-overflow: ellipsis" in RECYCLING_CSS[name_start:name_end]
     assert 'aria-label="{{ row.name }}"' in TEMPLATE
+
+
+def test_new_leaderboard_tv_keeps_three_goat_chips_in_one_row_at_all_tv_widths():
+    goat_list_selector = "body.new-leaderboard-tv .rlb-goat-banner .tv-header-right-list"
+    assert goat_list_selector in CSS
+    goat_list_start = CSS.index(goat_list_selector)
+    goat_list_end = CSS.index("}", goat_list_start)
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in CSS[goat_list_start:goat_list_end]
+    fallback_start = CSS.index("@media (max-width: 1400px)")
+    fallback_end = CSS.index("@media (max-width: 1100px)", fallback_start)
+    fallback = CSS[fallback_start:fallback_end]
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in fallback
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" not in fallback
