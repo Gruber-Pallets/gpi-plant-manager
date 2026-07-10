@@ -1,10 +1,15 @@
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
+
+from jinja2 import Environment, FileSystemLoader
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = (ROOT / "src/zira_dashboard/templates/new_leaderboard_tv.html").read_text()
 CSS = (ROOT / "src/zira_dashboard/static/new_leaderboard.css").read_text()
 RECYCLING_CSS = (ROOT / "src/zira_dashboard/static/recycling_leaderboard.css").read_text()
+TEST_WORKFLOW = (ROOT / ".github/workflows/tests.yml").read_text()
 
 
 def test_new_leaderboard_uses_recycling_visual_base_and_own_layout_css():
@@ -23,10 +28,73 @@ def test_new_leaderboard_layout_responds_to_active_family_count():
     assert "repeat(3, minmax(0, 1fr))" in CSS
 
 
-def test_new_leaderboard_ribbon_grid_is_family_driven():
-    assert "--nlb-family-count: {{ data.active_families|length }}" in TEMPLATE
-    assert "repeat(var(--nlb-family-count), minmax(0, 1fr))" in CSS
-    assert "month.winners[family]" in TEMPLATE
+def test_new_leaderboard_ribbon_matrix_uses_calendar_columns_and_family_rows():
+    assert "data.ribbons|sort(attribute='month')" in TEMPLATE
+    assert "{% for month in calendar_ribbons %}" in TEMPLATE
+    assert "{% for family in data.active_families %}" in TEMPLATE
+    assert "{% set winner = month.winners[family] %}" in TEMPLATE
+    assert "nlb-work-center" in TEMPLATE
+
+    calendar_ribbons = [
+        SimpleNamespace(month=month, month_label=label, winners={"Alpha": None, "Beta": None})
+        for month, label in reversed(list(enumerate((
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ), start=1)))
+    ]
+    data = SimpleNamespace(
+        active_families=["Alpha", "Beta"],
+        current_goats=[],
+        error_message=None,
+        families={
+            family: SimpleNamespace(
+                thresholds=SimpleNamespace(ytd=1, l30=1),
+                rows=[],
+            )
+            for family in ("Alpha", "Beta")
+        },
+        ribbons=calendar_ribbons,
+        ytd_start=date(2026, 1, 1),
+        ytd_end=date(2026, 12, 31),
+        l30_start=date(2026, 12, 2),
+        l30_end=date(2026, 12, 31),
+    )
+    environment = Environment(loader=FileSystemLoader(ROOT / "src/zira_dashboard/templates"))
+    environment.globals["static_v"] = lambda _: "test"
+    rendered = environment.get_template("new_leaderboard_tv.html").render(data=data)
+    ribbon_grid = rendered.split('<div class="nlb-ribbon-grid"', 1)[1].split("</div>", 1)[0]
+    month_positions = [
+        ribbon_grid.index(f'class="nlb-month">{label}</strong>')
+        for label in ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    ]
+    work_center_positions = [
+        ribbon_grid.index(f'class="nlb-work-center">{family}</strong>')
+        for family in ("Alpha", "Beta")
+    ]
+    assert month_positions == sorted(month_positions)
+    assert max(month_positions) < min(work_center_positions)
+
+
+def test_new_leaderboard_ribbon_matrix_fits_all_months_without_scrolling():
+    assert "grid-template-columns: minmax(4.5rem, 0.7fr) repeat(12, minmax(0, 1fr));" in CSS
+    assert "grid-template-rows: auto repeat(var(--nlb-family-count), minmax(0, 1fr));" in CSS
+    assert "overflow: hidden;" in CSS
+    assert ".nlb-work-center" in CSS
+
+
+def test_new_leaderboard_tv_bounds_multi_family_ribbons_inside_the_viewport():
+    tv_layout = CSS[CSS.index("html[data-tv-theme] body.new-leaderboard-tv {"):]
+    assert "display: grid;" in tv_layout
+    assert "grid-template-rows: auto minmax(0, 1fr);" in tv_layout
+    assert "height: 100vh;" in tv_layout
+    assert "html[data-tv-theme] body.new-leaderboard-tv .rlb-main" in tv_layout
+    assert "html[data-tv-theme] body.new-leaderboard-tv .nlb-grid" in tv_layout
+    assert "height: 100%;" in tv_layout
+    assert "grid-template-rows: minmax(0, 1fr) minmax(14rem, 0.42fr);" in CSS
+
+
+def test_ci_installs_chromium_for_new_leaderboard_geometry_contract():
+    assert "python -m playwright install --with-deps chromium" in TEST_WORKFLOW
 
 
 def test_new_leaderboard_copy_and_empty_states_are_exact():

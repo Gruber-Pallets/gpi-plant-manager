@@ -69,10 +69,14 @@
       <section class="rlb-panel nlb-ribbons">
         <div class="rlb-panel-head"><div><h2>Gold Ribbons</h2><p>Best normalized full day</p></div></div>
         <div class="nlb-ribbon-grid" style="--nlb-family-count: {{ data.active_families|length }}">
-          <span></span>{% for family in data.active_families %}<strong>{{ family }}</strong>{% endfor %}
-          {% for month in data.ribbons %}
+          {% set calendar_ribbons = data.ribbons|sort(attribute='month') %}
+          <span></span>
+          {% for month in calendar_ribbons %}
             <strong class="nlb-month">{{ month.month_label }}</strong>
-            {% for family in data.active_families %}
+          {% endfor %}
+          {% for family in data.active_families %}
+            <strong class="nlb-work-center">{{ family }}</strong>
+            {% for month in calendar_ribbons %}
               {% set winner = month.winners[family] %}
               <span class="nlb-ribbon-cell">{% if winner %}<strong>{{ winner.name }}</strong><small>{{ winner.day.strftime('%b %-d') }} - {{ "%.0f"|format(winner.amount) }}</small>{% else %}<strong>-</strong>{% endif %}</span>
             {% endfor %}

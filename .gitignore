@@ -60,3 +60,4 @@ tz_backup.json
 scripts/_preview_out/
 # New dashboard visual-QA render output (scripts/preview_new_dashboard.py)
 scripts/_preview_new_out/
+.gstack/

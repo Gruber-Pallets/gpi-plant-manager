@@ -48,6 +48,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          python -m playwright install --with-deps chromium
 
       - name: Lint (ruff)
         run: ruff check src tests scripts

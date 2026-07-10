@@ -48,9 +48,10 @@
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: 2.6rem repeat(var(--nlb-family-count), minmax(0, 1fr));
-  grid-template-rows: auto repeat(12, minmax(0, 1fr));
+  grid-template-columns: minmax(4.5rem, 0.7fr) repeat(12, minmax(0, 1fr));
+  grid-template-rows: auto repeat(var(--nlb-family-count), minmax(0, 1fr));
   gap: 0.18rem;
+  overflow: hidden;
 }
 
 .nlb-ribbon-grid > strong,
@@ -58,12 +59,12 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  padding: 0.18rem 0.28rem;
+  padding: 0.12rem clamp(0.16rem, 0.25vw, 0.28rem);
 }
 
-.nlb-ribbon-grid > strong:not(.nlb-month) {
+.nlb-work-center {
   color: #fbbf24;
-  font-size: clamp(0.55rem, 0.75vw, 0.95rem);
+  font-size: clamp(0.5rem, 0.7vw, 0.85rem);
   text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
@@ -82,6 +83,7 @@
   flex-direction: column;
   justify-content: center;
   align-items: flex-start !important;
+  padding: 0.1rem clamp(0.16rem, 0.25vw, 0.28rem);
 }
 
 .nlb-ribbon-cell strong,
@@ -93,9 +95,13 @@
   text-overflow: ellipsis;
 }
 
+.nlb-ribbon-cell strong {
+  font-size: clamp(0.5rem, 0.7vw, 0.82rem);
+}
+
 .nlb-ribbon-cell small {
   color: var(--muted);
-  font-size: clamp(0.6rem, 0.75vw, 0.9rem);
+  font-size: clamp(0.48rem, 0.65vw, 0.76rem);
 }
 
 .nlb-state {
@@ -116,7 +122,27 @@ body.new-leaderboard-page .nlb-family-count-3 {
 }
 
 body.new-leaderboard-page .nlb-ribbons {
-  min-height: 22rem;
+  min-height: min-content;
+}
+
+/* The TV body owns the viewport budget: the header takes its natural height
+   and the main area receives the remaining space. This keeps the fixed-height
+   ribbon grid from starting below the header and extending past the clipped
+   TV viewport. */
+html[data-tv-theme] body.new-leaderboard-tv {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+}
+
+html[data-tv-theme] body.new-leaderboard-tv .rlb-main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+html[data-tv-theme] body.new-leaderboard-tv .nlb-grid {
+  height: 100%;
 }
 
 /* Three family GOATs need one header row on wide TVs. The inherited
@@ -167,6 +193,6 @@ html[data-tv-theme] body.new-leaderboard-tv .rlb-goat-banner .tv-header-right-na
   }
 
   .nlb-ribbons {
-    min-height: 22rem;
+    min-height: min-content;
   }
 }
