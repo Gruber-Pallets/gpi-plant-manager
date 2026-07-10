@@ -233,7 +233,7 @@ _is_flexible = _odoo_calendars.is_flexible
 
 
 def fetch_work_schedules() -> list[dict]:
-    return _odoo_calendars.fetch_work_schedules(execute)
+    return _odoo_calendars.fetch_work_schedules(execute, SCHEDULE_TYPE_FIELD)
 
 
 def fetch_calendar_hours(calendar_ids) -> dict:

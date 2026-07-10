@@ -85,19 +85,21 @@ def is_flexible(value) -> bool:
     return bool(value)
 
 
-def fetch_work_schedules(execute_fn: Callable[..., Any]) -> list[dict]:
+def fetch_work_schedules(
+    execute_fn: Callable[..., Any], schedule_type_field: str
+) -> list[dict]:
     """Return active resource calendars normalized for schedule settings."""
     rows = execute_fn(
         "resource.calendar",
         "search_read",
         [("active", "=", True)],
-        fields=["id", "name", SCHEDULE_TYPE_FIELD],
+        fields=["id", "name", schedule_type_field],
     )
     return [
         {
             "id": row["id"],
             "name": row.get("name") or "",
-            "is_flexible": is_flexible(row.get(SCHEDULE_TYPE_FIELD)),
+            "is_flexible": is_flexible(row.get(schedule_type_field)),
         }
         for row in rows
     ]

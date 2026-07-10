@@ -43,6 +43,30 @@ def test_facade_uses_unwrap_m2o_replaced_after_import(monkeypatch):
     ]
 
 
+def test_facade_schedule_type_field_is_resolved_at_call_time(monkeypatch):
+    field_name = "x_schedule_type"
+    calls = []
+
+    def fake(model, method, *args, **kwargs):
+        calls.append((model, method, args, kwargs))
+        return [{"id": 7, "name": "Flexible", field_name: "flexible"}]
+
+    monkeypatch.setattr(odoo_client, "SCHEDULE_TYPE_FIELD", field_name)
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    assert odoo_client.fetch_work_schedules() == [
+        {"id": 7, "name": "Flexible", "is_flexible": True}
+    ]
+    assert calls == [
+        (
+            "resource.calendar",
+            "search_read",
+            ([("active", "=", True)],),
+            {"fields": ["id", "name", field_name]},
+        )
+    ]
+
+
 def test_facade_leave_cache_remains_assignable(monkeypatch):
     expected = [{"id": 7, "name": "Vacation", "request_unit": "day"}]
     monkeypatch.setattr(odoo_client, "_leave_types_cache", (expected, float("inf")))
