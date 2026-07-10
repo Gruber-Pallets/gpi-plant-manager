@@ -175,6 +175,37 @@ CREATE TABLE IF NOT EXISTS schedule_wc_notes (
   PRIMARY KEY (day, wc_id)
 );
 
+-- Recycled smart rotations ---------------------------------------------
+
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS recycled_rotation_mode TEXT NOT NULL DEFAULT 'normal';
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS assignment_sources JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS person_rotation_preferences (
+  person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  rotation_group TEXT NOT NULL CHECK (rotation_group IN ('Dismantler', 'Repair', 'Trim Saw')),
+  preference TEXT NOT NULL CHECK (preference IN ('primary', 'regular', 'occasional', 'never')),
+  PRIMARY KEY (person_id, rotation_group)
+);
+
+CREATE TABLE IF NOT EXISTS rotation_training_blocks (
+  id BIGSERIAL PRIMARY KEY,
+  trainee_id INTEGER NOT NULL REFERENCES people(id),
+  trainer_id INTEGER NOT NULL REFERENCES people(id),
+  skill_id INTEGER NOT NULL REFERENCES skills(id),
+  start_day DATE NOT NULL,
+  planned_attended_days SMALLINT NOT NULL CHECK (planned_attended_days > 0),
+  status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'completed', 'ended')),
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rotation_training_block_days (
+  block_id BIGINT NOT NULL REFERENCES rotation_training_blocks(id) ON DELETE CASCADE,
+  day DATE NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('attended', 'absent', 'conflict')),
+  PRIMARY KEY (block_id, day)
+);
+
 -- Retro time-windowed WC attributions: when a metered WC produced units but
 -- had no one scheduled there, the user can attribute the production to the
 -- person who actually worked it. Used by attribute_for_day so leaderboards

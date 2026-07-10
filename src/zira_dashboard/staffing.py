@@ -277,6 +277,19 @@ class Schedule:
     # "breaks": [{"start": "HH:MM", "end": "HH:MM", "name": "..."}, ...]}.
     # None means "use the global schedule from schedule_store".
     custom_hours: dict | None = None
+    # Recycled smart-rotation metadata. Old schedules default to normal/manual-free.
+    rotation_mode: str = "normal"
+    assignment_sources: dict[str, dict[str, str]] = field(default_factory=dict)
+
+
+def _json_mapping(value) -> dict:
+    """Normalize JSONB values returned either decoded or as JSON text."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def snapshot_of(sched: Schedule) -> dict:
@@ -286,6 +299,11 @@ def snapshot_of(sched: Schedule) -> dict:
         "notes": sched.notes or "",
         "wc_notes": dict(sched.wc_notes or {}),
         "testing_day": bool(sched.testing_day),
+        "rotation_mode": sched.rotation_mode or "normal",
+        "assignment_sources": {
+            wc_name: dict(sources or {})
+            for wc_name, sources in (sched.assignment_sources or {}).items()
+        },
     }
 
 
@@ -336,7 +354,8 @@ def iter_saved_schedules():
 def _load_schedule_from_db(day: date) -> Schedule:
     from . import db
     rows = db.query(
-        "SELECT day, published, testing_day, notes, custom_hours, published_snapshot "
+        "SELECT day, published, testing_day, notes, custom_hours, published_snapshot, "
+        "recycled_rotation_mode, assignment_sources "
         "FROM schedules WHERE day = %s",
         (day,),
     )
@@ -371,6 +390,8 @@ def _load_schedule_from_db(day: date) -> Schedule:
         testing_day=r["testing_day"],
         custom_hours=r["custom_hours"],
         published_snapshot=r["published_snapshot"],
+        rotation_mode=r.get("recycled_rotation_mode") or "normal",
+        assignment_sources=_json_mapping(r.get("assignment_sources")),
     )
 
 
@@ -399,7 +420,8 @@ def load_schedules_bulk(
         conds.append("published = TRUE")
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
     sched_rows = db.query(
-        "SELECT day, published, testing_day, notes, custom_hours, published_snapshot "
+        "SELECT day, published, testing_day, notes, custom_hours, published_snapshot, "
+        "recycled_rotation_mode, assignment_sources "
         f"FROM schedules{where} ORDER BY day DESC",
         tuple(params) if params else None,
     )
@@ -450,6 +472,8 @@ def load_schedules_bulk(
             testing_day=r["testing_day"],
             custom_hours=r["custom_hours"],
             published_snapshot=r["published_snapshot"],
+            rotation_mode=r.get("recycled_rotation_mode") or "normal",
+            assignment_sources=_json_mapping(r.get("assignment_sources")),
         )))
     return out
 
@@ -462,14 +486,16 @@ def save_schedule(schedule: Schedule) -> None:
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO schedules (day, published, testing_day, notes, "
-            "custom_hours, published_snapshot, updated_at) "
-            "VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, now()) "
+            "custom_hours, published_snapshot, recycled_rotation_mode, assignment_sources, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, now()) "
             "ON CONFLICT (day) DO UPDATE SET "
             "  published = EXCLUDED.published, "
             "  testing_day = EXCLUDED.testing_day, "
             "  notes = EXCLUDED.notes, "
             "  custom_hours = EXCLUDED.custom_hours, "
             "  published_snapshot = EXCLUDED.published_snapshot, "
+            "  recycled_rotation_mode = EXCLUDED.recycled_rotation_mode, "
+            "  assignment_sources = EXCLUDED.assignment_sources, "
             "  updated_at = now()",
             (
                 schedule.day,
@@ -478,6 +504,8 @@ def save_schedule(schedule: Schedule) -> None:
                 schedule.notes or "",
                 json.dumps(schedule.custom_hours) if schedule.custom_hours else None,
                 json.dumps(schedule.published_snapshot) if schedule.published_snapshot else None,
+                schedule.rotation_mode or "normal",
+                json.dumps(schedule.assignment_sources or {}),
             ),
         )
         cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (schedule.day,))
