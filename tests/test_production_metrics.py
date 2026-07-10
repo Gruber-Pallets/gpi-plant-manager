@@ -142,3 +142,58 @@ def test_build_recycling_leaderboard_ribbons_use_normalized_amount():
     assert july["repair"]["name"] == "Short Day"
     assert july["repair"]["day"] == date(2026, 7, 2)
     assert july["repair"]["amount"] == 140.0
+
+
+def test_build_family_leaderboard_keeps_families_independent_and_ordered():
+    records = [
+        rec(date(2026, 7, 1), "Junior Operator", "Junior #2", 600, 7.0),
+        rec(date(2026, 7, 1), "Wood Operator", "Woodpecker #1", 300, 7.0),
+        rec(date(2026, 7, 1), "Builder", "Hand Build #1", 100, 3.0),
+        rec(date(2026, 7, 1), "Builder", "Big Build #1", 80, 4.0),
+    ]
+    data = pm.build_family_leaderboard(
+        records,
+        today=date(2026, 7, 10),
+        standard_full_day_hours=STD_HOURS,
+        family_wc_names={
+            "Juniors": {"Junior #1", "Junior #2", "Junior #3"},
+            "Woodpecker": {"Woodpecker #1"},
+            "Hand Build": {"Hand Build #1", "Hand Build #2", "Big Build #1"},
+        },
+    )
+    assert data["active_families"] == ["Juniors", "Woodpecker", "Hand Build"]
+    assert data["families"]["Juniors"]["rows"][0]["name"] == "Junior Operator"
+    assert data["families"]["Woodpecker"]["rows"][0]["name"] == "Wood Operator"
+    hand_build = data["families"]["Hand Build"]["rows"][0]
+    assert hand_build["name"] == "Builder"
+    assert hand_build["ytd"]["avg_units"] == 180.0
+
+
+def test_build_family_leaderboard_hides_family_without_qualifying_rows():
+    data = pm.build_family_leaderboard(
+        [rec(date(2026, 7, 1), "Short Shift", "Woodpecker #1", 200, 3.99)],
+        today=date(2026, 7, 10),
+        standard_full_day_hours=STD_HOURS,
+        family_wc_names={
+            "Juniors": {"Junior #2"},
+            "Woodpecker": {"Woodpecker #1"},
+        },
+    )
+    assert data["active_families"] == []
+    assert data["families"]["Woodpecker"]["rows"] == []
+
+
+def test_build_family_leaderboard_first_day_threshold_and_ribbon():
+    data = pm.build_family_leaderboard(
+        [rec(date(2026, 7, 2), "Launch Operator", "Junior #2", 80, 4.0)],
+        today=date(2026, 7, 10),
+        standard_full_day_hours=STD_HOURS,
+        family_wc_names={"Juniors": {"Junior #2"}},
+    )
+    assert data["families"]["Juniors"]["thresholds"] == {"ytd": 1, "l30": 1}
+    assert data["ribbons"][0]["winners"]["Juniors"] == {
+        "name": "Launch Operator",
+        "day": date(2026, 7, 2),
+        "amount": 140.0,
+        "days": 1,
+    }

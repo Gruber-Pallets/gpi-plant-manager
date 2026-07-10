@@ -205,28 +205,23 @@ def _best_ribbon(
     }
 
 
-def build_recycling_leaderboard(
+def build_family_leaderboard(
     records: list[dict],
     *,
     today: date,
     standard_full_day_hours: float,
-    wc_role_by_name: dict[str, str],
+    family_wc_names: dict[str, set[str]],
 ) -> dict:
     ytd_start = date(today.year, 1, 1)
     ytd_end = today
     l30_start = today - timedelta(days=29)
     l30_end = today
-    roles = {
-        "Repair": {wc for wc, role in wc_role_by_name.items() if role == "Repair"},
-        "Dismantler": {
-            wc for wc, role in wc_role_by_name.items() if role == "Dismantler"
-        },
-    }
+    ytd_records = [r for r in records if ytd_start <= r["day"] <= ytd_end]
+    l30_records = [r for r in records if l30_start <= r["day"] <= l30_end]
 
-    out_roles = {}
-    for role, wc_names in roles.items():
-        ytd_records = [r for r in records if ytd_start <= r["day"] <= ytd_end]
-        l30_records = [r for r in records if l30_start <= r["day"] <= l30_end]
+    families: dict[str, dict] = {}
+    active_families: list[str] = []
+    for family, wc_names in family_wc_names.items():
         ytd_rows = normalized_average_by_person(
             ytd_records,
             wc_names=wc_names,
@@ -239,17 +234,20 @@ def build_recycling_leaderboard(
         )
         ytd_threshold = _threshold(ytd_rows)
         l30_threshold = _threshold(l30_rows)
-        out_roles[role] = {
-            "rows": _role_rows(
-                ytd_rows=ytd_rows,
-                l30_rows=l30_rows,
-                ytd_threshold=ytd_threshold,
-                l30_threshold=l30_threshold,
-            ),
+        rows = _role_rows(
+            ytd_rows=ytd_rows,
+            l30_rows=l30_rows,
+            ytd_threshold=ytd_threshold,
+            l30_threshold=l30_threshold,
+        )
+        families[family] = {
+            "rows": rows,
             "thresholds": {"ytd": ytd_threshold, "l30": l30_threshold},
         }
+        if rows:
+            active_families.append(family)
 
-    ribbons = []
+    ribbons: list[dict] = []
     current_month = date(today.year, today.month, 1)
     for offset in range(12):
         month_start = _add_months(current_month, -offset)
@@ -260,16 +258,14 @@ def build_recycling_leaderboard(
                 "year": month_start.year,
                 "month": month_start.month,
                 "month_label": month_abbr[month_start.month],
-                "repair": _best_ribbon(
-                    month_records,
-                    wc_names=roles["Repair"],
-                    standard_full_day_hours=standard_full_day_hours,
-                ),
-                "dismantler": _best_ribbon(
-                    month_records,
-                    wc_names=roles["Dismantler"],
-                    standard_full_day_hours=standard_full_day_hours,
-                ),
+                "winners": {
+                    family: _best_ribbon(
+                        month_records,
+                        wc_names=wc_names,
+                        standard_full_day_hours=standard_full_day_hours,
+                    )
+                    for family, wc_names in family_wc_names.items()
+                },
             }
         )
 
@@ -278,6 +274,45 @@ def build_recycling_leaderboard(
         "ytd_end": ytd_end,
         "l30_start": l30_start,
         "l30_end": l30_end,
-        "roles": out_roles,
+        "families": families,
+        "active_families": active_families,
         "ribbons": ribbons,
+    }
+
+
+def build_recycling_leaderboard(
+    records: list[dict],
+    *,
+    today: date,
+    standard_full_day_hours: float,
+    wc_role_by_name: dict[str, str],
+) -> dict:
+    family_wc_names = {
+        "Repair": {wc for wc, role in wc_role_by_name.items() if role == "Repair"},
+        "Dismantler": {
+            wc for wc, role in wc_role_by_name.items() if role == "Dismantler"
+        },
+    }
+    data = build_family_leaderboard(
+        records,
+        today=today,
+        standard_full_day_hours=standard_full_day_hours,
+        family_wc_names=family_wc_names,
+    )
+    return {
+        "ytd_start": data["ytd_start"],
+        "ytd_end": data["ytd_end"],
+        "l30_start": data["l30_start"],
+        "l30_end": data["l30_end"],
+        "roles": data["families"],
+        "ribbons": [
+            {
+                "year": row["year"],
+                "month": row["month"],
+                "month_label": row["month_label"],
+                "repair": row["winners"]["Repair"],
+                "dismantler": row["winners"]["Dismantler"],
+            }
+            for row in data["ribbons"]
+        ],
     }
