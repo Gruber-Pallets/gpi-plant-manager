@@ -282,14 +282,43 @@ class Schedule:
     assignment_sources: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
+_ASSIGNMENT_SOURCES = frozenset(("generated", "manual"))
+
+
+def _validate_assignment_sources(value) -> dict[str, dict[str, str]]:
+    """Validate and copy the persisted ``work center -> person -> source`` map."""
+    if not isinstance(value, dict):
+        raise ValueError("assignment_sources must be a work center mapping")
+    normalized: dict[str, dict[str, str]] = {}
+    for wc_name, people in value.items():
+        if not isinstance(wc_name, str) or not isinstance(people, dict):
+            raise ValueError("assignment_sources must map work centers to person mappings")
+        normalized_people: dict[str, str] = {}
+        for person_name, source in people.items():
+            if (
+                not isinstance(person_name, str)
+                or not isinstance(source, str)
+                or source not in _ASSIGNMENT_SOURCES
+            ):
+                raise ValueError(
+                    "assignment_sources values must be 'generated' or 'manual'"
+                )
+            normalized_people[person_name] = source
+        normalized[wc_name] = normalized_people
+    return normalized
+
+
 def _json_mapping(value) -> dict:
-    """Normalize JSONB values returned either decoded or as JSON text."""
+    """Safely normalize persisted assignment-source JSONB values."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except json.JSONDecodeError:
             return {}
-    return dict(value) if isinstance(value, dict) else {}
+    try:
+        return _validate_assignment_sources(value)
+    except ValueError:
+        return {}
 
 
 def snapshot_of(sched: Schedule) -> dict:
@@ -482,6 +511,7 @@ def save_schedule(schedule: Schedule) -> None:
     """Upsert the day's schedule + replace its assignments / time off /
     wc_notes atomically (delete-then-insert inside one transaction)."""
     from . import db
+    assignment_sources = _validate_assignment_sources(schedule.assignment_sources)
     _invalidate_schedule_cache(schedule.day)
     with db.cursor() as cur:
         cur.execute(
@@ -505,7 +535,7 @@ def save_schedule(schedule: Schedule) -> None:
                 json.dumps(schedule.custom_hours) if schedule.custom_hours else None,
                 json.dumps(schedule.published_snapshot) if schedule.published_snapshot else None,
                 schedule.rotation_mode or "normal",
-                json.dumps(schedule.assignment_sources or {}),
+                json.dumps(assignment_sources),
             ),
         )
         cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (schedule.day,))

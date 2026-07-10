@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, UTC
@@ -161,6 +162,9 @@ def staffing_page(
     view_mode = view if view in ("draft", "posted") else "draft"
     viewing_posted = has_snapshot and view_mode == "posted"
     if viewing_posted:
+        # ``load_schedule`` returns an in-process cached draft. The posted view
+        # is display-only, so never swap snapshot fields into that shared object.
+        sched = copy.deepcopy(sched)
         snap = sched.published_snapshot or {}
         sched.assignments = {k: list(v) for k, v in (snap.get("assignments") or {}).items()}
         sched.notes = str(snap.get("notes") or "")

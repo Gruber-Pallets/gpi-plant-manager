@@ -83,6 +83,18 @@ def validate_block(*, level: int, trainer_level: int, workdays: int) -> None:
         raise InvalidTrainingBlock("Training block must contain at least one attended workday.")
 
 
+def _validate_training_target(skill_id: int) -> str:
+    """Return an allowed recycled target skill or reject it before any write."""
+    rows = db.query("SELECT name FROM skills WHERE id = %s", (skill_id,))
+    skill_name = rows[0].get("name") if rows else None
+    if skill_name not in ROTATION_GROUPS:
+        allowed = ", ".join(ROTATION_GROUPS)
+        raise InvalidTrainingBlock(
+            f"Training blocks require a Recycled skill: {allowed}."
+        )
+    return skill_name
+
+
 def _block_from_row(row: dict) -> TrainingBlock:
     start_day = row["start_day"]
     if not isinstance(start_day, date):
@@ -107,6 +119,7 @@ def create_block(
     planned_attended_days: int,
 ) -> TrainingBlock:
     """Create an active block after reading and validating both skill levels."""
+    _validate_training_target(skill_id)
     levels = db.query(
         "SELECT "
         "  COALESCE((SELECT level FROM person_skills WHERE person_id = %s AND skill_id = %s), 0) "

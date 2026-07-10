@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date
+from datetime import date, time
 from types import SimpleNamespace
 
 from starlette.datastructures import FormData
@@ -94,3 +94,78 @@ def test_clear_testing_day_preserves_rotation_metadata(monkeypatch):
     assert response.status_code == 200
     assert saved[0].rotation_mode == "training"
     assert saved[0].assignment_sources == SOURCES
+
+
+def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
+    from zira_dashboard import cert_lookup, staffing_view
+
+    draft_sources = {"Repair 1": {"Jordan": "generated"}}
+    posted_sources = {"Repair 1": {"Jordan": "manual"}}
+    cached = staffing.Schedule(
+        day=DAY,
+        published=False,
+        assignments={"Repair 1": ["Jordan"]},
+        rotation_mode="training",
+        assignment_sources=draft_sources,
+        published_snapshot={
+            "assignments": {"Repair 1": ["Taylor"]},
+            "notes": "posted",
+            "wc_notes": {},
+            "testing_day": False,
+            "rotation_mode": "normal",
+            "assignment_sources": posted_sources,
+        },
+    )
+    staffing._schedule_cache.clear()
+    staffing._schedule_cache[DAY] = cached
+    saved = []
+
+    monkeypatch.setattr(staffing_routes, "plant_today", lambda: date(2026, 7, 13))
+    monkeypatch.setattr(staffing_routes, "_next_working_day", lambda _d: DAY)
+    monkeypatch.setattr(staffing_routes._http_cache, "get_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(staffing_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
+    monkeypatch.setattr(staffing_routes._http_cache, "store_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
+    monkeypatch.setattr(staffing, "load_roster", lambda: [])
+    monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda _d: [])
+    monkeypatch.setattr(
+        staffing_routes,
+        "_safe_attendance",
+        lambda _d, _sched, _today: {"by_name": {}, "name_to_id": {}},
+    )
+    monkeypatch.setattr(staffing_routes, "_late_emp_ids", lambda *_args: set())
+    monkeypatch.setattr(staffing_routes.attendance, "person_id_to_name", lambda _ids: {})
+    monkeypatch.setattr(staffing_routes.shift_config, "configured_shift_start_for", lambda _d: time(7, 0))
+    monkeypatch.setattr(staffing_routes.shift_config, "configured_shift_end_for", lambda _d: time(15, 30))
+    monkeypatch.setattr(staffing_routes.shift_config, "configured_breaks_for", lambda _d: [])
+    monkeypatch.setattr(staffing_routes.shift_config, "scheduler_hours_source", lambda *_args: "weekday_default")
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", ())
+    monkeypatch.setattr(staffing_routes.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(
+        staffing_view,
+        "build_staffing_bays",
+        lambda **_kwargs: {
+            "bays": [], "publish_block_reasons": [], "defaults_by_loc": {},
+            "unassigned": [], "reserves": [], "time_off_names": [], "time_off_entries": [],
+            "partial_hours_by_name": {}, "partial_range_by_name": {}, "partial_clear_by_name": {},
+            "people_meta": {}, "all_active_people": [],
+        },
+    )
+    monkeypatch.setattr(staffing_routes, "templates", type("Templates", (), {
+        "TemplateResponse": staticmethod(lambda *_args: type("Response", (), {"headers": {}})()),
+    })())
+
+    staffing_routes.staffing_page(
+        request=object(), day=DAY.isoformat(), publish_blocked=0, view="posted",
+    )
+
+    assert staffing.load_schedule(DAY).rotation_mode == "training"
+    assert staffing.load_schedule(DAY).assignment_sources == draft_sources
+
+    monkeypatch.setattr(staffing, "save_schedule", saved.append)
+    staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), DAY, 0, _save_form("save", notes="draft update"),
+    )
+
+    assert saved[0].rotation_mode == "training"
+    assert saved[0].assignment_sources == draft_sources
