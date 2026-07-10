@@ -63,9 +63,10 @@ def test_tv_recycling_renders_with_default_dark_theme(monkeypatch):
     assert 'data-tv-theme="dark"' in r.text
     # Chrome hidden via CSS — but the TV stylesheet must be linked.
     assert "/static/tv-mode.css" in r.text
-    # TV header rendered with the dashboard title.
+    # TV header rendered with the dashboard title (the dept is named
+    # "Recycling" — the older "Recycling VS" label was dropped).
     assert 'class="tv-header"' in r.text
-    assert "Recycling VS" in r.text
+    assert "Recycling" in r.text
     # Resilient auto-refresh: the hard meta-refresh (which paints the edge's
     # "upstream error" page on any blip) is gone, replaced by the guarded
     # tv-refresh.js that reloads only when the backend answers OK.

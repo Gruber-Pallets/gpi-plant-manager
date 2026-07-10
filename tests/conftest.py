@@ -69,17 +69,6 @@ _KNOWN_DB_TEST_DEBT = {
     "tests/test_production_history.py::test_attribution_range_reads_from_production_daily",
     "tests/test_production_history.py::test_daily_records_reads_from_production_daily",
     "tests/test_settings_auto_lunch.py::test_post_clamps_flex_values",
-    "tests/test_tv_dashboards_vs.py::test_tv_recycling_renders_with_default_dark_theme",
-    "tests/test_tv_displays_routes.py::test_get_tv_vs_recycling_dispatches",
-    "tests/test_tv_displays_routes.py::test_get_tv_with_query_theme_overrides_stored",
-    "tests/test_tv_displays_store.py::test_seed_defaults_if_empty_seeds_when_empty",
-    "tests/test_tv_displays_store.py::test_seed_defaults_skips_missing_wc",
-    "tests/test_wc_dashboard.py::test_editor_route_renders_with_drag",
-    "tests/test_wc_dashboard.py::test_operator_dashboard_applies_custom_titles",
-    "tests/test_wc_dashboard.py::test_operator_dashboard_has_four_split_kpi_widgets",
-    "tests/test_wc_dashboard.py::test_operator_dashboard_has_widget_edit_buttons",
-    "tests/test_wc_dashboard.py::test_operator_route_loads_widget_customizations",
-    "tests/test_wc_dashboard.py::test_tv_route_renders_with_dark_theme_and_no_chrome",
     "tests/test_work_centers_store_required_skills.py::test_row_present_with_required_skill_rows_returns_db_list",
 }
 

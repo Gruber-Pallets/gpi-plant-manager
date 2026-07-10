@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -95,7 +96,12 @@ def test_get_tv_vs_recycling_dispatches():
         "kind": "vs_recycling",
         "theme": "light",
     })
-    r = c.get("/tv/rt-recyc-light")
+    # The vs_recycling dispatch renders /recycling, whose data path calls the
+    # Zira-backed leaderboard() — mock it (as the recycling render tests do) so
+    # this exercises the dispatcher without a live Zira key (else HTTP 403).
+    with patch("zira_dashboard.routes.departments.leaderboard", return_value=[]), \
+         patch("zira_dashboard.routes.departments.shift_elapsed_minutes", return_value=60):
+        r = c.get("/tv/rt-recyc-light")
     assert r.status_code == 200
     assert 'data-tv-theme="light"' in r.text
 
@@ -155,7 +161,9 @@ def test_get_tv_with_query_theme_overrides_stored():
         "kind": "vs_recycling",
         "theme": "dark",
     })
-    r = c.get("/tv/rt-recyc-dark?theme=light")
+    with patch("zira_dashboard.routes.departments.leaderboard", return_value=[]), \
+         patch("zira_dashboard.routes.departments.shift_elapsed_minutes", return_value=60):
+        r = c.get("/tv/rt-recyc-dark?theme=light")
     assert r.status_code == 200
     assert 'data-tv-theme="light"' in r.text
 

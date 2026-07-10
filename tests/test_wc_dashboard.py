@@ -19,7 +19,13 @@ pytestmark = pytest.mark.skipif(
 
 
 def _stub_wc(monkeypatch):
-    """Make `wc_by_slug` return a fake Location for slug 'repair-1'."""
+    """Stub every data source the operator-dashboard render touches so the
+    page renders without live Zira/Odoo, for slug 'repair-1'.
+
+    Keep this in sync with `_render_wc_dashboard`'s ``wc_dashboard_data.*``
+    calls: the render consumes ``fifteen_min_progress_buckets`` and
+    ``kpi_tiles`` (the ``daily_progress``/``fifteen_min_increments`` helpers
+    they replaced are no longer called by the render)."""
     from zira_dashboard import wc_dashboard_data, work_centers_store
 
     class _Loc:
@@ -37,13 +43,17 @@ def _stub_wc(monkeypatch):
     monkeypatch.setattr(wc_dashboard_data, "pallets_banner",
                         lambda nm, d: {"units_today": 87, "target_today": 100,
                                        "target_full_day": 200, "pct_of_target": 87.0})
-    monkeypatch.setattr(wc_dashboard_data, "daily_progress", lambda nm, d: [])
+    monkeypatch.setattr(wc_dashboard_data, "kpi_tiles",
+                        lambda nm, d: {"units_today": 87, "downtime_minutes": 12,
+                                       "hours_elapsed": 4.0, "up_time_pct": 95.0,
+                                       "pallets_per_hour": 21.7})
     monkeypatch.setattr(wc_dashboard_data, "goat_race",
                         lambda nm, d: {"group": "Repairs", "goat": None, "units_today": 87,
                                        "goat_pace_today": 0, "status": None})
     monkeypatch.setattr(wc_dashboard_data, "monthly_ribbons",
                         lambda nm, y, m: {"group": "Repairs", "entries": []})
-    monkeypatch.setattr(wc_dashboard_data, "fifteen_min_increments", lambda nm, d: [])
+    monkeypatch.setattr(wc_dashboard_data, "fifteen_min_progress_buckets",
+                        lambda nm, d: {"buckets": [], "bucket_target": 0})
     monkeypatch.setattr(wc_dashboard_data, "downtime_report",
                         lambda nm, d: {"events": [], "total_minutes": 0})
 
@@ -59,10 +69,11 @@ def test_editor_route_renders_with_drag(monkeypatch):
     # Header renders the WC name + operator list.
     assert "Repair 1" in r.text
     assert "Christian · Jose L" in r.text
-    # All 6 widget IDs present.
-    for wid in ("wc-pallets-banner", "wc-daily-progress", "wc-goat-race",
-                "wc-monthly-ribbons", "wc-15min-increments", "wc-downtime-report"):
-        assert wid in r.text
+    # All operator-dashboard widgets present (shared /recycling-style layout;
+    # the KPI row was consolidated to a single Pallets/hr tile).
+    for wid in ("kpi-pph", "pallets-banner", "progress-15min", "cumulative-daily",
+                "downtime-row", "goat-race", "monthly-ribbons"):
+        assert f'gs-id="{wid}"' in r.text, f"missing widget {wid}"
 
 
 def test_tv_route_renders_with_dark_theme_and_no_chrome(monkeypatch):
@@ -77,7 +88,7 @@ def test_tv_route_renders_with_dark_theme_and_no_chrome(monkeypatch):
     assert 'http-equiv="refresh"' not in r.text
     assert "tv-refresh.js" in r.text
     # Same widgets present.
-    assert "wc-pallets-banner" in r.text
+    assert 'gs-id="pallets-banner"' in r.text
 
 
 def test_tv_route_supports_light_theme_via_query(monkeypatch):
@@ -138,10 +149,15 @@ def test_operator_route_loads_widget_customizations(monkeypatch):
     _stub_wc(monkeypatch)
     seen = {}
     from zira_dashboard import widget_customizer
-    monkeypatch.setattr(
-        widget_customizer, "load_all",
-        lambda page: (seen.setdefault("page", page) or {}),
-    )
+
+    def _record(page):
+        # Record the page key, but always return a dict — the template does
+        # ``customs.get(...)`` on the result, so a truthy non-dict (e.g. the
+        # page string) would raise UndefinedError.
+        seen["page"] = page
+        return {}
+
+    monkeypatch.setattr(widget_customizer, "load_all", _record)
     c = TestClient(app)
     r = c.get("/wc/repair-1")
     assert r.status_code == 200
@@ -157,21 +173,17 @@ def test_operator_route_renders_without_500_after_context_changes(monkeypatch):
     assert r.status_code == 200
 
 
-def test_operator_dashboard_has_four_split_kpi_widgets(monkeypatch):
-    """KPI row is split into 4 independent grid-stack-items."""
+def test_operator_dashboard_has_single_pallets_per_hour_kpi(monkeypatch):
+    """Only the Pallets/hr KPI remains a standalone widget — Units / Up Time /
+    Downtime were folded into the Pallets banner + Downtime widget."""
     _stub_wc(monkeypatch)
-    from zira_dashboard import wc_dashboard_data
-    monkeypatch.setattr(
-        wc_dashboard_data, "kpi_tiles",
-        lambda nm, d: {"units_today": 87, "downtime_minutes": 12,
-                       "hours_elapsed": 4.0, "up_time_pct": 95.0,
-                       "pallets_per_hour": 21.7},
-    )
     c = TestClient(app)
     r = c.get("/wc/repair-1")
     assert r.status_code == 200
-    for wid in ("kpi-units", "kpi-uptime", "kpi-downtime", "kpi-pph"):
-        assert f'gs-id="{wid}"' in r.text, f"missing widget {wid}"
+    assert 'gs-id="kpi-pph"' in r.text
+    # The old four-way KPI split is gone.
+    for old in ("kpi-units", "kpi-uptime", "kpi-downtime"):
+        assert f'gs-id="{old}"' not in r.text, f"stale KPI widget still present: {old}"
 
 
 def test_operator_dashboard_renders_operator_strip(monkeypatch):
@@ -258,8 +270,7 @@ def test_operator_dashboard_has_widget_edit_buttons(monkeypatch):
     c = TestClient(app)
     r = c.get("/wc/repair-1")
     assert r.status_code == 200
-    for wid in ("kpi-units", "kpi-uptime", "kpi-downtime", "kpi-pph",
-                "pallets-banner", "progress-15min", "cumulative-daily",
+    for wid in ("kpi-pph", "pallets-banner", "progress-15min", "cumulative-daily",
                 "downtime-row", "goat-race", "monthly-ribbons"):
         assert f'data-widget="{wid}"' in r.text, f"missing edit btn for {wid}"
 
@@ -280,7 +291,7 @@ def test_operator_dashboard_applies_custom_titles(monkeypatch):
     from zira_dashboard import widget_customizer
     monkeypatch.setattr(
         widget_customizer, "load_all",
-        lambda page: {"kpi-units": {"title": "Pallets Done"}} if page == "operator" else {},
+        lambda page: {"kpi-pph": {"title": "Pallets Done"}} if page == "operator" else {},
     )
     c = TestClient(app)
     r = c.get("/wc/repair-1")
