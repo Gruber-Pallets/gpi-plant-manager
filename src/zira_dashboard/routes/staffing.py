@@ -298,7 +298,12 @@ def staffing_page(
     try:
         from .. import app_settings, forklift_advisor, forklift_settings
         _overload = set(app_settings.get_setting("forklift_overload_responders") or [])
-        _fcfg = forklift_settings.current()
+        try:
+            _fcfg = forklift_settings.current()
+        except Exception:
+            # A settings-table hiccup must not hide the advisor entirely; fall
+            # back to defaults so coverage still counts Tablets drivers.
+            _fcfg = forklift_settings.DEFAULT
         _wc_names = (
             (FORKLIFT_TABLETS_WC, FORKLIFT_LOADING_WC)
             if _fcfg.include_loading_jockeying else (FORKLIFT_TABLETS_WC,)

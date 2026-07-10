@@ -227,3 +227,8 @@ table.sched td { vertical-align: top !important; }
   min-height: 4em !important;
   resize: none;
 }
+
+/* In-app guidance only; Slack posts use this same print/PDF path. */
+.forklift-bay-summary {
+  display: none !important;
+}

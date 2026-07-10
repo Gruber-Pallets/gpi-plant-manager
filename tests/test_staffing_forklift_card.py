@@ -234,3 +234,25 @@ def test_staffing_template_exports_forklift_live_model():
     html = _staffing_template()
 
     assert "window.FORKLIFT_LIVE_MODEL = {{ forklift_live_model|tojson }};" in html
+
+
+def test_forklift_bay_summary_is_hidden_from_print_and_slack_pdf():
+    """In-app bay summary is for the live scheduler; print/Slack PDFs stay clean."""
+    from pathlib import Path
+
+    css = Path("src/zira_dashboard/static/staffing-print.css").read_text()
+    assert ".forklift-bay-summary" in css
+    assert "display: none !important;" in css
+
+
+def test_settings_read_failure_falls_back_to_default_instead_of_hiding_advisor():
+    """Regression: forklift_settings.current() raising used to blank the whole
+    advisor via the outer except. It must fall back to DEFAULT so coverage
+    still counts drivers on Tablets."""
+    from pathlib import Path
+
+    src = Path("src/zira_dashboard/routes/staffing.py").read_text()
+    assert "forklift_settings.DEFAULT" in src
+    # Nested try around current() must exist (outer try still guards build_advisor).
+    assert "try:\n            _fcfg = forklift_settings.current()" in src
+    assert "_fcfg = forklift_settings.DEFAULT" in src
