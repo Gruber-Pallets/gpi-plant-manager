@@ -26,7 +26,7 @@ import xmlrpc.client
 from datetime import datetime, UTC
 from typing import Any
 
-from . import _odoo_skills
+from . import _odoo_calendars, _odoo_skills
 
 
 def unwrap_m2o(val):
@@ -215,151 +215,33 @@ def fetch_departments() -> list[str]:
     return out
 
 
-def _float_to_hhmm(f) -> str:
-    """Odoo stores working-schedule hours as floats (5.75 == 05:45). Round
-    to the nearest minute, carrying into the hour, clamped to [00:00, 23:59]."""
-    total = int(round(float(f) * 60))          # minutes since midnight
-    total = max(0, min(total, 23 * 60 + 59))
-    return f"{total // 60:02d}:{total % 60:02d}"
-
-
-def _calendar_hours_from_lines(rows) -> dict:
-    """Reduce resource.calendar.attendance rows to per-weekday OUTER shift
-    boundaries: {cal_id: {"0": ["05:45","14:30"], ...}} with weekday keys
-    0=Mon..6=Sun (Odoo's dayofweek convention, same as Python weekday()).
-    A lunch split (two lines on one day) collapses to min(hour_from) ..
-    max(hour_to). Malformed rows are skipped."""
-    acc: dict = {}   # {cal_id: {weekday:int -> [min_from:float, max_to:float]}}
-    for r in rows:
-        if r.get("day_period") == "lunch":
-            continue
-        cal = r.get("calendar_id")
-        cal_id = unwrap_m2o(cal)
-        if not isinstance(cal_id, int) or isinstance(cal_id, bool):
-            continue
-        try:
-            wd = int(r.get("dayofweek"))
-        except (TypeError, ValueError):
-            continue
-        if not (0 <= wd <= 6):
-            continue
-        hf = float(r.get("hour_from") or 0.0)
-        ht = float(r.get("hour_to") or 0.0)
-        day = acc.setdefault(cal_id, {}).get(wd)
-        if day is None:
-            acc[cal_id][wd] = [hf, ht]
-        else:
-            day[0] = min(day[0], hf)
-            day[1] = max(day[1], ht)
-    out: dict = {}
-    for cal_id, days in acc.items():
-        out[cal_id] = {
-            str(wd): [_float_to_hhmm(lo), _float_to_hhmm(hi)]
-            for wd, (lo, hi) in days.items()
-        }
-    return out
-
-
-def _calendar_lunch_windows_from_lines(rows) -> dict:
-    """Per-weekday lunch windows from resource.calendar.attendance rows:
-    {cal_id: {"0": ["11:00","11:30"], ...}}.
-
-    Auto-lunch writes Odoo attendance splits, so fixed-schedule lunch must use
-    Odoo's own lunch window when it differs from the app's custom day schedule.
-    """
-    out: dict = {}
-    for r in rows:
-        if r.get("day_period") != "lunch":
-            continue
-        cal = r.get("calendar_id")
-        cal_id = unwrap_m2o(cal)
-        if not isinstance(cal_id, int) or isinstance(cal_id, bool):
-            continue
-        try:
-            wd = int(r.get("dayofweek"))
-        except (TypeError, ValueError):
-            continue
-        if not (0 <= wd <= 6):
-            continue
-        hf = float(r.get("hour_from") or 0.0)
-        ht = float(r.get("hour_to") or 0.0)
-        if ht <= hf:
-            continue
-        out.setdefault(cal_id, {})[str(wd)] = [_float_to_hhmm(hf), _float_to_hhmm(ht)]
-    return out
+_float_to_hhmm = _odoo_calendars.float_to_hhmm
+_calendar_hours_from_lines = _odoo_calendars.calendar_hours_from_lines
+_calendar_lunch_windows_from_lines = (
+    _odoo_calendars.calendar_lunch_windows_from_lines
+)
 
 
 # Odoo "Schedule Type" on resource.calendar. Confirmed against live Odoo
 # (Task 6 Step 1). Odoo 18 exposes flexible scheduling as the boolean
 # `flexible_hours`; if your instance uses a selection, change this name —
 # _is_flexible() already accepts both a bool and the string 'flexible'.
-SCHEDULE_TYPE_FIELD = "flexible_hours"
+SCHEDULE_TYPE_FIELD = _odoo_calendars.SCHEDULE_TYPE_FIELD
 
 
-def _is_flexible(value) -> bool:
-    """Interpret the resource.calendar Schedule Type value as a flex flag.
-    Accepts a boolean (Odoo 18 `flexible_hours`) or a selection string."""
-    if isinstance(value, str):
-        return value.strip().lower() == "flexible"
-    return bool(value)
+_is_flexible = _odoo_calendars.is_flexible
 
 
 def fetch_work_schedules() -> list[dict]:
-    """Active working schedules (resource.calendar):
-    [{id, name, is_flexible}, ...]. is_flexible drives the auto-lunch
-    elapsed-time trigger for flexible-schedule employees."""
-    rows = execute(
-        "resource.calendar", "search_read",
-        [("active", "=", True)],
-        fields=["id", "name", SCHEDULE_TYPE_FIELD],
-    )
-    return [
-        {"id": r["id"], "name": r.get("name") or "",
-         "is_flexible": _is_flexible(r.get(SCHEDULE_TYPE_FIELD))}
-        for r in rows
-    ]
+    return _odoo_calendars.fetch_work_schedules(execute)
 
 
 def fetch_calendar_hours(calendar_ids) -> dict:
-    """Per-weekday shift boundaries for the given resource.calendar ids,
-    derived from their attendance lines. Returns
-    {cal_id: {"0": ["05:45","14:30"], ...}}; empty dict for no ids."""
-    if not calendar_ids:
-        return {}
-    rows = execute(
-        "resource.calendar.attendance", "search_read",
-        [("calendar_id", "in", list(calendar_ids))],
-        fields=["calendar_id", "dayofweek", "hour_from", "hour_to", "day_period"],
-    )
-    return _calendar_hours_from_lines(rows)
-
-
-_calendar_lunch_windows_cache: dict[tuple[int, ...], tuple[dict, float]] = {}
-_CALENDAR_LUNCH_TTL_SECONDS = 10 * 60
+    return _odoo_calendars.fetch_calendar_hours(execute, calendar_ids)
 
 
 def fetch_calendar_lunch_windows(calendar_ids) -> dict:
-    """Per-weekday lunch windows for Odoo resource.calendar ids.
-
-    Cached briefly because auto-lunch may check this every worker tick while
-    waiting for lunch, and Odoo working schedules do not change minute to
-    minute.
-    """
-    ids = tuple(sorted({int(i) for i in (calendar_ids or []) if i is not None}))
-    if not ids:
-        return {}
-    now = time.monotonic()
-    cached = _calendar_lunch_windows_cache.get(ids)
-    if cached is not None and cached[1] > now:
-        return cached[0]
-    rows = execute(
-        "resource.calendar.attendance", "search_read",
-        [("calendar_id", "in", list(ids))],
-        fields=["calendar_id", "dayofweek", "hour_from", "hour_to", "day_period"],
-    )
-    out = _calendar_lunch_windows_from_lines(rows)
-    _calendar_lunch_windows_cache[ids] = (out, now + _CALENDAR_LUNCH_TTL_SECONDS)
-    return out
+    return _odoo_calendars.fetch_calendar_lunch_windows(execute, calendar_ids)
 
 
 def fetch_employees() -> list[dict]:
@@ -963,43 +845,9 @@ def fetch_resource_calendar(employee_odoo_id: int) -> dict | None:
 
 
 def _fetch_resource_calendar_uncached(employee_odoo_id: int) -> dict | None:
-    """The actual 3-call Odoo fetch behind ``fetch_resource_calendar``."""
-    emp_rows = execute(
-        "hr.employee", "search_read",
-        [("id", "=", employee_odoo_id)],
-        fields=["id", "resource_calendar_id"],
+    return _odoo_calendars.fetch_resource_calendar(
+        execute, unwrap_m2o, employee_odoo_id
     )
-    if not emp_rows or not emp_rows[0].get("resource_calendar_id"):
-        return None
-    cal_field = emp_rows[0]["resource_calendar_id"]
-    cal_id = unwrap_m2o(cal_field)
-    cal_rows = execute(
-        "resource.calendar", "read",
-        [cal_id], ["id", "tz"],
-    )
-    tz = cal_rows[0]["tz"] if cal_rows else None
-
-    att_rows = execute(
-        "resource.calendar.attendance", "search_read",
-        [("calendar_id", "=", cal_id)],
-        fields=["hour_from", "hour_to", "dayofweek", "day_period"],
-    )
-    # Filter to non-lunch periods for the work-window bounds.
-    work = [a for a in att_rows if a.get("day_period") != "lunch"]
-    lunches = [a for a in att_rows if a.get("day_period") == "lunch"]
-    if not work:
-        return None
-    hour_from = min(float(a["hour_from"]) for a in work)
-    hour_to = max(float(a["hour_to"]) for a in work)
-    lunch_from = min((float(a["hour_from"]) for a in lunches), default=None)
-    lunch_to = max((float(a["hour_to"]) for a in lunches), default=None)
-    return {
-        "hour_from": hour_from,
-        "hour_to": hour_to,
-        "lunch_from": lunch_from,
-        "lunch_to": lunch_to,
-        "tz": tz,
-    }
 
 
 # hr.leave.allocation states that contribute to allocated_total.

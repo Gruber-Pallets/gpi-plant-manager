@@ -1,10 +1,28 @@
 """Pure tests for the per-weekday hours derivation. No Odoo/DB needed."""
 
+import importlib
+import importlib.util
+
+from zira_dashboard import odoo_client
 from zira_dashboard.odoo_client import (
     _float_to_hhmm,
     _calendar_hours_from_lines,
     _calendar_lunch_windows_from_lines,
 )
+
+
+def test_calendar_reducers_are_extracted_behind_facade_aliases():
+    module_name = "zira_dashboard._odoo_calendars"
+    assert importlib.util.find_spec(module_name) is not None
+    private = importlib.import_module(module_name)
+
+    assert odoo_client._float_to_hhmm is private.float_to_hhmm
+    assert odoo_client._calendar_hours_from_lines is private.calendar_hours_from_lines
+    assert (
+        odoo_client._calendar_lunch_windows_from_lines
+        is private.calendar_lunch_windows_from_lines
+    )
+    assert odoo_client._is_flexible is private.is_flexible
 
 
 def test_float_to_hhmm_basic():
