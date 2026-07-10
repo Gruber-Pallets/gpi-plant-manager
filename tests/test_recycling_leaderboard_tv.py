@@ -77,6 +77,37 @@ def test_tv_recycling_leaderboard_renders(monkeypatch):
     assert "tv-refresh.js" in r.text
 
 
+def test_tv_recycling_range_moves_into_header_and_goat_group_has_one_icon(monkeypatch):
+    monkeypatch.setattr(
+        "zira_dashboard.routes.recycling_leaderboard._leaderboard_payload",
+        lambda today: _fake_recycling_leaderboard_data(),
+    )
+
+    response = TestClient(app).get("/tv/recycling-leaderboard")
+
+    assert response.status_code == 200
+    assert response.text.count('class="tv-header-title-meta"') == 1
+    assert "YTD: Jan 1-Jul 9" in response.text
+    assert "L30: Jun 10-Jul 9" in response.text
+    assert 'class="rlb-range"' not in response.text
+    assert response.text.count('class="tv-header-right-icon"') == 1
+    assert '<span class="tv-header-right-icon" aria-hidden="true">🐐</span>' in response.text
+
+
+def test_desktop_recycling_range_and_header_stay_unchanged(monkeypatch):
+    monkeypatch.setattr(
+        "zira_dashboard.routes.recycling_leaderboard._leaderboard_payload",
+        lambda today: _fake_recycling_leaderboard_data(),
+    )
+
+    response = TestClient(app).get("/recycling-leaderboard")
+
+    assert response.status_code == 200
+    assert 'class="rlb-range"' in response.text
+    assert 'class="tv-header-title-meta"' not in response.text
+    assert 'class="tv-header-right-icon"' not in response.text
+
+
 def test_current_recycling_goats_uses_awards_with_overrides(monkeypatch):
     from zira_dashboard.routes import recycling_leaderboard
 
