@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "src" / "zira_dashboard" / "templates" / "recycling.html"
 CSS = ROOT / "src" / "zira_dashboard" / "static" / "recycling.css"
+SHARED = ROOT / "src" / "zira_dashboard" / "templates" / "_department_dashboard_widgets.html"
 
 
 def test_recycling_range_toolbar_sits_below_subnav_not_header():
@@ -28,3 +29,19 @@ def test_recycling_edit_bar_shares_toolbar_row():
     start = css.index(".edit-bar {")
     block = css[start:css.index("}", start)]
     assert "margin-left: auto" in block  # pushed to the right of the chips
+
+
+def test_recycling_uses_shared_department_widget_macros():
+    html = TEMPLATE.read_text(encoding="utf-8")
+    shared = SHARED.read_text(encoding="utf-8")
+    assert '_department_dashboard_widgets.html' in html
+    assert "macro department_bar_chart" in shared
+    assert "macro department_progress_chart" in shared
+    assert "macro department_downtime_report" in shared
+
+
+def test_shared_daily_progress_stays_bar_based():
+    html = TEMPLATE.read_text(encoding="utf-8")
+    shared = SHARED.read_text(encoding="utf-8")
+    assert 'class="bars"' in shared
+    assert "cumulative_progress_chart" in html

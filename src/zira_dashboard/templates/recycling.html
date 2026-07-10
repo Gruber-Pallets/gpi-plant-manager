@@ -14,6 +14,11 @@
 {% endif %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 {% from "_widget_edit_controls.html" import edit_controls with context %}
+{% from "_department_dashboard_widgets.html" import
+   department_bar_chart,
+   department_progress_chart,
+   department_downtime_report
+   with context %}
 <style>{{ goat_badges_css() }}</style>
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 </head>
@@ -60,113 +65,12 @@
   gs-id="{{ id }}" gs-x="{{ l.x }}" gs-y="{{ l.y }}" gs-w="{{ l.w }}" gs-h="{{ l.h }}"
 {%- endmacro %}
 
-{%- macro bar_chart(widget_id, items) -%}
-  {%- set c = customs.get(widget_id, {}) -%}
-  {%- set orient = c.get('orientation', 'horizontal') -%}
-  {%- set numpos = c.get('number_position', 'widget') -%}
-  {%- set total_u = items | sum(attribute='units') -%}
-  {%- set total_e = items | sum(attribute='expected') -%}
-  {%- set ns = namespace(target_pct=none) -%}
-  {%- for b in items if b.target_pct is not none and ns.target_pct is none -%}
-    {%- set ns.target_pct = b.target_pct -%}
-  {%- endfor -%}
-  {%- set widget_target_pct = ns.target_pct -%}
-  {% if orient == 'vertical' %}
-    <div class="vbars">
-      {% for b in items %}
-        {% set fill_color = b.color or 'var(--good)' %}
-        <div class="vbar-col" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
-          {% if numpos == 'widget' %}<div class="vbar-val">{{ b.units }}{% if b.expected %}<span class="pct"> / {{ b.expected }}</span>{% endif %}</div>{% endif %}
-          <div class="vbar-track">
-            <div class="vbar-fill" style="height: {{ b.pct }}%; background: {{ fill_color }}">
-              {% if numpos == 'inside' %}<span class="in">{{ b.units }}</span>{% endif %}
-              {% if numpos == 'bar'    %}<span class="edge">{{ b.units }}</span>{% endif %}
-            </div>
-            {% if b.target_pct is not none %}<div class="vbar-target-line" style="bottom: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
-          </div>
-          <div class="vbar-name">
-            {% if is_range %}
-              <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
-            {% elif b.who and b.who != b.name %}
-              {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
-              {{ operator_name(b.who, operator_href, true) }}
-              <span class="name-secondary">{{ b.name }}</span>
-            {% else %}
-              <span class="name-primary">{{ b.name }}</span>
-              {% if assignments_todo_by_wc and b.name in assignments_todo_by_wc %}
-                {% set _todo = assignments_todo_by_wc[b.name] %}
-                <button type="button" class="no-assign-btn" data-wc="{{ b.name }}" data-day="{{ today }}" data-start="{{ _todo.first_iso }}" data-end="{{ _todo.last_iso }}" title="Assign person to this WC's work">↪ assign</button>
-              {% else %}
-                <span class="name-secondary"><em>(no assignment)</em></span>
-              {% endif %}
-            {% endif %}
-          </div>
-        </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    {% for b in items %}
-      {% set fill_color = b.color or 'var(--good)' %}
-      <div class="bar-row numpos-{{ numpos }}" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
-        <div class="name">
-          {% if is_range %}
-            <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
-          {% elif b.who and b.who != b.name %}
-            {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
-            {{ operator_name(b.who, operator_href, true) }}
-            <span class="name-secondary">{{ b.name }}</span>
-          {% else %}
-            <span class="name-primary">{{ b.name }}</span>
-            {% if assignments_todo_by_wc and b.name in assignments_todo_by_wc %}
-              {% set _todo = assignments_todo_by_wc[b.name] %}
-              <button type="button" class="no-assign-btn" data-wc="{{ b.name }}" data-day="{{ today }}" data-start="{{ _todo.first_iso }}" data-end="{{ _todo.last_iso }}" title="Assign person to this WC's work">↪ assign</button>
-            {% else %}
-              <span class="name-secondary"><em>(no assignment)</em></span>
-            {% endif %}
-          {% endif %}
-        </div>
-        <div class="bar-track">
-          <div class="bar-fill" style="width: {{ b.pct }}%; background: {{ fill_color }}">
-            {% if numpos == 'inside' %}<span class="in">{{ b.units }}</span>{% endif %}
-            {% if numpos == 'bar'    %}<span class="edge">{{ b.units }}</span>{% endif %}
-          </div>
-          {% if b.target_pct is not none %}<div class="bar-target-line" style="left: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
-        </div>
-        {% if numpos == 'widget' %}<div class="val">{{ b.units }}{% if b.expected %}<span class="pct">/{{ b.expected }}</span>{% endif %}</div>{% endif %}
-      </div>
-    {% endfor %}
-    {% if widget_target_pct is not none and not is_range %}
-      <div class="bar-row axis-row numpos-{{ numpos }}">
-        <div></div>
-        <div class="axis-track">
-          {% if shift_start_label %}<div class="axis-tick axis-start" style="left: 0%">start · {{ shift_start_label }}</div>{% endif %}
-          <div class="axis-tick" style="left: {{ widget_target_pct }}%">now · {{ now_label }}</div>
-        </div>
-        {% if numpos == 'widget' %}<div></div>{% endif %}
-      </div>
-    {% endif %}
-  {% endif %}
-  <div class="widget-total">
-    <b>{{ total_u }}</b>{% if total_e %} / {{ total_e }}{% endif %}
-    {%- if total_e %}<span class="widget-total-pct"> ({{ ((total_u / total_e) * 100) | round(1) }}%)</span>{% endif %}
-  </div>
-{%- endmacro %}
-
 {%- macro widget_title(id, default) -%}{{ customs.get(id, {}).get('title', default) }}{%- endmacro %}
 
 {%- macro widget_color_style(id, role) -%}
   {%- set c = customs.get(id, {}).get('color') -%}
   {%- if c -%}style="--wc: {{ c }}; {{ role }}: {{ c }} !important"{%- endif -%}
 {%- endmacro %}
-
-{%- macro operator_name(name, href, show_badges=false) -%}
-  {%- if href and not tv_mode -%}
-    <a href="{{ href }}" class="name-primary operator-dashboard-link">{{ name }}{%- if show_badges -%}{{ goat_badges(name, goat_holders()) }}{%- endif -%}</a>
-  {%- else -%}
-    <span class="name-primary">{{ name }}{%- if show_badges -%}{{ goat_badges(name, goat_holders()) }}{%- endif -%}</span>
-  {%- endif -%}
-{%- endmacro %}
-
 
 {# TV mode seats the banner in the header center (tv_header {% call %}
    above); screen mode keeps it here below the edit bar. #}
@@ -199,7 +103,7 @@
         {% if not tv_mode %}{{ edit_controls('dismantler-bars', 'Pallets by Work Center — Dismantlers', 'bars') }}{% endif %}
         <h3>{{ widget_title('dismantler-bars', 'Pallets by Work Center — Dismantlers') }}</h3>
         <div class="widget-body">
-          {{ bar_chart('dismantler-bars', dismantler_bars) }}
+          {{ department_bar_chart('dismantler-bars', dismantler_bars) }}
         </div>
       </div>
     </div>
@@ -209,49 +113,10 @@
         {% if not tv_mode %}{{ edit_controls('repair-bars', 'Pallets by Work Center — Repairs', 'bars') }}{% endif %}
         <h3>{{ widget_title('repair-bars', 'Pallets by Work Center — Repairs') }}</h3>
         <div class="widget-body">
-          {{ bar_chart('repair-bars', repair_bars) }}
+          {{ department_bar_chart('repair-bars', repair_bars) }}
         </div>
       </div>
     </div>
-
-  {% macro progress_chart(buckets, group_target_per_hour, bucket_target, widget_id='') -%}
-    {% set pc = customs.get(widget_id, {}) %}
-    {% set show_target = pc.get('show_target', True) %}
-    {% set show_legend = pc.get('show_legend', True) %}
-    {% set max_val = namespace(v=bucket_target) %}
-    {% for b in buckets %}
-      {% if b.actual > max_val.v %}{% set max_val.v = b.actual %}{% endif %}
-      {% if b.target > max_val.v %}{% set max_val.v = b.target %}{% endif %}
-    {% endfor %}
-    {% set scale = max_val.v if max_val.v > 0 else 1 %}
-    <div class="progress no-legend {% if not show_target %}no-target{% endif %}">
-      {# Legend removed; Goal info now lives in the widget-level .widget-total
-         (top-right of widget, same row as title). Rendered by the widget
-         that calls this macro — see the dismantler-progress / repair-
-         progress widgets below. #}
-      <div class="plot">
-        <div class="bars">
-          {% for b in buckets %}
-            {% set hit = b.actual >= b.target and not b.in_progress %}
-            {% set h = (b.actual / scale * 100.0) if scale else 0 %}
-            {% set t_h = (b.target / scale * 100.0) if (scale and b.target) else 0 %}
-            <div class="col {% if hit %}hit{% else %}{% if b.in_progress %}hit{% else %}miss{% endif %}{% endif %} {% if b.in_progress %}in-progress{% endif %}"
-                 title="{{ b.label }} · {{ b.actual }} pallets (goal {{ b.target }})">
-              <div class="bar" style="height: {{ h }}%">
-                {% if b.actual > 0 %}<span class="bar-label">{{ b.actual }}</span>{% endif %}
-              </div>
-              {% if not b.in_progress and b.target %}<div class="target-tick" style="bottom: {{ t_h }}%"></div>{% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      </div>
-      <div class="x-ticks">
-        {% for b in buckets %}
-          {% if loop.index0 % 2 == 0 %}<span>{{ b.label }}</span>{% else %}<span></span>{% endif %}
-        {% endfor %}
-      </div>
-    </div>
-  {%- endmacro %}
 
   {% from "_cumulative_progress_chart.html" import cumulative_progress_chart %}
 
@@ -265,7 +130,7 @@
         {% endif %}
         <div class="widget-body">
           {% if dismantler_progress %}
-            {{ progress_chart(dismantler_progress, dismantler_group_target, (dismantler_group_target / 4)|round|int, 'dismantler-progress') }}
+            {{ department_progress_chart(dismantler_progress, dismantler_group_target, (dismantler_group_target / 4)|round|int, 'dismantler-progress') }}
           {% else %}
             <div style="color:var(--muted);font-size:0.85rem">No shift data for this day.</div>
           {% endif %}
@@ -283,7 +148,7 @@
         {% endif %}
         <div class="widget-body">
           {% if repair_progress %}
-            {{ progress_chart(repair_progress, repair_group_target, (repair_group_target / 4)|round|int, 'repair-progress') }}
+            {{ department_progress_chart(repair_progress, repair_group_target, (repair_group_target / 4)|round|int, 'repair-progress') }}
           {% else %}
             <div style="color:var(--muted);font-size:0.85rem">No shift data for this day.</div>
           {% endif %}
@@ -325,40 +190,9 @@
       <div class="grid-stack-item-content" {% set dc = customs.get('downtime-report', {}).get('color') %}{% if dc %}style="--good-color: {{ dc }}"{% endif %}>
         {% if not tv_mode %}{{ edit_controls('downtime-report', 'Downtime Report', 'downtime') }}{% endif %}
         <h3>{{ widget_title('downtime-report', 'Downtime Report — green = working, red = down (shift-scoped)') }}</h3>
-        {% if elapsed_minutes > 0 and downtime_rows %}
-          {%- set total_down = downtime_rows | sum(attribute='down') -%}
-          <div class="widget-total"><b>{{ uptime_pct|round(0)|int }}%</b> up · <b>{{ total_down }}m</b> down</div>
-        {% endif %}
-        <div class="widget-body">
-          {% if elapsed_minutes == 0 %}
-            <div style="color:var(--muted);font-size:0.85rem">No elapsed shift minutes on this day (weekend or before 7:00 AM).</div>
-          {% else %}
-            <div class="downtime-vbars">
-              {% for d in downtime_rows %}
-                <div class="downtime-vbar-col" title="{{ d.who or d.name }} — Working {{ d.working }}m · Down {{ d.down }}m">
-                  <div class="downtime-vbar-val">{{ d.down }}m</div>
-                  <div class="downtime-vbar-track">
-                    <div class="bad"  style="height: {{ d.down_pct }}%"   title="Down {{ d.down }}m"></div>
-                    <div class="good" style="height: {{ d.working_pct }}%" title="Working {{ d.working }}m">
-                      <span class="downtime-vbar-uptime">{{ d.working_pct|round(0)|int }}%</span>
-                    </div>
-                  </div>
-                  <div class="downtime-vbar-name">
-                    {% if is_range %}
-                      <span class="name-primary">{{ d.name }}</span>
-                    {% elif d.who and d.who != d.name %}
-                      {% set operator_href = operator_links_by_wc.get(d.name) if operator_links_by_wc else none %}
-                      {{ operator_name(d.who, operator_href) }}
-                      <span class="name-secondary">{{ d.name }}</span>
-                    {% else %}
-                      <span class="name-primary">{{ d.name }}</span>
-                    {% endif %}
-                  </div>
-                </div>
-              {% endfor %}
-            </div>
-          {% endif %}
-        </div>
+        {{ department_downtime_report(
+          downtime_rows, elapsed_minutes, uptime_pct, 'downtime-report'
+        ) }}
       </div>
     </div>
 
