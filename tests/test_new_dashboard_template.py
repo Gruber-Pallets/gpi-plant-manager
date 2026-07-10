@@ -14,7 +14,8 @@ def _html():
     return TEMPLATE.read_text(encoding="utf-8")
 
 
-def _render_new(*, customs=None, new_bars=None, configured_new_meter_count=1):
+def _render_new(*, customs=None, new_bars=None, configured_new_meter_count=1,
+                new_progress=None):
     """Render the actual New template with only the dashboard context it needs.
 
     This deliberately exercises Jinja rather than checking template source so
@@ -41,7 +42,7 @@ def _render_new(*, customs=None, new_bars=None, configured_new_meter_count=1):
         uptime_pct=0,
         new_people=0,
         is_range=False,
-        new_progress=[
+        new_progress=new_progress or [
             {"label": "7:00", "actual": 4, "target": 6, "in_progress": False},
         ],
         new_group_target=24,
@@ -94,6 +95,7 @@ def test_new_daily_progress_is_cumulative_bars_and_no_stop_widget():
     html = _html()
     assert "cumulative_progress_chart(new_progress, 'new-cumulative')" in html
     assert "Unplanned Stops" not in html
+    assert '<div class="target-line"' in _render_new()
 
 
 def test_new_keeps_shared_dashboard_surfaces_and_refresh_behavior():
@@ -116,6 +118,7 @@ def test_new_renders_saved_kpi_and_progress_customizations():
         "kpi-palletshr": {"align": "left", "color": "#97531f"},
         "new-progress": {"color": "#2468ac"},
         "new-cumulative": {"color": "#96351f"},
+        "downtime-report": {"color": "#4caf50"},
     })
 
     assert 'class="grid-stack-item-content align-right"' in html
@@ -128,13 +131,24 @@ def test_new_renders_saved_kpi_and_progress_customizations():
     assert re.search(
         r'gs-id="new-cumulative".*?style="--good: #96351f"', html, re.DOTALL
     )
+    assert re.search(
+        r'gs-id="downtime-report".*?style="--good-color: #4caf50"', html, re.DOTALL
+    )
 
 
 def test_new_cumulative_hides_saved_target_line():
     html = _render_new(customs={"new-cumulative": {"show_target": False}})
 
     assert 'class="cum-progress no-legend no-target"' in html
-    assert '<div class="target-line"' in html
+    assert '<div class="target-line"' not in html
+
+
+def test_new_cumulative_hides_target_line_when_total_target_is_zero():
+    html = _render_new(new_progress=[
+        {"label": "7:00", "actual": 4, "target": 0, "in_progress": False},
+    ])
+
+    assert '<div class="target-line"' not in html
 
 
 def test_new_empty_state_distinguishes_unconfigured_meters_from_no_readings():

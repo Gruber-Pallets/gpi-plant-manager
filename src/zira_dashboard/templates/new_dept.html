@@ -121,7 +121,7 @@
     </div>
 
     <div class="grid-stack-item" {{ widget_attrs('downtime-report', 7, 0, 5, 6) }}>
-      <div class="grid-stack-item-content">
+      <div class="grid-stack-item-content" {% set dc = customs.get('downtime-report', {}).get('color') %}{% if dc %}style="--good-color: {{ dc }}"{% endif %}>
         {% if not tv_mode %}{{ edit_controls('downtime-report', 'Downtime Report', 'downtime') }}{% endif %}
         <h3>{{ widget_title('downtime-report', 'Downtime Report') }}</h3>
         {{ department_downtime_report(downtime_rows, elapsed_minutes, uptime_pct) }}

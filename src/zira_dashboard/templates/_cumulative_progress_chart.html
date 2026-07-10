@@ -22,7 +22,7 @@
   {% if scale <= 0 %}{% set scale = 1 %}{% endif %}
   {% set n = buckets|length %}
 
-  <div class="cum-progress no-legend {% if not show_target %}no-target{% endif %}" style="--n-cols: {{ n }}">
+  <div class="cum-progress no-legend {% if not show_target or max_t <= 0 %}no-target{% endif %}" style="--n-cols: {{ n }}">
     {# Legend removed (Dale's request); plot fills the freed space. #}
     <div class="plot">
       <div class="bars">
@@ -40,7 +40,7 @@
           </div>
         {% endfor %}
       </div>
-      <div class="target-line" aria-hidden="true">
+      {% if show_target and max_t > 0 %}<div class="target-line" aria-hidden="true">
         <svg viewBox="0 0 100 100" preserveAspectRatio="none">
           {% set pts = namespace(s='') %}
           {% for i in range(n) %}
@@ -50,7 +50,7 @@
           {% endfor %}
           <polyline points="{{ pts.s|trim }}"/>
         </svg>
-      </div>
+      </div>{% endif %}
     </div>
     <div class="x-ticks">
       {% for b in buckets %}
