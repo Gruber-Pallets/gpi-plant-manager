@@ -9,6 +9,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-07-10
 
+### Features
+
+- **The New leaderboard TV ribbons are now a compact calendar matrix.** Monthly Gold Ribbons render as a January–December grid with work centers as rows instead of a tall scrollable list, so multi-family TV layouts keep more room for the leaderboard panels and the ribbon block stays inside the viewport.
+
 ### Fixes
 
 - **Operator dashboards now keep every downtime minute readable.** When the red downtime portion of the working/down bar was narrower than its label, the left side of the value was cut off. Wide values can now extend onto the adjacent green portion while staying right-aligned inside the overall bar, in both editor and TV views.
