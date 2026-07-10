@@ -179,6 +179,61 @@ def test_get_tv_wc_archived_returns_404(monkeypatch):
     assert "work center" in r.text.lower() or "removed" in r.text.lower()
 
 
+def test_get_tv_wc_valid_renders_dashboard(monkeypatch):
+    """A configured work-center TV must render (HTTP 200), not 500.
+
+    Regression for the plant-wide outage: the /tv/{slug} dispatcher called
+    _render_wc_dashboard() without the required `day` keyword-only argument,
+    so every registry-dispatched operator TV (kind='wc') 500'd. The
+    /tv/wc/{slug} sibling route passed `day`, which is why that path stayed
+    green in tests while the actual plant TVs went dark. This drives the real
+    dispatcher end-to-end so the dispatch->render wiring is covered.
+    """
+    from zira_dashboard import staffing, wc_dashboard_data, work_centers_store
+
+    class _Loc:
+        name = "Repair 1"
+        meter_id = "meter-1"
+        skill = "Repair"
+        bay = "Bay 1"
+
+    loc = _Loc()
+    # Dispatcher validates row.wc_name against staffing.LOCATIONS.
+    monkeypatch.setattr(staffing, "LOCATIONS", [loc])
+    # Stub the render's data sources (mirrors test_wc_dashboard._stub_wc) so
+    # the page renders without live Zira/Odoo.
+    monkeypatch.setattr(wc_dashboard_data, "wc_by_slug",
+                        lambda s: loc if s == "repair-1" else None)
+    monkeypatch.setattr(work_centers_store, "groups", lambda l: ["Repairs"])
+    monkeypatch.setattr(work_centers_store, "goal_per_day", lambda l: 200)
+    monkeypatch.setattr(wc_dashboard_data, "assigned_operators_for_wc",
+                        lambda nm, d: ["Christian", "Jose L"])
+    monkeypatch.setattr(wc_dashboard_data, "pallets_banner",
+                        lambda nm, d: {"units_today": 87, "target_today": 100,
+                                       "target_full_day": 200, "pct_of_target": 87.0})
+    monkeypatch.setattr(wc_dashboard_data, "goat_race",
+                        lambda nm, d: {"group": "Repairs", "goat": None,
+                                       "units_today": 87, "goat_pace_today": 0,
+                                       "status": None})
+    monkeypatch.setattr(wc_dashboard_data, "monthly_ribbons",
+                        lambda nm, y, m: {"group": "Repairs", "entries": []})
+    monkeypatch.setattr(wc_dashboard_data, "downtime_report",
+                        lambda nm, d: {"events": [], "total_minutes": 0})
+
+    c = TestClient(app)
+    add = c.post("/api/tv-displays", json={
+        "name": "rt-repair1-live",
+        "kind": "wc",
+        "wc_name": "Repair 1",
+        "theme": "dark",
+    }).json()
+    assert add["ok"] is True
+    r = c.get(f"/tv/{add['slug']}")
+    assert r.status_code == 200
+    assert 'data-tv-theme="dark"' in r.text
+    assert "Repair 1" in r.text
+
+
 def test_legacy_tv_d_redirects_to_new_path():
     """Old /tv/d/{slug} URLs should 302 to /tv/{slug} so already-deployed
     TVs keep working without manual reconfiguration."""

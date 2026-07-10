@@ -72,9 +72,10 @@ def tv_display(request: Request, slug: str, theme: str | None = Query(default=No
                 _wc_removed_html(row["name"], wc_name),
                 status_code=404,
             )
-        from .wc_dashboard import _render_wc_dashboard
+        from .wc_dashboard import _dashboard_day, _render_wc_dashboard
         return _render_wc_dashboard(
-            request, slug=slug_for_wc(wc_name), tv_mode=True, tv_theme=tv_theme,
+            request, slug=slug_for_wc(wc_name), day=_dashboard_day(None),
+            tv_mode=True, tv_theme=tv_theme,
         )
     return JSONResponse(
         {"error": f"unknown kind: {kind}"}, status_code=500,
