@@ -74,6 +74,13 @@ def test_new_leaderboard_ribbon_matrix_uses_calendar_columns_and_family_rows():
     assert max(month_positions) < min(work_center_positions)
 
 
+def test_new_leaderboard_ribbon_matrix_fits_all_months_without_scrolling():
+    assert "grid-template-columns: minmax(4.5rem, 0.7fr) repeat(12, minmax(0, 1fr));" in CSS
+    assert "grid-template-rows: auto repeat(var(--nlb-family-count), minmax(0, 1fr));" in CSS
+    assert "overflow: hidden;" in CSS
+    assert ".nlb-work-center" in CSS
+
+
 def test_new_leaderboard_copy_and_empty_states_are_exact():
     assert "New-Leaderboard" in TEMPLATE
     assert "Waiting for qualifying Zira production." in TEMPLATE

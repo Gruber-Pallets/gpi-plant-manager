@@ -35,3 +35,21 @@ def test_preview_renderer_creates_all_new_leaderboard_fixtures():
     } <= {path.name for path in OUT.iterdir()}
     dashboard = (OUT / "dashboard-junior-only.html").read_text(encoding="utf-8")
     assert 'id="gpi-inbox-summary-bootstrap" type="application/json">{"source_errors": [], "total": 0, "urgent_total": 0}</script>' in dashboard
+
+
+def test_preview_three_family_fixture_contains_calendar_ribbon_headers():
+    env = os.environ | {
+        "ZIRA_API_KEY": "test",
+        "AUTH_DISABLED": "1",
+        "PYTHONPATH": str(ROOT / "src"),
+    }
+    subprocess.run(
+        [sys.executable, "scripts/preview_new_leaderboard.py"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
+    html = (OUT / "tv-dark-three-families.html").read_text(encoding="utf-8")
+    assert html.index(">Jan<") < html.index(">Dec<")
+    for family in ("Juniors", "Woodpecker", "Hand Build"):
+        assert f'class="nlb-work-center">{family}</strong>' in html
