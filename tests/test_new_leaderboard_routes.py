@@ -94,6 +94,32 @@ def test_dashboard_new_leaderboard_renders_junior_only(monkeypatch):
     assert "tv-refresh.js" not in response.text
 
 
+@pytest.mark.parametrize(
+    ("active", "count"),
+    [
+        (["Juniors", "Woodpecker"], 2),
+        (["Juniors", "Woodpecker", "Hand Build"], 3),
+    ],
+)
+def test_new_leaderboard_renders_active_family_count(monkeypatch, active, count):
+    payload = fake_payload()
+    payload["active_families"] = active
+    junior_block = payload["families"]["Juniors"]
+    junior_winner = payload["ribbons"][0]["winners"]["Juniors"]
+    for family in active[1:]:
+        payload["families"][family] = junior_block
+        payload["ribbons"][0]["winners"][family] = junior_winner
+    monkeypatch.setattr(
+        "zira_dashboard.routes.new_leaderboard._leaderboard_payload",
+        lambda today: payload,
+    )
+    response = TestClient(app).get("/new-leaderboard")
+    assert response.status_code == 200
+    assert f"nlb-family-count-{count}" in response.text
+    for family in active:
+        assert family in response.text
+
+
 def test_tv_new_leaderboard_renders_dark_and_refreshes(monkeypatch):
     monkeypatch.setattr(
         "zira_dashboard.routes.new_leaderboard._leaderboard_payload",

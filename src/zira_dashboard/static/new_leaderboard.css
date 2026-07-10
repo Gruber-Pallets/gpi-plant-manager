@@ -1,0 +1,140 @@
+.nlb-grid {
+  display: grid;
+  gap: clamp(6px, 0.6vw, 12px);
+  height: calc(100vh - 7.2rem);
+  min-height: 0;
+}
+
+.nlb-family-panels {
+  display: grid;
+  gap: clamp(6px, 0.6vw, 12px);
+  min-width: 0;
+  min-height: 0;
+}
+
+.nlb-family-panel,
+.nlb-ribbons {
+  min-width: 0;
+  min-height: 0;
+}
+
+.nlb-family-count-1 {
+  grid-template-columns: minmax(0, 1.8fr) minmax(18rem, 1fr);
+}
+
+.nlb-family-count-1 .nlb-family-panels {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nlb-family-count-2,
+.nlb-family-count-3 {
+  grid-template-rows: minmax(0, 1fr) minmax(14rem, 0.42fr);
+}
+
+.nlb-family-count-2 .nlb-family-panels {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.nlb-family-count-3 .nlb-family-panels {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.nlb-ribbons {
+  display: flex;
+  flex-direction: column;
+}
+
+.nlb-ribbon-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 2.6rem repeat(var(--nlb-family-count), minmax(0, 1fr));
+  grid-template-rows: auto repeat(12, minmax(0, 1fr));
+  gap: 0.18rem;
+}
+
+.nlb-ribbon-grid > strong,
+.nlb-ribbon-grid > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0.18rem 0.28rem;
+}
+
+.nlb-ribbon-grid > strong:not(.nlb-month) {
+  color: #fbbf24;
+  font-size: clamp(0.55rem, 0.75vw, 0.95rem);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nlb-month {
+  justify-content: center;
+  color: #fbbf24;
+}
+
+.nlb-ribbon-cell {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(251, 191, 36, 0.08);
+  border-radius: 6px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start !important;
+}
+
+.nlb-ribbon-cell strong,
+.nlb-ribbon-cell small {
+  display: block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nlb-ribbon-cell small {
+  color: var(--muted);
+  font-size: clamp(0.6rem, 0.75vw, 0.9rem);
+}
+
+.nlb-state {
+  min-height: min(55vh, 32rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+body.new-leaderboard-page .nlb-grid {
+  height: auto;
+}
+
+body.new-leaderboard-page .nlb-family-count-2,
+body.new-leaderboard-page .nlb-family-count-3 {
+  grid-template-rows: auto auto;
+}
+
+body.new-leaderboard-page .nlb-ribbons {
+  min-height: 22rem;
+}
+
+@media (max-width: 1100px) {
+  .nlb-grid,
+  .nlb-family-count-1,
+  .nlb-family-count-2,
+  .nlb-family-count-3 {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    height: auto;
+  }
+
+  .nlb-family-count-2 .nlb-family-panels,
+  .nlb-family-count-3 .nlb-family-panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .nlb-ribbons {
+    min-height: 22rem;
+  }
+}

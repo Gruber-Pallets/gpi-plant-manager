@@ -17,7 +17,7 @@
 <link rel="stylesheet" href="/static/new_leaderboard.css?v={{ static_v('new_leaderboard.css') }}">
 {% if is_tv %}<script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>{% endif %}
 </head>
-<body class="{% if is_tv %}new-leaderboard-tv{% else %}new-leaderboard-page{% endif %}">
+<body class="{% if is_tv %}recycling-leaderboard-tv new-leaderboard-tv{% else %}recycling-leaderboard-page new-leaderboard-page{% endif %}">
   {% if is_tv %}
   {{ tv_header(
       "New-Leaderboard",
