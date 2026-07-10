@@ -14,7 +14,7 @@ from calendar import monthrange
 
 # Earliest possible production data — production_daily starts in 2024. A
 # constant floor avoids a SELECT MIN(day) round-trip on every GOAT lookup.
-_ALL_TIME_FLOOR = date(2024, 1, 1)
+AWARDS_DATA_FLOOR = date(2024, 1, 1)
 
 
 def _wc_names_for_group(group_name: str) -> set[str]:
@@ -32,15 +32,17 @@ def _records_for(start: date, end: date, records: list[dict] | None) -> list[dic
     return production_history.daily_records(start, end)
 
 
-def person_days_in_group(
-    group_name: str, start: date, end: date, records: list[dict] | None = None,
+def person_days_in_wc_names(
+    wc_names: set[str],
+    start: date,
+    end: date,
+    records: list[dict] | None = None,
 ) -> list[dict]:
-    """Returns one row per (person, day) summing units/hours across the
-    group's WCs. Filters days where total units == 0.
+    """Returns one row per (person, day) summing units/hours across WCs.
+    Filters days where total units == 0.
 
     Each row: {"name": str, "day": date, "units": float, "hours": float}.
     """
-    wc_names = _wc_names_for_group(group_name)
     if not wc_names:
         return []
     raw = _records_for(start, end, records)
@@ -56,6 +58,18 @@ def person_days_in_group(
         for (person, day), v in agg.items()
         if v["units"] > 0
     ]
+
+
+def person_days_in_group(
+    group_name: str, start: date, end: date, records: list[dict] | None = None,
+) -> list[dict]:
+    """Returns one row per (person, day) across the group's WCs."""
+    return person_days_in_wc_names(
+        _wc_names_for_group(group_name),
+        start,
+        end,
+        records=records,
+    )
 
 
 def person_days_in_wc(
@@ -121,6 +135,19 @@ _GOAT_TTL_SECONDS = 300  # 5 minutes
 _GOAT_CACHE: dict = {}   # {group_name: (value, expires_at)}
 
 
+def _goat_from_rows(rows: list[dict]) -> dict | None:
+    if not rows:
+        return None
+    top = sorted(rows, key=lambda row: (-row["units"], row["day"], row["name"]))[0]
+    pph = round(top["units"] / top["hours"], 1) if top["hours"] > 0 else 0.0
+    return {
+        "name": top["name"],
+        "day": top["day"],
+        "units": top["units"],
+        "pph": pph,
+    }
+
+
 def goat(group_name: str) -> dict | None:
     """All-time best person-day in the group. Earliest day wins on tie.
     Returns {name, day, units, pph} or None when no data.
@@ -135,16 +162,33 @@ def goat(group_name: str) -> dict | None:
         return cached[0]
     from datetime import datetime
     today = datetime.now(UTC).date()
-    rows = person_days_in_group(group_name, _ALL_TIME_FLOOR, today)
-    if not rows:
-        result = None
-    else:
-        rows_sorted = sorted(rows, key=lambda r: (-r["units"], r["day"], r["name"]))
-        top = rows_sorted[0]
-        pph = round(top["units"] / top["hours"], 1) if top["hours"] > 0 else 0.0
-        result = {"name": top["name"], "day": top["day"], "units": top["units"], "pph": pph}
+    rows = person_days_in_group(group_name, AWARDS_DATA_FLOOR, today)
+    result = _goat_from_rows(rows)
     _GOAT_CACHE[group_name] = (result, now + _GOAT_TTL_SECONDS)
     return result
+
+
+def goat_for_wc_names(
+    wc_names: set[str],
+    *,
+    group_name: str,
+    records: list[dict],
+    today: date,
+    overrides: list[dict] | None = None,
+) -> dict | None:
+    rows = person_days_in_wc_names(
+        wc_names,
+        AWARDS_DATA_FLOOR,
+        today,
+        records=records,
+    )
+    live = _goat_from_rows(rows)
+    return apply_overrides_single(
+        live,
+        scope="award_goat",
+        group_name=group_name,
+        overrides=overrides,
+    )
 
 
 def _rank_avg(rows: list[dict], min_days: int) -> dict | None:
@@ -203,6 +247,10 @@ def _load_overrides() -> list[dict]:
         "SELECT scope, group_name, wc_name, year, month, position, action, name "
         "FROM award_overrides"
     )
+
+
+def load_overrides() -> list[dict]:
+    return _load_overrides()
 
 
 def _override_matches(o: dict, *, scope: str, group_name: str | None = None,

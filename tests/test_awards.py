@@ -212,6 +212,67 @@ def test_goat_returns_none_when_no_data(monkeypatch):
     assert awards.goat("Repairs") is None
 
 
+def test_goat_for_wc_names_uses_only_explicit_family_and_applies_override():
+    from zira_dashboard import awards
+
+    records = [
+        {"day": date(2026, 7, 1), "person": "Junior Winner", "wc": "Junior #2",
+         "units": 700.0, "hours": 7.0, "downtime": 0.0},
+        {"day": date(2026, 7, 2), "person": "Other Family", "wc": "Repair 1",
+         "units": 999.0, "hours": 7.0, "downtime": 0.0},
+    ]
+    overrides = [
+        {"scope": "award_goat", "group_name": "Juniors", "wc_name": None,
+         "year": None, "month": None, "position": 1,
+         "action": "replace", "name": "Verified Junior"},
+    ]
+    winner = awards.goat_for_wc_names(
+        {"Junior #1", "Junior #2", "Junior #3"},
+        group_name="Juniors",
+        records=records,
+        today=date(2026, 7, 10),
+        overrides=overrides,
+    )
+    assert winner["name"] == "Verified Junior"
+    assert winner["units"] == 700.0
+
+
+def test_goat_for_wc_names_first_day_wins_exact_tie():
+    from zira_dashboard import awards
+
+    records = [
+        {"day": date(2026, 7, 2), "person": "Later", "wc": "Junior #2",
+         "units": 700.0, "hours": 7.0, "downtime": 0.0},
+        {"day": date(2026, 7, 1), "person": "First", "wc": "Junior #2",
+         "units": 700.0, "hours": 7.0, "downtime": 0.0},
+    ]
+    winner = awards.goat_for_wc_names(
+        {"Junior #2"},
+        group_name="Juniors",
+        records=records,
+        today=date(2026, 7, 10),
+        overrides=[],
+    )
+    assert winner["name"] == "First"
+    assert winner["day"] == date(2026, 7, 1)
+
+
+def test_goat_for_wc_names_returns_none_without_positive_units():
+    from zira_dashboard import awards
+
+    winner = awards.goat_for_wc_names(
+        {"Junior #2"},
+        group_name="Juniors",
+        records=[
+            {"day": date(2026, 7, 1), "person": "Zero", "wc": "Junior #2",
+             "units": 0.0, "hours": 7.0, "downtime": 0.0},
+        ],
+        today=date(2026, 7, 10),
+        overrides=[],
+    )
+    assert winner is None
+
+
 def test_annual_best_avg_group_requires_30_days(monkeypatch):
     """Person with 29 days at 20pph is excluded; person with 30 days
     at 15pph wins."""
