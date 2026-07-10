@@ -106,6 +106,8 @@ def test_tv_new_uses_static_new_grid(monkeypatch):
     assert 'data-tv-mode="1"' in response.text
     assert 'class="rc-toolbar"' not in response.text
     assert 'id="reset-layout"' not in response.text
+    assert "No New work centers have Zira production data for this range." in response.text
+    assert 'class="bar-row' not in response.text
     assert "tv-refresh.js" in response.text
 
 
