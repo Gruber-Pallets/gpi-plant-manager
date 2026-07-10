@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import date
+
+import pytest
 
 from zira_dashboard import staffing
 from zira_dashboard.rotation_suggestions import (
     TRIM_SAW_SKILL,
+    RecycledHistory,
     TrimSawHistory,
     _valid_trim_saw_pair,
+    choose_center,
+    suggest_recycled_assignments,
     suggest_trim_saw_pair,
 )
 
@@ -292,3 +298,347 @@ def test_smart_defaults_excludes_people_already_defaulted_elsewhere(monkeypatch)
     smart = rotation_suggestions.smart_defaults_for_day(TARGET_DAY, roster, base, [])
 
     assert smart["Trim Saw 1"] == ["Jesus Martinez", "Rotation Two"]
+
+
+# ---------- Generic Recycled rotation engine ----------
+
+
+def _person(name: str, level: int, *, active: bool = True, reserve: bool = False):
+    """A person holding the same level in all three Recycled rotation groups."""
+    return staffing.Person(
+        name=name,
+        active=active,
+        reserve=reserve,
+        skills={"Dismantler": level, "Repair": level, "Trim Saw": level},
+    )
+
+
+@dataclass(frozen=True)
+class _BlockEffect:
+    """Duck-typed stand-in for Task 3's BlockEffect."""
+
+    locked_people: dict = field(default_factory=dict)
+    temporary_extra_people: dict = field(default_factory=dict)
+    warnings: tuple = ()
+
+
+def test_normal_mode_uses_primary_preference_before_regular():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal", roster=[_person("Primary", 3), _person("Regular", 3)],
+        preferences={"Primary": {"Repair": "primary"}, "Regular": {"Repair": "regular"}},
+        base_assignments={}, history=RecycledHistory(), locked_assignments={}, block_effects=[],
+    )
+    assert out.assignments["Repair 1"] == ["Primary"]
+
+
+def test_training_mode_pairs_level_one_with_level_three():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training", roster=[_person("Green", 3), _person("Learner", 1)],
+        preferences={"Green": {"Repair": "regular"}, "Learner": {"Repair": "regular"}},
+        base_assignments={}, group_locations={"Repair": ("Repair 1",)}, history=RecycledHistory(),
+        locked_assignments={}, block_effects=(), training_cap=2,
+    )
+    assert {"Green", "Learner"} <= set(out.people_for_group("Repair"))
+
+
+def test_level_zero_is_ignored_without_training_block():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal", roster=[_person("Zero", 0), _person("Green", 3)],
+        preferences={"Zero": {"Repair": "primary"}, "Green": {"Repair": "regular"}},
+        base_assignments={}, group_locations={"Repair": ("Repair 1",)}, history=RecycledHistory(),
+        locked_assignments={}, block_effects=(), training_cap=2,
+    )
+    assert "Zero" not in out.assigned_people
+
+
+def test_repair_center_rotation_uses_least_recent_then_least_frequent():
+    history = RecycledHistory(center_counts={("Jordan", "Repair 1"): 1, ("Jordan", "Repair 2"): 1, ("Jordan", "Repair 3"): 1}, last_center_by_person_group={("Jordan", "Repair"): "Repair 3"})
+    assert choose_center("Jordan", "Repair", ("Repair 1", "Repair 2", "Repair 3"), history) == "Repair 1"
+
+
+def test_choose_center_prefers_least_frequent_center_first():
+    history = RecycledHistory(
+        center_counts={("Jordan", "Repair 1"): 2, ("Jordan", "Repair 2"): 1},
+        last_center_by_person_group={("Jordan", "Repair"): "Repair 1"},
+    )
+    assert choose_center("Jordan", "Repair", ("Repair 1", "Repair 2", "Repair 3"), history) == "Repair 3"
+
+
+def test_unknown_mode_is_rejected():
+    with pytest.raises(ValueError, match="mode"):
+        suggest_recycled_assignments(day=date(2026, 7, 14), mode="chaotic", roster=[])
+
+
+def test_never_preference_blocks_generated_placement():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Refuser", 3), _person("Backup", 2)],
+        preferences={"Refuser": {"Repair": "never"}},
+        base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    assert "Refuser" not in out.assigned_people
+    assert out.assignments["Repair 1"] == ["Backup"]
+
+
+def test_never_preference_keeps_manual_lock_in_place():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Refuser", 3), _person("Backup", 2)],
+        preferences={"Refuser": {"Repair": "never"}},
+        base_assignments={"Repair 1": ["Refuser"]},
+        group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(),
+        locked_assignments={"Repair 1": ["Refuser"]},
+        block_effects=(),
+    )
+    assert out.assignments["Repair 1"] == ["Refuser"]
+    assert out.sources["Repair 1"]["Refuser"] == "manual"
+
+
+def test_optimized_mode_prefers_level_three_over_preference():
+    roster = [_person("Green Occasional", 3), _person("Two Primary", 2)]
+    preferences = {
+        "Green Occasional": {"Repair": "occasional"},
+        "Two Primary": {"Repair": "primary"},
+    }
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="optimized", roster=roster, preferences=preferences,
+        base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    assert out.assignments["Repair 1"] == ["Green Occasional"]
+
+
+def test_normal_mode_lets_strong_preference_outweigh_one_level():
+    roster = [_person("Green Occasional", 3), _person("Two Primary", 2)]
+    preferences = {
+        "Green Occasional": {"Repair": "occasional"},
+        "Two Primary": {"Repair": "primary"},
+    }
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal", roster=roster, preferences=preferences,
+        base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    assert out.assignments["Repair 1"] == ["Two Primary"]
+
+
+def test_normal_mode_rests_person_with_heavy_recent_group_history():
+    roster = [_person("Alicia", 3), _person("Beatriz", 3)]
+    history = RecycledHistory(
+        group_counts={("Alicia", "Repair"): 4},
+        most_recent_group_names={"Repair": {"Alicia"}},
+    )
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal", roster=roster, preferences={},
+        base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=history, locked_assignments={}, block_effects=(),
+    )
+    assert out.assignments["Repair 1"] == ["Beatriz"]
+
+
+def test_engine_rotates_centers_using_history():
+    history = RecycledHistory(
+        center_counts={("Jordan", "Repair 1"): 2, ("Jordan", "Repair 2"): 1},
+        last_center_by_person_group={("Jordan", "Repair"): "Repair 2"},
+    )
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal", roster=[_person("Jordan", 3)], preferences={},
+        base_assignments={}, group_locations={"Repair": ("Repair 1", "Repair 2", "Repair 3")},
+        history=history, locked_assignments={}, block_effects=(),
+    )
+    assert out.assignments["Repair 3"] == ["Jordan"]
+
+
+def test_manual_lock_survives_rebuild_and_engine_fills_around_it():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Manual Person", 2), _person("Stale Generated", 3), _person("Fresh", 3)],
+        preferences={},
+        base_assignments={"Repair 1": ["Manual Person"], "Repair 2": ["Stale Generated"]},
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        history=RecycledHistory(),
+        locked_assignments={"Repair 1": ["Manual Person"]},
+        block_effects=(),
+    )
+    assert out.assignments["Repair 1"] == ["Manual Person"]
+    assert out.sources["Repair 1"]["Manual Person"] == "manual"
+    assert "Manual Person" not in out.reasons.get("Repair 1", {})
+    # The stale generated pick is rebuilt; the best remaining candidate wins.
+    assert out.assignments["Repair 2"] == ["Fresh"]
+    assert out.sources["Repair 2"]["Fresh"] == "generated"
+    all_names = [name for names in out.assignments.values() for name in names]
+    assert all_names.count("Manual Person") == 1
+
+
+def test_one_person_is_never_duplicated_across_centers():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal", roster=[_person("Multi", 3)], preferences={},
+        base_assignments={}, history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    all_names = [name for names in out.assignments.values() for name in names]
+    assert all_names.count("Multi") == 1
+
+
+def test_non_recycled_base_assignments_pass_through_untouched():
+    base = {"Woodpecker #1": ["New Guy"], "Repair 1": ["Old Generated"]}
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("New Guy", 3), _person("Fresh", 3)],
+        preferences={}, base_assignments=base,
+        group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    assert out.assignments["Woodpecker #1"] == ["New Guy"]
+    # New Guy already works elsewhere, so the open Repair slot goes to Fresh.
+    assert out.assignments["Repair 1"] == ["Fresh"]
+    all_names = [name for names in out.assignments.values() for name in names]
+    assert all_names.count("New Guy") == 1
+    # Inputs are never mutated.
+    assert base == {"Woodpecker #1": ["New Guy"], "Repair 1": ["Old Generated"]}
+
+
+def test_inactive_and_reserve_people_are_not_auto_scheduled():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[
+            _person("Gone", 3, active=False),
+            _person("Reserve", 3, reserve=True),
+            _person("Here", 2),
+        ],
+        preferences={}, base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    assert out.assignments["Repair 1"] == ["Here"]
+    assert out.assigned_people == {"Here"}
+
+
+def test_training_cap_limits_development_placements():
+    roster = [
+        _person("Green", 3),
+        _person("Learner A", 1),
+        _person("Learner B", 1),
+        _person("Learner C", 1),
+    ]
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training", roster=roster, preferences={},
+        base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    assert out.assignments["Repair 1"] == ["Green", "Learner A", "Learner B"]
+    assert "Learner C" not in out.assigned_people
+    assert out.reasons["Repair 1"]["Learner A"] == "training pair"
+
+    capped = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training", roster=roster, preferences={},
+        base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(), training_cap=1,
+    )
+    assert capped.assignments["Repair 1"] == ["Green", "Learner A"]
+
+
+def test_training_development_requires_level_three_in_group():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Senior Two", 2), _person("Learner", 1)],
+        preferences={}, base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    assert out.assignments["Repair 1"] == ["Senior Two"]
+    assert "Learner" not in out.assigned_people
+
+
+def test_block_effect_reserves_trainee_and_pairs_trainer():
+    effect = _BlockEffect(
+        locked_people={"Repair": ["Trainee"]},
+        temporary_extra_people={"Repair": ["Trainer"]},
+        warnings=("Trainee was absent Monday; block extended.",),
+    )
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Trainee", 0), _person("Trainer", 3), _person("Other", 3)],
+        preferences={}, base_assignments={},
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(effect,),
+    )
+    # The level-0 trainee is only eligible through the block, and the day-one
+    # trainer pairs into the same center even though it exceeds normal staffing.
+    assert out.assignments["Repair 1"] == ["Trainee", "Trainer"]
+    assert out.sources["Repair 1"]["Trainee"] == "generated"
+    assert out.sources["Repair 1"]["Trainer"] == "generated"
+    assert out.reasons["Repair 1"]["Trainee"] == "training block"
+    assert out.reasons["Repair 1"]["Trainer"] == "training pair"
+    assert out.assignments["Repair 2"] == ["Other"]
+    assert "Trainee was absent Monday; block extended." in out.warnings
+
+
+def test_trim_saw_generated_pair_must_be_valid():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Level Two", 2), _person("Level One", 1)],
+        preferences={}, base_assignments={},
+        group_locations={"Trim Saw": ("Trim Saw 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    # A 2/1 pair is unsafe, so nothing is generated and a warning explains it.
+    assert out.assignments.get("Trim Saw 1", []) == []
+    assert any("Trim Saw 1" in warning for warning in out.warnings)
+
+
+def test_trim_saw_generated_pair_is_placed_when_valid():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Green", 3), _person("Level One", 1)],
+        preferences={}, base_assignments={},
+        group_locations={"Trim Saw": ("Trim Saw 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    assert out.assignments["Trim Saw 1"] == ["Green", "Level One"]
+    assert out.warnings == ()
+
+
+def test_trim_saw_locked_operator_gets_only_safe_partner():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Pinned One", 1), _person("Green Partner", 3), _person("Level Two", 2)],
+        preferences={}, base_assignments={},
+        group_locations={"Trim Saw": ("Trim Saw 1",)},
+        history=RecycledHistory(),
+        locked_assignments={"Trim Saw 1": ["Pinned One"]},
+        block_effects=(),
+    )
+    assert out.assignments["Trim Saw 1"] == ["Pinned One", "Green Partner"]
+    assert out.sources["Trim Saw 1"]["Pinned One"] == "manual"
+    assert out.sources["Trim Saw 1"]["Green Partner"] == "generated"
+
+
+def test_trim_saw_locked_single_without_safe_partner_warns():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Pinned One", 1), _person("Level Two", 2)],
+        preferences={}, base_assignments={},
+        group_locations={"Trim Saw": ("Trim Saw 1",)},
+        history=RecycledHistory(),
+        locked_assignments={"Trim Saw 1": ["Pinned One"]},
+        block_effects=(),
+    )
+    assert out.assignments["Trim Saw 1"] == ["Pinned One"]
+    assert any("Trim Saw 1" in warning for warning in out.warnings)
+
+
+def test_generated_assignments_carry_reasons():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Green", 3), _person("Primary Two", 2)],
+        preferences={"Primary Two": {"Repair": "primary"}},
+        base_assignments={}, group_locations={"Repair": ("Repair 1", "Repair 2")},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+    reasons = {
+        name: reason
+        for center_reasons in out.reasons.values()
+        for name, reason in center_reasons.items()
+    }
+    assert reasons["Green"] == "green coverage"
+    assert reasons["Primary Two"] == "primary Repair operator"
