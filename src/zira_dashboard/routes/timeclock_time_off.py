@@ -249,7 +249,7 @@ def _fallback_fetch_and_cache_leave_types() -> list[dict]:
     import logging
     _log = logging.getLogger(__name__)
     try:
-        odoo_client._leave_types_cache = None
+        odoo_client.invalidate_leave_types_cache()
         types = odoo_client.fetch_leave_types()
     except Exception as e:  # noqa: BLE001 — return empty + log; UI shows the empty state
         _log.warning(

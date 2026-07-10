@@ -16,10 +16,50 @@ from fastapi.testclient import TestClient
 # Import after conftest sets AUTH_DISABLED
 from zira_dashboard.app import app
 from zira_dashboard.routes.timeclock import _mint_token
+from zira_dashboard.routes import timeclock_time_off
 
 
 def _token_for(person_id: int) -> str:
     return _mint_token(person_id)
+
+
+def test_leave_type_fallback_uses_named_cache_invalidator(monkeypatch):
+    events = []
+    types = [
+        {
+            "id": 7,
+            "name": "Vacation",
+            "request_unit": "day",
+            "requires_allocation": "yes",
+            "color": 1,
+            "active": True,
+        }
+    ]
+    monkeypatch.setattr(
+        timeclock_time_off.odoo_client,
+        "invalidate_leave_types_cache",
+        lambda: events.append("invalidate"),
+    )
+    monkeypatch.setattr(
+        timeclock_time_off.odoo_client,
+        "fetch_leave_types",
+        lambda: events.append("fetch") or types,
+    )
+    monkeypatch.setattr(
+        timeclock_time_off.db,
+        "execute",
+        lambda *args, **kwargs: events.append("cache"),
+    )
+
+    assert timeclock_time_off._fallback_fetch_and_cache_leave_types() == [
+        {
+            "holiday_status_id": 7,
+            "name": "Vacation",
+            "request_unit": "day",
+            "requires_allocation": "yes",
+        }
+    ]
+    assert events == ["invalidate", "fetch", "cache"]
 
 
 def test_landing_route_redirects_when_token_invalid(monkeypatch):
