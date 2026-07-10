@@ -1043,7 +1043,7 @@ Expected: DB-free tests pass and database-gated cases skip locally.
 ### Task 10: Apply targeted hygiene and verify the whole refactor
 
 **Files:**
-- Modify: `src/zira_dashboard/routes/departments.py:504`
+- Verify: `src/zira_dashboard/recycling_range.py`
 - Modify: `src/zira_dashboard/routes/staffing.py:587`
 - Modify only proven-safe transformed loops reported by Ruff.
 - Modify: `pyproject.toml` only if an expanded rule category is completely clean.
@@ -1057,9 +1057,8 @@ Expected: DB-free tests pass and database-gated cases skip locally.
 - [ ] **Step 1: Make zip truncation intent explicit**
 
 ```python
-# routes/departments.py
-- for p, d in zip(per_day, days):
-+ for p, d in zip(per_day, days, strict=True):
+# recycling_range.py (created in Task 7)
+for item, day in zip(per_day, days, strict=True):
 
 # routes/staffing.py
 - for bs, be, bn in zip(starts, ends, names):
@@ -1119,7 +1118,7 @@ from commits.
 - [ ] **Step 7: Commit final hygiene only if files changed**
 
 ```bash
-git add src/zira_dashboard/routes/departments.py src/zira_dashboard/routes/staffing.py
+git add src/zira_dashboard/routes/staffing.py
 git commit -m "refactor: clarify safe iteration contracts"
 ```
 
