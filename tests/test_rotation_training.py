@@ -305,6 +305,92 @@ def test_reconcile_does_not_promote_before_enough_attended_days(monkeypatch):
     assert calls == []
 
 
+def test_record_then_reconcile_is_the_single_completion_owner(monkeypatch):
+    """Full flow: the pure recorder logs attended days without completing the
+    block; reconcile then promotes exactly once and marks it completed; a second
+    reconcile is a no-op."""
+    from zira_dashboard import rotation_store, rotation_training
+
+    calls: list[tuple] = []
+    state = {
+        "block": SimpleNamespace(
+            id=5, trainee_id=11, skill_id=9, planned_attended_days=3, status="active"
+        ),
+        "days": [],
+    }
+
+    def fake_record(block_id, day, status="attended"):
+        # Mirror the real pure recorder: upsert the day, never touch status.
+        state["days"] = [d for d in state["days"] if d.day != day]
+        state["days"].append(SimpleNamespace(day=day, status=status))
+
+    def fake_active_blocks():
+        block = state["block"]
+        return [block] if block.status == "active" else []
+
+    def fake_mark_completed(bid):
+        if state["block"].id == bid and state["block"].status == "active":
+            state["block"].status = "completed"
+
+    monkeypatch.setattr(rotation_training.rotation_store, "record_attended_day", fake_record)
+    monkeypatch.setattr(rotation_training.rotation_store, "active_blocks", fake_active_blocks)
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "resolved_days", lambda _bid: list(state["days"])
+    )
+    monkeypatch.setattr(rotation_training.rotation_store, "mark_completed", fake_mark_completed)
+    monkeypatch.setattr(
+        rotation_training.skill_levels, "set_person_skill_level", lambda *a: calls.append(a)
+    )
+
+    for day in (date(2026, 7, 14), date(2026, 7, 15), date(2026, 7, 16)):
+        rotation_store.record_attended_day(5, day, "attended")
+
+    # Recording the requested attended days must NOT complete the block.
+    assert state["block"].status == "active"
+
+    assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == [5]
+    assert calls == [(11, 9, 1)]
+    assert state["block"].status == "completed"
+
+    # Idempotent: the completed block is no longer active, so no re-promotion.
+    assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == []
+    assert calls == [(11, 9, 1)]
+
+
+def test_reconcile_continues_past_a_failed_promotion(monkeypatch):
+    """One block's Odoo failure must not abort the pass: later blocks still
+    promote, and the failed block stays active (not completed) to retry."""
+    from zira_dashboard import rotation_training, skill_levels
+
+    completed: list[int] = []
+    block_a = SimpleNamespace(
+        id=1, trainee_id=10, skill_id=9, planned_attended_days=2, status="active"
+    )
+    block_b = SimpleNamespace(
+        id=2, trainee_id=20, skill_id=9, planned_attended_days=2, status="active"
+    )
+
+    def failing_writer(person_id, skill_id, level):
+        if person_id == 10:
+            raise skill_levels.SkillSyncError("odoo down")
+
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "active_blocks", lambda: [block_a, block_b]
+    )
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "resolved_days", lambda _bid: [_attended()] * 2
+    )
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "mark_completed", lambda bid: completed.append(bid)
+    )
+    monkeypatch.setattr(
+        rotation_training.skill_levels, "set_person_skill_level", failing_writer
+    )
+
+    assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == [2]
+    assert completed == [2]  # block_a not completed -> retried next pass
+
+
 def test_reconcile_counts_only_attended_days(monkeypatch):
     from zira_dashboard import rotation_training
 

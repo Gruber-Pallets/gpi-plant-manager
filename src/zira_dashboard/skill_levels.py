@@ -31,7 +31,13 @@ class SkillSyncError(RuntimeError):
 
 
 def _resolve_odoo_id(sql: str, local_id: int, label: str) -> int:
-    rows = db.query(sql, (local_id,))
+    # Resolution runs before the Odoo call, so a DB blip here means Odoo was
+    # never reached. Surface it as SkillSyncError so callers treat it as an
+    # Odoo-side failure (no local write) rather than a post-Odoo mirror failure.
+    try:
+        rows = db.query(sql, (local_id,))
+    except Exception as exc:  # noqa: BLE001 - normalized into a typed failure
+        raise SkillSyncError(f"Could not resolve Odoo id for {label} {local_id}: {exc}") from exc
     odoo_id = rows[0].get("odoo_id") if rows else None
     if not odoo_id:
         raise SkillSyncError(f"No Odoo id for {label} {local_id}.")

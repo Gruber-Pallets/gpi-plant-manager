@@ -277,3 +277,51 @@ def test_skill_cell_update_delegates_to_shared_skill_writer(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"ok": True, "level": 3, "label": "proficient"}
     assert calls == [(1, 2, 3)]
+
+
+def test_skill_cell_update_resolution_db_failure_returns_502_not_202(monkeypatch):
+    """A DB blip while the writer resolves Odoo ids happens *before* Odoo is
+    called, so it must surface as 502 (Odoo not saved), never the 202
+    "Saved in Odoo" branch. No local write should occur."""
+    from zira_dashboard.routes import skills as skills_routes
+
+    def fake_query(sql, params=None):
+        # The writer's Odoo-id resolution -- simulate a transient DB failure.
+        if sql.strip().startswith("SELECT odoo_id FROM"):
+            raise RuntimeError("db blip during resolution")
+        # The endpoint's own lookups succeed so we get past the 404 checks.
+        if "FROM people" in sql:
+            return [{"id": 1, "odoo_id": 77, "name": "Maria Garcia"}]
+        if "FROM skills" in sql:
+            return [{"id": 2, "odoo_id": 88, "name": "Repair", "skill_type": "Production Skills"}]
+        return []
+
+    cursor_used: list[tuple] = []
+
+    class FakeCursor:
+        def execute(self, sql, params=None):
+            cursor_used.append((sql, params))
+
+    class FakeCursorContext:
+        def __enter__(self):
+            return FakeCursor()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    odoo_calls: list[tuple] = []
+    monkeypatch.setattr(skills_routes.db, "query", fake_query)
+    monkeypatch.setattr(skills_routes.db, "cursor", lambda: FakeCursorContext())
+    monkeypatch.setattr(
+        odoo_client, "set_employee_skill_level", lambda *args: odoo_calls.append(args)
+    )
+
+    response = _client().post(
+        "/staffing/skills/cell",
+        json={"person_odoo_id": 77, "skill_odoo_id": 88, "level": 3},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["ok"] is False
+    assert odoo_calls == []  # Odoo never reached
+    assert cursor_used == []  # no local mirror write

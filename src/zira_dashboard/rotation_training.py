@@ -20,11 +20,14 @@ day-one supervised pair that may exceed ordinary center staffing, and
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from . import rotation_store, schedule_store, skill_levels
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,9 @@ def effect_for_day(
     if day not in planned:
         return _EMPTY_EFFECT
 
+    # The effect is keyed by ``block.skill`` because a Recycled skill name is
+    # also its rotation-group name (Dismantler / Repair / Trim Saw). If a future
+    # group ever stops matching its skill name, this mapping must be revisited.
     group = block.skill
     warnings: list[str] = []
 
@@ -145,7 +151,16 @@ def reconcile_blocks(as_of: date) -> list[int]:
         attended = sum(1 for d in rotation_store.resolved_days(block.id) if _is_attended(d))
         if attended < block.planned_attended_days:
             continue
-        skill_levels.set_person_skill_level(block.trainee_id, block.skill_id, 1)
+        try:
+            skill_levels.set_person_skill_level(block.trainee_id, block.skill_id, 1)
+        except Exception:  # noqa: BLE001 - one block's failure must not abort the pass
+            # Leave the block active (do NOT mark completed) so the next
+            # reconciliation retries the promotion, and keep going.
+            log.exception(
+                "Training block %s promotion failed; leaving active to retry",
+                getattr(block, "id", "?"),
+            )
+            continue
         rotation_store.mark_completed(block.id)
         promoted.append(block.id)
     return promoted

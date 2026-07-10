@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from datetime import date
 
@@ -197,3 +198,79 @@ def test_schedule_manual_and_generated_assignment_sources_round_trip(monkeypatch
 
     monkeypatch.setattr(db, "query", fake_query)
     assert staffing._load_schedule_from_db(schedule.day).assignment_sources == sources
+
+
+@pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"), reason="needs Postgres"
+)
+def test_block_accessors_round_trip_against_real_schema():
+    """DB-backed guard for the new store SQL. The monkeypatched unit tests
+    above can't catch a column/join typo in active_blocks / resolved_days /
+    mark_completed or the added b.trainee_id / b.skill_id, so exercise them
+    against the real schema. Skips cleanly when Postgres isn't configured."""
+    from zira_dashboard import db, rotation_store
+
+    db.bootstrap_schema()
+
+    trainee_name = "ZZ Rotation Trainee"
+    trainer_name = "ZZ Rotation Trainer"
+    skill_name = "ZZ Rotation Skill"
+
+    def _cleanup():
+        db.execute(
+            "DELETE FROM rotation_training_blocks WHERE trainee_id IN "
+            "(SELECT id FROM people WHERE name IN (%s, %s))",
+            (trainee_name, trainer_name),
+        )
+        db.execute("DELETE FROM people WHERE name IN (%s, %s)", (trainee_name, trainer_name))
+        db.execute("DELETE FROM skills WHERE name = %s", (skill_name,))
+
+    _cleanup()
+    try:
+        trainee_id = db.query(
+            "INSERT INTO people (name, active) VALUES (%s, TRUE) RETURNING id",
+            (trainee_name,),
+        )[0]["id"]
+        trainer_id = db.query(
+            "INSERT INTO people (name, active) VALUES (%s, TRUE) RETURNING id",
+            (trainer_name,),
+        )[0]["id"]
+        skill_id = db.query(
+            "INSERT INTO skills (name, skill_type) VALUES (%s, 'Production Skills') RETURNING id",
+            (skill_name,),
+        )[0]["id"]
+        block_id = db.query(
+            "INSERT INTO rotation_training_blocks "
+            "(trainee_id, trainer_id, skill_id, start_day, planned_attended_days, status) "
+            "VALUES (%s, %s, %s, %s, %s, 'active') RETURNING id",
+            (trainee_id, trainer_id, skill_id, date(2026, 7, 14), 2),
+        )[0]["id"]
+
+        # active_blocks(): joins resolve and the added id columns populate.
+        matches = [b for b in rotation_store.active_blocks() if b.id == block_id]
+        assert len(matches) == 1
+        block = matches[0]
+        assert block.trainee_id == trainee_id
+        assert block.skill_id == skill_id
+        assert block.trainee_name == trainee_name
+        assert block.trainer_name == trainer_name
+        assert block.skill == skill_name
+
+        # resolved_days(): records round-trip with day + status.
+        rotation_store.record_attended_day(block_id, date(2026, 7, 14), "attended")
+        rotation_store.record_attended_day(block_id, date(2026, 7, 15), "absent")
+        assert [(d.day, d.status) for d in rotation_store.resolved_days(block_id)] == [
+            (date(2026, 7, 14), "attended"),
+            (date(2026, 7, 15), "absent"),
+        ]
+
+        # record_attended_day is a pure recorder: reaching the planned attended
+        # count must NOT auto-complete the block (reconcile owns completion).
+        rotation_store.record_attended_day(block_id, date(2026, 7, 16), "attended")
+        assert any(b.id == block_id for b in rotation_store.active_blocks())
+
+        # mark_completed(): flips status; the block drops out of active_blocks().
+        rotation_store.mark_completed(block_id)
+        assert not any(b.id == block_id for b in rotation_store.active_blocks())
+    finally:
+        _cleanup()

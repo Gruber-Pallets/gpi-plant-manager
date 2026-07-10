@@ -227,22 +227,20 @@ def mark_completed(block_id: int) -> None:
 
 
 def record_attended_day(block_id: int, day: date, status: str = "attended") -> None:
-    """Record one day's outcome and complete a block after enough attended days."""
+    """Record one day's outcome for a block. Pure recorder — never completes.
+
+    This only upserts the day row; it deliberately does NOT flip the block to
+    ``completed``. Completion and the level-1 promotion are owned solely by
+    ``rotation_training.reconcile_blocks`` (which promotes the skill *and* marks
+    the block completed in one place). Auto-completing here would let a block
+    reach ``completed`` without ever promoting, since ``active_blocks`` — the
+    only input reconcile sees — filters to ``status = 'active'``.
+    """
     if status not in _BLOCK_DAY_STATUSES:
         raise InvalidTrainingBlock(f"Unknown training-day status: {status!r}")
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO rotation_training_block_days (block_id, day, status) "
-            "VALUES (%s, %s, %s) "
-            "ON CONFLICT (block_id, day) DO UPDATE SET status = EXCLUDED.status",
-            (block_id, day, status),
-        )
-        cur.execute(
-            "UPDATE rotation_training_blocks b "
-            "SET status = 'completed', completed_at = now() "
-            "WHERE b.id = %s AND b.status = 'active' "
-            "  AND (SELECT COUNT(*) FROM rotation_training_block_days d "
-            "       WHERE d.block_id = b.id AND d.status = 'attended') "
-            "      >= b.planned_attended_days",
-            (block_id,),
-        )
+    db.execute(
+        "INSERT INTO rotation_training_block_days (block_id, day, status) "
+        "VALUES (%s, %s, %s) "
+        "ON CONFLICT (block_id, day) DO UPDATE SET status = EXCLUDED.status",
+        (block_id, day, status),
+    )
