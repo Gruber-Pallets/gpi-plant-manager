@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = (ROOT / "src/zira_dashboard/templates/recycling_leaderboard_tv.html").read_text()
@@ -58,6 +59,7 @@ def test_tv_range_and_goat_group_have_scoped_responsive_styles():
     )
     meta_block = CSS[meta_start:meta_end]
     assert "opacity: 0.7" in meta_block
+    assert "color: var(--fg)" in meta_block
     assert "white-space: nowrap" in meta_block
     assert "font-size: clamp(" in meta_block
 
@@ -75,7 +77,14 @@ def test_tv_range_and_goat_group_have_scoped_responsive_styles():
     icon_end = CSS.index("}", icon_start)
     assert "font-size: clamp(" in CSS[icon_start:icon_end]
 
-    assert "body.recycling-leaderboard-tv:not(.new-leaderboard-tv)" in CSS
+    wide_grid = re.search(
+        r"@media \(min-width: 1101px\)\s*\{.*?"
+        r"body\.recycling-leaderboard-tv:not\(\.new-leaderboard-tv\) "
+        r"\.rlb-grid\s*\{\s*height:\s*100%;\s*\}",
+        CSS,
+        re.DOTALL,
+    )
+    assert wide_grid is not None
 
 
 def test_tv_leaderboard_role_titles_are_not_header_elements():

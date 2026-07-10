@@ -54,8 +54,10 @@ html[data-tv-theme] body.recycling-leaderboard-tv:not(.new-leaderboard-tv) .rlb-
   flex: 1 1 auto;
   min-height: 0;
 }
-html[data-tv-theme] body.recycling-leaderboard-tv:not(.new-leaderboard-tv) .rlb-grid {
-  height: 100%;
+@media (min-width: 1101px) {
+  html[data-tv-theme] body.recycling-leaderboard-tv:not(.new-leaderboard-tv) .rlb-grid {
+    height: 100%;
+  }
 }
 html[data-tv-theme] .tv-header-title-line {
   display: flex;
@@ -66,7 +68,7 @@ html[data-tv-theme] .tv-header-title-line {
 html[data-tv-theme] .tv-header-title-meta {
   display: flex;
   gap: 0.5rem;
-  color: var(--muted);
+  color: var(--fg);
   font-size: clamp(0.65rem, 0.8vw, 0.95rem);
   font-weight: 700;
   line-height: 1;
