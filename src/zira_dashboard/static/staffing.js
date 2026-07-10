@@ -1120,19 +1120,7 @@
   })();
 
   function printSchedule() {
-    // Open the page in a new tab and trigger print on load.
-    // Using the current URL means the print preview shows the same day.
-    const url = window.location.href;
-    const win = window.open(url, '_blank');
-    if (!win) {
-      // Popup blocker; fall back to printing the current tab.
-      window.print();
-      return;
-    }
-    win.addEventListener('load', () => {
-      win.focus();
-      win.print();
-    }, { once: true });
+    window.print();
   }
 
   function showToast(message, link, severity) {
