@@ -15,7 +15,15 @@ import logging
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import auth, schedule_store, settings_store, shift_config, staffing, work_centers_store
+from .. import (
+    auth,
+    schedule_store,
+    settings_context,
+    settings_store,
+    shift_config,
+    staffing,
+    work_centers_store,
+)
 from ..deps import templates
 from ..stations import CATEGORIES, STATIONS
 
@@ -271,105 +279,39 @@ def settings_page(
     active_people_objs = [p for p in roster if p.active]
     active_people = sorted((p.name for p in active_people_objs), key=str.lower)
 
-    # Per-work-center rows.
-    wc_rows = []
-    for loc in staffing.LOCATIONS:
-        eff = work_centers_store.effective(loc)
-        max_ops = eff["max_ops"]
-        required_skills = eff["required_skills"]
-        # Pool for the Default People picker, color-coded by min skill level
-        # across the WC's required skills (mirrors the scheduler's logic).
-        # When required_skills is empty, render at neutral lvl-2 (no scale).
-        default_pool: list[dict] = []
-        for p in active_people_objs:
-            if required_skills:
-                lvl = min((p.level(s) for s in required_skills), default=0)
-            else:
-                lvl = 2
-            default_pool.append({"name": p.name, "level": lvl, "reserve": p.reserve})
-        default_pool.sort(key=lambda r: (r["reserve"], -r["level"], r["name"].lower()))
-        wc_rows.append(
-            {
-                "key": loc.meter_id or f"name:{loc.name}",
-                "name": loc.name,
-                "bay": loc.bay,
-                "required_skills": required_skills,
-                "min_ops": eff["min_ops"],
-                "max_ops": max_ops if max_ops is not None else "",
-                "goal": eff["goal_per_day"],
-                "note": eff["note"],
-                "groups": eff["groups"],
-                "department": eff["department"],
-                "default_people": eff["default_people"],
-                "default_pool": default_pool,
-            }
-        )
-
-    def _group_summary(kind: str) -> list[dict]:
-        rows = []
-        for name in work_centers_store.all_group_names(kind):
-            members = work_centers_store.members(kind, name)
-            auto = work_centers_store.group_goal_auto(kind, name)
-            override = work_centers_store.group_goal_override(kind, name)
-            rows.append(
-                {
-                    "name": name,
-                    "count": len(members),
-                    "auto": auto,
-                    "override": "" if override is None else override,
-                    "effective": work_centers_store.group_goal(kind, name),
-                }
-            )
-        return rows
-
-    group_rows = _group_summary("group")
-    dept_rows = _group_summary("department")
+    wc_rows = settings_context.work_center_rows(
+        staffing.LOCATIONS, active_people_objs, work_centers_store.effective
+    )
+    group_rows = settings_context.group_summary(
+        "group",
+        all_names=work_centers_store.all_group_names,
+        members=work_centers_store.members,
+        auto_goal=work_centers_store.group_goal_auto,
+        override_goal=work_centers_store.group_goal_override,
+        effective_goal=work_centers_store.group_goal,
+    )
+    dept_rows = settings_context.group_summary(
+        "department",
+        all_names=work_centers_store.all_group_names,
+        members=work_centers_store.members,
+        auto_goal=work_centers_store.group_goal_auto,
+        override_goal=work_centers_store.group_goal_override,
+        effective_goal=work_centers_store.group_goal,
+    )
     sched = schedule_store.current()
-    schedule_ctx = {
-        "shift_start": f"{sched.shift_start.hour:02d}:{sched.shift_start.minute:02d}",
-        "shift_end":   f"{sched.shift_end.hour:02d}:{sched.shift_end.minute:02d}",
-        "work_weekdays": sorted(sched.work_weekdays),
-        "weekday_names": schedule_store.WEEKDAY_NAMES,
-        "breaks": [
-            {
-                "start": f"{b.start.hour:02d}:{b.start.minute:02d}",
-                "end":   f"{b.end.hour:02d}:{b.end.minute:02d}",
-                "name": b.name,
-            }
-            for b in sched.breaks
-        ],
-    }
+    schedule_ctx = settings_context.schedule_context(sched, schedule_store.WEEKDAY_NAMES)
     from .. import work_schedule_store
-    work_schedules_ctx = [
-        {
-            "resource_calendar_id": o.resource_calendar_id,
-            "name": o.name or f"Schedule {o.resource_calendar_id}",
-            "hours_display": _hours_display(o.work_hours),
-            "in_before_min": o.rounding.in_before_min,
-            "in_after_min": o.rounding.in_after_min,
-            "out_before_min": o.rounding.out_before_min,
-            "out_after_min": o.rounding.out_after_min,
-        }
-        for o in work_schedule_store.all_overrides()
-    ]
+    _work_schedules = work_schedule_store.all_overrides()
+    work_schedules_ctx = settings_context.work_schedule_context(
+        _work_schedules, _hours_display
+    )
     from .. import rounding_system_store
     _systems = rounding_system_store.all_systems()
-    rounding_systems_ctx = [
-        {
-            "id": s.id,
-            "name": s.name,
-            "in_before_min": s.rounding.in_before_min,
-            "in_after_min": s.rounding.in_after_min,
-            "out_before_min": s.rounding.out_before_min,
-            "out_after_min": s.rounding.out_after_min,
-        }
-        for s in _systems
-    ]
+    rounding_systems_ctx = settings_context.rounding_system_context(_systems)
     _dept_map = rounding_system_store.department_map()
-    department_rounding_ctx = [
-        {"department": d, "system_id": _dept_map.get(d)}
-        for d in staffing.DEPARTMENT_ORDER
-    ]
+    department_rounding_ctx = settings_context.department_rounding_context(
+        staffing.DEPARTMENT_ORDER, _dept_map
+    )
     # Skill list comes directly from the `skills` table — Odoo's
     # Production + Supervisor skill types. Production first (alphabetical),
     # then Supervisor.
@@ -382,25 +324,10 @@ def settings_page(
     skills_all = [r["name"] for r in _skill_rows]
     from .. import saturday_schedule_store
     _sat = saturday_schedule_store.current()
-    saturday_schedule_ctx = {
-        "shift_start": f"{_sat.shift_start.hour:02d}:{_sat.shift_start.minute:02d}",
-        "shift_end":   f"{_sat.shift_end.hour:02d}:{_sat.shift_end.minute:02d}",
-        "breaks": [
-            {
-                "start": f"{b.start.hour:02d}:{b.start.minute:02d}",
-                "end":   f"{b.end.hour:02d}:{b.end.minute:02d}",
-                "name": b.name,
-            }
-            for b in _sat.breaks
-        ],
-    }
+    saturday_schedule_ctx = settings_context.saturday_schedule_context(_sat)
     from .. import auto_lunch_settings
     _al = auto_lunch_settings.current()
-    auto_lunch_ctx = {
-        "mode": "off" if not _al.enabled else ("observe" if _al.observe_only else "live"),
-        "flex_after_hours": _al.flex_after_hours,
-        "flex_minutes": _al.flex_minutes,
-    }
+    auto_lunch_ctx = settings_context.auto_lunch_context(_al)
     # Forklift demand-advisor settings + a live forecast summary for the next
     # working day. Wrapped so the settings page never 500s if the forklift data
     # source (or DB) is unavailable.
