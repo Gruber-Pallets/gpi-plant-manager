@@ -11,19 +11,34 @@ The work is intentionally being done directly on `main`.
 
 ## Current status
 
-Task 1 of the implementation plan is complete, committed, and passed a task-scoped review. Task 2 was interrupted before it made any changes. Continue at **Task 2: Build pure group scoring and fair work-center selection** in the implementation plan.
+**All implementation-plan tasks (1–7) are complete, committed, reviewed, and deployed.** Pushed to `origin/main` on 2026-07-11 (commit `44a7a10`); Railway auto-deployed and the `web` service is Online (healthz 200). Full test suite: 1,616 passed / 301 skipped.
 
-Do not redo Task 1. Its commits, newest first, are:
+Each task passed a spec-compliance review and a code-quality review before the next began. Feature commits, newest first:
 
-- `97cfe8c fix: validate rotation schedule metadata`
-- `e45a4fd fix: retain metadata when seeding next schedule`
-- `5ca596e fix: preserve rotation metadata on schedule saves`
-- `f1ef5e7 feat: persist recycled rotation settings`
+- `44a7a10 docs: explain recycled rotations` (Task 7 — regression + README)
+- `b94678a feat: manage recycled rotation preferences` (Task 6 — People Matrix editor + block lifecycle)
+- `aab7af1 feat: add recycled staffing controls` (Task 5 — staffing mode control + reasons/warnings)
+- `b93a99a fix: bound rotation absence window and tighten staffing wiring` (Task 4 review fixes)
+- `b3063dd feat: schedule recycled rotations` (Task 4 — rotation APIs + staffing wiring)
+- `8d7262a fix: make reconcile the sole owner of training-block completion` (Task 3 review fix)
+- `a636218 test: patch shared odoo_client for skill-cell writer tests` (Task 3)
+- `04c81fd feat: add recycled training blocks` (Task 3 — training lifecycle + shared promotion)
+- `b3594a3 fix: harden recycled rotation review findings` (Task 2 review fixes)
+- `1291238 feat: add recycled rotation recommendations` (Task 2 — pure scoring engine)
+- Task 1 (persistence): `97cfe8c`, `e45a4fd`, `5ca596e`, `f1ef5e7`
 
-The approved design and plan are committed as:
+The approved design and plan are committed as `8096a7e` (design) and `0e2c3d2` (plan).
 
-- `8096a7e docs: define recycled rotation scheduling`
-- `0e2c3d2 docs: plan recycled smart rotations`
+### Remaining follow-ups (post-deploy)
+
+- **Live smoke test the two UI surfaces** — the staffing "Recycled schedule goal" control and the People Matrix rotation editor / training-block form. All routes are Azure-AD-gated, so these were verified by template-render + logic checks, never in a real browser.
+- **Confirm the blank-day behavior** reads right: a fresh Recycled day is now seeded by the rotation engine (not the static `default_people`), with manual locks and Trim Saw pairing preserved.
+
+### Key invariants (for future changes)
+
+- `rotation_training.reconcile_blocks` is the SOLE owner of training-block completion + the level-0→1 promotion. `rotation_store.record_attended_day` is a pure recorder that must NOT auto-complete (auto-completing would let a block finish without ever promoting, since `active_blocks()` only returns `status='active'`).
+- Manual assignment locks (`assignment_sources[wc][name] == "manual"`) survive rebuilds; only `generated` entries are recomputed; non-Recycled centers are never touched.
+- `_absence_by_day_for_block` is capped at `planned_block_days`' scan horizon to avoid O(days) DB fan-out on the hot staffing page.
 
 ## Binding product decisions
 
