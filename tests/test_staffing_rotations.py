@@ -8,7 +8,7 @@ recommendation inputs stubbed, so nothing here touches Postgres or the clock.
 
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, time, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -581,9 +581,12 @@ def test_manual_locks_from_sources_extracts_manual_only():
 # --------------------------------------------------------------------------- #
 
 
-def _render_staffing_page(monkeypatch, *, saved_schedule=None, day=None):
+def _render_staffing_page(monkeypatch, *, saved_schedule=None, day=None, smart_defaults=None):
     """Render the staffing page with all I/O stubbed, returning the captured
-    template context. Mirrors the harness in test_staffing_trim_saw_defaults."""
+    template context. Mirrors the harness in test_staffing_trim_saw_defaults.
+
+    ``smart_defaults`` optionally replaces the ``_smart_defaults_for_day`` stub
+    (e.g. a spy that records the ``mode`` it was called with)."""
     from zira_dashboard import cert_lookup
     from zira_dashboard import staffing as staffing_mod, staffing_view
     from zira_dashboard.routes import staffing as staffing_routes
@@ -616,7 +619,8 @@ def _render_staffing_page(monkeypatch, *, saved_schedule=None, day=None):
     monkeypatch.setattr(staffing_routes.work_centers_store, "default_people", lambda loc: [])
     monkeypatch.setattr(
         staffing_routes, "_smart_defaults_for_day",
-        lambda d, roster, defaults, time_off: {k: list(v) for k, v in defaults.items()},
+        smart_defaults
+        or (lambda d, roster, defaults, time_off, mode="normal": {k: list(v) for k, v in defaults.items()}),
     )
 
     def fake_build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
@@ -662,3 +666,125 @@ def test_saved_staffing_day_context_hydrates_stored_mode(monkeypatch):
     )
     ctx = _render_staffing_page(monkeypatch, saved_schedule=sched)
     assert ctx["recycled_rotation_mode"] == "optimized"
+
+
+def test_saved_day_hints_thread_stored_mode(monkeypatch):
+    """The saved-day empty-slot hints compute with the schedule's stored mode,
+    not a hard-coded 'normal', so hints agree with the reason badges."""
+    calls: list[str] = []
+
+    def spy(d, roster, defaults, time_off, mode="normal"):
+        calls.append(mode)
+        return {k: list(v) for k, v in defaults.items()}
+
+    sched = staffing.Schedule(
+        day=TARGET_DAY, published=False,
+        assignments={"Repair 1": ["Someone"]},  # saved → the else/hints branch runs
+        rotation_mode="optimized",
+    )
+    _render_staffing_page(monkeypatch, saved_schedule=sched, smart_defaults=spy)
+    assert calls == ["optimized"]
+
+
+# --------------------------------------------------------------------------- #
+# Bad JSON, rebuild source hygiene, and the bounded absence window
+# --------------------------------------------------------------------------- #
+
+
+def test_bad_json_body_returns_400(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    resp = client.post(
+        "/api/rotations/preferences",
+        content=b"{not valid json",
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["ok"] is False
+    assert "JSON" in resp.json()["error"]
+
+
+def test_rebuild_drops_stale_generated_source(monkeypatch):
+    """A person left as a 'generated' source but no longer placed by the engine
+    disappears from BOTH assignments and sources after a rebuild."""
+    client, rotations = _rotations_client(monkeypatch)
+    _stub_recommendation_inputs(monkeypatch)
+
+    saved: list = []
+    sched = staffing.Schedule(
+        day=TARGET_DAY,
+        assignments={"Repair 1": ["Gone"]},
+        assignment_sources={"Repair 1": {"Gone": "generated"}},
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green One", 3)])
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: sched)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda s: saved.append(s))
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    resp = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "normal"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    all_assigned = {n for names in body["assignments"].values() for n in names}
+    all_sourced = {n for src in body["sources"].values() for n in src}
+    assert "Gone" not in all_assigned
+    assert "Gone" not in all_sourced
+    assert "Green One" in all_assigned  # the real green person took the slot
+    # And the persisted schedule is equally clean.
+    assert "Gone" not in {n for names in saved[-1].assignments.values() for n in names}
+
+
+def test_rebuild_leaves_non_recycled_center_untouched(monkeypatch):
+    """A non-Recycled center and its source pass through a rebuild unchanged
+    (verified end-to-end through the endpoint, not just the merge helper)."""
+    client, rotations = _rotations_client(monkeypatch)
+    _stub_recommendation_inputs(monkeypatch)
+
+    saved: list = []
+    sched = staffing.Schedule(
+        day=TARGET_DAY,
+        assignments={"Junior #1": ["Static"], "Repair 1": ["Old"]},
+        assignment_sources={
+            "Junior #1": {"Static": "generated"},  # not manual → not a lock
+            "Repair 1": {"Old": "generated"},
+        },
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green One", 3)])
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: sched)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda s: saved.append(s))
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    resp = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "normal"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["assignments"]["Junior #1"] == ["Static"]
+    assert body["sources"]["Junior #1"] == {"Static": "generated"}
+    assert saved[-1].assignments["Junior #1"] == ["Static"]
+    assert saved[-1].assignment_sources["Junior #1"] == {"Static": "generated"}
+
+
+def test_absence_by_day_window_is_bounded(monkeypatch):
+    """A stale block with an old start_day must not fan out O(days) DB lookups:
+    the window is capped at planned_block_days' own scan horizon."""
+    from zira_dashboard.routes import staffing as staffing_route
+    from zira_dashboard import rotation_store, rotation_training, scheduler_time_off
+
+    queried: list[date] = []
+    monkeypatch.setattr(
+        scheduler_time_off, "full_day_off_names",
+        lambda day: (queried.append(day) or set()),
+    )
+
+    start = date(2025, 1, 1)
+    d = start + timedelta(days=400)  # far past the block's horizon
+    block = rotation_store.TrainingBlock(
+        id=1, trainee_name="T", trainer_name="G", skill="Repair",
+        start_day=start, planned_attended_days=5, status="active",
+    )
+
+    staffing_route._absence_by_day_for_block(block, d)
+
+    horizon = start + timedelta(days=5 + rotation_training._MAX_SCAN_DAYS)
+    assert max(queried) == horizon
+    assert d not in queried
+    assert len(queried) == (5 + rotation_training._MAX_SCAN_DAYS + 1)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, UTC
@@ -16,6 +17,8 @@ from .._http_cache import invalidate_today_cache
 from ..deps import templates
 from ..plant_day import today as plant_today, now as plant_now
 from ..staffing_attendance import _late_emp_ids, _safe_attendance, _safe_time_off_entries
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -125,17 +128,26 @@ def _manual_locks_from_sources(assignment_sources, assignments=None):
 
 
 def _absence_by_day_for_block(block, d: date):
-    """Full-day-off names per date across ``[block.start_day .. d]``.
+    """Full-day-off names per date across the block's bounded planning window.
 
     ``rotation_training.effect_for_day`` re-derives the block's planned days over
     this map to decide day-one vs. later pairing, so it must cover the window up
-    to ``d``. The window is a handful of days, so the per-day lookups are bounded.
+    to ``d``. The end is capped at the same horizon ``planned_block_days`` scans
+    to (``start_day + planned_attended_days + _MAX_SCAN_DAYS``): past that point
+    the effect is empty, so any further per-day lookups are pure waste. Without
+    the cap, a block left ``active`` with an old ``start_day`` (extended trainee
+    leave, an abandoned block) would fire O(days) serial DB queries on every
+    uncached staffing render — the hottest page in the app.
     """
     from .. import scheduler_time_off
 
+    horizon = block.start_day + timedelta(
+        days=block.planned_attended_days + rotation_training._MAX_SCAN_DAYS
+    )
+    end = min(d, horizon)
     absence_by_day: dict[date, set[str]] = {}
     cursor = block.start_day
-    while cursor <= d:
+    while cursor <= end:
         try:
             names = scheduler_time_off.full_day_off_names(cursor)
         except Exception:
@@ -192,6 +204,7 @@ def _recycled_suggestion_for_day(
             training_cap=_RECYCLED_TRAINING_CAP,
         )
     except Exception:
+        log.exception("Recycled suggestion failed for %s; falling back to stored defaults", d)
         return None
 
 
@@ -268,7 +281,7 @@ def _recycled_context_for_day(
         ctx["rotation_warnings"] = list(suggestion.warnings)
         ctx["active_training_blocks"] = _training_blocks_context(active_blocks, d)
     except Exception:
-        pass
+        log.exception("Recycled context failed for %s; degrading to empty defaults", d)
     return ctx
 
 
@@ -489,11 +502,14 @@ def staffing_page(
         for loc_name, names in raw_defaults_by_loc.items():
             smart_defaults_by_loc.setdefault(loc_name, list(names))
     else:
+        # A saved day keeps its stored mode so the empty-slot fill hints agree
+        # with the reason badges/warnings (which also use sched.rotation_mode).
         smart_defaults_by_loc = _smart_defaults_for_day(
             d,
             roster,
             {k: list(v) for k, v in raw_defaults_by_loc.items()},
             time_off_entries,
+            mode=sched.rotation_mode or "normal",
         )
 
     eff_start = shift_config.configured_shift_start_for(d)

@@ -159,7 +159,7 @@ def test_staffing_page_preserves_saved_manual_trim_saw_assignments(monkeypatch):
         lambda loc: ["Stored"] if loc.name == "Trim Saw 1" else [],
     )
 
-    def fake_smart_defaults(d, roster, defaults, time_off):
+    def fake_smart_defaults(d, roster, defaults, time_off, mode="normal"):
         captured["smart_defaults_input"] = defaults
         return {"Trim Saw 1": ["Smart"]}
 
@@ -255,7 +255,7 @@ def test_publish_prefills_next_day_with_smart_defaults(monkeypatch):
         lambda loc: ["Stored"] if loc.name == "Trim Saw 1" else [],
     )
 
-    def fake_smart(d, roster, defaults, time_off):
+    def fake_smart(d, roster, defaults, time_off, mode="normal"):
         smart_calls.append((d, defaults))
         return {"Trim Saw 1": ["Smart"]}
 

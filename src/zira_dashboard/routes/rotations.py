@@ -41,6 +41,9 @@ async def _json_body(request: Request):
 
 
 def _person_id_by_name(name: str) -> int | None:
+    # Assumes names are unique among active, non-excluded people — the same
+    # name-keyed assumption the whole rotation engine (and roster) rely on. If
+    # two such rows ever share a name this binds to whichever the DB returns first.
     rows = db.query("SELECT id FROM people WHERE name = %s AND NOT excluded", (name,))
     return int(rows[0]["id"]) if rows else None
 
@@ -117,7 +120,8 @@ async def create_training_block(request: Request):
         if trainer_id is None:
             return _error(f"Unknown person: {trainer}")
         # The rotation group name IS the target skill name (Dismantler / Repair
-        # / Trim Saw); resolve it to a local skills.id for create_block.
+        # / Trim Saw); resolve it to a local skills.id for create_block. Skill
+        # names are assumed unique; a duplicate would bind to the first row.
         skill_rows = db.query("SELECT id FROM skills WHERE name = %s", (group,))
         if not skill_rows:
             return _error(f"Unknown group: {group}")
