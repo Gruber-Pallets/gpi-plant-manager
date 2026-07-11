@@ -412,3 +412,69 @@ def test_reconcile_counts_only_attended_days(monkeypatch):
 
     assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == [7]
     assert calls == [(3, 4, 1)]
+
+
+# ---------- end-to-end: completion promotes once and never repeats ----------
+
+
+def _completed_candidate_block():
+    """A real, completion-ready block: 5 planned attended days, still active."""
+    from zira_dashboard import rotation_store
+
+    return rotation_store.TrainingBlock(
+        id=42,
+        trainee_name="Learner",
+        trainer_name="Green",
+        skill="Repair",
+        start_day=date(2026, 7, 14),
+        planned_attended_days=5,
+        status="active",
+        trainee_id=17,
+        skill_id=9,
+    )
+
+
+def _attended_day():
+    from zira_dashboard import rotation_store
+
+    return rotation_store.TrainingBlockDay(day=date(2026, 7, 14), status="attended")
+
+
+def test_completed_training_block_promotes_to_one_and_never_repeats(monkeypatch):
+    """End-to-end promotion: a block whose attended days meet its plan promotes
+    the trainee to level 1 exactly once, then is never promoted again.
+
+    The fakes are STATEFUL to mirror the real store contract: ``mark_completed``
+    removes the block from the active set (that is how idempotency is achieved,
+    not via any internal already-promoted flag), so the second reconcile sees an
+    empty active set and does nothing.
+    """
+    from zira_dashboard import rotation_training
+
+    calls: list[tuple] = []
+    state = {"active": [_completed_candidate_block()]}
+
+    monkeypatch.setattr(
+        rotation_training.skill_levels,
+        "set_person_skill_level",
+        lambda *a: calls.append(a),
+    )
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "active_blocks", lambda: list(state["active"])
+    )
+    monkeypatch.setattr(
+        rotation_training.rotation_store,
+        "resolved_days",
+        lambda _bid: [_attended_day()] * 5,
+    )
+    monkeypatch.setattr(
+        rotation_training.rotation_store,
+        "mark_completed",
+        lambda bid: state.__setitem__(
+            "active", [b for b in state["active"] if b.id != bid]
+        ),
+    )
+
+    assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == [42]
+    assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == []
+    assert calls == [(17, 9, 1)]

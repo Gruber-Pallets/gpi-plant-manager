@@ -779,3 +779,35 @@ def test_generated_assignments_carry_reasons():
     }
     assert reasons["Green"] == "green coverage"
     assert reasons["Primary Two"] == "primary Repair operator"
+
+
+def test_normal_mode_rotates_one_green_through_every_repair_center_over_days():
+    """End-to-end fairness (design goal 4): feeding each day's real suggestion
+    back through the real history aggregator makes a single green cycle
+    Repair 1 -> Repair 2 -> Repair 3 across days rather than parking on Repair 1.
+
+    This exercises ``suggest_recycled_assignments`` and
+    ``_recycled_history_from_rows`` together across a simulated multi-day run,
+    so it is a genuine integration regression, not a restatement of either
+    single-shot helper test.
+    """
+    from zira_dashboard import rotation_suggestions as rs
+
+    group_locations = {"Repair": ("Repair 1", "Repair 2", "Repair 3")}
+    roster = [_person("Jordan", 3)]
+    rows: list[dict] = []  # accumulated schedule history, newest first
+    visited: list[str] = []
+
+    for _ in range(3):
+        history = rs._recycled_history_from_rows(rows, group_locations)
+        out = suggest_recycled_assignments(
+            day=date(2026, 7, 14), mode="normal", roster=roster, preferences={},
+            base_assignments={}, group_locations=group_locations,
+            history=history, locked_assignments={}, block_effects=(),
+        )
+        assert out.people_for_group("Repair") == ["Jordan"]
+        center = next(c for c, names in out.assignments.items() if "Jordan" in names)
+        visited.append(center)
+        rows.insert(0, {"assignments": {center: ["Jordan"]}})
+
+    assert visited == ["Repair 1", "Repair 2", "Repair 3"]

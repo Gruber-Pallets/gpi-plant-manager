@@ -370,6 +370,35 @@ def test_rebuild_preserves_manual_assignment(monkeypatch):
     assert saved[-1].assignment_sources["Repair 1"]["Manual Person"] == "manual"
 
 
+def test_manual_repair_assignment_survives_optimized_rebuild(monkeypatch):
+    """End-to-end (Task 7): a manual Repair 1 pick keeps its 'manual' source
+    through an optimized rebuild, in both the response and the saved schedule."""
+    client, rotations = _rotations_client(monkeypatch)
+    _stub_recommendation_inputs(monkeypatch)
+
+    saved: list = []
+    sched = staffing.Schedule(
+        day=TARGET_DAY,
+        assignments={"Repair 1": ["Manual Person"]},
+        assignment_sources={"Repair 1": {"Manual Person": "manual"}},
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Manual Person", 3)])
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: sched)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda s: saved.append(s))
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={"day": "2026-07-14", "mode": "optimized"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["sources"]["Repair 1"]["Manual Person"] == "manual"
+    assert response.json()["assignments"]["Repair 1"] == ["Manual Person"]
+    assert saved and saved[-1].rotation_mode == "optimized"
+    assert saved[-1].assignment_sources["Repair 1"]["Manual Person"] == "manual"
+
+
 def test_rebuild_generates_and_reports_reasons(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     _stub_recommendation_inputs(monkeypatch)
