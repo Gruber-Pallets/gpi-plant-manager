@@ -266,6 +266,62 @@ def test_training_block_endpoint_bad_workdays_422(monkeypatch, workdays):
 
 
 # --------------------------------------------------------------------------- #
+# POST /api/rotations/training-blocks/{id}/{pause,resume,end}
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "action,store_fn,expected_status",
+    [
+        ("pause", "pause_block", "paused"),
+        ("resume", "resume_block", "active"),
+        ("end", "end_block", "ended"),
+    ],
+)
+def test_block_lifecycle_endpoint_success(monkeypatch, action, store_fn, expected_status):
+    client, rotations = _rotations_client(monkeypatch)
+    calls: dict = {}
+    monkeypatch.setattr(
+        rotations.rotation_store, store_fn,
+        lambda block_id: calls.__setitem__("block_id", block_id),
+    )
+    invalidated: list[str] = []
+    monkeypatch.setattr(
+        rotations._http_cache, "invalidate_today_cache",
+        lambda: invalidated.append("today"),
+    )
+    monkeypatch.setattr(
+        rotations._http_cache, "invalidate_stable_cache",
+        lambda: invalidated.append("stable"),
+    )
+
+    resp = client.post(f"/api/rotations/training-blocks/42/{action}")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "id": 42, "status": expected_status}
+    assert calls["block_id"] == 42
+    assert invalidated == ["today", "stable"]
+
+
+@pytest.mark.parametrize("action", ["pause", "resume", "end"])
+def test_block_lifecycle_endpoint_bad_id_422(monkeypatch, action):
+    client, rotations = _rotations_client(monkeypatch)
+
+    def boom(block_id):
+        raise AssertionError("store must not run for a non-positive id")
+
+    monkeypatch.setattr(rotations.rotation_store, "pause_block", boom)
+    monkeypatch.setattr(rotations.rotation_store, "resume_block", boom)
+    monkeypatch.setattr(rotations.rotation_store, "end_block", boom)
+
+    resp = client.post(f"/api/rotations/training-blocks/0/{action}")
+
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    assert "block_id" in resp.json()["error"]
+
+
+# --------------------------------------------------------------------------- #
 # POST /api/rotations/rebuild
 # --------------------------------------------------------------------------- #
 
@@ -370,6 +426,15 @@ def test_staffing_has_rotation_mode_controls_and_reason_data():
     assert 'data-rotation-mode="training"' in html
     assert "rotation_reasons" in html
     assert "/api/rotations/rebuild" in js
+
+
+def test_skills_matrix_exposes_recycled_preference_editor():
+    html = (ROOT / "src/zira_dashboard/templates/skills.html").read_text()
+    js = (ROOT / "src/zira_dashboard/static/skills-page.js").read_text()
+    assert "Recycled Rotation" in html
+    assert 'data-rotation-preference' in html
+    assert "/api/rotations/preferences" in js
+    assert "/api/rotations/training-blocks" in js
 
 
 # --------------------------------------------------------------------------- #
@@ -806,3 +871,117 @@ def test_absence_by_day_window_is_bounded(monkeypatch):
     assert max(queried) == horizon
     assert d not in queried
     assert len(queried) == (5 + rotation_training._MAX_SCAN_DAYS + 1)
+
+
+# --------------------------------------------------------------------------- #
+# GET /staffing/skills — People Matrix rotation editor context
+# --------------------------------------------------------------------------- #
+
+
+def test_staffing_skills_context_includes_rotation_editor_data(monkeypatch):
+    """The People Matrix GET hands the template the per-person rotation
+    preferences and active training blocks the editor renders."""
+    from types import SimpleNamespace
+    from zira_dashboard import (
+        odoo_sync, cert_lookup, rotation_store,
+        skill_matrix_views_store as views_store,
+    )
+    from zira_dashboard.routes import skills as skills_routes
+
+    monkeypatch.setattr(skills_routes._http_cache, "get_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(skills_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
+    monkeypatch.setattr(skills_routes._http_cache, "store_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
+    monkeypatch.setattr(
+        odoo_sync, "sync",
+        lambda force=False: SimpleNamespace(ok=True, last_sync_at=None, error=None),
+    )
+    monkeypatch.setattr(
+        skills_routes.staffing, "load_roster",
+        lambda: [_person("Alex", 0, "Repair"), _person("Green", 3, "Repair")],
+    )
+    monkeypatch.setattr(skills_routes.db, "query", lambda *a, **k: [])
+    monkeypatch.setattr(views_store, "list_views", lambda: [])
+    monkeypatch.setattr(views_store, "get_default_view", lambda: None)
+    monkeypatch.setattr(
+        skills_routes.rotation_store, "load_preferences_by_name",
+        lambda: {"Alex": {"Repair": "primary"}},
+    )
+    block = rotation_store.TrainingBlock(
+        id=7, trainee_name="Alex", trainer_name="Green", skill="Repair",
+        start_day=TARGET_DAY, planned_attended_days=5, status="active",
+    )
+    monkeypatch.setattr(skills_routes.rotation_store, "active_blocks", lambda: [block])
+
+    captured: dict = {}
+
+    class FakeResponse:
+        def __init__(self, ctx):
+            self.context = ctx
+            self.headers = {}
+
+    class FakeTemplates:
+        def TemplateResponse(self, request, template, context):
+            captured["context"] = context
+            return FakeResponse(context)
+
+    monkeypatch.setattr(skills_routes, "templates", FakeTemplates())
+
+    skills_routes.staffing_skills(request=object())
+    ctx = captured["context"]
+
+    assert ctx["rotation_groups"] == ["Dismantler", "Repair", "Trim Saw"]
+    assert ctx["rotation_preference_options"] == ["primary", "regular", "occasional", "never"]
+    assert ctx["rotation_preferences"] == {"Alex": {"Repair": "primary"}}
+    assert ctx["rotation_levels"]["Green"]["Repair"] == 3
+    assert ctx["rotation_levels"]["Alex"]["Repair"] == 0
+    assert "Alex" in ctx["rotation_active_people"]
+    assert len(ctx["active_training_blocks"]) == 1
+    tb = ctx["active_training_blocks"][0]
+    assert tb["trainee"] == "Alex"
+    assert tb["group"] == "Repair"
+    assert tb["status"] == "active"
+
+
+def test_staffing_skills_context_degrades_when_rotation_load_fails(monkeypatch):
+    """A DB hiccup loading rotation data leaves the matrix renderable with an
+    empty editor rather than 500ing."""
+    from types import SimpleNamespace
+    from zira_dashboard import (
+        odoo_sync, cert_lookup, skill_matrix_views_store as views_store,
+    )
+    from zira_dashboard.routes import skills as skills_routes
+
+    monkeypatch.setattr(skills_routes._http_cache, "get_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(skills_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
+    monkeypatch.setattr(skills_routes._http_cache, "store_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
+    monkeypatch.setattr(
+        odoo_sync, "sync",
+        lambda force=False: SimpleNamespace(ok=True, last_sync_at=None, error=None),
+    )
+    monkeypatch.setattr(skills_routes.staffing, "load_roster", lambda: [_person("Alex", 0)])
+    monkeypatch.setattr(skills_routes.db, "query", lambda *a, **k: [])
+    monkeypatch.setattr(views_store, "list_views", lambda: [])
+    monkeypatch.setattr(views_store, "get_default_view", lambda: None)
+
+    def boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(skills_routes.rotation_store, "load_preferences_by_name", boom)
+    monkeypatch.setattr(skills_routes.rotation_store, "active_blocks", boom)
+
+    captured: dict = {}
+
+    class FakeTemplates:
+        def TemplateResponse(self, request, template, context):
+            captured["context"] = context
+            return SimpleNamespace(context=context, headers={})
+
+    monkeypatch.setattr(skills_routes, "templates", FakeTemplates())
+
+    skills_routes.staffing_skills(request=object())
+    ctx = captured["context"]
+
+    assert ctx["rotation_preferences"] == {}
+    assert ctx["active_training_blocks"] == []

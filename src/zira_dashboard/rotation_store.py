@@ -248,6 +248,38 @@ def mark_completed(block_id: int) -> None:
     )
 
 
+def pause_block(block_id: int) -> None:
+    """Pause an active block; a no-op unless it is currently active.
+
+    A paused block is excluded from ``active_blocks``/``active_blocks_for_day``,
+    so it stops driving scheduling and reconciliation without being completed.
+    """
+    db.execute(
+        "UPDATE rotation_training_blocks SET status = 'paused' "
+        "WHERE id = %s AND status = 'active'",
+        (block_id,),
+    )
+
+
+def resume_block(block_id: int) -> None:
+    """Resume a paused block back to active; a no-op unless it is paused."""
+    db.execute(
+        "UPDATE rotation_training_blocks SET status = 'active' "
+        "WHERE id = %s AND status = 'paused'",
+        (block_id,),
+    )
+
+
+def end_block(block_id: int) -> None:
+    """End a block without completing it; a no-op once it is neither active
+    nor paused. Ending never promotes the target skill (unlike completion)."""
+    db.execute(
+        "UPDATE rotation_training_blocks SET status = 'ended' "
+        "WHERE id = %s AND status IN ('active', 'paused')",
+        (block_id,),
+    )
+
+
 def record_attended_day(block_id: int, day: date, status: str = "attended") -> None:
     """Record one day's outcome for a block. Pure recorder — never completes.
 

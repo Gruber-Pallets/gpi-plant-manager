@@ -16,7 +16,7 @@ import os
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import staffing, skill_levels
+from .. import staffing, skill_levels, rotation_store
 from .. import _http_cache, db
 from ..deps import templates
 
@@ -64,6 +64,42 @@ def staffing_skills(request: Request):
     all_views = views_store.list_views()
     default_view = views_store.get_default_view()
 
+    # Recycled Rotation editor data. Each load is guarded so a DB hiccup degrades
+    # to an empty editor rather than 500ing the whole matrix (mirrors the
+    # safe-defaults discipline in the staffing route). Saved preferences/blocks
+    # refresh here on the next load because the Task 4 endpoints invalidate the
+    # stable bucket this response is cached in.
+    rotation_groups = list(rotation_store.ROTATION_GROUPS)
+    rotation_preference_options = list(rotation_store.PREFERENCES)
+    try:
+        rotation_preferences = rotation_store.load_preferences_by_name()
+    except Exception:
+        log.exception("Skills matrix: failed to load rotation preferences")
+        rotation_preferences = {}
+    try:
+        active_training_blocks = [
+            {
+                "id": b.id,
+                "trainee": b.trainee_name,
+                "trainer": b.trainer_name,
+                "group": b.skill,
+                "skill": b.skill,
+                "start_day": b.start_day.isoformat(),
+                "planned_attended_days": b.planned_attended_days,
+                "status": b.status,
+            }
+            for b in rotation_store.active_blocks()
+        ]
+    except Exception:
+        log.exception("Skills matrix: failed to load active training blocks")
+        active_training_blocks = []
+    # Per-person Recycled skill levels drive the level-0-only training-block form
+    # (which groups a trainee is eligible for) and the level-3 trainer picker.
+    rotation_levels = {
+        p.name: {g: int(p.skills.get(g, 0)) for g in rotation_groups} for p in roster
+    }
+    rotation_active_people = [p.name for p in roster if p.active]
+
     response = templates.TemplateResponse(
         request,
         "skills.html",
@@ -77,6 +113,12 @@ def staffing_skills(request: Request):
             "views": all_views,
             "default_view_name": default_view["name"] if default_view else None,
             "default_view_state": default_view,
+            "rotation_groups": rotation_groups,
+            "rotation_preference_options": rotation_preference_options,
+            "rotation_preferences": rotation_preferences,
+            "active_training_blocks": active_training_blocks,
+            "rotation_levels": rotation_levels,
+            "rotation_active_people": rotation_active_people,
             "active_count": active_count,
             "inactive_count": len(roster) - active_count,
             "sync_ok": sync_result.ok,

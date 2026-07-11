@@ -1123,3 +1123,292 @@
       }
     });
   })();
+
+  // ---------- Recycled Rotation editor (per-person preferences + blocks) ----------
+  // One shared modal opened per row via the ⟳ button. Preferences POST one
+  // changed select to /api/rotations/preferences; the level-0-only training
+  // block form POSTs to /api/rotations/training-blocks; pause/resume/end route
+  // through the per-block lifecycle endpoints. Reuses the page's showSavedToast.
+  (function initRotationEditor() {
+    const backdrop = document.getElementById('rotation-modal-backdrop');
+    const modal = document.getElementById('rotation-modal');
+    if (!backdrop || !modal) return;
+
+    const GROUPS = Array.isArray(window.ROTATION_GROUPS) ? window.ROTATION_GROUPS : [];
+    const PREFS = window.ROTATION_PREFERENCES || {};
+    const LEVELS = window.ROTATION_LEVELS || {};
+    const ACTIVE_PEOPLE = Array.isArray(window.ROTATION_ACTIVE_PEOPLE) ? window.ROTATION_ACTIVE_PEOPLE : [];
+    let BLOCKS = Array.isArray(window.ROTATION_ACTIVE_BLOCKS) ? window.ROTATION_ACTIVE_BLOCKS.slice() : [];
+
+    const personLabel = document.getElementById('rotation-modal-person');
+    const closeBtn = document.getElementById('rotation-modal-close');
+    const prefSelects = [...modal.querySelectorAll('.rotation-pref-select')];
+    const blockList = document.getElementById('rotation-block-list');
+    const blockEmpty = document.getElementById('rotation-block-empty');
+    const blockErr = document.getElementById('rotation-block-error');
+    const blockForm = document.getElementById('rotation-block-form');
+    const unavailableNote = document.getElementById('rotation-block-unavailable');
+    const groupSel = document.getElementById('rotation-block-group');
+    const trainerSel = document.getElementById('rotation-block-trainer');
+    const startInput = document.getElementById('rotation-block-start');
+    const workdaysInput = document.getElementById('rotation-block-workdays');
+    const submitBtn = document.getElementById('rotation-block-submit');
+
+    let currentPerson = null;
+    let opener = null;
+
+    function levelOf(name, group) {
+      const byGroup = LEVELS[name] || {};
+      return Number(byGroup[group] || 0);
+    }
+
+    function todayISO() {
+      const d = new Date();
+      const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+      return local.toISOString().slice(0, 10);
+    }
+
+    async function postJSON(url, body) {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json().catch(() => ({}));
+      return { resp, data };
+    }
+
+    // ---- soft preferences ----
+    function fillPreferences(person) {
+      const saved = PREFS[person] || {};
+      prefSelects.forEach(sel => {
+        sel.value = saved[sel.dataset.group] || 'regular';
+        sel.dataset.person = person;
+        sel.dataset.prev = sel.value;  // remembered for revert-on-failure
+      });
+    }
+
+    prefSelects.forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const person = sel.dataset.person;
+        const group = sel.dataset.group;
+        const preference = sel.value;
+        if (!person) return;
+        sel.disabled = true;
+        try {
+          const { resp, data } = await postJSON('/api/rotations/preferences', { person, group, preference });
+          if (!resp.ok || !data.ok) throw new Error(data.error || 'Save failed');
+          sel.dataset.prev = preference;
+          if (!PREFS[person]) PREFS[person] = {};
+          PREFS[person][group] = preference;
+          showSavedToast(null);  // "Saved"
+        } catch (e) {
+          sel.value = sel.dataset.prev || 'regular';  // revert the visible choice
+          showSavedToast(null, e && e.message ? e.message : 'Save failed');
+        } finally {
+          sel.disabled = false;
+        }
+      });
+    });
+
+    // ---- active training blocks ----
+    function statusLabel(s) {
+      if (s === 'paused') return 'Paused';
+      if (s === 'active') return 'Active';
+      return s;
+    }
+
+    function renderBlocks(person) {
+      blockList.textContent = '';
+      const mine = BLOCKS.filter(b =>
+        b.trainee === person && b.status !== 'ended' && b.status !== 'completed'
+      );
+      if (!mine.length) {
+        blockEmpty.hidden = false;
+        return;
+      }
+      blockEmpty.hidden = true;
+      mine.forEach(b => blockList.appendChild(renderBlockItem(b)));
+    }
+
+    function renderBlockItem(b) {
+      const li = document.createElement('li');
+      li.className = 'rotation-block-item';
+
+      const info = document.createElement('div');
+      info.className = 'rotation-block-info';
+      const title = document.createElement('span');
+      title.className = 'rotation-block-title';
+      title.textContent = b.group + ' · trainer ' + b.trainer;
+      const meta = document.createElement('span');
+      meta.className = 'rotation-block-meta';
+      meta.textContent = 'from ' + b.start_day + ' · ' + b.planned_attended_days +
+        ' workdays · ' + statusLabel(b.status);
+      info.appendChild(title);
+      info.appendChild(meta);
+      li.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'rotation-block-actions';
+      if (b.status === 'active') {
+        actions.appendChild(lifecycleBtn(b, 'pause', 'Pause'));
+      } else if (b.status === 'paused') {
+        actions.appendChild(lifecycleBtn(b, 'resume', 'Resume'));
+      }
+      actions.appendChild(lifecycleBtn(b, 'end', 'End'));
+      li.appendChild(actions);
+      return li;
+    }
+
+    function lifecycleBtn(b, action, label) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'rotation-block-btn' + (action === 'end' ? ' danger' : '');
+      btn.textContent = label;
+      btn.addEventListener('click', () => runLifecycle(b, action, btn));
+      return btn;
+    }
+
+    async function runLifecycle(b, action, btn) {
+      btn.disabled = true;
+      try {
+        const { resp, data } = await postJSON(
+          '/api/rotations/training-blocks/' + b.id + '/' + action, {}
+        );
+        if (!resp.ok || !data.ok) throw new Error(data.error || 'Update failed');
+        if (action === 'end') {
+          BLOCKS = BLOCKS.filter(x => x.id !== b.id);
+        } else {
+          b.status = data.status;  // 'paused' or 'active'
+        }
+        renderBlocks(currentPerson);  // refresh the active-block list
+        showSavedToast(null);
+      } catch (e) {
+        btn.disabled = false;
+        showSavedToast(null, e && e.message ? e.message : 'Update failed');
+      }
+    }
+
+    // ---- start a level-0 training block ----
+    function eligibleGroups(person) {
+      return GROUPS.filter(g => levelOf(person, g) === 0);
+    }
+
+    function fillTrainers(person, group) {
+      trainerSel.textContent = '';
+      const candidates = ACTIVE_PEOPLE.filter(n => n !== person && levelOf(n, group) === 3);
+      if (!candidates.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No level-3 trainer available';
+        opt.disabled = true;
+        trainerSel.appendChild(opt);
+        return;
+      }
+      candidates.forEach(n => {
+        const opt = document.createElement('option');
+        opt.value = n;
+        opt.textContent = n;
+        trainerSel.appendChild(opt);
+      });
+    }
+
+    function fillBlockForm(person) {
+      blockErr.textContent = '';
+      const groups = eligibleGroups(person);
+      groupSel.textContent = '';
+      if (!groups.length) {
+        // Training blocks are only for a level-0 target skill.
+        blockForm.hidden = true;
+        unavailableNote.hidden = false;
+        return;
+      }
+      blockForm.hidden = false;
+      unavailableNote.hidden = true;
+      groups.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g;
+        opt.textContent = g;
+        groupSel.appendChild(opt);
+      });
+      fillTrainers(person, groupSel.value);
+      startInput.value = todayISO();
+      workdaysInput.value = '5';
+    }
+
+    groupSel.addEventListener('change', () => {
+      if (currentPerson) fillTrainers(currentPerson, groupSel.value);
+    });
+
+    submitBtn.addEventListener('click', async () => {
+      if (!currentPerson) return;
+      blockErr.textContent = '';
+      const parsedWorkdays = parseInt(workdaysInput.value, 10);
+      submitBtn.disabled = true;
+      try {
+        const { resp, data } = await postJSON('/api/rotations/training-blocks', {
+          trainee: currentPerson,
+          trainer: trainerSel.value,
+          group: groupSel.value,
+          start_day: startInput.value,
+          // Send the raw value when it isn't an integer so the server rejects it
+          // with its own message instead of us silently coercing.
+          workdays: Number.isFinite(parsedWorkdays) ? parsedWorkdays : workdaysInput.value,
+        });
+        if (!resp.ok || !data.ok) throw new Error(data.error || 'Could not start training block.');
+        if (data.block) {
+          BLOCKS.push({
+            id: data.block.id,
+            trainee: data.block.trainee,
+            trainer: data.block.trainer,
+            group: data.block.group,
+            start_day: data.block.start_day,
+            planned_attended_days: data.block.planned_attended_days,
+            status: data.block.status,
+          });
+        }
+        renderBlocks(currentPerson);   // refresh the active-block list
+        fillBlockForm(currentPerson);  // reset the form + clear the error region
+        showSavedToast(null);
+      } catch (e) {
+        // Non-200: surface the error and RETAIN every entered value.
+        blockErr.textContent = e && e.message ? e.message : 'Could not start training block.';
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    // ---- modal open/close ----
+    function onKeydown(e) {
+      if (e.key === 'Escape') closeModal();
+    }
+
+    function openModal(person, btn) {
+      currentPerson = person;
+      opener = btn || null;
+      personLabel.textContent = person;
+      fillPreferences(person);
+      renderBlocks(person);
+      fillBlockForm(person);
+      backdrop.hidden = false;
+      closeBtn.focus();
+      document.addEventListener('keydown', onKeydown);
+    }
+
+    function closeModal() {
+      backdrop.hidden = true;
+      document.removeEventListener('keydown', onKeydown);
+      if (opener && document.contains(opener)) opener.focus();
+      currentPerson = null;
+      opener = null;
+    }
+
+    closeBtn.addEventListener('click', closeModal);
+    backdrop.addEventListener('click', e => {
+      if (e.target === backdrop) closeModal();
+    });
+
+    document.querySelectorAll('.rotation-open-btn').forEach(btn => {
+      btn.addEventListener('click', () => openModal(btn.dataset.person, btn));
+    });
+  })();

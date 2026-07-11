@@ -143,6 +143,40 @@ async def create_training_block(request: Request):
     return await asyncio.to_thread(_work)
 
 
+async def _lifecycle(block_id: int, store_fn_name: str, status: str) -> JSONResponse:
+    """Shared body for the pause/resume/end block endpoints.
+
+    Resolves the store helper by name at call time (so tests can monkeypatch
+    ``rotation_store.<fn>``), invalidates the caches the schedule reads from, and
+    returns the resulting status. A non-positive id is a client error (422).
+    """
+    if not isinstance(block_id, int) or isinstance(block_id, bool) or block_id <= 0:
+        return _error("block_id must be a positive integer.")
+
+    def _work():
+        getattr(rotation_store, store_fn_name)(block_id)
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
+        return JSONResponse({"ok": True, "id": block_id, "status": status})
+
+    return await asyncio.to_thread(_work)
+
+
+@router.post("/api/rotations/training-blocks/{block_id}/pause")
+async def pause_training_block(block_id: int):
+    return await _lifecycle(block_id, "pause_block", "paused")
+
+
+@router.post("/api/rotations/training-blocks/{block_id}/resume")
+async def resume_training_block(block_id: int):
+    return await _lifecycle(block_id, "resume_block", "active")
+
+
+@router.post("/api/rotations/training-blocks/{block_id}/end")
+async def end_training_block(block_id: int):
+    return await _lifecycle(block_id, "end_block", "ended")
+
+
 def _build_assignment_sources(existing_sources, suggestion) -> dict[str, dict[str, str]]:
     """Manual entries kept as ``manual``, engine placements as ``generated``.
 
