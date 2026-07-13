@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from . import db
+from . import db, staffing
 
 
 ROTATION_GROUPS = ("Dismantler", "Repair", "Trim Saw")
@@ -58,7 +58,7 @@ def preference_for(preferences: dict[tuple[int, str], str], person_id: int, grou
 
 
 def _validate_preference(group: str, preference: str) -> None:
-    if group not in ROTATION_GROUPS:
+    if group not in {target.key for target in staffing.scheduling_preference_targets()}:
         raise InvalidRotationPreference(f"Unknown rotation group: {group!r}")
     if preference not in PREFERENCES:
         raise InvalidRotationPreference(f"Unknown rotation preference: {preference!r}")

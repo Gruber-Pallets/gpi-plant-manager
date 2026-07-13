@@ -7,6 +7,49 @@ from datetime import date
 import pytest
 
 
+def test_scheduling_preference_targets_group_sibling_centers():
+    from zira_dashboard import staffing
+
+    targets = {target.key: target for target in staffing.scheduling_preference_targets()}
+
+    assert targets["Repair"].centers == (
+        "Repair 1", "Repair 2", "Repair 3", "Repair 4", "Repair 5",
+    )
+    assert targets["Hand Build"].centers == (
+        "Hand Build #2", "Hand Build #1", "Big Build #1",
+    )
+    assert targets["Woodpecker #1"].centers == ("Woodpecker #1",)
+    assert targets["Woodpecker #1"].required_skills == ("Woodpecker",)
+
+
+def test_eligible_targets_require_every_required_skill():
+    from zira_dashboard import staffing
+
+    person = staffing.Person(
+        "Qualified", skills={"Repair": 1, "Loading": 1, "CPUs/VDOs": 1}
+    )
+    keys = {
+        target.key for target in staffing.eligible_scheduling_preference_targets(person)
+    }
+    assert "Repair" in keys
+    assert "Loading/Jockeying" not in keys
+
+    person.skills["Trailer Jockeying"] = 1
+    assert "Loading/Jockeying" in {
+        target.key for target in staffing.eligible_scheduling_preference_targets(person)
+    }
+
+
+def test_save_preference_accepts_derived_scheduling_target(monkeypatch):
+    from zira_dashboard import rotation_store
+
+    monkeypatch.setattr(rotation_store.db, "execute", lambda *_args, **_kwargs: None)
+
+    preference = rotation_store.save_preference(17, "Woodpecker #1", "primary")
+
+    assert preference.rotation_group == "Woodpecker #1"
+
+
 def test_missing_rotation_preference_is_regular(monkeypatch):
     from zira_dashboard import rotation_store
 

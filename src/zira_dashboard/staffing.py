@@ -102,6 +102,51 @@ def required_skills_for(loc: Location) -> tuple[str, ...]:
     return loc.required_skills if loc.required_skills else (loc.skill,)
 
 
+@dataclass(frozen=True)
+class SchedulingPreferenceTarget:
+    key: str
+    label: str
+    centers: tuple[str, ...]
+    required_skills: tuple[str, ...]
+
+
+def scheduling_preference_targets() -> tuple[SchedulingPreferenceTarget, ...]:
+    single_skill_centers: dict[str, list[str]] = {}
+    for loc in LOCATIONS:
+        required = required_skills_for(loc)
+        if len(required) == 1:
+            single_skill_centers.setdefault(required[0], []).append(loc.name)
+    grouped_skills = {
+        skill for skill, centers in single_skill_centers.items() if len(centers) > 1
+    }
+
+    targets = []
+    emitted_groups = set()
+    for loc in LOCATIONS:
+        required = required_skills_for(loc)
+        if len(required) == 1 and required[0] in grouped_skills:
+            skill = required[0]
+            if skill not in emitted_groups:
+                targets.append(SchedulingPreferenceTarget(
+                    skill, skill, tuple(single_skill_centers[skill]), (skill,)
+                ))
+                emitted_groups.add(skill)
+        else:
+            targets.append(SchedulingPreferenceTarget(
+                loc.name, loc.name, (loc.name,), required
+            ))
+    return tuple(targets)
+
+
+def eligible_scheduling_preference_targets(
+    person: Person,
+) -> tuple[SchedulingPreferenceTarget, ...]:
+    return tuple(
+        target for target in scheduling_preference_targets()
+        if all(person.level(skill) >= 1 for skill in target.required_skills)
+    )
+
+
 # Static work-center -> department map, built once from LOCATIONS. This is the
 # `Location.department` classification (Recycled / New / Supervisor /
 # Maintenance / Transportation) — NOT the user-editable
