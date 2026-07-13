@@ -569,6 +569,8 @@ def test_rebuild_treats_default_people_as_locks(monkeypatch):
 
 
 def test_auto_work_centers_endpoint_saves_global_setting(monkeypatch):
+    from zira_dashboard import scheduler_time_off
+
     client, rotations = _rotations_client(monkeypatch)
     saved: dict[str, list[str]] = {}
     invalidated: list[str] = []
@@ -584,7 +586,7 @@ def test_auto_work_centers_endpoint_saves_global_setting(monkeypatch):
         "load_schedule",
         lambda d: staffing.Schedule(day=d),
     )
-    monkeypatch.setattr(rotations.staffing_route, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda d: [])
     monkeypatch.setattr(
         rotations.staffing_route,
         "_auto_capacity_for_day",
@@ -620,6 +622,8 @@ def test_auto_work_centers_endpoint_saves_global_setting(monkeypatch):
 
 
 def test_auto_center_endpoint_rejects_unsafe_enable_without_replacement(monkeypatch):
+    from zira_dashboard import scheduler_time_off
+
     client, rotations = _rotations_client(monkeypatch)
     monkeypatch.setattr(
         rotations.staffing_route,
@@ -632,7 +636,7 @@ def test_auto_center_endpoint_rejects_unsafe_enable_without_replacement(monkeypa
         "load_schedule",
         lambda d: staffing.Schedule(day=d),
     )
-    monkeypatch.setattr(rotations.staffing_route, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda d: [])
 
     resp = client.post("/api/rotations/auto-work-centers", json={
         "day": "2026-07-14",
@@ -646,6 +650,8 @@ def test_auto_center_endpoint_rejects_unsafe_enable_without_replacement(monkeypa
 
 
 def test_auto_center_endpoint_accepts_sufficient_replacement(monkeypatch):
+    from zira_dashboard import scheduler_time_off
+
     client, rotations = _rotations_client(monkeypatch)
     saved = []
     monkeypatch.setattr(
@@ -664,7 +670,7 @@ def test_auto_center_endpoint_accepts_sufficient_replacement(monkeypatch):
         "load_schedule",
         lambda d: staffing.Schedule(day=d),
     )
-    monkeypatch.setattr(rotations.staffing_route, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda d: [])
 
     resp = client.post("/api/rotations/auto-work-centers", json={
         "day": "2026-07-14",
@@ -749,6 +755,101 @@ def test_auto_center_endpoint_fails_closed_when_training_effect_read_fails(monke
     assert resp.status_code == 503
     assert saved == []
     assert invalidated == []
+
+
+def test_auto_center_endpoint_fails_closed_when_time_off_read_fails(monkeypatch):
+    from zira_dashboard import scheduler_time_off
+
+    client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
+    saved = []
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green", 3)])
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_schedule",
+        lambda d: staffing.Schedule(day=d),
+    )
+    monkeypatch.setattr(rotations.staffing_route, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(
+        scheduler_time_off,
+        "time_off_entries_for_day",
+        lambda d: (_ for _ in ()).throw(RuntimeError("time off unavailable")),
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_auto_capacity_for_day",
+        lambda **kwargs: AutoCapacity(1, 1, 0, 0, ("Repair 1",), ()),
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_save_enabled_auto_work_centers",
+        lambda names: saved.append(names),
+    )
+
+    resp = client.post("/api/rotations/auto-work-centers", json={
+        "day": "2026-07-14",
+        "work_centers": ["Repair 1"],
+        "turn_off": [],
+    })
+
+    assert resp.status_code == 503
+    assert saved == []
+
+
+def test_auto_center_endpoint_fails_closed_when_default_read_fails(monkeypatch):
+    from zira_dashboard import scheduler_time_off
+
+    client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
+    saved = []
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green", 3)])
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_schedule",
+        lambda d: staffing.Schedule(day=d),
+    )
+    monkeypatch.setattr(rotations.staffing_route, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda d: [])
+    monkeypatch.setattr(rotations.staffing_route, "_block_effects_for_day", lambda *args, **kwargs: [])
+    monkeypatch.setattr(rotations.staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store,
+        "default_people",
+        lambda loc: (_ for _ in ()).throw(RuntimeError("defaults unavailable")),
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_save_enabled_auto_work_centers",
+        lambda names: saved.append(names),
+    )
+
+    resp = client.post("/api/rotations/auto-work-centers", json={
+        "day": "2026-07-14",
+        "work_centers": ["Repair 1"],
+        "turn_off": [],
+    })
+
+    assert resp.status_code == 503
+    assert saved == []
+
+
+@pytest.mark.parametrize("path,body", [
+    (
+        "/api/rotations/auto-work-centers",
+        {"day": "2026-07-18", "work_centers": ["Repair 1"], "turn_off": []},
+    ),
+    ("/api/rotations/rebuild", {"day": "2026-07-18", "mode": "normal"}),
+])
+def test_auto_schedule_endpoints_reject_saturdays_before_loading_data(monkeypatch, path, body):
+    client, rotations = _rotations_client(monkeypatch)
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_roster",
+        lambda: (_ for _ in ()).throw(AssertionError("Saturday must not load roster")),
+    )
+
+    resp = client.post(path, json=body)
+
+    assert resp.status_code == 422
+    assert "Saturday" in resp.json()["error"]
 
 
 def test_rebuild_rejects_unknown_mode(monkeypatch):

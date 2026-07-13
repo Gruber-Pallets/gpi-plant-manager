@@ -21,7 +21,7 @@ from datetime import date
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import _http_cache, db, rotation_store, staffing
+from .. import _http_cache, db, rotation_store, scheduler_time_off, staffing
 from . import staffing as staffing_route
 
 router = APIRouter()
@@ -217,6 +217,8 @@ async def save_auto_work_centers(request: Request):
         return _error("Invalid day.")
     if not isinstance(names, list) or not isinstance(turn_off, list):
         return _error("work_centers and turn_off must be lists.")
+    if d.weekday() == 5:
+        return _error("Automatic scheduling is unavailable on Saturday.")
 
     def _work():
         proposed = staffing_route._ordered_work_center_names(names)
@@ -224,8 +226,10 @@ async def save_auto_work_centers(request: Request):
         enabled = [name for name in proposed if name not in turn_off_names]
         roster = staffing.load_roster()
         sched = staffing.load_schedule(d)
-        time_off = staffing_route._safe_time_off_entries(d)
         try:
+            # Capacity changes must not be approved from a forgiving scheduler
+            # display read: absence and defaults must be current and complete.
+            time_off = scheduler_time_off.time_off_entries_for_day(d)
             capacity = staffing_route._auto_capacity_for_day(
                 d=d,
                 enabled_work_centers=enabled,
@@ -233,6 +237,7 @@ async def save_auto_work_centers(request: Request):
                 assignments=sched.assignments,
                 assignment_sources=sched.assignment_sources,
                 time_off_entries=time_off,
+                strict_default_reads=True,
             )
         except Exception:
             return _error("Could not verify daily staffing capacity.", 503)
@@ -287,6 +292,8 @@ async def rebuild_rotation(request: Request):
         return _error("Invalid day.")
     if mode not in _VALID_MODES:
         return _error(f"Unknown mode: {mode}")
+    if d.weekday() == 5:
+        return _error("Automatic scheduling is unavailable on Saturday.")
 
     def _work():
         roster = staffing.load_roster()

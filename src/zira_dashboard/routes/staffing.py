@@ -234,7 +234,13 @@ def _manual_locks_from_sources(assignment_sources, assignments=None):
     return locks
 
 
-def _protected_locks(assignment_sources, assignments=None, *, allowed_centers=None):
+def _protected_locks(
+    assignment_sources,
+    assignments=None,
+    *,
+    allowed_centers=None,
+    strict_default_reads: bool = False,
+):
     """Manual locks plus saved default people, optionally scoped by WC name."""
     allowed = set(allowed_centers) if allowed_centers is not None else None
     locks = _manual_locks_from_sources(assignment_sources, assignments)
@@ -244,6 +250,8 @@ def _protected_locks(assignment_sources, assignments=None, *, allowed_centers=No
         try:
             defaults = work_centers_store.default_people(loc)
         except Exception:
+            if strict_default_reads:
+                raise
             defaults = []
         if not defaults:
             continue
@@ -259,7 +267,7 @@ def _protected_locks(assignment_sources, assignments=None, *, allowed_centers=No
 
 def _auto_capacity_for_day(
     *, d: date, enabled_work_centers, roster, assignments, assignment_sources, time_off_entries,
-    block_effects=None,
+    block_effects=None, strict_default_reads: bool = False,
 ) -> AutoCapacity:
     """Return the Auto-center crew capacity for one actual schedule day.
 
@@ -277,9 +285,18 @@ def _auto_capacity_for_day(
             assignment_sources=assignment_sources,
         )
     assignments, assignment_sources = _capacity_inputs_with_block_effects(
-        assignments, assignment_sources, block_effects, enabled,
+        assignments,
+        assignment_sources,
+        block_effects,
+        enabled,
+        strict_default_reads=strict_default_reads,
     )
-    locks = _protected_locks(assignment_sources, assignments, allowed_centers=None)
+    locks = _protected_locks(
+        assignment_sources,
+        assignments,
+        allowed_centers=None,
+        strict_default_reads=strict_default_reads,
+    )
     locked_names = {name for names in locks.values() for name in names}
     assigned_outside_auto = {
         str(name).strip()
@@ -328,7 +345,12 @@ def _auto_capacity_for_day(
 
 
 def _capacity_inputs_with_block_effects(
-    base_assignments, assignment_sources, block_effects, enabled_work_centers,
+    base_assignments,
+    assignment_sources,
+    block_effects,
+    enabled_work_centers,
+    *,
+    strict_default_reads: bool = False,
 ):
     """Represent protected trainees as one occupied Auto slot for capacity.
 
@@ -342,7 +364,12 @@ def _capacity_inputs_with_block_effects(
     sources = {wc: dict(values or {}) for wc, values in (assignment_sources or {}).items()}
     enabled = _ordered_work_center_names(enabled_work_centers)
     groups, _required_skills = _auto_group_maps(enabled)
-    protected = _protected_locks(sources, assignments, allowed_centers=enabled)
+    protected = _protected_locks(
+        sources,
+        assignments,
+        allowed_centers=enabled,
+        strict_default_reads=strict_default_reads,
+    )
 
     for effect in block_effects or ():
         for group, names in (getattr(effect, "locked_people", None) or {}).items():

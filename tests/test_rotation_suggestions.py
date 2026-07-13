@@ -303,13 +303,25 @@ def test_smart_defaults_excludes_people_already_defaulted_elsewhere(monkeypatch)
 # ---------- Generic Recycled rotation engine ----------
 
 
-def _person(name: str, level: int, *, active: bool = True, reserve: bool = False):
+def _person(
+    name: str,
+    level: int,
+    group: str | None = None,
+    *,
+    active: bool = True,
+    reserve: bool = False,
+):
     """A person holding the same level in all three Recycled rotation groups."""
     return staffing.Person(
         name=name,
         active=active,
         reserve=reserve,
-        skills={"Dismantle": level, "Repair": level, "Trim Saw": level},
+        skills={
+            "Dismantle": level,
+            "Repair": level,
+            "Trim Saw": level,
+            **({group: level} if group is not None else {}),
+        },
     )
 
 
@@ -554,12 +566,13 @@ def test_normal_mode_uses_primary_preference_before_regular():
 
 def test_training_mode_pairs_level_one_with_level_three():
     out = suggest_recycled_assignments(
-        day=date(2026, 7, 14), mode="training", roster=[_person("Green", 3), _person("Learner", 1)],
-        preferences={"Green": {"Repair": "regular"}, "Learner": {"Repair": "regular"}},
-        base_assignments={}, group_locations={"Repair": ("Repair 1",)}, history=RecycledHistory(),
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Green", 3, "Woodpecker"), _person("Learner", 1, "Woodpecker")],
+        preferences={"Green": {"Woodpecker": "regular"}, "Learner": {"Woodpecker": "regular"}},
+        base_assignments={}, group_locations={"Woodpecker": ("Woodpecker #1",)}, history=RecycledHistory(),
         locked_assignments={}, block_effects=(), training_cap=2,
     )
-    assert {"Green", "Learner"} <= set(out.people_for_group("Repair"))
+    assert {"Green", "Learner"} <= set(out.people_for_group("Woodpecker"))
 
 
 def test_level_zero_is_ignored_without_training_block():
@@ -735,28 +748,21 @@ def test_inactive_and_reserve_people_are_not_auto_scheduled():
     assert out.assigned_people == {"Here"}
 
 
-def test_training_cap_limits_development_placements():
+def test_training_mode_fills_available_capacity_without_exceeding_it():
     roster = [
-        _person("Green", 3),
-        _person("Learner A", 1),
-        _person("Learner B", 1),
-        _person("Learner C", 1),
+        _person("Green", 3, "Woodpecker"),
+        _person("Learner A", 1, "Woodpecker"),
+        _person("Learner B", 1, "Woodpecker"),
+        _person("Learner C", 1, "Woodpecker"),
     ]
     out = suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="training", roster=roster, preferences={},
-        base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        base_assignments={}, group_locations={"Woodpecker": ("Woodpecker #1",)},
         history=RecycledHistory(), locked_assignments={}, block_effects=(),
     )
-    assert out.assignments["Repair 1"] == ["Green", "Learner A", "Learner B"]
+    assert out.assignments["Woodpecker #1"] == ["Green", "Learner A", "Learner B"]
     assert "Learner C" not in out.assigned_people
-    assert out.reasons["Repair 1"]["Learner A"] == "training pair"
-
-    capped = suggest_recycled_assignments(
-        day=date(2026, 7, 14), mode="training", roster=roster, preferences={},
-        base_assignments={}, group_locations={"Repair": ("Repair 1",)},
-        history=RecycledHistory(), locked_assignments={}, block_effects=(), training_cap=1,
-    )
-    assert capped.assignments["Repair 1"] == ["Green", "Learner A"]
+    assert out.reasons["Woodpecker #1"]["Learner A"] == "Woodpecker rotation"
 
 
 def test_training_development_requires_level_three_in_group():
@@ -770,7 +776,7 @@ def test_training_development_requires_level_three_in_group():
     assert "Learner" not in out.assigned_people
 
 
-def test_block_effect_reserves_trainee_and_pairs_trainer():
+def test_block_effect_does_not_overfill_center_for_temporary_trainer():
     effect = _BlockEffect(
         locked_people={"Repair": ["Trainee"]},
         temporary_extra_people={"Repair": ["Trainer"]},
@@ -783,13 +789,12 @@ def test_block_effect_reserves_trainee_and_pairs_trainer():
         group_locations={"Repair": ("Repair 1", "Repair 2")},
         history=RecycledHistory(), locked_assignments={}, block_effects=(effect,),
     )
-    # The level-0 trainee is only eligible through the block, and the day-one
-    # trainer pairs into the same center even though it exceeds normal staffing.
-    assert out.assignments["Repair 1"] == ["Trainee", "Trainer"]
+    # The level-0 trainee is only eligible through the block. Repair 1 is at
+    # its hard one-person maximum, so a day-one trainer cannot overfill it.
+    assert out.assignments["Repair 1"] == ["Trainee"]
     assert out.sources["Repair 1"]["Trainee"] == "generated"
-    assert out.sources["Repair 1"]["Trainer"] == "generated"
     assert out.reasons["Repair 1"]["Trainee"] == "training block"
-    assert out.reasons["Repair 1"]["Trainer"] == "training pair"
+    assert "Trainer" not in out.assigned_people
     assert out.assignments["Repair 2"] == ["Other"]
     assert "Trainee was absent Monday; block extended." in out.warnings
 
@@ -930,6 +935,34 @@ def test_block_effect_overfills_when_every_center_is_full():
     assert out.assignments["Repair 1"] == ["Occupier", "Trainee"]
     assert out.sources["Repair 1"]["Trainee"] == "generated"
     assert out.reasons["Repair 1"]["Trainee"] == "training block"
+
+
+def test_temporary_training_partner_never_exceeds_center_capacity():
+    effect = _BlockEffect(
+        locked_people={"Repair": ["Trainee"]},
+        temporary_extra_people={"Repair": ["Trainer"]},
+    )
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Trainee", 0), _person("Trainer", 3)],
+        preferences={}, base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(effect,),
+    )
+
+    assert out.assignments["Repair 1"] == ["Trainee"]
+    assert "Trainer" not in out.assigned_people
+
+
+def test_training_development_never_exceeds_center_capacity():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Green", 3), _person("Learner", 1)],
+        preferences={}, base_assignments={}, group_locations={"Repair": ("Repair 1",)},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(), training_cap=1,
+    )
+
+    assert out.assignments["Repair 1"] == ["Green"]
+    assert "Learner" not in out.assigned_people
 
 
 def test_training_cap_zero_blocks_all_development_placements():

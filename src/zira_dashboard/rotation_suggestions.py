@@ -706,9 +706,9 @@ def suggest_recycled_assignments(
             _place(center, name, MANUAL_SOURCE)
 
     # 2. Reserve validated training-block effects. Locked block people take a
-    # normal operator slot; temporary extras (the day-one trainer) pair into
-    # the same center and may exceed ordinary staffing. Block people are exempt
-    # from the level-0 exclusion and the daily training cap.
+    # normal operator slot; temporary extras (the day-one trainer) may pair
+    # into the same center only while its hard capacity remains open. Block
+    # people are exempt from the level-0 exclusion and the daily training cap.
     protected_block_people: set[str] = set()
     block_centers: set[tuple[str, str]] = set()
     for effect in block_effects or ():
@@ -750,6 +750,8 @@ def suggest_recycled_assignments(
                 center = block_center_by_group.get(group) or _choose_prioritized_center(
                     name, group, centers
                 )
+                if len(assignments.get(center, [])) >= _effective_capacity(center):
+                    continue
                 _place(center, name, GENERATED_SOURCE, "training pair")
 
     # 3. A locked trainee makes their center a mandatory deficit. Before any
@@ -900,7 +902,8 @@ def suggest_recycled_assignments(
             break
 
     # 6. Training mode adds capped development placements: level-1/2 people
-    # paired into a center that already has a level-3 operator.
+    # paired into a center that already has a level-3 operator, without ever
+    # exceeding that center's hard capacity.
     if mode == "training":
         development = [
             (person, group)
@@ -928,18 +931,16 @@ def suggest_recycled_assignments(
                 for c in groups[group]
                 if c in allowed_centers
                 and c not in block_centers_without_green
+                and len(assignments.get(c, [])) < _effective_capacity(c)
                 if any(_level_of(name, group) == 3 for name in assignments.get(c, []))
             ]
             if group == TRIM_SAW_SKILL:
-                # Trim Saw is a hard-capacity paired center: development
-                # placements may not overfill it or create an unsafe pair,
-                # unlike single-operator centers where the pairing is the point.
+                # Trim Saw also retains its pairing guarantee.
                 level = _group_level(person, group, resolved_group_required_skills)
                 green_centers = [
                     c
                     for c in green_centers
-                    if len(assignments.get(c, [])) < _effective_capacity(c)
-                    and all(
+                    if all(
                         _valid_trim_saw_pair(level, _level_of(name, group))
                         for name in assignments.get(c, [])
                     )
