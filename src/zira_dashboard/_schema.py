@@ -182,10 +182,16 @@ ALTER TABLE schedules ADD COLUMN IF NOT EXISTS assignment_sources JSONB NOT NULL
 
 CREATE TABLE IF NOT EXISTS person_rotation_preferences (
   person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-  rotation_group TEXT NOT NULL CHECK (rotation_group IN ('Dismantler', 'Repair', 'Trim Saw')),
+  rotation_group TEXT NOT NULL,
   preference TEXT NOT NULL CHECK (preference IN ('primary', 'regular', 'occasional', 'never')),
   PRIMARY KEY (person_id, rotation_group)
 );
+
+-- Scheduling targets now include every qualified work center, not only the
+-- original Recycled rotation groups. Remove the former static constraint from
+-- existing databases; request validation remains the source of truth.
+ALTER TABLE person_rotation_preferences
+  DROP CONSTRAINT IF EXISTS person_rotation_preferences_rotation_group_check;
 
 CREATE TABLE IF NOT EXISTS rotation_training_blocks (
   id BIGSERIAL PRIMARY KEY,
