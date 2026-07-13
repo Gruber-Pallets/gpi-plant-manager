@@ -430,6 +430,7 @@ def test_rebuild_fails_closed_before_solving_when_authoritative_input_read_fails
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     saved = []
     invalidated = []
+    solver_calls = []
 
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green", 3)])
     monkeypatch.setattr(
@@ -454,7 +455,13 @@ def test_rebuild_fails_closed_before_solving_when_authoritative_input_read_fails
         "maximum": (staffing_route.work_centers_store, "max_ops"),
     }[failed_read]
     monkeypatch.setattr(*failing_reader, fail)
-    monkeypatch.setattr(staffing_route, "_recycled_suggestion_for_day", fail)
+    real_solver = rotation_suggestions.suggest_recycled_assignments
+
+    def counting_solver(*args, **kwargs):
+        solver_calls.append((args, kwargs))
+        return real_solver(*args, **kwargs)
+
+    monkeypatch.setattr(rotation_suggestions, "suggest_recycled_assignments", counting_solver)
 
     response = client.post(
         "/api/rotations/rebuild",
@@ -462,6 +469,7 @@ def test_rebuild_fails_closed_before_solving_when_authoritative_input_read_fails
     )
 
     assert response.status_code == 503
+    assert solver_calls == []
     assert saved == []
     assert invalidated == []
 

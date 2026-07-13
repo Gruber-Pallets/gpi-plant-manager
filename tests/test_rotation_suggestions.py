@@ -812,6 +812,26 @@ def test_duplicate_default_lock_is_preserved_but_never_counts_twice(monkeypatch)
     _assert_duplicate_protected_lock_is_backfilled(out)
 
 
+def test_enabled_lock_conflicts_with_preserved_pass_through_assignment():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Duplicated Lock", 3), _person("Backfill", 3)],
+        base_assignments={"Disabled Bench": ["Duplicated Lock"]},
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+        locked_assignments={"Repair 1": ["Duplicated Lock"]},
+    )
+
+    assert out.assignments["Disabled Bench"] == ["Duplicated Lock"]
+    assert out.assignments["Repair 1"] == ["Duplicated Lock", "Backfill"]
+    assert out.reason_codes["Repair 1"]["Backfill"] == "minimum_coverage"
+    conflicts = [issue for issue in out.issues if issue.code == "protected_assignment_conflict"]
+    assert any(issue.center == "Repair 1" for issue in conflicts)
+    assert all("Disabled Bench" in issue.message and "Repair 1" in issue.message for issue in conflicts)
+
+
 def test_one_person_is_never_duplicated_across_centers():
     out = suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="normal", roster=[_person("Multi", 3)], preferences={},
@@ -1229,6 +1249,61 @@ def test_training_cap_zero_blocks_all_development_placements():
     )
     assert out.assignments["Repair 1"] == ["Green"]
     assert "Learner" not in out.assigned_people
+
+
+def test_training_cap_zero_blocks_optional_development_above_minimum():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Green", 3), _person("Learner", 1)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+        training_cap=0,
+    )
+
+    assert out.assignments["Repair 1"] == ["Green"]
+    assert "Learner" not in out.assigned_people
+
+
+def test_training_development_cap_is_shared_across_centers():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[
+            _person("Green A", 3),
+            _person("Green B", 3),
+            _person("Learner A", 1),
+            _person("Learner B", 1),
+        ],
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        center_minimums={"Repair 1": 1, "Repair 2": 1},
+        center_capacities={"Repair 1": 2, "Repair 2": 2},
+        runnable_centers={"Repair 1", "Repair 2"},
+        training_cap=1,
+    )
+
+    developed = {
+        name
+        for codes in out.reason_codes.values()
+        for name, code in codes.items()
+        if code == "training_development"
+    }
+    assert len(developed) == 1
+    assert len(out.assigned_people) == 3
+
+
+def test_training_cap_does_not_block_level_three_optional_fill():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Green A", 3), _person("Green B", 3)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+        training_cap=0,
+    )
+
+    assert set(out.assignments["Repair 1"]) == {"Green A", "Green B"}
 
 
 def test_dismantler_group_schedules_end_to_end():

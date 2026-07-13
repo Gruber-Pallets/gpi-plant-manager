@@ -1105,14 +1105,11 @@ def suggest_recycled_assignments(
         for _group, center in block_centers
     }
     protected_centers_by_name: dict[str, list[str]] = {}
-    for center, center_sources in sources.items():
-        if center not in allowed_centers:
-            continue
-        for name, source in center_sources.items():
-            if source == MANUAL_SOURCE:
-                protected_centers_by_name.setdefault(name, []).append(center)
+    for center, names in assignments.items():
+        for name in names:
+            protected_centers_by_name.setdefault(name, []).append(center)
     conflicting_protected = {
-        name: tuple(sorted(centers, key=str.lower))
+        name: tuple(sorted(set(centers), key=str.lower))
         for name, centers in protected_centers_by_name.items()
         if len(set(centers)) > 1
     }
@@ -1145,7 +1142,12 @@ def suggest_recycled_assignments(
         schedule_solver.CoverageIssue(
             center=center,
             group=next(
-                group for group, centers in groups.items() if center in centers
+                (
+                    group
+                    for group, group_centers in groups.items()
+                    if center in group_centers
+                ),
+                "",
             ),
             code="protected_assignment_conflict",
             message=(
@@ -1233,6 +1235,8 @@ def suggest_recycled_assignments(
             continue
         level = _group_level(person, group, resolved_group_required_skills)
         pref = _preference_for(preferences, person.name, group)
+        if mode == "training" and level in (1, 2):
+            continue
         if group != TRIM_SAW_SKILL:
             center = _choose_prioritized_center(person.name, group, open_centers)
             reason_code, reason = _optional_reason(
@@ -1335,6 +1339,7 @@ def suggest_recycled_assignments(
                 break
             if person.name in assigned:
                 continue
+            level = _group_level(person, group, resolved_group_required_skills)
             green_centers = [
                 c
                 for c in groups[group]
@@ -1345,7 +1350,6 @@ def suggest_recycled_assignments(
             ]
             if group == TRIM_SAW_SKILL:
                 # Trim Saw also retains its pairing guarantee.
-                level = _group_level(person, group, resolved_group_required_skills)
                 green_centers = [
                     c
                     for c in green_centers
@@ -1357,12 +1361,21 @@ def suggest_recycled_assignments(
             if not green_centers:
                 continue
             center = _choose_prioritized_center(person.name, group, green_centers)
+            pref = _preference_for(preferences, person.name, group)
+            reason_code, reason = _optional_reason(
+                mode,
+                level,
+                pref,
+                group,
+                len(groups[group]),
+                training_development=True,
+            )
             _place(
                 center,
                 person.name,
                 GENERATED_SOURCE,
-                "training pair",
-                "training_development",
+                reason,
+                reason_code,
             )
             placed_developments += 1
 
