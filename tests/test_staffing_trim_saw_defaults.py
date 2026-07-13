@@ -49,6 +49,7 @@ def test_staffing_page_seeds_empty_day_with_smart_defaults(monkeypatch):
     monkeypatch.setattr(staffing_routes._http_cache, "get_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "store_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(staffing_routes.app_settings, "get_setting", lambda key: ["Trim Saw 1"])
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
     monkeypatch.setattr(staffing_mod, "load_roster", lambda: [])
     monkeypatch.setattr(
@@ -76,7 +77,7 @@ def test_staffing_page_seeds_empty_day_with_smart_defaults(monkeypatch):
     monkeypatch.setattr(
         staffing_routes,
         "_smart_defaults_for_day",
-        lambda d, roster, defaults, time_off: {"Trim Saw 1": ["Smart"]},
+        lambda d, roster, defaults, time_off, **kwargs: {"Trim Saw 1": ["Smart"]},
     )
 
     def fake_build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
@@ -130,6 +131,7 @@ def test_staffing_page_preserves_saved_manual_trim_saw_assignments(monkeypatch):
     monkeypatch.setattr(staffing_routes._http_cache, "get_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "store_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(staffing_routes.app_settings, "get_setting", lambda key: ["Trim Saw 1"])
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
     monkeypatch.setattr(staffing_mod, "load_roster", lambda: [])
     monkeypatch.setattr(
@@ -159,7 +161,7 @@ def test_staffing_page_preserves_saved_manual_trim_saw_assignments(monkeypatch):
         lambda loc: ["Stored"] if loc.name == "Trim Saw 1" else [],
     )
 
-    def fake_smart_defaults(d, roster, defaults, time_off, mode="normal"):
+    def fake_smart_defaults(d, roster, defaults, time_off, mode="normal", **kwargs):
         captured["smart_defaults_input"] = defaults
         return {"Trim Saw 1": ["Smart"]}
 
@@ -248,6 +250,7 @@ def test_publish_prefills_next_day_with_smart_defaults(monkeypatch):
     monkeypatch.setattr(staffing_mod, "save_schedule", lambda sched: saved.append(sched))
     monkeypatch.setattr(staffing_mod, "load_roster", lambda: [])
     monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(staffing_routes.app_settings, "get_setting", lambda key: ["Trim Saw 1"])
     monkeypatch.setattr(staffing_routes.work_centers_store, "min_ops", lambda loc: loc.min_ops)
     monkeypatch.setattr(
         staffing_routes.work_centers_store,
@@ -255,7 +258,7 @@ def test_publish_prefills_next_day_with_smart_defaults(monkeypatch):
         lambda loc: ["Stored"] if loc.name == "Trim Saw 1" else [],
     )
 
-    def fake_smart(d, roster, defaults, time_off, mode="normal"):
+    def fake_smart(d, roster, defaults, time_off, mode="normal", **kwargs):
         smart_calls.append((d, defaults))
         return {"Trim Saw 1": ["Smart"]}
 

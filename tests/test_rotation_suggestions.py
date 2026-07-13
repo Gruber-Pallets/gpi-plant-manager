@@ -748,7 +748,7 @@ def test_dismantler_group_schedules_end_to_end():
     # Dee rotates onto a least-worked center that is not her most recent one.
     assert out.assignments["Dismantler 2"] == ["Dee"]
     assert out.assignments["Dismantler 1"] == ["Dan"]
-    assert out.reasons["Dismantler 2"]["Dee"] == "green coverage"
+    assert "Dee" not in out.reasons.get("Dismantler 2", {})
     assert out.reasons["Dismantler 1"]["Dan"] == "primary Dismantler operator"
     assert set(out.people_for_group("Dismantler")) == {"Dee", "Dan"}
 
@@ -777,8 +777,28 @@ def test_generated_assignments_carry_reasons():
         for center_reasons in out.reasons.values()
         for name, reason in center_reasons.items()
     }
-    assert reasons["Green"] == "green coverage"
+    assert "Green" not in reasons
     assert reasons["Primary Two"] == "primary Repair operator"
+
+
+def test_generic_group_locations_can_schedule_new_work_centers():
+    roster = [
+        staffing.Person(name="Hand Builder", skills={"Hand Build": 3}),
+        staffing.Person(name="Junior Pro", skills={"Junior": 3}),
+    ]
+
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal", roster=roster, preferences={},
+        base_assignments={},
+        group_locations={
+            "Hand Build": ("Hand Build #1",),
+            "Junior": ("Junior #1",),
+        },
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+
+    assert out.assignments["Hand Build #1"] == ["Hand Builder"]
+    assert out.assignments["Junior #1"] == ["Junior Pro"]
 
 
 def test_normal_mode_rotates_one_green_through_every_repair_center_over_days():

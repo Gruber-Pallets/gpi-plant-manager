@@ -53,25 +53,30 @@ Pure-logic tests run anywhere; tests that touch Postgres are skipped unless
 - `docs/object-api.md` — server-to-server Odoo-like API for internal apps.
 - `docs/superpowers/` — design specs and implementation plans.
 
-## Recycled rotations
+## Automatic schedule rotations
 
-The scheduler can auto-build the Recycled area (Dismantler, Repair, Trim Saw)
-with safe, explainable suggestions. Day-to-day manager workflow:
+The scheduler can auto-build enabled work centers with safe, explainable
+suggestions. Day-to-day manager workflow:
 
 1. **Set preferences.** On the People Matrix, give each person a Dismantler,
    Repair, and Trim Saw preference — `primary`, `regular`, `occasional`, or
-   `never` (missing means `regular`).
-2. **Pick a goal, then rebuild.** On Staffing, choose **Optimized** (maximize
-   level-3 coverage), **Normal** (balance coverage, preference, and rotation
-   history — the default), or **Training** (develop level-1/2 operators paired
-   with a green) before rebuilding a Recycled schedule.
-3. **Review, then adjust.** Each generated pick shows a reason badge; watch for
-   the warning banner. Make manual changes as needed — manual assignments are
-   locked and survive every rebuild.
-4. **Start a training block carefully.** A level-0 block requires a green
+   `never` (missing means `regular`). Other enabled work centers use skill
+   level and rotation history.
+2. **Choose the Auto work centers.** On Staffing, each work center has an
+   **Auto** checkbox. The first run initializes these from recently used
+   schedules; after that, the checked list is saved globally until changed.
+3. **Pick a goal, then rebuild.** Choose **Optimized** (favor strongest
+   coverage), **Normal** (balance coverage, preference, and rotation history —
+   the default), or **Training** (develop level-1/2 operators paired with a
+   green) before rebuilding the enabled Auto work centers.
+4. **Review, then adjust.** Generated picks can show reason badges for useful
+   context like primary operator, training pair, or least-recent center. Green
+   names do not get a redundant badge. Manual assignments and saved default
+   people are locked and survive rebuilds.
+5. **Start a training block carefully.** A level-0 block requires a green
    (level-3) day-one trainer; the trainer pairs in on day one and the trainee
    works solo on later attended days. A full-day absence does not consume a
    training day, so the block extends automatically.
-5. **Confirm promotion.** After the final attended day, the trainee is promoted
+6. **Confirm promotion.** After the final attended day, the trainee is promoted
    from level 0 to level 1 in the target skill automatically — verify it landed
    on the People Matrix.

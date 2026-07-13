@@ -515,7 +515,7 @@ def _candidate_rank_key(
     group nobody else can), and only then breaks ties with preference and
     rotation history. ``normal`` weighs skill, preference, and time since the
     group comparably. ``training`` fills ordinary slots with the normal
-    ranking (same green coverage) and adds development placements separately.
+    ranking and adds development placements separately.
     """
     name = person.name
     level = _recycled_level(person, group)
@@ -542,9 +542,9 @@ def _development_rank_key(
     return (-(MODE_SKILL_POINTS["training"][level] + tiebreak), name.lower(), group.lower())
 
 
-def _generated_reason(level: int, pref: str, group: str, center_count: int) -> str:
+def _generated_reason(level: int, pref: str, group: str, center_count: int) -> str | None:
     if level == 3:
-        return "green coverage"
+        return None
     if pref == "primary":
         return f"primary {group} operator"
     if center_count > 1:

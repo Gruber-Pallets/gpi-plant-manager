@@ -1375,13 +1375,11 @@
     }
   }
 
-  // ---------- Recycled rotation goal (mode buttons + reset) ----------
-  // The three mode buttons set the Recycled goal (optimized / normal /
-  // training) and rebuild the Recycled lines in that mode; "Reset non-manual
-  // assignments" rebuilds in the current mode. The server is authoritative: it
-  // returns the full assignment map with manual locks preserved, so we
-  // reconcile only the Recycled pickers to the returned selections — manual
-  // pills stay checked and non-Recycled centers are never touched.
+  // ---------- Rotation goal (mode buttons + auto-center toggles + reset) ----------
+  // The three mode buttons set the goal (optimized / normal / training) and
+  // rebuild enabled Auto work centers in that mode. The server is
+  // authoritative: it returns the full assignment map with manual/default locks
+  // preserved, so we reconcile only enabled Auto pickers.
   (function () {
     const controls = document.querySelector('.rotation-controls');
     if (!controls) return;
@@ -1389,13 +1387,15 @@
     const resetBtn = document.getElementById('rotation-reset-btn');
     const warnBox = document.getElementById('rotation-warnings');
     const helpEl = document.getElementById('rotation-mode-help');
+    const autoCbs = [...document.querySelectorAll('.wc-auto-cb')];
     const day = controls.dataset.day || window.SCHEDULE_DAY;
     let rebuilding = false;
+    let savingAutoCenters = false;
 
     // Per-mode help lines mirror routes/staffing.py::_ROTATION_MODE_HELP so the
     // hint updates instantly when the goal changes (no reload).
     const HELP = {
-      optimized: 'Optimized favors maximum level-3 coverage on the Recycled lines.',
+      optimized: 'Optimized favors the strongest coverage on auto work centers.',
       normal: 'Normal balances coverage, preferences, and fair rotation.',
       training: 'Training develops level-1/2 operators while protecting coverage.',
     };
@@ -1434,15 +1434,53 @@
       warnBox.hidden = false;
     }
 
-    // Reconcile every Recycled picker's checkboxes to the server-returned
-    // assignment map. Manual pills are already in that map, so they stay
-    // checked; regenerated people replace the rest. Non-Recycled centers are
-    // untouched. Mirrors the "Reset to defaults" reconcile pattern above.
+    function selectedAutoCenters() {
+      return autoCbs.filter(cb => cb.checked).map(cb => cb.dataset.loc).filter(Boolean);
+    }
+
+    function applyEnabledCenters(names) {
+      const enabled = new Set(names || []);
+      window.AUTO_SCHEDULE_WC_NAMES = [...enabled];
+      autoCbs.forEach(cb => {
+        cb.checked = enabled.has(cb.dataset.loc);
+      });
+    }
+
+    async function saveAutoCenters(changedCb) {
+      if (savingAutoCenters) return;
+      const before = !!changedCb.checked;
+      savingAutoCenters = true;
+      autoCbs.forEach(cb => { cb.disabled = true; });
+      try {
+        const resp = await fetch('/api/rotations/auto-work-centers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ work_centers: selectedAutoCenters() }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.ok) {
+          throw new Error((data && data.error) || ('HTTP ' + resp.status));
+        }
+        applyEnabledCenters(data.enabled_work_centers || selectedAutoCenters());
+        if (window.showToast) showToast('Auto work centers saved');
+      } catch (err) {
+        changedCb.checked = !before;
+        if (window.showToast) showToast('Auto toggle failed: ' + (err.message || 'network error'), null, 'error');
+      } finally {
+        savingAutoCenters = false;
+        autoCbs.forEach(cb => { cb.disabled = false; });
+      }
+    }
+
+    // Reconcile every enabled Auto picker's checkboxes to the server-returned
+    // assignment map. Manual/default pills are already in that map, so they
+    // stay checked; regenerated people replace the rest.
     function applyRebuild(data) {
       const assignments = data.assignments || {};
       window.ROTATION_REASONS = data.reasons || {};
-      const recycled = new Set(window.RECYCLED_WC_NAMES || []);
-      recycled.forEach(loc => {
+      applyEnabledCenters(data.enabled_work_centers || window.AUTO_SCHEDULE_WC_NAMES || []);
+      const enabled = new Set(window.AUTO_SCHEDULE_WC_NAMES || []);
+      enabled.forEach(loc => {
         const dd = document.querySelector('details.sched-dd[data-loc="' + CSS.escape(loc) + '"]');
         if (!dd) return;
         const wanted = new Set(assignments[loc] || []);
@@ -1483,14 +1521,14 @@
         if (!resp.ok || !data.ok) {
           const err = (data && data.error) || ('HTTP ' + resp.status);
           // Surface the failure without wiping the grid.
-          renderWarnings(['Could not rebuild the Recycled schedule: ' + err]);
+          renderWarnings(['Could not rebuild the schedule: ' + err]);
           if (window.showToast) showToast('Rebuild failed: ' + err, null, 'error');
           return;
         }
         setActiveMode(mode);
         applyRebuild(data);
       } catch (err) {
-        renderWarnings(['Could not rebuild the Recycled schedule: ' + (err.message || 'network error')]);
+        renderWarnings(['Could not rebuild the schedule: ' + (err.message || 'network error')]);
         if (window.showToast) showToast('Rebuild failed — network error', null, 'error');
       } finally {
         rebuilding = false;
@@ -1506,6 +1544,9 @@
     if (resetBtn) {
       resetBtn.addEventListener('click', () => rebuild(currentMode()));
     }
+    autoCbs.forEach(cb => {
+      cb.addEventListener('change', () => saveAutoCenters(cb));
+    });
   })();
 
   // Assignments to Do modal moved to the global footer; no per-page handler here.

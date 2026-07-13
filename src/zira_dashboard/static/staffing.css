@@ -449,8 +449,9 @@
   .multi-dd .dd-list .dd-reserves[open] > summary { color: #581c87; }
   .multi-dd .dd-list .dd-reserves-count { color: var(--muted); font-weight: 500; margin-left: 0.15rem; font-size: 0.75rem; }
 
-  /* Per-WC training checkbox sits next to the Work Center name */
-  .wc-training-toggle {
+  /* Per-WC checkboxes sit next to the Work Center name */
+  .wc-training-toggle,
+  .wc-auto-toggle {
     display: inline-flex; align-items: center; gap: 0.25rem;
     margin-left: 0.5rem;
     font-size: 0.7rem; font-weight: 500;
@@ -460,6 +461,9 @@
   }
   .wc-training-toggle input { accent-color: var(--warn); margin: 0; }
   .wc-training-toggle:has(input:checked) { color: var(--warn); }
+  .wc-auto-toggle { margin-left: 0.35rem; }
+  .wc-auto-toggle input { accent-color: var(--accent); margin: 0; }
+  .wc-auto-toggle:has(input:checked) { color: var(--accent); }
 
   /* Compact comma-list picker matching Settings' skills-picker style */
   .sched-picker { display: block; }

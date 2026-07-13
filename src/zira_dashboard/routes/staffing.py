@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, UTC
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import _http_cache, attendance, rotation_store, rotation_suggestions, rotation_training, schedule_store, shift_config, staffing, staffing_view, time_format, work_centers_store
+from .. import _http_cache, app_settings, attendance, db, rotation_store, rotation_suggestions, rotation_training, schedule_store, shift_config, staffing, staffing_view, time_format, work_centers_store
 from .._http_cache import invalidate_today_cache
 from ..deps import templates
 from ..plant_day import today as plant_today, now as plant_now
@@ -90,12 +90,14 @@ def _forklift_scheduled_counts(assignments, overload_responders, wc_names):
 # Recycled rotation is scoped to the three groups the design covers; the daily
 # development cap defaults to the engine's own default (two) for Task 4.
 _RECYCLED_TRAINING_CAP = 2
+AUTO_SCHEDULE_WC_SETTING = "rotation_auto_enabled_work_centers"
+AUTO_SCHEDULE_HISTORY_DAYS = 28
 
-# Short per-mode help line for the Staffing "Recycled schedule goal" control.
+# Short per-mode help line for the Staffing schedule-goal control.
 # A generic one-liner per mode — no settings/config surface, just enough to
 # explain what clicking each button optimizes for.
 _ROTATION_MODE_HELP = {
-    "optimized": "Optimized favors maximum level-3 coverage on the Recycled lines.",
+    "optimized": "Optimized favors the strongest coverage on auto work centers.",
     "normal": "Normal balances coverage, preferences, and fair rotation.",
     "training": "Training develops level-1/2 operators while protecting coverage.",
 }
@@ -114,6 +116,70 @@ def _recycled_wc_names() -> list[str]:
     """
     groups = rotation_suggestions._default_group_locations()
     return [center for centers in groups.values() for center in centers]
+
+
+def _location_order() -> dict[str, int]:
+    return {loc.name: i for i, loc in enumerate(staffing.LOCATIONS)}
+
+
+def _known_work_center_names() -> set[str]:
+    return {loc.name for loc in staffing.LOCATIONS}
+
+
+def _ordered_work_center_names(names) -> list[str]:
+    known = _known_work_center_names()
+    order = _location_order()
+    unique = {str(name).strip() for name in (names or []) if str(name or "").strip() in known}
+    return sorted(unique, key=lambda name: order.get(name, 1_000_000))
+
+
+def _recently_used_work_centers(d: date) -> list[str]:
+    """Work centers with scheduled people in the recent past.
+
+    This is the first-run initializer for the global auto-schedule toggle set:
+    it looks back four weeks from the viewed schedule day and keeps centers the
+    plant has actually used. Once saved, the explicit setting wins.
+    """
+    start = d - timedelta(days=AUTO_SCHEDULE_HISTORY_DAYS)
+    rows = db.query(
+        "SELECT DISTINCT wc.name "
+        "FROM schedule_assignments sa "
+        "JOIN schedules s ON s.day = sa.day "
+        "JOIN work_centers wc ON wc.id = sa.wc_id "
+        "WHERE s.day < %s "
+        "  AND s.day >= %s "
+        "  AND COALESCE((s.published_snapshot->>'testing_day')::boolean, s.testing_day, FALSE) = FALSE",
+        (d, start),
+    )
+    return _ordered_work_center_names(row.get("name") for row in rows)
+
+
+def _enabled_auto_work_centers(d: date) -> set[str]:
+    saved = app_settings.get_setting(AUTO_SCHEDULE_WC_SETTING)
+    if isinstance(saved, list):
+        return set(_ordered_work_center_names(saved))
+    enabled = _recently_used_work_centers(d)
+    app_settings.set_setting(AUTO_SCHEDULE_WC_SETTING, enabled)
+    return set(enabled)
+
+
+def _save_enabled_auto_work_centers(names) -> list[str]:
+    enabled = _ordered_work_center_names(names)
+    app_settings.set_setting(AUTO_SCHEDULE_WC_SETTING, enabled)
+    return enabled
+
+
+def _auto_group_locations(enabled_work_centers) -> dict[str, tuple[str, ...]]:
+    enabled = set(_ordered_work_center_names(enabled_work_centers))
+    grouped: dict[str, list[str]] = {}
+    for loc in staffing.LOCATIONS:
+        if loc.name not in enabled:
+            continue
+        required = staffing.required_skills_for(loc)
+        if len(required) != 1:
+            continue
+        grouped.setdefault(required[0], []).append(loc.name)
+    return {group: tuple(centers) for group, centers in grouped.items()}
 
 
 def _roster_minus_full_day_off(roster, time_off_entries):
@@ -148,6 +214,29 @@ def _manual_locks_from_sources(assignment_sources, assignments=None):
             ordered += [n for n in manual if n not in ordered]
             manual = ordered
         locks[wc] = manual
+    return locks
+
+
+def _protected_locks(assignment_sources, assignments=None, *, allowed_centers=None):
+    """Manual locks plus saved default people, optionally scoped by WC name."""
+    allowed = set(allowed_centers) if allowed_centers is not None else None
+    locks = _manual_locks_from_sources(assignment_sources, assignments)
+    for loc in staffing.LOCATIONS:
+        if allowed is not None and loc.name not in allowed:
+            continue
+        try:
+            defaults = work_centers_store.default_people(loc)
+        except Exception:
+            defaults = []
+        if not defaults:
+            continue
+        existing = locks.setdefault(loc.name, [])
+        for name in defaults:
+            clean = str(name or "").strip()
+            if clean and clean not in existing:
+                existing.append(clean)
+    if allowed is not None:
+        locks = {wc: names for wc, names in locks.items() if wc in allowed}
     return locks
 
 
@@ -205,7 +294,8 @@ def _gather_recycled_inputs(d: date, time_off_entries):
 
 
 def _recycled_suggestion_for_day(
-    d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries
+    d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries,
+    enabled_work_centers=None,
 ):
     """Compute the pure Recycled suggestion for ``d``, or ``None`` on any failure.
 
@@ -216,14 +306,28 @@ def _recycled_suggestion_for_day(
     try:
         preferences, history, block_effects, _blocks = _gather_recycled_inputs(d, time_off_entries)
         available = _roster_minus_full_day_off(roster, time_off_entries)
+        enabled = set(
+            _ordered_work_center_names(
+                enabled_work_centers
+                if enabled_work_centers is not None
+                else _enabled_auto_work_centers(d)
+            )
+        )
+        group_locations = _auto_group_locations(enabled)
+        scoped_locks = {
+            wc: list(names or [])
+            for wc, names in (locked_assignments or {}).items()
+            if wc in enabled
+        }
         return rotation_suggestions.suggest_recycled_assignments(
             day=d,
             mode=mode,
             roster=available,
             preferences=preferences,
             base_assignments=base_assignments,
+            group_locations=group_locations,
             history=history,
-            locked_assignments=locked_assignments,
+            locked_assignments=scoped_locks,
             block_effects=block_effects,
             training_cap=_RECYCLED_TRAINING_CAP,
         )
@@ -271,7 +375,8 @@ def _training_blocks_context(active_blocks, d: date):
 
 
 def _recycled_context_for_day(
-    d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries
+    d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries,
+    enabled_work_centers=None,
 ):
     """Recycled template context: mode, per-assignment reasons, warnings, blocks.
 
@@ -290,14 +395,28 @@ def _recycled_context_for_day(
             d, time_off_entries
         )
         available = _roster_minus_full_day_off(roster, time_off_entries)
+        enabled = set(
+            _ordered_work_center_names(
+                enabled_work_centers
+                if enabled_work_centers is not None
+                else _enabled_auto_work_centers(d)
+            )
+        )
+        group_locations = _auto_group_locations(enabled)
+        scoped_locks = {
+            wc: list(names or [])
+            for wc, names in (locked_assignments or {}).items()
+            if wc in enabled
+        }
         suggestion = rotation_suggestions.suggest_recycled_assignments(
             day=d,
             mode=mode,
             roster=available,
             preferences=preferences,
             base_assignments=base_assignments,
+            group_locations=group_locations,
             history=history,
-            locked_assignments=locked_assignments,
+            locked_assignments=scoped_locks,
             block_effects=block_effects,
             training_cap=_RECYCLED_TRAINING_CAP,
         )
@@ -309,20 +428,40 @@ def _recycled_context_for_day(
     return ctx
 
 
-def _smart_defaults_for_day(d: date, roster, defaults: dict[str, list[str]], time_off_entries, mode: str = "normal"):
+def _smart_defaults_for_day(
+    d: date,
+    roster,
+    defaults: dict[str, list[str]],
+    time_off_entries,
+    mode: str = "normal",
+    enabled_work_centers=None,
+):
     """Merge the Recycled rotation suggestion into the per-WC default map.
 
     Overlays the engine's Recycled centers onto ``defaults`` (non-Recycled
     centers untouched). On any failure reading recommendation data, returns the
     raw stored defaults — the same safe fallback the Trim Saw seeding had.
     """
+    try:
+        enabled = (
+            _ordered_work_center_names(
+                enabled_work_centers
+                if enabled_work_centers is not None
+                else _enabled_auto_work_centers(d)
+            )
+        )
+        locks = _protected_locks({}, defaults, allowed_centers=enabled)
+    except Exception:
+        return {k: list(v) for k, v in (defaults or {}).items()}
+
     suggestion = _recycled_suggestion_for_day(
         d,
         roster,
         mode,
         base_assignments=defaults,
-        locked_assignments={},
+        locked_assignments=locks,
         time_off_entries=time_off_entries,
+        enabled_work_centers=enabled,
     )
     if suggestion is None:
         return {k: list(v) for k, v in (defaults or {}).items()}
@@ -416,6 +555,11 @@ def staffing_page(
             wc_name: dict(sources or {})
             for wc_name, sources in (snap.get("assignment_sources") or {}).items()
         }
+    try:
+        enabled_auto_work_centers = _ordered_work_center_names(_enabled_auto_work_centers(d))
+    except Exception:
+        log.exception("Could not load auto-schedule work-center settings for %s", d)
+        enabled_auto_work_centers = []
     # If the day has no saved assignments, pre-fill from per-work-center defaults.
     seeded_from_defaults = False
     if not sched.assignments:
@@ -426,7 +570,13 @@ def staffing_page(
                 seeded[loc.name] = list(dp)
         if not seeded:  # fallback for first-run: legacy CSV defaults
             seeded = staffing.default_assignments()
-        sched.assignments = _smart_defaults_for_day(d, roster, seeded, time_off_entries)
+        sched.assignments = _smart_defaults_for_day(
+            d,
+            roster,
+            seeded,
+            time_off_entries,
+            enabled_work_centers=enabled_auto_work_centers,
+        )
         seeded_from_defaults = True
 
     # Now that the schedule is in hand, kick off attendance in parallel
@@ -534,6 +684,7 @@ def staffing_page(
             {k: list(v) for k, v in raw_defaults_by_loc.items()},
             time_off_entries,
             mode=sched.rotation_mode or "normal",
+            enabled_work_centers=enabled_auto_work_centers,
         )
 
     eff_start = shift_config.configured_shift_start_for(d)
@@ -582,10 +733,13 @@ def staffing_page(
         roster,
         sched.rotation_mode or "normal",
         base_assignments=sched.assignments,
-        locked_assignments=_manual_locks_from_sources(
-            sched.assignment_sources, sched.assignments
+        locked_assignments=_protected_locks(
+            sched.assignment_sources,
+            sched.assignments,
+            allowed_centers=enabled_auto_work_centers,
         ),
         time_off_entries=time_off_entries,
+        enabled_work_centers=enabled_auto_work_centers,
     )
 
     with _Phase(phases, "render"):
@@ -598,6 +752,8 @@ def staffing_page(
                 "rotation_mode_help": _rotation_mode_help(
                     recycled_ctx["recycled_rotation_mode"]
                 ),
+                "auto_schedule_enabled_wc_names": enabled_auto_work_centers,
+                "auto_schedule_available_wc_names": [loc.name for loc in staffing.LOCATIONS],
                 "recycled_wc_names": _recycled_wc_names(),
                 "day": d.isoformat(),
                 "day_short": d.strftime("%m/%d/%y"),
@@ -825,11 +981,15 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
                 try:
                     next_roster = staffing.load_roster()
                     next_time_off = _safe_time_off_entries(next_day)
+                    next_enabled = _ordered_work_center_names(
+                        _enabled_auto_work_centers(next_day)
+                    )
                     smart_defaults = _smart_defaults_for_day(
                         next_day,
                         next_roster,
                         defaults,
                         next_time_off,
+                        enabled_work_centers=next_enabled,
                     )
                 except Exception:
                     smart_defaults = {k: list(v) for k, v in defaults.items()}

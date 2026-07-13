@@ -3,7 +3,8 @@
 Routes:
   POST /api/rotations/preferences      — save one person's group preference
   POST /api/rotations/training-blocks  — start a level-0 training block
-  POST /api/rotations/rebuild          — regenerate a day's Recycled schedule
+  POST /api/rotations/auto-work-centers — save enabled auto-schedule centers
+  POST /api/rotations/rebuild          — regenerate enabled auto-schedule centers
 
 Each endpoint parses JSON, runs the blocking DB work in a worker thread
 (``asyncio.to_thread``, matching ``routes/skills.py``), returns ``200`` with the
@@ -177,6 +178,24 @@ async def end_training_block(block_id: int):
     return await _lifecycle(block_id, "end_block", "ended")
 
 
+@router.post("/api/rotations/auto-work-centers")
+async def save_auto_work_centers(request: Request):
+    body = await _json_body(request)
+    if body is None:
+        return _error("Invalid JSON body.", 400)
+    names = body.get("work_centers")
+    if not isinstance(names, list):
+        return _error("work_centers must be a list.")
+
+    def _work():
+        enabled = staffing_route._save_enabled_auto_work_centers(names)
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
+        return JSONResponse({"ok": True, "enabled_work_centers": enabled})
+
+    return await asyncio.to_thread(_work)
+
+
 def _build_assignment_sources(existing_sources, suggestion) -> dict[str, dict[str, str]]:
     """Manual entries kept as ``manual``, engine placements as ``generated``.
 
@@ -211,8 +230,13 @@ async def rebuild_rotation(request: Request):
         roster = staffing.load_roster()
         sched = staffing.load_schedule(d)
         base_assignments = {k: list(v) for k, v in sched.assignments.items()}
-        locked = staffing_route._manual_locks_from_sources(
-            sched.assignment_sources, sched.assignments
+        enabled_centers = staffing_route._ordered_work_center_names(
+            staffing_route._enabled_auto_work_centers(d)
+        )
+        locked = staffing_route._protected_locks(
+            sched.assignment_sources,
+            sched.assignments,
+            allowed_centers=enabled_centers,
         )
         time_off = staffing_route._safe_time_off_entries(d)
         suggestion = staffing_route._recycled_suggestion_for_day(
@@ -222,9 +246,10 @@ async def rebuild_rotation(request: Request):
             base_assignments=base_assignments,
             locked_assignments=locked,
             time_off_entries=time_off,
+            enabled_work_centers=enabled_centers,
         )
         if suggestion is None:
-            return _error("Could not rebuild the Recycled schedule.", 503)
+            return _error("Could not rebuild the schedule.", 503)
 
         new_assignments = staffing_route._merge_recycled_assignments(base_assignments, suggestion)
         new_sources = _build_assignment_sources(sched.assignment_sources, suggestion)
@@ -250,6 +275,7 @@ async def rebuild_rotation(request: Request):
             "sources": new_sources,
             "reasons": {wc: dict(r) for wc, r in suggestion.reasons.items()},
             "warnings": list(suggestion.warnings),
+            "enabled_work_centers": enabled_centers,
         })
 
     return await asyncio.to_thread(_work)

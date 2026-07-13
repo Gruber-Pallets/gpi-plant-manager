@@ -206,18 +206,16 @@
       </div>
     </div>
 
-    {# Recycled-only rotation controls. The mode buttons set the goal for the
-       Recycled lines (Dismantler / Repair / Trim Saw) and rebuild them; manual
-       locks always survive. Reset regenerates every non-manual Recycled slot
-       in the current mode. #}
+    {# Auto-scheduler controls. The mode buttons set the goal for the enabled
+       work centers; manual/default locks always survive. #}
     <div class="rotation-controls" data-day="{{ day }}">
-      <fieldset class="rotation-mode" aria-label="Recycled schedule goal">
-        <legend>Recycled schedule goal</legend>
+      <fieldset class="rotation-mode" aria-label="Schedule goal">
+        <legend>Schedule goal</legend>
         <button type="button" class="rotation-mode-btn {% if recycled_rotation_mode == 'optimized' %}active{% endif %}" data-rotation-mode="optimized" aria-pressed="{{ (recycled_rotation_mode == 'optimized')|tojson }}">Optimized</button>
         <button type="button" class="rotation-mode-btn {% if recycled_rotation_mode == 'normal' %}active{% endif %}" data-rotation-mode="normal" aria-pressed="{{ (recycled_rotation_mode == 'normal')|tojson }}">Normal</button>
         <button type="button" class="rotation-mode-btn {% if recycled_rotation_mode == 'training' %}active{% endif %}" data-rotation-mode="training" aria-pressed="{{ (recycled_rotation_mode == 'training')|tojson }}">Training</button>
         <button type="button" class="rotation-reset-btn" id="rotation-reset-btn"
-                title="Regenerate every Recycled assignment in the current goal, keeping only manual locks">Reset non-manual assignments</button>
+                title="Regenerate enabled auto work centers in the current goal, keeping manual and default locks">Reset auto assignments</button>
         <p class="hint rotation-mode-help" id="rotation-mode-help">{{ rotation_mode_help }}</p>
       </fieldset>
       <div class="rotation-warning" id="rotation-warnings" role="alert"{% if not rotation_warnings %} hidden{% endif %}>
@@ -279,6 +277,11 @@
                 <label class="wc-training-toggle" title="Include untrained people in the Scheduled picker">
                   <input type="checkbox" class="wc-training-cb" data-loc="{{ row.loc.name }}">
                   Training
+                </label>
+                <label class="wc-auto-toggle" title="Include this work center when automatic scheduling runs">
+                  <input type="checkbox" class="wc-auto-cb" data-loc="{{ row.loc.name }}"
+                         {% if row.loc.name in auto_schedule_enabled_wc_names %}checked{% endif %}>
+                  Auto
                 </label>
               </div>
               <div class="sub">
@@ -418,11 +421,13 @@
 </script>
 
 <script>
-  // Recycled rotation controls (mode buttons + reason badges + warnings).
+  // Rotation controls (mode buttons + reason badges + warnings).
   window.ROTATION_REASONS = {{ rotation_reasons|tojson }};
   window.ROTATION_WARNINGS = {{ rotation_warnings|tojson }};
   window.RECYCLED_WC_NAMES = {{ recycled_wc_names|tojson }};
   window.RECYCLED_ROTATION_MODE = {{ recycled_rotation_mode|tojson }};
+  window.AUTO_SCHEDULE_WC_NAMES = {{ auto_schedule_enabled_wc_names|tojson }};
+  window.AUTO_SCHEDULE_AVAILABLE_WC_NAMES = {{ auto_schedule_available_wc_names|tojson }};
 </script>
 
 <script src="/static/staffing.js?v={{ static_v('staffing.js') }}"></script>

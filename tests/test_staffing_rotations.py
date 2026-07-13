@@ -338,8 +338,15 @@ def _stub_recommendation_inputs(monkeypatch):
         lambda d: rotation_suggestions.RecycledHistory(),
     )
     monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda as_of: [])
+    monkeypatch.setattr(staffing_route.app_settings, "get_setting", lambda key: ["Repair 1"])
     monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda d: [])
     monkeypatch.setattr(staffing_route, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(
+        staffing_route,
+        "_enabled_auto_work_centers",
+        lambda d: {"Repair 1", "Repair 2", "Repair 3", "Dismantler 1", "Dismantler 2", "Trim Saw 1"},
+    )
+    monkeypatch.setattr(staffing_route.work_centers_store, "default_people", lambda loc: [])
     return staffing_route
 
 
@@ -422,11 +429,102 @@ def test_rebuild_generates_and_reports_reasons(monkeypatch):
     body = resp.json()
     generated = {n for names in body["assignments"].values() for n in names}
     assert {"Green One", "Green Two"} <= generated
-    # Every generated placement carries a source + reason.
+    # Every generated placement carries a source. Green/proficient placements
+    # intentionally do not render a redundant visible reason badge.
     for wc, sources in body["sources"].items():
         for name, src in sources.items():
             assert src in ("generated", "manual")
-            assert body["reasons"].get(wc, {}).get(name)
+    assert "green coverage" not in str(body["reasons"])
+
+
+def test_rebuild_uses_enabled_new_work_center_and_leaves_disabled_recycled(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+
+    saved: list = []
+    sched = staffing.Schedule(
+        day=TARGET_DAY,
+        assignments={"Repair 1": ["Keep Repair"]},
+    )
+    roster = [
+        staffing.Person(name="Keep Repair", skills={"Repair": 3}),
+        staffing.Person(name="Junior Pro", skills={"Junior": 3}),
+    ]
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda d: {"Junior #1"})
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: roster)
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: sched)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda s: saved.append(s))
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    resp = client.post(
+        "/api/rotations/rebuild",
+        json={"day": "2026-07-14", "mode": "normal"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["assignments"]["Junior #1"] == ["Junior Pro"]
+    assert body["assignments"]["Repair 1"] == ["Keep Repair"]
+    assert saved[-1].assignments["Junior #1"] == ["Junior Pro"]
+    assert saved[-1].assignments["Repair 1"] == ["Keep Repair"]
+
+
+def test_rebuild_treats_default_people_as_locks(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+
+    saved: list = []
+    sched = staffing.Schedule(day=TARGET_DAY, assignments={})
+    roster = [
+        staffing.Person(name="Default Green", skills={"Repair": 3}),
+        staffing.Person(name="Other Green", skills={"Repair": 3}),
+    ]
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda d: {"Repair 1", "Repair 2"})
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "default_people",
+        lambda loc: ["Default Green"] if loc.name == "Repair 1" else [],
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: roster)
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: sched)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda s: saved.append(s))
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    resp = client.post(
+        "/api/rotations/rebuild",
+        json={"day": "2026-07-14", "mode": "optimized"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["assignments"]["Repair 1"] == ["Default Green"]
+    assert body["sources"]["Repair 1"]["Default Green"] == "manual"
+    assert saved[-1].assignments["Repair 1"] == ["Default Green"]
+    assert saved[-1].assignment_sources["Repair 1"]["Default Green"] == "manual"
+
+
+def test_auto_work_centers_endpoint_saves_global_setting(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    saved: dict[str, list[str]] = {}
+    invalidated: list[str] = []
+
+    monkeypatch.setattr(
+        rotations.staffing_route.app_settings,
+        "set_setting",
+        lambda key, value: saved.setdefault(key, value),
+    )
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: invalidated.append("today"))
+    monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: invalidated.append("stable"))
+
+    resp = client.post(
+        "/api/rotations/auto-work-centers",
+        json={"work_centers": ["Junior #1", "Unknown", "Repair 1"]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "enabled_work_centers": ["Repair 1", "Junior #1"]}
+    assert saved[rotations.staffing_route.AUTO_SCHEDULE_WC_SETTING] == ["Repair 1", "Junior #1"]
+    assert invalidated == ["today", "stable"]
 
 
 def test_rebuild_rejects_unknown_mode(monkeypatch):
@@ -453,8 +551,10 @@ def test_staffing_has_rotation_mode_controls_and_reason_data():
     assert 'data-rotation-mode="optimized"' in html
     assert 'data-rotation-mode="normal"' in html
     assert 'data-rotation-mode="training"' in html
+    assert 'class="wc-auto-cb"' in html
     assert "rotation_reasons" in html
     assert "/api/rotations/rebuild" in js
+    assert "/api/rotations/auto-work-centers" in js
 
 
 def test_skills_matrix_exposes_recycled_preference_editor():
@@ -539,7 +639,7 @@ def test_smart_defaults_merges_recycled_and_keeps_non_recycled(monkeypatch):
         return rotation_suggestions.RecycledSuggestion(
             assignments={"Junior #1": ["Keep Me"], "Repair 1": ["Rotated"]},
             sources={"Repair 1": {"Rotated": "generated"}},
-            reasons={"Repair 1": {"Rotated": "green coverage"}},
+            reasons={},
             warnings=(),
             group_locations={"Repair": ("Repair 1", "Repair 2", "Repair 3")},
         )
@@ -613,6 +713,7 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
         lambda d: rotation_suggestions.RecycledHistory(),
     )
     monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda as_of: [])
+    monkeypatch.setattr(staffing_route.app_settings, "get_setting", lambda key: ["Repair 1"])
 
     block = rotation_store.TrainingBlock(
         id=1, trainee_name="Learner", trainer_name="Green", skill="Repair",
@@ -633,7 +734,7 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
         return rotation_suggestions.RecycledSuggestion(
             assignments={"Repair 1": ["Green"]},
             sources={"Repair 1": {"Green": "generated"}},
-            reasons={"Repair 1": {"Green": "green coverage"}},
+            reasons={},
             warnings=("Trim Saw 1 short",),
             group_locations={"Repair": ("Repair 1",)},
         )
@@ -646,7 +747,7 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
     )
 
     assert ctx["recycled_rotation_mode"] == "training"
-    assert ctx["rotation_reasons"]["Repair 1"]["Green"] == "green coverage"
+    assert ctx["rotation_reasons"] == {}
     assert "Trim Saw 1 short" in ctx["rotation_warnings"]
     assert len(ctx["active_training_blocks"]) == 1
     tb = ctx["active_training_blocks"][0]
@@ -688,6 +789,63 @@ def test_manual_locks_from_sources_extracts_manual_only():
     assert locks == {"Repair 1": ["Manual Person"]}
 
 
+def test_default_people_locks_merge_with_manual_locks(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "default_people",
+        lambda loc: ["Default Green"] if loc.name == "Repair 1" else [],
+    )
+
+    locks = staffing_route._protected_locks(
+        {"Repair 2": {"Manual Person": "manual"}},
+        {"Repair 2": ["Manual Person"]},
+    )
+
+    assert locks["Repair 1"] == ["Default Green"]
+    assert locks["Repair 2"] == ["Manual Person"]
+
+
+def test_enabled_auto_work_centers_initialize_from_recent_schedule_history(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    settings: dict[str, list[str]] = {}
+    monkeypatch.setattr(staffing_route.app_settings, "get_setting", lambda key: None)
+    monkeypatch.setattr(staffing_route.app_settings, "set_setting", lambda key, value: settings.setdefault(key, value))
+    monkeypatch.setattr(
+        staffing_route.db,
+        "query",
+        lambda sql, params=None: [
+            {"name": "Repair 1"},
+            {"name": "Junior #1"},
+            {"name": "Not A Real WC"},
+        ],
+    )
+
+    enabled = staffing_route._enabled_auto_work_centers(TARGET_DAY)
+
+    assert enabled == {"Repair 1", "Junior #1"}
+    assert settings[staffing_route.AUTO_SCHEDULE_WC_SETTING] == ["Repair 1", "Junior #1"]
+
+
+def test_enabled_auto_work_centers_use_saved_setting_without_history_query(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route.app_settings,
+        "get_setting",
+        lambda key: ["Junior #1", "Unknown", "Repair 2"],
+    )
+    monkeypatch.setattr(
+        staffing_route.db,
+        "query",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("history query should not run")),
+    )
+
+    assert staffing_route._enabled_auto_work_centers(TARGET_DAY) == {"Junior #1", "Repair 2"}
+
+
 # --------------------------------------------------------------------------- #
 # GET /staffing context wiring (rendered via a fake TemplateResponse)
 # --------------------------------------------------------------------------- #
@@ -711,6 +869,7 @@ def _render_staffing_page(monkeypatch, *, saved_schedule=None, day=None, smart_d
     monkeypatch.setattr(staffing_routes._http_cache, "get_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "store_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(staffing_routes.app_settings, "get_setting", lambda key: [])
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
     monkeypatch.setattr(staffing_mod, "load_roster", lambda: [])
     monkeypatch.setattr(
@@ -732,7 +891,7 @@ def _render_staffing_page(monkeypatch, *, saved_schedule=None, day=None, smart_d
     monkeypatch.setattr(
         staffing_routes, "_smart_defaults_for_day",
         smart_defaults
-        or (lambda d, roster, defaults, time_off, mode="normal": {k: list(v) for k, v in defaults.items()}),
+        or (lambda d, roster, defaults, time_off, mode="normal", **kwargs: {k: list(v) for k, v in defaults.items()}),
     )
 
     def fake_build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
@@ -785,7 +944,7 @@ def test_saved_day_hints_thread_stored_mode(monkeypatch):
     not a hard-coded 'normal', so hints agree with the reason badges."""
     calls: list[str] = []
 
-    def spy(d, roster, defaults, time_off, mode="normal"):
+    def spy(d, roster, defaults, time_off, mode="normal", **kwargs):
         calls.append(mode)
         return {k: list(v) for k, v in defaults.items()}
 
