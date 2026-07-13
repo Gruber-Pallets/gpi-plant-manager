@@ -1375,7 +1375,7 @@
     }
   }
 
-  // ---------- Rotation goal (mode buttons + auto-center toggles + reset) ----------
+  // ---------- Rotation goal (mode buttons + auto-center toggles) ----------
   // The three mode buttons set the goal (optimized / normal / training) and
   // rebuild enabled Auto work centers in that mode. The server is
   // authoritative: it returns the full assignment map with manual/default locks
@@ -1384,7 +1384,6 @@
     const controls = document.querySelector('.rotation-controls');
     if (!controls) return;
     const modeBtns = [...controls.querySelectorAll('.rotation-mode-btn')];
-    const resetBtn = document.getElementById('rotation-reset-btn');
     const warnBox = document.getElementById('rotation-warnings');
     const helpEl = document.getElementById('rotation-mode-help');
     const autoCbs = [...document.querySelectorAll('.wc-auto-cb')];
@@ -1642,7 +1641,6 @@
       rebuilding = true;
       controls.classList.add('rebuilding');
       modeBtns.forEach(b => { b.disabled = true; });
-      if (resetBtn) resetBtn.disabled = true;
       try {
         const resp = await fetch('/api/rotations/rebuild', {
           method: 'POST',
@@ -1666,16 +1664,12 @@
         rebuilding = false;
         controls.classList.remove('rebuilding');
         modeBtns.forEach(b => { b.disabled = false; });
-        if (resetBtn) resetBtn.disabled = false;
       }
     }
 
     modeBtns.forEach(btn => {
       btn.addEventListener('click', () => rebuild(btn.dataset.rotationMode));
     });
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => rebuild(currentMode()));
-    }
     autoCbs.forEach(cb => {
       cb.addEventListener('change', () => saveAutoCenters(cb));
     });

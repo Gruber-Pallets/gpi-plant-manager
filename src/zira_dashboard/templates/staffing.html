@@ -221,8 +221,6 @@
         <button type="button" class="rotation-mode-btn rotation-mode-icon {% if recycled_rotation_mode == 'training' %}active{% endif %}"
                 data-rotation-mode="training" aria-pressed="{{ (recycled_rotation_mode == 'training')|tojson }}"
                 aria-label="Training schedule goal" title="Training: develop operator skills">🎓</button>
-        <button type="button" class="rotation-reset-btn" id="rotation-reset-btn"
-                title="Regenerate enabled auto work centers in the current goal, keeping manual and default locks">Reset auto assignments</button>
         <p class="hint rotation-mode-help" id="rotation-mode-help">{{ rotation_mode_help }}</p>
       </div>
       <div class="rotation-warning" id="rotation-warnings" role="alert"{% if not rotation_warnings %} hidden{% endif %}>
