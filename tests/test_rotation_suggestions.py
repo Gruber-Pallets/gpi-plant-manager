@@ -337,6 +337,25 @@ def test_engine_leaves_two_person_center_empty_when_only_one_qualified_person_ex
     assert "Hand Build #2 could not be staffed to its minimum of 2 operators." in out.warnings
 
 
+def test_engine_never_exceeds_static_capacity_to_reach_minimum():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[
+            staffing.Person(name="A", skills={"Hand Build": 3}),
+            staffing.Person(name="B", skills={"Hand Build": 3}),
+            staffing.Person(name="C", skills={"Hand Build": 3}),
+        ],
+        group_locations={"Hand Build": ("Hand Build #1",)},
+        group_required_skills={"Hand Build": ("Hand Build",)},
+        center_minimums={"Hand Build #1": 3},
+        runnable_centers={"Hand Build #1"},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(),
+    )
+
+    assert len(out.assignments["Hand Build #1"]) <= 2
+    assert "Hand Build #1 could not be staffed to its minimum of 3 operators." in out.warnings
+
+
 def test_engine_fills_each_minimum_before_optional_capacity():
     out = suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="normal",
@@ -412,6 +431,27 @@ def test_training_block_keeps_trainee_without_a_level_three_partner():
     )
 
     assert out.assignments["Repair 1"] == ["Trainee"]
+    assert "Repair 1 could not be staffed to its minimum of 2 operators." in out.warnings
+
+
+def test_training_block_needs_green_partner_even_with_manual_level_two_lock():
+    effect = _BlockEffect(locked_people={"Repair": ["Trainee"]})
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[
+            staffing.Person(name="Trainee", skills={"Repair": 0}),
+            staffing.Person(name="Manual Level Two", skills={"Repair": 2}),
+        ],
+        group_locations={"Repair": ("Repair 1",)},
+        group_required_skills={"Repair": ("Repair",)},
+        center_minimums={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+        history=RecycledHistory(),
+        locked_assignments={"Repair 1": ["Manual Level Two"]},
+        block_effects=(effect,),
+    )
+
+    assert out.assignments["Repair 1"] == ["Manual Level Two", "Trainee"]
     assert "Repair 1 could not be staffed to its minimum of 2 operators." in out.warnings
 
 

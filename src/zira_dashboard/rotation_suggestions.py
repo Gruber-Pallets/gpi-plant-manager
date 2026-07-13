@@ -619,10 +619,8 @@ def suggest_recycled_assignments(
             return max(0, int(center_minimums[center]))
         return _center_min_ops(center)
 
-    # Supplying a minimum for a generic test/custom center makes that minimum
-    # schedulable even when no persisted Location record supplies its capacity.
     def _effective_capacity(center: str) -> int:
-        return max(_center_capacity(center), _effective_minimum(center))
+        return _center_capacity(center)
 
     allowed_centers = (
         managed_centers
@@ -760,7 +758,10 @@ def suggest_recycled_assignments(
     # Centers that cannot obtain such coverage reject optional partial crews.
     block_centers_without_green: set[str] = set()
     for group, center in sorted(block_centers):
-        needs_partner = len(assignments.get(center, [])) < _effective_minimum(center)
+        protected_trainees = {
+            name for name in assignments.get(center, []) if name in protected_block_people
+        }
+        needs_partner = len(protected_trainees) < _effective_minimum(center)
         has_green_partner = any(
             name not in protected_block_people and _level_of(name, group) == 3
             for name in assignments.get(center, [])
@@ -955,9 +956,13 @@ def suggest_recycled_assignments(
             if center not in allowed_centers:
                 continue
             minimum = _effective_minimum(center)
+            needs_training_partner_warning = center in block_centers_without_green
             if len(assignments.get(center, [])) < minimum:
                 _remove_generated(center, keep=protected_block_people)
-            if len(assignments.get(center, [])) >= minimum:
+            if (
+                len(assignments.get(center, [])) >= minimum
+                and not needs_training_partner_warning
+            ):
                 continue
             minimum_warning = f"{center} could not be staffed to its minimum of {minimum} operators."
             if minimum_warning not in warnings:
