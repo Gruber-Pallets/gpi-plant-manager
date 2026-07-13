@@ -98,6 +98,13 @@ def staffing_skills(request: Request):
     rotation_levels = {
         p.name: {g: int(p.skills.get(g, 0)) for g in rotation_groups} for p in roster
     }
+    rotation_preference_targets_by_person = {
+        person.name: [
+            {"key": target.key, "label": target.label}
+            for target in staffing.eligible_scheduling_preference_targets(person)
+        ]
+        for person in roster
+    }
     rotation_active_people = [p.name for p in roster if p.active]
 
     response = templates.TemplateResponse(
@@ -118,6 +125,7 @@ def staffing_skills(request: Request):
             "rotation_preferences": rotation_preferences,
             "active_training_blocks": active_training_blocks,
             "rotation_levels": rotation_levels,
+            "rotation_preference_targets_by_person": rotation_preference_targets_by_person,
             "rotation_active_people": rotation_active_people,
             "active_count": active_count,
             "inactive_count": len(roster) - active_count,

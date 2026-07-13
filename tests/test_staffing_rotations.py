@@ -557,11 +557,13 @@ def test_staffing_has_rotation_mode_controls_and_reason_data():
     assert "/api/rotations/auto-work-centers" in js
 
 
-def test_skills_matrix_exposes_recycled_preference_editor():
+def test_skills_matrix_exposes_scheduling_preferences_and_recycled_training():
     html = (ROOT / "src/zira_dashboard/templates/skills.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/skills-page.js").read_text()
-    assert "Recycled Rotation" in html
-    assert 'data-rotation-preference' in html
+    assert "Scheduling Preferences" in html
+    assert "Recycled training" in html
+    assert 'id="rotation-pref-grid"' in html
+    assert "dataset.rotationPreference" in js
     assert "/api/rotations/preferences" in js
     assert "/api/rotations/training-blocks" in js
 
@@ -1198,6 +1200,59 @@ def test_staffing_skills_context_includes_rotation_editor_data(monkeypatch):
     assert tb["trainee"] == "Alex"
     assert tb["group"] == "Repair"
     assert tb["status"] == "active"
+
+
+def test_skills_context_only_exposes_qualified_preference_targets(monkeypatch):
+    """The matrix only offers scheduling preferences a person can use."""
+    from types import SimpleNamespace
+    from zira_dashboard import (
+        odoo_sync, cert_lookup, skill_matrix_views_store as views_store,
+    )
+    from zira_dashboard.routes import skills as skills_routes
+
+    monkeypatch.setattr(skills_routes._http_cache, "get_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(skills_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
+    monkeypatch.setattr(skills_routes._http_cache, "store_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
+    monkeypatch.setattr(
+        odoo_sync, "sync",
+        lambda force=False: SimpleNamespace(ok=True, last_sync_at=None, error=None),
+    )
+    monkeypatch.setattr(
+        skills_routes.staffing, "load_roster",
+        lambda: [staffing.Person("Alex", skills={"Repair": 1, "Woodpecker": 0})],
+    )
+    monkeypatch.setattr(skills_routes.db, "query", lambda *a, **k: [])
+    monkeypatch.setattr(views_store, "list_views", lambda: [])
+    monkeypatch.setattr(views_store, "get_default_view", lambda: None)
+    monkeypatch.setattr(skills_routes.rotation_store, "load_preferences_by_name", lambda: {})
+    monkeypatch.setattr(skills_routes.rotation_store, "active_blocks", lambda: [])
+
+    captured: dict = {}
+
+    class FakeTemplates:
+        def TemplateResponse(self, request, template, context):
+            captured["context"] = context
+            return SimpleNamespace(context=context, headers={})
+
+    monkeypatch.setattr(skills_routes, "templates", FakeTemplates())
+
+    skills_routes.staffing_skills(request=object())
+
+    assert captured["context"]["rotation_preference_targets_by_person"]["Alex"] == [
+        {"key": "Repair", "label": "Repair"}
+    ]
+
+
+def test_people_matrix_uses_dynamic_scheduling_preferences_picker():
+    html = (ROOT / "src/zira_dashboard/templates/skills.html").read_text()
+    js = (ROOT / "src/zira_dashboard/static/skills-page.js").read_text()
+
+    assert 'aria-label="Scheduling preferences for {{ p.name }}"' in html
+    assert "<svg" in html
+    assert "ROTATION_PREFERENCE_TARGETS_BY_PERSON" in html
+    assert "renderPreferences(person)" in js
+    assert "dataset.rotationPreference" in js
 
 
 def test_staffing_skills_context_degrades_when_rotation_load_fails(monkeypatch):

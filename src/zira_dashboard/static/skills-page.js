@@ -1136,13 +1136,14 @@
 
     const GROUPS = Array.isArray(window.ROTATION_GROUPS) ? window.ROTATION_GROUPS : [];
     const PREFS = window.ROTATION_PREFERENCES || {};
+    const PREFERENCE_TARGETS_BY_PERSON = window.ROTATION_PREFERENCE_TARGETS_BY_PERSON || {};
     const LEVELS = window.ROTATION_LEVELS || {};
     const ACTIVE_PEOPLE = Array.isArray(window.ROTATION_ACTIVE_PEOPLE) ? window.ROTATION_ACTIVE_PEOPLE : [];
     let BLOCKS = Array.isArray(window.ROTATION_ACTIVE_BLOCKS) ? window.ROTATION_ACTIVE_BLOCKS.slice() : [];
 
     const personLabel = document.getElementById('rotation-modal-person');
     const closeBtn = document.getElementById('rotation-modal-close');
-    const prefSelects = [...modal.querySelectorAll('.rotation-pref-select')];
+    const prefGrid = document.getElementById('rotation-pref-grid');
     const blockList = document.getElementById('rotation-block-list');
     const blockEmpty = document.getElementById('rotation-block-empty');
     const blockErr = document.getElementById('rotation-block-error');
@@ -1179,37 +1180,52 @@
     }
 
     // ---- soft preferences ----
-    function fillPreferences(person) {
+    function renderPreferences(person) {
+      prefGrid.textContent = '';
       const saved = PREFS[person] || {};
-      prefSelects.forEach(sel => {
-        sel.value = saved[sel.dataset.group] || 'regular';
-        sel.dataset.person = person;
-        sel.dataset.prev = sel.value;  // remembered for revert-on-failure
+      (PREFERENCE_TARGETS_BY_PERSON[person] || []).forEach(target => {
+        const label = document.createElement('label');
+        label.className = 'rotation-pref';
+        const name = document.createElement('span');
+        name.className = 'rotation-pref-group';
+        name.textContent = target.label;
+        const select = document.createElement('select');
+        select.className = 'rotation-pref-select';
+        select.dataset.rotationPreference = '';
+        select.dataset.group = target.key;
+        select.dataset.person = person;
+        select.dataset.prev = saved[target.key] || 'regular';
+        select.setAttribute('aria-label', target.label + ' scheduling preference');
+        ['primary', 'regular', 'occasional', 'never'].forEach(value => {
+          select.add(new Option(value[0].toUpperCase() + value.slice(1), value));
+        });
+        select.value = select.dataset.prev;
+        select.addEventListener('change', () => savePreference(select));
+        label.append(name, select);
+        prefGrid.appendChild(label);
       });
     }
 
-    prefSelects.forEach(sel => {
-      sel.addEventListener('change', async () => {
-        const person = sel.dataset.person;
-        const group = sel.dataset.group;
-        const preference = sel.value;
-        if (!person) return;
-        sel.disabled = true;
-        try {
-          const { resp, data } = await postJSON('/api/rotations/preferences', { person, group, preference });
-          if (!resp.ok || !data.ok) throw new Error(data.error || 'Save failed');
-          sel.dataset.prev = preference;
-          if (!PREFS[person]) PREFS[person] = {};
-          PREFS[person][group] = preference;
-          showSavedToast(null);  // "Saved"
-        } catch (e) {
-          sel.value = sel.dataset.prev || 'regular';  // revert the visible choice
-          showSavedToast(null, e && e.message ? e.message : 'Save failed');
-        } finally {
-          sel.disabled = false;
-        }
-      });
-    });
+    async function savePreference(select) {
+      const person = select.dataset.person;
+      const group = select.dataset.group;
+      const preference = select.value;
+      if (!person) return;
+      select.disabled = true;
+      try {
+        const { resp, data } = await postJSON('/api/rotations/preferences', { person, group, preference });
+        if (!resp.ok || !data.ok) throw new Error(data.error || 'Save failed');
+        select.dataset.prev = preference;
+        if (!PREFS[person]) PREFS[person] = {};
+        PREFS[person][group] = preference;
+        showSavedToast(null);  // "Saved"
+      } catch (e) {
+        select.value = select.dataset.prev || 'regular';  // revert the visible choice
+        showSavedToast(null, e && e.message ? e.message : 'Save failed');
+      } finally {
+        select.disabled = false;
+      }
+    }
 
     // ---- active training blocks ----
     function statusLabel(s) {
@@ -1387,7 +1403,7 @@
       currentPerson = person;
       opener = btn || null;
       personLabel.textContent = person;
-      fillPreferences(person);
+      renderPreferences(person);
       renderBlocks(person);
       fillBlockForm(person);
       backdrop.hidden = false;

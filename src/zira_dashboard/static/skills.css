@@ -328,9 +328,12 @@
   .rotation-open-btn {
     background: transparent; color: var(--muted);
     border: 1px solid var(--border); border-radius: 4px;
-    padding: 0 0.32rem; font: inherit; font-size: 0.85rem; line-height: 1.5;
+    width: 2rem; height: 2rem; padding: 0;
+    display: inline-grid; place-items: center;
+    font: inherit; line-height: 1;
     cursor: pointer; opacity: 0.55;
   }
+  .rotation-open-icon { width: 1rem; height: 1rem; }
   .skills-table tr:hover .rotation-open-btn { opacity: 1; }
   .rotation-open-btn:hover,
   .rotation-open-btn:focus-visible {
@@ -364,6 +367,10 @@
   .rotation-modal-close:hover { border-color: var(--accent); color: var(--accent); }
 
   .rotation-section { margin-top: 1rem; }
+  .rotation-training-section {
+    margin-top: 1.25rem; padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+  }
   .rotation-section-title {
     margin: 0 0 0.35rem; font-size: 0.72rem; font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);
