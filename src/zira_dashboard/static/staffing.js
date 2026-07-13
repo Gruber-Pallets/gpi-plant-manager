@@ -1425,16 +1425,9 @@
     const warnBox = document.getElementById('rotation-warnings');
     const helpEl = document.getElementById('rotation-mode-help');
     const autoCbs = [...document.querySelectorAll('.wc-auto-cb')];
-    const capacityDialog = document.getElementById('auto-capacity-dialog');
-    const capacityForm = document.getElementById('auto-capacity-form');
-    const capacityMessage = document.getElementById('auto-capacity-message');
-    const capacityReplacements = document.getElementById('auto-capacity-replacements');
-    const capacityCancel = document.getElementById('auto-capacity-cancel');
-    const capacityConfirm = document.getElementById('auto-capacity-confirm');
     const day = controls.dataset.day || window.SCHEDULE_DAY;
     let rebuilding = false;
     let savingAutoCenters = false;
-    let capacityDialogState = null;
 
     // Per-mode help lines mirror routes/staffing.py::_ROTATION_MODE_HELP so the
     // hint updates instantly when the goal changes (no reload).
@@ -1460,22 +1453,53 @@
       if (helpEl && HELP[mode]) helpEl.textContent = HELP[mode];
     }
 
-    function renderWarnings(warnings) {
-      window.ROTATION_WARNINGS = warnings || [];
-      if (!warnBox) return;
-      warnBox.innerHTML = '';
-      if (!warnings || !warnings.length) {
-        warnBox.hidden = true;
-        return;
-      }
-      const ul = document.createElement('ul');
-      warnings.forEach(w => {
-        const li = document.createElement('li');
-        li.textContent = w;
-        ul.appendChild(li);
+    function renderCoverageIssues(warnings, issues) {
+      window.ROTATION_WARNINGS = Array.isArray(warnings) ? warnings : [];
+      window.ROTATION_ISSUES = Array.isArray(issues) ? issues : [];
+      const list = document.getElementById('rotation-warning-list');
+      if (!warnBox || !list) return;
+
+      list.replaceChildren();
+      const issueMessages = new Set();
+      window.ROTATION_ISSUES.forEach(issue => {
+        issueMessages.add(issue.message);
+        const item = document.createElement('li');
+        item.className = 'coverage-issue';
+        item.dataset.issueCode = issue.code || '';
+        const message = document.createElement('span');
+        message.textContent = issue.message || 'A work center needs manual attention.';
+        item.appendChild(message);
+
+        if (Array.isArray(issue.rejections) && issue.rejections.length) {
+          const details = document.createElement('details');
+          details.className = 'coverage-why';
+          const summary = document.createElement('summary');
+          summary.textContent = 'Why?';
+          const reasons = document.createElement('ul');
+          issue.rejections.forEach(rejection => {
+            const reason = document.createElement('li');
+            reason.textContent = `${rejection.person}: ${rejection.detail}`;
+            reasons.appendChild(reason);
+          });
+          details.append(summary, reasons);
+          item.appendChild(details);
+        }
+        list.appendChild(item);
       });
-      warnBox.appendChild(ul);
-      warnBox.hidden = false;
+
+      window.ROTATION_WARNINGS.forEach(warning => {
+        if (issueMessages.has(warning)) return;
+        const item = document.createElement('li');
+        item.textContent = warning;
+        list.appendChild(item);
+      });
+      warnBox.hidden = list.childElementCount === 0;
+    }
+
+    function renderCoverageFailure(message) {
+      const warnings = [...(window.ROTATION_WARNINGS || [])];
+      if (!warnings.includes(message)) warnings.push(message);
+      renderCoverageIssues(warnings, window.ROTATION_ISSUES);
     }
 
     function selectedAutoCenters() {
@@ -1488,23 +1512,6 @@
       autoCbs.forEach(cb => {
         cb.checked = enabled.has(cb.dataset.loc);
       });
-    }
-
-    function removeDisabledAutoWarnings() {
-      const enabled = new Set(selectedAutoCenters());
-      renderWarnings((window.ROTATION_WARNINGS || []).filter(warning => {
-        // This is a day-wide shortage.  It remains visible until the server
-        // accepts a replacement selection and sends the next authority state.
-        if (warning.startsWith('Auto centers need ')) return true;
-        const center = autoCbs.map(cb => cb.dataset.loc).find(center =>
-          center && (
-            warning.startsWith(center + ' is staffed below its minimum')
-            || warning.startsWith(center + ' could not be staffed to its minimum')
-            || warning === 'No safe operator pairing available for ' + center + '.'
-          )
-        );
-        return !center || enabled.has(center);
-      }));
     }
 
     function postAutoCenters(workCenters, turnOff) {
@@ -1520,52 +1527,9 @@
       autoCbs.forEach(cb => { cb.disabled = saving; });
     }
 
-    function closeAutoCapacityDialog() {
-      const changedCb = capacityDialogState && capacityDialogState.changedCb;
-      capacityDialogState = null;
-      if (capacityDialog && capacityDialog.open) capacityDialog.close();
-      if (changedCb) changedCb.focus();
-    }
-
-    function updateCapacityConfirm() {
-      if (!capacityDialogState || !capacityConfirm || !capacityReplacements) return;
-      const chosen = capacityReplacements.querySelectorAll('input:checked').length;
-      capacityConfirm.disabled = chosen < capacityDialogState.requiredDisableCount;
-    }
-
-    function showAutoCapacityDialog(data, requestedCenter, changedCb) {
-      if (!capacityDialog || !capacityMessage || !capacityReplacements || !capacityConfirm) {
-        if (window.showToast) showToast((data && data.error) || 'Auto-center capacity could not be updated.', null, 'error');
-        return;
-      }
-      const requiredDisableCount = Math.max(0, Number(data.required_disable_count) || 0);
-      capacityDialogState = { requestedCenter, changedCb, requiredDisableCount };
-      capacityMessage.textContent = (data && data.error) || 'Choose work centers to turn off.';
-      capacityReplacements.innerHTML = '';
-      selectedAutoCenters()
-        .filter(center => center !== requestedCenter)
-        .forEach(center => {
-          const label = document.createElement('label');
-          label.className = 'auto-capacity-replacement';
-          const input = document.createElement('input');
-          input.type = 'checkbox';
-          input.value = center;
-          input.addEventListener('change', updateCapacityConfirm);
-          label.append(input, document.createTextNode(center));
-          capacityReplacements.appendChild(label);
-        });
-      updateCapacityConfirm();
-      if (!capacityDialog.open) capacityDialog.showModal();
-      window.requestAnimationFrame(() => {
-        const firstChoice = capacityReplacements.querySelector('input');
-        (firstChoice || capacityCancel).focus();
-      });
-    }
-
     async function saveAutoCenters(changedCb) {
       if (__viewingPosted) return;
       if (savingAutoCenters) return;
-      const requestedCenter = changedCb.dataset.loc;
       const requestedWorkCenters = selectedAutoCenters();
       // Browser checkbox changes are optimistic by default.  Put this one
       // straight back until the server has accepted the requested selection.
@@ -1574,10 +1538,6 @@
       try {
         const resp = await postAutoCenters(requestedWorkCenters, []);
         const data = await resp.json().catch(() => ({}));
-        if (resp.status === 409) {
-          showAutoCapacityDialog(data, requestedCenter, changedCb);
-          return;
-        }
         if (!resp.ok || !data.ok) {
           throw new Error((data && data.error) || ('HTTP ' + resp.status));
         }
@@ -1585,62 +1545,15 @@
           throw new Error('Server did not return enabled Auto work centers.');
         }
         applyEnabledCenters(data.enabled_work_centers);
-        removeDisabledAutoWarnings();
+        renderCoverageIssues(data.warnings, data.coverage?.issues || []);
         if (window.showToast) showToast('Auto work centers saved');
       } catch (err) {
-        if (window.showToast) showToast('Auto toggle failed: ' + (err.message || 'network error'), null, 'error');
+        const message = 'Auto toggle failed: ' + (err.message || 'network error');
+        renderCoverageFailure(message);
+        if (window.showToast) showToast(message, null, 'error');
       } finally {
         setAutoCentersSaving(false);
       }
-    }
-
-    if (capacityCancel) {
-      capacityCancel.addEventListener('click', closeAutoCapacityDialog);
-    }
-    if (capacityDialog) {
-      capacityDialog.addEventListener('cancel', event => {
-        event.preventDefault();
-        closeAutoCapacityDialog();
-      });
-    }
-    if (capacityForm) {
-      capacityForm.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (__viewingPosted) return;
-        if (!capacityDialogState || savingAutoCenters) return;
-        const { requestedCenter, requiredDisableCount } = capacityDialogState;
-        const turnOff = [...capacityReplacements.querySelectorAll('input:checked')]
-          .map(input => input.value);
-        if (turnOff.length < requiredDisableCount) return;
-        const workCenters = [...new Set([requestedCenter, ...selectedAutoCenters()])]
-          .filter(center => !turnOff.includes(center));
-        setAutoCentersSaving(true);
-        capacityConfirm.disabled = true;
-        try {
-          const resp = await postAutoCenters(workCenters, turnOff);
-          const data = await resp.json().catch(() => ({}));
-          if (resp.status === 409) {
-            showAutoCapacityDialog(data, requestedCenter, capacityDialogState.changedCb);
-            return;
-          }
-          if (!resp.ok || !data.ok) {
-            throw new Error((data && data.error) || ('HTTP ' + resp.status));
-          }
-          if (!Array.isArray(data.enabled_work_centers)) {
-            throw new Error('Server did not return enabled Auto work centers.');
-          }
-          applyEnabledCenters(data.enabled_work_centers);
-          removeDisabledAutoWarnings();
-          if (window.showToast) showToast('Auto work centers saved');
-          closeAutoCapacityDialog();
-        } catch (err) {
-          if (capacityMessage) capacityMessage.textContent = err.message || 'Auto-center capacity could not be updated.';
-          if (window.showToast) showToast('Auto toggle failed: ' + (err.message || 'network error'), null, 'error');
-        } finally {
-          setAutoCentersSaving(false);
-          updateCapacityConfirm();
-        }
-      });
     }
 
     // Reconcile every enabled Auto picker's checkboxes to the server-returned
@@ -1665,7 +1578,7 @@
         updateDdSummary(dd);
         __prevSel.set(dd, [...dd.querySelectorAll('.dd-item.selected')].map(i => i.dataset.name));
       });
-      renderWarnings(data.warnings);
+      renderCoverageIssues(data.warnings, data.coverage?.issues || []);
       syncLeftRailWithSchedule();
       refreshPickerVisibility();
       kickAutosave();
@@ -1691,14 +1604,14 @@
         if (!resp.ok || !data.ok) {
           const err = (data && data.error) || ('HTTP ' + resp.status);
           // Surface the failure without wiping the grid.
-          renderWarnings(['Could not rebuild the schedule: ' + err]);
+          renderCoverageFailure('Could not rebuild the schedule: ' + err);
           if (window.showToast) showToast('Rebuild failed: ' + err, null, 'error');
           return;
         }
         setActiveMode(mode);
         applyRebuild(data);
       } catch (err) {
-        renderWarnings(['Could not rebuild the schedule: ' + (err.message || 'network error')]);
+        renderCoverageFailure('Could not rebuild the schedule: ' + (err.message || 'network error'));
         if (window.showToast) showToast('Rebuild failed — network error', null, 'error');
       } finally {
         rebuilding = false;

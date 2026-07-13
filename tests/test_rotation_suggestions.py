@@ -365,7 +365,8 @@ def test_engine_never_exceeds_static_capacity_to_reach_minimum():
     )
 
     assert len(out.assignments["Hand Build #1"]) <= 2
-    assert "Hand Build #1 could not be staffed to its minimum of 3 operators." in out.warnings
+    assert out.issues[0].code == "invalid_center_configuration"
+    assert "minimum of 3 exceeds its maximum of 2" in out.warnings[0]
 
 
 def test_engine_honors_configured_capacity_over_static_location_maximum():
@@ -462,6 +463,7 @@ def test_training_block_keeps_trainee_without_a_level_three_partner():
         group_locations={"Repair": ("Repair 1",)},
         group_required_skills={"Repair": ("Repair",)},
         center_minimums={"Repair 1": 2},
+        center_capacities={"Repair 1": 2},
         runnable_centers={"Repair 1"},
         history=RecycledHistory(), locked_assignments={}, block_effects=(effect,),
     )
@@ -670,7 +672,7 @@ def test_optimized_mode_prefers_level_three_over_preference():
     assert out.assignments["Repair 1"] == ["Green Occasional"]
 
 
-def test_normal_mode_lets_strong_preference_outweigh_one_level():
+def test_minimum_coverage_prefers_higher_skill_before_normal_mode_preference():
     roster = [_person("Green Occasional", 3), _person("Two Primary", 2)]
     preferences = {
         "Green Occasional": {"Repair": "occasional"},
@@ -681,7 +683,7 @@ def test_normal_mode_lets_strong_preference_outweigh_one_level():
         base_assignments={}, group_locations={"Repair": ("Repair 1",)},
         history=RecycledHistory(), locked_assignments={}, block_effects=(),
     )
-    assert out.assignments["Repair 1"] == ["Two Primary"]
+    assert out.assignments["Repair 1"] == ["Green Occasional"]
 
 
 def test_normal_mode_rests_person_with_heavy_recent_group_history():
@@ -698,7 +700,7 @@ def test_normal_mode_rests_person_with_heavy_recent_group_history():
     assert out.assignments["Repair 1"] == ["Beatriz"]
 
 
-def test_engine_rotates_centers_using_history():
+def test_minimum_coverage_uses_center_history_before_canonical_center_order():
     history = RecycledHistory(
         center_counts={("Jordan", "Repair 1"): 2, ("Jordan", "Repair 2"): 1},
         last_center_by_person_group={("Jordan", "Repair"): "Repair 2"},
@@ -709,6 +711,31 @@ def test_engine_rotates_centers_using_history():
         history=history, locked_assignments={}, block_effects=(),
     )
     assert out.assignments["Repair 3"] == ["Jordan"]
+
+
+def test_minimum_coverage_rotates_people_across_fully_staffed_equal_centers():
+    history = RecycledHistory(
+        center_counts={
+            ("Alicia", "Repair 1"): 1,
+            ("Beatriz", "Repair 2"): 1,
+        },
+        last_center_by_person_group={
+            ("Alicia", "Repair"): "Repair 1",
+            ("Beatriz", "Repair"): "Repair 2",
+        },
+    )
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Alicia", 3), _person("Beatriz", 3)],
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        center_minimums={"Repair 1": 1, "Repair 2": 1},
+        center_capacities={"Repair 1": 1, "Repair 2": 1},
+        runnable_centers={"Repair 1", "Repair 2"},
+        history=history,
+    )
+
+    assert out.assignments["Repair 1"] == ["Beatriz"]
+    assert out.assignments["Repair 2"] == ["Alicia"]
 
 
 def test_manual_lock_survives_rebuild_and_engine_fills_around_it():
@@ -730,6 +757,79 @@ def test_manual_lock_survives_rebuild_and_engine_fills_around_it():
     assert out.sources["Repair 2"]["Fresh"] == "generated"
     all_names = [name for names in out.assignments.values() for name in names]
     assert all_names.count("Manual Person") == 1
+
+
+def _duplicate_protected_lock_suggestion(locked_assignments):
+    return suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Duplicated Lock", 3), _person("Backfill A", 3), _person("Backfill B", 3)],
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        center_minimums={"Repair 1": 1, "Repair 2": 1},
+        center_capacities={"Repair 1": 2, "Repair 2": 2},
+        runnable_centers={"Repair 1", "Repair 2"},
+        locked_assignments=locked_assignments,
+    )
+
+
+def _assert_duplicate_protected_lock_is_backfilled(out):
+    assert out.assignments["Repair 1"][0] == "Duplicated Lock"
+    assert out.assignments["Repair 2"][0] == "Duplicated Lock"
+    assert len(out.assignments["Repair 1"]) == 2
+    assert len(out.assignments["Repair 2"]) == 2
+    generated_codes = {
+        code
+        for center, codes in out.reason_codes.items()
+        for name, code in codes.items()
+        if name != "Duplicated Lock" and center in {"Repair 1", "Repair 2"}
+    }
+    assert generated_codes == {"minimum_coverage"}
+    conflict_issues = [issue for issue in out.issues if issue.code == "protected_assignment_conflict"]
+    assert {issue.center for issue in conflict_issues} == {"Repair 1", "Repair 2"}
+    assert all("Duplicated Lock" in issue.message for issue in conflict_issues)
+    assert all("Repair 1" in issue.message and "Repair 2" in issue.message for issue in conflict_issues)
+
+
+def test_duplicate_manual_lock_is_preserved_but_never_counts_twice():
+    out = _duplicate_protected_lock_suggestion({
+        "Repair 1": ["Duplicated Lock"],
+        "Repair 2": ["Duplicated Lock"],
+    })
+    _assert_duplicate_protected_lock_is_backfilled(out)
+
+
+def test_duplicate_default_lock_is_preserved_but_never_counts_twice(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "default_people",
+        lambda loc: ["Duplicated Lock"] if loc.name in {"Repair 1", "Repair 2"} else [],
+    )
+    default_locks = staffing_route._protected_locks(
+        {}, {}, allowed_centers={"Repair 1", "Repair 2"}, strict_default_reads=True,
+    )
+    out = _duplicate_protected_lock_suggestion(default_locks)
+    _assert_duplicate_protected_lock_is_backfilled(out)
+
+
+def test_enabled_lock_conflicts_with_preserved_pass_through_assignment():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Duplicated Lock", 3), _person("Backfill", 3)],
+        base_assignments={"Disabled Bench": ["Duplicated Lock"]},
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+        locked_assignments={"Repair 1": ["Duplicated Lock"]},
+    )
+
+    assert out.assignments["Disabled Bench"] == ["Duplicated Lock"]
+    assert out.assignments["Repair 1"] == ["Duplicated Lock", "Backfill"]
+    assert out.reason_codes["Repair 1"]["Backfill"] == "minimum_coverage"
+    conflicts = [issue for issue in out.issues if issue.code == "protected_assignment_conflict"]
+    assert any(issue.center == "Repair 1" for issue in conflicts)
+    assert all("Disabled Bench" in issue.message and "Repair 1" in issue.message for issue in conflicts)
 
 
 def test_one_person_is_never_duplicated_across_centers():
@@ -772,6 +872,156 @@ def test_inactive_and_reserve_people_are_not_auto_scheduled():
     )
     assert out.assignments["Repair 1"] == ["Here"]
     assert out.assigned_people == {"Here"}
+
+
+def test_global_minimum_moves_cross_trained_jose_and_backfills_repair():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[
+            staffing.Person(
+                name="Jose Luis",
+                skills={"Repair": 3, "Dismantle": 1},
+            ),
+            staffing.Person(
+                name="Domingo Recinos",
+                skills={"Repair": 1, "Dismantle": 0},
+            ),
+        ],
+        group_locations={
+            "Repair": ("Repair 2",),
+            "Dismantler": ("Dismantler 1",),
+        },
+        group_required_skills={
+            "Repair": ("Repair",),
+            "Dismantler": ("Dismantle",),
+        },
+        center_minimums={"Repair 2": 1, "Dismantler 1": 1},
+        center_capacities={"Repair 2": 1, "Dismantler 1": 1},
+        runnable_centers={"Repair 2", "Dismantler 1"},
+    )
+
+    assert out.assignments["Dismantler 1"] == ["Jose Luis"]
+    assert out.assignments["Repair 2"] == ["Domingo Recinos"]
+    assert out.issues == ()
+
+
+def test_equal_minimum_candidates_use_solver_canonical_name_order():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[
+            staffing.Person(name="Bob", skills={"Repair": 2}),
+            staffing.Person(name="Ann", skills={"Repair": 2}),
+        ],
+        group_locations={"Repair": ("Repair 1",)},
+        group_required_skills={"Repair": ("Repair",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 1},
+        runnable_centers={"Repair 1"},
+    )
+
+    assert out.assignments["Repair 1"] == ["Ann"]
+
+
+def test_empty_assignment_keys_follow_canonical_group_center_order():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[],
+        group_locations={
+            "First Group": ("Center Z", "Center A"),
+            "Second Group": ("Center M",),
+        },
+        group_required_skills={
+            "First Group": ("First Skill",),
+            "Second Group": ("Second Skill",),
+        },
+        runnable_centers={center for center in ("Center M", "Center A", "Center Z")},
+    )
+
+    assert list(out.assignments) == ["Center Z", "Center A", "Center M"]
+
+
+def test_staffed_center_reports_invalid_protected_assignment():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[
+            staffing.Person(name="Protected Zero", skills={"Repair": 0}),
+            staffing.Person(name="Qualified", skills={"Repair": 3}),
+        ],
+        group_locations={"Repair": ("Repair 1",)},
+        group_required_skills={"Repair": ("Repair",)},
+        locked_assignments={"Repair 1": ("Protected Zero",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+    )
+
+    assert out.assignments["Repair 1"] == ["Protected Zero", "Qualified"]
+    assert out.staffed_centers == ("Repair 1",)
+    issue = next(
+        item for item in out.issues
+        if item.code == "protected_assignment_unqualified"
+    )
+    assert issue.center == "Repair 1"
+    assert issue.rejections[0].person == "Protected Zero"
+    assert "does not safely count toward minimum coverage" in issue.rejections[0].detail
+    assert issue.message in out.warnings
+
+
+def test_level_zero_only_alerts_that_training_is_required():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[staffing.Person(
+            name="Potential Trainee",
+            skills={"Dismantle": 0},
+        )],
+        group_locations={"Dismantler": ("Dismantler 1",)},
+        group_required_skills={"Dismantler": ("Dismantle",)},
+        center_minimums={"Dismantler 1": 1},
+        center_capacities={"Dismantler 1": 1},
+        runnable_centers={"Dismantler 1"},
+    )
+
+    assert out.assignments.get("Dismantler 1", []) == []
+    assert out.issues[0].code == "training_required"
+    assert any("Training is required for Dismantler" in warning for warning in out.warnings)
+
+
+def test_unavoidable_never_override_has_structured_reason():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[staffing.Person(name="Only Qualified", skills={"Repair": 1})],
+        preferences={"Only Qualified": {"Repair": "never"}},
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 1},
+        runnable_centers={"Repair 1"},
+    )
+
+    assert out.assignments["Repair 1"] == ["Only Qualified"]
+    assert out.reason_codes["Repair 1"]["Only Qualified"] == "preference_override"
+    assert "despite Never" in out.reasons["Repair 1"]["Only Qualified"]
+
+
+def test_unresolved_multi_person_center_has_no_generated_partial_crew():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[staffing.Person(name="One Builder", skills={"Hand Build": 2})],
+        group_locations={"Hand Build": ("Hand Build #1",)},
+        group_required_skills={"Hand Build": ("Hand Build",)},
+        center_minimums={"Hand Build #1": 2},
+        center_capacities={"Hand Build #1": 2},
+        runnable_centers={"Hand Build #1"},
+    )
+
+    assert out.assignments.get("Hand Build #1", []) == []
+    assert out.unresolved_centers == ("Hand Build #1",)
 
 
 def test_training_mode_fills_available_capacity_without_exceeding_it():
@@ -835,7 +1085,7 @@ def test_trim_saw_generated_pair_must_be_valid():
     )
     # A 2/1 pair is unsafe, so nothing is generated and a warning explains it.
     assert out.assignments.get("Trim Saw 1", []) == []
-    assert any("Trim Saw 1" in warning for warning in out.warnings)
+    assert "No safe operator pairing available for Trim Saw 1." in out.warnings
 
 
 def test_trim_saw_generated_pair_is_placed_when_valid():
@@ -1001,6 +1251,126 @@ def test_training_cap_zero_blocks_all_development_placements():
     assert "Learner" not in out.assigned_people
 
 
+def test_training_cap_zero_blocks_optional_development_above_minimum():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Green", 3), _person("Learner", 1)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+        training_cap=0,
+    )
+
+    assert out.assignments["Repair 1"] == ["Green"]
+    assert "Learner" not in out.assigned_people
+
+
+def test_training_development_cap_is_shared_across_centers():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[
+            _person("Green A", 3),
+            _person("Green B", 3),
+            _person("Learner A", 1),
+            _person("Learner B", 1),
+        ],
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        center_minimums={"Repair 1": 1, "Repair 2": 1},
+        center_capacities={"Repair 1": 2, "Repair 2": 2},
+        runnable_centers={"Repair 1", "Repair 2"},
+        training_cap=1,
+    )
+
+    developed = {
+        name
+        for codes in out.reason_codes.values()
+        for name, code in codes.items()
+        if code == "training_development"
+    }
+    assert len(developed) == 1
+    assert len(out.assigned_people) == 3
+
+
+def test_training_cap_does_not_block_level_three_optional_fill():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("Green A", 3), _person("Green B", 3)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+        training_cap=0,
+    )
+
+    assert set(out.assignments["Repair 1"]) == {"Green A", "Green B"}
+
+
+def test_training_cap_zero_blocks_empty_trim_saw_green_learner_pair():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[
+            staffing.Person("Trim Green", skills={"Trim Saw": 3}),
+            staffing.Person("Trim Learner", skills={"Trim Saw": 1}),
+        ],
+        group_locations={"Trim Saw": ("Trim Saw 1",)},
+        group_required_skills={"Trim Saw": ("Trim Saw",)},
+        center_minimums={"Trim Saw 1": 0},
+        center_capacities={"Trim Saw 1": 2},
+        runnable_centers={"Trim Saw 1"},
+        training_cap=0,
+    )
+
+    assert out.assignments["Trim Saw 1"] == []
+
+
+def test_empty_trim_saw_pair_consumes_shared_training_development_cap():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[
+            staffing.Person("Trim Green", skills={"Trim Saw": 3}),
+            staffing.Person("Trim Learner", skills={"Trim Saw": 1}),
+            staffing.Person("Repair Green", skills={"Repair": 3}),
+            staffing.Person("Repair Learner", skills={"Repair": 1}),
+        ],
+        group_locations={
+            "Trim Saw": ("Trim Saw 1",),
+            "Repair": ("Repair 1",),
+        },
+        group_required_skills={
+            "Trim Saw": ("Trim Saw",),
+            "Repair": ("Repair",),
+        },
+        center_minimums={"Trim Saw 1": 0, "Repair 1": 1},
+        center_capacities={"Trim Saw 1": 2, "Repair 1": 2},
+        runnable_centers={"Trim Saw 1", "Repair 1"},
+        training_cap=1,
+    )
+
+    assert set(out.assignments["Trim Saw 1"]) == {"Trim Green", "Trim Learner"}
+    assert out.assignments["Repair 1"] == ["Repair Green"]
+    assert out.reason_codes["Trim Saw 1"]["Trim Learner"] == "training_development"
+    assert "Repair Learner" not in out.assigned_people
+
+
+def test_training_cap_zero_allows_empty_trim_saw_level_three_pair():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[
+            staffing.Person("Trim Green A", skills={"Trim Saw": 3}),
+            staffing.Person("Trim Green B", skills={"Trim Saw": 3}),
+        ],
+        group_locations={"Trim Saw": ("Trim Saw 1",)},
+        group_required_skills={"Trim Saw": ("Trim Saw",)},
+        center_minimums={"Trim Saw 1": 0},
+        center_capacities={"Trim Saw 1": 2},
+        runnable_centers={"Trim Saw 1"},
+        training_cap=0,
+    )
+
+    assert set(out.assignments["Trim Saw 1"]) == {"Trim Green A", "Trim Green B"}
+
+
 def test_dismantler_group_schedules_end_to_end():
     roster = [
         staffing.Person(name="Dee", skills={"Dismantle": 3}),
@@ -1024,11 +1394,11 @@ def test_dismantler_group_schedules_end_to_end():
         },
         history=history, locked_assignments={}, block_effects=(),
     )
-    # Dee rotates onto a least-worked center that is not her most recent one.
+    # Equal-cost center mappings use the pure solver's canonical final tie.
     assert out.assignments["Dismantler 2"] == ["Dee"]
     assert out.assignments["Dismantler 1"] == ["Dan"]
-    assert "Dee" not in out.reasons.get("Dismantler 2", {})
-    assert out.reasons["Dismantler 1"]["Dan"] == "primary Dismantler operator"
+    assert out.reasons["Dismantler 2"]["Dee"] == "Assigned to meet minimum coverage."
+    assert out.reasons["Dismantler 1"]["Dan"] == "Assigned to meet minimum coverage."
     assert set(out.people_for_group("Dismantler")) == {"Dee", "Dan"}
 
 
@@ -1056,8 +1426,10 @@ def test_generated_assignments_carry_reasons():
         for center_reasons in out.reasons.values()
         for name, reason in center_reasons.items()
     }
-    assert "Green" not in reasons
-    assert reasons["Primary Two"] == "primary Repair operator"
+    assert reasons == {
+        "Green": "Assigned to meet minimum coverage.",
+        "Primary Two": "Assigned to meet minimum coverage.",
+    }
 
 
 def test_generic_group_locations_keep_an_under_minimum_hand_build_crew_empty():
@@ -1081,7 +1453,7 @@ def test_generic_group_locations_keep_an_under_minimum_hand_build_crew_empty():
     assert out.assignments["Junior #1"] == ["Junior Pro"]
 
 
-def test_generic_engine_honors_standalone_preference():
+def test_minimum_skill_precedes_standalone_preference_for_optional_fill():
     roster = [
         staffing.Person("Primary", skills={"Woodpecker": 2}),
         staffing.Person("Regular", skills={"Woodpecker": 3}),
@@ -1094,14 +1466,12 @@ def test_generic_engine_honors_standalone_preference():
         group_required_skills={"Woodpecker #1": ("Woodpecker",)},
         history=RecycledHistory(), locked_assignments={}, block_effects=(),
     )
-    assert out.assignments["Woodpecker #1"][0] == "Primary"
-    assert "Regular" in out.assignments["Woodpecker #1"]
+    assert out.assignments["Woodpecker #1"] == ["Regular", "Primary"]
 
 
-def test_normal_mode_rotates_one_green_through_every_repair_center_over_days():
-    """End-to-end fairness (design goal 4): feeding each day's real suggestion
-    back through the real history aggregator makes a single green cycle
-    Repair 1 -> Repair 2 -> Repair 3 across days rather than parking on Repair 1.
+def test_minimum_coverage_center_tie_rotates_across_days():
+    """Feeding each day's real suggestion back through the real history
+    aggregator rotates minimum placements before the final canonical tie.
 
     This exercises ``suggest_recycled_assignments`` and
     ``_recycled_history_from_rows`` together across a simulated multi-day run,
@@ -1128,3 +1498,103 @@ def test_normal_mode_rotates_one_green_through_every_repair_center_over_days():
         rows.insert(0, {"assignments": {center: ["Jordan"]}})
 
     assert visited == ["Repair 1", "Repair 2", "Repair 3"]
+
+
+def test_invalid_minimum_above_capacity_is_configuration_issue_even_with_headcount():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Green A", 3), _person("Green B", 3)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 2},
+        center_capacities={"Repair 1": 1},
+        runnable_centers={"Repair 1"},
+    )
+
+    assert out.assignments["Repair 1"] == []
+    assert out.unresolved_centers == ("Repair 1",)
+    assert out.issues[0].code == "invalid_center_configuration"
+    assert "minimum of 2 exceeds its maximum of 1" in out.issues[0].message
+    assert "staff" not in out.issues[0].message.lower()
+
+
+def test_invalid_minimum_above_capacity_preserves_protected_assignment():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Protected", 3), _person("Green", 3)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 2},
+        center_capacities={"Repair 1": 1},
+        runnable_centers={"Repair 1"},
+        locked_assignments={"Repair 1": ["Protected"]},
+    )
+
+    assert out.assignments["Repair 1"] == ["Protected"]
+    assert out.issues[0].code == "invalid_center_configuration"
+
+
+def test_every_generated_assignment_path_has_a_stable_reason_code_and_text():
+    block = _BlockEffect(
+        locked_people={"Hand Build": ["Trainee"]},
+        temporary_extra_people={"Hand Build": ["Trainer"]},
+    )
+    blocked = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[
+            staffing.Person("Trainee", skills={"Hand Build": 0}),
+            staffing.Person("Trainer", skills={"Hand Build": 3}),
+        ],
+        group_locations={"Hand Build": ("Hand Build #1",)},
+        group_required_skills={"Hand Build": ("Hand Build",)},
+        center_minimums={"Hand Build #1": 2},
+        center_capacities={"Hand Build #1": 2},
+        runnable_centers={"Hand Build #1"},
+        block_effects=(block,),
+    )
+    assert blocked.reason_codes["Hand Build #1"] == {
+        "Trainee": "training_block",
+        "Trainer": "training_block",
+    }
+
+    strongest = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="optimized",
+        roster=[_person("A Green", 3), _person("B Green", 3)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1}, center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+    )
+    assert strongest.reason_codes["Repair 1"]["B Green"] == "strongest_coverage"
+
+    primary = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("A Green", 3), _person("Primary", 2)],
+        preferences={"Primary": {"Repair": "primary"}},
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1}, center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+    )
+    assert primary.reason_codes["Repair 1"]["Primary"] == "primary_preference"
+
+    rotated = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("A Green", 3), _person("Rotator", 2)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1}, center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+    )
+    assert rotated.reason_codes["Repair 1"]["Rotator"] == "rotation_fairness"
+
+    developed = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("A Green", 3), _person("Learner", 1)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1}, center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"}, training_cap=1,
+    )
+    assert developed.reason_codes["Repair 1"]["Learner"] == "training_development"
+
+    for suggestion in (blocked, strongest, primary, rotated, developed):
+        for center, sources in suggestion.sources.items():
+            for name, source in sources.items():
+                if source == "generated":
+                    assert suggestion.reason_codes[center][name]
+                    assert suggestion.reasons[center][name]

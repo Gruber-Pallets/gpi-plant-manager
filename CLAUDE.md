@@ -40,6 +40,15 @@ The approved design and plan are committed as `8096a7e` (design) and `0e2c3d2` (
 - Manual assignment locks (`assignment_sources[wc][name] == "manual"`) survive rebuilds; only `generated` entries are recomputed; non-Recycled centers are never touched.
 - `_absence_by_day_for_block` is capped at `planned_block_days`' scan horizon to avoid O(days) DB fan-out on the hot staffing page.
 
+### Global Auto scheduling
+
+- `schedule_solver.solve_minimum_coverage` is the pure authority for enabled Auto-center minimum feasibility.
+- Coverage cardinality is primary; `never` overrides, mode rank, and stable ordering are tie-breakers in that order.
+- Generated multi-person crews are atomic: complete or absent.
+- Level 0 is automatic only through a validated training block; otherwise surface `training_required`.
+- Page context, Auto selection, and rebuild responses must serialize the same structured coverage issues.
+- Focused checks: `ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_schedule_solver.py tests/test_schedule_solver_properties.py tests/test_rotation_suggestions.py tests/test_staffing_rotations.py -q`.
+
 ## Binding product decisions
 
 - Scope automatic rotation to the Recycled groups `Dismantler`, `Repair`, and `Trim Saw`.

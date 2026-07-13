@@ -33,15 +33,11 @@ def _error(message: str, status_code: int = 422) -> JSONResponse:
     return JSONResponse({"ok": False, "error": message}, status_code=status_code)
 
 
-def _capacity_payload(capacity) -> dict:
-    """Serialize the stable, client-facing portion of an AutoCapacity result."""
+def _coverage_payload(suggestion) -> dict[str, object]:
     return {
-        "required_people": capacity.required_people,
-        "available_people": capacity.available_people,
-        "shortage": capacity.shortage,
-        "centers_to_disable": capacity.centers_to_disable,
-        "runnable_centers": list(capacity.runnable_centers),
-        "blocked_centers": list(capacity.blocked_centers),
+        "staffed_centers": list(suggestion.staffed_centers),
+        "unresolved_centers": list(suggestion.unresolved_centers),
+        "issues": [issue.to_dict() for issue in suggestion.issues],
     }
 
 
@@ -227,37 +223,35 @@ async def save_auto_work_centers(request: Request):
         roster = staffing.load_roster()
         sched = staffing.load_schedule(d)
         try:
-            # Capacity changes must not be approved from a forgiving scheduler
-            # display read: absence and defaults must be current and complete.
             time_off = scheduler_time_off.time_off_entries_for_day(d)
-            capacity = staffing_route._auto_capacity_for_day(
-                d=d,
-                enabled_work_centers=enabled,
-                roster=roster,
-                assignments=sched.assignments,
-                assignment_sources=sched.assignment_sources,
-                time_off_entries=time_off,
+            locks = staffing_route._protected_locks(
+                sched.assignment_sources,
+                sched.assignments,
+                allowed_centers=enabled,
                 strict_default_reads=True,
             )
         except Exception:
-            return _error("Could not verify daily staffing capacity.", 503)
-        if capacity.shortage:
-            return JSONResponse({
-                "ok": False,
-                "error": (
-                    f"Auto centers need {capacity.shortage} more people to run. "
-                    f"Turn off at least {capacity.centers_to_disable} work center(s)."
-                ),
-                "capacity": _capacity_payload(capacity),
-                "required_disable_count": capacity.centers_to_disable,
-            }, status_code=409)
+            return _error("Could not verify daily staffing coverage.", 503)
+        suggestion = staffing_route._recycled_suggestion_for_day(
+            d,
+            roster,
+            sched.rotation_mode or "normal",
+            base_assignments={wc: list(values) for wc, values in sched.assignments.items()},
+            locked_assignments=locks,
+            time_off_entries=time_off,
+            enabled_work_centers=enabled,
+            assignment_sources=sched.assignment_sources,
+        )
+        if suggestion is None:
+            return _error("Could not verify daily staffing coverage.", 503)
         enabled = staffing_route._save_enabled_auto_work_centers(enabled)
         _http_cache.invalidate_today_cache()
         _http_cache.invalidate_stable_cache()
         return JSONResponse({
             "ok": True,
             "enabled_work_centers": enabled,
-            "capacity": _capacity_payload(capacity),
+            "warnings": list(suggestion.warnings),
+            "coverage": _coverage_payload(suggestion),
         })
 
     return await asyncio.to_thread(_work)
@@ -302,12 +296,24 @@ async def rebuild_rotation(request: Request):
         enabled_centers = staffing_route._ordered_work_center_names(
             staffing_route._enabled_auto_work_centers(d)
         )
-        locked = staffing_route._protected_locks(
-            sched.assignment_sources,
-            sched.assignments,
-            allowed_centers=enabled_centers,
-        )
-        time_off = staffing_route._safe_time_off_entries(d)
+        try:
+            time_off = scheduler_time_off.time_off_entries_for_day(d)
+            locked = staffing_route._protected_locks(
+                sched.assignment_sources,
+                sched.assignments,
+                allowed_centers=enabled_centers,
+                strict_default_reads=True,
+            )
+            center_minimums = {
+                loc.name: staffing_route._effective_minimum(loc)
+                for loc in staffing.LOCATIONS if loc.name in enabled_centers
+            }
+            center_capacities = staffing_route._configured_center_capacities(
+                enabled_centers,
+                strict=True,
+            )
+        except Exception:
+            return _error("Could not rebuild the schedule.", 503)
         suggestion = staffing_route._recycled_suggestion_for_day(
             d,
             roster,
@@ -317,6 +323,8 @@ async def rebuild_rotation(request: Request):
             time_off_entries=time_off,
             enabled_work_centers=enabled_centers,
             assignment_sources=sched.assignment_sources,
+            center_minimums=center_minimums,
+            center_capacities=center_capacities,
         )
         if suggestion is None:
             return _error("Could not rebuild the schedule.", 503)
@@ -345,6 +353,7 @@ async def rebuild_rotation(request: Request):
             "sources": new_sources,
             "reasons": {wc: dict(r) for wc, r in suggestion.reasons.items()},
             "warnings": list(suggestion.warnings),
+            "coverage": _coverage_payload(suggestion),
             "enabled_work_centers": enabled_centers,
         })
 

@@ -7,6 +7,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      (anything ungrouped renders as "Highlights"). An entry with a Features
      group shows a green "New feature" badge in the What's New panel. -->
 
+## 2026-07-13
+
+### Fixes
+
+- **Auto scheduling now makes cross-skill swaps before declaring a work center uncovered.** The scheduler globally maximizes minimum work-center coverage, so a cross-trained person can move to a scarce role while another qualified unscheduled person backfills their old role. Skill levels 1–3 may cover a minimum even when the person’s preference is Never, but Never is overridden only when it staffs more centers. When full coverage is impossible, the safest partial schedule is saved, unresolved Auto centers stay enabled, and the page explains what needs manual attention. If only level-0 people remain, the alert says training is required without choosing the trainee or trainer.
+
 ## 2026-07-10
 
 ### Features

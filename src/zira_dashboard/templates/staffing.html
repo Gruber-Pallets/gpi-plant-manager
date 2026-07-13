@@ -228,8 +228,31 @@
                 aria-label="Training schedule goal" title="Training: develop operator skills">🎓</button>
         <p class="hint rotation-mode-help" id="rotation-mode-help">{{ rotation_mode_help }}</p>
       </div>
-      <div class="rotation-warning" id="rotation-warnings" role="alert"{% if not rotation_warnings %} hidden{% endif %}>
-        {% if rotation_warnings %}<ul>{% for w in rotation_warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+      <div class="rotation-warning" id="rotation-warnings" role="alert"
+           {% if not rotation_warnings and not rotation_issues %}hidden{% endif %}>
+        <ul id="rotation-warning-list">
+          {% for issue in rotation_issues %}
+            <li class="coverage-issue" data-issue-code="{{ issue.code }}">
+              <span>{{ issue.message }}</span>
+              {% if issue.rejections %}
+                <details class="coverage-why">
+                  <summary>Why?</summary>
+                  <ul>
+                    {% for rejection in issue.rejections %}
+                      <li><strong>{{ rejection.person }}</strong>: {{ rejection.detail }}</li>
+                    {% endfor %}
+                  </ul>
+                </details>
+              {% endif %}
+            </li>
+          {% endfor %}
+          {% set issue_messages = rotation_issues | map(attribute='message') | list %}
+          {% for warning in rotation_warnings %}
+            {% if warning not in issue_messages %}
+              <li>{{ warning }}</li>
+            {% endif %}
+          {% endfor %}
+        </ul>
       </div>
     </div>
     {% endif %}
@@ -379,20 +402,6 @@
 
 </form>
 
-{% if auto_scheduler_available %}
-<dialog id="auto-capacity-dialog" aria-labelledby="auto-capacity-title">
-  <form method="dialog" id="auto-capacity-form">
-    <h3 id="auto-capacity-title">Choose work centers to turn off</h3>
-    <p id="auto-capacity-message"></p>
-    <div id="auto-capacity-replacements"></div>
-    <div class="dialog-actions">
-      <button type="button" id="auto-capacity-cancel">Cancel</button>
-      <button type="submit" id="auto-capacity-confirm">Update Auto centers</button>
-    </div>
-  </form>
-</dialog>
-{% endif %}
-
 <p class="hint">
   Click <em>+ Add</em> to assign someone. × on a pill to unassign. Skill legend:
   <span class="pill lvl-3" style="padding:0.05rem 0.5rem;font-size:0.72rem">proficient</span>
@@ -451,6 +460,7 @@
   // Rotation controls (mode buttons + reason badges + warnings).
   window.ROTATION_REASONS = {{ rotation_reasons|tojson }};
   window.ROTATION_WARNINGS = {{ rotation_warnings|tojson }};
+  window.ROTATION_ISSUES = {{ rotation_issues|tojson }};
   window.RECYCLED_WC_NAMES = {{ recycled_wc_names|tojson }};
   window.RECYCLED_ROTATION_MODE = {{ recycled_rotation_mode|tojson }};
   window.AUTO_SCHEDULE_WC_NAMES = {{ auto_schedule_enabled_wc_names|tojson }};
