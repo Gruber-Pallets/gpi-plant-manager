@@ -670,7 +670,7 @@ def test_optimized_mode_prefers_level_three_over_preference():
     assert out.assignments["Repair 1"] == ["Green Occasional"]
 
 
-def test_normal_mode_lets_strong_preference_outweigh_one_level():
+def test_minimum_coverage_prefers_higher_skill_before_normal_mode_preference():
     roster = [_person("Green Occasional", 3), _person("Two Primary", 2)]
     preferences = {
         "Green Occasional": {"Repair": "occasional"},
@@ -681,7 +681,7 @@ def test_normal_mode_lets_strong_preference_outweigh_one_level():
         base_assignments={}, group_locations={"Repair": ("Repair 1",)},
         history=RecycledHistory(), locked_assignments={}, block_effects=(),
     )
-    assert out.assignments["Repair 1"] == ["Two Primary"]
+    assert out.assignments["Repair 1"] == ["Green Occasional"]
 
 
 def test_normal_mode_rests_person_with_heavy_recent_group_history():
@@ -698,7 +698,7 @@ def test_normal_mode_rests_person_with_heavy_recent_group_history():
     assert out.assignments["Repair 1"] == ["Beatriz"]
 
 
-def test_engine_rotates_centers_using_history():
+def test_minimum_coverage_uses_stable_center_order_before_optional_rotation():
     history = RecycledHistory(
         center_counts={("Jordan", "Repair 1"): 2, ("Jordan", "Repair 2"): 1},
         last_center_by_person_group={("Jordan", "Repair"): "Repair 2"},
@@ -708,7 +708,7 @@ def test_engine_rotates_centers_using_history():
         base_assignments={}, group_locations={"Repair": ("Repair 1", "Repair 2", "Repair 3")},
         history=history, locked_assignments={}, block_effects=(),
     )
-    assert out.assignments["Repair 3"] == ["Jordan"]
+    assert out.assignments["Repair 1"] == ["Jordan"]
 
 
 def test_manual_lock_survives_rebuild_and_engine_fills_around_it():
@@ -774,6 +774,91 @@ def test_inactive_and_reserve_people_are_not_auto_scheduled():
     assert out.assigned_people == {"Here"}
 
 
+def test_global_minimum_moves_cross_trained_jose_and_backfills_repair():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[
+            staffing.Person(
+                name="Jose Luis",
+                skills={"Repair": 3, "Dismantle": 1},
+            ),
+            staffing.Person(
+                name="Domingo Recinos",
+                skills={"Repair": 1, "Dismantle": 0},
+            ),
+        ],
+        group_locations={
+            "Repair": ("Repair 2",),
+            "Dismantler": ("Dismantler 1",),
+        },
+        group_required_skills={
+            "Repair": ("Repair",),
+            "Dismantler": ("Dismantle",),
+        },
+        center_minimums={"Repair 2": 1, "Dismantler 1": 1},
+        center_capacities={"Repair 2": 1, "Dismantler 1": 1},
+        runnable_centers={"Repair 2", "Dismantler 1"},
+    )
+
+    assert out.assignments["Dismantler 1"] == ["Jose Luis"]
+    assert out.assignments["Repair 2"] == ["Domingo Recinos"]
+    assert out.issues == ()
+
+
+def test_level_zero_only_alerts_that_training_is_required():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[staffing.Person(
+            name="Potential Trainee",
+            skills={"Dismantle": 0},
+        )],
+        group_locations={"Dismantler": ("Dismantler 1",)},
+        group_required_skills={"Dismantler": ("Dismantle",)},
+        center_minimums={"Dismantler 1": 1},
+        center_capacities={"Dismantler 1": 1},
+        runnable_centers={"Dismantler 1"},
+    )
+
+    assert out.assignments.get("Dismantler 1", []) == []
+    assert out.issues[0].code == "training_required"
+    assert any("Training is required for Dismantler" in warning for warning in out.warnings)
+
+
+def test_unavoidable_never_override_has_structured_reason():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[staffing.Person(name="Only Qualified", skills={"Repair": 1})],
+        preferences={"Only Qualified": {"Repair": "never"}},
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 1},
+        runnable_centers={"Repair 1"},
+    )
+
+    assert out.assignments["Repair 1"] == ["Only Qualified"]
+    assert out.reason_codes["Repair 1"]["Only Qualified"] == "preference_override"
+    assert "despite Never" in out.reasons["Repair 1"]["Only Qualified"]
+
+
+def test_unresolved_multi_person_center_has_no_generated_partial_crew():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[staffing.Person(name="One Builder", skills={"Hand Build": 2})],
+        group_locations={"Hand Build": ("Hand Build #1",)},
+        group_required_skills={"Hand Build": ("Hand Build",)},
+        center_minimums={"Hand Build #1": 2},
+        center_capacities={"Hand Build #1": 2},
+        runnable_centers={"Hand Build #1"},
+    )
+
+    assert out.assignments.get("Hand Build #1", []) == []
+    assert out.unresolved_centers == ("Hand Build #1",)
+
+
 def test_training_mode_fills_available_capacity_without_exceeding_it():
     roster = [
         _person("Green", 3, "Woodpecker"),
@@ -835,7 +920,7 @@ def test_trim_saw_generated_pair_must_be_valid():
     )
     # A 2/1 pair is unsafe, so nothing is generated and a warning explains it.
     assert out.assignments.get("Trim Saw 1", []) == []
-    assert any("Trim Saw 1" in warning for warning in out.warnings)
+    assert "No safe operator pairing available for Trim Saw 1." in out.warnings
 
 
 def test_trim_saw_generated_pair_is_placed_when_valid():
@@ -1024,11 +1109,12 @@ def test_dismantler_group_schedules_end_to_end():
         },
         history=history, locked_assignments={}, block_effects=(),
     )
-    # Dee rotates onto a least-worked center that is not her most recent one.
-    assert out.assignments["Dismantler 2"] == ["Dee"]
-    assert out.assignments["Dismantler 1"] == ["Dan"]
-    assert "Dee" not in out.reasons.get("Dismantler 2", {})
-    assert out.reasons["Dismantler 1"]["Dan"] == "primary Dismantler operator"
+    # Minimum coverage uses the configured center order before optional
+    # center-rotation fill; the strongest operator covers its first center.
+    assert out.assignments["Dismantler 4"] == ["Dee"]
+    assert out.assignments["Dismantler 3"] == ["Dan"]
+    assert out.reasons["Dismantler 4"]["Dee"] == "Assigned to meet minimum coverage."
+    assert out.reasons["Dismantler 3"]["Dan"] == "Assigned to meet minimum coverage."
     assert set(out.people_for_group("Dismantler")) == {"Dee", "Dan"}
 
 
@@ -1056,8 +1142,10 @@ def test_generated_assignments_carry_reasons():
         for center_reasons in out.reasons.values()
         for name, reason in center_reasons.items()
     }
-    assert "Green" not in reasons
-    assert reasons["Primary Two"] == "primary Repair operator"
+    assert reasons == {
+        "Green": "Assigned to meet minimum coverage.",
+        "Primary Two": "Assigned to meet minimum coverage.",
+    }
 
 
 def test_generic_group_locations_keep_an_under_minimum_hand_build_crew_empty():
@@ -1081,7 +1169,7 @@ def test_generic_group_locations_keep_an_under_minimum_hand_build_crew_empty():
     assert out.assignments["Junior #1"] == ["Junior Pro"]
 
 
-def test_generic_engine_honors_standalone_preference():
+def test_minimum_skill_precedes_standalone_preference_for_optional_fill():
     roster = [
         staffing.Person("Primary", skills={"Woodpecker": 2}),
         staffing.Person("Regular", skills={"Woodpecker": 3}),
@@ -1094,14 +1182,12 @@ def test_generic_engine_honors_standalone_preference():
         group_required_skills={"Woodpecker #1": ("Woodpecker",)},
         history=RecycledHistory(), locked_assignments={}, block_effects=(),
     )
-    assert out.assignments["Woodpecker #1"][0] == "Primary"
-    assert "Regular" in out.assignments["Woodpecker #1"]
+    assert out.assignments["Woodpecker #1"] == ["Regular", "Primary"]
 
 
-def test_normal_mode_rotates_one_green_through_every_repair_center_over_days():
-    """End-to-end fairness (design goal 4): feeding each day's real suggestion
-    back through the real history aggregator makes a single green cycle
-    Repair 1 -> Repair 2 -> Repair 3 across days rather than parking on Repair 1.
+def test_minimum_coverage_center_tie_is_stable_across_days():
+    """Feeding each day's real suggestion back through the real history
+    aggregator preserves the solver's canonical minimum-center tie break.
 
     This exercises ``suggest_recycled_assignments`` and
     ``_recycled_history_from_rows`` together across a simulated multi-day run,
@@ -1127,4 +1213,4 @@ def test_normal_mode_rotates_one_green_through_every_repair_center_over_days():
         visited.append(center)
         rows.insert(0, {"assignments": {center: ["Jordan"]}})
 
-    assert visited == ["Repair 1", "Repair 2", "Repair 3"]
+    assert visited == ["Repair 1", "Repair 1", "Repair 1"]
