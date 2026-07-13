@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from typing import Literal, Sequence
 
@@ -179,21 +180,24 @@ def _match_single_requirements(
         distance: list[int | None] = [None] * node_count
         previous: list[tuple[int, int] | None] = [None] * node_count
         distance[source] = 0
-        for _ in range(node_count - 1):
-            changed = False
-            for node, arcs in enumerate(graph):
-                if distance[node] is None:
-                    continue
-                for arc_index, arc in enumerate(arcs):
-                    candidate = distance[node] + arc.cost
-                    if arc.capacity and (
-                        distance[arc.to] is None or candidate < distance[arc.to]
-                    ):
-                        distance[arc.to] = candidate
-                        previous[arc.to] = (node, arc_index)
-                        changed = True
-            if not changed:
-                break
+        pending = deque((source,))
+        queued = {source}
+        while pending:
+            node = pending.popleft()
+            queued.remove(node)
+            node_distance = distance[node]
+            if node_distance is None:
+                continue
+            for arc_index, arc in enumerate(graph[node]):
+                candidate = node_distance + arc.cost
+                if arc.capacity and (
+                    distance[arc.to] is None or candidate < distance[arc.to]
+                ):
+                    distance[arc.to] = candidate
+                    previous[arc.to] = (node, arc_index)
+                    if arc.to not in queued:
+                        pending.append(arc.to)
+                        queued.add(arc.to)
         if previous[sink] is None:
             break
         node = sink
@@ -342,6 +346,10 @@ def solve_minimum_coverage(
         raise ValueError("candidate and crew member levels must be positive")
 
     best: CoverageResult | None = None
+    single_candidate_people = frozenset(
+        edge.person for requirement in singles for edge in requirement.candidates
+    )
+    single_match_cache: dict[frozenset[str], tuple[AssignmentDecision, ...]] = {}
     seen_prefix: dict[
         tuple[int, frozenset[str]],
         tuple[int, int, int, tuple[tuple[str, str], ...]],
@@ -377,7 +385,11 @@ def solve_minimum_coverage(
         if best is not None and optimistic < len(best.staffed_centers):
             return
         if index == len(coupled):
-            matched = _match_single_requirements(singles, used_people)
+            unavailable_singles = used_people & single_candidate_people
+            matched = single_match_cache.get(unavailable_singles)
+            if matched is None:
+                matched = _match_single_requirements(singles, unavailable_singles)
+                single_match_cache[unavailable_singles] = matched
             candidate = _assemble_result(normalized, decisions + matched)
             if _result_is_better(candidate, best):
                 best = candidate
