@@ -570,14 +570,30 @@ def _development_rank_key(
     return (-(MODE_SKILL_POINTS["training"][level] + tiebreak), name.lower(), group.lower())
 
 
-def _generated_reason(level: int, pref: str, group: str, center_count: int) -> str | None:
-    if level == 3:
-        return None
+def _optional_reason(
+    mode: str,
+    level: int,
+    pref: str,
+    group: str,
+    center_count: int,
+    *,
+    training_development: bool = False,
+) -> tuple[str, str]:
+    if training_development:
+        if pref == "primary":
+            text = f"primary {group} operator"
+        elif center_count > 1:
+            text = f"least-recent {group} center"
+        else:
+            text = f"{group} rotation"
+        return "training_development", text
+    if mode == "optimized":
+        return "strongest_coverage", f"strongest {group} coverage"
     if pref == "primary":
-        return f"primary {group} operator"
+        return "primary_preference", f"primary {group} operator"
     if center_count > 1:
-        return f"least-recent {group} center"
-    return f"{group} rotation"
+        return "rotation_fairness", f"least-recent {group} center"
+    return "rotation_fairness", f"{group} rotation"
 
 
 def _minimum_eligible(
@@ -596,6 +612,7 @@ def _minimum_eligible(
 def _minimum_rank_cost(
     person: staffing.Person,
     group: str,
+    center: str,
     mode: str,
     preferences: dict[str, dict[str, str]],
     history: RecycledHistory,
@@ -611,9 +628,14 @@ def _minimum_rank_cost(
         group_required_skills,
     )
     mode_cost = 10_000 + int(mode_key[0])
+    center_fairness_cost = (
+        int(history.center_counts.get((person.name, center), 0)) * 2
+        + int(center == history.last_center_by_person_group.get((person.name, group)))
+    )
     return (
         (3 - level) * 1_000_000_000_000
         + mode_cost * 1_000_000
+        + center_fairness_cost
     )
 
 
@@ -748,6 +770,7 @@ def _coverage_requirements(
     minimum_for,
     capacity_for,
     block_trainees_by_center: Mapping[str, Collection[str]],
+    conflicting_protected_people: Collection[str],
 ) -> tuple[schedule_solver.CenterRequirement, ...]:
     by_name = {person.name: person for person in roster}
     requirements = []
@@ -760,10 +783,11 @@ def _coverage_requirements(
             safe_existing = tuple(
                 name
                 for name in existing
-                if name in trainees or (
+                if name not in conflicting_protected_people
+                and (name in trainees or (
                     (person := by_name.get(name)) is not None
                     and _minimum_eligible(person, group, preferences, required_skills)
-                )
+                ))
             )
             protected_crew_is_safe = _coverage_crew_is_safe(
                 group=group,
@@ -776,6 +800,20 @@ def _coverage_requirements(
             if group == TRIM_SAW_SKILL and len(existing) >= 2 and not protected_crew_is_safe:
                 safe_existing = ()
             minimum = minimum_for(center)
+            capacity = capacity_for(center)
+            if minimum > capacity:
+                requirements.append(schedule_solver.CenterRequirement(
+                    center=center,
+                    group=group,
+                    remaining_slots=max(1, minimum - len(safe_existing)),
+                    protected_people=safe_existing,
+                    unresolved_code="invalid_center_configuration",
+                    unresolved_message=(
+                        f"{center} has an invalid configuration: its minimum of "
+                        f"{minimum} exceeds its maximum of {capacity}."
+                    ),
+                ))
+                continue
             needs_green_partner = bool(trainees) and not any(
                 name not in trainees
                 and (person := by_name.get(name)) is not None
@@ -783,7 +821,7 @@ def _coverage_requirements(
                 for name in safe_existing
             )
             remaining = max(0, minimum - len(safe_existing), int(needs_green_partner))
-            open_slots = max(0, capacity_for(center) - len(existing))
+            open_slots = max(0, capacity - len(existing))
             available_people = [
                 person
                 for person in roster
@@ -804,6 +842,7 @@ def _coverage_requirements(
                     rank_cost=_minimum_rank_cost(
                         person,
                         group,
+                        center,
                         mode,
                         preferences,
                         history,
@@ -949,15 +988,25 @@ def suggest_recycled_assignments(
 
     sources: dict[str, dict[str, str]] = {}
     reasons: dict[str, dict[str, str]] = {}
+    reason_codes: dict[str, dict[str, str]] = {}
     warnings: list[str] = []
     by_name = {p.name: p for p in roster}
     assigned: set[str] = {name for names in assignments.values() for name in names}
 
-    def _place(center: str, name: str, source: str, reason: str | None = None) -> None:
+    def _place(
+        center: str,
+        name: str,
+        source: str,
+        reason: str | None = None,
+        reason_code: str | None = None,
+    ) -> None:
         assignments.setdefault(center, []).append(name)
         sources.setdefault(center, {})[name] = source
-        if reason:
+        if source == GENERATED_SOURCE:
+            if not reason or not reason_code:
+                raise ValueError("generated assignments require a reason code and display text")
             reasons.setdefault(center, {})[name] = reason
+            reason_codes.setdefault(center, {})[name] = reason_code
         assigned.add(name)
 
     def _center_priority(center: str) -> tuple[int, int, str]:
@@ -1028,7 +1077,7 @@ def suggest_recycled_assignments(
                         warnings.append(warning)
                     continue
                 center = _choose_prioritized_center(name, group, open_centers)
-                _place(center, name, GENERATED_SOURCE, "training block")
+                _place(center, name, GENERATED_SOURCE, "training block", "training_block")
                 protected_block_people.add(name)
                 block_centers.add((group, center))
                 block_center_by_group[group] = center
@@ -1046,7 +1095,7 @@ def suggest_recycled_assignments(
                 )
                 if len(assignments.get(center, [])) >= _effective_capacity(center):
                     continue
-                _place(center, name, GENERATED_SOURCE, "training pair")
+                _place(center, name, GENERATED_SOURCE, "training pair", "training_block")
 
     block_trainees_by_center = {
         center: {
@@ -1054,6 +1103,18 @@ def suggest_recycled_assignments(
             if name in protected_block_people
         }
         for _group, center in block_centers
+    }
+    protected_centers_by_name: dict[str, list[str]] = {}
+    for center, center_sources in sources.items():
+        if center not in allowed_centers:
+            continue
+        for name, source in center_sources.items():
+            if source == MANUAL_SOURCE:
+                protected_centers_by_name.setdefault(name, []).append(center)
+    conflicting_protected = {
+        name: tuple(sorted(centers, key=str.lower))
+        for name, centers in protected_centers_by_name.items()
+        if len(set(centers)) > 1
     }
     requirements = _coverage_requirements(
         mode=mode,
@@ -1069,6 +1130,7 @@ def suggest_recycled_assignments(
         minimum_for=_effective_minimum,
         capacity_for=_effective_capacity,
         block_trainees_by_center=block_trainees_by_center,
+        conflicting_protected_people=set(conflicting_protected),
     )
     protected_issues = _protected_assignment_issues(
         roster=roster,
@@ -1079,12 +1141,37 @@ def suggest_recycled_assignments(
         allowed_centers=allowed_centers,
         block_trainees_by_center=block_trainees_by_center,
     )
+    conflict_issues = tuple(
+        schedule_solver.CoverageIssue(
+            center=center,
+            group=next(
+                group for group, centers in groups.items() if center in centers
+            ),
+            code="protected_assignment_conflict",
+            message=(
+                f"{name} is protected at multiple work centers "
+                f"({', '.join(centers)}); none of those commitments count "
+                "toward minimum coverage."
+            ),
+            rejections=(schedule_solver.CandidateRejection(
+                person=name,
+                code="protected_assignment_conflict",
+                detail=f"Protected at {', '.join(centers)}.",
+            ),),
+        )
+        for name, centers in sorted(conflicting_protected.items(), key=lambda item: item[0].lower())
+        for center in centers
+    )
     coverage = schedule_solver.solve_minimum_coverage(requirements)
-    issues = protected_issues + coverage.issues
-    reason_codes: dict[str, dict[str, str]] = {}
+    issues = protected_issues + conflict_issues + coverage.issues
     for decision in coverage.decisions:
-        _place(decision.center, decision.person, GENERATED_SOURCE, decision.reason)
-        reason_codes.setdefault(decision.center, {})[decision.person] = decision.reason_code
+        _place(
+            decision.center,
+            decision.person,
+            GENERATED_SOURCE,
+            decision.reason,
+            decision.reason_code,
+        )
 
     warnings.extend(
         issue.message for issue in issues if issue.message not in warnings
@@ -1146,10 +1233,21 @@ def suggest_recycled_assignments(
             continue
         level = _group_level(person, group, resolved_group_required_skills)
         pref = _preference_for(preferences, person.name, group)
-        reason = _generated_reason(level, pref, group, len(centers))
         if group != TRIM_SAW_SKILL:
             center = _choose_prioritized_center(person.name, group, open_centers)
-            _place(center, person.name, GENERATED_SOURCE, reason)
+            reason_code, reason = _optional_reason(
+                mode,
+                level,
+                pref,
+                group,
+                len(centers),
+                training_development=(
+                    mode == "training"
+                    and level in (1, 2)
+                    and any(_level_of(name, group) == 3 for name in assignments.get(center, []))
+                ),
+            )
+            _place(center, person.name, GENERATED_SOURCE, reason, reason_code)
             continue
         # Trim Saw keeps its pairing guarantee: never generate an unsafe pair.
         # Try the candidate's open centers in fairness order so one unsafe
@@ -1161,7 +1259,18 @@ def suggest_recycled_assignments(
             occupants = assignments.get(center, [])
             if occupants:
                 if all(_valid_trim_saw_pair(level, _level_of(name, group)) for name in occupants):
-                    _place(center, person.name, GENERATED_SOURCE, reason)
+                    reason_code, reason = _optional_reason(
+                        mode, level, pref, group, len(centers),
+                        training_development=(
+                            mode == "training"
+                            and level in (1, 2)
+                            and any(
+                                _level_of(name, group) == 3
+                                for name in assignments.get(center, [])
+                            )
+                        ),
+                    )
+                    _place(center, person.name, GENERATED_SOURCE, reason, reason_code)
                     break
                 continue
             if _effective_capacity(center) < 2:
@@ -1178,14 +1287,26 @@ def suggest_recycled_assignments(
                     break
             if partner is None:
                 continue  # no safe pairing from this anchor; warned about below
-            _place(center, person.name, GENERATED_SOURCE, reason)
+            reason_code, reason = _optional_reason(
+                mode, level, pref, group, len(centers)
+            )
+            _place(center, person.name, GENERATED_SOURCE, reason, reason_code)
             partner_level = _group_level(partner, group, resolved_group_required_skills)
             partner_pref = _preference_for(preferences, partner.name, group)
+            partner_code, partner_reason = _optional_reason(
+                mode,
+                partner_level,
+                partner_pref,
+                group,
+                len(centers),
+                training_development=(mode == "training" and partner_level in (1, 2)),
+            )
             _place(
                 center,
                 partner.name,
                 GENERATED_SOURCE,
-                _generated_reason(partner_level, partner_pref, group, len(centers)),
+                partner_reason,
+                partner_code,
             )
             break
 
@@ -1236,7 +1357,13 @@ def suggest_recycled_assignments(
             if not green_centers:
                 continue
             center = _choose_prioritized_center(person.name, group, green_centers)
-            _place(center, person.name, GENERATED_SOURCE, "training pair")
+            _place(
+                center,
+                person.name,
+                GENERATED_SOURCE,
+                "training pair",
+                "training_development",
+            )
             placed_developments += 1
 
     generated_people = {

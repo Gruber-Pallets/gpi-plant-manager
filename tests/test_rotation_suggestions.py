@@ -365,7 +365,8 @@ def test_engine_never_exceeds_static_capacity_to_reach_minimum():
     )
 
     assert len(out.assignments["Hand Build #1"]) <= 2
-    assert "Hand Build #1 could not be staffed to its minimum of 3 operators." in out.warnings
+    assert out.issues[0].code == "invalid_center_configuration"
+    assert "minimum of 3 exceeds its maximum of 2" in out.warnings[0]
 
 
 def test_engine_honors_configured_capacity_over_static_location_maximum():
@@ -462,6 +463,7 @@ def test_training_block_keeps_trainee_without_a_level_three_partner():
         group_locations={"Repair": ("Repair 1",)},
         group_required_skills={"Repair": ("Repair",)},
         center_minimums={"Repair 1": 2},
+        center_capacities={"Repair 1": 2},
         runnable_centers={"Repair 1"},
         history=RecycledHistory(), locked_assignments={}, block_effects=(effect,),
     )
@@ -698,7 +700,7 @@ def test_normal_mode_rests_person_with_heavy_recent_group_history():
     assert out.assignments["Repair 1"] == ["Beatriz"]
 
 
-def test_minimum_coverage_uses_solver_canonical_center_order():
+def test_minimum_coverage_uses_center_history_before_canonical_center_order():
     history = RecycledHistory(
         center_counts={("Jordan", "Repair 1"): 2, ("Jordan", "Repair 2"): 1},
         last_center_by_person_group={("Jordan", "Repair"): "Repair 2"},
@@ -708,7 +710,32 @@ def test_minimum_coverage_uses_solver_canonical_center_order():
         base_assignments={}, group_locations={"Repair": ("Repair 1", "Repair 2", "Repair 3")},
         history=history, locked_assignments={}, block_effects=(),
     )
-    assert out.assignments["Repair 1"] == ["Jordan"]
+    assert out.assignments["Repair 3"] == ["Jordan"]
+
+
+def test_minimum_coverage_rotates_people_across_fully_staffed_equal_centers():
+    history = RecycledHistory(
+        center_counts={
+            ("Alicia", "Repair 1"): 1,
+            ("Beatriz", "Repair 2"): 1,
+        },
+        last_center_by_person_group={
+            ("Alicia", "Repair"): "Repair 1",
+            ("Beatriz", "Repair"): "Repair 2",
+        },
+    )
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Alicia", 3), _person("Beatriz", 3)],
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        center_minimums={"Repair 1": 1, "Repair 2": 1},
+        center_capacities={"Repair 1": 1, "Repair 2": 1},
+        runnable_centers={"Repair 1", "Repair 2"},
+        history=history,
+    )
+
+    assert out.assignments["Repair 1"] == ["Beatriz"]
+    assert out.assignments["Repair 2"] == ["Alicia"]
 
 
 def test_manual_lock_survives_rebuild_and_engine_fills_around_it():
@@ -730,6 +757,59 @@ def test_manual_lock_survives_rebuild_and_engine_fills_around_it():
     assert out.sources["Repair 2"]["Fresh"] == "generated"
     all_names = [name for names in out.assignments.values() for name in names]
     assert all_names.count("Manual Person") == 1
+
+
+def _duplicate_protected_lock_suggestion(locked_assignments):
+    return suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Duplicated Lock", 3), _person("Backfill A", 3), _person("Backfill B", 3)],
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        center_minimums={"Repair 1": 1, "Repair 2": 1},
+        center_capacities={"Repair 1": 2, "Repair 2": 2},
+        runnable_centers={"Repair 1", "Repair 2"},
+        locked_assignments=locked_assignments,
+    )
+
+
+def _assert_duplicate_protected_lock_is_backfilled(out):
+    assert out.assignments["Repair 1"][0] == "Duplicated Lock"
+    assert out.assignments["Repair 2"][0] == "Duplicated Lock"
+    assert len(out.assignments["Repair 1"]) == 2
+    assert len(out.assignments["Repair 2"]) == 2
+    generated_codes = {
+        code
+        for center, codes in out.reason_codes.items()
+        for name, code in codes.items()
+        if name != "Duplicated Lock" and center in {"Repair 1", "Repair 2"}
+    }
+    assert generated_codes == {"minimum_coverage"}
+    conflict_issues = [issue for issue in out.issues if issue.code == "protected_assignment_conflict"]
+    assert {issue.center for issue in conflict_issues} == {"Repair 1", "Repair 2"}
+    assert all("Duplicated Lock" in issue.message for issue in conflict_issues)
+    assert all("Repair 1" in issue.message and "Repair 2" in issue.message for issue in conflict_issues)
+
+
+def test_duplicate_manual_lock_is_preserved_but_never_counts_twice():
+    out = _duplicate_protected_lock_suggestion({
+        "Repair 1": ["Duplicated Lock"],
+        "Repair 2": ["Duplicated Lock"],
+    })
+    _assert_duplicate_protected_lock_is_backfilled(out)
+
+
+def test_duplicate_default_lock_is_preserved_but_never_counts_twice(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "default_people",
+        lambda loc: ["Duplicated Lock"] if loc.name in {"Repair 1", "Repair 2"} else [],
+    )
+    default_locks = staffing_route._protected_locks(
+        {}, {}, allowed_centers={"Repair 1", "Repair 2"}, strict_default_reads=True,
+    )
+    out = _duplicate_protected_lock_suggestion(default_locks)
+    _assert_duplicate_protected_lock_is_backfilled(out)
 
 
 def test_one_person_is_never_duplicated_across_centers():
@@ -1249,9 +1329,9 @@ def test_minimum_skill_precedes_standalone_preference_for_optional_fill():
     assert out.assignments["Woodpecker #1"] == ["Regular", "Primary"]
 
 
-def test_minimum_coverage_center_tie_is_stable_across_days():
+def test_minimum_coverage_center_tie_rotates_across_days():
     """Feeding each day's real suggestion back through the real history
-    aggregator preserves the solver's canonical minimum-center tie break.
+    aggregator rotates minimum placements before the final canonical tie.
 
     This exercises ``suggest_recycled_assignments`` and
     ``_recycled_history_from_rows`` together across a simulated multi-day run,
@@ -1277,4 +1357,104 @@ def test_minimum_coverage_center_tie_is_stable_across_days():
         visited.append(center)
         rows.insert(0, {"assignments": {center: ["Jordan"]}})
 
-    assert visited == ["Repair 1", "Repair 1", "Repair 1"]
+    assert visited == ["Repair 1", "Repair 2", "Repair 3"]
+
+
+def test_invalid_minimum_above_capacity_is_configuration_issue_even_with_headcount():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Green A", 3), _person("Green B", 3)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 2},
+        center_capacities={"Repair 1": 1},
+        runnable_centers={"Repair 1"},
+    )
+
+    assert out.assignments["Repair 1"] == []
+    assert out.unresolved_centers == ("Repair 1",)
+    assert out.issues[0].code == "invalid_center_configuration"
+    assert "minimum of 2 exceeds its maximum of 1" in out.issues[0].message
+    assert "staff" not in out.issues[0].message.lower()
+
+
+def test_invalid_minimum_above_capacity_preserves_protected_assignment():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("Protected", 3), _person("Green", 3)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 2},
+        center_capacities={"Repair 1": 1},
+        runnable_centers={"Repair 1"},
+        locked_assignments={"Repair 1": ["Protected"]},
+    )
+
+    assert out.assignments["Repair 1"] == ["Protected"]
+    assert out.issues[0].code == "invalid_center_configuration"
+
+
+def test_every_generated_assignment_path_has_a_stable_reason_code_and_text():
+    block = _BlockEffect(
+        locked_people={"Hand Build": ["Trainee"]},
+        temporary_extra_people={"Hand Build": ["Trainer"]},
+    )
+    blocked = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[
+            staffing.Person("Trainee", skills={"Hand Build": 0}),
+            staffing.Person("Trainer", skills={"Hand Build": 3}),
+        ],
+        group_locations={"Hand Build": ("Hand Build #1",)},
+        group_required_skills={"Hand Build": ("Hand Build",)},
+        center_minimums={"Hand Build #1": 2},
+        center_capacities={"Hand Build #1": 2},
+        runnable_centers={"Hand Build #1"},
+        block_effects=(block,),
+    )
+    assert blocked.reason_codes["Hand Build #1"] == {
+        "Trainee": "training_block",
+        "Trainer": "training_block",
+    }
+
+    strongest = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="optimized",
+        roster=[_person("A Green", 3), _person("B Green", 3)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1}, center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+    )
+    assert strongest.reason_codes["Repair 1"]["B Green"] == "strongest_coverage"
+
+    primary = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("A Green", 3), _person("Primary", 2)],
+        preferences={"Primary": {"Repair": "primary"}},
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1}, center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+    )
+    assert primary.reason_codes["Repair 1"]["Primary"] == "primary_preference"
+
+    rotated = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[_person("A Green", 3), _person("Rotator", 2)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1}, center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+    )
+    assert rotated.reason_codes["Repair 1"]["Rotator"] == "rotation_fairness"
+
+    developed = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="training",
+        roster=[_person("A Green", 3), _person("Learner", 1)],
+        group_locations={"Repair": ("Repair 1",)},
+        center_minimums={"Repair 1": 1}, center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"}, training_cap=1,
+    )
+    assert developed.reason_codes["Repair 1"]["Learner"] == "training_development"
+
+    for suggestion in (blocked, strongest, primary, rotated, developed):
+        for center, sources in suggestion.sources.items():
+            for name, source in sources.items():
+                if source == "generated":
+                    assert suggestion.reason_codes[center][name]
+                    assert suggestion.reasons[center][name]

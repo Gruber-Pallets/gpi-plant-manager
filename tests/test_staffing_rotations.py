@@ -395,7 +395,7 @@ def _stub_recommendation_inputs(monkeypatch):
     """Make the shared recommendation gather DB-free and empty so the pure
     engine runs deterministically on the roster/base/locks the test provides."""
     from zira_dashboard.routes import staffing as staffing_route
-    from zira_dashboard import rotation_suggestions
+    from zira_dashboard import rotation_suggestions, scheduler_time_off
 
     monkeypatch.setattr(staffing_route.rotation_store, "load_preferences_by_name", lambda: {})
     monkeypatch.setattr(
@@ -412,8 +412,58 @@ def _stub_recommendation_inputs(monkeypatch):
         lambda d: {"Repair 1", "Repair 2", "Repair 3", "Dismantler 1", "Dismantler 2", "Trim Saw 1"},
     )
     monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
+    monkeypatch.setattr(staffing_route.work_centers_store, "max_ops", lambda loc: loc.max_ops)
     monkeypatch.setattr(staffing_route.work_centers_store, "default_people", lambda loc: [])
+    monkeypatch.setattr(
+        scheduler_time_off,
+        "time_off_entries_for_day",
+        lambda _d: [],
+    )
     return staffing_route
+
+
+@pytest.mark.parametrize("failed_read", ["time_off", "defaults", "minimum", "maximum"])
+def test_rebuild_fails_closed_before_solving_when_authoritative_input_read_fails(
+    monkeypatch, failed_read,
+):
+    client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    saved = []
+    invalidated = []
+
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green", 3)])
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_schedule",
+        lambda _d: staffing.Schedule(day=TARGET_DAY),
+    )
+    monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        rotations._http_cache,
+        "invalidate_today_cache",
+        lambda: invalidated.append("today"),
+    )
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError(f"{failed_read} unavailable")
+
+    failing_reader = {
+        "time_off": (rotations.scheduler_time_off, "time_off_entries_for_day"),
+        "defaults": (staffing_route.work_centers_store, "default_people"),
+        "minimum": (staffing_route.work_centers_store, "min_ops"),
+        "maximum": (staffing_route.work_centers_store, "max_ops"),
+    }[failed_read]
+    monkeypatch.setattr(*failing_reader, fail)
+    monkeypatch.setattr(staffing_route, "_recycled_suggestion_for_day", fail)
+
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={"day": "2026-07-14", "mode": "normal"},
+    )
+
+    assert response.status_code == 503
+    assert saved == []
+    assert invalidated == []
 
 
 def test_rebuild_preserves_manual_assignment(monkeypatch):
@@ -544,7 +594,17 @@ def test_rebuild_persists_safe_partial_assignments_and_reports_coverage(monkeypa
         lambda _d: {"Repair 1", "Dismantler 1"},
     )
     monkeypatch.setattr(rotations.staffing_route.work_centers_store, "default_people", lambda _loc: [])
-    monkeypatch.setattr(rotations.staffing_route, "_safe_time_off_entries", lambda _d: [])
+    monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _d: [])
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store,
+        "min_ops",
+        lambda loc: loc.min_ops,
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store,
+        "max_ops",
+        lambda loc: loc.max_ops,
+    )
     monkeypatch.setattr(
         rotations.staffing_route,
         "_recycled_suggestion_for_day",
@@ -794,6 +854,31 @@ def test_recycled_context_warns_how_many_auto_centers_to_enable_for_unused_peopl
         "Turn on 1 more Auto work center to schedule all 1 available person."
         in context["rotation_warnings"]
     )
+
+
+def test_recycled_context_reports_invalid_minimum_above_maximum(monkeypatch):
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    monkeypatch.setattr(
+        staffing_route,
+        "_auto_group_maps",
+        lambda _enabled: ({"Repair": ("Repair 1",)}, {"Repair": ("Repair",)}),
+    )
+    monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda _loc: 2)
+    monkeypatch.setattr(staffing_route.work_centers_store, "max_ops", lambda _loc: 1)
+
+    context = staffing_route._recycled_context_for_day(
+        TARGET_DAY,
+        roster=[_person("Green A", 3), _person("Green B", 3)],
+        mode="normal",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
+        enabled_work_centers={"Repair 1"},
+        assignment_sources={},
+    )
+
+    assert context["rotation_issues"][0]["code"] == "invalid_center_configuration"
+    assert "minimum of 2 exceeds its maximum of 1" in context["rotation_issues"][0]["message"]
 
 
 def test_recycled_context_omits_auto_expansion_advisory_on_saturday(monkeypatch):

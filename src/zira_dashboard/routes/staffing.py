@@ -134,7 +134,9 @@ def _effective_minimum(loc) -> int:
     return work_centers_store.min_ops(loc)
 
 
-def _configured_center_capacities(centers) -> dict[str, int | None]:
+def _configured_center_capacities(
+    centers, *, strict: bool = False,
+) -> dict[str, int | None]:
     """Read configured maxima for engine input, retaining its static fallback.
 
     A transient Settings read must not make normal scheduling unavailable.  The
@@ -149,6 +151,8 @@ def _configured_center_capacities(centers) -> dict[str, int | None]:
         try:
             capacities[loc.name] = work_centers_store.max_ops(loc)
         except Exception:
+            if strict:
+                raise
             log.exception("Could not load configured maximum for %s; using static fallback", loc.name)
             capacities[loc.name] = loc.max_ops
     return capacities
@@ -528,6 +532,7 @@ def _append_auto_expansion_warning(
 def _recycled_suggestion_for_day(
     d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries,
     enabled_work_centers=None, assignment_sources=None,
+    center_minimums=None, center_capacities=None,
 ):
     """Compute the pure Recycled suggestion for ``d``, or ``None`` on any failure.
 
@@ -551,11 +556,15 @@ def _recycled_suggestion_for_day(
             )
         )
         group_locations, group_required_skills = _auto_group_maps(enabled)
-        center_minimums = {
+        resolved_minimums = center_minimums if center_minimums is not None else {
             loc.name: _effective_minimum(loc)
             for loc in staffing.LOCATIONS if loc.name in enabled
         }
-        center_capacities = _configured_center_capacities(enabled)
+        resolved_capacities = (
+            center_capacities
+            if center_capacities is not None
+            else _configured_center_capacities(enabled)
+        )
         scoped_locks = {
             wc: list(names or [])
             for wc, names in (locked_assignments or {}).items()
@@ -573,8 +582,8 @@ def _recycled_suggestion_for_day(
             locked_assignments=scoped_locks,
             block_effects=block_effects,
             training_cap=_RECYCLED_TRAINING_CAP,
-            center_minimums=center_minimums,
-            center_capacities=center_capacities,
+            center_minimums=resolved_minimums,
+            center_capacities=resolved_capacities,
             runnable_centers=enabled,
         )
         suggestion = _append_auto_expansion_warning(

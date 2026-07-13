@@ -296,12 +296,24 @@ async def rebuild_rotation(request: Request):
         enabled_centers = staffing_route._ordered_work_center_names(
             staffing_route._enabled_auto_work_centers(d)
         )
-        locked = staffing_route._protected_locks(
-            sched.assignment_sources,
-            sched.assignments,
-            allowed_centers=enabled_centers,
-        )
-        time_off = staffing_route._safe_time_off_entries(d)
+        try:
+            time_off = scheduler_time_off.time_off_entries_for_day(d)
+            locked = staffing_route._protected_locks(
+                sched.assignment_sources,
+                sched.assignments,
+                allowed_centers=enabled_centers,
+                strict_default_reads=True,
+            )
+            center_minimums = {
+                loc.name: staffing_route._effective_minimum(loc)
+                for loc in staffing.LOCATIONS if loc.name in enabled_centers
+            }
+            center_capacities = staffing_route._configured_center_capacities(
+                enabled_centers,
+                strict=True,
+            )
+        except Exception:
+            return _error("Could not rebuild the schedule.", 503)
         suggestion = staffing_route._recycled_suggestion_for_day(
             d,
             roster,
@@ -311,6 +323,8 @@ async def rebuild_rotation(request: Request):
             time_off_entries=time_off,
             enabled_work_centers=enabled_centers,
             assignment_sources=sched.assignment_sources,
+            center_minimums=center_minimums,
+            center_capacities=center_capacities,
         )
         if suggestion is None:
             return _error("Could not rebuild the schedule.", 503)
