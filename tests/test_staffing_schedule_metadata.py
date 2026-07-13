@@ -48,7 +48,7 @@ def test_notes_only_save_preserves_rotation_metadata(monkeypatch):
     assert saved[0].assignment_sources == SOURCES
 
 
-def test_regular_save_preserves_rotation_metadata(monkeypatch):
+def test_regular_save_drops_sources_for_people_removed_from_schedule(monkeypatch):
     saved = _capture_route_save(monkeypatch, _schedule())
 
     staffing_routes._staffing_save_work(
@@ -56,6 +56,21 @@ def test_regular_save_preserves_rotation_metadata(monkeypatch):
     )
 
     assert saved[0].rotation_mode == "training"
+    assert saved[0].assignments == {}
+    assert saved[0].assignment_sources == {}
+
+
+def test_regular_save_preserves_source_for_person_still_assigned(monkeypatch):
+    repair_1 = next(loc for loc in staffing.LOCATIONS if loc.name == "Repair 1")
+    saved = _capture_route_save(monkeypatch, _schedule())
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair_1,))
+
+    staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), DAY, 0,
+        _save_form("save", **{"loc__Repair 1": "Jordan"}),
+    )
+
+    assert saved[0].assignments == {"Repair 1": ["Jordan"]}
     assert saved[0].assignment_sources == SOURCES
 
 
@@ -139,6 +154,7 @@ def test_clear_testing_day_preserves_rotation_metadata(monkeypatch):
 def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
     from zira_dashboard import cert_lookup, staffing_view
 
+    repair_1 = next(loc for loc in staffing.LOCATIONS if loc.name == "Repair 1")
     draft_sources = {"Repair 1": {"Jordan": "generated"}}
     posted_sources = {"Repair 1": {"Jordan": "manual"}}
     cached = staffing.Schedule(
@@ -203,8 +219,10 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
     assert staffing.load_schedule(DAY).assignment_sources == draft_sources
 
     monkeypatch.setattr(staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair_1,))
     staffing_routes._staffing_save_work(
-        SimpleNamespace(headers={}), DAY, 0, _save_form("save", notes="draft update"),
+        SimpleNamespace(headers={}), DAY, 0,
+        _save_form("save", notes="draft update", **{"loc__Repair 1": "Jordan"}),
     )
 
     assert saved[0].rotation_mode == "training"

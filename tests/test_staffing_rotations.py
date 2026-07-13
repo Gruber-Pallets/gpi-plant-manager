@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from datetime import date, time, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.datastructures import FormData
 
 from zira_dashboard import staffing
 from zira_dashboard.auto_schedule_capacity import AutoCapacity
@@ -1857,6 +1859,53 @@ def test_rebuild_drops_stale_generated_source(monkeypatch):
     assert "Green One" in all_assigned  # the real green person took the slot
     # And the persisted schedule is equally clean.
     assert "Gone" not in {n for names in saved[-1].assignments.values() for n in names}
+
+
+def test_rebuild_does_not_restore_person_after_clear_removes_manual_source(monkeypatch):
+    """A cleared manual source cannot become a stale rebuild lock."""
+    from zira_dashboard.routes import staffing as staffing_route
+
+    client, rotations = _rotations_client(monkeypatch)
+    schedule_before_clear = staffing.Schedule(
+        day=TARGET_DAY,
+        assignments={"Repair 1": ["Manual Person"]},
+        assignment_sources={"Repair 1": {"Manual Person": "manual"}},
+    )
+    cleared: list = []
+    locations = staffing.LOCATIONS
+    monkeypatch.setattr(staffing_route.staffing, "LOCATIONS", ())
+    monkeypatch.setattr(
+        staffing_route.staffing, "load_schedule", lambda _day: schedule_before_clear,
+    )
+    monkeypatch.setattr(staffing_route.staffing, "save_schedule", cleared.append)
+    monkeypatch.setattr(staffing_route._http_cache, "invalidate_today_cache", lambda: None)
+
+    staffing_route._staffing_save_work(
+        SimpleNamespace(headers={}), TARGET_DAY, 1, FormData({"action": "save"}),
+    )
+
+    cleared_schedule = cleared[-1]
+    assert cleared_schedule.assignments == {}
+    assert cleared_schedule.assignment_sources == {}
+
+    monkeypatch.setattr(staffing_route.staffing, "LOCATIONS", locations)
+    _stub_recommendation_inputs(monkeypatch)
+
+    rebuilt: list = []
+    monkeypatch.setattr(
+        rotations.staffing, "load_roster", lambda: [_person("Manual Person", 3, active=False)],
+    )
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: cleared_schedule)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", rebuilt.append)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    resp = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "normal"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "Manual Person" not in {name for names in body["assignments"].values() for name in names}
+    assert "Manual Person" not in {name for sources in body["sources"].values() for name in sources}
+    assert rebuilt[-1].assignment_sources == {}
 
 
 def test_rebuild_leaves_non_recycled_center_untouched(monkeypatch):

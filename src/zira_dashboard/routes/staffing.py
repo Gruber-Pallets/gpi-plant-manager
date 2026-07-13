@@ -1372,6 +1372,21 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         # First edit of a posted day: snapshot before overwriting, flip to draft.
         published_snapshot = staffing.snapshot_of(existing)
         published = False
+
+    # An ordinary save owns the current grid, so sources only survive for
+    # people still submitted in the same work center. This prevents a cleared
+    # manual pick from becoming a stale rebuild lock.
+    assignment_sources = {}
+    for wc_name, sources in existing.assignment_sources.items():
+        assigned_names = set(assignments.get(wc_name, []))
+        remaining_sources = {
+            name: source
+            for name, source in (sources or {}).items()
+            if name in assigned_names
+        }
+        if remaining_sources:
+            assignment_sources[wc_name] = remaining_sources
+
     staffing.save_schedule(staffing.Schedule(
         day=d,
         published=published,
@@ -1385,10 +1400,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         # publish / save / unpublish so the user's overrides aren't dropped.
         custom_hours=existing.custom_hours,
         rotation_mode=existing.rotation_mode,
-        assignment_sources={
-            wc_name: dict(sources or {})
-            for wc_name, sources in existing.assignment_sources.items()
-        },
+        assignment_sources=assignment_sources,
     ))
     # Bust the today response cache so the next GET sees fresh data.
     _http_cache.invalidate_today_cache()
