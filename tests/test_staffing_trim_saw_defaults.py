@@ -210,7 +210,7 @@ def test_staffing_page_preserves_saved_manual_trim_saw_assignments(monkeypatch):
     assert captured["context"]["smart_defaults_by_loc"] == {"Trim Saw 1": ["Smart"]}
 
 
-def test_publish_prefills_next_day_with_smart_defaults(monkeypatch):
+def test_publish_does_not_seed_or_persist_empty_next_day_schedule(monkeypatch):
     from zira_dashboard import staffing as staffing_mod
     from zira_dashboard.routes import staffing as staffing_routes
 
@@ -267,11 +267,8 @@ def test_publish_prefills_next_day_with_smart_defaults(monkeypatch):
     response = staffing_routes._staffing_save_work(FakeRequest(), current_day, 0, FakeForm())
 
     assert response.status_code == 303
-    assert smart_calls == [(next_day, {"Trim Saw 1": ["Stored"]})]
-    assert saved[-1].day == next_day
-    assert saved[-1].assignments == {"Trim Saw 1": ["Smart"]}
-    assert saved[-1].rotation_mode == "training"
-    assert saved[-1].assignment_sources == {"Trim Saw 1": {"Jordan": "manual"}}
+    assert smart_calls == []
+    assert all(sched.day != next_day for sched in saved)
 
 
 def test_route_smart_defaults_falls_back_to_raw_defaults(monkeypatch):

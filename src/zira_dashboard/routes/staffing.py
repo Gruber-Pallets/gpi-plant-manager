@@ -1176,43 +1176,9 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
     if publish_block:
         return RedirectResponse(f"/staffing?day={d.isoformat()}&publish_blocked=1", status_code=303)
 
-    # Successful publish: advance to next working day and pre-fill with defaults.
+    # Successful publish leaves the next working day untouched. New schedules
+    # start blank and automatic scheduling is always an explicit action.
     if action == "publish" and published:
-        next_day = _next_working_day(d)
-        next_sched = staffing.load_schedule(next_day)
-        if not next_sched.assignments:
-            defaults: dict[str, list[str]] = {}
-            for loc in staffing.LOCATIONS:
-                dp = work_centers_store.default_people(loc)
-                if dp:
-                    defaults[loc.name] = list(dp)
-            if defaults:
-                try:
-                    next_roster = staffing.load_roster()
-                    next_time_off = _safe_time_off_entries(next_day)
-                    next_enabled = _ordered_work_center_names(
-                        _enabled_auto_work_centers(next_day)
-                    )
-                    smart_defaults = _smart_defaults_for_day(
-                        next_day,
-                        next_roster,
-                        defaults,
-                        next_time_off,
-                        enabled_work_centers=next_enabled,
-                        assignment_sources=next_sched.assignment_sources,
-                    )
-                except Exception:
-                    smart_defaults = {k: list(v) for k, v in defaults.items()}
-                staffing.save_schedule(staffing.Schedule(
-                    day=next_day,
-                    published=False,
-                    assignments=smart_defaults,
-                    rotation_mode=next_sched.rotation_mode,
-                    assignment_sources={
-                        wc_name: dict(sources or {})
-                        for wc_name, sources in next_sched.assignment_sources.items()
-                    },
-                ))
         return RedirectResponse(f"/staffing?day={d.isoformat()}", status_code=303)
 
     return RedirectResponse(f"/staffing?day={d.isoformat()}", status_code=303)
