@@ -624,6 +624,12 @@ def test_skills_matrix_exposes_scheduling_preferences_and_recycled_training():
     html = (ROOT / "src/zira_dashboard/templates/skills.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/skills-page.js").read_text()
     assert "Scheduling Preferences" in html
+    assert 'class="rotation-open-btn"' in html
+    assert 'aria-label="Scheduling preferences for {{ p.name }}"' in html
+    assert 'd="M17 7.5A8.5 8.5 0 1 0 19.5 16"' in html
+    assert '<circle cx="12" cy="3.5" r="1.45"' in html
+    assert '<circle cx="19.5" cy="15.5" r="1.45"' in html
+    assert '<circle cx="6.5" cy="18" r="1.45"' in html
     assert "Recycled training" in html
     assert 'id="rotation-pref-grid"' in html
     assert "dataset.rotationPreference" in js
