@@ -397,6 +397,12 @@ def fetch_attendances_for_day(day) -> list[dict]:
     return _odoo_attendance.fetch_attendances_for_day(execute, day)
 
 
+def fetch_employee_attendances_for_day(employee_odoo_id: int, day) -> list[dict]:
+    return _odoo_attendance.fetch_employee_attendances_for_day(
+        execute, employee_odoo_id, day
+    )
+
+
 def fetch_attendance_intervals_for_day(day) -> list[dict]:
     return _odoo_attendance.fetch_attendance_intervals_for_day(
         execute, day, _kiosk_wc_field()

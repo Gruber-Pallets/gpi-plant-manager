@@ -202,6 +202,32 @@ def fetch_attendances_for_day(
     return list(aggregate.values())
 
 
+def fetch_employee_attendances_for_day(
+    execute_fn: Callable[..., Any], employee_odoo_id: int, day: date
+) -> list[dict]:
+    start_local = datetime.combine(day, _time.min, tzinfo=shift_config.SITE_TZ)
+    end_local = start_local + timedelta(days=1)
+    rows = execute_fn(
+        "hr.attendance", "search_read",
+        [
+            ("employee_id", "=", int(employee_odoo_id)),
+            ("check_in", ">=", to_odoo_dt(start_local)),
+            ("check_in", "<", to_odoo_dt(end_local)),
+        ],
+        fields=["id", "check_in", "check_out"],
+        order="check_in asc, id asc",
+    )
+    return [
+        {
+            "id": int(row["id"]),
+            "check_in": odoo_dt_to_iso(row.get("check_in")),
+            "check_out": odoo_dt_to_iso(row.get("check_out")),
+        }
+        for row in rows
+        if row.get("id") and odoo_dt_to_iso(row.get("check_in"))
+    ]
+
+
 def fetch_attendance_intervals_for_day(
     execute_fn: Callable[..., Any], day: date, wc_field: str | None
 ) -> list[dict]:

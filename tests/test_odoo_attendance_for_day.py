@@ -2,6 +2,32 @@ from datetime import date
 from zira_dashboard import odoo_client
 
 
+def test_fetch_employee_attendances_for_day_uses_employee_and_day_bounds(monkeypatch):
+    calls = []
+    monkeypatch.setattr(odoo_client, "execute", lambda *a, **kw: calls.append((a, kw)) or [
+        {"id": 34, "check_in": "2026-07-12 17:47:00", "check_out": False},
+    ])
+
+    assert odoo_client.fetch_employee_attendances_for_day(6, date(2026, 7, 12)) == [{
+        "id": 34, "check_in": "2026-07-12T17:47:00+00:00", "check_out": None,
+    }]
+    args, kwargs = calls[0]
+    assert args[:2] == ("hr.attendance", "search_read")
+    assert ("employee_id", "=", 6) in args[2]
+    assert kwargs["fields"] == ["id", "check_in", "check_out"]
+
+
+def test_fetch_employee_attendances_for_day_preserves_closed_checkout(monkeypatch):
+    monkeypatch.setattr(odoo_client, "execute", lambda *a, **kw: [
+        {"id": 35, "check_in": "2026-07-12 17:47:00", "check_out": "2026-07-12 22:00:00"},
+    ])
+
+    assert odoo_client.fetch_employee_attendances_for_day(6, date(2026, 7, 12)) == [{
+        "id": 35, "check_in": "2026-07-12T17:47:00+00:00",
+        "check_out": "2026-07-12T22:00:00+00:00",
+    }]
+
+
 def test_fetch_attendances_for_day_reduces_to_earliest_and_open(monkeypatch):
     # Two punches for emp 7 (earlier one wins), one still-open punch for emp 9.
     fake_rows = [
