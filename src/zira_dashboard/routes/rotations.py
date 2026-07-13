@@ -225,14 +225,17 @@ async def save_auto_work_centers(request: Request):
         roster = staffing.load_roster()
         sched = staffing.load_schedule(d)
         time_off = staffing_route._safe_time_off_entries(d)
-        capacity = staffing_route._auto_capacity_for_day(
-            d=d,
-            enabled_work_centers=enabled,
-            roster=roster,
-            assignments=sched.assignments,
-            assignment_sources=sched.assignment_sources,
-            time_off_entries=time_off,
-        )
+        try:
+            capacity = staffing_route._auto_capacity_for_day(
+                d=d,
+                enabled_work_centers=enabled,
+                roster=roster,
+                assignments=sched.assignments,
+                assignment_sources=sched.assignment_sources,
+                time_off_entries=time_off,
+            )
+        except Exception:
+            return _error("Could not verify daily staffing capacity.", 503)
         if capacity.shortage:
             return JSONResponse({
                 "ok": False,

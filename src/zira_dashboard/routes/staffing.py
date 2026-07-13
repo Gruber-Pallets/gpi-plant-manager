@@ -130,12 +130,8 @@ def _known_work_center_names() -> set[str]:
 
 
 def _effective_minimum(loc) -> int:
-    """Read the configured minimum, with the location default as safe fallback."""
-    try:
-        return work_centers_store.min_ops(loc)
-    except Exception:
-        log.exception("Could not load configured minimum for %s; using location default", loc.name)
-        return loc.min_ops
+    """Read the authoritative configured minimum for a work center."""
+    return work_centers_store.min_ops(loc)
 
 
 def _ordered_work_center_names(names) -> list[str]:
@@ -289,16 +285,43 @@ def _auto_capacity_for_day(
     )
     locks = _protected_locks(assignment_sources, assignments, allowed_centers=None)
     locked_names = {name for names in locks.values() for name in names}
+    assigned_outside_auto = {
+        str(name).strip()
+        for center, names in (assignments or {}).items()
+        if center not in enabled
+        for name in (names or [])
+        if str(name or "").strip()
+    }
+    unavailable = rotation_suggestions._full_day_time_off_names(time_off_entries or [])
+    people_by_name = {person.name: person for person in roster}
+
+    def _eligible_lock(name: str) -> bool:
+        person = people_by_name.get(name)
+        return bool(
+            person
+            and person.active
+            and not person.reserve
+            and name not in unavailable
+        )
+
     available = [
         person
         for person in _roster_minus_full_day_off(roster, time_off_entries)
-        if person.active and not person.reserve and person.name not in locked_names
+        if (
+            person.active
+            and not person.reserve
+            and person.name not in locked_names
+            and person.name not in assigned_outside_auto
+        )
     ]
     minimums = {
         loc.name: _effective_minimum(loc)
         for loc in staffing.LOCATIONS if loc.name in enabled
     }
-    manual_counts = {center: len(set(locks.get(center, []))) for center in enabled}
+    manual_counts = {
+        center: len({name for name in locks.get(center, []) if _eligible_lock(name)})
+        for center in enabled
+    }
     return analyze_auto_capacity(
         enabled_centers=enabled,
         minimum_by_center=minimums,

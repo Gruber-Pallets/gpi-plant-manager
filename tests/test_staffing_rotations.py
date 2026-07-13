@@ -28,12 +28,12 @@ def _person(name: str, level: int, group: str = "Repair", *, active: bool = True
     return staffing.Person(name=name, active=active, reserve=reserve, skills={group: level})
 
 
-def _rotations_client(monkeypatch):
+def _rotations_client(monkeypatch, *, raise_server_exceptions: bool = True):
     from zira_dashboard.routes import rotations
 
     app = FastAPI()
     app.include_router(rotations.router)
-    return TestClient(app), rotations
+    return TestClient(app, raise_server_exceptions=raise_server_exceptions), rotations
 
 
 # --------------------------------------------------------------------------- #
@@ -676,6 +676,37 @@ def test_auto_center_endpoint_accepts_sufficient_replacement(monkeypatch):
     assert saved == [["Hand Build #2"]]
 
 
+def test_auto_center_endpoint_fails_closed_when_minimum_lookup_fails(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
+    saved = []
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green", 3, "Hand Build")])
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_schedule",
+        lambda d: staffing.Schedule(day=d),
+    )
+    monkeypatch.setattr(rotations.staffing_route, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store,
+        "min_ops",
+        lambda loc: (_ for _ in ()).throw(RuntimeError("settings unavailable")),
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_save_enabled_auto_work_centers",
+        lambda names: saved.append(names),
+    )
+
+    resp = client.post("/api/rotations/auto-work-centers", json={
+        "day": "2026-07-14",
+        "work_centers": ["Hand Build #2"],
+        "turn_off": [],
+    })
+
+    assert resp.status_code == 503
+    assert saved == []
+
+
 def test_rebuild_rejects_unknown_mode(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     resp = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "chaos"})
@@ -713,6 +744,7 @@ def test_staffing_has_rotation_mode_controls_and_reason_data():
     assert "rotation_reasons" in html
     assert "/api/rotations/rebuild" in js
     assert "/api/rotations/auto-work-centers" in js
+    assert "JSON.stringify({ day, work_centers: selectedAutoCenters(), turn_off: [] })" in js
 
 
 def test_skills_matrix_exposes_scheduling_preferences_and_recycled_training():
@@ -823,6 +855,84 @@ def test_capacity_for_day_uses_effective_minimum_and_excludes_absent_and_manual(
     assert result.shortage == 1
 
 
+def test_capacity_for_day_excludes_generated_assignment_outside_auto_centers(monkeypatch):
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
+
+    result = staffing_route._auto_capacity_for_day(
+        d=TARGET_DAY,
+        enabled_work_centers={"Hand Build #2"},
+        roster=[
+            staffing.Person(name="Auto Candidate", skills={"Hand Build": 3}),
+            staffing.Person(name="Generated Elsewhere", skills={"Hand Build": 3}),
+        ],
+        assignments={"Junior #1": ["Generated Elsewhere"]},
+        assignment_sources={"Junior #1": {"Generated Elsewhere": "generated"}},
+        time_off_entries=[],
+        block_effects=(),
+    )
+
+    assert result.available_people == 1
+    assert result.required_people == 2
+    assert result.shortage == 1
+
+
+@pytest.mark.parametrize(
+    "lock_kind,locked_person,time_off",
+    [
+        ("manual", _person("Inactive", 3, "Hand Build", active=False), []),
+        ("manual", _person("Reserve", 3, "Hand Build", reserve=True), []),
+        ("manual", _person("Absent", 3, "Hand Build"), [{"name": "Absent", "hours": None}]),
+        ("default", _person("Default Absent", 3, "Hand Build"), [{"name": "Default Absent", "hours": None}]),
+        (
+            "training",
+            _person("Trainee Absent", 0, "Hand Build"),
+            [{"name": "Trainee Absent", "hours": None}],
+        ),
+    ],
+)
+def test_capacity_for_day_nonworking_locks_do_not_reduce_minimum(
+    monkeypatch, lock_kind, locked_person, time_off,
+):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    _stub_recommendation_inputs(monkeypatch)
+    monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
+    if lock_kind == "default":
+        monkeypatch.setattr(
+            staffing_route.work_centers_store,
+            "default_people",
+            lambda loc: [locked_person.name] if loc.name == "Hand Build #2" else [],
+        )
+        assignments, sources = {}, {}
+        block_effects = ()
+    elif lock_kind == "training":
+        assignments, sources = {}, {}
+        block_effects = (
+            staffing_route.rotation_training.BlockEffect(
+                locked_people={"Hand Build": [locked_person.name]},
+            ),
+        )
+    else:
+        assignments = {"Hand Build #2": [locked_person.name]}
+        sources = {"Hand Build #2": {locked_person.name: "manual"}}
+        block_effects = ()
+
+    result = staffing_route._auto_capacity_for_day(
+        d=TARGET_DAY,
+        enabled_work_centers={"Hand Build #2"},
+        roster=[locked_person, _person("Available", 3, "Hand Build")],
+        assignments=assignments,
+        assignment_sources=sources,
+        time_off_entries=time_off,
+        block_effects=block_effects,
+    )
+
+    assert result.available_people == 1
+    assert result.required_people == 2
+    assert result.shortage == 1
+
+
 def test_auto_group_maps_keep_hand_build_centers_under_one_target():
     from zira_dashboard.routes import staffing as staffing_route
 
@@ -862,7 +972,6 @@ def test_staffing_history_counts_hand_build_and_rotates_to_other_center(monkeypa
     monkeypatch.setattr(staffing_route.rotation_store, "load_preferences_by_name", lambda: {})
     monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda _as_of: [])
     monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda _d: [])
-    monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
     monkeypatch.setattr(
         db,
         "query",
@@ -987,6 +1096,7 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
     )
     monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda as_of: [])
     monkeypatch.setattr(staffing_route.app_settings, "get_setting", lambda key: ["Repair 1"])
+    monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
 
     block = rotation_store.TrainingBlock(
         id=1, trainee_name="Learner", trainer_name="Green", skill="Repair",
@@ -1045,6 +1155,7 @@ def test_recycled_suggestion_uses_regular_preferences_when_preference_read_fails
     )
     monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda _as_of: [])
     monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda _d: [])
+    monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
 
     captured = {}
     sentinel = object()
@@ -1082,6 +1193,7 @@ def test_recycled_context_uses_regular_preferences_when_preference_read_fails(mo
     )
     monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda _as_of: [])
     monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda _d: [])
+    monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
 
     captured = {}
 

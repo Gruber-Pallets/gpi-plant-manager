@@ -1468,7 +1468,7 @@
         const resp = await fetch('/api/rotations/auto-work-centers', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ work_centers: selectedAutoCenters() }),
+          body: JSON.stringify({ day, work_centers: selectedAutoCenters(), turn_off: [] }),
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || !data.ok) {
