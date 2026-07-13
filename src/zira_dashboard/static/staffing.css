@@ -670,14 +670,6 @@
     min-width: 2.4rem; padding: 0.3rem 0.45rem;
     font-size: 1rem; line-height: 1;
   }
-  .rotation-reset-btn {
-    background: transparent; color: var(--muted);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.3rem 0.7rem; font: inherit; font-size: 0.82rem; cursor: pointer;
-    white-space: nowrap;
-  }
-  .rotation-reset-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--muted); }
-  .rotation-reset-btn:disabled { opacity: 0.6; cursor: progress; }
   /* Override the global centered .hint for the inline help text. */
   .rotation-mode-help.hint {
     flex: 1 1 15rem; margin: 0; min-width: 0; padding: 0;
