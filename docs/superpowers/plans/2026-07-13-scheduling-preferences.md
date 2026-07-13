@@ -42,7 +42,7 @@
 - Produces \`scheduling_preference_targets() -> tuple[SchedulingPreferenceTarget, ...]\`.
 - Produces \`eligible_scheduling_preference_targets(person) -> tuple[SchedulingPreferenceTarget, ...]\`.
 
-- [ ] **Step 1: Write failing target derivation tests**
+- [x] **Step 1: Write failing target derivation tests**
 
 ~~~python
 def test_scheduling_preference_targets_group_sibling_centers():
@@ -76,13 +76,13 @@ def test_eligible_targets_require_every_required_skill():
     }
 ~~~
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: \`ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_rotation_store.py -q\`
 
 Expected: FAIL because \`scheduling_preference_targets\` does not exist.
 
-- [ ] **Step 3: Implement shared derivation**
+- [x] **Step 3: Implement shared derivation**
 
 ~~~python
 @dataclass(frozen=True)
@@ -143,7 +143,7 @@ Run: \`ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_rotation_store.py
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ~~~bash
 git add src/zira_dashboard/staffing.py src/zira_dashboard/rotation_store.py tests/test_rotation_store.py
@@ -163,7 +163,7 @@ git commit -m "feat: derive scheduling preference targets"
 - Produces \`_auto_group_maps(enabled_work_centers) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]\`.
 - A target level is the lowest of the operator's required-skill levels.
 
-- [ ] **Step 1: Write failing generic-scheduling tests**
+- [x] **Step 1: Write failing generic-scheduling tests**
 
 ~~~python
 def test_generic_engine_honors_standalone_preference():
@@ -193,13 +193,13 @@ def test_auto_group_maps_keep_hand_build_centers_under_one_target():
     assert skills == {"Hand Build": ("Hand Build",)}
 ~~~
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: \`ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_rotation_suggestions.py tests/test_staffing_rotations.py -q\`
 
 Expected: FAIL with an unexpected \`group_required_skills\` argument and missing \`_auto_group_maps\`.
 
-- [ ] **Step 3: Implement target-aware maps and levels**
+- [x] **Step 3: Implement target-aware maps and levels**
 
 Replace \`_auto_group_locations\` with:
 
@@ -231,13 +231,13 @@ def _group_level(person, group, group_required_skills):
 
 Replace every generic \`_recycled_level(person, group)\` call with \`_group_level(person, group, group_required_skills)\`. Preserve the existing Trim Saw safety branch and its pairing rules, but pass it the resolved group level.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: \`ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_rotation_suggestions.py tests/test_staffing_rotations.py -q\`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ~~~bash
 git add src/zira_dashboard/routes/staffing.py src/zira_dashboard/rotation_suggestions.py tests/test_rotation_suggestions.py tests/test_staffing_rotations.py
@@ -258,7 +258,7 @@ git commit -m "feat: honor preferences across auto work centers"
 - Browser reads \`window.ROTATION_PREFERENCE_TARGETS_BY_PERSON\`.
 - The existing POST body remains \`{person, group, preference}\`, with \`group\` now a general target key.
 
-- [ ] **Step 1: Write failing route and static-contract tests**
+- [x] **Step 1: Write failing route and static-contract tests**
 
 ~~~python
 def test_skills_context_only_exposes_qualified_preference_targets(monkeypatch):
@@ -285,13 +285,13 @@ def test_people_matrix_uses_dynamic_scheduling_preferences_picker():
     assert "data.rotationPreference" in js
 ~~~
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: \`ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_staffing_rotations.py -q\`
 
 Expected: FAIL because the context and dynamic icon/rendering contracts do not exist.
 
-- [ ] **Step 3: Add eligible target context and modal markup**
+- [x] **Step 3: Add eligible target context and modal markup**
 
 Keep \`rotation_groups\` and \`rotation_levels\` for Recycled training. Add to the Skills route:
 
@@ -317,7 +317,7 @@ Pass it into the template. Replace the fixed Jinja select loop with:
 
 Rename the dialog to \`Scheduling Preferences\`. Keep training section copy explicitly Recycled. Replace the glyph with a compact inline two-arrow SVG inside the existing button and set its title and aria-label to \`Scheduling preferences for {{ p.name }}\`.
 
-- [ ] **Step 4: Render rows in JavaScript and retain save behavior**
+- [x] **Step 4: Render rows in JavaScript and retain save behavior**
 
 Replace the static \`prefSelects\` setup with \`renderPreferences(person)\`, which clears the grid, reads the target list for that person, and creates the label and select. The implementation must attach the existing save/revert behavior to each dynamic select:
 
@@ -350,7 +350,7 @@ function renderPreferences(person) {
 
 Extract the existing endpoint request, disabled state, \`PREFS\` update, toast, and failure revert into \`savePreference(select)\`. Call \`renderPreferences(person)\` from \`openModal\`. Make the button square enough for the SVG's pointer target while retaining the current hover and focus styles.
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run: \`ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_staffing_rotations.py tests/test_staffing_static.py tests/test_skills_static.py tests/test_skills_template_render.py -q\`
 
