@@ -490,51 +490,55 @@ def _gather_recycled_inputs(d: date, time_off_entries, *, assignments=None, assi
 def _append_auto_expansion_warning(
     *, suggestion, capacity, enabled_work_centers, base_assignments, assignment_sources,
 ):
-    if capacity.shortage:
-        return suggestion
-    generated_people = {
-        name
-        for sources in suggestion.sources.values()
-        for name, source in sources.items()
-        if source == rotation_suggestions.GENERATED_SOURCE
-    }
-    unassigned_people = max(0, capacity.available_people - len(generated_people))
-    if not unassigned_people:
-        return suggestion
+    try:
+        if capacity.shortage:
+            return suggestion
+        generated_people = {
+            name
+            for sources in suggestion.sources.values()
+            for name, source in sources.items()
+            if source == rotation_suggestions.GENERATED_SOURCE
+        }
+        unassigned_people = max(0, capacity.available_people - len(generated_people))
+        if not unassigned_people:
+            return suggestion
 
-    enabled = set(_ordered_work_center_names(enabled_work_centers))
-    locks = _protected_locks(assignment_sources, base_assignments, allowed_centers=None)
-    open_slots_by_center = {}
-    disabled_centers = []
-    for loc in staffing.LOCATIONS:
-        if loc.name in enabled:
-            continue
-        maximum = work_centers_store.max_ops(loc)
-        if maximum is None:
-            maximum = unassigned_people
-        occupied = set(base_assignments.get(loc.name, [])) | set(locks.get(loc.name, []))
-        open_slots_by_center[loc.name] = max(0, int(maximum) - len(occupied))
-        disabled_centers.append(loc.name)
+        enabled = set(_ordered_work_center_names(enabled_work_centers))
+        locks = _protected_locks(assignment_sources, base_assignments, allowed_centers=None)
+        open_slots_by_center = {}
+        disabled_centers = []
+        for loc in staffing.LOCATIONS:
+            if loc.name in enabled:
+                continue
+            maximum = work_centers_store.max_ops(loc)
+            if maximum is None:
+                maximum = unassigned_people
+            occupied = set(base_assignments.get(loc.name, [])) | set(locks.get(loc.name, []))
+            open_slots_by_center[loc.name] = max(0, int(maximum) - len(occupied))
+            disabled_centers.append(loc.name)
 
-    expansion = analyze_auto_expansion(
-        unassigned_people=unassigned_people,
-        disabled_centers=disabled_centers,
-        open_slots_by_center=open_slots_by_center,
-        center_order=_location_order(),
-    )
-    if expansion.centers_to_enable is None:
-        warning = (
-            "Not enough Auto work-center capacity is available to schedule "
-            f"all {unassigned_people} remaining people."
+        expansion = analyze_auto_expansion(
+            unassigned_people=unassigned_people,
+            disabled_centers=disabled_centers,
+            open_slots_by_center=open_slots_by_center,
+            center_order=_location_order(),
         )
-    else:
-        noun = "center" if expansion.centers_to_enable == 1 else "centers"
-        people = "person" if unassigned_people == 1 else "people"
-        warning = (
-            f"Turn on {expansion.centers_to_enable} more Auto work {noun} "
-            f"to schedule all {unassigned_people} available {people}."
-        )
-    return replace(suggestion, warnings=tuple(suggestion.warnings) + (warning,))
+        if expansion.centers_to_enable is None:
+            warning = (
+                "Not enough Auto work-center capacity is available to schedule "
+                f"all {unassigned_people} remaining people."
+            )
+        else:
+            noun = "center" if expansion.centers_to_enable == 1 else "centers"
+            people = "person" if unassigned_people == 1 else "people"
+            warning = (
+                f"Turn on {expansion.centers_to_enable} more Auto work {noun} "
+                f"to schedule all {unassigned_people} available {people}."
+            )
+        return replace(suggestion, warnings=tuple(suggestion.warnings) + (warning,))
+    except Exception:
+        log.exception("Could not calculate Auto expansion advisory; omitting it")
+        return suggestion
 
 
 def _recycled_suggestion_for_day(
@@ -724,13 +728,14 @@ def _recycled_context_for_day(
                 f"Turn off at least {capacity.centers_to_disable} work center(s)."
             )
             suggestion = replace(suggestion, warnings=tuple(suggestion.warnings) + (warning,))
-        suggestion = _append_auto_expansion_warning(
-            suggestion=suggestion,
-            capacity=capacity,
-            enabled_work_centers=enabled,
-            base_assignments=base_assignments,
-            assignment_sources=assignment_sources,
-        )
+        if d.weekday() != 5:
+            suggestion = _append_auto_expansion_warning(
+                suggestion=suggestion,
+                capacity=capacity,
+                enabled_work_centers=enabled,
+                base_assignments=base_assignments,
+                assignment_sources=assignment_sources,
+            )
         ctx["rotation_reasons"] = {wc: dict(r) for wc, r in suggestion.reasons.items()}
         ctx["rotation_warnings"] = list(suggestion.warnings)
         ctx["active_training_blocks"] = _training_blocks_context(active_blocks, d)

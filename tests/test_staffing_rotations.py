@@ -552,6 +552,29 @@ def test_rebuild_warns_when_auto_center_capacity_is_exhausted(monkeypatch):
     )
 
 
+def test_rebuild_ignores_auto_expansion_advisory_failure(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    sched = staffing.Schedule(day=TARGET_DAY)
+    roster = [_person("Green One", 3), _person("Green Two", 3)]
+
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _d: {"Repair 1"})
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "max_ops",
+        lambda _loc: (_ for _ in ()).throw(RuntimeError("max ops unavailable")),
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: roster)
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _d: sched)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda _schedule: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "normal"})
+
+    assert response.status_code == 200
+    assert response.json()["warnings"] == []
+
+
 def test_recycled_context_warns_how_many_auto_centers_to_enable_for_unused_people(monkeypatch):
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     roster = [_person("Green One", 3), _person("Green Two", 3), _person("Green Three", 3)]
@@ -573,6 +596,26 @@ def test_recycled_context_warns_how_many_auto_centers_to_enable_for_unused_peopl
         "Turn on 1 more Auto work center to schedule all 2 available people."
         in context["rotation_warnings"]
     )
+
+
+def test_recycled_context_omits_auto_expansion_advisory_on_saturday(monkeypatch):
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    roster = [_person("Green One", 3), _person("Green Two", 3), _person("Green Three", 3)]
+
+    monkeypatch.setattr(staffing_route.work_centers_store, "max_ops", lambda _loc: 2)
+
+    context = staffing_route._recycled_context_for_day(
+        date(2026, 7, 18),
+        roster=roster,
+        mode="normal",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
+        enabled_work_centers={"Repair 1"},
+        assignment_sources={},
+    )
+
+    assert context["rotation_warnings"] == []
 
 
 def test_rebuild_uses_enabled_new_work_center_and_leaves_disabled_recycled(monkeypatch):
