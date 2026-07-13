@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import _http_cache, app_settings, attendance, db, late_report, rotation_store, rotation_suggestions, rotation_training, schedule_store, shift_config, staffing, staffing_view, time_format, work_centers_store
 from .._http_cache import invalidate_today_cache
-from ..auto_schedule_capacity import AutoCapacity, analyze_auto_capacity
+from ..auto_schedule_capacity import AutoCapacity, analyze_auto_capacity, analyze_auto_expansion
 from ..deps import templates
 from ..plant_day import today as plant_today, now as plant_now
 from ..staffing_attendance import _late_emp_ids, _safe_attendance, _safe_time_off_entries
@@ -487,6 +487,56 @@ def _gather_recycled_inputs(d: date, time_off_entries, *, assignments=None, assi
     return preferences, history, block_effects, active_blocks
 
 
+def _append_auto_expansion_warning(
+    *, suggestion, capacity, enabled_work_centers, base_assignments, assignment_sources,
+):
+    if capacity.shortage:
+        return suggestion
+    generated_people = {
+        name
+        for sources in suggestion.sources.values()
+        for name, source in sources.items()
+        if source == rotation_suggestions.GENERATED_SOURCE
+    }
+    unassigned_people = max(0, capacity.available_people - len(generated_people))
+    if not unassigned_people:
+        return suggestion
+
+    enabled = set(_ordered_work_center_names(enabled_work_centers))
+    locks = _protected_locks(assignment_sources, base_assignments, allowed_centers=None)
+    open_slots_by_center = {}
+    disabled_centers = []
+    for loc in staffing.LOCATIONS:
+        if loc.name in enabled:
+            continue
+        maximum = work_centers_store.max_ops(loc)
+        if maximum is None:
+            maximum = unassigned_people
+        occupied = set(base_assignments.get(loc.name, [])) | set(locks.get(loc.name, []))
+        open_slots_by_center[loc.name] = max(0, int(maximum) - len(occupied))
+        disabled_centers.append(loc.name)
+
+    expansion = analyze_auto_expansion(
+        unassigned_people=unassigned_people,
+        disabled_centers=disabled_centers,
+        open_slots_by_center=open_slots_by_center,
+        center_order=_location_order(),
+    )
+    if expansion.centers_to_enable is None:
+        warning = (
+            "Not enough Auto work-center capacity is available to schedule "
+            f"all {unassigned_people} remaining people."
+        )
+    else:
+        noun = "center" if expansion.centers_to_enable == 1 else "centers"
+        people = "person" if unassigned_people == 1 else "people"
+        warning = (
+            f"Turn on {expansion.centers_to_enable} more Auto work {noun} "
+            f"to schedule all {unassigned_people} available {people}."
+        )
+    return replace(suggestion, warnings=tuple(suggestion.warnings) + (warning,))
+
+
 def _recycled_suggestion_for_day(
     d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries,
     enabled_work_centers=None, assignment_sources=None,
@@ -552,6 +602,13 @@ def _recycled_suggestion_for_day(
                 f"Turn off at least {capacity.centers_to_disable} work center(s)."
             )
             suggestion = replace(suggestion, warnings=tuple(suggestion.warnings) + (warning,))
+        suggestion = _append_auto_expansion_warning(
+            suggestion=suggestion,
+            capacity=capacity,
+            enabled_work_centers=enabled,
+            base_assignments=base_assignments,
+            assignment_sources=assignment_sources,
+        )
         return suggestion
     except Exception:
         log.exception("Recycled suggestion failed for %s; falling back to stored defaults", d)
@@ -667,6 +724,13 @@ def _recycled_context_for_day(
                 f"Turn off at least {capacity.centers_to_disable} work center(s)."
             )
             suggestion = replace(suggestion, warnings=tuple(suggestion.warnings) + (warning,))
+        suggestion = _append_auto_expansion_warning(
+            suggestion=suggestion,
+            capacity=capacity,
+            enabled_work_centers=enabled,
+            base_assignments=base_assignments,
+            assignment_sources=assignment_sources,
+        )
         ctx["rotation_reasons"] = {wc: dict(r) for wc, r in suggestion.reasons.items()}
         ctx["rotation_warnings"] = list(suggestion.warnings)
         ctx["active_training_blocks"] = _training_blocks_context(active_blocks, d)

@@ -502,6 +502,79 @@ def test_rebuild_generates_and_reports_reasons(monkeypatch):
     assert "green coverage" not in str(body["reasons"])
 
 
+def test_rebuild_warns_how_many_auto_centers_to_enable_for_unused_people(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    sched = staffing.Schedule(day=TARGET_DAY)
+    roster = [_person("Green One", 3), _person("Green Two", 3), _person("Green Three", 3)]
+
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _d: {"Repair 1"})
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "max_ops",
+        lambda loc: 1 if loc.name == "Repair 1" else 2,
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: roster)
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _d: sched)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda _schedule: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "normal"})
+
+    assert response.status_code == 200
+    assert "Turn on 1 more Auto work center to schedule all 2 available people." in response.json()["warnings"]
+
+
+def test_rebuild_warns_when_auto_center_capacity_is_exhausted(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    sched = staffing.Schedule(day=TARGET_DAY, assignments={"Repair 2": ["Already Assigned"]})
+    roster = [_person("Green One", 3), _person("Green Two", 3), _person("Green Three", 3)]
+    locations = tuple(
+        staffing.Location(name, "Repair", "Bay 1", "Recycled", None)
+        for name in ("Repair 1", "Repair 2", "Repair 3")
+    )
+
+    monkeypatch.setattr(staffing_route.staffing, "LOCATIONS", locations)
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _d: {"Repair 1"})
+    monkeypatch.setattr(staffing_route.work_centers_store, "max_ops", lambda _loc: 1)
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: roster)
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _d: sched)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda _schedule: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "normal"})
+
+    assert response.status_code == 200
+    assert (
+        "Not enough Auto work-center capacity is available to schedule all 2 remaining people."
+        in response.json()["warnings"]
+    )
+
+
+def test_recycled_context_warns_how_many_auto_centers_to_enable_for_unused_people(monkeypatch):
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    roster = [_person("Green One", 3), _person("Green Two", 3), _person("Green Three", 3)]
+
+    monkeypatch.setattr(staffing_route.work_centers_store, "max_ops", lambda _loc: 2)
+
+    context = staffing_route._recycled_context_for_day(
+        TARGET_DAY,
+        roster=roster,
+        mode="normal",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
+        enabled_work_centers={"Repair 1"},
+        assignment_sources={},
+    )
+
+    assert (
+        "Turn on 1 more Auto work center to schedule all 2 available people."
+        in context["rotation_warnings"]
+    )
+
+
 def test_rebuild_uses_enabled_new_work_center_and_leaves_disabled_recycled(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
@@ -1304,7 +1377,13 @@ def test_recycled_suggestion_uses_regular_preferences_when_preference_read_fails
     monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
 
     captured = {}
-    sentinel = object()
+    sentinel = rotation_suggestions.RecycledSuggestion(
+        assignments={"Repair 1": ["Green"]},
+        sources={"Repair 1": {"Green": "generated"}},
+        reasons={},
+        warnings=(),
+        group_locations={"Repair": ("Repair 1",)},
+    )
 
     def fake_engine(**kwargs):
         captured.update(kwargs)
