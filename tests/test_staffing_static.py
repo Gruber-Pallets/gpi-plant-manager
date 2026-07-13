@@ -105,12 +105,24 @@ def test_posted_snapshot_blocks_autosave_and_mutating_client_handlers():
         "// ---------- Per-dropdown quick clear", 1
     )[0]
     autosave = js.split("function fireSave()", 1)[1].split("function onEdit()", 1)[0]
+    posted_view_setup = js.split("if (__viewingPosted) __form.classList.add('viewing-posted');", 1)[1].split(
+        "const __editScheduleBtn", 1
+    )[0]
+    slack_post = js.split("async function postToSlack(btn) {", 1)[1].split(
+        "// ---------- Rotation goal", 1
+    )[0]
+    posted_picker_guard = picker_handler.split("if (__viewingPosted) {", 1)[1].split("    }", 1)[0]
 
     assert "if (__viewingPosted) return;" in js
     assert "if (__viewingPosted) { return; }" in js
     assert autosave.index("if (__viewingPosted) { return; }") < autosave.index("new FormData(form)")
-    assert picker_handler.index("if (__viewingPosted) return;") < picker_handler.index(
-        "e.preventDefault();"
+    assert "document.querySelectorAll('button, input:not([type=\"hidden\"]), select').forEach(control => {" in posted_view_setup
+    assert "if (control.name === 'action' && control.value === 'discard_draft') return;" in posted_view_setup
+    assert "control.disabled = true;" in posted_view_setup
+    assert posted_picker_guard.index("e.preventDefault();") < posted_picker_guard.index("return;")
+    assert posted_picker_guard.index("e.stopPropagation();") < posted_picker_guard.index("return;")
+    assert slack_post.index("if (__viewingPosted) return;") < slack_post.index(
+        "const originalContent = btn.innerHTML;"
     )
 
 

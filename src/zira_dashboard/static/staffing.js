@@ -37,6 +37,12 @@
     __form.classList.add('locked');
   }
   if (__viewingPosted) __form.classList.add('viewing-posted');
+  if (__viewingPosted) {
+    document.querySelectorAll('button, input:not([type="hidden"]), select').forEach(control => {
+      if (control.name === 'action' && control.value === 'discard_draft') return;
+      control.disabled = true;
+    });
+  }
   const __editScheduleBtn = document.getElementById('edit-schedule-btn');
   if (__editScheduleBtn) {
     __editScheduleBtn.addEventListener('click', () => {
@@ -810,7 +816,11 @@
   document.addEventListener('click', (e) => {
     const item = e.target.closest('.multi-dd .dd-item');
     if (!item) return;
-    if (__viewingPosted) return;
+    if (__viewingPosted) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     // We don't want the label's default click-to-check behavior to double-fire.
     e.preventDefault();
     const cb = item.querySelector('input[type=checkbox]');
@@ -1342,6 +1352,7 @@
   })();
 
   async function postToSlack(btn) {
+    if (__viewingPosted) return;
     const originalContent = btn.innerHTML;
     btn.disabled = true;
     btn.setAttribute('aria-busy', 'true');
