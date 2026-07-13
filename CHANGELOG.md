@@ -15,6 +15,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Fixes
 
+- **Missed Punch Out now reconciles Odoo edits safely.** If a manager already fixed or replaced an auto-closed attendance in Odoo, Plant Manager refreshes that employee's current attendance for the original day. A changed Odoo checkout clears the alert with an explanation; a single open replacement receives the entered correction; missing or ambiguous Odoo data remains open with a clear verification instruction instead of a raw Odoo fault.
 - **Forklift bay summary survives settings hiccups and stays off print/Slack PDFs.** If forklift settings cannot be read, the advisor falls back to defaults instead of disappearing; the compact bay summary is hidden on the print stylesheet so Slack schedule posts stay clean.
 - **Operator dashboards now keep every downtime minute readable.** When the red downtime portion of the working/down bar was narrower than its label, the left side of the value was cut off. Wide values can now extend onto the adjacent green portion while staying right-aligned inside the overall bar, in both editor and TV views.
 - **The Recycling leaderboard TV header is tighter and easier to scan.** YTD and L30 ranges now sit beside the page title with lower visual emphasis, while one large goat icon groups the two Current GOAT tiles in the top-right corner. The desktop leaderboard and New leaderboard layouts are unchanged.
