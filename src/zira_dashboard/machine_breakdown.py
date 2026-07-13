@@ -240,28 +240,22 @@ def _shift_bounds(day: date) -> tuple[datetime, datetime]:
     return start, end
 
 
-def _operators_on_wc(wc_name: str, day: date) -> list[str]:
-    """Names of people currently resolved onto wc_name and clocked in, via
-    the same assignment_windows machinery the recycling dashboard uses."""
-    from . import staffing, wc_attributions, assignment_windows, timeclock_windows
-    now = datetime.now(UTC)
-    sched = staffing.load_schedule(day)
-    punch_windows = timeclock_windows.attendance_windows_for_day(day)
-    attributions = wc_attributions.creditable_for_day(day)
-    shift_start, _ = _shift_bounds(day)
-    segments = assignment_windows.resolve_segments(
-        assignments=sched.assignments,
-        attributions=attributions,
-        punch_windows=punch_windows,
-        shift_start_utc=shift_start,
-        cap_utc=now,
-    )
-    return sorted({s.person_name for s in segments if s.wc_name == wc_name})
-
-
 def _punch_windows_for_day(day: date) -> dict:
     from . import timeclock_windows
     return timeclock_windows.attendance_windows_for_day(day)
+
+
+def _present_operators_on_wc(
+    wc_name: str, day: date, now: datetime | None = None
+) -> list[str]:
+    """Names with an open attendance window at this work center at now."""
+    now = now or datetime.now(UTC)
+    return sorted({
+        person
+        for person, windows in _punch_windows_for_day(day).items()
+        for punched_wc, start, end in windows
+        if punched_wc == wc_name and start <= now and end is None
+    })
 
 
 def _station_signals(day: date, now: datetime) -> list[StationSignal]:
@@ -285,7 +279,7 @@ def _station_signals(day: date, now: datetime) -> list[StationSignal]:
         # 15. samples is the actual (event_dt_utc, units) production log --
         # samples[-1][0] is the true last-unit timestamp.
         last_output = total.samples[-1][0] if total.samples else None
-        has_operator = bool(_operators_on_wc(wc_name, day))
+        has_operator = bool(_present_operators_on_wc(wc_name, day, now))
         out.append(StationSignal(wc_name=wc_name, last_output_utc=last_output, has_operator=has_operator))
     return out
 
@@ -331,6 +325,9 @@ def run_detect_tick(day: date | None = None, now: datetime | None = None) -> Non
 
     for incident in open_incidents:
         try:
+            if not _present_operators_on_wc(incident["wc_name"], day, now):
+                resolve_incident(incident["id"], "handled")
+                continue
             _cap_departed_operators(incident, day, now)
             _maybe_auto_resolve(incident, day, now)
         except Exception:
@@ -354,7 +351,7 @@ def run_detect_tick(day: date | None = None, now: datetime | None = None) -> Non
             continue
         try:
             incident_id = open_incident(candidate.wc_name, day, candidate.stop_utc, source="auto")
-            for person in _operators_on_wc(candidate.wc_name, day):
+            for person in _present_operators_on_wc(candidate.wc_name, day, now):
                 wc_attributions.add_breakdown(day, candidate.wc_name, person, candidate.stop_utc, incident_id)
         except Exception:
             import logging
@@ -371,7 +368,7 @@ def _cap_departed_operators(incident: dict, day: date, now: datetime) -> None:
     wc_name = incident["wc_name"]
     stop = incident["detected_stop_utc"]
     punch_windows = _punch_windows_for_day(day)
-    for person in _operators_on_wc(wc_name, day) or list(punch_windows.keys()):
+    for person in punch_windows:
         dep = departed_at(person, wc_name, punch_windows, stop)
         if dep is None:
             continue
@@ -387,7 +384,7 @@ def _maybe_auto_resolve(incident: dict, day: date, now: datetime) -> None:
     resume = _last_output_after(incident["wc_name"], day, incident["detected_stop_utc"])
     if resume is None:
         return
-    for person in _operators_on_wc(incident["wc_name"], day):
+    for person in _present_operators_on_wc(incident["wc_name"], day, now):
         row = wc_attributions.open_breakdown_row(day, incident["wc_name"], person)
         if row is not None:
             wc_attributions.cap_breakdown(row["id"], resume)
@@ -408,6 +405,9 @@ def current_rows(day: date | None = None, now: datetime | None = None) -> list[d
     rows: list[dict] = []
     for incident in all_open_incidents(day):
         wc_name = incident["wc_name"]
+        operators = _present_operators_on_wc(wc_name, day, now)
+        if not operators:
+            continue
         stop = incident["detected_stop_utc"]
         stop_iso = stop.isoformat()
         elapsed_min = int((now - stop).total_seconds() // 60)
@@ -425,7 +425,7 @@ def current_rows(day: date | None = None, now: datetime | None = None) -> list[d
                 "incident_id": incident["id"],
             },
         })
-        for person in _operators_on_wc(wc_name, day):
+        for person in operators:
             snoozed_until = active_snooze_until(incident["id"], person)
             item_key = inbox_keys.breakdown(wc_name, stop_iso, person)
             if snoozed_until is not None:
@@ -481,7 +481,7 @@ def report_manual(wc_name: str, day: date | None = None, now: datetime | None = 
 
     stop = _last_output_before(wc_name, day, now) or now
     incident_id = open_incident(wc_name, day, stop, source="manual")
-    operators = _operators_on_wc(wc_name, day)
+    operators = _present_operators_on_wc(wc_name, day, now)
     for person in operators:
         wc_attributions.add_breakdown(day, wc_name, person, stop, incident_id)
     if not operators:

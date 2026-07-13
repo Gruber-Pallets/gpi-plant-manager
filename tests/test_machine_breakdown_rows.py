@@ -10,6 +10,60 @@ def _now():
     return datetime(2026, 7, 8, 18, 22, tzinfo=timezone.utc)  # 1:22 PM Central
 
 
+def test_present_operators_requires_open_punch_at_this_work_center(monkeypatch):
+    from zira_dashboard import timeclock_windows
+
+    now = _now()
+    monkeypatch.setattr(timeclock_windows, "attendance_windows_for_day", lambda day: {
+        "Jesus Galindo": [("Repair 1", now - timedelta(hours=1), now - timedelta(minutes=1))],
+        "Juan": [("Repair 1", now - timedelta(hours=1), None)],
+        "Ana": [("Repair 2", now - timedelta(hours=1), None)],
+    })
+
+    assert machine_breakdown._present_operators_on_wc(
+        "Repair 1", date(2026, 7, 8), now
+    ) == ["Juan"]
+
+
+def test_current_rows_hides_incident_without_present_operator(monkeypatch):
+    incident = {
+        "id": 1, "wc_name": "Repair 1", "day": date(2026, 7, 8),
+        "detected_stop_utc": _now() - timedelta(minutes=25), "source": "auto",
+    }
+    monkeypatch.setattr(machine_breakdown, "all_open_incidents", lambda day: [incident])
+    monkeypatch.setattr(
+        machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: []
+    )
+
+    assert machine_breakdown.current_rows(day=date(2026, 7, 8), now=_now()) == []
+
+
+def test_detect_tick_handles_incident_after_final_operator_leaves(monkeypatch):
+    incident = {
+        "id": 1, "wc_name": "Repair 1", "day": date(2026, 7, 8),
+        "detected_stop_utc": _now() - timedelta(minutes=25), "source": "auto",
+    }
+    monkeypatch.setattr(machine_breakdown, "all_open_incidents", lambda day: [incident])
+    monkeypatch.setattr(
+        machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: []
+    )
+    monkeypatch.setattr(machine_breakdown, "_station_signals", lambda day, now: [])
+    monkeypatch.setattr(machine_breakdown, "_shift_bounds", lambda day: (
+        _now() - timedelta(hours=6), _now() + timedelta(hours=2)
+    ))
+    from zira_dashboard import shift_config
+    monkeypatch.setattr(shift_config, "in_shift_on", lambda local_dt: True)
+    handled = []
+    monkeypatch.setattr(
+        machine_breakdown, "resolve_incident",
+        lambda incident_id, resolution, resume_utc=None: handled.append((incident_id, resolution)),
+    )
+
+    machine_breakdown.run_detect_tick(day=date(2026, 7, 8), now=_now())
+
+    assert handled == [(1, "handled")]
+
+
 def test_station_signals_uses_last_sample_not_padded_active_interval(monkeypatch):
     """Regression: leaderboard._active_intervals pads its tail interval end
     forward by up to TRANSFER_GAP (60 min) so a lunch-adjacent gap doesn't
@@ -34,7 +88,7 @@ def test_station_signals_uses_last_sample_not_padded_active_interval(monkeypatch
     monkeypatch.setattr(staffing, "LOCATIONS", [
         staffing.Location("Dismantler 2", "Dismantler", "Bay 2", "Recycled", "42713"),
     ])
-    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: [])
+    monkeypatch.setattr(machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: [])
 
     signals = machine_breakdown._station_signals(date(2026, 7, 8), _now())
 
@@ -69,7 +123,7 @@ def test_run_detect_tick_opens_new_incident(monkeypatch):
         return 1
 
     monkeypatch.setattr(machine_breakdown, "open_incident", _open_incident)
-    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: ["Juan"])
+    monkeypatch.setattr(machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: ["Juan"])
     from zira_dashboard import wc_attributions
     added = []
     monkeypatch.setattr(wc_attributions, "add_breakdown",
@@ -121,7 +175,7 @@ def test_run_detect_tick_does_not_open_during_break(monkeypatch):
     monkeypatch.setattr(shift_config, "in_shift_on", lambda local_dt: False)
     monkeypatch.setattr(shift_config, "productive_minutes_in_window",
                         lambda day, start, end: 90)
-    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: [])
+    monkeypatch.setattr(machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: [])
     opened = []
     monkeypatch.setattr(machine_breakdown, "open_incident", lambda *a, **k: opened.append(a))
 
@@ -148,7 +202,7 @@ def test_run_detect_tick_uses_break_aware_elapsed_minutes(monkeypatch):
         "productive_minutes_in_window",
         lambda day, start, end: calls.append((day, start, end)) or 45,
     )
-    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: [])
+    monkeypatch.setattr(machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: [])
     opened = []
     monkeypatch.setattr(machine_breakdown, "open_incident", lambda *a, **k: opened.append(a))
 
@@ -162,7 +216,6 @@ def test_cap_departed_operators_caps_and_leaves_still_present_untouched(monkeypa
     from zira_dashboard import wc_attributions
     incident = {"id": 1, "wc_name": "Dismantler 2", "day": date(2026, 7, 8),
                 "detected_stop_utc": _now() - timedelta(minutes=30)}
-    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: ["Juan", "Benjamin"])
     dep_end = _now() - timedelta(minutes=5)
     monkeypatch.setattr(machine_breakdown, "_punch_windows_for_day", lambda day: {
         "Juan": [("Dismantler 2", _now() - timedelta(hours=6), dep_end)],
@@ -183,7 +236,7 @@ def test_maybe_auto_resolve_resolves_when_station_producing_again(monkeypatch):
                 "detected_stop_utc": _now() - timedelta(minutes=30)}
     resume = _now() - timedelta(minutes=2)
     monkeypatch.setattr(machine_breakdown, "_last_output_after", lambda wc, day, stop: resume)
-    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: ["Juan"])
+    monkeypatch.setattr(machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: ["Juan"])
     from zira_dashboard import wc_attributions
     monkeypatch.setattr(wc_attributions, "open_breakdown_row", lambda day, wc, person: {"id": 10})
     capped = []
@@ -215,7 +268,7 @@ def test_current_rows_shapes_header_and_operator_rows(monkeypatch):
                 "detected_stop_utc": _now() - timedelta(minutes=25),
                 "source": "auto", "resolved_at": None, "resolution": None}
     monkeypatch.setattr(machine_breakdown, "all_open_incidents", lambda day: [incident])
-    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: ["Juan", "Benjamin"])
+    monkeypatch.setattr(machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: ["Juan", "Benjamin"])
     monkeypatch.setattr(machine_breakdown, "active_snooze_until",
                         lambda incident_id, person: (_now() + timedelta(minutes=10)) if person == "Benjamin" else None)
     from zira_dashboard import staffing
@@ -253,7 +306,7 @@ def test_report_manual_opens_incident_with_operators(monkeypatch):
         return 1
 
     monkeypatch.setattr(machine_breakdown, "open_incident", fake_open_incident)
-    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: ["Juan"])
+    monkeypatch.setattr(machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: ["Juan"])
     from zira_dashboard import wc_attributions
     monkeypatch.setattr(wc_attributions, "add_breakdown", lambda day, wc, person, start, breakdown_id: 5)
     resolved = []
@@ -274,7 +327,7 @@ def test_report_manual_self_resolves_when_no_operators(monkeypatch):
     monkeypatch.setattr(machine_breakdown, "get_open_incident", lambda wc, day: None)
     monkeypatch.setattr(machine_breakdown, "_last_output_before", lambda wc, day, now: None)
     monkeypatch.setattr(machine_breakdown, "open_incident", lambda wc, day, stop_utc, source: 1)
-    monkeypatch.setattr(machine_breakdown, "_operators_on_wc", lambda wc, day: [])
+    monkeypatch.setattr(machine_breakdown, "_present_operators_on_wc", lambda wc, day, now=None: [])
     resolved = []
     monkeypatch.setattr(machine_breakdown, "resolve_incident",
                         lambda incident_id, resolution, resume_utc=None: resolved.append((incident_id, resolution)))
