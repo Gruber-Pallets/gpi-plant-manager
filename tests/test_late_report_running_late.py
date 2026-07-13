@@ -2,6 +2,8 @@ import json
 from datetime import UTC, date, datetime, time
 from unittest.mock import MagicMock
 
+import pytest
+
 from zira_dashboard import shift_config
 from zira_dashboard.routes import late_report as late_report_routes
 
@@ -42,6 +44,28 @@ def test_running_late_saves_utc_time_and_busts_caches(monkeypatch):
         2026, 7, 13, 9, 15, tzinfo=shift_config.SITE_TZ
     ).astimezone(UTC)
     bust.assert_called_once()
+
+
+@pytest.mark.parametrize("expected_time", ["0830", "08:30:45", "08:30+01:00"])
+def test_running_late_rejects_non_hh_mm_time_without_persisting(monkeypatch, expected_time):
+    save = MagicMock()
+    bust = MagicMock()
+    monkeypatch.setattr(late_report_routes, "plant_today", lambda: date(2026, 7, 13))
+    monkeypatch.setattr(
+        late_report_routes, "plant_now",
+        lambda: datetime(2026, 7, 13, 8, 30, tzinfo=shift_config.SITE_TZ),
+    )
+    monkeypatch.setattr(late_report_routes.late_report, "set_expected_arrival", save)
+    monkeypatch.setattr(late_report_routes, "_bust_caches", bust)
+
+    response = late_report_routes._running_late_sync({
+        "emp_id": "7", "name": "Jesus Galindo", "expected_time": expected_time,
+    })
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "expected_time must be HH:MM"
+    save.assert_not_called()
+    bust.assert_not_called()
 
 
 def test_late_payload_emits_running_late_and_suppresses_no_punch_action(monkeypatch):

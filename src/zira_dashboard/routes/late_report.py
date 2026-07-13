@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import UTC, datetime, time as dt_time
 
 from fastapi import APIRouter, Request
@@ -332,11 +333,18 @@ async def late_report_snooze(request: Request):
     return await asyncio.to_thread(_snooze_sync, body)
 
 
+def _parse_running_late_time(value) -> dt_time | None:
+    """Accept only the exact ``HH:MM`` form used by Running Late."""
+    if not isinstance(value, str) or re.fullmatch(r"[0-9]{2}:[0-9]{2}", value) is None:
+        return None
+    return _parse_clock_time(value)
+
+
 def _running_late_sync(body: dict) -> JSONResponse:
     """Record a manager-confirmed expected arrival for a late employee."""
     emp_id = str(body.get("emp_id") or "").strip()
     name = str(body.get("name") or "").strip()
-    selected = _parse_clock_time(body.get("expected_time"))
+    selected = _parse_running_late_time(body.get("expected_time"))
     if not emp_id or not name:
         return JSONResponse({"ok": False, "error": "emp_id and name required"}, status_code=400)
     if selected is None:
