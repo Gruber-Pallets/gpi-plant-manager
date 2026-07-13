@@ -51,9 +51,12 @@ async def missed_punch_out_correct(request: Request):
 
 
 def _is_missing_odoo_attendance(error: Exception) -> bool:
-    return (
-        isinstance(error, xmlrpc.client.Fault)
-        and "record does not exist or has been deleted" in error.faultString.lower()
+    missing_record_messages = (
+        "record does not exist or has been deleted",
+        "one of the documents you are trying to access has been deleted",
+    )
+    return isinstance(error, xmlrpc.client.Fault) and any(
+        message in error.faultString.lower() for message in missing_record_messages
     )
 
 

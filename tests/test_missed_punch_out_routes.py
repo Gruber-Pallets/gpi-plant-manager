@@ -131,6 +131,42 @@ def test_deleted_odoo_record_settles_when_current_checkout_changed(monkeypatch):
     assert corrected[0][0] == 3326
 
 
+def test_deleted_odoo_documents_fault_reconciles_already_resolved_attendance(monkeypatch):
+    row = _unresolved_row()
+    monkeypatch.setattr(mpo, "get_unresolved", lambda _id: row)
+    monkeypatch.setattr(
+        odoo_client,
+        "clock_out",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            xmlrpc.client.Fault(
+                1,
+                "One of the documents you are trying to access has been deleted, "
+                "please try again after refreshing.",
+            )
+        ),
+    )
+    fresh_reads = []
+    monkeypatch.setattr(
+        odoo_client,
+        "fetch_employee_attendances_for_day",
+        lambda employee_id, day: fresh_reads.append((employee_id, day)) or [{
+            "id": 4001,
+            "check_in": row["check_in"].isoformat(),
+            "check_out": "2026-07-13T18:00:00+00:00",
+        }],
+    )
+    corrected = []
+    monkeypatch.setattr(mpo, "correct", lambda aid, ts: corrected.append((aid, ts)))
+    _patch_audit_log(monkeypatch)
+
+    response = missed_punch_route._correct_sync({"attendance_id": 3326, "time": "13:00"})
+
+    assert response.status_code == 200
+    assert _body(response)["message"] == "Odoo already resolved this conflict."
+    assert fresh_reads == [(6, row["check_in"].astimezone(SITE_TZ).date())]
+    assert corrected[0][0] == 3326
+
+
 def test_deleted_odoo_record_corrects_one_open_current_record(monkeypatch):
     row = _unresolved_row()
     calls = []
