@@ -446,7 +446,7 @@ def test_training_block_keeps_trainee_without_a_level_three_partner():
     assert "Repair 1 could not be staffed to its minimum of 2 operators." in out.warnings
 
 
-def test_training_block_needs_green_partner_even_with_manual_level_two_lock():
+def test_training_block_does_not_overfill_manual_lock_for_green_partner():
     effect = _BlockEffect(locked_people={"Repair": ["Trainee"]})
     out = suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="normal",
@@ -463,11 +463,12 @@ def test_training_block_needs_green_partner_even_with_manual_level_two_lock():
         block_effects=(effect,),
     )
 
-    assert out.assignments["Repair 1"] == ["Manual Level Two", "Trainee"]
-    assert "Repair 1 could not be staffed to its minimum of 2 operators." in out.warnings
+    assert out.assignments["Repair 1"] == ["Manual Level Two"]
+    assert "Trainee" not in out.assigned_people
+    assert "Training block for Repair could not reserve an open work center." in out.warnings
 
 
-def test_two_training_block_trainees_still_require_a_green_partner():
+def test_two_training_block_trainees_do_not_overfill_one_person_center():
     effects = (
         _BlockEffect(locked_people={"Repair": ["Trainee A"]}),
         _BlockEffect(locked_people={"Repair": ["Trainee B"]}),
@@ -485,8 +486,9 @@ def test_two_training_block_trainees_still_require_a_green_partner():
         history=RecycledHistory(), locked_assignments={}, block_effects=effects,
     )
 
-    assert set(out.assignments["Repair 1"]) == {"Trainee A", "Trainee B"}
-    assert "Repair 1 could not be staffed to its minimum of 2 operators." in out.warnings
+    assert out.assignments["Repair 1"] == ["Trainee A"]
+    assert "Trainee B" not in out.assigned_people
+    assert "Training block for Repair could not reserve an open work center." in out.warnings
 
 
 def test_training_block_reserves_green_before_ordinary_placement():
@@ -920,7 +922,7 @@ def test_block_effect_with_unknown_group_warns_once():
     assert len(block_warnings) == 1
 
 
-def test_block_effect_overfills_when_every_center_is_full():
+def test_training_block_trainee_is_unassigned_when_every_center_is_full():
     effect = _BlockEffect(locked_people={"Repair": ["Trainee"]})
     out = suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="normal",
@@ -931,10 +933,9 @@ def test_block_effect_overfills_when_every_center_is_full():
         locked_assignments={"Repair 1": ["Occupier"]},
         block_effects=(effect,),
     )
-    # The block reservation must be honored even when the group is full.
-    assert out.assignments["Repair 1"] == ["Occupier", "Trainee"]
-    assert out.sources["Repair 1"]["Trainee"] == "generated"
-    assert out.reasons["Repair 1"]["Trainee"] == "training block"
+    assert out.assignments["Repair 1"] == ["Occupier"]
+    assert "Trainee" not in out.assigned_people
+    assert "Training block for Repair could not reserve an open work center." in out.warnings
 
 
 def test_temporary_training_partner_never_exceeds_center_capacity():

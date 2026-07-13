@@ -733,7 +733,14 @@ def suggest_recycled_assignments(
                 open_centers = [
                     c for c in centers if len(assignments.get(c, [])) < _effective_capacity(c)
                 ]
-                center = _choose_prioritized_center(name, group, open_centers or centers)
+                if not open_centers:
+                    warning = (
+                        f"Training block for {group} could not reserve an open work center."
+                    )
+                    if warning not in warnings:
+                        warnings.append(warning)
+                    continue
+                center = _choose_prioritized_center(name, group, open_centers)
                 _place(center, name, GENERATED_SOURCE, "training block")
                 protected_block_people.add(name)
                 block_centers.add((group, center))
