@@ -395,24 +395,24 @@ def test_engine_generates_only_for_runnable_centers():
 
 def test_training_block_trainee_requires_a_level_three_partner_to_run():
     effect = _BlockEffect(
-        locked_people={"Repair": ["Trainee"]},
+        locked_people={"Hand Build": ["Trainee"]},
         temporary_extra_people={},
         warnings=(),
     )
     out = suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="normal",
         roster=[
-            staffing.Person(name="Trainee", skills={"Repair": 0}),
-            staffing.Person(name="Green", skills={"Repair": 3}),
+            staffing.Person(name="Trainee", skills={"Hand Build": 0}),
+            staffing.Person(name="Green", skills={"Hand Build": 3}),
         ],
-        group_locations={"Repair": ("Repair 1",)},
-        group_required_skills={"Repair": ("Repair",)},
-        center_minimums={"Repair 1": 2},
-        runnable_centers={"Repair 1"},
+        group_locations={"Hand Build": ("Hand Build #1",)},
+        group_required_skills={"Hand Build": ("Hand Build",)},
+        center_minimums={"Hand Build #1": 2},
+        runnable_centers={"Hand Build #1"},
         history=RecycledHistory(), locked_assignments={}, block_effects=(effect,),
     )
 
-    assert set(out.assignments["Repair 1"]) == {"Trainee", "Green"}
+    assert set(out.assignments["Hand Build #1"]) == {"Trainee", "Green"}
 
 
 def test_training_block_keeps_trainee_without_a_level_three_partner():
@@ -478,30 +478,69 @@ def test_two_training_block_trainees_still_require_a_green_partner():
 
 
 def test_training_block_reserves_green_before_ordinary_placement():
+    effects = (_BlockEffect(locked_people={"Hand Build": ["Trainee"]}),)
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[
+            staffing.Person(name="Trainee", skills={"Hand Build": 0}),
+            staffing.Person(name="Green", skills={"Hand Build": 3, "Dismantle": 3}),
+            staffing.Person(name="Dismantler Backup", skills={"Dismantle": 3}),
+        ],
+        group_locations={
+            "Hand Build": ("Hand Build #1",),
+            "Dismantler": ("Dismantler 1",),
+        },
+        group_required_skills={"Hand Build": ("Hand Build",), "Dismantler": ("Dismantle",)},
+        center_minimums={"Hand Build #1": 2, "Dismantler 1": 1},
+        runnable_centers={"Hand Build #1", "Dismantler 1"},
+        history=RecycledHistory(), locked_assignments={}, block_effects=effects,
+    )
+
+    assert "Green" in out.assignments["Hand Build #1"]
+    assert "Green" not in out.assignments.get("Dismantler 1", [])
+
+
+def test_training_green_reservation_respects_center_capacity():
     effects = (
-        _BlockEffect(locked_people={"Repair": ["Trainee A"]}),
-        _BlockEffect(locked_people={"Repair": ["Trainee B"]}),
+        _BlockEffect(locked_people={"Hand Build": ["Trainee A"]}),
+        _BlockEffect(locked_people={"Hand Build": ["Trainee B"]}),
     )
     out = suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="normal",
         roster=[
-            staffing.Person(name="Trainee A", skills={"Repair": 0}),
-            staffing.Person(name="Trainee B", skills={"Repair": 0}),
-            staffing.Person(name="Green", skills={"Repair": 3, "Dismantle": 3}),
-            staffing.Person(name="Dismantler Backup", skills={"Dismantle": 3}),
+            staffing.Person(name="Trainee A", skills={"Hand Build": 0}),
+            staffing.Person(name="Trainee B", skills={"Hand Build": 0}),
+            staffing.Person(name="Green", skills={"Hand Build": 3}),
         ],
-        group_locations={
-            "Repair": ("Repair 1",),
-            "Dismantler": ("Dismantler 1",),
-        },
-        group_required_skills={"Repair": ("Repair",), "Dismantler": ("Dismantle",)},
-        center_minimums={"Repair 1": 2, "Dismantler 1": 1},
-        runnable_centers={"Repair 1", "Dismantler 1"},
+        group_locations={"Hand Build": ("Hand Build #1",)},
+        group_required_skills={"Hand Build": ("Hand Build",)},
+        center_minimums={"Hand Build #1": 2},
+        runnable_centers={"Hand Build #1"},
         history=RecycledHistory(), locked_assignments={}, block_effects=effects,
     )
 
-    assert "Green" in out.assignments["Repair 1"]
-    assert "Green" not in out.assignments.get("Dismantler 1", [])
+    assert len(out.assignments["Hand Build #1"]) <= 2
+    assert set(out.assignments["Hand Build #1"]) == {"Trainee A", "Trainee B"}
+    assert "Hand Build #1 could not be staffed to its minimum of 2 operators." in out.warnings
+
+
+def test_trim_saw_training_green_reservation_uses_occupant_levels():
+    effect = _BlockEffect(locked_people={"Trim Saw": ["Trainee"]})
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14), mode="normal",
+        roster=[
+            staffing.Person(name="Trainee", skills={"Trim Saw": 0}),
+            staffing.Person(name="Green", skills={"Trim Saw": 3}),
+        ],
+        group_locations={"Trim Saw": ("Trim Saw 1",)},
+        group_required_skills={"Trim Saw": ("Trim Saw",)},
+        center_minimums={"Trim Saw 1": 2},
+        runnable_centers={"Trim Saw 1"},
+        history=RecycledHistory(), locked_assignments={}, block_effects=(effect,),
+    )
+
+    assert set(out.assignments["Trim Saw 1"]) == {"Trainee", "Green"}
+    assert out.warnings == ()
 
 
 def test_normal_mode_uses_primary_preference_before_regular():

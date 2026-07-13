@@ -769,22 +769,22 @@ def suggest_recycled_assignments(
             for name in assignments.get(center, [])
         )
         if needs_partner and not has_green_partner:
-            green_candidates = [
-                person
-                for person in roster
-                if person.name not in assigned
-                and _eligible(person, group)
-                and _group_level(person, group, resolved_group_required_skills) == 3
-                and (
-                    group != TRIM_SAW_SKILL
-                    or all(
-                        _valid_trim_saw_pair(
-                            3, _group_level(occupant, group, resolved_group_required_skills)
+            green_candidates = []
+            if len(assignments.get(center, [])) < _effective_capacity(center):
+                green_candidates = [
+                    person
+                    for person in roster
+                    if person.name not in assigned
+                    and _eligible(person, group)
+                    and _group_level(person, group, resolved_group_required_skills) == 3
+                    and (
+                        group != TRIM_SAW_SKILL
+                        or all(
+                            _valid_trim_saw_pair(3, _level_of(occupant, group))
+                            for occupant in assignments.get(center, [])
                         )
-                        for occupant in assignments.get(center, [])
                     )
-                )
-            ]
+                ]
             if not green_candidates:
                 block_centers_without_green.add(center)
                 _remove_generated(
