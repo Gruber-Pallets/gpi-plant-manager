@@ -35,6 +35,7 @@
 {% include '_staffing_subnav.html' %}
 
 <form method="post" action="/staffing?day={{ day }}" id="staffing-form">
+  {% if viewing_posted %}<input type="hidden" name="viewing_posted" value="1">{% endif %}
 <input type="hidden" name="testing_day" id="testing-day-input" value="{{ '1' if testing_day else '0' }}">
 {% if publish_block_reasons %}
 <div class="save-block" style="max-width: 1100px; margin: 0 auto 0.75rem;">
@@ -178,6 +179,9 @@
         {% else %}
           {% if published %}
             <span class="pub-pill on">Posted</span>
+            {% if published and not viewing_posted %}
+              <button type="button" id="edit-schedule-btn" class="publish-btn">Edit</button>
+            {% endif %}
           {% else %}
             <span class="draft-label">DRAFT</span>
           {% endif %}
@@ -345,7 +349,7 @@
               </details>
             </td>
             <td class="wc-note-cell">
-              <textarea name="wc_note__{{ row.loc.name }}" rows="1" placeholder="—" maxlength="500">{{ row.wc_note }}</textarea>
+              <textarea name="wc_note__{{ row.loc.name }}" rows="1" placeholder="—" maxlength="500"{% if viewing_posted %} readonly{% endif %}>{{ row.wc_note }}</textarea>
               <div class="wc-note-print">{{ row.wc_note }}</div>
             </td>
           </tr>
@@ -367,7 +371,7 @@
       </div>
       {% endif %}
       <label class="notes-label" for="notes-textarea">Notes for the day <span class="hint">— shown with the published schedule</span></label>
-      <textarea id="notes-textarea" name="notes" rows="6" placeholder="">{{ notes }}</textarea>
+      <textarea id="notes-textarea" name="notes" rows="6" placeholder=""{% if viewing_posted %} readonly{% endif %}>{{ notes }}</textarea>
     </div>
   </aside>
 

@@ -525,6 +525,73 @@ def test_rebuild_warns_how_many_auto_centers_to_enable_for_unused_people(monkeyp
     assert "Turn on 1 more Auto work center to schedule all 2 available people." in response.json()["warnings"]
 
 
+def test_rebuild_suppresses_expansion_advice_for_unqualified_available_person(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    roster = [
+        _person("Qualified", 3),
+        staffing.Person(name="No Repair Skill", skills={"Repair": 0}),
+    ]
+
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _d: {"Repair 1"})
+    monkeypatch.setattr(staffing_route.work_centers_store, "max_ops", lambda _loc: 1)
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: roster)
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _d: staffing.Schedule(day=TARGET_DAY))
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda _schedule: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal"})
+
+    assert response.status_code == 200
+    assert not any(warning.startswith("Turn on ") for warning in response.json()["warnings"])
+
+
+def test_rebuild_suppresses_expansion_advice_for_never_preference(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    roster = [_person("Qualified", 3), _person("Never", 3)]
+
+    monkeypatch.setattr(
+        staffing_route.rotation_store,
+        "load_preferences_by_name",
+        lambda: {"Never": {"Repair": "never"}},
+    )
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _d: {"Repair 1"})
+    monkeypatch.setattr(staffing_route.work_centers_store, "max_ops", lambda _loc: 1)
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: roster)
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _d: staffing.Schedule(day=TARGET_DAY))
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda _schedule: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal"})
+
+    assert response.status_code == 200
+    assert not any(warning.startswith("Turn on ") for warning in response.json()["warnings"])
+
+
+def test_rebuild_keeps_trim_saw_safety_warning_without_expansion_advice(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    roster = [
+        staffing.Person("Learner One", skills={"Trim Saw": 1}),
+        staffing.Person("Learner Two", skills={"Trim Saw": 1}),
+    ]
+
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _d: {"Trim Saw 1"})
+    monkeypatch.setattr(staffing_route.work_centers_store, "max_ops", lambda _loc: 2)
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: roster)
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _d: staffing.Schedule(day=TARGET_DAY))
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda _schedule: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal"})
+
+    assert response.status_code == 200
+    warnings = response.json()["warnings"]
+    assert "No safe operator pairing available for Trim Saw 1." in warnings
+    assert not any(warning.startswith("Turn on ") for warning in warnings)
+
+
 def test_rebuild_warning_disappears_after_enabling_enough_auto_capacity(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
@@ -550,13 +617,14 @@ def test_rebuild_warning_disappears_after_enabling_enough_auto_capacity(monkeypa
         "Turn on 1 more Auto work center to schedule all 2 available people."
     ]
 
-    # The advisory reports Repair 2 with two open configured slots, but rebuild
-    # scheduling honors each Repair center's static one-person capacity. All
-    # three stations are therefore needed for the three-person roster.
-    enabled_centers.update({"Repair 2", "Repair 3"})
+    # The exact deterministic center named by the advisory has the configured
+    # two-person maximum, so it alone is sufficient for the two remaining
+    # qualified candidates.
+    enabled_centers.add("Repair 2")
     second = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "normal"})
 
     assert second.status_code == 200
+    assert set(second.json()["assignments"]["Repair 2"]) == {"Green Two", "Green Three"}
     assert not any(
         warning.startswith("Turn on ")
         or warning.startswith("Not enough Auto work-center capacity")
@@ -564,7 +632,7 @@ def test_rebuild_warning_disappears_after_enabling_enough_auto_capacity(monkeypa
     )
 
 
-def test_rebuild_warns_when_auto_center_capacity_is_exhausted(monkeypatch):
+def test_rebuild_omits_expansion_advice_when_configured_capacity_cannot_prove_all_people(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     sched = staffing.Schedule(day=TARGET_DAY, assignments={"Repair 2": ["Already Assigned"]})
@@ -585,9 +653,10 @@ def test_rebuild_warns_when_auto_center_capacity_is_exhausted(monkeypatch):
     response = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "normal"})
 
     assert response.status_code == 200
-    assert (
-        "Not enough Auto work-center capacity is available to schedule all 2 remaining people."
-        in response.json()["warnings"]
+    assert not any(
+        warning.startswith("Turn on ")
+        or warning.startswith("Not enough Auto work-center capacity")
+        for warning in response.json()["warnings"]
     )
 
 
@@ -601,7 +670,9 @@ def test_rebuild_ignores_auto_expansion_advisory_failure(monkeypatch):
     monkeypatch.setattr(
         staffing_route.work_centers_store,
         "max_ops",
-        lambda _loc: (_ for _ in ()).throw(RuntimeError("max ops unavailable")),
+        lambda loc: 1 if loc.name == "Repair 1" else (_ for _ in ()).throw(
+            RuntimeError("max ops unavailable")
+        ),
     )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: roster)
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _d: sched)
@@ -632,7 +703,7 @@ def test_recycled_context_warns_how_many_auto_centers_to_enable_for_unused_peopl
     )
 
     assert (
-        "Turn on 1 more Auto work center to schedule all 2 available people."
+        "Turn on 1 more Auto work center to schedule all 1 available person."
         in context["rotation_warnings"]
     )
 

@@ -740,8 +740,8 @@
   /* …except notes (day-level + per-WC). Supervisors need to update notes
      after publishing without unlocking the whole schedule. Saves via the
      dedicated `save_notes` action that keeps the published state. */
-  form.locked textarea[name="notes"],
-  form.locked textarea[name^="wc_note__"] {
+  form.locked:not(.viewing-posted) textarea[name="notes"],
+  form.locked:not(.viewing-posted) textarea[name^="wc_note__"] {
     pointer-events: auto;
     opacity: 1;
   }

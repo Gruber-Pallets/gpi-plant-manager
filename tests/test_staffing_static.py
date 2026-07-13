@@ -84,6 +84,36 @@ def test_staffing_publish_busy_state_preserves_publish_action():
     assert "form.appendChild(publishIntent);" in js
 
 
+def test_current_published_schedule_has_a_local_edit_gate_but_snapshot_does_not():
+    html = _template()
+    js = _script()
+
+    assert "{% if published and not viewing_posted %}" in html
+    assert 'id="edit-schedule-btn"' in html
+    assert 'name="viewing_posted" value="1"' in html
+    assert "const __editScheduleBtn = document.getElementById('edit-schedule-btn');" in js
+    assert "if (__viewingPosted) return;" in js
+    assert "__unlocked = true;" in js
+    assert "__form.classList.remove('locked');" in js
+    assert "__editScheduleBtn.disabled = true;" in js
+    assert "__editScheduleBtn.hidden = true;" in js
+
+
+def test_posted_snapshot_blocks_autosave_and_mutating_client_handlers():
+    js = _script()
+    picker_handler = js.split("const item = e.target.closest('.multi-dd .dd-item');", 1)[1].split(
+        "// ---------- Per-dropdown quick clear", 1
+    )[0]
+    autosave = js.split("function fireSave()", 1)[1].split("function onEdit()", 1)[0]
+
+    assert "if (__viewingPosted) return;" in js
+    assert "if (__viewingPosted) { return; }" in js
+    assert autosave.index("if (__viewingPosted) { return; }") < autosave.index("new FormData(form)")
+    assert picker_handler.index("if (__viewingPosted) return;") < picker_handler.index(
+        "e.preventDefault();"
+    )
+
+
 def test_staffing_slack_post_button_exposes_busy_state():
     html = _template()
     js = _script()

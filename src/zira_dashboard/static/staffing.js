@@ -15,13 +15,17 @@
 
   // ---------- Per-WC training checkbox ----------
   function setWcTraining(loc, on) {
+    if (__viewingPosted) return;
     const dd = document.querySelector('details.sched-dd[data-loc="' + CSS.escape(loc) + '"]');
     if (dd) dd.dataset.training = on ? '1' : '';
     const cb = document.querySelector('.wc-training-cb[data-loc="' + CSS.escape(loc) + '"]');
     if (cb) cb.checked = !!on;
   }
   document.querySelectorAll('.wc-training-cb').forEach(cb => {
-    cb.addEventListener('change', (e) => setWcTraining(cb.dataset.loc, e.target.checked));
+    cb.addEventListener('change', (e) => {
+      if (__viewingPosted) return;
+      setWcTraining(cb.dataset.loc, e.target.checked);
+    });
   });
 
   // ---------- Posted schedule lock / Edit gate ----------
@@ -32,6 +36,19 @@
   if (__isPublished || __viewingPosted) {
     __form.classList.add('locked');
   }
+  if (__viewingPosted) __form.classList.add('viewing-posted');
+  const __editScheduleBtn = document.getElementById('edit-schedule-btn');
+  if (__editScheduleBtn) {
+    __editScheduleBtn.addEventListener('click', () => {
+      if (__viewingPosted) return;
+      __unlocked = true;
+      __form.classList.remove('locked');
+      __editScheduleBtn.disabled = true;
+      __editScheduleBtn.hidden = true;
+      const control = document.querySelector('details.sched-dd summary, details.sched-dd input, .rotation-mode button');
+      if (control) control.focus();
+    });
+  }
 
   // Wake the autosave controller after a programmatic DOM mutation (pill
   // remove, checkbox toggled by code, options stripped from a select, etc.).
@@ -39,6 +56,7 @@
   // assigning to .checked or removing nodes doesn't fire those — dispatch a
   // synthetic, bubbling change so autosave is triggered exactly once.
   function kickAutosave() {
+    if (__viewingPosted) return;
     __form.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
@@ -50,11 +68,11 @@
   const __resetBtn = document.getElementById('reset-schedule-btn');
   if (__resetBtn) {
     __resetBtn.addEventListener('click', () => {
+      if (__viewingPosted) return;
       if (__isPublished && !__unlocked) {
         alert("This schedule is Posted. Click Edit first if you need to reset it.");
         return;
       }
-      if (__viewingPosted) return;
       if (!confirm("Reset every Scheduled cell to the page defaults?\n\n(Time off and notes stay. Anyone manually scheduled is replaced with the defaults shown on this page.)")) return;
       document.querySelectorAll('details.sched-dd').forEach(dd => {
         const wanted = new Set(__defaultsByLoc[dd.dataset.loc] || []);
@@ -77,11 +95,11 @@
   const __clearBtn = document.getElementById('clear-schedule-btn');
   if (__clearBtn) {
     __clearBtn.addEventListener('click', () => {
+      if (__viewingPosted) return;
       if (__isPublished && !__unlocked) {
         alert('This schedule is Posted. Click Edit first if you need to clear it.');
         return;
       }
-      if (__viewingPosted) return;
       if (!confirm('Clear every Scheduled cell for this day?\n\n(Time off and notes stay. You can undo this before leaving the page.)')) return;
       document.querySelectorAll('details.sched-dd').forEach(dd => {
         dd.querySelectorAll('.dd-item.selected').forEach(item => {
@@ -365,6 +383,7 @@
   }
 
   function flagTestingDay() {
+    if (__viewingPosted) return;
     const inp = document.getElementById('testing-day-input');
     inp.value = '1';
     const pill = document.getElementById('testing-pill');
@@ -383,6 +402,7 @@
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (__viewingPosted) return;
       if (!confirm('Clear the Testing Day flag for this schedule? Output for the day will count toward employees again.')) return;
       btn.style.opacity = '0.4';
       try {
@@ -485,6 +505,7 @@
   document.addEventListener('click', (e) => {
     const x = e.target.closest('.timeoff .pill-x');
     if (!x) return;
+    if (__viewingPosted) return;
     e.preventDefault();
     const pill = x.closest('.pill');
     if (!pill) return;
@@ -735,6 +756,7 @@
   document.addEventListener('change', (e) => {
     const sel = e.target.closest('.add-select[data-loc="__time_off"]');
     if (!sel) return;
+    if (__viewingPosted) return;
     const raw = sel.value;
     if (!raw) return;
     // Value format: "Name|level". Default level to 2 if missing.
@@ -788,6 +810,7 @@
   document.addEventListener('click', (e) => {
     const item = e.target.closest('.multi-dd .dd-item');
     if (!item) return;
+    if (__viewingPosted) return;
     // We don't want the label's default click-to-check behavior to double-fire.
     e.preventDefault();
     const cb = item.querySelector('input[type=checkbox]');
@@ -870,11 +893,11 @@
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
+    if (__viewingPosted) return;
     if (__isPublished && !__unlocked) {
       alert("This schedule is Posted. Click Edit first if you need to clear it.");
       return;
     }
-    if (__viewingPosted) return;
     const dd = document.querySelector('details.sched-dd[data-loc="' + CSS.escape(btn.dataset.loc) + '"]');
     if (!dd) return;
     const cleared = [...dd.querySelectorAll('.dd-item.selected')].map(i => i.dataset.name);
@@ -904,6 +927,7 @@
   // person OR a partial row in the Time Off section) → confirm → clear.
   // Click a "restore" button in the Cleared-today footer → un-clear.
   async function _doPartialAction(target, isClear) {
+    if (__viewingPosted) return;
     const day = target.dataset.day;
     const name = target.dataset.name;
     if (!day || !name) return;
@@ -970,6 +994,7 @@
       btn.addEventListener('click', async (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (__viewingPosted) return;
         const id = btn.dataset.attributionId;
         const name = btn.dataset.name || 'this attribution';
         if (!id) return;
@@ -1048,6 +1073,7 @@
     if (!pill || !editor) return;
 
     function open() {
+      if (__viewingPosted) return;
       editor.hidden = false;
       pill.setAttribute('aria-expanded', 'true');
       document.getElementById('hours-start').focus();
@@ -1064,6 +1090,7 @@
     });
 
     addBtn.addEventListener('click', () => {
+      if (__viewingPosted) return;
       const row = document.createElement('div');
       row.className = 'break-row';
       row.innerHTML =
@@ -1075,12 +1102,14 @@
     });
 
     list.addEventListener('click', (e) => {
+      if (__viewingPosted) return;
       const btn = e.target.closest('.remove-btn');
       if (!btn) return;
       btn.closest('.break-row').remove();
     });
 
     reset.addEventListener('click', () => {
+      if (__viewingPosted) return;
       // Reset clears the override entirely on save. Mark a flag and trigger save.
       save.dataset.resetMode = '1';
       save.click();
@@ -1108,6 +1137,7 @@
     }
 
     save.addEventListener('click', async () => {
+      if (__viewingPosted) return;
       if (save.disabled) return;
       // Past-day edits retroactively reshuffle leaderboards + player cards
       // for any window that contains this day. Make the user confirm.
@@ -1219,6 +1249,7 @@
     }
 
     function fireSave() {
+      if (__viewingPosted) { return; }
       setState('saving');
       const formData = new FormData(form);
       // On a published-and-still-locked schedule, the only fields the user
@@ -1260,6 +1291,7 @@
     }
 
     function onEdit() {
+      if (__viewingPosted) { return; }
       setState('dirty');
       if (inFlight) {
         queued = true;
@@ -1307,36 +1339,6 @@
         button.setAttribute('aria-busy', 'true');
       });
     });
-  })();
-
-  // ---------- First-edit-on-posted: one-time toast + drop ?view=posted ----------
-  // When the page is loaded with ?view=posted, the first input/change
-  // event flips us back to draft mode silently after a brief toast.
-  // Subsequent edits in the same session are silent.
-  (function () {
-    if (window.SCHEDULE_VIEW_MODE !== 'posted') return;
-    const form = document.getElementById('staffing-form');
-    if (!form) return;
-
-    let warned = false;
-    function onFirstEdit() {
-      if (warned) return;
-      warned = true;
-      if (window.showToast) {
-        showToast(
-          'Switched to draft — Re-publish to update the posted version.',
-          null,
-          'info'
-        );
-      }
-      const url = new URL(window.location.href);
-      url.searchParams.delete('view');
-      history.replaceState({}, '', url.toString());
-      const pill = document.querySelector('.title-bar .pub-pill.on');
-      if (pill) pill.style.display = 'none';
-    }
-    form.addEventListener('input', onFirstEdit);
-    form.addEventListener('change', onFirstEdit);
   })();
 
   async function postToSlack(btn) {
@@ -1550,6 +1552,7 @@
     }
 
     async function saveAutoCenters(changedCb) {
+      if (__viewingPosted) return;
       if (savingAutoCenters) return;
       const requestedCenter = changedCb.dataset.loc;
       const requestedWorkCenters = selectedAutoCenters();
@@ -1592,6 +1595,7 @@
     if (capacityForm) {
       capacityForm.addEventListener('submit', async event => {
         event.preventDefault();
+        if (__viewingPosted) return;
         if (!capacityDialogState || savingAutoCenters) return;
         const { requestedCenter, requiredDisableCount } = capacityDialogState;
         const turnOff = [...capacityReplacements.querySelectorAll('input:checked')]
@@ -1657,12 +1661,12 @@
     }
 
     async function rebuild(mode) {
+      if (__viewingPosted) return;
       if (rebuilding || !mode) return;
       if (__isPublished && !__unlocked) {
         alert('This schedule is Posted. Click Edit first to change the Recycled goal.');
         return;
       }
-      if (__viewingPosted) return;
       rebuilding = true;
       controls.classList.add('rebuilding');
       modeBtns.forEach(b => { b.disabled = true; });

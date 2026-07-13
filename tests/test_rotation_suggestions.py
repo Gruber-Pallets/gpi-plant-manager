@@ -368,6 +368,30 @@ def test_engine_never_exceeds_static_capacity_to_reach_minimum():
     assert "Hand Build #1 could not be staffed to its minimum of 3 operators." in out.warnings
 
 
+def test_engine_honors_configured_capacity_over_static_location_maximum():
+    """A route-supplied maximum can enlarge a static one-person location."""
+    roster = [
+        staffing.Person(name="A", skills={"Repair": 3}),
+        staffing.Person(name="B", skills={"Repair": 3}),
+    ]
+    common = dict(
+        day=date(2026, 7, 14), mode="normal", roster=roster,
+        group_locations={"Repair": ("Repair 2",)},
+        group_required_skills={"Repair": ("Repair",)},
+        center_minimums={"Repair 2": 1},
+        runnable_centers={"Repair 2"}, history=RecycledHistory(),
+        locked_assignments={}, block_effects=(),
+    )
+
+    fallback = suggest_recycled_assignments(**common)
+    configured = suggest_recycled_assignments(
+        **common, center_capacities={"Repair 2": 2},
+    )
+
+    assert fallback.assignments["Repair 2"] == ["A"]
+    assert configured.assignments["Repair 2"] == ["A", "B"]
+
+
 def test_engine_fills_each_minimum_before_optional_capacity():
     out = suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="normal",

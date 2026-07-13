@@ -59,6 +59,46 @@ def test_regular_save_preserves_rotation_metadata(monkeypatch):
     assert saved[0].assignment_sources == SOURCES
 
 
+def test_first_normal_save_of_published_schedule_snapshots_and_starts_draft(monkeypatch):
+    existing = _schedule(published=True, notes="posted")
+    saved = _capture_route_save(monkeypatch, existing)
+
+    staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), DAY, 0, _save_form("save", notes="draft update"),
+    )
+
+    assert saved[0].published is False
+    assert saved[0].published_snapshot == staffing.snapshot_of(existing)
+    assert saved[0].notes == "draft update"
+
+
+def test_posted_snapshot_rejects_ordinary_save_without_persisting(monkeypatch):
+    saved = _capture_route_save(monkeypatch, _schedule())
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), DAY, 0,
+        _save_form("save", viewing_posted="1", notes="should not save"),
+    )
+
+    assert response.status_code == 400
+    assert saved == []
+
+
+def test_posted_snapshot_allows_discard_draft(monkeypatch):
+    snapshot = staffing.snapshot_of(_schedule(published=True))
+    saved = _capture_route_save(
+        monkeypatch, _schedule(published=False, published_snapshot=snapshot),
+    )
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), DAY, 0,
+        _save_form("discard_draft", viewing_posted="1"),
+    )
+
+    assert response.status_code == 303
+    assert saved[0].published is True
+
+
 def test_discard_draft_restores_rotation_metadata_from_snapshot(monkeypatch):
     snapshot = staffing.snapshot_of(_schedule())
     saved = _capture_route_save(

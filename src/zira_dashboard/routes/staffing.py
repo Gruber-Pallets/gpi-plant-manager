@@ -134,6 +134,26 @@ def _effective_minimum(loc) -> int:
     return work_centers_store.min_ops(loc)
 
 
+def _configured_center_capacities(centers) -> dict[str, int | None]:
+    """Read configured maxima for engine input, retaining its static fallback.
+
+    A transient Settings read must not make normal scheduling unavailable.  The
+    advisory makes its own strict reads and simply disappears on such a
+    failure; the engine can safely retain each Location's built-in maximum.
+    """
+    wanted = set(centers)
+    capacities: dict[str, int | None] = {}
+    for loc in staffing.LOCATIONS:
+        if loc.name not in wanted:
+            continue
+        try:
+            capacities[loc.name] = work_centers_store.max_ops(loc)
+        except Exception:
+            log.exception("Could not load configured maximum for %s; using static fallback", loc.name)
+            capacities[loc.name] = loc.max_ops
+    return capacities
+
+
 def _ordered_work_center_names(names) -> list[str]:
     known = _known_work_center_names()
     order = _location_order()
@@ -488,27 +508,80 @@ def _gather_recycled_inputs(d: date, time_off_entries, *, assignments=None, assi
 
 
 def _append_auto_expansion_warning(
-    *, suggestion, capacity, enabled_work_centers, base_assignments, assignment_sources,
+    *,
+    suggestion,
+    capacity,
+    day,
+    mode,
+    available_roster,
+    preferences,
+    history,
+    block_effects,
+    enabled_work_centers,
+    base_assignments,
+    assignment_sources,
 ):
+    """Append an expansion hint only when a counterfactual engine run proves it.
+
+    The numeric capacity helper selects the deterministic smallest set of
+    disabled Auto centers.  Its result is merely a candidate action: the same
+    pure scheduling engine must then place every currently available Auto
+    candidate with exactly those centers enabled.  This deliberately withholds
+    advice when qualification, preference, pairing, or training constraints
+    are also limiting the roster.
+    """
     try:
         if capacity.shortage:
             return suggestion
+        enabled = set(_ordered_work_center_names(enabled_work_centers))
+        locks = _protected_locks(assignment_sources, base_assignments, allowed_centers=None)
+        locked_names = {name for names in locks.values() for name in names}
+        assigned_outside_auto = {
+            str(name).strip()
+            for center, names in (base_assignments or {}).items()
+            if center not in enabled
+            for name in (names or [])
+            if str(name or "").strip()
+        }
+        block_people = {
+            str(name).strip()
+            for effect in block_effects or ()
+            for people in (
+                getattr(effect, "locked_people", {}) or {},
+                getattr(effect, "temporary_extra_people", {}) or {},
+            )
+            for names in people.values()
+            for name in names or ()
+            if str(name or "").strip()
+        }
+        candidate_names = {
+            person.name
+            for person in available_roster
+            if person.active
+            and not person.reserve
+            and person.name not in locked_names
+            and person.name not in assigned_outside_auto
+            and person.name not in block_people
+        }
         generated_people = {
             name
             for sources in suggestion.sources.values()
             for name, source in sources.items()
             if source == rotation_suggestions.GENERATED_SOURCE
         }
-        unassigned_people = max(0, capacity.available_people - len(generated_people))
+        unassigned_people = len(candidate_names - generated_people)
         if not unassigned_people:
             return suggestion
 
-        enabled = set(_ordered_work_center_names(enabled_work_centers))
-        locks = _protected_locks(assignment_sources, base_assignments, allowed_centers=None)
         open_slots_by_center = {}
         disabled_centers = []
+        schedulable = {
+            center
+            for centers in _auto_history_group_locations().values()
+            for center in centers
+        }
         for loc in staffing.LOCATIONS:
-            if loc.name in enabled:
+            if loc.name in enabled or loc.name not in schedulable:
                 continue
             maximum = work_centers_store.max_ops(loc)
             if maximum is None:
@@ -524,17 +597,52 @@ def _append_auto_expansion_warning(
             center_order=_location_order(),
         )
         if expansion.centers_to_enable is None:
-            warning = (
-                "Not enough Auto work-center capacity is available to schedule "
-                f"all {unassigned_people} remaining people."
-            )
-        else:
-            noun = "center" if expansion.centers_to_enable == 1 else "centers"
-            people = "person" if unassigned_people == 1 else "people"
-            warning = (
-                f"Turn on {expansion.centers_to_enable} more Auto work {noun} "
-                f"to schedule all {unassigned_people} available {people}."
-            )
+            return suggestion
+
+        proof_centers = enabled | set(expansion.usable_centers[:expansion.centers_to_enable])
+        proof_locations, proof_skills = _auto_group_maps(proof_centers)
+        proof_minimums = {
+            loc.name: _effective_minimum(loc)
+            for loc in staffing.LOCATIONS if loc.name in proof_centers
+        }
+        proof_capacities = {
+            loc.name: work_centers_store.max_ops(loc)
+            for loc in staffing.LOCATIONS if loc.name in proof_centers
+        }
+        proof = rotation_suggestions.suggest_recycled_assignments(
+            day=day,
+            mode=mode,
+            roster=available_roster,
+            preferences=preferences,
+            base_assignments=base_assignments,
+            group_locations=proof_locations,
+            group_required_skills=proof_skills,
+            history=history,
+            locked_assignments={
+                center: list(names or [])
+                for center, names in locks.items() if center in proof_centers
+            },
+            block_effects=block_effects,
+            training_cap=_RECYCLED_TRAINING_CAP,
+            center_minimums=proof_minimums,
+            center_capacities=proof_capacities,
+            runnable_centers=proof_centers,
+        )
+        proof_generated = {
+            name
+            for sources in proof.sources.values()
+            for name, source in sources.items()
+            if source == rotation_suggestions.GENERATED_SOURCE
+        }
+        if not candidate_names.issubset(proof_generated):
+            return suggestion
+
+        noun = "center" if expansion.centers_to_enable == 1 else "centers"
+        people = "person" if unassigned_people == 1 else "people"
+        warning = (
+            f"Turn on {expansion.centers_to_enable} more Auto work {noun} "
+            f"to schedule all {unassigned_people} available {people}."
+        )
         return replace(suggestion, warnings=tuple(suggestion.warnings) + (warning,))
     except Exception:
         log.exception("Could not calculate Auto expansion advisory; omitting it")
@@ -580,6 +688,7 @@ def _recycled_suggestion_for_day(
             loc.name: _effective_minimum(loc)
             for loc in staffing.LOCATIONS if loc.name in enabled
         }
+        center_capacities = _configured_center_capacities(enabled)
         scoped_locks = {
             wc: list(names or [])
             for wc, names in (locked_assignments or {}).items()
@@ -598,6 +707,7 @@ def _recycled_suggestion_for_day(
             block_effects=block_effects,
             training_cap=_RECYCLED_TRAINING_CAP,
             center_minimums=center_minimums,
+            center_capacities=center_capacities,
             runnable_centers=capacity.runnable_centers,
         )
         if capacity.shortage:
@@ -609,6 +719,12 @@ def _recycled_suggestion_for_day(
         suggestion = _append_auto_expansion_warning(
             suggestion=suggestion,
             capacity=capacity,
+            day=d,
+            mode=mode,
+            available_roster=available,
+            preferences=preferences,
+            history=history,
+            block_effects=block_effects,
             enabled_work_centers=enabled,
             base_assignments=base_assignments,
             assignment_sources=assignment_sources,
@@ -702,6 +818,7 @@ def _recycled_context_for_day(
             loc.name: _effective_minimum(loc)
             for loc in staffing.LOCATIONS if loc.name in enabled
         }
+        center_capacities = _configured_center_capacities(enabled)
         scoped_locks = {
             wc: list(names or [])
             for wc, names in (locked_assignments or {}).items()
@@ -720,6 +837,7 @@ def _recycled_context_for_day(
             block_effects=block_effects,
             training_cap=_RECYCLED_TRAINING_CAP,
             center_minimums=center_minimums,
+            center_capacities=center_capacities,
             runnable_centers=capacity.runnable_centers,
         )
         if capacity.shortage:
@@ -732,6 +850,12 @@ def _recycled_context_for_day(
             suggestion = _append_auto_expansion_warning(
                 suggestion=suggestion,
                 capacity=capacity,
+                day=d,
+                mode=mode,
+                available_roster=available,
+                preferences=preferences,
+                history=history,
+                block_effects=block_effects,
                 enabled_work_centers=enabled,
                 base_assignments=base_assignments,
                 assignment_sources=assignment_sources,
@@ -1128,6 +1252,12 @@ async def staffing_save(
 
 
 def _staffing_save_work(request: Request, d: date, auto: int, form):
+    action = (form.get("action") or "save").strip().lower()
+    if (form.get("viewing_posted") or "").strip() == "1" and action != "discard_draft":
+        return JSONResponse(
+            {"ok": False, "error": "The posted schedule view is read-only."},
+            status_code=400,
+        )
     assignments: dict[str, list[str]] = {}
     for loc in staffing.LOCATIONS:
         picked = form.getlist(f"loc__{loc.name}")
@@ -1146,7 +1276,6 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
     # no longer collects time-off entries via form fields, so we ignore any
     # `loc____time_off` values that a stale tab might still be posting.
 
-    action = (form.get("action") or "save").strip().lower()
     override = (form.get("override") or "").strip() == "1"
     notes = (form.get("notes") or "").strip()[:2000]
     wc_notes: dict[str, str] = {}

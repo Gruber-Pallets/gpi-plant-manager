@@ -588,6 +588,7 @@ def suggest_recycled_assignments(
     block_effects: Sequence = (),
     training_cap: int = 2,
     center_minimums: Mapping[str, int] | None = None,
+    center_capacities: Mapping[str, int | None] | None = None,
     runnable_centers: Collection[str] | None = None,
 ) -> RecycledSuggestion:
     """Suggest safe Recycled assignments for the Dismantler/Repair/Trim Saw groups.
@@ -620,6 +621,9 @@ def suggest_recycled_assignments(
         return _center_min_ops(center)
 
     def _effective_capacity(center: str) -> int:
+        if center_capacities is not None and center in center_capacities:
+            configured = center_capacities[center]
+            return 1_000_000 if configured is None else max(0, int(configured))
         return _center_capacity(center)
 
     allowed_centers = (
@@ -883,7 +887,7 @@ def suggest_recycled_assignments(
                     _place(center, person.name, GENERATED_SOURCE, reason)
                     break
                 continue
-            if _center_capacity(center) < 2:
+            if _effective_capacity(center) < 2:
                 continue
             partner = None
             for other, other_group in candidate_pairs:
