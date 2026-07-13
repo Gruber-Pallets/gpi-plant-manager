@@ -376,6 +376,20 @@
 
 </form>
 
+{% if auto_scheduler_available %}
+<dialog id="auto-capacity-dialog" aria-labelledby="auto-capacity-title">
+  <form method="dialog" id="auto-capacity-form">
+    <h3 id="auto-capacity-title">Choose work centers to turn off</h3>
+    <p id="auto-capacity-message"></p>
+    <div id="auto-capacity-replacements"></div>
+    <div class="dialog-actions">
+      <button type="button" id="auto-capacity-cancel">Cancel</button>
+      <button type="submit" id="auto-capacity-confirm">Update Auto centers</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
+
 <p class="hint">
   Click <em>+ Add</em> to assign someone. × on a pill to unassign. Skill legend:
   <span class="pill lvl-3" style="padding:0.05rem 0.5rem;font-size:0.72rem">proficient</span>

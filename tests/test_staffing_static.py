@@ -134,3 +134,28 @@ def test_auto_toggle_removes_only_disabled_center_warnings():
     assert "warning === 'No safe operator pairing available for ' + center + '.'" in js
     assert "renderWarnings((window.ROTATION_WARNINGS || []).filter" in js
     assert "removeDisabledAutoWarnings();" in js
+
+
+def test_auto_capacity_dialog_has_replacement_controls():
+    html = _template()
+    js = _script()
+
+    assert 'id="auto-capacity-dialog"' in html
+    assert 'aria-labelledby="auto-capacity-title"' in html
+    assert 'id="auto-capacity-replacements"' in html
+    assert "required_disable_count" in js
+    assert "turn_off" in js
+    assert "showAutoCapacityDialog" in js
+
+
+def test_disabled_auto_warning_filter_keeps_capacity_warning_visible():
+    js = _script()
+
+    assert "Auto centers need " in js
+    assert "warning.startsWith(center + ' could not be staffed to its minimum')" in js
+
+
+def test_auto_capacity_replacement_payload_excludes_selected_turn_off_centers():
+    js = _script()
+
+    assert "const workCenters = [...new Set([requestedCenter, ...selectedAutoCenters()])]\n          .filter(center => !turnOff.includes(center));" in js

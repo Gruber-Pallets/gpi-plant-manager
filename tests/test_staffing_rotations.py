@@ -788,7 +788,8 @@ def test_staffing_has_rotation_mode_controls_and_reason_data():
     assert "rotation_reasons" in html
     assert "/api/rotations/rebuild" in js
     assert "/api/rotations/auto-work-centers" in js
-    assert "JSON.stringify({ day, work_centers: selectedAutoCenters(), turn_off: [] })" in js
+    assert "function postAutoCenters(workCenters, turnOff)" in js
+    assert "JSON.stringify({ day, work_centers: workCenters, turn_off: turnOff })" in js
 
 
 def test_skills_matrix_exposes_scheduling_preferences_and_recycled_training():

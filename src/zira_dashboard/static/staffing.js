@@ -1388,9 +1388,16 @@
     const warnBox = document.getElementById('rotation-warnings');
     const helpEl = document.getElementById('rotation-mode-help');
     const autoCbs = [...document.querySelectorAll('.wc-auto-cb')];
+    const capacityDialog = document.getElementById('auto-capacity-dialog');
+    const capacityForm = document.getElementById('auto-capacity-form');
+    const capacityMessage = document.getElementById('auto-capacity-message');
+    const capacityReplacements = document.getElementById('auto-capacity-replacements');
+    const capacityCancel = document.getElementById('auto-capacity-cancel');
+    const capacityConfirm = document.getElementById('auto-capacity-confirm');
     const day = controls.dataset.day || window.SCHEDULE_DAY;
     let rebuilding = false;
     let savingAutoCenters = false;
+    let capacityDialogState = null;
 
     // Per-mode help lines mirror routes/staffing.py::_ROTATION_MODE_HELP so the
     // hint updates instantly when the goal changes (no reload).
@@ -1449,9 +1456,13 @@
     function removeDisabledAutoWarnings() {
       const enabled = new Set(selectedAutoCenters());
       renderWarnings((window.ROTATION_WARNINGS || []).filter(warning => {
+        // This is a day-wide shortage.  It remains visible until the server
+        // accepts a replacement selection and sends the next authority state.
+        if (warning.startsWith('Auto centers need ')) return true;
         const center = autoCbs.map(cb => cb.dataset.loc).find(center =>
           center && (
             warning.startsWith(center + ' is staffed below its minimum')
+            || warning.startsWith(center + ' could not be staffed to its minimum')
             || warning === 'No safe operator pairing available for ' + center + '.'
           )
         );
@@ -1459,31 +1470,132 @@
       }));
     }
 
+    function postAutoCenters(workCenters, turnOff) {
+      return fetch('/api/rotations/auto-work-centers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ day, work_centers: workCenters, turn_off: turnOff }),
+      });
+    }
+
+    function setAutoCentersSaving(saving) {
+      savingAutoCenters = saving;
+      autoCbs.forEach(cb => { cb.disabled = saving; });
+    }
+
+    function closeAutoCapacityDialog() {
+      const changedCb = capacityDialogState && capacityDialogState.changedCb;
+      capacityDialogState = null;
+      if (capacityDialog && capacityDialog.open) capacityDialog.close();
+      if (changedCb) changedCb.focus();
+    }
+
+    function updateCapacityConfirm() {
+      if (!capacityDialogState || !capacityConfirm || !capacityReplacements) return;
+      const chosen = capacityReplacements.querySelectorAll('input:checked').length;
+      capacityConfirm.disabled = chosen < capacityDialogState.requiredDisableCount;
+    }
+
+    function showAutoCapacityDialog(data, requestedCenter, changedCb) {
+      if (!capacityDialog || !capacityMessage || !capacityReplacements || !capacityConfirm) {
+        if (window.showToast) showToast((data && data.error) || 'Auto-center capacity could not be updated.', null, 'error');
+        return;
+      }
+      const requiredDisableCount = Math.max(0, Number(data.required_disable_count) || 0);
+      capacityDialogState = { requestedCenter, changedCb, requiredDisableCount };
+      capacityMessage.textContent = (data && data.error) || 'Choose work centers to turn off.';
+      capacityReplacements.innerHTML = '';
+      selectedAutoCenters()
+        .filter(center => center !== requestedCenter)
+        .forEach(center => {
+          const label = document.createElement('label');
+          label.className = 'auto-capacity-replacement';
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.value = center;
+          input.addEventListener('change', updateCapacityConfirm);
+          label.append(input, document.createTextNode(center));
+          capacityReplacements.appendChild(label);
+        });
+      updateCapacityConfirm();
+      if (!capacityDialog.open) capacityDialog.showModal();
+      window.requestAnimationFrame(() => {
+        const firstChoice = capacityReplacements.querySelector('input');
+        (firstChoice || capacityCancel).focus();
+      });
+    }
+
     async function saveAutoCenters(changedCb) {
       if (savingAutoCenters) return;
-      const before = !!changedCb.checked;
-      savingAutoCenters = true;
-      autoCbs.forEach(cb => { cb.disabled = true; });
+      const requestedCenter = changedCb.dataset.loc;
+      const requestedWorkCenters = selectedAutoCenters();
+      // Browser checkbox changes are optimistic by default.  Put this one
+      // straight back until the server has accepted the requested selection.
+      changedCb.checked = !changedCb.checked;
+      setAutoCentersSaving(true);
       try {
-        const resp = await fetch('/api/rotations/auto-work-centers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ day, work_centers: selectedAutoCenters(), turn_off: [] }),
-        });
+        const resp = await postAutoCenters(requestedWorkCenters, []);
         const data = await resp.json().catch(() => ({}));
+        if (resp.status === 409) {
+          showAutoCapacityDialog(data, requestedCenter, changedCb);
+          return;
+        }
         if (!resp.ok || !data.ok) {
           throw new Error((data && data.error) || ('HTTP ' + resp.status));
         }
-        applyEnabledCenters(data.enabled_work_centers || selectedAutoCenters());
+        applyEnabledCenters(data.enabled_work_centers || requestedWorkCenters);
         removeDisabledAutoWarnings();
         if (window.showToast) showToast('Auto work centers saved');
       } catch (err) {
-        changedCb.checked = !before;
         if (window.showToast) showToast('Auto toggle failed: ' + (err.message || 'network error'), null, 'error');
       } finally {
-        savingAutoCenters = false;
-        autoCbs.forEach(cb => { cb.disabled = false; });
+        setAutoCentersSaving(false);
       }
+    }
+
+    if (capacityCancel) {
+      capacityCancel.addEventListener('click', closeAutoCapacityDialog);
+    }
+    if (capacityDialog) {
+      capacityDialog.addEventListener('cancel', event => {
+        event.preventDefault();
+        closeAutoCapacityDialog();
+      });
+    }
+    if (capacityForm) {
+      capacityForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (!capacityDialogState || savingAutoCenters) return;
+        const { requestedCenter, requiredDisableCount } = capacityDialogState;
+        const turnOff = [...capacityReplacements.querySelectorAll('input:checked')]
+          .map(input => input.value);
+        if (turnOff.length < requiredDisableCount) return;
+        const workCenters = [...new Set([requestedCenter, ...selectedAutoCenters()])]
+          .filter(center => !turnOff.includes(center));
+        setAutoCentersSaving(true);
+        capacityConfirm.disabled = true;
+        try {
+          const resp = await postAutoCenters(workCenters, turnOff);
+          const data = await resp.json().catch(() => ({}));
+          if (resp.status === 409) {
+            showAutoCapacityDialog(data, requestedCenter, capacityDialogState.changedCb);
+            return;
+          }
+          if (!resp.ok || !data.ok) {
+            throw new Error((data && data.error) || ('HTTP ' + resp.status));
+          }
+          applyEnabledCenters(data.enabled_work_centers || workCenters.filter(center => !turnOff.includes(center)));
+          removeDisabledAutoWarnings();
+          if (window.showToast) showToast('Auto work centers saved');
+          closeAutoCapacityDialog();
+        } catch (err) {
+          if (capacityMessage) capacityMessage.textContent = err.message || 'Auto-center capacity could not be updated.';
+          if (window.showToast) showToast('Auto toggle failed: ' + (err.message || 'network error'), null, 'error');
+        } finally {
+          setAutoCentersSaving(false);
+          updateCapacityConfirm();
+        }
+      });
     }
 
     // Reconcile every enabled Auto picker's checkboxes to the server-returned
