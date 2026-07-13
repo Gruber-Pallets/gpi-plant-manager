@@ -232,6 +232,11 @@ include:
 | `training_development` | Added by Training mode after minimums were protected. |
 | `training_block` | Reserved by an active explicit training block. |
 
+Assignment reasons are diagnostic data only. The Staffing page must not render
+them beside employee names as badges, notes, icons, tooltips, or hidden text.
+Only actionable schedule-level warnings and unresolved-center issues appear in
+the UI; their “Why?” disclosure may show candidate rejection details.
+
 Unresolved-center issues also use stable codes:
 
 | Code | Meaning |

@@ -11,6 +11,7 @@
 ## Global Constraints
 
 - Follow the approved design in `docs/superpowers/specs/2026-07-13-global-minimum-coverage-solver-design.md`.
+- Follow `docs/superpowers/specs/2026-07-13-hide-automated-scheduler-notes-design.md`: keep assignment reasons internal and never render per-person automated notes, badges, icons, tooltips, or hidden text.
 - Do not move, delete, or invalidate manual/default assignments or active training-block commitments.
 - A protected assignment counts toward safe minimum coverage only when the person is active, present, non-reserve, and level 1+ in every required skill, or the active training block explicitly authorizes their level-0 placement.
 - Treat skill levels 1, 2, and 3 as qualified for automatic minimum coverage.
@@ -1424,12 +1425,18 @@ Replace capacity-dialog assertions with:
 def test_rotation_warning_supports_structured_coverage_issues():
     html = TEMPLATE.read_text()
     js = STAFFING_JS.read_text()
+    css = STAFFING_CSS.read_text()
 
     assert 'id="rotation-warnings"' in html
     assert 'class="coverage-why"' in html
     assert "rotation_issues" in html
     assert "renderCoverageIssues" in js
     assert "ROTATION_ISSUES" in js
+    assert "rotation-reason" not in html
+    assert "rotation-reason" not in js
+    assert "rotation-reason" not in css
+    assert "ROTATION_REASONS" not in html
+    assert "ROTATION_REASONS" not in js
 
 
 def test_auto_capacity_turn_off_dialog_is_removed():

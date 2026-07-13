@@ -639,6 +639,9 @@ def test_rebuild_persists_safe_partial_assignments_and_reports_coverage(monkeypa
     assert response.json()["sources"] == {
         "Repair 1": {"Qualified": "generated"},
     }
+    assert response.json()["reasons"] == {
+        "Repair 1": {"Qualified": "Assigned to meet minimum coverage."},
+    }
     assert saved[-1].assignments == {"Repair 1": ["Qualified"]}
     assert saved[-1].assignment_sources == {
         "Repair 1": {"Qualified": "generated"},
@@ -1307,9 +1310,10 @@ def test_rebuild_rejects_bad_day(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_staffing_has_rotation_mode_controls_and_reason_data():
+def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
+    css = (ROOT / "src/zira_dashboard/static/staffing.css").read_text()
     assert 'data-rotation-mode="optimized"' in html
     assert 'data-rotation-mode="normal"' in html
     assert 'data-rotation-mode="training"' in html
@@ -1323,7 +1327,16 @@ def test_staffing_has_rotation_mode_controls_and_reason_data():
     assert '⚖' in html
     assert '🎓' in html
     assert 'class="wc-auto-cb"' in html
-    assert "rotation_reasons" in html
+    assert "rotation_reasons" not in html
+    assert "ROTATION_REASONS" not in html
+    assert "ROTATION_REASONS" not in js
+    assert "appendReasonBadge" not in js
+    assert "rotation-reason" not in html
+    assert "rotation-reason" not in js
+    assert "rotation-reason" not in css
+    assert 'id="rotation-warnings"' in html
+    assert 'name="notes"' in html
+    assert 'name="wc_note__{{ row.loc.name }}"' in html
     assert "/api/rotations/rebuild" in js
     assert "/api/rotations/auto-work-centers" in js
     assert "function postAutoCenters(workCenters, turnOff)" in js

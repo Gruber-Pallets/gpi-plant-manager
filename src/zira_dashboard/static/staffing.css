@@ -695,17 +695,6 @@
   }
   .coverage-why ul { margin: 0.35rem 0 0.1rem 1.1rem; }
   .coverage-why li { margin: 0.15rem 0; }
-  /* "Why" annotation shown next to a generated Recycled pill. Reuses the
-     level-3 accent palette so it reads as the engine's recommendation. */
-  .rotation-reason {
-    margin-left: 0.3rem; padding: 0 0.35rem;
-    background: var(--accent-dim); color: var(--accent);
-    border-radius: 4px;
-    font-size: 0.66rem; font-weight: 600; font-style: normal;
-    letter-spacing: 0.2px; vertical-align: 1px;
-    white-space: nowrap;
-  }
-
   /* Lock inputs on posted days until Edit */
   form.locked select,
   form.locked textarea,

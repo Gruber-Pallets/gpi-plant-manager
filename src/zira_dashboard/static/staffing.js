@@ -458,21 +458,6 @@
 
   }
 
-  // Append the Recycled rotation "why" badge to a summary name span, mirroring
-  // the server-rendered .rotation-reason pill. No-op unless the engine reported
-  // a reason for this person at this work center (i.e. a generated placement),
-  // so manually-placed people never get a spurious reason.
-  function appendReasonBadge(parentEl, loc, name) {
-    const reasons = (window.ROTATION_REASONS || {})[loc];
-    const reason = reasons && reasons[name];
-    if (!reason) return;
-    const span = document.createElement('span');
-    span.className = 'rotation-reason';
-    span.title = reason;
-    span.textContent = reason;
-    parentEl.appendChild(span);
-  }
-
   // ---------- Dropdown item click: toggles checkbox + selected class + summary ----------
   function updateDdSummary(dd) {
     const text = dd.querySelector('.dd-summary-text');
@@ -482,7 +467,7 @@
       text.innerHTML = '<span class="empty">—</span>';
       return;
     }
-    // Rebuild via DOM so we can attach cert + reason badges to each name span.
+    // Rebuild via DOM so we can attach certification badges to each name span.
     text.innerHTML = '';
     items.forEach((it, idx) => {
       const lvl = it.dataset.level;
@@ -491,7 +476,6 @@
       span.className = 'lvl-' + (lvl || '2');
       span.appendChild(document.createTextNode(name));
       appendCertBadges(span, name);
-      appendReasonBadge(span, dd.dataset.loc, name);
       text.appendChild(span);
       if (idx < items.length - 1) {
         const sep = document.createElement('span');
@@ -1561,7 +1545,6 @@
     // stay checked; regenerated people replace the rest.
     function applyRebuild(data) {
       const assignments = data.assignments || {};
-      window.ROTATION_REASONS = data.reasons || {};
       applyEnabledCenters(data.enabled_work_centers || window.AUTO_SCHEDULE_WC_NAMES || []);
       const enabled = new Set(window.AUTO_SCHEDULE_WC_NAMES || []);
       enabled.forEach(loc => {

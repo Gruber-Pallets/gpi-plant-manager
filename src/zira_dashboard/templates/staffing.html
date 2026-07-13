@@ -334,7 +334,7 @@
                 <summary>
                   <span class="dd-summary-text">
                     {% if visible_assigned %}
-                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ a.name }}{{ cert_badges(a.name, person_certs) }}{{ goat_badges(a.name, goat_holders()) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<button type="button" class="partial-hours-badge clearable" data-day="{{ day }}" data-name="{{ a.name }}" title="Click to clear this partial for {{ a.name }} — they actually worked through it" aria-label="Clear partial time off for {{ a.name }}">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }} ✕</button>{% endif %}{% set _reason = rotation_reasons.get(row.loc.name, {}).get(a.name) if rotation_reasons else none %}{% if _reason %}<span class="rotation-reason" title="{{ _reason }}">{{ _reason }}</span>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
+                      {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ a.name }}{{ cert_badges(a.name, person_certs) }}{{ goat_badges(a.name, goat_holders()) }}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<button type="button" class="partial-hours-badge clearable" data-day="{{ day }}" data-name="{{ a.name }}" title="Click to clear this partial for {{ a.name }} — they actually worked through it" aria-label="Clear partial time off for {{ a.name }}">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }} ✕</button>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
                     {% endif %}
                     {% if _wc_attribs_for_row %}
                       {% for attrib in _wc_attribs_for_row %}<span class="lvl-attribution" title="Worked {{ attrib.first_label }}–{{ attrib.last_label }} (click ✕ to remove)">{{ attrib.person_name }}{{ cert_badges(attrib.person_name, person_certs) }}{{ goat_badges(attrib.person_name, goat_holders()) }}{% if attrib.time_range %}<span class="attribution-range">{{ attrib.time_range }}</span>{% endif %}<button type="button" class="attribution-clear" data-attribution-id="{{ attrib.id }}" data-name="{{ attrib.person_name }}" title="Remove this attribution — Jose Luis actually didn't work here" aria-label="Remove attribution for {{ attrib.person_name }}">✕</button></span>{% if not loop.last %}<span class="sep">, </span>{% endif %}{% endfor %}
@@ -457,8 +457,7 @@
 </script>
 
 <script>
-  // Rotation controls (mode buttons + reason badges + warnings).
-  window.ROTATION_REASONS = {{ rotation_reasons|tojson }};
+  // Rotation controls (mode buttons + schedule-level warnings).
   window.ROTATION_WARNINGS = {{ rotation_warnings|tojson }};
   window.ROTATION_ISSUES = {{ rotation_issues|tojson }};
   window.RECYCLED_WC_NAMES = {{ recycled_wc_names|tojson }};
