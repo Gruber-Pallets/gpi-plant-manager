@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from . import rotation_store, schedule_store, skill_levels
+from . import rotation_store, schedule_store, skill_levels, staffing
 
 log = logging.getLogger(__name__)
 
@@ -92,10 +92,9 @@ def effect_for_day(
     if day not in planned:
         return _EMPTY_EFFECT
 
-    # The effect is keyed by ``block.skill`` because a Recycled skill name is
-    # also its rotation-group name (Dismantler / Repair / Trim Saw). If a future
-    # group ever stops matching its skill name, this mapping must be revisited.
-    group = block.skill
+    # Effects use persisted scheduling-group keys, which can differ from the
+    # source matrix/Odoo skill name (Dismantler is stored in Odoo as Dismantle).
+    group = staffing.scheduling_group_for_skill(block.skill)
     warnings: list[str] = []
 
     if block.trainee_name in manual:

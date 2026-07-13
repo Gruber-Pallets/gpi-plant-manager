@@ -382,7 +382,7 @@ def _training_blocks_context(active_blocks, d: date):
             "id": block.id,
             "trainee": block.trainee_name,
             "trainer": block.trainer_name,
-            "group": block.skill,
+            "group": staffing.scheduling_group_for_skill(block.skill),
             "skill": block.skill,
             "start_day": block.start_day.isoformat(),
             "planned_attended_days": block.planned_attended_days,

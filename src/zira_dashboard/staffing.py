@@ -35,6 +35,25 @@ LOADING_JOCKEYING_REQUIRED_SKILLS: tuple[str, ...] = (
     "Trailer Jockeying",
 )
 
+# Scheduling groups retain the names used by work-center configuration and
+# persisted rotation preferences. Odoo calls the corresponding production
+# skill "Dismantle", so resolve the group to that source-of-truth skill when
+# reading qualifications or creating a training block.
+_SCHEDULING_GROUP_SKILL_NAMES = {"Dismantler": "Dismantle"}
+
+
+def skill_name_for_scheduling_group(group: str) -> str:
+    """Return the matrix/Odoo skill that supplies a scheduling group's level."""
+    return _SCHEDULING_GROUP_SKILL_NAMES.get(group, group)
+
+
+def scheduling_group_for_skill(skill: str) -> str:
+    """Return the persisted scheduling-group key for a matrix/Odoo skill."""
+    for group, skill_name in _SCHEDULING_GROUP_SKILL_NAMES.items():
+        if skill == skill_name:
+            return group
+    return skill
+
 
 @dataclass(frozen=True)
 class Location:
@@ -184,7 +203,7 @@ class Person:
     is_flexible: bool = False       # Odoo "Schedule Type" flexible; excluded from late report
 
     def level(self, skill: str) -> int:
-        return int(self.skills.get(skill, 0))
+        return int(self.skills.get(skill_name_for_scheduling_group(skill), 0))
 
 
 PLANT_SCHEDULER_CSV = Path("Plant Scheduler(Plant Scheduler).csv")

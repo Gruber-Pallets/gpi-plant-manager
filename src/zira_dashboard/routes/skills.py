@@ -82,7 +82,7 @@ def staffing_skills(request: Request):
                 "id": b.id,
                 "trainee": b.trainee_name,
                 "trainer": b.trainer_name,
-                "group": b.skill,
+                "group": staffing.scheduling_group_for_skill(b.skill),
                 "skill": b.skill,
                 "start_day": b.start_day.isoformat(),
                 "planned_attended_days": b.planned_attended_days,
@@ -96,7 +96,7 @@ def staffing_skills(request: Request):
     # Per-person Recycled skill levels drive the level-0-only training-block form
     # (which groups a trainee is eligible for) and the level-3 trainer picker.
     rotation_levels = {
-        p.name: {g: int(p.skills.get(g, 0)) for g in rotation_groups} for p in roster
+        p.name: {g: p.level(g) for g in rotation_groups} for p in roster
     }
     rotation_preference_targets_by_person = {
         person.name: [

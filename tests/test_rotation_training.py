@@ -112,6 +112,17 @@ def test_first_attended_day_pairs_trainee_and_green_trainer():
     assert tuple(effect.warnings) == ()
 
 
+def test_dismantle_training_block_uses_dismantler_scheduling_group():
+    from zira_dashboard import rotation_training
+
+    effect = rotation_training.effect_for_day(
+        _block(start_day=date(2026, 7, 14), skill="Dismantle"), date(2026, 7, 14)
+    )
+
+    assert effect.locked_people == {"Dismantler": ["Trainee"]}
+    assert effect.temporary_extra_people == {"Dismantler": ["Trainer"]}
+
+
 def test_later_attended_day_reserves_trainee_only():
     from zira_dashboard import rotation_training
 

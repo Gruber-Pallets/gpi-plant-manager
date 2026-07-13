@@ -121,7 +121,7 @@ def _validate_training_target(skill_id: int) -> str:
     """Return an allowed recycled target skill or reject it before any write."""
     rows = db.query("SELECT name FROM skills WHERE id = %s", (skill_id,))
     skill_name = rows[0].get("name") if rows else None
-    if skill_name not in ROTATION_GROUPS:
+    if staffing.scheduling_group_for_skill(skill_name) not in ROTATION_GROUPS:
         allowed = ", ".join(ROTATION_GROUPS)
         raise InvalidTrainingBlock(
             f"Training blocks require a Recycled skill: {allowed}."

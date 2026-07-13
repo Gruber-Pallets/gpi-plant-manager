@@ -133,10 +133,10 @@ async def create_training_block(request: Request):
         trainer_id = _person_id_by_name(trainer)
         if trainer_id is None:
             return _error(f"Unknown person: {trainer}")
-        # The rotation group name IS the target skill name (Dismantler / Repair
-        # / Trim Saw); resolve it to a local skills.id for create_block. Skill
-        # names are assumed unique; a duplicate would bind to the first row.
-        skill_rows = db.query("SELECT id FROM skills WHERE name = %s", (group,))
+        # Resolve the scheduling-group key to its source matrix/Odoo skill
+        # (Dismantler is named Dismantle in Odoo) before creating the block.
+        skill_name = staffing.skill_name_for_scheduling_group(group)
+        skill_rows = db.query("SELECT id FROM skills WHERE name = %s", (skill_name,))
         if not skill_rows:
             return _error(f"Unknown group: {group}")
         skill_id = int(skill_rows[0]["id"])
