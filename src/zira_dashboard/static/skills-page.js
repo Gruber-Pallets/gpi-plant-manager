@@ -188,6 +188,10 @@
     }
     const el = document.createElement('div');
     el.className = 'save-toast' + (errorMsg ? ' error' : '');
+    if (errorMsg) {
+      el.setAttribute('role', 'alert');
+      el.setAttribute('aria-live', 'assertive');
+    }
     const label = document.createElement('span');
     label.textContent = errorMsg || 'Saved';
     el.appendChild(label);

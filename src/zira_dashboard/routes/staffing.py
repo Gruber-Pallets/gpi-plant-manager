@@ -285,11 +285,15 @@ def _gather_recycled_inputs(d: date, time_off_entries):
 
     Returns ``(preferences, history, block_effects, active_blocks)``. Impure —
     reads preferences, bounded history, and active blocks (with their per-day
-    absences). ``reconcile_blocks`` runs first, per the design, so a finished
-    block is promoted and no longer counts as active for the day. Callers wrap
-    this in try/except so any read failure degrades to the stored defaults.
+    absences). A preferences read failure falls back to ``{}``, which treats
+    everyone as Regular; history, reconciliation, and block read failures still
+    propagate to the callers' safe defaults.
     """
-    preferences = rotation_store.load_preferences_by_name()
+    try:
+        preferences = rotation_store.load_preferences_by_name()
+    except Exception:
+        log.exception("Could not load Recycled preferences for %s; using regular preferences", d)
+        preferences = {}
     history = rotation_suggestions._load_recycled_history(
         d,
         group_locations=_auto_history_group_locations(),

@@ -891,24 +891,85 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
     assert tb["remaining_attended_days"] == 3  # 5 planned - 2 attended
 
 
-def test_recycled_context_degrades_to_safe_defaults(monkeypatch):
+def test_recycled_suggestion_uses_regular_preferences_when_preference_read_fails(monkeypatch):
+    from zira_dashboard import rotation_suggestions
     from zira_dashboard.routes import staffing as staffing_route
 
     def boom():
-        raise RuntimeError("no db")
+        raise RuntimeError("preferences unavailable")
 
     monkeypatch.setattr(staffing_route.rotation_store, "load_preferences_by_name", boom)
+    monkeypatch.setattr(
+        rotation_suggestions,
+        "_load_recycled_history",
+        lambda _d, group_locations=None: rotation_suggestions.RecycledHistory(),
+    )
+    monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda _as_of: [])
+    monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda _d: [])
+
+    captured = {}
+    sentinel = object()
+
+    def fake_engine(**kwargs):
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(rotation_suggestions, "suggest_recycled_assignments", fake_engine)
+
+    assert staffing_route._recycled_suggestion_for_day(
+        TARGET_DAY,
+        roster=[_person("Green", 3)],
+        mode="normal",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
+        enabled_work_centers={"Repair 1"},
+    ) is sentinel
+    assert captured["preferences"] == {}
+
+
+def test_recycled_context_uses_regular_preferences_when_preference_read_fails(monkeypatch):
+    from zira_dashboard import rotation_suggestions
+    from zira_dashboard.routes import staffing as staffing_route
+
+    def boom():
+        raise RuntimeError("preferences unavailable")
+
+    monkeypatch.setattr(staffing_route.rotation_store, "load_preferences_by_name", boom)
+    monkeypatch.setattr(
+        rotation_suggestions,
+        "_load_recycled_history",
+        lambda _d, group_locations=None: rotation_suggestions.RecycledHistory(),
+    )
+    monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda _as_of: [])
+    monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda _d: [])
+
+    captured = {}
+
+    def fake_engine(**kwargs):
+        captured.update(kwargs)
+        return rotation_suggestions.RecycledSuggestion(
+            assignments={},
+            sources={},
+            reasons={},
+            warnings=(),
+            group_locations={},
+        )
+
+    monkeypatch.setattr(rotation_suggestions, "suggest_recycled_assignments", fake_engine)
 
     ctx = staffing_route._recycled_context_for_day(
-        TARGET_DAY, roster=[], mode="normal",
-        base_assignments={}, locked_assignments={}, time_off_entries=[],
+        TARGET_DAY,
+        roster=[_person("Green", 3)],
+        mode="normal",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
+        enabled_work_centers={"Repair 1"},
     )
-    assert ctx == {
-        "recycled_rotation_mode": "normal",
-        "rotation_reasons": {},
-        "rotation_warnings": [],
-        "active_training_blocks": [],
-    }
+
+    assert ctx["recycled_rotation_mode"] == "normal"
+    assert captured["preferences"] == {}
 
 
 def test_manual_locks_from_sources_extracts_manual_only():

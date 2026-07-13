@@ -55,6 +55,17 @@ def test_people_matrix_skill_picker_surfaces_odoo_saved_local_warning():
     assert "showSavedToast(null, data.warning" in js
 
 
+def test_people_matrix_error_toasts_are_assertively_announced():
+    js = Path("src/zira_dashboard/static/skills-page.js").read_text()
+
+    assert (
+        "if (errorMsg) {\n"
+        "      el.setAttribute('role', 'alert');\n"
+        "      el.setAttribute('aria-live', 'assertive');\n"
+        "    }"
+    ) in js
+
+
 def test_people_matrix_skill_picker_handles_escape_and_focus_return():
     js = Path("src/zira_dashboard/static/skills-page.js").read_text()
 
