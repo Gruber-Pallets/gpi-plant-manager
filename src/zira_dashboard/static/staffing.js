@@ -1543,7 +1543,10 @@
         if (!resp.ok || !data.ok) {
           throw new Error((data && data.error) || ('HTTP ' + resp.status));
         }
-        applyEnabledCenters(data.enabled_work_centers || requestedWorkCenters);
+        if (!Array.isArray(data.enabled_work_centers)) {
+          throw new Error('Server did not return enabled Auto work centers.');
+        }
+        applyEnabledCenters(data.enabled_work_centers);
         removeDisabledAutoWarnings();
         if (window.showToast) showToast('Auto work centers saved');
       } catch (err) {
@@ -1584,7 +1587,10 @@
           if (!resp.ok || !data.ok) {
             throw new Error((data && data.error) || ('HTTP ' + resp.status));
           }
-          applyEnabledCenters(data.enabled_work_centers || workCenters.filter(center => !turnOff.includes(center)));
+          if (!Array.isArray(data.enabled_work_centers)) {
+            throw new Error('Server did not return enabled Auto work centers.');
+          }
+          applyEnabledCenters(data.enabled_work_centers);
           removeDisabledAutoWarnings();
           if (window.showToast) showToast('Auto work centers saved');
           closeAutoCapacityDialog();

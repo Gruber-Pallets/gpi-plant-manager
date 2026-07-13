@@ -159,3 +159,11 @@ def test_auto_capacity_replacement_payload_excludes_selected_turn_off_centers():
     js = _script()
 
     assert "const workCenters = [...new Set([requestedCenter, ...selectedAutoCenters()])]\n          .filter(center => !turnOff.includes(center));" in js
+
+
+def test_auto_center_success_requires_server_enabled_centers():
+    js = _script()
+
+    assert js.count("Array.isArray(data.enabled_work_centers)") == 2
+    assert "data.enabled_work_centers || requestedWorkCenters" not in js
+    assert "data.enabled_work_centers || workCenters.filter" not in js
