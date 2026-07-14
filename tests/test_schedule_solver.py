@@ -4,7 +4,9 @@ from zira_dashboard.schedule_solver import (
     CandidateEdge,
     CandidateRejection,
     CenterRequirement,
+    CompleteCenter,
     CrewOption,
+    solve_complete_schedule,
     solve_minimum_coverage,
 )
 
@@ -17,6 +19,69 @@ def edge(person, center, *, level=1, never=False, rank=0):
         preference="never" if never else "regular",
         rank_cost=rank,
     )
+
+
+def test_complete_solver_places_every_person_and_meets_center_minimums():
+    result = solve_complete_schedule(
+        people=("Cross Trained", "Repair Only", "Extra Repair"),
+        centers=(
+            CompleteCenter("Dismantler 1", "Dismantler", minimum=1, capacity=1),
+            CompleteCenter("Repair 1", "Repair", minimum=1, capacity=2),
+        ),
+        candidates=(
+            edge("Cross Trained", "Dismantler 1", level=1, rank=20),
+            edge("Cross Trained", "Repair 1", level=3, rank=0),
+            edge("Repair Only", "Repair 1", level=1, rank=5),
+            edge("Extra Repair", "Repair 1", level=1, rank=10),
+        ),
+    )
+
+    assert result.complete is True
+    assert {(item.center, item.person) for item in result.decisions} == {
+        ("Dismantler 1", "Cross Trained"),
+        ("Repair 1", "Repair Only"),
+        ("Repair 1", "Extra Repair"),
+    }
+    assert result.unplaced_people == ()
+
+
+def test_complete_solver_returns_failure_instead_of_partial_schedule():
+    result = solve_complete_schedule(
+        people=("Qualified", "No Edge"),
+        centers=(CompleteCenter("Repair 1", "Repair", minimum=1, capacity=1),),
+        candidates=(edge("Qualified", "Repair 1"),),
+    )
+
+    assert result.complete is False
+    assert result.decisions == ()
+    assert result.unplaced_people == ("No Edge",)
+    assert result.issues[0].code == "person_no_enabled_qualified_center"
+
+
+def test_complete_solver_honors_variable_complete_crew_options():
+    result = solve_complete_schedule(
+        people=("Green", "Learner", "Repair"),
+        centers=(
+            CompleteCenter(
+                "Trim Saw 1",
+                "Trim Saw",
+                minimum=2,
+                capacity=2,
+                crew_options=(CrewOption(
+                    "Trim Saw 1",
+                    (
+                        edge("Green", "Trim Saw 1", level=3),
+                        edge("Learner", "Trim Saw 1", level=1),
+                    ),
+                ),),
+            ),
+            CompleteCenter("Repair 1", "Repair", minimum=1, capacity=1),
+        ),
+        candidates=(edge("Repair", "Repair 1"),),
+    )
+
+    assert result.complete is True
+    assert {item.person for item in result.decisions} == {"Green", "Learner", "Repair"}
 
 
 def test_cross_trained_person_moves_to_scarce_center_and_backfills_old_role():

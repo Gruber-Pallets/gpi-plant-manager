@@ -95,6 +95,45 @@ class CoverageResult:
         return frozenset(item.person for item in self.decisions)
 
 
+@dataclass(frozen=True)
+class CompleteCenter:
+    center: str
+    group: str
+    minimum: int
+    capacity: int
+    protected_people: tuple[str, ...] = ()
+    crew_options: tuple[CrewOption, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlacementIssue:
+    code: str
+    message: str
+    person: str | None = None
+    centers: tuple[str, ...] = ()
+    rejections: tuple[CandidateRejection, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "person": self.person,
+            "centers": list(self.centers),
+            "rejections": [item.to_dict() for item in self.rejections],
+        }
+
+
+@dataclass(frozen=True)
+class CompleteScheduleResult:
+    complete: bool
+    decisions: tuple[AssignmentDecision, ...]
+    placed_people: tuple[str, ...]
+    unplaced_people: tuple[str, ...]
+    staffed_centers: tuple[str, ...]
+    issues: tuple[PlacementIssue, ...]
+    total_cost: int = 0
+
+
 @dataclass
 class _Arc:
     to: int
@@ -422,3 +461,444 @@ def solve_minimum_coverage(
     )
     visit(0, reserved_people, ())
     return best if best is not None else _assemble_result(normalized, ())
+
+
+@dataclass(frozen=True)
+class _CompleteAttempt:
+    decisions: tuple[AssignmentDecision, ...]
+    placed_people: tuple[str, ...]
+    staffed_centers: tuple[str, ...]
+    unsatisfied_slots: int
+    all_people_placed: bool
+
+    @property
+    def complete(self) -> bool:
+        return self.all_people_placed and self.unsatisfied_slots == 0
+
+
+def _complete_flow_attempt(
+    *,
+    people: Sequence[str],
+    centers: Sequence[CompleteCenter],
+    candidates: Sequence[CandidateEdge],
+) -> _CompleteAttempt:
+    """Maximum-cardinality, minimum-cost flow for non-coupled centers."""
+    ordered_people = tuple(sorted(people, key=str.lower))
+    ordered_centers = tuple(sorted(centers, key=lambda item: item.center.lower()))
+    people_set = frozenset(ordered_people)
+    center_names = frozenset(item.center for item in ordered_centers)
+
+    # A caller can produce the same safe edge through more than one target
+    # path. Keep its cheapest canonical representation.
+    best_edge: dict[tuple[str, str], CandidateEdge] = {}
+    for edge in sorted(
+        candidates,
+        key=lambda item: (
+            item.person.lower(),
+            item.center.lower(),
+            item.override_cost,
+            max(0, item.rank_cost),
+        ),
+    ):
+        if edge.person not in people_set or edge.center not in center_names:
+            continue
+        key = (edge.person, edge.center)
+        current = best_edge.get(key)
+        if current is None or (
+            edge.override_cost,
+            max(0, edge.rank_cost),
+        ) < (
+            current.override_cost,
+            max(0, current.rank_cost),
+        ):
+            best_edge[key] = edge
+    edges = tuple(best_edge.values())
+
+    source = 0
+    person_node = {name: index + 1 for index, name in enumerate(ordered_people)}
+    center_offset = 1 + len(ordered_people)
+    center_node = {
+        item.center: center_offset + index
+        for index, item in enumerate(ordered_centers)
+    }
+    sink = center_offset + len(ordered_centers)
+    graph: list[list[_Arc]] = [[] for _ in range(sink + 1)]
+
+    for person in ordered_people:
+        _add_arc(graph, source, person_node[person], 1, 0)
+
+    ordinary_bound = (
+        1
+        + sum(max(0, edge.rank_cost) + edge.override_cost for edge in edges)
+        + len(edges)
+    )
+    tie_width = max(1, len(ordered_people) * max(1, len(ordered_centers)) + 1)
+    tie_scale = tie_width * (len(ordered_people) + 1)
+    person_rank = {name: index for index, name in enumerate(ordered_people)}
+    center_rank = {
+        item.center: index for index, item in enumerate(ordered_centers)
+    }
+    chosen_arcs: list[tuple[int, int, CandidateEdge]] = []
+    encoded_costs: list[int] = []
+    for edge in edges:
+        primary_cost = (
+            edge.override_cost * ordinary_bound + max(0, edge.rank_cost)
+        )
+        tie_cost = (
+            center_rank[edge.center] * max(1, len(ordered_people))
+            + person_rank[edge.person]
+        )
+        cost = primary_cost * tie_scale + tie_cost
+        start = person_node[edge.person]
+        arc_index = _add_arc(graph, start, center_node[edge.center], 1, cost)
+        chosen_arcs.append((start, arc_index, edge))
+        encoded_costs.append(cost)
+
+    required_reward = (
+        1 + sum(abs(cost) for cost in encoded_costs)
+    ) * (len(ordered_people) + 1)
+    required_arcs: dict[str, tuple[int, int]] = {}
+    for center in ordered_centers:
+        protected_count = len(center.protected_people)
+        remaining_minimum = max(0, center.minimum - protected_count)
+        remaining_capacity = center.capacity - protected_count
+        node = center_node[center.center]
+        arc_index = _add_arc(
+            graph,
+            node,
+            sink,
+            remaining_minimum,
+            -required_reward,
+        )
+        required_arcs[center.center] = (arc_index, remaining_minimum)
+        _add_arc(
+            graph,
+            node,
+            sink,
+            max(0, remaining_capacity - remaining_minimum),
+            0,
+        )
+
+    node_count = len(graph)
+    while True:
+        distance: list[int | None] = [None] * node_count
+        previous: list[tuple[int, int] | None] = [None] * node_count
+        distance[source] = 0
+        pending = deque((source,))
+        queued = {source}
+        while pending:
+            node = pending.popleft()
+            queued.remove(node)
+            node_distance = distance[node]
+            if node_distance is None:
+                continue
+            for arc_index, arc in enumerate(graph[node]):
+                candidate = node_distance + arc.cost
+                if arc.capacity and (
+                    distance[arc.to] is None or candidate < distance[arc.to]
+                ):
+                    distance[arc.to] = candidate
+                    previous[arc.to] = (node, arc_index)
+                    if arc.to not in queued:
+                        pending.append(arc.to)
+                        queued.add(arc.to)
+        if previous[sink] is None:
+            break
+        node = sink
+        while node != source:
+            prior_node, arc_index = previous[node]  # type: ignore[misc]
+            arc = graph[prior_node][arc_index]
+            arc.capacity -= 1
+            graph[node][arc.reverse].capacity += 1
+            node = prior_node
+
+    selected = tuple(sorted(
+        (
+            _decision(edge)
+            for start, arc_index, edge in chosen_arcs
+            if graph[start][arc_index].capacity == 0
+        ),
+        key=lambda item: (item.center.lower(), item.person.lower()),
+    ))
+    placed = tuple(sorted((item.person for item in selected), key=str.lower))
+    assigned_by_center: dict[str, int] = {}
+    for decision in selected:
+        assigned_by_center[decision.center] = assigned_by_center.get(decision.center, 0) + 1
+    staffed = tuple(sorted(
+        (
+            center.center
+            for center in ordered_centers
+            if len(center.protected_people) + assigned_by_center.get(center.center, 0)
+            >= center.minimum
+        ),
+        key=str.lower,
+    ))
+    unsatisfied = sum(
+        graph[center_node[center.center]][required_arcs[center.center][0]].capacity
+        for center in ordered_centers
+    )
+    return _CompleteAttempt(
+        decisions=selected,
+        placed_people=placed,
+        staffed_centers=staffed,
+        unsatisfied_slots=unsatisfied,
+        all_people_placed=len(placed) == len(ordered_people),
+    )
+
+
+def _validate_complete_problem(
+    people: Sequence[str],
+    centers: Sequence[CompleteCenter],
+    candidates: Sequence[CandidateEdge],
+) -> None:
+    if len(set(people)) != len(people):
+        raise ValueError("requested people must be unique")
+    center_names = [center.center for center in centers]
+    if len(set(center_names)) != len(center_names):
+        raise ValueError("complete center names must be unique")
+    requested = frozenset(people)
+    known_centers = frozenset(center_names)
+    protected_seen: set[str] = set()
+    for center in centers:
+        if center.minimum < 0 or center.capacity < 0:
+            raise ValueError("center minimums and capacities must be nonnegative")
+        if center.minimum > center.capacity:
+            raise ValueError("center minimum cannot exceed capacity")
+        if len(set(center.protected_people)) != len(center.protected_people):
+            raise ValueError("protected people must be unique within a center")
+        if protected_seen.intersection(center.protected_people):
+            raise ValueError("a protected person cannot occupy multiple centers")
+        protected_seen.update(center.protected_people)
+        if len(center.protected_people) > center.capacity:
+            raise ValueError("protected people cannot exceed center capacity")
+        remaining_minimum = max(0, center.minimum - len(center.protected_people))
+        remaining_capacity = center.capacity - len(center.protected_people)
+        for option in center.crew_options:
+            if option.center != center.center:
+                raise ValueError("crew options must be center-scoped")
+            if len(set(option.people)) != len(option.people):
+                raise ValueError("crew option people must be unique")
+            if not remaining_minimum <= len(option.members) <= remaining_capacity:
+                raise ValueError("crew option size must satisfy remaining center bounds")
+            if set(option.people).intersection(center.protected_people):
+                raise ValueError("crew options cannot include protected people")
+            for member in option.members:
+                if member.center != center.center:
+                    raise ValueError("crew members must match their option center")
+                if member.person not in requested:
+                    raise ValueError("crew option people must be requested")
+                if member.level not in {1, 2, 3}:
+                    raise ValueError("candidate and crew member levels must be 1, 2, or 3")
+    for edge in candidates:
+        if edge.person not in requested:
+            raise ValueError("candidate people must be requested")
+        if edge.center not in known_centers:
+            raise ValueError("candidate centers must exist")
+        if edge.level not in {1, 2, 3}:
+            raise ValueError("candidate and crew member levels must be 1, 2, or 3")
+
+
+def _complete_attempt_key(attempt: _CompleteAttempt) -> tuple[object, ...]:
+    return (
+        sum(item.preference == "never" for item in attempt.decisions),
+        sum(item.rank_cost for item in attempt.decisions),
+        tuple(
+            (item.center.lower(), item.person.lower())
+            for item in attempt.decisions
+        ),
+    )
+
+
+def solve_complete_schedule(
+    *,
+    people: Sequence[str],
+    centers: Sequence[CompleteCenter],
+    candidates: Sequence[CandidateEdge],
+) -> CompleteScheduleResult:
+    """Place every requested person or return a zero-decision failure."""
+    _validate_complete_problem(people, centers, candidates)
+    ordered_people = tuple(sorted(people, key=str.lower))
+    ordered_centers = tuple(sorted(centers, key=lambda item: item.center.lower()))
+    coupled = tuple(sorted(
+        (center for center in ordered_centers if center.crew_options),
+        key=lambda item: (len(item.crew_options), item.center.lower()),
+    ))
+    ordinary = tuple(center for center in ordered_centers if not center.crew_options)
+    coupled_names = frozenset(center.center for center in coupled)
+    ordinary_candidates = tuple(
+        edge for edge in candidates if edge.center not in coupled_names
+    )
+    best_complete: _CompleteAttempt | None = None
+    best_diagnostic: _CompleteAttempt | None = None
+
+    def consider(
+        crew_decisions: tuple[AssignmentDecision, ...],
+        chosen_by_center: dict[str, int],
+    ) -> None:
+        nonlocal best_complete, best_diagnostic
+        crew_people = frozenset(item.person for item in crew_decisions)
+        remaining_people = tuple(
+            person for person in ordered_people if person not in crew_people
+        )
+        flow = _complete_flow_attempt(
+            people=remaining_people,
+            centers=ordinary,
+            candidates=ordinary_candidates,
+        )
+        decisions = tuple(sorted(
+            crew_decisions + flow.decisions,
+            key=lambda item: (item.center.lower(), item.person.lower()),
+        ))
+        placed = tuple(sorted((item.person for item in decisions), key=str.lower))
+        assigned_by_center: dict[str, int] = dict(chosen_by_center)
+        for item in flow.decisions:
+            assigned_by_center[item.center] = assigned_by_center.get(item.center, 0) + 1
+        staffed = tuple(sorted(
+            (
+                center.center
+                for center in ordered_centers
+                if len(center.protected_people)
+                + assigned_by_center.get(center.center, 0)
+                >= center.minimum
+            ),
+            key=str.lower,
+        ))
+        unsatisfied = sum(
+            max(
+                0,
+                center.minimum
+                - len(center.protected_people)
+                - assigned_by_center.get(center.center, 0),
+            )
+            for center in ordered_centers
+        )
+        attempt = _CompleteAttempt(
+            decisions=decisions,
+            placed_people=placed,
+            staffed_centers=staffed,
+            unsatisfied_slots=unsatisfied,
+            all_people_placed=len(placed) == len(ordered_people),
+        )
+        if attempt.complete and (
+            best_complete is None
+            or _complete_attempt_key(attempt) < _complete_attempt_key(best_complete)
+        ):
+            best_complete = attempt
+        diagnostic_key = (
+            -len(attempt.placed_people),
+            attempt.unsatisfied_slots,
+            _complete_attempt_key(attempt),
+        )
+        if best_diagnostic is None or diagnostic_key < (
+            -len(best_diagnostic.placed_people),
+            best_diagnostic.unsatisfied_slots,
+            _complete_attempt_key(best_diagnostic),
+        ):
+            best_diagnostic = attempt
+
+    def visit(
+        index: int,
+        used_people: frozenset[str],
+        decisions: tuple[AssignmentDecision, ...],
+        chosen_by_center: dict[str, int],
+    ) -> None:
+        if index == len(coupled):
+            consider(decisions, chosen_by_center)
+            return
+        center = coupled[index]
+        options = sorted(
+            center.crew_options,
+            key=lambda option: (
+                sum(member.preference == "never" for member in option.members),
+                sum(member.rank_cost for member in option.members),
+                tuple(name.lower() for name in option.people),
+            ),
+        )
+        for option in options:
+            option_people = frozenset(option.people)
+            if option_people.intersection(used_people):
+                continue
+            next_counts = dict(chosen_by_center)
+            next_counts[center.center] = len(option.members)
+            visit(
+                index + 1,
+                used_people | option_people,
+                decisions + _crew_decisions(option),
+                next_counts,
+            )
+        # The empty branch is a valid complete choice only when protected
+        # occupants already cover the minimum, but it remains useful for a
+        # deterministic failure diagnostic otherwise.
+        visit(index + 1, used_people, decisions, dict(chosen_by_center))
+
+    visit(0, frozenset(), (), {})
+    if best_complete is not None:
+        return CompleteScheduleResult(
+            complete=True,
+            decisions=best_complete.decisions,
+            placed_people=best_complete.placed_people,
+            unplaced_people=(),
+            staffed_centers=best_complete.staffed_centers,
+            issues=(),
+            total_cost=sum(item.rank_cost for item in best_complete.decisions),
+        )
+
+    diagnostic = best_diagnostic or _CompleteAttempt((), (), (), 0, False)
+    placed_set = frozenset(diagnostic.placed_people)
+    unplaced = tuple(
+        person for person in ordered_people if person not in placed_set
+    )
+    candidate_centers: dict[str, set[str]] = {person: set() for person in ordered_people}
+    for edge in candidates:
+        candidate_centers[edge.person].add(edge.center)
+    for center in coupled:
+        for option in center.crew_options:
+            for member in option.members:
+                candidate_centers[member.person].add(center.center)
+    issues: list[PlacementIssue] = []
+    for person in unplaced:
+        centers_for_person = tuple(sorted(candidate_centers[person], key=str.lower))
+        if not centers_for_person:
+            issues.append(PlacementIssue(
+                code="person_no_enabled_qualified_center",
+                person=person,
+                centers=(),
+                message=(
+                    f"{person} has no enabled work center they are qualified to run. "
+                    "Previous schedule kept."
+                ),
+            ))
+        else:
+            issues.append(PlacementIssue(
+                code="person_all_qualified_centers_full",
+                person=person,
+                centers=centers_for_person,
+                message=(
+                    f"Every enabled work center {person} is qualified for is full. "
+                    "Previous schedule kept."
+                ),
+            ))
+    staffed_set = frozenset(diagnostic.staffed_centers)
+    for center in ordered_centers:
+        if center.center not in staffed_set:
+            issues.append(PlacementIssue(
+                code=(
+                    "no_safe_complete_crew"
+                    if center.crew_options
+                    else "center_minimum_unmet"
+                ),
+                centers=(center.center,),
+                message=(
+                    f"{center.center} cannot be staffed safely to its minimum. "
+                    "Previous schedule kept."
+                ),
+            ))
+    return CompleteScheduleResult(
+        complete=False,
+        decisions=(),
+        placed_people=diagnostic.placed_people,
+        unplaced_people=unplaced,
+        staffed_centers=diagnostic.staffed_centers,
+        issues=tuple(issues),
+        total_cost=0,
+    )

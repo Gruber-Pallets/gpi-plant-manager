@@ -10,7 +10,9 @@ from zira_dashboard import staffing
 from zira_dashboard.schedule_solver import (
     CandidateEdge,
     CenterRequirement,
+    CompleteCenter,
     CrewOption,
+    solve_complete_schedule,
     solve_minimum_coverage,
 )
 
@@ -38,6 +40,99 @@ def _oracle_count(requirements):
             continue
         best = max(best, len(used))
     return best
+
+
+def exhaustive_complete(people, centers, candidates):
+    choices = {
+        person: tuple(sorted(
+            {edge.center for edge in candidates if edge.person == person},
+            key=str.lower,
+        ))
+        for person in people
+    }
+    if any(not choices[person] for person in people):
+        return False
+    by_center = {center.center: center for center in centers}
+    for selected in product(*(choices[person] for person in people)):
+        counts = {name: 0 for name in by_center}
+        for center_name in selected:
+            counts[center_name] += 1
+        if all(
+            center.minimum <= counts[center.center] <= center.capacity
+            for center in centers
+        ):
+            return True
+    return False
+
+
+def _assert_complete_invariants(people, centers, candidates, result):
+    assert result.complete
+    assert result.unplaced_people == ()
+    assert {item.person for item in result.decisions} == set(people)
+    assert len(result.decisions) == len(people)
+    known_edges = {(edge.person, edge.center) for edge in candidates}
+    assert all((item.person, item.center) in known_edges for item in result.decisions)
+    for center in centers:
+        count = sum(item.center == center.center for item in result.decisions)
+        assert center.minimum <= count <= center.capacity
+
+
+def test_complete_solver_matches_exhaustive_feasibility_for_all_small_graphs():
+    people = ("A", "B", "C")
+    centers = (
+        CompleteCenter("One", "One", minimum=1, capacity=2),
+        CompleteCenter("Two", "Two", minimum=1, capacity=2),
+    )
+    possible = tuple(
+        _edge(person, center.center)
+        for person in people
+        for center in centers
+    )
+    for mask in range(1 << len(possible)):
+        candidates = tuple(
+            edge for index, edge in enumerate(possible) if mask & (1 << index)
+        )
+        expected = exhaustive_complete(people, centers, candidates)
+        result = solve_complete_schedule(
+            people=people,
+            centers=centers,
+            candidates=candidates,
+        )
+        assert result.complete == expected
+        if expected:
+            _assert_complete_invariants(people, centers, candidates, result)
+        else:
+            assert result.decisions == ()
+
+
+def test_complete_solver_is_stable_across_input_order_with_five_people():
+    people = ("A", "B", "C", "D", "E")
+    centers = (
+        CompleteCenter("One", "Group", minimum=1, capacity=2),
+        CompleteCenter("Two", "Group", minimum=1, capacity=2),
+        CompleteCenter("Three", "Group", minimum=1, capacity=2),
+    )
+    candidates = tuple(
+        _edge(person, center.center, rank_cost=(person_index + center_index) % 3)
+        for person_index, person in enumerate(people)
+        for center_index, center in enumerate(centers)
+        if (person_index + center_index) % 4 != 0
+    )
+
+    forward = solve_complete_schedule(
+        people=people,
+        centers=centers,
+        candidates=candidates,
+    )
+    reverse = solve_complete_schedule(
+        people=tuple(reversed(people)),
+        centers=tuple(reversed(centers)),
+        candidates=tuple(reversed(candidates)),
+    )
+
+    assert forward == reverse
+    assert forward.complete == exhaustive_complete(people, centers, candidates)
+    _assert_complete_invariants(people, centers, candidates, forward)
 
 
 def _assert_solver_invariants(requirements, result):
