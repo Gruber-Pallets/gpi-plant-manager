@@ -8,12 +8,28 @@ def test_people_matrix_odoo_link_is_visible_on_keyboard_focus():
     assert "opacity: 1 !important" in css
 
 
-def test_people_matrix_sort_headers_handle_keyboard_activation():
+def test_people_matrix_sort_uses_button_triggers():
     js = Path("src/zira_dashboard/static/skills-page.js").read_text()
 
-    assert "th.addEventListener('keydown'" in js
-    assert "e.key === 'Enter'" in js
-    assert "e.key === ' '" in js
+    # Sorting binds to the header's matrix-sort-trigger button (native
+    # keyboard), no longer to a role="button" th keydown handler.
+    assert "matrix-sort-trigger" in js
+    assert "th.addEventListener('keydown'" not in js
+
+
+def test_settings_gear_does_not_trigger_sort():
+    js = Path("src/zira_dashboard/static/skills-page.js").read_text()
+
+    assert "automation-settings-trigger" in js
+    assert "event.stopPropagation()" in js
+    assert "matrix-sort-trigger" in js
+
+
+def test_automation_modal_posts_and_restores_focus():
+    js = Path("src/zira_dashboard/static/skills-page.js").read_text()
+
+    assert "'/staffing/skills/automation/' + " in js
+    assert "lastAutomationTrigger.focus()" in js
 
 
 def test_people_matrix_skill_sort_reads_any_skill_display_control():

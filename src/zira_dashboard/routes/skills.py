@@ -12,16 +12,42 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import asdict
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from .. import automated_skill_settings, automated_skills
 from .. import staffing, skill_levels, rotation_store
 from .. import _http_cache, db
 from ..deps import templates
+from ..plant_day import today as plant_today
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+
+
+def _automation_context() -> dict:
+    """Per-group automatic-skill state for the matrix headers, keyed by the
+    matrix skill name (Repair, Dismantle). Carries the saved thresholds, the
+    last run summary, and each group's work centers + goals so the modal can
+    preview the daily unit target each threshold implies."""
+    configs = automated_skill_settings.all_current()
+    result: dict = {}
+    for group, matrix_skill in automated_skills.GROUP_TO_SKILL.items():
+        goals = automated_skills.goals_for_group(group)
+        last = automated_skill_settings.last_run(group)
+        result[matrix_skill] = {
+            "group": group,
+            "settings": asdict(configs[group]),
+            "last_run": asdict(last) if last else None,
+            "work_centers": [
+                {"name": loc.name, "goal": goals.get(loc.name, 0.0)}
+                for loc in staffing.LOCATIONS
+                if loc.skill == group
+            ],
+        }
+    return result
 
 
 @router.get("/staffing/skills", response_class=HTMLResponse)
@@ -107,6 +133,14 @@ def staffing_skills(request: Request):
     }
     rotation_active_people = [p.name for p in roster if p.active]
 
+    # Optional read: a settings/goals outage must degrade to no gears, never
+    # 500 the whole People Matrix.
+    try:
+        automation_groups = _automation_context()
+    except Exception:
+        log.exception("Skills matrix: failed to build automation context")
+        automation_groups = {}
+
     response = templates.TemplateResponse(
         request,
         "skills.html",
@@ -127,6 +161,7 @@ def staffing_skills(request: Request):
             "rotation_levels": rotation_levels,
             "rotation_preference_targets_by_person": rotation_preference_targets_by_person,
             "rotation_active_people": rotation_active_people,
+            "automation_groups": automation_groups,
             "active_count": active_count,
             "inactive_count": len(roster) - active_count,
             "sync_ok": sync_result.ok,
@@ -167,6 +202,33 @@ async def staffing_skills_save(request: Request):
 
 def _skill_cell_error(message: str, status_code: int) -> JSONResponse:
     return JSONResponse({"ok": False, "error": message}, status_code=status_code)
+
+
+@router.post("/staffing/skills/automation/{group}")
+async def staffing_automation_save(group: str, request: Request):
+    try:
+        body = await request.json()
+        settings = automated_skill_settings.validate(
+            automated_skill_settings.BucketSettings(
+                level_3_min=body["level_3_min"],
+                level_2_min=body["level_2_min"],
+                level_1_min=body["level_1_min"],
+            )
+        )
+        automated_skill_settings.save(group, settings)
+    except (KeyError, TypeError, ValueError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    try:
+        summary = await asyncio.to_thread(
+            automated_skills.run_group, group, "manual", plant_today()
+        )
+    except automated_skills.RunInProgress as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+    _http_cache.invalidate_today_cache()
+    _http_cache.invalidate_stable_cache()
+    return JSONResponse(
+        {"ok": True, "settings": asdict(settings), "summary": asdict(summary)}
+    )
 
 
 def _strict_json_int(body: dict, field: str) -> int:

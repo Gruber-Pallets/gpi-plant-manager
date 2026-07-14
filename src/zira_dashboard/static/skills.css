@@ -434,3 +434,92 @@
   }
   .rotation-block-submit:hover:not(:disabled) { filter: brightness(1.08); }
   .rotation-block-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* --- Automatic Repair/Dismantle skill settings ------------------------- */
+/* Header controls: the sort label is a borderless button so the gear can sit
+   beside it without nesting one activatable control inside another. */
+.matrix-header-controls { display: inline-flex; align-items: center; gap: 0.2rem; }
+.matrix-sort-trigger {
+  border: 0; padding: 0; margin: 0; background: transparent; color: inherit;
+  font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer;
+}
+.matrix-sort-trigger:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px;
+}
+/* Gear stays hidden until the header is hovered or the gear is focused. */
+.automation-settings-trigger {
+  opacity: 0; border: 0; background: transparent; color: var(--muted);
+  font-size: 0.9em; line-height: 1; padding: 0 0.1rem; cursor: pointer;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.skills-table thead th:hover .automation-settings-trigger,
+.automation-settings-trigger:focus-visible {
+  opacity: 1; color: var(--accent);
+}
+.automation-settings-trigger:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px;
+}
+
+.automation-modal-backdrop {
+  position: fixed; inset: 0; z-index: 1000; display: flex;
+  align-items: flex-start; justify-content: center; padding: 6vh 1rem;
+  overflow-y: auto; background: rgba(0, 0, 0, 0.55);
+}
+.automation-modal-backdrop[hidden] { display: none; }
+.automation-modal {
+  width: min(46rem, 100%); background: var(--panel); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5); padding: 1rem 1.25rem 1.25rem;
+}
+.automation-modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; margin-bottom: 0.25rem;
+}
+.automation-modal-head h3 { margin: 0; font-size: 1.05rem; }
+.automation-modal-head button {
+  border: 0; background: transparent; color: var(--muted);
+  font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 0.1rem 0.3rem;
+}
+.automation-modal-head button:hover { color: var(--fg); }
+.automation-modal-note { margin: 0.25rem 0 0.9rem; color: var(--muted); font-size: 0.85rem; }
+
+.automation-bucket-grid { display: grid; gap: 0.45rem; margin-bottom: 0.9rem; }
+.automation-bucket-row {
+  display: grid; grid-template-columns: 12rem 6rem auto;
+  align-items: center; gap: 0.5rem; font-size: 0.9rem;
+}
+.automation-bucket-row input {
+  width: 100%; padding: 0.3rem 0.4rem; font: inherit;
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.automation-bucket-suffix { color: var(--muted); font-size: 0.85rem; }
+
+.automation-preview { margin-bottom: 0.75rem; overflow-x: auto; }
+.automation-preview table {
+  width: 100%; border-collapse: collapse; font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.automation-preview caption {
+  caption-side: top; text-align: left; color: var(--muted);
+  font-size: 0.8rem; margin-bottom: 0.35rem;
+}
+.automation-preview th, .automation-preview td {
+  border: 1px solid var(--border); padding: 0.25rem 0.5rem; text-align: right;
+}
+.automation-preview th[scope="row"], .automation-preview thead th:first-child { text-align: left; }
+.automation-preview-sub { color: var(--muted); }
+.automation-preview-empty { color: var(--muted); font-size: 0.85rem; margin: 0; }
+
+.automation-run-status { margin: 0.4rem 0 0.8rem; font-size: 0.85rem; min-height: 1.1rem; }
+.automation-run-status.ok { color: var(--accent); }
+.automation-run-status.has-failures { color: var(--bad); }
+
+.automation-modal-actions { display: flex; justify-content: flex-end; }
+.automation-save-btn {
+  background: var(--accent); color: #fff; border: 1px solid var(--accent);
+  border-radius: 6px; padding: 0.45rem 1rem; font: inherit; font-weight: 600;
+  cursor: pointer;
+}
+.automation-save-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.automation-save-btn:disabled { opacity: 0.6; cursor: not-allowed; }

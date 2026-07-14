@@ -14,7 +14,10 @@
   filterInput.addEventListener('input', apply);
   apply();
 
-  // Column sort: click or keyboard-activate any <th> to sort rows. Toggle asc/desc on repeat.
+  // Column sort: activate a header's matrix-sort-trigger button to sort rows.
+  // Toggle asc/desc on repeat. The trigger is a real <button>, so Enter/Space
+  // work natively — no th keydown handler — which lets the automation gear sit
+  // beside it without nesting one activatable control inside another.
   (function () {
     const table = document.getElementById('skills-table');
     const tbody = table.querySelector('tbody');
@@ -52,15 +55,9 @@
       rows.forEach(r => tbody.appendChild(r));
     }
     ths.forEach((th, i) => {
-      th.addEventListener('click', () => {
-        sortBy(i, th);
-      });
-      th.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          sortBy(i, th);
-        }
-      });
+      const trigger = th.querySelector('.matrix-sort-trigger');
+      if (!trigger) return;
+      trigger.addEventListener('click', () => sortBy(i, th));
     });
   })();
 
@@ -1431,4 +1428,188 @@
     document.querySelectorAll('.rotation-open-btn').forEach(btn => {
       btn.addEventListener('click', () => openModal(btn.dataset.person, btn));
     });
+  })();
+
+  // Automatic Repair/Dismantle skill settings. Opened from the gear beside the
+  // Repair or Dismantle header. Reads thresholds + work-center goals from
+  // window.AUTOMATION_GROUPS, previews the daily unit target each threshold
+  // implies, and POSTs to the recalculate endpoint on save.
+  (function () {
+    const backdrop = document.getElementById('automation-modal-backdrop');
+    if (!backdrop) return;
+    const groups = window.AUTOMATION_GROUPS || {};
+    const titleEl = document.getElementById('automation-modal-title');
+    const gridEl = document.getElementById('automation-bucket-grid');
+    const previewEl = document.getElementById('automation-preview');
+    const statusEl = document.getElementById('automation-run-status');
+    const saveBtn = document.getElementById('automation-save-btn');
+    const closeBtn = document.getElementById('automation-modal-close');
+
+    let lastAutomationTrigger = null;
+    let activeAutomationSkill = null;
+
+    const LEVELS = [
+      { key: 'level_3_min', label: 'Level 3 · proficient' },
+      { key: 'level_2_min', label: 'Level 2 · competent' },
+      { key: 'level_1_min', label: 'Level 1 · practicing' },
+    ];
+
+    function fmtPct(v) {
+      return (Math.round(Number(v) * 100) / 100).toString();
+    }
+
+    function readThresholds() {
+      const out = {};
+      gridEl.querySelectorAll('[data-automation-level]').forEach(input => {
+        out[input.dataset.automationLevel] = Number(input.value);
+      });
+      return out;
+    }
+
+    function renderBucketGrid(settings) {
+      gridEl.innerHTML = '';
+      LEVELS.forEach(({ key, label }) => {
+        const row = document.createElement('label');
+        row.className = 'automation-bucket-row';
+        const span = document.createElement('span');
+        span.textContent = label;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.max = '100';
+        input.step = '0.1';
+        input.value = fmtPct(settings[key]);
+        input.dataset.automationLevel = key;
+        input.setAttribute('aria-label', label + ' minimum percent of goal');
+        input.addEventListener('input', renderPreview);
+        const suffix = document.createElement('span');
+        suffix.className = 'automation-bucket-suffix';
+        suffix.textContent = '% of goal';
+        row.appendChild(span);
+        row.appendChild(input);
+        row.appendChild(suffix);
+        gridEl.appendChild(row);
+      });
+    }
+
+    function renderPreview() {
+      const data = groups[activeAutomationSkill];
+      if (!data) { previewEl.innerHTML = ''; return; }
+      const thresholds = readThresholds();
+      const centers = data.work_centers || [];
+      if (!centers.length) {
+        previewEl.innerHTML =
+          '<p class="automation-preview-empty">No work-center goals configured for this group yet.</p>';
+        return;
+      }
+      const body = centers.map(wc => {
+        const goal = Number(wc.goal) || 0;
+        const cells = LEVELS.map(({ key }) => {
+          const pct = Number(thresholds[key]) || 0;
+          const solo = Math.round(pct / 100 * goal);
+          const paired = Math.round(pct / 100 * goal / 2);
+          return '<td>' + solo + '<span class="automation-preview-sub"> / ' + paired + '</span></td>';
+        }).join('');
+        return '<tr><th scope="row">' + wc.name + '</th><td>' + Math.round(goal) + '</td>' + cells + '</tr>';
+      }).join('');
+      previewEl.innerHTML =
+        '<table><caption>Full-day units needed to reach each level — alone / per person when two share the center</caption>' +
+        '<thead><tr><th scope="col">Work center</th><th scope="col">Goal</th>' +
+        '<th scope="col">L3</th><th scope="col">L2</th><th scope="col">L1</th></tr></thead>' +
+        '<tbody>' + body + '</tbody></table>';
+    }
+
+    function renderRunSummary(summary) {
+      if (!summary) { statusEl.textContent = ''; statusEl.className = 'automation-run-status'; return; }
+      const parts = [
+        summary.changed + ' changed',
+        summary.unchanged + ' unchanged',
+        summary.skipped + ' without enough data',
+      ];
+      let msg = 'Recalculated ' + summary.evaluated + ' eligible: ' + parts.join(', ') + '.';
+      const failures = summary.failures || [];
+      if (failures.length) {
+        msg += ' Odoo rejected ' + failures.map(f => f.name).join(', ') + '.';
+        statusEl.className = 'automation-run-status has-failures';
+      } else {
+        statusEl.className = 'automation-run-status ok';
+      }
+      if (summary.run_at) msg += ' (' + summary.trigger + ' run)';
+      statusEl.textContent = msg;
+    }
+
+    function openAutomationModal(trigger) {
+      const skill = trigger.dataset.automationSkill;
+      const data = groups[skill];
+      if (!data) return;
+      lastAutomationTrigger = trigger;
+      activeAutomationSkill = skill;
+      titleEl.textContent = 'Automatic ' + skill + ' levels';
+      renderBucketGrid(data.settings || {});
+      renderPreview();
+      renderRunSummary(data.last_run);
+      saveBtn.disabled = false;
+      backdrop.hidden = false;
+      const firstInput = gridEl.querySelector('input');
+      if (firstInput) firstInput.focus();
+      document.addEventListener('keydown', onKeydown);
+    }
+
+    function closeAutomationModal() {
+      backdrop.hidden = true;
+      document.removeEventListener('keydown', onKeydown);
+      activeAutomationSkill = null;
+      if (lastAutomationTrigger && document.contains(lastAutomationTrigger)) {
+        lastAutomationTrigger.focus();
+      }
+    }
+
+    function onKeydown(e) {
+      if (e.key === 'Escape') closeAutomationModal();
+    }
+
+    async function saveAutomationSettings() {
+      const data = groups[activeAutomationSkill];
+      if (!data) return;
+      const payload = readThresholds();
+      saveBtn.disabled = true;
+      statusEl.setAttribute('role', 'status');
+      statusEl.className = 'automation-run-status';
+      statusEl.textContent = 'Saving and recalculating…';
+      try {
+        const response = await fetch('/staffing/skills/automation/' + encodeURIComponent(data.group), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const respBody = await response.json().catch(() => ({}));
+        if (!response.ok || !respBody.ok) {
+          statusEl.setAttribute('role', 'alert');
+          statusEl.className = 'automation-run-status has-failures';
+          statusEl.textContent = respBody.error || 'Could not save automatic skill settings.';
+          return;
+        }
+        data.settings = respBody.settings;
+        if (respBody.summary) data.last_run = respBody.summary;
+        renderBucketGrid(respBody.settings);
+        renderPreview();
+        renderRunSummary(respBody.summary);
+      } catch (err) {
+        statusEl.setAttribute('role', 'alert');
+        statusEl.className = 'automation-run-status has-failures';
+        statusEl.textContent = 'Network error — settings were not saved.';
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    document.querySelectorAll('.automation-settings-trigger').forEach(trigger => {
+      trigger.addEventListener('click', event => {
+        event.stopPropagation();
+        openAutomationModal(trigger);
+      });
+    });
+    closeBtn.addEventListener('click', closeAutomationModal);
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) closeAutomationModal(); });
+    saveBtn.addEventListener('click', saveAutomationSettings);
   })();
