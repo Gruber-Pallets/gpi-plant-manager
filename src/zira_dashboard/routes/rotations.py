@@ -462,6 +462,9 @@ async def rebuild_rotation(request: Request):
         return _error("Invalid JSON body.", 400)
     day_raw = str(body.get("day") or "").strip()
     mode = str(body.get("mode") or "").strip()
+    reset_to_defaults = body.get("reset_to_defaults", False)
+    if not isinstance(reset_to_defaults, bool):
+        return _error("reset_to_defaults must be a boolean.")
     try:
         d = date.fromisoformat(day_raw)
     except ValueError:
@@ -490,6 +493,8 @@ async def rebuild_rotation(request: Request):
                 strict_default_reads=True,
                 include_saved_defaults=False,
             )
+            if reset_to_defaults:
+                manual_locks = {}
             center_minimums = {
                 loc.name: staffing_route._effective_minimum(loc)
                 for loc in staffing.LOCATIONS if loc.name in enabled_centers

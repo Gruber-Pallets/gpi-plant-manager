@@ -202,7 +202,7 @@ def test_rotation_warning_success_replaces_alert_with_authoritative_response():
         "// Reconcile every enabled Auto picker's checkboxes", 1
     )[0]
     apply_rebuild = js.split("function applyRebuild(data) {", 1)[1].split(
-        "async function rebuild(mode)", 1
+        "async function rebuild(mode, options = {})", 1
     )[0]
 
     call = "renderCoverageIssues(data.warnings, data.coverage?.issues || []);"
@@ -210,7 +210,7 @@ def test_rotation_warning_success_replaces_alert_with_authoritative_response():
     assert call in apply_rebuild
 
 
-def test_rotation_warning_failures_preserve_current_issues_and_append_once():
+def test_auto_toggle_failures_preserve_current_issues_and_append_once():
     js = _script()
     assert "function renderCoverageFailure(message) {" in js
     helper = js.split("function renderCoverageFailure(message) {", 1)[1].split(
@@ -219,16 +219,37 @@ def test_rotation_warning_failures_preserve_current_issues_and_append_once():
     save_auto = js.split("async function saveAutoCenters(changedCb) {", 1)[1].split(
         "// Reconcile every enabled Auto picker's checkboxes", 1
     )[0]
-    rebuild = js.split("async function rebuild(mode) {", 1)[1].split(
-        "modeBtns.forEach(btn =>", 1
-    )[0]
-
     assert "const warnings = [...(window.ROTATION_WARNINGS || [])];" in helper
     assert "if (!warnings.includes(message)) warnings.push(message);" in helper
     assert "renderCoverageIssues(warnings, window.ROTATION_ISSUES);" in helper
     assert "renderCoverageFailure(" in save_auto
-    assert rebuild.count("renderCoverageFailure(") == 2
-    assert "renderCoverageIssues([" not in rebuild
+
+
+def test_reset_to_defaults_uses_complete_rebuild_endpoint():
+    js = _script()
+    rotation = js.split("// ---------- Rotation goal", 1)[1].split(
+        "// Assignments to Do modal", 1
+    )[0]
+    reset = rotation.split("const resetScheduleBtn", 1)[1].split(
+        "modeBtns.forEach", 1
+    )[0]
+    assert "await rebuild(currentMode(), { resetToDefaults: true })" in reset
+    assert "window.SMART_DEFAULTS_BY_LOC" not in reset
+    assert "kickAutosave()" not in reset
+
+
+def test_failed_rebuild_keeps_grid_and_renders_person_issues():
+    js = _script()
+    rebuild = js.split("async function rebuild", 1)[1].split(
+        "const resetScheduleBtn", 1
+    )[0]
+    assert "if (!resp.ok || !data.ok)" in rebuild
+    assert "renderPlacementFailure(data)" in rebuild
+    failure_branch = rebuild.split("if (!resp.ok || !data.ok)", 1)[1].split(
+        "applyRebuild", 1
+    )[0]
+    assert "applyRebuild" not in failure_branch
+    assert "kickAutosave" not in failure_branch
 
 
 def test_auto_capacity_turn_off_dialog_is_removed():
@@ -271,22 +292,18 @@ def test_auto_center_success_requires_server_enabled_centers():
     )
 
 
-def test_clear_schedule_is_distinct_from_reset_and_uses_existing_autosave_flow():
+def test_clear_schedule_remains_a_distinct_local_autosave_action():
     html = _template()
     js = _script()
     css = Path("src/zira_dashboard/static/staffing.css").read_text()
-    reset_handler = js.split("const __resetBtn = document.getElementById('reset-schedule-btn');", 1)[1].split(
-        "const __clearBtn = document.getElementById('clear-schedule-btn');", 1
-    )[0]
     clear_handler = js.split("const __clearBtn = document.getElementById('clear-schedule-btn');", 1)[1].split(
         "// ---------- Undo / Redo helpers ----------", 1
     )[0]
 
     assert 'id="reset-schedule-btn" class="clear-btn">Reset to defaults</button>' in html
     assert 'id="clear-schedule-btn" class="clear-btn clear-schedule-btn">Clear schedule</button>' in html
-    assert "Reset every Scheduled cell to the page defaults?" in js
     assert "Clear every Scheduled cell for this day?" in js
-    assert "const __resetBtn = document.getElementById('reset-schedule-btn');" in js
+    assert "const resetScheduleBtn = document.getElementById('reset-schedule-btn');" in js
     assert "const __clearBtn = document.getElementById('clear-schedule-btn');" in js
     assert "cb.checked = false;" in js
     assert "item.classList.remove('selected');" in js
@@ -294,10 +311,6 @@ def test_clear_schedule_is_distinct_from_reset_and_uses_existing_autosave_flow()
     assert "refreshPickerVisibility();" in js
     assert "kickAutosave();" in js
     assert ".clear-schedule-btn:hover" in css
-    assert "if (__viewingPosted) return;" in reset_handler
-    assert reset_handler.index("if (__viewingPosted) return;") < reset_handler.index(
-        'if (!confirm("Reset every Scheduled cell to the page defaults?'
-    )
     assert "if (__viewingPosted) return;" in clear_handler
     assert clear_handler.index("if (__viewingPosted) return;") < clear_handler.index(
         "if (!confirm('Clear every Scheduled cell for this day?"

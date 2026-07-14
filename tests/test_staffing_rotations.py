@@ -549,6 +549,92 @@ def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
     assert response.json()["placement"]["unplaced_people"] == []
 
 
+def test_reset_rebuild_drops_enabled_manual_lock_but_preserves_outside_assignment(
+    monkeypatch,
+):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    prior = staffing.Schedule(
+        day=TARGET_DAY,
+        assignments={
+            "Repair 1": ["Manual Inside"],
+            "Truck Driver": ["Outside Auto"],
+        },
+        assignment_sources={
+            "Repair 1": {"Manual Inside": "manual"},
+            "Truck Driver": {"Outside Auto": "manual"},
+        },
+    )
+    captured = {}
+    saved = []
+    monkeypatch.setattr(staffing_route, "_effective_minimum", lambda _loc: 0)
+    monkeypatch.setattr(
+        staffing_route,
+        "_configured_center_capacities",
+        lambda enabled, strict=False: {name: 3 for name in enabled},
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "_recycled_suggestion_for_day",
+        lambda *args, **kwargs: (
+            captured.update(kwargs)
+            or rotation_suggestions.RecycledSuggestion(
+                assignments={"Repair 1": ["Default Person"]},
+                sources={"Repair 1": {"Default Person": "generated"}},
+                reasons={"Repair 1": {"Default Person": "default work center"}},
+                warnings=(),
+                group_locations={"Repair": ("Repair 1",)},
+                complete=True,
+                available_people=("Default Person", "Outside Auto"),
+                placed_people=("Default Person", "Outside Auto"),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_roster",
+        lambda: [
+            _person("Default Person", 3),
+            _person("Outside Auto", 3),
+        ],
+    )
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: prior)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
+
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "mode": "normal",
+            "reset_to_defaults": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["locked_assignments"] == {}
+    assert saved[0].assignments["Repair 1"] == ["Default Person"]
+    assert saved[0].assignments["Truck Driver"] == ["Outside Auto"]
+    assert "Manual Inside" not in {
+        name for names in saved[0].assignments.values() for name in names
+    }
+
+
+def test_rebuild_rejects_non_boolean_reset_flag(monkeypatch):
+    client, _rotations = _rotations_client(monkeypatch)
+
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "mode": "normal",
+            "reset_to_defaults": "yes",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "boolean" in response.json()["error"]
+
+
 @pytest.mark.parametrize("failed_read", ["time_off", "defaults", "minimum", "maximum"])
 def test_rebuild_fails_closed_before_solving_when_authoritative_input_read_fails(
     monkeypatch, failed_read,

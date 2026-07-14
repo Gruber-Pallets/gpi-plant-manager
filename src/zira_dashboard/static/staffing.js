@@ -66,38 +66,6 @@
     __form.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // ---------- Reset to defaults ----------
-  // Replaces every Scheduled cell using the page-rendered default map: smart
-  // defaults first, with stored Work Center defaults as the route fallback.
-  // These values are not editable from the scheduler.
-  const __defaultsByLoc = window.SMART_DEFAULTS_BY_LOC || window.DEFAULTS_BY_LOC;
-  const __resetBtn = document.getElementById('reset-schedule-btn');
-  if (__resetBtn) {
-    __resetBtn.addEventListener('click', () => {
-      if (__viewingPosted) return;
-      if (__isPublished && !__unlocked) {
-        alert("This schedule is Posted. Click Edit first if you need to reset it.");
-        return;
-      }
-      if (!confirm("Reset every Scheduled cell to the page defaults?\n\n(Time off and notes stay. Anyone manually scheduled is replaced with the defaults shown on this page.)")) return;
-      document.querySelectorAll('details.sched-dd').forEach(dd => {
-        const wanted = new Set(__defaultsByLoc[dd.dataset.loc] || []);
-        dd.querySelectorAll('.dd-item').forEach(item => {
-          const cb = item.querySelector('input[type=checkbox]');
-          if (!cb) return;
-          const should = wanted.has(item.dataset.name);
-          cb.checked = should;
-          item.classList.toggle('selected', should);
-        });
-        updateDdSummary(dd);
-        __prevSel.set(dd, [...dd.querySelectorAll('.dd-item.selected')].map(i => i.dataset.name));
-      });
-      syncLeftRailWithSchedule();
-      refreshPickerVisibility();
-      kickAutosave();
-    });
-  }
-
   const __clearBtn = document.getElementById('clear-schedule-btn');
   if (__clearBtn) {
     __clearBtn.addEventListener('click', () => {
@@ -1486,6 +1454,20 @@
       renderCoverageIssues(warnings, window.ROTATION_ISSUES);
     }
 
+    function renderPlacementFailure(data) {
+      const issues = [];
+      if (data && data.error) {
+        issues.push({ code: 'complete_schedule_failed', message: data.error });
+      }
+      const placementIssues = data && data.placement && Array.isArray(data.placement.issues)
+        ? data.placement.issues : [];
+      issues.push(...placementIssues);
+      renderCoverageIssues([], issues);
+      if (window.showToast) {
+        showToast((data && data.error) || 'Auto schedule failed', null, 'error');
+      }
+    }
+
     function selectedAutoCenters() {
       return autoCbs.filter(cb => cb.checked).map(cb => cb.dataset.loc).filter(Boolean);
     }
@@ -1564,15 +1546,14 @@
       renderCoverageIssues(data.warnings, data.coverage?.issues || []);
       syncLeftRailWithSchedule();
       refreshPickerVisibility();
-      kickAutosave();
     }
 
-    async function rebuild(mode) {
-      if (__viewingPosted) return;
-      if (rebuilding || !mode) return;
+    async function rebuild(mode, options = {}) {
+      if (__viewingPosted) return false;
+      if (rebuilding || !mode) return false;
       if (__isPublished && !__unlocked) {
         alert('This schedule is Posted. Click Edit first to change the Recycled goal.');
-        return;
+        return false;
       }
       rebuilding = true;
       controls.classList.add('rebuilding');
@@ -1581,26 +1562,54 @@
         const resp = await fetch('/api/rotations/rebuild', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ day, mode }),
+          body: JSON.stringify({
+            day,
+            mode,
+            reset_to_defaults: options.resetToDefaults === true,
+          }),
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || !data.ok) {
-          const err = (data && data.error) || ('HTTP ' + resp.status);
-          // Surface the failure without wiping the grid.
-          renderCoverageFailure('Could not rebuild the schedule: ' + err);
-          if (window.showToast) showToast('Rebuild failed: ' + err, null, 'error');
-          return;
+          renderPlacementFailure(data);
+          return false;
         }
         setActiveMode(mode);
         applyRebuild(data);
+        return true;
       } catch (err) {
-        renderCoverageFailure('Could not rebuild the schedule: ' + (err.message || 'network error'));
-        if (window.showToast) showToast('Rebuild failed — network error', null, 'error');
+        renderPlacementFailure({
+          error: 'Could not rebuild the schedule: ' + (err.message || 'network error'),
+          placement: { issues: [] },
+        });
+        return false;
       } finally {
         rebuilding = false;
         controls.classList.remove('rebuilding');
         modeBtns.forEach(b => { b.disabled = false; });
       }
+    }
+
+    const resetScheduleBtn = document.getElementById('reset-schedule-btn');
+    if (resetScheduleBtn) {
+      resetScheduleBtn.addEventListener('click', async () => {
+        if (__viewingPosted) return;
+        if (__isPublished && !__unlocked) {
+          alert('This schedule is Posted. Click Edit first if you need to reset it.');
+          return;
+        }
+        if (!confirm(
+          'Rebuild enabled Auto work centers around saved exact and group defaults?\n\n' +
+          'Manual assignments inside those Auto centers will be replaced. ' +
+          'If everyone cannot be placed safely, the previous schedule will be kept.'
+        )) return;
+        resetScheduleBtn.disabled = true;
+        try {
+          const succeeded = await rebuild(currentMode(), { resetToDefaults: true });
+          if (succeeded) syncLeftRailWithSchedule();
+        } finally {
+          resetScheduleBtn.disabled = false;
+        }
+      });
     }
 
     modeBtns.forEach(btn => {
