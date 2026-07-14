@@ -153,7 +153,7 @@ def test_every_mode_places_the_same_complete_headcount(mode):
     assert len(result.assignments["Repair 1"]) == 2
 
 
-def test_impossible_capacity_returns_no_generated_partial_schedule():
+def test_impossible_capacity_keeps_best_safe_partial_schedule():
     result = suggest_recycled_assignments(
         TARGET_DAY,
         "normal",
@@ -169,12 +169,55 @@ def test_impossible_capacity_returns_no_generated_partial_schedule():
     )
 
     assert result.complete is False
-    assert result.assignments == {}
-    assert result.unused_people == ("A", "B")
+    assert result.assignments == {"Repair 1": ["A"]}
+    assert result.unused_people == ("B",)
     assert any(
-        issue.code == "person_all_qualified_centers_full"
+        issue.code == "person_unplaced"
         for issue in result.placement_issues
     )
+
+
+def test_partial_rebuild_keeps_valid_existing_assignment_and_fills_open_capacity():
+    result = suggest_recycled_assignments(
+        TARGET_DAY,
+        "normal",
+        roster=[
+            staffing.Person("Kept", True, False, {"Repair": 3}),
+            staffing.Person("Placed", True, False, {"Repair": 2}),
+            staffing.Person("Unqualified", True, False, {"Dismantle": 3}),
+        ],
+        base_assignments={"Repair 1": ["Kept"]},
+        locked_assignments={"Repair 1": ["Kept"]},
+        group_locations={"Repair": ("Repair 1",)},
+        group_required_skills={"Repair": ("Repair",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+    )
+
+    assert result.assignments["Repair 1"] == ["Kept", "Placed"]
+    assert result.unused_people == ("Unqualified",)
+    assert result.complete is False
+
+
+def test_partial_rebuild_clears_unqualified_enabled_assignment_before_fill():
+    result = suggest_recycled_assignments(
+        TARGET_DAY,
+        "normal",
+        roster=[
+            staffing.Person("Invalid", True, False, {"Dismantle": 3}),
+            staffing.Person("Qualified", True, False, {"Repair": 3}),
+        ],
+        base_assignments={"Repair 1": ["Invalid"]},
+        group_locations={"Repair": ("Repair 1",)},
+        group_required_skills={"Repair": ("Repair",)},
+        center_minimums={"Repair 1": 0},
+        center_capacities={"Repair 1": 1},
+        runnable_centers={"Repair 1"},
+    )
+
+    assert result.assignments["Repair 1"] == ["Qualified"]
+    assert result.unused_people == ("Invalid",)
 
 
 def test_valid_trim_saw_pair_rules():

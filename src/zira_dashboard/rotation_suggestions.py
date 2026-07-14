@@ -1000,18 +1000,49 @@ def suggest_recycled_assignments(
         else managed_centers & set(runnable_centers)
     )
 
+    by_name = {p.name: p for p in roster}
+    available_names = tuple(sorted(
+        (person.name for person in roster if person.active and not person.reserve),
+        key=str.lower,
+    ))
+    available_set = frozenset(available_names)
+    center_group: dict[str, str] = {}
+    for group, centers in sorted(groups.items(), key=lambda item: item[0].lower()):
+        for center in centers:
+            if center in allowed_centers:
+                center_group.setdefault(center, group)
+
     assignments: dict[str, list[str]] = {}
+    assigned: set[str] = set()
+    warnings: list[str] = []
     for center, names in (base_assignments or {}).items():
-        if center in managed_centers:
-            continue  # rebuilt below; manual entries come back via locked_assignments
-        assignments[center] = [str(n) for n in (names or []) if str(n or "").strip()]
+        if center not in allowed_centers:
+            copied = [str(name) for name in (names or []) if str(name or "").strip()]
+            assignments[center] = copied
+            assigned.update(copied)
+            continue
+        group = center_group.get(center)
+        for raw_name in names or ():
+            name = str(raw_name or "").strip()
+            person = by_name.get(name)
+            if not name or name in assigned:
+                continue
+            if (
+                group is None
+                or name not in available_set
+                or _group_level(person, group, resolved_group_required_skills) < 1
+                or len(assignments.get(center, ())) >= _effective_capacity(center)
+            ):
+                warnings.append(
+                    f"{name} was removed from {center} because it is not a safe Auto assignment."
+                )
+                continue
+            assignments.setdefault(center, []).append(name)
+            assigned.add(name)
 
     sources: dict[str, dict[str, str]] = {}
     reasons: dict[str, dict[str, str]] = {}
     reason_codes: dict[str, dict[str, str]] = {}
-    warnings: list[str] = []
-    by_name = {p.name: p for p in roster}
-    assigned: set[str] = {name for names in assignments.values() for name in names}
 
     def _place(
         center: str,
@@ -1043,11 +1074,29 @@ def suggest_recycled_assignments(
         ]
         return choose_center(name, group, prioritized, resolved_history)
 
-    # 1. Manual locks survive rebuilds untouched.
+    # 1. Valid manual locks survive rebuilds. Invalid locks are cleared like
+    # any other enabled Auto assignment so rebuild never leaves an unsafe slot.
     for center, names in (locked_assignments or {}).items():
         for name in names or []:
-            name = str(name)
-            if not name.strip() or name in assignments.get(center, []):
+            name = str(name).strip()
+            if not name:
+                continue
+            if name in assignments.get(center, []):
+                sources.setdefault(center, {})[name] = MANUAL_SOURCE
+                continue
+            group = center_group.get(center)
+            person = by_name.get(name)
+            if (
+                center not in allowed_centers
+                or group is None
+                or name in assigned
+                or name not in available_set
+                or _group_level(person, group, resolved_group_required_skills) < 1
+                or len(assignments.get(center, ())) >= _effective_capacity(center)
+            ):
+                warnings.append(
+                    f"{name} was removed from {center} because it is not a safe Auto assignment."
+                )
                 continue
             _place(center, name, MANUAL_SOURCE)
 
@@ -1124,19 +1173,9 @@ def suggest_recycled_assignments(
         if len(set(centers)) > 1
     }
 
-    # Complete rebuild: every active non-reserve person who is not already
-    # protected must flow to exactly one enabled center. Defaults narrow that
-    # person's safe edges; they never create or enable work centers.
-    available_names = tuple(sorted(
-        (person.name for person in roster if person.active and not person.reserve),
-        key=str.lower,
-    ))
+    # Rebuild fills every remaining safe Auto opening. It does not require
+    # every available person or center minimum to be satisfied first.
     solver_people = tuple(name for name in available_names if name not in assigned)
-    center_group: dict[str, str] = {}
-    for group, centers in sorted(groups.items(), key=lambda item: item[0].lower()):
-        for center in centers:
-            if center in allowed_centers:
-                center_group.setdefault(center, group)
 
     protected_issues = _protected_assignment_issues(
         roster=roster,
@@ -1173,7 +1212,6 @@ def suggest_recycled_assignments(
 
     exact_target_by_person: dict[str, str] = {}
     group_target_by_person: dict[str, str] = {}
-    constrained_centers: dict[str, frozenset[str]] = {}
     solver_people_set = frozenset(solver_people)
     for name, targets in sorted(default_targets.items(), key=lambda item: item[0].lower()):
         if name not in solver_people_set:
@@ -1187,7 +1225,7 @@ def suggest_recycled_assignments(
                 centers=tuple(target for _kind, target in unique_targets),
                 message=(
                     f"{name} has multiple default targets ({', '.join(labels)}). "
-                    "Previous schedule kept."
+                    "The Auto scheduler will use its best safe placement."
                 ),
             ))
             continue
@@ -1198,27 +1236,24 @@ def suggest_recycled_assignments(
                     code="exact_default_center_disabled",
                     person=name,
                     centers=(target,),
-                    message=(
-                        f"{name}'s default work center {target} is not enabled. "
-                        "Previous schedule kept."
-                    ),
-                ))
-                continue
+                message=(
+                    f"{name}'s default work center {target} is not enabled."
+                ),
+            ))
+            continue
             group = center_group[target]
             if _group_level(by_name.get(name), group, resolved_group_required_skills) < 1:
                 placement_issues.append(schedule_solver.PlacementIssue(
                     code="exact_default_unqualified",
                     person=name,
                     centers=(target,),
-                    message=(
-                        f"{name} is not qualified for default work center {target}. "
-                        "Previous schedule kept."
-                    ),
-                ))
-                continue
-            exact_target_by_person[name] = target
-            constrained_centers[name] = frozenset((target,))
+                message=(
+                    f"{name} is not qualified for default work center {target}."
+                ),
+            ))
             continue
+        exact_target_by_person[name] = target
+        continue
 
         members = tuple(
             center
@@ -1231,8 +1266,7 @@ def suggest_recycled_assignments(
                 person=name,
                 centers=(),
                 message=(
-                    f"{name}'s default group {target} has no enabled member work center. "
-                    "Previous schedule kept."
+                    f"{name}'s default group {target} has no enabled member work center."
                 ),
             ))
             continue
@@ -1252,12 +1286,11 @@ def suggest_recycled_assignments(
                 centers=tuple(sorted(members, key=str.lower)),
                 message=(
                     f"{name} is not qualified for any enabled work center in "
-                    f"default group {target}. Previous schedule kept."
+                    f"default group {target}."
                 ),
             ))
             continue
         group_target_by_person[name] = target
-        constrained_centers[name] = frozenset(qualified)
 
     for center in sorted(allowed_centers, key=str.lower):
         minimum = _effective_minimum(center)
@@ -1268,7 +1301,7 @@ def suggest_recycled_assignments(
                 centers=(center,),
                 message=(
                     f"{center} has a minimum of {minimum} but a maximum of "
-                    f"{capacity}. Previous schedule kept."
+                    f"{capacity}."
                 ),
             ))
 
@@ -1313,19 +1346,13 @@ def suggest_recycled_assignments(
             placement_issues=combined,
         )
 
-    if placement_issues:
-        return _finish_failure(placement_issues)
-
     candidate_edges: list[schedule_solver.CandidateEdge] = []
     edges_by_center: dict[str, list[schedule_solver.CandidateEdge]] = {
         center: [] for center in allowed_centers
     }
     for name in solver_people:
         person = by_name[name]
-        allowed_for_person = constrained_centers.get(name)
         for center in sorted(allowed_centers, key=str.lower):
-            if allowed_for_person is not None and center not in allowed_for_person:
-                continue
             group = center_group.get(center)
             if group is None:
                 continue
@@ -1454,16 +1481,91 @@ def suggest_recycled_assignments(
             crew_options=crew_options,
         ))
 
-    if coupled_failure:
-        return _finish_failure(coupled_failure)
+    placement_issues.extend(coupled_failure)
 
-    complete_result = schedule_solver.solve_complete_schedule(
-        people=solver_people,
-        centers=tuple(complete_centers),
-        candidates=tuple(direct_candidates),
+    # Choose safe coupled crews first, then greedily place each remaining
+    # person at their best qualified ordinary center. Minimum coverage is not
+    # a prerequisite for either decision; capacity and qualification are.
+    preference_order = {"primary": 0, "regular": 1, "occasional": 2, "never": 3}
+    selected: list[schedule_solver.AssignmentDecision] = []
+    selected_people: set[str] = set()
+    remaining_capacity = {center.center: center.capacity for center in complete_centers}
+    for center in sorted(
+        (item for item in complete_centers if item.crew_options),
+        key=lambda item: item.center.lower(),
+    ):
+        options = [
+            option for option in center.crew_options
+            if not set(option.people).intersection(selected_people)
+            and len(option.members) <= remaining_capacity[center.center]
+        ]
+        if not options:
+            continue
+        option = min(options, key=lambda item: (
+            -sum(member.level for member in item.members),
+            sum(preference_order[member.preference] for member in item.members),
+            sum(member.rank_cost for member in item.members),
+            tuple(member.person.lower() for member in item.members),
+        ))
+        for edge in option.members:
+            selected.append(schedule_solver.AssignmentDecision(
+                center=edge.center,
+                person=edge.person,
+                level=edge.level,
+                preference=edge.preference,
+                reason_code="partial_fill",
+                reason="Assigned to a safe Auto work center.",
+                rank_cost=edge.rank_cost,
+            ))
+            selected_people.add(edge.person)
+            remaining_capacity[center.center] -= 1
+
+    for name in sorted(solver_people, key=str.lower):
+        if name in selected_people:
+            continue
+        choices = [
+            edge for edge in direct_candidates
+            if edge.person == name and remaining_capacity.get(edge.center, 0) > 0
+        ]
+        if not choices:
+            continue
+        choice = min(choices, key=lambda edge: (
+            -edge.level,
+            preference_order[edge.preference],
+            edge.rank_cost,
+            edge.center.lower(),
+        ))
+        selected.append(schedule_solver.AssignmentDecision(
+            center=choice.center,
+            person=choice.person,
+            level=choice.level,
+            preference=choice.preference,
+            reason_code="partial_fill",
+            reason="Assigned to a safe Auto work center.",
+            rank_cost=choice.rank_cost,
+        ))
+        selected_people.add(choice.person)
+        remaining_capacity[choice.center] -= 1
+
+    complete_result = schedule_solver.CompleteScheduleResult(
+        complete=len(selected_people) == len(solver_people),
+        decisions=tuple(sorted(
+            selected, key=lambda item: (item.center.lower(), item.person.lower())
+        )),
+        placed_people=tuple(sorted(selected_people, key=str.lower)),
+        unplaced_people=tuple(sorted(
+            set(solver_people) - selected_people, key=str.lower
+        )),
+        staffed_centers=tuple(sorted(
+            (
+                center.center for center in complete_centers
+                if len(assignments.get(center.center, ()))
+                + sum(item.center == center.center for item in selected) >= center.minimum
+            ),
+            key=str.lower,
+        )),
+        issues=(),
     )
-    if not complete_result.complete:
-        return _finish_failure(complete_result.issues, solver_result=complete_result)
 
     default_assignments: dict[str, str] = {}
     decisions_by_center: dict[str, list[schedule_solver.AssignmentDecision]] = {}
@@ -1485,11 +1587,18 @@ def suggest_recycled_assignments(
             if decision.preference == "never":
                 reason_code = "preference_override"
                 reason = "Assigned despite Never so every available person is scheduled."
-            elif decision.person in exact_target_by_person:
+            elif (
+                exact_target_by_person.get(decision.person) == center
+            ):
                 reason_code = "exact_default"
                 reason = f"default work center: {center}"
                 default_assignments[decision.person] = center
-            elif decision.person in group_target_by_person:
+            elif (
+                decision.person in group_target_by_person
+                and center in (user_group_centers or {}).get(
+                    group_target_by_person[decision.person], ()
+                )
+            ):
                 reason_code = "group_default"
                 reason = (
                     f"default group {group_target_by_person[decision.person]}; "
@@ -1531,7 +1640,20 @@ def suggest_recycled_assignments(
         (name for name in available_names if name in assigned),
         key=str.lower,
     ))
-    assert set(placed_people) == set(available_names)
+    unused_people = tuple(name for name in available_names if name not in assigned)
+    for name in unused_people:
+        placement_issues.append(schedule_solver.PlacementIssue(
+            code="person_unplaced",
+            person=name,
+            message=f"{name} could not be placed in an enabled Auto work center.",
+        ))
+    for center in sorted(allowed_centers, key=str.lower):
+        if len(assignments.get(center, ())) < _effective_minimum(center):
+            placement_issues.append(schedule_solver.PlacementIssue(
+                code="center_minimum_unmet",
+                centers=(center,),
+                message=f"{center} is below its minimum Auto staffing level.",
+            ))
     for issue in protected_issues:
         if issue.message not in warnings:
             warnings.append(issue.message)
@@ -1543,12 +1665,19 @@ def suggest_recycled_assignments(
         group_locations={group: tuple(centers) for group, centers in groups.items()},
         reason_codes=reason_codes,
         staffed_centers=complete_result.staffed_centers,
-        unresolved_centers=(),
+        unresolved_centers=tuple(sorted({
+            center
+            for issue in placement_issues
+            for center in issue.centers
+            if center in allowed_centers
+        }, key=str.lower)),
         issues=protected_issues,
-        unused_people=(),
-        complete=True,
+        unused_people=unused_people,
+        complete=not unused_people and not any(
+            issue.code == "center_minimum_unmet" for issue in placement_issues
+        ),
         available_people=available_names,
         placed_people=placed_people,
-        placement_issues=(),
+        placement_issues=tuple(placement_issues),
         default_assignments=default_assignments,
     )

@@ -513,6 +513,8 @@ async def rebuild_rotation(request: Request):
             }
         except Exception:
             return _error("Could not rebuild the schedule.", 503)
+        if not enabled_centers:
+            return _error("Select at least one Auto work center before rebuilding.")
         suggestion = staffing_route._recycled_suggestion_for_day(
             d,
             roster,
@@ -548,24 +550,34 @@ async def rebuild_rotation(request: Request):
             proposed_assignments=new_assignments,
             proposed_sources=new_sources,
         )
-        if (
-            not suggestion.complete
-            or suggestion.placement_issues
-            or validation_issues
-        ):
-            issues = tuple(suggestion.placement_issues) + tuple(validation_issues)
+        hard_codes = {
+            "person_assigned_multiple_centers",
+            "center_capacity_exceeded",
+            "generated_assignment_unqualified",
+            "generated_assignment_center_disabled",
+        }
+        hard_issues = tuple(
+            issue for issue in validation_issues if issue.code in hard_codes
+        )
+        if hard_issues:
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": (
-                        "Auto could not safely assign everyone. "
-                        "Previous schedule kept."
-                    ),
+                    "error": "Auto produced an unsafe assignment. Previous schedule kept.",
                     "schedule_kept": True,
-                    "placement": _placement_payload(suggestion, issues),
+                    "placement": _placement_payload(suggestion, hard_issues),
                 },
                 status_code=422,
             )
+
+        reporting_issues = tuple(suggestion.placement_issues) + tuple(
+            issue for issue in validation_issues if issue.code not in hard_codes
+        )
+        warning_messages = list(suggestion.warnings)
+        for issue in reporting_issues:
+            message = issue.message.replace(" Previous schedule kept.", "")
+            if message not in warning_messages:
+                warning_messages.append(message)
 
         # Persist the rebuild, preserving everything not owned by rotation
         # (published state, snapshot, testing day, notes, custom hours).
@@ -584,13 +596,15 @@ async def rebuild_rotation(request: Request):
         _http_cache.invalidate_today_cache()
         return JSONResponse({
             "ok": True,
+            "applied": True,
             "assignments": new_assignments,
             "sources": new_sources,
             "reasons": {wc: dict(r) for wc, r in suggestion.reasons.items()},
-            "warnings": list(suggestion.warnings),
+            "warnings": warning_messages,
+            "unplaced": list(suggestion.unused_people),
             "coverage": _coverage_payload(suggestion),
             "enabled_work_centers": enabled_centers,
-            "placement": _placement_payload(suggestion),
+            "placement": _placement_payload(suggestion, reporting_issues),
         })
 
     return await asyncio.to_thread(_work)

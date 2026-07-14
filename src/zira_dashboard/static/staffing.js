@@ -1469,6 +1469,14 @@
       }
     }
 
+    function partialPlacementIssues(data) {
+      const unplaced = Array.isArray(data && data.unplaced) ? data.unplaced : [];
+      return unplaced.map(name => ({
+        code: 'person_unplaced',
+        message: `${name} could not be placed in an enabled Auto work center.`,
+      }));
+    }
+
     function selectedAutoCenters() {
       return autoCbs.filter(cb => cb.checked).map(cb => cb.dataset.loc).filter(Boolean);
     }
@@ -1547,7 +1555,10 @@
         updateDdSummary(dd);
         __prevSel.set(dd, [...dd.querySelectorAll('.dd-item.selected')].map(i => i.dataset.name));
       });
-      renderCoverageIssues(data.warnings, data.coverage?.issues || []);
+      renderCoverageIssues(
+        data.warnings,
+        [...(data.coverage?.issues || []), ...partialPlacementIssues(data)],
+      );
       syncLeftRailWithSchedule();
       refreshPickerVisibility();
     }

@@ -434,7 +434,7 @@ def _stub_recommendation_inputs(monkeypatch):
     return staffing_route
 
 
-def test_rebuild_infeasible_keeps_previous_schedule_and_does_not_save(monkeypatch):
+def test_rebuild_infeasible_applies_empty_partial_schedule_and_reports_unplaced(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     saved = []
@@ -478,10 +478,10 @@ def test_rebuild_infeasible_keeps_previous_schedule_and_does_not_save(monkeypatc
         json={"day": "2026-07-15", "mode": "normal"},
     )
 
-    assert response.status_code == 422
-    assert saved == []
-    assert response.json()["schedule_kept"] is True
-    assert response.json()["placement"]["unplaced_people"] == ["Gerardo Garcia"]
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
+    assert response.json()["unplaced"] == ["Gerardo Garcia"]
+    assert len(saved) == 1
 
 
 def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
@@ -825,7 +825,7 @@ def test_rebuild_generates_and_reports_reasons(monkeypatch):
     assert "green coverage" not in str(body["reasons"])
 
 
-def test_rebuild_rejects_safe_partial_assignments_and_preserves_schedule(monkeypatch):
+def test_rebuild_applies_safe_partial_assignments_and_reports_unplaced(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     saved = []
     issue = schedule_solver.CoverageIssue(
@@ -904,10 +904,13 @@ def test_rebuild_rejects_safe_partial_assignments_and_preserves_schedule(monkeyp
         json={"day": TARGET_DAY.isoformat(), "mode": "normal"},
     )
 
-    assert response.status_code == 422
-    assert response.json()["schedule_kept"] is True
-    assert response.json()["placement"]["unplaced_people"] == ["Missing"]
-    assert saved == []
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["applied"] is True
+    assert body["assignments"]["Repair 1"] == ["Qualified"]
+    assert body["unplaced"] == ["Missing"]
+    assert saved[0].assignments["Repair 1"] == ["Qualified"]
 
 
 
@@ -1013,10 +1016,13 @@ def test_rebuild_treats_default_people_as_exact_generated_anchors(monkeypatch):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["assignments"]["Repair 1"] == ["Default Green"]
+    assert "Default Green" in body["assignments"]["Repair 1"]
     assert body["sources"]["Repair 1"]["Default Green"] == "generated"
-    assert body["placement"]["defaults"]["Default Green"] == "Repair 1"
-    assert saved[-1].assignments["Repair 1"] == ["Default Green"]
+    assert not any(
+        issue["code"] in {"exact_default_violation", "exact_default_unqualified"}
+        for issue in body["placement"]["issues"]
+    )
+    assert "Default Green" in saved[-1].assignments["Repair 1"]
     assert saved[-1].assignment_sources["Repair 1"]["Default Green"] == "generated"
 
 
@@ -1402,6 +1408,8 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "const resetBtn" not in js
     assert "modeBtns.forEach(btn => {" in js
     assert "btn.addEventListener('click', () => rebuild(btn.dataset.rotationMode));" in js
+    assert "data.unplaced" in js
+    assert "could not be placed in an enabled Auto work center" in js
 
 
 def test_skills_matrix_exposes_scheduling_preferences_and_recycled_training():
@@ -2124,9 +2132,10 @@ def test_rebuild_does_not_restore_person_after_clear_removes_manual_source(monke
 
     resp = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "normal"})
 
-    assert resp.status_code == 422
-    assert resp.json()["schedule_kept"] is True
-    assert rebuilt == []
+    assert resp.status_code == 200
+    assert resp.json()["applied"] is True
+    assert resp.json()["unplaced"] == []
+    assert len(rebuilt) == 1
 
 
 def test_rebuild_leaves_non_recycled_center_untouched(monkeypatch):
