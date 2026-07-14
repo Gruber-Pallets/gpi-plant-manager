@@ -1523,14 +1523,17 @@
       }
     }
 
-    // Reconcile every enabled Auto picker's checkboxes to the server-returned
-    // assignment map. Manual/default pills are already in that map, so they
-    // stay checked; regenerated people replace the rest.
-    function applyRebuild(data) {
+    // Ordinary rebuilds reconcile enabled Auto pickers only, preserving local
+    // selections elsewhere. A defaults-only reset replaces the whole schedule,
+    // so reconcile every picker to prevent autosave from restoring old pills.
+    function applyRebuild(data, { resetToDefaults = false } = {}) {
       const assignments = data.assignments || {};
       applyEnabledCenters(data.enabled_work_centers || window.AUTO_SCHEDULE_WC_NAMES || []);
       const enabled = new Set(window.AUTO_SCHEDULE_WC_NAMES || []);
-      enabled.forEach(loc => {
+      const pickerLocations = resetToDefaults
+        ? [...document.querySelectorAll('details.sched-dd[data-loc]')].map(dd => dd.dataset.loc)
+        : enabled;
+      pickerLocations.forEach(loc => {
         const dd = document.querySelector('details.sched-dd[data-loc="' + CSS.escape(loc) + '"]');
         if (!dd) return;
         const wanted = new Set(assignments[loc] || []);
@@ -1575,7 +1578,7 @@
           return false;
         }
         setActiveMode(mode);
-        applyRebuild(data);
+        applyRebuild(data, options);
         return true;
       } catch (err) {
         renderPlacementFailure({

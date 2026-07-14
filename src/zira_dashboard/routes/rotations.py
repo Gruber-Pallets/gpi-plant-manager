@@ -519,9 +519,6 @@ async def rebuild_rotation(request: Request):
         roster = staffing.load_roster()
         sched = staffing.load_schedule(d)
         base_assignments = {k: list(v) for k, v in sched.assignments.items()}
-        enabled_centers = staffing_route._ordered_work_center_names(
-            staffing_route._enabled_auto_work_centers(d)
-        )
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
             exact_defaults, group_defaults, user_group_centers = (
@@ -578,6 +575,9 @@ async def rebuild_rotation(request: Request):
                     "coverage": {},
                     "placement": {},
                 })
+            enabled_centers = staffing_route._ordered_work_center_names(
+                staffing_route._enabled_auto_work_centers(d)
+            )
             manual_locks = staffing_route._protected_locks(
                 sched.assignment_sources,
                 sched.assignments,
@@ -585,8 +585,6 @@ async def rebuild_rotation(request: Request):
                 strict_default_reads=True,
                 include_saved_defaults=False,
             )
-            if reset_to_defaults:
-                manual_locks = {}
             center_minimums = {
                 loc.name: staffing_route._effective_minimum(loc)
                 for loc in staffing.LOCATIONS if loc.name in enabled_centers

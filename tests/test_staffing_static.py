@@ -215,7 +215,7 @@ def test_rotation_warning_success_replaces_alert_with_authoritative_response():
     save_auto = js.split("async function saveAutoCenters(changedCb) {", 1)[1].split(
         "// Reconcile every enabled Auto picker's checkboxes", 1
     )[0]
-    apply_rebuild = js.split("function applyRebuild(data) {", 1)[1].split(
+    apply_rebuild = js.split("function applyRebuild(", 1)[1].split(
         "async function rebuild(mode, options = {})", 1
     )[0]
 
@@ -251,6 +251,22 @@ def test_reset_to_defaults_uses_default_only_endpoint_mode():
     assert "Replace every assignment with saved defaults and next group rotations?" in reset
     assert "Previous schedule will be kept" not in reset
     assert "Rebuild enabled Auto work centers" not in reset
+
+
+def test_reset_to_defaults_reconciles_every_picker_from_the_server_map():
+    js = _script()
+    apply_rebuild = js.split("function applyRebuild(data, { resetToDefaults = false } = {})", 1)[1].split(
+        "async function rebuild(mode, options = {})", 1
+    )[0]
+    rebuild = js.split("async function rebuild(mode, options = {})", 1)[1].split(
+        "const resetScheduleBtn", 1
+    )[0]
+
+    assert "function applyRebuild(data, { resetToDefaults = false } = {})" in js
+    assert "const pickerLocations = resetToDefaults" in apply_rebuild
+    assert "? [...document.querySelectorAll('details.sched-dd[data-loc]')].map(dd => dd.dataset.loc)" in apply_rebuild
+    assert ": enabled;" in apply_rebuild
+    assert "applyRebuild(data, options);" in rebuild
 
 
 def test_failed_rebuild_keeps_grid_and_renders_person_issues():

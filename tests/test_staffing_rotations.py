@@ -636,6 +636,59 @@ def test_reset_to_defaults_replaces_assignments_with_exact_and_next_group_defaul
     assert saved[0].rotation_mode == prior.rotation_mode
 
 
+def test_reset_to_defaults_does_not_read_auto_settings_and_excludes_unavailable_defaults(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    from zira_dashboard.routes import staffing as staffing_route
+
+    saved = []
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_schedule",
+        lambda _day: staffing.Schedule(day=TARGET_DAY, assignments={"Repair 1": ["Old"]}),
+    )
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_roster",
+        lambda: [
+            _person("Available", 1),
+            _person("Inactive", 1, active=False),
+            _person("Reserve", 1, reserve=True),
+            _person("Full Day Off", 1),
+        ],
+    )
+    monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_route,
+        "_enabled_auto_work_centers",
+        lambda _day: pytest.fail("defaults-only reset must not read Auto settings"),
+    )
+    monkeypatch.setattr(
+        rotations.scheduler_time_off,
+        "time_off_entries_for_day",
+        lambda _day: [{"name": "Full Day Off", "hours": None}],
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "_default_inputs",
+        lambda strict=False: (
+            {"Repair 1": ("Available", "Inactive", "Reserve", "Full Day Off")},
+            {},
+            {},
+        ),
+    )
+    monkeypatch.setattr(rotations.rotation_suggestions, "_load_recycled_history", lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory())
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True},
+    )
+
+    assert response.status_code == 200
+    assert saved[0].assignments == {"Repair 1": ["Available"]}
+    assert saved[0].assignment_sources == {"Repair 1": {"Available": "default"}}
+
+
 def test_rebuild_rejects_non_boolean_reset_flag(monkeypatch):
     client, _rotations = _rotations_client(monkeypatch)
 
