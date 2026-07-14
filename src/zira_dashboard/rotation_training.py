@@ -165,8 +165,10 @@ def reconcile_blocks(as_of: date) -> list[int]:
         attended = sum(1 for d in rotation_store.resolved_days(block.id) if _is_attended(d))
         if attended < block.planned_attended_days:
             continue
+        skill_ids = tuple(getattr(block, "skill_ids", ()) or (block.skill_id,))
         try:
-            skill_levels.set_person_skill_level(block.trainee_id, block.skill_id, 1)
+            for skill_id in skill_ids:
+                skill_levels.set_person_skill_level(block.trainee_id, skill_id, 1)
         except Exception:  # noqa: BLE001 - one block's failure must not abort the pass
             # Leave the block active (do NOT mark completed) so the next
             # reconciliation retries the promotion, and keep going.

@@ -270,6 +270,34 @@ def test_reconcile_promotes_once_and_returns_block_id(monkeypatch):
     assert completed == [42]
 
 
+def test_reconcile_promotes_every_persisted_protocol_skill(monkeypatch):
+    from zira_dashboard import rotation_training
+
+    block = SimpleNamespace(
+        id=42,
+        trainee_id=17,
+        skill_ids=(9, 10),
+        skill_id=9,
+        planned_attended_days=2,
+        status="active",
+    )
+    calls, completed = [], []
+    monkeypatch.setattr(rotation_training.rotation_store, "active_blocks", lambda: [block])
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "resolved_days", lambda _id: [_attended()] * 2
+    )
+    monkeypatch.setattr(
+        rotation_training.skill_levels,
+        "set_person_skill_level",
+        lambda *args: calls.append(args),
+    )
+    monkeypatch.setattr(rotation_training.rotation_store, "mark_completed", completed.append)
+
+    assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == [42]
+    assert calls == [(17, 9, 1), (17, 10, 1)]
+    assert completed == [42]
+
+
 def test_reconcile_marks_completed_before_it_would_re_promote(monkeypatch):
     """With a real store, once a block is marked completed it is no longer
     returned by ``active_blocks`` and so is never promoted twice."""
