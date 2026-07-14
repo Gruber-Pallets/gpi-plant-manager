@@ -9,9 +9,13 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-07-13
 
+### Features
+
+- **Auto scheduling now places everyone or keeps the previous schedule unchanged.** Goal buttons rebuild only the work centers whose Auto checkbox is enabled, honor exact default people as fixed anchors, and support default people on user-managed groups with even rotation among qualified enabled member centers. If skills, safety, minimums, maximums, or defaults make a complete schedule impossible, no partial result is saved and the page explains who could not be placed and why. Reset to defaults uses this same complete server-side rebuild.
+
 ### Fixes
 
-- **Auto scheduling now makes cross-skill swaps before declaring a work center uncovered.** The scheduler globally maximizes minimum work-center coverage, so a cross-trained person can move to a scarce role while another qualified unscheduled person backfills their old role. Skill levels 1–3 may cover a minimum even when the person’s preference is Never, but Never is overridden only when it staffs more centers. When full coverage is impossible, the safest partial schedule is saved, unresolved Auto centers stay enabled, and the page explains what needs manual attention. If only level-0 people remain, the alert says training is required without choosing the trainee or trainer.
+- **Auto scheduling makes cross-skill swaps before reporting an infeasible rebuild.** The scheduler solves minimum coverage and complete headcount together, so a cross-trained person can move to a scarce role while another qualified person backfills their old role. Skill levels 1–3 may be used even when the preference is Never, but Never is overridden only when required for a complete safe schedule.
 
 ## 2026-07-10
 

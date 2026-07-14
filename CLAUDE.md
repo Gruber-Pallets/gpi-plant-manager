@@ -42,11 +42,16 @@ The approved design and plan are committed as `8096a7e` (design) and `0e2c3d2` (
 
 ### Global Auto scheduling
 
-- `schedule_solver.solve_minimum_coverage` is the pure authority for enabled Auto-center minimum feasibility.
-- Coverage cardinality is primary; `never` overrides, mode rank, and stable ordering are tie-breakers in that order.
-- Generated multi-person crews are atomic: complete or absent.
-- Level 0 is automatic only through a validated training block; otherwise surface `training_required`.
-- Page context, Auto selection, and rebuild responses must serialize the same structured coverage issues.
+- A successful goal-button rebuild assigns every available active, non-reserve person exactly once; full-day absences are not available.
+- Infeasible rebuilds never save a partial schedule. They return structured placement issues and leave the prior schedule and metadata unchanged.
+- Automatic assignments may use only work centers whose Auto checkbox is enabled; the solver never enables or populates another center on its own.
+- `schedule_solver.solve_complete_schedule` is the pure authority for full-person placement plus enabled-center min/max feasibility. Generated multi-person crews are atomic: complete or absent.
+- Each person may have at most one default target across exact work-center defaults and user-managed group defaults.
+- Exact defaults are hard work-center constraints. Group defaults are hard user-group constraints and rotate evenly only among qualified, enabled member centers.
+- Manual locks and exact/group defaults are hard constraints. A `never` preference may be overridden only when required to place everyone safely.
+- Reset to defaults calls the same server-side complete rebuild; it clears manual locks only inside enabled Auto centers and preserves assignments outside them.
+- Level 0 is automatic only through a validated training block; otherwise the complete rebuild fails without saving.
+- Page context, Auto selection advisories, and rebuild failures must serialize the same structured placement issues.
 - Focused checks: `ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_schedule_solver.py tests/test_schedule_solver_properties.py tests/test_rotation_suggestions.py tests/test_staffing_rotations.py -q`.
 
 ## Binding product decisions

@@ -346,10 +346,12 @@ def test_replay_uses_only_read_paths_even_when_auto_centers_are_not_initialized(
         rotation_mode="normal",
     )
     suggestion = SimpleNamespace(
-        assignments={"Repair 1": ["Suggested"]},
-        staffed_centers=("Repair 1",),
-        unresolved_centers=(),
-        issues=(),
+        complete=True,
+        available_people=("Suggested",),
+        placed_people=("Suggested",),
+        unused_people=(),
+        default_assignments={},
+        placement_issues=(),
     )
 
     def forbidden(*_args, **_kwargs):
@@ -369,6 +371,7 @@ def test_replay_uses_only_read_paths_even_when_auto_centers_are_not_initialized(
     monkeypatch.setattr(route.app_settings, "set_setting", forbidden)
     monkeypatch.setattr(route, "_recently_used_work_centers", lambda _day: ["Repair 1"])
     monkeypatch.setattr(route, "_auto_group_maps", lambda _enabled: ({"Repair": ("Repair 1",)}, {}))
+    monkeypatch.setattr(route, "_default_inputs", lambda strict=False: ({}, {}, {}))
     monkeypatch.setattr(route, "_auto_history_group_locations", lambda: {})
     monkeypatch.setattr(route, "_block_effects_for_day", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(route, "_protected_locks", lambda *_args, **_kwargs: {})
@@ -396,11 +399,15 @@ def test_replay_uses_only_read_paths_even_when_auto_centers_are_not_initialized(
         lambda **_kwargs: suggestion,
     )
 
-    assert replay_module.replay(day) == {
+    replayed = replay_module.replay(day)
+    elapsed_ms = replayed.pop("elapsed_ms")
+    assert elapsed_ms >= 0
+    assert replayed == {
         "day": "2026-07-14",
-        "saved_assignments": {"Repair 1": ["Saved"]},
-        "suggested_assignments": {"Repair 1": ["Suggested"]},
-        "staffed_centers": ("Repair 1",),
-        "unresolved_centers": (),
+        "complete": True,
+        "available_people": ["Suggested"],
+        "placed_people": ["Suggested"],
+        "unplaced_people": [],
+        "default_assignments": {},
         "issues": [],
     }
