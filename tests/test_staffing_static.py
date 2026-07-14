@@ -257,6 +257,23 @@ def test_reset_to_defaults_uses_default_only_endpoint_mode():
     assert "Rebuild enabled Auto work centers" not in reset
 
 
+def test_reset_to_defaults_clears_the_selected_schedule_goal_after_success():
+    js = _script()
+    rotation = js.split("// ---------- Rotation goal", 1)[1].split(
+        "// Assignments to Do modal", 1
+    )[0]
+    reset = rotation.split("const resetScheduleBtn", 1)[1].split(
+        "modeBtns.forEach", 1
+    )[0]
+    assert "function clearActiveMode()" in rotation
+    assert "b.classList.remove('active');" in rotation
+    assert "b.setAttribute('aria-pressed', 'false');" in rotation
+    assert "window.RECYCLED_ROTATION_MODE = null;" in rotation
+    assert "helpEl.textContent = '';" in rotation
+    assert "if (succeeded) {" in reset
+    assert "clearActiveMode();" in reset
+
+
 def test_reset_to_defaults_reconciles_every_picker_from_the_server_map():
     js = _script()
     apply_rebuild = js.split("function applyRebuild(data, { resetToDefaults = false } = {})", 1)[1].split(
