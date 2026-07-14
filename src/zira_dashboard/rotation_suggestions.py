@@ -1105,9 +1105,84 @@ def suggest_recycled_assignments(
     # into the same center only while its hard capacity remains open. Block
     # people are exempt from the level-0 exclusion and the daily training cap.
     protected_block_people: set[str] = set()
+    exact_block_people: set[str] = set()
     block_centers: set[tuple[str, str]] = set()
     for effect in block_effects or ():
         warnings.extend(str(w) for w in (getattr(effect, "warnings", None) or ()))
+
+        # Protocol blocks carry their exact configured work center. Reserve
+        # these before legacy group effects so a disabled/full target never
+        # falls back to a sibling center.
+        def _warn_exact_center(center: str, message: str) -> None:
+            warning = f"Training block for {center} {message}"
+            if warning not in warnings:
+                warnings.append(warning)
+
+        exact_locks = getattr(effect, "locked_work_centers", None) or {}
+        exact_extras = getattr(effect, "temporary_extra_work_centers", None) or {}
+        exact_people = {
+            str(name).strip()
+            for names in (*exact_locks.values(), *exact_extras.values())
+            for name in (names or ())
+            if str(name).strip()
+        }
+        # An exact protocol target never degrades into an ordinary placement at
+        # a sibling center when its reservation cannot be honored.
+        exact_block_people.update(exact_people)
+        manual_exact_people = {
+            name
+            for name in exact_people
+            if any(people.get(name) == MANUAL_SOURCE for people in sources.values())
+        }
+        if manual_exact_people:
+            for center in {*exact_locks, *exact_extras}:
+                _warn_exact_center(
+                    str(center),
+                    "was not applied because an existing manual assignment owns "
+                    f"{', '.join(sorted(manual_exact_people, key=str.lower))}."
+                )
+
+        for center, names in (() if manual_exact_people else exact_locks.items()):
+            center = str(center)
+            group = center_group.get(center)
+            if center not in allowed_centers or group is None:
+                _warn_exact_center(center, "has no schedulable work center.")
+                continue
+            for raw_name in names or ():
+                name = str(raw_name).strip()
+                if not name:
+                    continue
+                if name in assigned:
+                    _warn_exact_center(
+                        center, f"did not reserve {name}; an existing assignment owns them."
+                    )
+                    continue
+                if len(assignments.get(center, ())) >= _effective_capacity(center):
+                    _warn_exact_center(center, "could not reserve an open work center.")
+                    continue
+                _place(center, name, GENERATED_SOURCE, "training block", "training_block")
+                protected_block_people.add(name)
+                block_centers.add((group, center))
+
+        for center, names in (() if manual_exact_people else exact_extras.items()):
+            center = str(center)
+            if center not in allowed_centers or center not in center_group:
+                _warn_exact_center(center, "has no schedulable work center.")
+                continue
+            for raw_name in names or ():
+                name = str(raw_name).strip()
+                if not name:
+                    continue
+                if name in assigned:
+                    _warn_exact_center(
+                        center, f"did not reserve {name}; an existing assignment owns them."
+                    )
+                    continue
+                if len(assignments.get(center, ())) >= _effective_capacity(center):
+                    _warn_exact_center(center, "could not reserve an open work center.")
+                    continue
+                _place(center, name, GENERATED_SOURCE, "training pair", "training_block")
+
         block_center_by_group: dict[str, str] = {}
         warned_groups: set[str] = set()
 
@@ -1175,7 +1250,11 @@ def suggest_recycled_assignments(
 
     # Rebuild fills every remaining safe Auto opening. It does not require
     # every available person or center minimum to be satisfied first.
-    solver_people = tuple(name for name in available_names if name not in assigned)
+    solver_people = tuple(
+        name
+        for name in available_names
+        if name not in assigned and name not in exact_block_people
+    )
 
     protected_issues = _protected_assignment_issues(
         roster=roster,

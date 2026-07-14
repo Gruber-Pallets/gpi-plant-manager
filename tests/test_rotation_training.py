@@ -27,6 +27,7 @@ def _block(
     trainer_name: str = "Trainer",
     skill: str = "Repair",
     status: str = "active",
+    work_center: str | None = None,
 ):
     from zira_dashboard import rotation_store
 
@@ -38,6 +39,7 @@ def _block(
         start_day=start_day,
         planned_attended_days=planned_attended_days,
         status=status,
+        work_center=work_center,
     )
 
 
@@ -132,6 +134,19 @@ def test_later_attended_day_reserves_trainee_only():
     assert effect.locked_people == {"Repair": ["Trainee"]}
     assert effect.temporary_extra_people == {}
     assert tuple(effect.warnings) == ()
+
+
+def test_exact_center_protocol_pairs_only_on_day_one():
+    from zira_dashboard import rotation_training
+
+    block = _block(work_center="Repair 2")
+    first = rotation_training.effect_for_day(block, date(2026, 7, 14))
+    later = rotation_training.effect_for_day(block, date(2026, 7, 15))
+
+    assert first.locked_work_centers == {"Repair 2": ["Trainee"]}
+    assert first.temporary_extra_work_centers == {"Repair 2": ["Trainer"]}
+    assert later.locked_work_centers == {"Repair 2": ["Trainee"]}
+    assert later.temporary_extra_work_centers == {}
 
 
 def test_non_planned_day_returns_empty_effect():

@@ -36,6 +36,8 @@ class BlockEffect:
 
     locked_people: dict[str, list[str]] = field(default_factory=dict)
     temporary_extra_people: dict[str, list[str]] = field(default_factory=dict)
+    locked_work_centers: dict[str, list[str]] = field(default_factory=dict)
+    temporary_extra_work_centers: dict[str, list[str]] = field(default_factory=dict)
     warnings: Sequence[str] = ()
 
 
@@ -92,9 +94,11 @@ def effect_for_day(
     if day not in planned:
         return _EMPTY_EFFECT
 
-    # Effects use persisted scheduling-group keys, which can differ from the
-    # source matrix/Odoo skill name (Dismantler is stored in Odoo as Dismantle).
+    # Effects use persisted scheduling-group keys for legacy records, which can
+    # differ from the source matrix/Odoo skill name (Dismantler is stored in
+    # Odoo as Dismantle). New protocol records target their saved work center.
     group = staffing.scheduling_group_for_skill(block.skill)
+    work_center = getattr(block, "work_center", None)
     warnings: list[str] = []
 
     if block.trainee_name in manual:
@@ -104,8 +108,14 @@ def effect_for_day(
         )
         return BlockEffect(warnings=tuple(warnings))
 
-    locked: dict[str, list[str]] = {group: [block.trainee_name]}
+    locked: dict[str, list[str]] = {}
     extra: dict[str, list[str]] = {}
+    locked_work_centers: dict[str, list[str]] = {}
+    extra_work_centers: dict[str, list[str]] = {}
+    if work_center:
+        locked_work_centers[work_center] = [block.trainee_name]
+    else:
+        locked[group] = [block.trainee_name]
 
     if day == planned[0]:
         if block.trainer_name in manual:
@@ -114,11 +124,16 @@ def effect_for_day(
                 f"{day.isoformat()}; day-one pairing was not applied."
             )
         else:
-            extra[group] = [block.trainer_name]
+            if work_center:
+                extra_work_centers[work_center] = [block.trainer_name]
+            else:
+                extra[group] = [block.trainer_name]
 
     return BlockEffect(
         locked_people=locked,
         temporary_extra_people=extra,
+        locked_work_centers=locked_work_centers,
+        temporary_extra_work_centers=extra_work_centers,
         warnings=tuple(warnings),
     )
 
