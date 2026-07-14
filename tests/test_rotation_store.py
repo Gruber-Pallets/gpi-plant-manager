@@ -269,6 +269,45 @@ def test_schedule_manual_and_generated_assignment_sources_round_trip(monkeypatch
     assert staffing._load_schedule_from_db(schedule.day).assignment_sources == sources
 
 
+def test_schedule_default_assignment_source_round_trips_through_persistence_validation(monkeypatch):
+    """Defaults-only resets must persist their distinct assignment source."""
+    from zira_dashboard import db, staffing
+
+    sources = {"Repair 1": {"Jordan": "default"}}
+    schedule = staffing.Schedule(day=date(2026, 7, 14), assignment_sources=sources)
+    executed: list[tuple[str, tuple | None]] = []
+
+    class Cursor:
+        def execute(self, sql, params=None):
+            executed.append((sql, params))
+
+    @contextmanager
+    def fake_cursor():
+        yield Cursor()
+
+    monkeypatch.setattr(db, "cursor", fake_cursor)
+    staffing.save_schedule(schedule)
+
+    assert executed[0][1][-1] == '{"Repair 1": {"Jordan": "default"}}'
+
+    def fake_query(sql, params=None):
+        if "FROM schedules" in sql:
+            return [{
+                "day": schedule.day,
+                "published": False,
+                "testing_day": False,
+                "notes": "",
+                "custom_hours": None,
+                "published_snapshot": None,
+                "recycled_rotation_mode": "normal",
+                "assignment_sources": sources,
+            }]
+        return []
+
+    monkeypatch.setattr(db, "query", fake_query)
+    assert staffing._load_schedule_from_db(schedule.day).assignment_sources == sources
+
+
 @pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"), reason="needs Postgres"
 )

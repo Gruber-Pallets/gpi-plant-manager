@@ -349,7 +349,7 @@ class Schedule:
     assignment_sources: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
-_ASSIGNMENT_SOURCES = frozenset(("generated", "manual"))
+_ASSIGNMENT_SOURCES = frozenset(("default", "generated", "manual"))
 
 
 def _validate_assignment_sources(value) -> dict[str, dict[str, str]]:
@@ -368,7 +368,7 @@ def _validate_assignment_sources(value) -> dict[str, dict[str, str]]:
                 or source not in _ASSIGNMENT_SOURCES
             ):
                 raise ValueError(
-                    "assignment_sources values must be 'generated' or 'manual'"
+                    "assignment_sources values must be 'default', 'generated', or 'manual'"
                 )
             normalized_people[person_name] = source
         normalized[wc_name] = normalized_people
