@@ -249,6 +249,7 @@ def test_reset_to_defaults_uses_default_only_endpoint_mode():
     )[0]
     assert "await rebuild(currentMode(), { resetToDefaults: true })" in reset
     assert "Replace every assignment with saved defaults and next group rotations?" in reset
+    assert "This removes manual and automated assignments." in reset
     assert "Previous schedule will be kept" not in reset
     assert "Rebuild enabled Auto work centers" not in reset
 
