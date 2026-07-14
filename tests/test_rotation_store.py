@@ -42,6 +42,19 @@ def test_eligible_targets_require_every_required_skill():
     }
 
 
+def test_tablets_skill_qualifies_for_tablets_scheduling_target():
+    from zira_dashboard import staffing
+
+    person = staffing.Person("Tablets Operator", skills={"Tablets": 1})
+
+    targets = {
+        target.key: target
+        for target in staffing.eligible_scheduling_preference_targets(person)
+    }
+
+    assert targets["Tablets"].required_skills == ("Tablets",)
+
+
 def test_dismantle_skill_qualifies_for_dismantler_scheduling_group():
     """Odoo's Dismantle skill backs the Dismantler scheduling group."""
     from zira_dashboard import staffing

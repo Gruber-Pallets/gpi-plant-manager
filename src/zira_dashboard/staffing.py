@@ -107,7 +107,7 @@ LOCATIONS: tuple[Location, ...] = (
         None,
         required_skills=LOADING_JOCKEYING_REQUIRED_SKILLS,
     ),
-    Location("Tablets", "Forklift: Tablets", "Forklift", "Supervisor", None, min_ops=1, max_ops=None),
+    Location("Tablets", "Tablets", "Forklift", "Supervisor", None, min_ops=1, max_ops=None),
     # Maint.
     Location("Work Orders", "Mechanic", "Maint.", "Maintenance", None, min_ops=1, max_ops=None),
     # Transportation
