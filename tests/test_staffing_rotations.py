@@ -679,7 +679,8 @@ def test_reset_to_defaults_spreads_group_people_across_enabled_auto_centers(monk
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
     monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _day: {"Repair 1", "Repair 2", "Repair 3"})
     monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({}, {"Repair": ("Ana", "Bob", "Cara")}, {"Repair": ("Repair 1", "Repair 2", "Repair 3")}))
-    monkeypatch.setattr(staffing_route, "_configured_center_capacities", lambda centers, strict=False: {center: 1 for center in centers})
+    # Capacities must not force this distribution: least-load selection should.
+    monkeypatch.setattr(staffing_route, "_configured_center_capacities", lambda centers, strict=False: {center: 3 for center in centers})
     monkeypatch.setattr(rotations.rotation_suggestions, "_load_recycled_history", lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory())
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
