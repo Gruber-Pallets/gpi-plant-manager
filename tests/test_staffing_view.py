@@ -381,46 +381,22 @@ def test_partial_hours_window_and_full_day_routing(patch_wcs):
 # (g) publish_block_reasons gating
 # --------------------------------------------------------------------------
 
-def test_publish_block_reasons_require_blocked_under_and_min_ge_2(patch_wcs):
-    """A reason is emitted only when publish_blocked AND hc_status==under
-    AND min_ops >= 2. A min_ops==1 under-staffed WC stays silent."""
+def test_publish_block_reasons_include_every_below_minimum_work_center(patch_wcs):
+    pair = _loc("Hand Build #1", bay="Bay 6", min_ops=2, max_ops=2, required=("Repair",))
+    solo = _loc("Junior #1", bay="Bay 16", min_ops=1, max_ops=1, required=("Repair",))
     patch_wcs([
-        (_loc("Trim Saw 1", bay="Bay 4", skill="Trim Saw",
-              min_ops=2, max_ops=2, required=("Repair",)),
-         {"required": ("Repair",), "min": 2, "max": 2, "defaults": []}),
-        (_loc("Solo", bay="Bay 5", required=("Repair",), min_ops=1, max_ops=1),
-         {"required": ("Repair",), "min": 1, "max": 1, "defaults": []}),
+        (pair, {"required": ("Repair",), "min": 2, "max": 2, "defaults": []}),
+        (solo, {"required": ("Repair",), "min": 1, "max": 1, "defaults": []}),
     ])
-    roster = [_person("One", Repair=3)]
-    # Trim Saw: 1 of 2 → under, min>=2 → reason. Solo: empty → not 'under'.
-    sched = _sched({"Trim Saw 1": ["One"], "Solo": []})
 
-    # publish_blocked falsy → no reasons at all.
-    m0 = staffing_view.build_staffing_bays(
-        roster=roster, sched=sched, time_off_entries=[], publish_blocked=0,
-    )
-    assert m0["publish_block_reasons"] == []
-
-    # publish_blocked truthy → only the min>=2 under WC reports.
-    m1 = staffing_view.build_staffing_bays(
-        roster=roster, sched=sched, time_off_entries=[], publish_blocked=1,
-    )
-    assert len(m1["publish_block_reasons"]) == 1
-    reason = m1["publish_block_reasons"][0]
-    assert reason.startswith("Trim Saw 1 requires 2 operators")
-    assert "currently 1" in reason
-
-
-def test_min_ops_one_under_staffed_never_blocks_publish(patch_wcs):
-    """An under-staffed min_ops==1 WC (empty is 'empty', a single open slot
-    elsewhere) never contributes a publish-block reason."""
-    patch_wcs([(_loc("Solo", required=("Repair",), min_ops=1, max_ops=3),
-                {"required": ("Repair",), "min": 1, "max": 3, "defaults": []})])
-    # 0 assigned → 'empty' (not 'under'); still no reason regardless.
-    m = staffing_view.build_staffing_bays(
-        roster=[_person("A", Repair=3)],
-        sched=_sched({"Solo": []}),
+    model = staffing_view.build_staffing_bays(
+        roster=[_person("Jordan", Repair=3)],
+        sched=_sched({"Hand Build #1": ["Jordan"]}),
         time_off_entries=[],
         publish_blocked=1,
     )
-    assert m["publish_block_reasons"] == []
+
+    assert model["publish_block_reasons"] == [
+        "Hand Build #1 requires 2 operators — currently 1.",
+        "Junior #1 requires 1 operators — currently 0.",
+    ]

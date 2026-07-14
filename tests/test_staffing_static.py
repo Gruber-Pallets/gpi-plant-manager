@@ -71,8 +71,8 @@ def test_staffing_publish_submit_buttons_expose_busy_state():
     html = _template()
     js = _script()
 
-    assert 'class="override-btn publish-submit" aria-busy="false"' in html
     assert 'class="publish-btn publish-submit" aria-busy="false"' in html
+    assert 'class="override-btn publish-submit" aria-busy="false"' not in html
     assert "form.addEventListener('submit'" in js
     assert "event.submitter" in js
     assert "submitter.value !== 'publish'" in js
@@ -86,6 +86,20 @@ def test_staffing_publish_busy_state_preserves_publish_action():
     assert "publishIntent.name = 'action';" in js
     assert "publishIntent.value = 'publish';" in js
     assert "form.appendChild(publishIntent);" in js
+
+
+def test_staffing_publish_banner_has_no_override_and_slack_stops_on_json_failure():
+    html = _template()
+    js = _script()
+    slack_post = js.split("async function postToSlack(btn) {", 1)[1].split(
+        "// ---------- Rotation goal", 1,
+    )[0]
+
+    assert "Override &amp; Publish" not in html
+    assert "publish-override" not in html
+    assert 'class="override-btn' not in html
+    assert "if (!pubRes.ok)" in slack_post
+    assert slack_post.index("if (!pubRes.ok)") < slack_post.index("// Step 2: post the resulting PDF to Slack.")
 
 
 def test_current_published_schedule_has_a_local_edit_gate_but_snapshot_does_not():

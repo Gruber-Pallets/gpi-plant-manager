@@ -37,6 +37,89 @@ def _capture_route_save(monkeypatch, existing):
     return saved
 
 
+def _publish_location(name, *, min_ops):
+    return staffing.Location(
+        name, "Repair", "Bay 1", "Recycled", None,
+        min_ops=min_ops, max_ops=min_ops,
+    )
+
+
+def _capture_publish(monkeypatch, locs, existing=None):
+    saved = []
+    existing = existing or staffing.Schedule(day=DAY, published=False, assignments={})
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", tuple(locs))
+    monkeypatch.setattr(
+        staffing_routes.work_centers_store, "min_ops", lambda loc: loc.min_ops,
+    )
+    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: existing)
+    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
+    return saved
+
+
+def test_publish_override_cannot_bypass_two_person_minimum(monkeypatch):
+    pair = _publish_location("Hand Build #1", min_ops=2)
+    saved = _capture_publish(monkeypatch, [pair])
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), DAY, 0,
+        FormData([
+            ("action", "publish"),
+            ("loc__Hand Build #1", "Jordan"),
+            ("override", "1"),
+        ]),
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/staffing?day={DAY.isoformat()}&publish_blocked=1"
+    assert saved[0].published is False
+    assert saved[0].assignments == {"Hand Build #1": ["Jordan"]}
+
+
+def test_publish_blocks_an_empty_one_person_work_center(monkeypatch):
+    solo = _publish_location("Junior #1", min_ops=1)
+    saved = _capture_publish(monkeypatch, [solo])
+
+    staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), DAY, 0, FormData({"action": "publish"}),
+    )
+
+    assert saved[0].published is False
+
+
+def test_json_publish_below_minimum_returns_conflict_with_shortages(monkeypatch):
+    pair = _publish_location("Hand Build #1", min_ops=2)
+    saved = _capture_publish(monkeypatch, [pair])
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}), DAY, 0,
+        FormData([("action", "publish"), ("loc__Hand Build #1", "Jordan")]),
+    )
+
+    assert response.status_code == 409
+    assert response.body == (
+        '{"ok":false,"error":"Publish blocked — staff every work center to its minimum.",'
+        '"publish_block_reasons":["Hand Build #1 requires 2 operators — currently 1."]}'
+    ).encode()
+    assert saved[0].published is False
+
+
+def test_failed_republish_preserves_the_posted_version_as_a_snapshot(monkeypatch):
+    pair = _publish_location("Hand Build #1", min_ops=2)
+    posted = staffing.Schedule(
+        day=DAY, published=True, assignments={"Hand Build #1": ["Jordan", "Taylor"]},
+    )
+    saved = _capture_publish(monkeypatch, [pair], existing=posted)
+
+    staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), DAY, 0,
+        FormData([("action", "publish"), ("loc__Hand Build #1", "Jordan")]),
+    )
+
+    assert saved[0].published is False
+    assert saved[0].published_snapshot == staffing.snapshot_of(posted)
+
+
 def test_notes_only_save_preserves_rotation_metadata(monkeypatch):
     saved = _capture_route_save(monkeypatch, _schedule(published=True))
 
