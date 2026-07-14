@@ -81,3 +81,22 @@ suggestions. Day-to-day manager workflow:
 6. **Confirm promotion.** After the final attended day, the trainee is promoted
    from level 0 to level 1 in the target skill automatically — verify it landed
    on the People Matrix.
+
+### Automatic Repair and Dismantle skill levels
+
+Repair and Dismantle levels can update themselves from production. On the
+**People Matrix**, hover the **Repair** or **Dismantle** header and click the
+settings gear. Each group keeps its own thresholds — level 3 defaults to 90% of
+goal, level 2 to 80%, and level 1 to 70%; anything lower is level 0. The modal
+previews how many units per day each threshold works out to for every work
+center, both for a solo operator and for two people sharing a center.
+
+Scoring looks back 30 calendar days. A person needs at least two days with four
+or more hours in the group before automation will move their level; on each day
+the center's goal and output are split equally among that day's operators, and
+partial days are normalized to a full shift before comparing to goal. **Save &
+Recalculate** applies the new thresholds immediately, and a daily run after the
+shift ends keeps eligible employees in sync. Every change is written to Odoo
+first, so a rejected write leaves the level unchanged and is reported in the
+run summary. Manual matrix edits still work; a later automated run may promote
+or demote the same two skills.
