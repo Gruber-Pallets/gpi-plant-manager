@@ -247,7 +247,7 @@
                       {% for o in g.default_pool %}
                         <label class="dd-item {% if o.name in g.default_conflicts %}default-conflict{% endif %}" data-name="{{ o.name }}">
                           <input type="checkbox" name="group_default_people__{{ g.name }}" value="{{ o.name }}" {% if o.name in g.default_people %}checked{% endif %}>
-                          <span class="dd-item-text">{{ o.name }} <span class="eligible-centers">{{ o.eligible_centers | join(', ') }}</span></span>
+                          <span class="dd-item-text">{{ o.name }}</span>
                         </label>
                       {% endfor %}
                     </div>

@@ -10,6 +10,14 @@ def test_settings_group_table_has_default_people_picker():
     assert "protected anchors used when Auto runs" in html
 
 
+def test_settings_group_default_picker_rows_show_names_without_eligible_centers():
+    html = Path("src/zira_dashboard/templates/settings.html").read_text()
+
+    assert '<span class="dd-item-text">{{ o.name }}</span>' in html
+    assert "o.eligible_centers" not in html
+    assert "eligible-centers" not in html
+
+
 def test_settings_route_uses_one_atomic_default_replacement():
     source = Path("src/zira_dashboard/routes/settings.py").read_text()
     handler = source.split("async def settings_save_work_centers", 1)[1].split(
