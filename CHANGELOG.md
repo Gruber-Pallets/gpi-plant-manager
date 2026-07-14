@@ -7,6 +7,16 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      (anything ungrouped renders as "Highlights"). An entry with a Features
      group shows a green "New feature" badge in the What's New panel. -->
 
+## 2026-07-14
+
+### Features
+
+- **Staffing now manages unified training protocols.** Use **+ Training** to
+  reserve a trainee and level-3 trainer at an exact work center on day one,
+  then manually pair the trainer on later days when needed. Protocols extend
+  for full-day absences and promote the trainee to level 1 after all attended
+  days. The former per-row Training toggle has been removed.
+
 ## 2026-07-13
 
 ### Features

@@ -25,6 +25,13 @@ TARGET_DAY = date(2026, 7, 14)
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_readme_describes_exact_work_center_training_protocol():
+    readme = (ROOT / "README.md").read_text()
+    assert "exact work center" in readme
+    assert "day one" in readme
+    assert "level 3" in readme
+
+
 def _person(name: str, level: int, group: str = "Repair", *, active: bool = True, reserve: bool = False):
     return staffing.Person(name=name, active=active, reserve=reserve, skills={group: level})
 

@@ -74,13 +74,15 @@ suggestions. Day-to-day manager workflow:
    context like primary operator, training pair, or least-recent center. Green
    names do not get a redundant badge. Manual assignments and saved default
    people are locked and survive rebuilds.
-5. **Start a training block carefully.** A level-0 block requires a green
-   (level-3) day-one trainer; the trainer pairs in on day one and the trainee
-   works solo on later attended days. A full-day absence does not consume a
-   training day, so the block extends automatically.
-6. **Confirm promotion.** After the final attended day, the trainee is promoted
-   from level 0 to level 1 in the target skill automatically — verify it landed
-   on the People Matrix.
+5. **Start a training protocol.** On Staffing, click **+ Training**, then
+   choose the trainee, a level 3 trainer, the exact work center, start date,
+   and number of attended days. The scheduler places the pair at that work
+   center automatically on day one. On later attended days, add the trainer
+   manually beside the trainee when continued pairing is needed.
+6. **Confirm completion.** A full-day absence does not consume a training day,
+   so the protocol extends automatically. After the final attended day, the
+   trainee is promoted from level 0 to level 1 in every protocol skill — verify
+   it landed on the People Matrix.
 
 ### Automatic Repair and Dismantle skill levels
 
