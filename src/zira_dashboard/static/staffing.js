@@ -1599,9 +1599,8 @@
           return;
         }
         if (!confirm(
-          'Rebuild enabled Auto work centers around saved exact and group defaults?\n\n' +
-          'Manual assignments inside those Auto centers will be replaced. ' +
-          'If everyone cannot be placed safely, the previous schedule will be kept.'
+          'Replace every assignment with saved defaults and next group rotations?\n\n' +
+          'This removes manual and automated assignments. Notes, time off, and schedule settings stay.'
         )) return;
         resetScheduleBtn.disabled = true;
         try {

@@ -239,7 +239,7 @@ def test_auto_toggle_failures_preserve_current_issues_and_append_once():
     assert "renderCoverageFailure(" in save_auto
 
 
-def test_reset_to_defaults_uses_complete_rebuild_endpoint():
+def test_reset_to_defaults_uses_default_only_endpoint_mode():
     js = _script()
     rotation = js.split("// ---------- Rotation goal", 1)[1].split(
         "// Assignments to Do modal", 1
@@ -248,8 +248,9 @@ def test_reset_to_defaults_uses_complete_rebuild_endpoint():
         "modeBtns.forEach", 1
     )[0]
     assert "await rebuild(currentMode(), { resetToDefaults: true })" in reset
-    assert "window.SMART_DEFAULTS_BY_LOC" not in reset
-    assert "kickAutosave()" not in reset
+    assert "Replace every assignment with saved defaults and next group rotations?" in reset
+    assert "Previous schedule will be kept" not in reset
+    assert "Rebuild enabled Auto work centers" not in reset
 
 
 def test_failed_rebuild_keeps_grid_and_renders_person_issues():
