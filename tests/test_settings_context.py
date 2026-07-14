@@ -283,3 +283,31 @@ def test_auto_lunch_context_preserves_mode_mapping(enabled, observe_only, mode):
         "flex_after_hours": 5.5,
         "flex_minutes": 30,
     }
+
+
+def test_group_default_rows_include_only_nonreserve_people_qualified_somewhere():
+    repair_1 = SimpleNamespace(name="Repair 1")
+    repair_2 = SimpleNamespace(name="Repair 2")
+    people = [
+        SimpleNamespace(name="Ana", reserve=False, level=lambda skill: 3),
+        SimpleNamespace(name="Learner", reserve=False, level=lambda skill: 0),
+        SimpleNamespace(name="Reserve", reserve=True, level=lambda skill: 3),
+    ]
+    rows = [{"name": "Repair", "count": 2}]
+
+    result = settings_context.with_group_default_context(
+        rows,
+        people,
+        members_for=lambda kind, name: [repair_1, repair_2],
+        required_skills_for=lambda loc: ("Repair",),
+        defaults_for=lambda name: ["Ana"],
+        conflicts={"Ana": ("group:Repair", "work_center:Repair 1")},
+    )
+
+    assert result[0]["default_people"] == ["Ana"]
+    assert result[0]["default_pool"] == [
+        {"name": "Ana", "eligible_centers": ("Repair 1", "Repair 2")}
+    ]
+    assert result[0]["default_conflicts"] == {
+        "Ana": ("group:Repair", "work_center:Repair 1")
+    }

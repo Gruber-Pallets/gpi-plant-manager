@@ -73,6 +73,56 @@ def group_summary(
     return rows
 
 
+def with_group_default_context(
+    rows,
+    active_people,
+    *,
+    members_for,
+    required_skills_for,
+    defaults_for,
+    conflicts,
+) -> list[dict]:
+    """Add eligible default-person choices to user-managed group rows."""
+    result: list[dict] = []
+    for row in rows:
+        members = members_for("group", row["name"])
+        selected = list(defaults_for(row["name"]))
+        eligible_people: list[tuple[object, list[str]]] = []
+        for person in active_people:
+            if person.reserve:
+                continue
+            eligible_centers = [
+                member.name
+                for member in members
+                if all(
+                    person.level(skill) >= 1
+                    for skill in required_skills_for(member)
+                )
+            ]
+            if eligible_centers:
+                eligible_people.append((person, eligible_centers))
+        eligible_people.sort(key=lambda item: item[0].name.lower())
+        result.append(
+            {
+                **row,
+                "default_people": selected,
+                "default_pool": [
+                    {
+                        "name": person.name,
+                        "eligible_centers": tuple(eligible_centers),
+                    }
+                    for person, eligible_centers in eligible_people
+                ],
+                "default_conflicts": {
+                    name: conflicts[name]
+                    for name in selected
+                    if name in conflicts
+                },
+            }
+        )
+    return result
+
+
 def work_schedule_context(overrides, hours_display) -> list[dict]:
     return [
         {

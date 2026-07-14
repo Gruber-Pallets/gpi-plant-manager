@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -131,6 +132,7 @@ def settings_page(
     request: Request,
     saved: int = Query(default=0),
     section: str = Query(default="work_centers"),
+    defaults_error: str = Query(default=""),
 ):
     if section not in ("work_centers", "integrations", "api", "roster_filter", "tvs", "timeclock", "time_off", "forklift", "diagnostics"):
         section = "work_centers"
@@ -296,6 +298,16 @@ def settings_page(
         override_goal=work_centers_store.group_goal_override,
         effective_goal=work_centers_store.group_goal,
     )
+    group_rows = settings_context.with_group_default_context(
+        group_rows,
+        active_people_objs,
+        members_for=work_centers_store.members,
+        required_skills_for=lambda loc: tuple(
+            work_centers_store.required_skills(loc)
+        ),
+        defaults_for=work_centers_store.group_default_people,
+        conflicts=work_centers_store.default_target_conflicts(),
+    )
     dept_rows = settings_context.group_summary(
         "department",
         all_names=work_centers_store.all_group_names,
@@ -379,6 +391,7 @@ def settings_page(
             "dept_rows": dept_rows,
             "active_people": active_people,
             "saved": bool(saved),
+            "defaults_error": defaults_error,
             "active_section": section,
             "roster_filter_active": roster_filter_active,
             "roster_filter_inactive": roster_filter_inactive,
@@ -882,15 +895,67 @@ async def settings_save_work_centers(request: Request):
     form = await request.form()
 
     def _work():
+        original_groups = list(work_centers_store.registered_groups())
+        exact_defaults: dict[str, list[str]] = {}
+        for loc in staffing.LOCATIONS:
+            key = loc.meter_id or f"name:{loc.name}"
+            prefix = f"wc__{key}__"
+            exact_defaults[loc.name] = (
+                form.getlist(prefix + "default_people")
+                if (prefix + "default_people_present") in form
+                else work_centers_store.default_people(loc)
+            )
+        group_defaults = {
+            name: (
+                form.getlist(f"group_default_people__{name}")
+                if f"group_default_people_present__{name}" in form
+                else work_centers_store.group_default_people(name)
+            )
+            for name in original_groups
+        }
+
+        # Apply group registry edits to the in-memory target map before any
+        # database writes, so duplicate defaults reject the whole target set.
+        for name in original_groups:
+            if form.get(f"group_delete__{name}"):
+                group_defaults.pop(name, None)
+                continue
+            new_name = (form.get(f"group_rename__{name}") or "").strip()[:80]
+            if new_name and new_name != name:
+                group_defaults[new_name] = group_defaults.pop(name, [])
+        new_group = (form.get("group_new") or "").strip()[:80]
+        if new_group:
+            group_defaults.setdefault(new_group, [])
+
+        try:
+            work_centers_store._normalize_default_targets(
+                exact_by_center=exact_defaults,
+                group_by_name=group_defaults,
+            )
+        except work_centers_store.InvalidDefaultTargets as exc:
+            if (request.headers.get("accept") or "").startswith("application/json"):
+                return JSONResponse(
+                    {"ok": False, "error": str(exc), "conflicts": exc.conflicts},
+                    status_code=422,
+                )
+            query = urlencode(
+                {
+                    "section": "work_centers",
+                    "defaults_error": str(exc),
+                }
+            )
+            return RedirectResponse(url=f"/settings?{query}", status_code=303)
+
         # 1. Group registry (delete, rename, add) — do first so WC save sees updated names.
-        for name in list(work_centers_store.registered_groups()):
+        for name in original_groups:
             if form.get(f"group_delete__{name}"):
                 work_centers_store.delete_group(name)
-        for name in list(work_centers_store.registered_groups()):
+        for name in original_groups:
+            if form.get(f"group_delete__{name}"):
+                continue
             new_name = (form.get(f"group_rename__{name}") or "").strip()
             if new_name and new_name != name:
                 work_centers_store.rename_group(name, new_name)
-        new_group = (form.get("group_new") or "").strip()
         if new_group:
             work_centers_store.add_group(new_group)
 
@@ -915,10 +980,6 @@ async def settings_save_work_centers(request: Request):
             if group_field in form:
                 v = (form.get(group_field) or "").strip()
                 updates["groups"] = [v] if v else []
-            # Multi-select Default People checkbox list.
-            dp_present = prefix + "default_people_present"
-            if dp_present in form:
-                updates["default_people"] = form.getlist(prefix + "default_people")
             if updates:
                 work_centers_store.save_one(loc, updates)
 
@@ -928,6 +989,10 @@ async def settings_save_work_centers(request: Request):
                 field = f"group_override__{kind}__{name}"
                 if field in form:
                     work_centers_store.save_group_override(kind, name, form.get(field) or "")
+        work_centers_store.replace_default_targets(
+            exact_by_center=exact_defaults,
+            group_by_name=group_defaults,
+        )
         if (request.headers.get("accept") or "").startswith("application/json"):
             return JSONResponse({"ok": True})
         return RedirectResponse(url="/settings?saved=1&section=work_centers", status_code=303)

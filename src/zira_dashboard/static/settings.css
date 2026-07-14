@@ -371,6 +371,19 @@ header .page-actions .redo-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
   border-radius: 6px; padding: 0.2rem 0.45rem; font: inherit; font-size: 0.85rem; width: 100%;
 }
+.group-col .group-defaults-cell { min-width: 13rem; }
+.group-col .group-default-people-picker { max-width: 20rem; }
+.group-col .eligible-centers {
+  color: var(--muted); font-size: 0.75rem; font-weight: 400; margin-left: 0.25rem;
+}
+.group-col .default-conflict .dd-item-text,
+.group-col .default-conflict-message { color: var(--bad); }
+.group-col .default-conflict-message { font-size: 0.72rem; margin-top: 0.2rem; }
+.defaults-error {
+  margin: 0 0 0.75rem; padding: 0.55rem 0.75rem;
+  border: 1px solid var(--bad); border-radius: 6px;
+  background: color-mix(in srgb, var(--bad) 10%, transparent); color: var(--bad);
+}
 .group-col .del-col { width: 2.5rem; text-align: center; }
 .group-col .del-check { display: inline-flex; align-items: center; color: var(--muted); cursor: pointer; }
 .group-col .del-check input { accent-color: #ef4444; }

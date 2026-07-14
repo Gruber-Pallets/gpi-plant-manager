@@ -66,6 +66,9 @@
         {% if active_section != 'work_centers' %}style="display:none"{% endif %}>
     <section class="panel">
       <h2>Work Centers &amp; Goals</h2>
+      {% if defaults_error %}
+        <div class="defaults-error" role="alert" aria-live="assertive">{{ defaults_error }}</div>
+      {% endif %}
 
       <table class="wc-table">
         <thead>
@@ -198,7 +201,7 @@
           {% endfor %}
         </tbody>
       </table>
-      <div class="note">Max blank = unlimited. Required skills gate who shows up in the scheduler dropdown (training mode bypasses). Default people are pre-loaded into the Scheduled column whenever a brand-new day is opened, and on click of "Reset to defaults" in the scheduler.</div>
+      <div class="note">Max blank = unlimited. Required skills control safe automatic placement. Default people are protected anchors used when Auto runs; group defaults rotate among qualified enabled member work centers.</div>
 
       <div class="group-summaries">
         <!-- LEFT: Departments — synced from Odoo hr.department, only goal editable -->
@@ -224,19 +227,42 @@
         <section class="group-col">
           <h3 class="section-title">Groups <span class="section-sub">pallets / day · add, rename, or delete</span></h3>
           <table>
-            <thead><tr><th>Group</th><th class="num hint">WCs</th><th class="num">Auto</th><th class="num">Override</th><th class="del-col">Del</th></tr></thead>
+            <thead><tr><th>Group</th><th class="num hint">WCs</th><th>Default people</th><th class="num">Auto</th><th class="num">Override</th><th class="del-col">Del</th></tr></thead>
             <tbody>
               {% for g in group_rows %}
               <tr>
                 <td><input type="text" name="group_rename__{{ g.name }}" value="{{ g.name }}" maxlength="80" class="group-name-input"></td>
                 <td class="num hint">{{ g.count }}</td>
+                <td class="group-defaults-cell">
+                  <input type="hidden" name="group_default_people_present__{{ g.name }}" value="1">
+                  <details class="skills-picker default-people-picker group-default-people-picker">
+                    <summary>
+                      <span class="dd-summary-text">
+                        {% if g.default_people %}{{ g.default_people | join(', ') }}{% else %}<span class="empty">—</span>{% endif %}
+                      </span>
+                      <button type="button" class="dd-clear" title="Clear" aria-label="Clear">×</button>
+                      <span class="dd-chev">▾</span>
+                    </summary>
+                    <div class="skills-list">
+                      {% for o in g.default_pool %}
+                        <label class="dd-item {% if o.name in g.default_conflicts %}default-conflict{% endif %}" data-name="{{ o.name }}">
+                          <input type="checkbox" name="group_default_people__{{ g.name }}" value="{{ o.name }}" {% if o.name in g.default_people %}checked{% endif %}>
+                          <span class="dd-item-text">{{ o.name }} <span class="eligible-centers">{{ o.eligible_centers | join(', ') }}</span></span>
+                        </label>
+                      {% endfor %}
+                    </div>
+                  </details>
+                  {% for person, targets in g.default_conflicts.items() %}
+                    <div class="default-conflict-message">{{ person }}: {{ targets | join(', ') }}</div>
+                  {% endfor %}
+                </td>
                 <td class="num hint">{{ g.auto }}</td>
                 <td class="num"><input type="number" name="group_override__group__{{ g.name }}" min="0" step="1" value="{{ g.override }}" placeholder="{{ g.auto }}"></td>
                 <td class="del-col"><label class="del-check" title="Delete this group on save"><input type="checkbox" name="group_delete__{{ g.name }}" value="1"> ×</label></td>
               </tr>
               {% endfor %}
               <tr class="add-row">
-                <td colspan="5">
+                <td colspan="6">
                   <input type="text" name="group_new" placeholder="+ add new group…" maxlength="80" class="group-name-input">
                 </td>
               </tr>
