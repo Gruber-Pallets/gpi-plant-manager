@@ -221,9 +221,10 @@ def test_rotation_warning_success_replaces_alert_with_authoritative_response():
 
     call = "renderCoverageIssues(data.warnings, data.coverage?.issues || []);"
     assert call in save_auto
-    assert "renderCoverageIssues(" in apply_rebuild
-    assert "data.warnings," in apply_rebuild
-    assert "[...(data.coverage?.issues || []), ...partialPlacementIssues(data)]," in apply_rebuild
+    assert """renderCoverageIssues(
+        data.warnings,
+        [...(data.coverage?.issues || []), ...partialPlacementIssues(data)],
+      );""" in apply_rebuild
 
 
 def test_auto_toggle_failures_preserve_current_issues_and_append_once():
