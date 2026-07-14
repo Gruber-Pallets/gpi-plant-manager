@@ -27,6 +27,7 @@
   {% set active_nav = 'staffing' %}{% include "_topnav.html" %}
   <div style="display:flex;gap:0.5rem;align-items:center">
     <span id="testing-pill" class="pub-pill" style="{% if not testing_day %}display:none;{% endif %}background:var(--warn-dim);color:var(--warn)">Testing Day<button type="button" id="testing-pill-clear" title="Clear Testing Day flag for this schedule" aria-label="Clear Testing Day" style="background:transparent;border:0;color:inherit;cursor:pointer;font-weight:700;font-size:0.95rem;line-height:1;padding:0;margin-left:0.4rem;opacity:0.75">×</button></span>
+    <button type="button" id="training-protocol-open" class="training-protocol-open" aria-haspopup="dialog">+ Training</button>
     <button type="button" class="undo-btn header-undo-redo" id="undo-btn" title="Undo" aria-label="Undo" disabled>↶</button>
     <button type="button" class="redo-btn header-undo-redo" id="redo-btn" title="Redo" aria-label="Redo" disabled>↷</button>
   </div>
@@ -304,10 +305,6 @@
             <td class="station">
               <div class="name">
                 {{ row.loc.name }}
-                <label class="wc-training-toggle" title="Include untrained people in the Scheduled picker">
-                  <input type="checkbox" class="wc-training-cb" data-loc="{{ row.loc.name }}">
-                  Training
-                </label>
                 {% if auto_scheduler_available %}
                 <label class="wc-auto-toggle" title="Include this work center when automatic scheduling runs">
                   <input type="checkbox" class="wc-auto-cb" data-loc="{{ row.loc.name }}"
@@ -404,8 +401,43 @@
   <span class="pill lvl-2" style="padding:0.05rem 0.5rem;font-size:0.72rem">competent</span>
   <span class="pill lvl-1" style="padding:0.05rem 0.5rem;font-size:0.72rem">practicing</span>
   <span class="pill lvl-0" style="padding:0.05rem 0.5rem;font-size:0.72rem">not trained</span>.
-  Tick <em>Training</em> next to a work center to reveal untrained people in its picker.
 </p>
+
+<dialog id="training-protocol-modal" class="training-protocol-modal" aria-labelledby="training-protocol-title">
+  <form id="training-protocol-form" method="dialog">
+    <header class="training-protocol-head">
+      <h2 id="training-protocol-title">Training protocols</h2>
+      <button type="button" id="training-protocol-close" class="training-protocol-close" aria-label="Close training protocols">×</button>
+    </header>
+    <p class="training-protocol-intro">Start a paired training protocol. After day one, add the trainer to the normal schedule picker if needed.</p>
+    <p id="training-protocol-error" class="training-protocol-error" role="alert" aria-live="assertive"></p>
+    <div class="training-protocol-fields">
+      <label>Trainee
+        <select id="training-protocol-trainee" required></select>
+      </label>
+      <label>Trainer
+        <select id="training-protocol-trainer" required></select>
+      </label>
+      <label>Work center
+        <select id="training-protocol-work-center" required></select>
+      </label>
+      <label>Start date
+        <input id="training-protocol-start-day" type="date" value="{{ day }}" required>
+      </label>
+      <label>Attended workdays
+        <input id="training-protocol-workdays" type="number" min="1" step="1" value="5" required>
+      </label>
+    </div>
+    <div class="training-protocol-actions">
+      <button type="submit" id="training-protocol-submit">Start training</button>
+    </div>
+    <section class="training-protocol-list-section" aria-labelledby="training-protocol-active-title">
+      <h3 id="training-protocol-active-title">Active protocols</h3>
+      <p id="training-protocol-empty" class="training-protocol-empty">No active training protocols.</p>
+      <ul id="training-protocol-list" class="training-protocol-list"></ul>
+    </section>
+  </form>
+</dialog>
 
 <script>
   window.PERSON_CERTS = {{ person_certs|tojson }};
@@ -422,6 +454,9 @@
   window.PARTIAL_HOURS_BY_NAME = {{ partial_hours_by_name|tojson }};
   window.TIME_OFF_NAMES = {{ time_off_names|tojson }};
   window.FORKLIFT_LIVE_MODEL = {{ forklift_live_model|tojson }};
+  window.TRAINING_PROTOCOLS = {{ active_training_blocks|tojson }};
+  window.TRAINING_PROTOCOL_PEOPLE = {{ training_protocol_people|tojson }};
+  window.TRAINING_PROTOCOL_WORK_CENTERS = {{ training_protocol_work_centers|tojson }};
 </script>
 
 <script>

@@ -408,11 +408,9 @@
   .multi-dd .dd-item.lvl-0 .dd-item-text { color: var(--bad); }
   .multi-dd .dd-empty { padding: 0.5rem; color: var(--muted); font-style: italic; font-size: 0.8rem; }
 
-  /* Untrained people hidden by default; always shown when already selected, or when
-     the WC's per-row Training checkbox flips the sched-dd into training mode. */
+  /* Untrained people are hidden from ordinary pickers unless already scheduled. */
   .multi-dd .dd-item.untrained { display: none; }
   .multi-dd .dd-item.untrained.selected { display: flex; }
-  .sched-dd[data-training="1"] .dd-item.untrained { display: flex; }
 
   /* People already scheduled at another WC, in time off, or defaulted at another WC
      are hidden from sibling pickers. !important so this beats the reserves-section
@@ -449,8 +447,7 @@
   .multi-dd .dd-list .dd-reserves[open] > summary { color: #581c87; }
   .multi-dd .dd-list .dd-reserves-count { color: var(--muted); font-weight: 500; margin-left: 0.15rem; font-size: 0.75rem; }
 
-  /* Per-WC checkboxes sit next to the Work Center name */
-  .wc-training-toggle,
+  /* Auto checkboxes sit next to the Work Center name. */
   .wc-auto-toggle {
     display: inline-flex; align-items: center; gap: 0.25rem;
     margin-left: 0.5rem;
@@ -459,8 +456,6 @@
     user-select: none;
     vertical-align: middle;
   }
-  .wc-training-toggle input { accent-color: var(--warn); margin: 0; }
-  .wc-training-toggle:has(input:checked) { color: var(--warn); }
   .wc-auto-toggle { margin-left: 0.35rem; }
   .wc-auto-toggle input { accent-color: var(--accent); margin: 0; }
   .wc-auto-toggle:has(input:checked) { color: var(--accent); }
@@ -684,6 +679,55 @@
   .rotation-warning[hidden] { display: none; }
   .rotation-warning ul { margin: 0; padding-left: 1.1rem; }
   .rotation-warning li { margin: 0.1rem 0; }
+
+  /* ---------- Unified training protocol dialog ---------- */
+  .training-protocol-open {
+    background: var(--accent); color: #fff; border: 1px solid var(--accent);
+    border-radius: 6px; padding: 0.3rem 0.65rem; font: inherit; font-size: 0.8rem;
+    font-weight: 650; cursor: pointer;
+  }
+  .training-protocol-open:hover { filter: brightness(1.08); }
+  .training-protocol-modal {
+    width: min(38rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem);
+    overflow: auto; color: var(--fg); background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45); padding: 1rem;
+  }
+  .training-protocol-modal::backdrop { background: rgba(0, 0, 0, 0.55); }
+  .training-protocol-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .training-protocol-head h2 { margin: 0; font-size: 1.1rem; }
+  .training-protocol-close,
+  .training-protocol-lifecycle {
+    color: var(--fg); background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.25rem 0.55rem; font: inherit; cursor: pointer;
+  }
+  .training-protocol-close { font-size: 1rem; line-height: 1; }
+  .training-protocol-close:hover,
+  .training-protocol-lifecycle:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .training-protocol-lifecycle.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
+  .training-protocol-lifecycle:disabled { opacity: 0.55; cursor: progress; }
+  .training-protocol-intro { margin: 0.65rem 0; color: var(--muted); font-size: 0.85rem; }
+  .training-protocol-error { min-height: 1.2em; margin: 0 0 0.5rem; color: var(--bad); font-size: 0.85rem; }
+  .training-protocol-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
+  .training-protocol-fields label { display: grid; gap: 0.25rem; font-size: 0.82rem; font-weight: 650; }
+  .training-protocol-fields select,
+  .training-protocol-fields input {
+    width: 100%; box-sizing: border-box; color: var(--fg); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.38rem 0.45rem; font: inherit;
+  }
+  .training-protocol-actions { margin-top: 0.8rem; }
+  .training-protocol-actions button {
+    color: #fff; background: var(--accent); border: 1px solid var(--accent); border-radius: 6px;
+    padding: 0.4rem 0.8rem; font: inherit; font-weight: 650; cursor: pointer;
+  }
+  .training-protocol-actions button:disabled { opacity: 0.6; cursor: progress; }
+  .training-protocol-list-section { margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+  .training-protocol-list-section h3 { margin: 0 0 0.5rem; font-size: 0.88rem; }
+  .training-protocol-empty { margin: 0; color: var(--muted); font-size: 0.85rem; }
+  .training-protocol-list { display: grid; gap: 0.45rem; list-style: none; margin: 0; padding: 0; }
+  .training-protocol-item { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; }
+  .training-protocol-details { display: grid; gap: 0.15rem; min-width: 0; }
+  .training-protocol-details span { color: var(--muted); font-size: 0.78rem; }
+  .training-protocol-item-actions { display: flex; gap: 0.35rem; flex-shrink: 0; }
 
   .coverage-issue > span { font-weight: 650; }
   .coverage-why { margin-top: 0.3rem; color: var(--muted); }

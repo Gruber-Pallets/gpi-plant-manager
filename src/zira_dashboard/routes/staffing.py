@@ -525,11 +525,13 @@ def _training_blocks_context(active_blocks, d: date):
             "id": block.id,
             "trainee": block.trainee_name,
             "trainer": block.trainer_name,
+            "work_center": block.work_center,
             "group": staffing.scheduling_group_for_skill(block.skill),
             "skill": block.skill,
             "start_day": block.start_day.isoformat(),
             "planned_attended_days": block.planned_attended_days,
             "remaining_attended_days": max(0, block.planned_attended_days - attended),
+            "status": block.status,
         })
     return out
 
@@ -930,6 +932,10 @@ def staffing_page(
                 "auto_schedule_enabled_wc_names": enabled_auto_work_centers,
                 "auto_schedule_available_wc_names": [loc.name for loc in staffing.LOCATIONS],
                 "recycled_wc_names": _recycled_wc_names(),
+                "training_protocol_people": sorted(
+                    (person.name for person in roster if person.active), key=str.lower
+                ),
+                "training_protocol_work_centers": [loc.name for loc in staffing.LOCATIONS],
                 "day": d.isoformat(),
                 "day_short": d.strftime("%m/%d/%y"),
                 "day_pretty": f"{d.strftime('%A, %B')} {d.day}, {d.year}",

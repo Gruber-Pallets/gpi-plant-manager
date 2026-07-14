@@ -323,7 +323,7 @@
     input[type=search] { width: 12rem; font-size: 0.82rem; }
   }
 
-  /* ---- Recycled Rotation editor (per-person preferences + training blocks) ---- */
+  /* ---- Recycled Rotation editor (per-person preferences) ---- */
   .name-inner .name-controls { display: inline-flex; align-items: center; gap: 0.3rem; }
   .rotation-open-btn {
     background: transparent; color: var(--muted);
@@ -367,10 +367,6 @@
   .rotation-modal-close:hover { border-color: var(--accent); color: var(--accent); }
 
   .rotation-section { margin-top: 1rem; }
-  .rotation-training-section {
-    margin-top: 1.25rem; padding-top: 0.75rem;
-    border-top: 1px solid var(--border);
-  }
   .rotation-section-title {
     margin: 0 0 0.35rem; font-size: 0.72rem; font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);
@@ -384,56 +380,13 @@
     gap: 0.6rem; font-size: 0.85rem;
   }
   .rotation-pref-group { font-weight: 600; }
-  .rotation-pref-select,
-  .rotation-field select,
-  .rotation-field input {
+  .rotation-pref-select {
     background: var(--panel-2); color: var(--fg);
     border: 1px solid var(--border); border-radius: 6px;
     padding: 0.3rem 0.45rem; font: inherit; font-size: 0.85rem;
   }
   .rotation-pref-select { min-width: 9rem; }
-  .rotation-pref-select:focus,
-  .rotation-field select:focus,
-  .rotation-field input:focus { outline: 1px solid var(--accent); outline-offset: 1px; }
-
-  .rotation-block-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
-  .rotation-block-item {
-    display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
-    padding: 0.4rem 0.5rem; background: var(--panel-2);
-    border: 1px solid var(--border); border-radius: 6px;
-  }
-  .rotation-block-info { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
-  .rotation-block-title { font-weight: 600; font-size: 0.85rem; }
-  .rotation-block-meta { font-size: 0.75rem; color: var(--muted); }
-  .rotation-block-actions { display: flex; gap: 0.35rem; flex-shrink: 0; }
-  .rotation-block-btn {
-    background: var(--panel); color: var(--fg);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.25rem 0.6rem; font: inherit; font-size: 0.78rem; cursor: pointer;
-  }
-  .rotation-block-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-  .rotation-block-btn.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
-  .rotation-block-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .rotation-block-error { color: var(--bad); font-size: 0.8rem; margin-bottom: 0.4rem; }
-  .rotation-block-error:empty { display: none; }
-
-  .rotation-block-form { display: grid; gap: 0.5rem; }
-  .rotation-block-form[hidden] { display: none; }
-  .rotation-field {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 0.6rem; font-size: 0.85rem;
-  }
-  .rotation-field span { font-weight: 600; }
-  .rotation-field select, .rotation-field input { min-width: 11rem; }
-  .rotation-block-submit {
-    justify-self: start; margin-top: 0.2rem;
-    background: var(--accent); color: #fff; border: 1px solid var(--accent);
-    border-radius: 6px; padding: 0.4rem 0.9rem;
-    font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer;
-  }
-  .rotation-block-submit:hover:not(:disabled) { filter: brightness(1.08); }
-  .rotation-block-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+  .rotation-pref-select:focus { outline: 1px solid var(--accent); outline-offset: 1px; }
 
 /* --- Automatic Repair/Dismantle skill settings ------------------------- */
 /* Header controls: the sort label is a borderless button so the gear can sit

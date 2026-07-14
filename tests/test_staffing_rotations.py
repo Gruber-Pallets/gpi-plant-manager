@@ -1465,6 +1465,24 @@ def test_rebuild_rejects_bad_day(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
+def test_staffing_exposes_unified_training_setup_and_removes_row_toggles():
+    html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
+    js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
+
+    assert 'id="training-protocol-open"' in html
+    assert 'id="training-protocol-modal"' in html
+    assert 'class="wc-training-cb"' not in html
+    assert "setWcTraining" not in js
+    assert "/api/rotations/training-blocks" in js
+
+
+def test_people_matrix_no_longer_renders_training_block_form():
+    html = (ROOT / "src/zira_dashboard/templates/skills.html").read_text()
+
+    assert 'id="rotation-block-form"' not in html
+    assert "Start Recycled level-0 training block" not in html
+
+
 def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
@@ -1505,7 +1523,7 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "could not be placed in an enabled Auto work center" in js
 
 
-def test_skills_matrix_exposes_scheduling_preferences_and_recycled_training():
+def test_skills_matrix_exposes_scheduling_preferences_without_training_controls():
     html = (ROOT / "src/zira_dashboard/templates/skills.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/skills-page.js").read_text()
     assert "Scheduling Preferences" in html
@@ -1516,11 +1534,10 @@ def test_skills_matrix_exposes_scheduling_preferences_and_recycled_training():
     assert '<circle cx="9" cy="5.6" r="1"' in html
     assert '<circle cx="18.9" cy="12.9" r="1"' in html
     assert '<circle cx="8.7" cy="18.3" r="1"' in html
-    assert "Recycled training" in html
     assert 'id="rotation-pref-grid"' in html
     assert "dataset.rotationPreference" in js
     assert "/api/rotations/preferences" in js
-    assert "/api/rotations/training-blocks" in js
+    assert "/api/rotations/training-blocks" not in js
 
 
 # --------------------------------------------------------------------------- #

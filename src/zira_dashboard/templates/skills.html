@@ -155,10 +155,9 @@
   </div>
 </form>
 
-{# Per-person Recycled Rotation editor: soft preferences + training-block
-   management. One shared modal, opened per row via the ⟳ button; JS fills the
-   selects/lists for the chosen person. Kept outside #skills-form so its inputs
-   never join the roster autosave. #}
+{# Per-person Recycled Rotation editor: soft scheduling preferences only. One
+   shared modal, opened per row via the ⟳ button. Kept outside #skills-form so
+   its inputs never join the roster autosave. #}
 <div class="rotation-modal-backdrop" id="rotation-modal-backdrop" hidden>
   <div class="rotation-modal" id="rotation-modal" role="dialog" aria-modal="true" aria-labelledby="rotation-modal-title">
     <div class="rotation-modal-head">
@@ -170,39 +169,6 @@
       <h4 class="rotation-section-title">Scheduling preferences</h4>
       <p class="rotation-hint">How often this person should be scheduled into each qualified work center.</p>
       <div class="rotation-pref-grid" id="rotation-pref-grid"></div>
-    </section>
-
-    <section class="rotation-section rotation-training-section">
-      <h4 class="rotation-section-title">Active Recycled training blocks</h4>
-      <ul class="rotation-block-list" id="rotation-block-list"></ul>
-      <p class="rotation-hint" id="rotation-block-empty" hidden>No active training block for this person.</p>
-    </section>
-
-    <section class="rotation-section">
-      <h4 class="rotation-section-title">Start Recycled level-0 training block</h4>
-      <div class="rotation-block-error" id="rotation-block-error" role="alert" aria-live="assertive"></div>
-      <p class="rotation-hint" id="rotation-block-unavailable" hidden>
-        This person is already level&nbsp;1 or higher in every Recycled group, so no level-0 training block can be started.
-      </p>
-      <div class="rotation-block-form" id="rotation-block-form">
-        <label class="rotation-field">
-          <span>Target group</span>
-          <select id="rotation-block-group"></select>
-        </label>
-        <label class="rotation-field">
-          <span>Green trainer (level 3)</span>
-          <select id="rotation-block-trainer"></select>
-        </label>
-        <label class="rotation-field">
-          <span>Start date</span>
-          <input type="date" id="rotation-block-start">
-        </label>
-        <label class="rotation-field">
-          <span>Attended workdays</span>
-          <input type="number" id="rotation-block-workdays" min="1" step="1" value="5">
-        </label>
-        <button type="button" class="rotation-block-submit" id="rotation-block-submit">Start training block</button>
-      </div>
     </section>
   </div>
 </div>
@@ -242,14 +208,10 @@
   ];
   window.SKILLS_SKILL_TYPES = {{ type_by_skill | tojson if type_by_skill is defined else '{}' }};
   window.SKILLS_ALL_SKILLS = {{ skill_names | tojson if skill_names is defined else '[]' }};
-  // Recycled Rotation editor bootstrap (per-person preferences + training blocks).
-  window.ROTATION_GROUPS = {{ rotation_groups | tojson if rotation_groups is defined else '[]' }};
+  // Recycled Rotation editor bootstrap (per-person preferences only).
   window.ROTATION_PREFERENCE_OPTIONS = {{ rotation_preference_options | tojson if rotation_preference_options is defined else '[]' }};
   window.ROTATION_PREFERENCES = {{ rotation_preferences | tojson if rotation_preferences is defined else '{}' }};
   window.ROTATION_PREFERENCE_TARGETS_BY_PERSON = {{ rotation_preference_targets_by_person | tojson if rotation_preference_targets_by_person is defined else '{}' }};
-  window.ROTATION_ACTIVE_BLOCKS = {{ active_training_blocks | tojson if active_training_blocks is defined else '[]' }};
-  window.ROTATION_LEVELS = {{ rotation_levels | tojson if rotation_levels is defined else '{}' }};
-  window.ROTATION_ACTIVE_PEOPLE = {{ rotation_active_people | tojson if rotation_active_people is defined else '[]' }};
   // Automatic Repair/Dismantle skill settings (thresholds + last run + work-center goals).
   window.AUTOMATION_GROUPS = {{ automation_groups | tojson if automation_groups is defined else '{}' }};
 </script>
