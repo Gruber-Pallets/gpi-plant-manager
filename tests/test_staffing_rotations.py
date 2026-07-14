@@ -549,7 +549,7 @@ def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
     assert response.json()["placement"]["unplaced_people"] == []
 
 
-def test_reset_rebuild_uses_enabled_auto_centers_to_distribute_defaults(
+def test_normal_rebuild_uses_enabled_auto_centers_to_distribute_defaults(
     monkeypatch,
 ):
     client, rotations = _rotations_client(monkeypatch)
@@ -584,10 +584,10 @@ def test_reset_rebuild_uses_enabled_auto_centers_to_distribute_defaults(
         lambda *args, **kwargs: (
             captured.update(kwargs)
             or rotation_suggestions.RecycledSuggestion(
-                assignments={"Repair 1": ["First Repair"], "Repair 2": ["Second Repair"]},
+                assignments={"Repair 2": ["First Repair"], "Repair 3": ["Second Repair"]},
                 sources={
-                    "Repair 1": {"First Repair": "generated"},
-                    "Repair 2": {"Second Repair": "generated"},
+                    "Repair 2": {"First Repair": "generated"},
+                    "Repair 3": {"Second Repair": "generated"},
                 },
                 reasons={}, warnings=(),
                 group_locations={"Repair": ("Repair 1", "Repair 2", "Repair 3")},
@@ -614,16 +614,15 @@ def test_reset_rebuild_uses_enabled_auto_centers_to_distribute_defaults(
         json={
             "day": TARGET_DAY.isoformat(),
             "mode": "normal",
-            "reset_to_defaults": True,
         },
     )
 
     assert response.status_code == 200
     assert captured["enabled_work_centers"] == ["Repair 1", "Repair 2", "Repair 3"]
-    assert captured["locked_assignments"] == {}
+    assert captured["locked_assignments"] == {"Repair 1": ["Manual Inside"]}
     assert saved[0].assignments == {
-        "Repair 1": ["First Repair"],
-        "Repair 2": ["Second Repair"],
+        "Repair 2": ["First Repair"],
+        "Repair 3": ["Second Repair"],
         "Truck Driver": ["Outside Auto"],
     }
 
@@ -648,11 +647,13 @@ def test_reset_to_defaults_replaces_assignments_and_never_runs_auto_solver(monke
     monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({"Truck Driver": ("Exact",), "Repair 1": ("Absent",)}, {"Repair": ("Rotate",)}, {"Repair": ("Repair 1", "Repair 2")}))
     monkeypatch.setattr(rotation_suggestions, "_load_recycled_history", lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory())
     monkeypatch.setattr(staffing_route, "_recycled_suggestion_for_day", lambda *_args, **_kwargs: pytest.fail("reset must not run automatic scheduling"))
+    monkeypatch.setattr(rotations, "_validate_complete_rebuild", lambda *_args, **_kwargs: pytest.fail("reset must not validate a complete rebuild"))
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
     response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
 
     assert response.status_code == 200
+    assert len(saved) == 1
     assert saved[0].assignments == {"Truck Driver": ["Exact"], "Repair 2": ["Rotate"]}
     assert saved[0].assignment_sources == {"Truck Driver": {"Exact": "default"}, "Repair 2": {"Rotate": "default"}}
     assert saved[0].notes == prior.notes
@@ -661,6 +662,11 @@ def test_reset_to_defaults_replaces_assignments_and_never_runs_auto_solver(monke
     assert saved[0].published_snapshot == prior.published_snapshot
     assert saved[0].custom_hours == prior.custom_hours
     assert saved[0].rotation_mode == prior.rotation_mode
+    assert response.json()["assignments"] == saved[0].assignments
+    assert response.json()["sources"] == saved[0].assignment_sources
+    assert response.json()["enabled_work_centers"] == ["Repair 2"]
+    assert response.json()["coverage"]["issues"] == []
+    assert response.json()["placement"]["issues"] == []
 
 
 def test_reset_to_defaults_skips_group_default_without_enabled_member(monkeypatch):
