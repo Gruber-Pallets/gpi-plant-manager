@@ -1316,10 +1316,10 @@ def suggest_recycled_assignments(
                     person=name,
                     centers=(target,),
                 message=(
-                    f"{name}'s default work center {target} is not enabled."
-                ),
-            ))
-            continue
+                        f"{name}'s default work center {target} is not enabled."
+                    ),
+                ))
+                continue
             group = center_group[target]
             if _group_level(by_name.get(name), group, resolved_group_required_skills) < 1:
                 placement_issues.append(schedule_solver.PlacementIssue(
@@ -1327,12 +1327,12 @@ def suggest_recycled_assignments(
                     person=name,
                     centers=(target,),
                 message=(
-                    f"{name} is not qualified for default work center {target}."
-                ),
-            ))
+                        f"{name} is not qualified for default work center {target}."
+                    ),
+                ))
+                continue
+            exact_target_by_person[name] = target
             continue
-        exact_target_by_person[name] = target
-        continue
 
         members = tuple(
             center
