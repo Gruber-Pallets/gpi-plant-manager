@@ -15,6 +15,15 @@ class LifecycleConflict(sr.SaturdayRecruitingError):
 
 
 SaturdayRecruitingError = sr.SaturdayRecruitingError
+InvalidAvailability = sr.InvalidAvailability
+
+
+class RecruitingClosed(sr.SaturdayRecruitingError):
+    """Raised when an employee response arrives after recruiting has closed."""
+
+
+class NoCompatibleOpening(sr.SaturdayRecruitingError):
+    """Raised when an employee cannot safely fill a remaining opening."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +58,37 @@ class RecruitmentBundle:
     recruitment: Recruitment
     openings: tuple[sr.Opening, ...]
     commitments: tuple[StoredCommitment, ...]
+
+
+@dataclass(frozen=True)
+class Offer:
+    day: date
+    shift_start: time
+    shift_end: time
+    response_deadline: datetime
+    eligible_wc_ids: frozenset[int]
+
+
+@dataclass(frozen=True)
+class HomeBanner:
+    day: date
+    response_deadline: datetime
+    remaining_count: int
+
+
+@dataclass(frozen=True)
+class CommitmentStatus:
+    day: date
+    availability_start: time
+    availability_end: time
+    response_deadline: datetime
+    can_employee_cancel: bool
+
+
+@dataclass(frozen=True)
+class DecisionResult:
+    status: str
+    bundle: RecruitmentBundle
 
 
 def _on_half_hour(value: time) -> bool:
@@ -204,6 +244,334 @@ def available_positions() -> tuple[AvailablePosition, ...]:
             )
             for row in cur.fetchall()
         )
+
+
+def _lock_recruitment(cur, day: date) -> Recruitment:
+    cur.execute(
+        "SELECT day, status, shift_start, shift_end, response_deadline "
+        "FROM saturday_recruitments WHERE day = %s FOR UPDATE",
+        (day,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        raise LifecycleConflict("No Saturday recruiting round exists for this date")
+    return Recruitment(
+        day=row["day"],
+        status=str(row["status"]),
+        shift_start=row["shift_start"],
+        shift_end=row["shift_end"],
+        response_deadline=row["response_deadline"],
+    )
+
+
+def _require_open(recruitment: Recruitment, now: datetime) -> None:
+    if recruitment.status != "recruiting" or recruitment.response_deadline <= now:
+        raise RecruitingClosed("Saturday work sign-up is closed. Contact a manager to make a change.")
+
+
+def _existing_response(cur, day: date, person_id: int) -> dict | None:
+    cur.execute(
+        "SELECT status, availability_start, availability_end, committed_at, cancelled_at "
+        "FROM saturday_work_responses WHERE day = %s AND person_id = %s",
+        (day, person_id),
+    )
+    return cur.fetchone()
+
+
+def _person_can_volunteer(cur, person_id: int, day: date) -> bool:
+    cur.execute(
+        "SELECT odoo_id FROM people "
+        "WHERE id = %s AND active = TRUE AND excluded = FALSE "
+        "AND COALESCE(wage_type, 'hourly') <> 'monthly'",
+        (person_id,),
+    )
+    person = cur.fetchone()
+    if person is None:
+        return False
+    if person["odoo_id"] is None:
+        return True
+    cur.execute(
+        "SELECT 1 FROM time_off_requests "
+        "WHERE person_odoo_id = %s AND shape = 'full_day' "
+        "AND state = ANY(%s) AND date_from <= %s AND date_to >= %s LIMIT 1",
+        (person["odoo_id"], ["confirm", "validate1", "validate"], day, day),
+    )
+    return cur.fetchone() is None
+
+
+def _eligible_wc_ids_for_person(
+    cur, person_id: int, openings: tuple[sr.Opening, ...], day: date
+) -> frozenset[int]:
+    if not _person_can_volunteer(cur, person_id, day):
+        return frozenset()
+    cur.execute(
+        "SELECT s.name, ps.level FROM person_skills ps "
+        "JOIN skills s ON s.id = ps.skill_id WHERE ps.person_id = %s",
+        (person_id,),
+    )
+    levels = {str(row["name"]): int(row["level"]) for row in cur.fetchall()}
+    return sr.eligible_work_centers(levels, openings)
+
+
+def _coverage_with_candidate(
+    bundle: RecruitmentBundle, person_id: int, eligible_wc_ids: frozenset[int]
+) -> sr.Coverage | None:
+    commitments = [
+        sr.Commitment(item.person_id, item.eligible_wc_ids)
+        for item in bundle.commitments
+        if item.status == "committed" and item.person_id != person_id
+    ]
+    return sr.match_commitments(
+        bundle.openings, [*commitments, sr.Commitment(person_id, eligible_wc_ids)]
+    )
+
+
+def _remaining_count(bundle: RecruitmentBundle) -> int:
+    coverage = sr.match_commitments(
+        bundle.openings,
+        [
+            sr.Commitment(item.person_id, item.eligible_wc_ids)
+            for item in bundle.commitments
+            if item.status == "committed"
+        ],
+    )
+    if coverage is None:
+        return 0
+    return sum(opening.requested_count for opening in bundle.openings) - coverage.total
+
+
+def _insert_response(
+    cur,
+    day: date,
+    person_id: int,
+    status: str,
+    now: datetime,
+    *,
+    availability_start: time | None = None,
+    availability_end: time | None = None,
+    eligible_wc_ids: frozenset[int] = frozenset(),
+) -> None:
+    cur.execute(
+        "INSERT INTO saturday_work_responses "
+        "(day, person_id, status, availability_start, availability_end, eligible_wc_ids, responded_at, committed_at, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s) "
+        "ON CONFLICT (day, person_id) DO UPDATE SET "
+        "status = EXCLUDED.status, availability_start = EXCLUDED.availability_start, "
+        "availability_end = EXCLUDED.availability_end, eligible_wc_ids = EXCLUDED.eligible_wc_ids, "
+        "responded_at = EXCLUDED.responded_at, committed_at = EXCLUDED.committed_at, updated_at = EXCLUDED.updated_at",
+        (
+            day,
+            person_id,
+            status,
+            availability_start,
+            availability_end,
+            json.dumps(sorted(eligible_wc_ids)),
+            now,
+            now if status == "committed" else None,
+            now,
+            now,
+        ),
+    )
+
+
+def _result(cur, day: date, status: str) -> DecisionResult:
+    bundle = _load_bundle(cur, day)
+    assert bundle is not None
+    return DecisionResult(status, bundle)
+
+
+def offer_for_person(person_id: int, now: datetime) -> Offer | None:
+    """Return the next compatible open Saturday offer for one employee."""
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT day FROM saturday_recruitments "
+            "WHERE status = 'recruiting' AND response_deadline > %s ORDER BY day LIMIT 1",
+            (now,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        bundle = _load_bundle(cur, row["day"])
+        assert bundle is not None
+        existing = next((item for item in bundle.commitments if item.person_id == person_id), None)
+        if existing is not None and existing.status in {"declined", "committed", "cancelled"}:
+            return None
+        eligible_wc_ids = _eligible_wc_ids_for_person(cur, person_id, bundle.openings, bundle.recruitment.day)
+        if not eligible_wc_ids or _coverage_with_candidate(bundle, person_id, eligible_wc_ids) is None:
+            return None
+        return Offer(
+            bundle.recruitment.day,
+            bundle.recruitment.shift_start,
+            bundle.recruitment.shift_end,
+            bundle.recruitment.response_deadline,
+            eligible_wc_ids,
+        )
+
+
+def home_banner(now: datetime) -> HomeBanner | None:
+    """Return the next recruiting Saturday while at least one slot remains."""
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT day FROM saturday_recruitments "
+            "WHERE status = 'recruiting' AND response_deadline > %s ORDER BY day",
+            (now,),
+        )
+        for row in cur.fetchall():
+            bundle = _load_bundle(cur, row["day"])
+            assert bundle is not None
+            remaining_count = _remaining_count(bundle)
+            if remaining_count > 0:
+                return HomeBanner(
+                    bundle.recruitment.day, bundle.recruitment.response_deadline, remaining_count
+                )
+        return None
+
+
+def commitment_for_person(person_id: int, now: datetime) -> CommitmentStatus | None:
+    """Return an employee's next firm Saturday commitment, including after cutoff."""
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT r.day, r.availability_start, r.availability_end, s.status, s.response_deadline "
+            "FROM saturday_work_responses r "
+            "JOIN saturday_recruitments s ON s.day = r.day "
+            "WHERE r.person_id = %s AND r.status = 'committed' AND r.day >= %s "
+            "ORDER BY r.day LIMIT 1",
+            (person_id, now.date()),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return CommitmentStatus(
+            row["day"],
+            row["availability_start"],
+            row["availability_end"],
+            row["response_deadline"],
+            row["status"] == "recruiting" and row["response_deadline"] > now,
+        )
+
+
+def record_later(day: date, person_id: int, now: datetime) -> DecisionResult:
+    """Record a non-reserving Later response without allowing stale downgrades."""
+    from . import db
+
+    with db.cursor() as cur:
+        recruitment = _lock_recruitment(cur, day)
+        _require_open(recruitment, now)
+        existing = _existing_response(cur, day, person_id)
+        if existing is not None:
+            if existing["status"] == "later":
+                return _result(cur, day, "later")
+            raise LifecycleConflict("Your Saturday response has already been finalized")
+        bundle = _load_bundle(cur, day)
+        assert bundle is not None
+        eligible_wc_ids = _eligible_wc_ids_for_person(cur, person_id, bundle.openings, day)
+        if not eligible_wc_ids or _coverage_with_candidate(bundle, person_id, eligible_wc_ids) is None:
+            raise NoCompatibleOpening("That opening was just filled. You have not been scheduled.")
+        _insert_response(cur, day, person_id, "later", now)
+        return _result(cur, day, "later")
+
+
+def decline(day: date, person_id: int, now: datetime) -> DecisionResult:
+    """Record a No response, permanently suppressing this Saturday's offer."""
+    from . import db
+
+    with db.cursor() as cur:
+        recruitment = _lock_recruitment(cur, day)
+        _require_open(recruitment, now)
+        existing = _existing_response(cur, day, person_id)
+        if existing is not None:
+            if existing["status"] == "declined":
+                return _result(cur, day, "declined")
+            if existing["status"] != "later":
+                raise LifecycleConflict("Your Saturday response has already been finalized")
+        _insert_response(cur, day, person_id, "declined", now)
+        return _result(cur, day, "declined")
+
+
+def commit(
+    day: date, person_id: int, start: time, end: time, now: datetime
+) -> DecisionResult:
+    """Atomically claim one compatible Saturday opening for an employee."""
+    from . import db
+
+    with db.cursor() as cur:
+        recruitment = _lock_recruitment(cur, day)
+        _require_open(recruitment, now)
+        sr.validate_availability(start, end, recruitment.shift_start, recruitment.shift_end)
+        existing = _existing_response(cur, day, person_id)
+        if existing is not None:
+            if (
+                existing["status"] == "committed"
+                and existing["availability_start"] == start
+                and existing["availability_end"] == end
+            ):
+                return _result(cur, day, "committed")
+            if existing["status"] != "later":
+                raise LifecycleConflict("Your Saturday response has already been finalized")
+        bundle = _load_bundle(cur, day)
+        assert bundle is not None
+        eligible_wc_ids = _eligible_wc_ids_for_person(cur, person_id, bundle.openings, day)
+        if not eligible_wc_ids or _coverage_with_candidate(bundle, person_id, eligible_wc_ids) is None:
+            raise NoCompatibleOpening("That opening was just filled. You have not been scheduled.")
+        _insert_response(
+            cur,
+            day,
+            person_id,
+            "committed",
+            now,
+            availability_start=start,
+            availability_end=end,
+            eligible_wc_ids=eligible_wc_ids,
+        )
+        return _result(cur, day, "committed")
+
+
+def _cancel(
+    cur, day: date, person_id: int, now: datetime, actor: str | None, reason: str | None
+) -> DecisionResult:
+    existing = _existing_response(cur, day, person_id)
+    if existing is None:
+        raise LifecycleConflict("No Saturday commitment exists to cancel")
+    if existing["status"] == "cancelled":
+        return _result(cur, day, "cancelled")
+    if existing["status"] != "committed":
+        raise LifecycleConflict("No Saturday commitment exists to cancel")
+    cur.execute(
+        "UPDATE saturday_work_responses SET status = 'cancelled', cancelled_at = %s, "
+        "cancelled_by = %s, cancellation_reason = %s, updated_at = %s "
+        "WHERE day = %s AND person_id = %s",
+        (now, actor, reason, now, day, person_id),
+    )
+    return _result(cur, day, "cancelled")
+
+
+def cancel_by_employee(day: date, person_id: int, now: datetime) -> DecisionResult:
+    """Allow an employee to cancel their own commitment before the cutoff."""
+    from . import db
+
+    with db.cursor() as cur:
+        recruitment = _lock_recruitment(cur, day)
+        _require_open(recruitment, now)
+        return _cancel(cur, day, person_id, now, None, None)
+
+
+def cancel_by_manager(
+    day: date, person_id: int, actor: str | None, reason: str, now: datetime
+) -> DecisionResult:
+    """Allow a manager to cancel a commitment even after the employee cutoff."""
+    from . import db
+
+    if not reason.strip():
+        raise LifecycleConflict("A cancellation reason is required")
+    with db.cursor() as cur:
+        _lock_recruitment(cur, day)
+        return _cancel(cur, day, person_id, now, actor, reason.strip())
 
 
 def activate(

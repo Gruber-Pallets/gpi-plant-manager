@@ -21,7 +21,8 @@ pytestmark = pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="need
 
 WC_IDS = (910101, 910102, 910103)
 SKILL_IDS = (910101, 910102)
-PERSON_ID = 910101
+PERSON_IDS = (910101, 910102, 910103, 910104)
+PERSON_ID = PERSON_IDS[0]
 
 
 @pytest.fixture(autouse=True)
@@ -31,10 +32,11 @@ def _clean_recruiting_data():
     db.execute("DELETE FROM schedule_assignments WHERE day = %s", (SATURDAY,))
     db.execute("DELETE FROM schedules WHERE day = %s", (SATURDAY,))
     db.execute("DELETE FROM work_center_required_skills WHERE wc_id = ANY(%s)", (list(WC_IDS),))
-    db.execute("DELETE FROM person_skills WHERE person_id = %s", (PERSON_ID,))
+    db.execute("DELETE FROM person_skills WHERE person_id = ANY(%s)", (list(PERSON_IDS),))
+    db.execute("DELETE FROM time_off_requests WHERE person_odoo_id = ANY(%s)", (list(PERSON_IDS),))
     db.execute("DELETE FROM skills WHERE id = ANY(%s)", (list(SKILL_IDS),))
     db.execute("DELETE FROM work_centers WHERE id = ANY(%s)", (list(WC_IDS),))
-    db.execute("DELETE FROM people WHERE id = %s", (PERSON_ID,))
+    db.execute("DELETE FROM people WHERE id = ANY(%s)", (list(PERSON_IDS),))
     db.execute(
         "INSERT INTO work_centers (id, name, category) VALUES "
         "(910101, 'Saturday Test Repair', 'Repair'), "
@@ -50,16 +52,23 @@ def _clean_recruiting_data():
         "INSERT INTO work_center_required_skills (wc_id, skill_id) VALUES "
         "(910101, 910101), (910102, 910102)"
     )
-    db.execute("INSERT INTO people (id, name) VALUES (910101, 'Saturday Test Volunteer')")
+    db.execute(
+        "INSERT INTO people (id, odoo_id, name, wage_type) VALUES "
+        "(910101, 910101, 'Saturday Test Volunteer', 'hourly'), "
+        "(910102, 910102, 'Saturday Test Repair', 'hourly'), "
+        "(910103, 910103, 'Saturday Test Salaried', 'monthly'), "
+        "(910104, 910104, 'Saturday Test Unqualified Person', 'hourly')"
+    )
     yield
     db.execute("DELETE FROM saturday_recruitments WHERE day = %s", (SATURDAY,))
     db.execute("DELETE FROM schedule_assignments WHERE day = %s", (SATURDAY,))
     db.execute("DELETE FROM schedules WHERE day = %s", (SATURDAY,))
     db.execute("DELETE FROM work_center_required_skills WHERE wc_id = ANY(%s)", (list(WC_IDS),))
-    db.execute("DELETE FROM person_skills WHERE person_id = %s", (PERSON_ID,))
+    db.execute("DELETE FROM person_skills WHERE person_id = ANY(%s)", (list(PERSON_IDS),))
+    db.execute("DELETE FROM time_off_requests WHERE person_odoo_id = ANY(%s)", (list(PERSON_IDS),))
     db.execute("DELETE FROM skills WHERE id = ANY(%s)", (list(SKILL_IDS),))
     db.execute("DELETE FROM work_centers WHERE id = ANY(%s)", (list(WC_IDS),))
-    db.execute("DELETE FROM people WHERE id = %s", (PERSON_ID,))
+    db.execute("DELETE FROM people WHERE id = ANY(%s)", (list(PERSON_IDS),))
 
 
 def _activate(**changes):
@@ -74,6 +83,20 @@ def _activate(**changes):
     }
     values.update(changes)
     return store.activate(**values)
+
+
+def _qualify(person_id, *skill_ids):
+    db.execute_many(
+        "INSERT INTO person_skills (person_id, skill_id, level) VALUES (%s, %s, 2)",
+        [(person_id, skill_id) for skill_id in skill_ids],
+    )
+
+
+def _response(person_id):
+    return db.query(
+        "SELECT * FROM saturday_work_responses WHERE day = %s AND person_id = %s",
+        (SATURDAY, person_id),
+    )[0]
 
 
 def test_available_positions_includes_qualified_rows_and_excludes_unqualified_rows():
@@ -217,3 +240,192 @@ def test_closed_recruitment_allows_shift_change_before_first_commitment():
         SATURDAY, {910101: 3}, time(6, 30), time(12, 0), None, NOW
     )
     assert updated.recruitment.shift_start == time(6, 30)
+
+
+def test_commit_rematches_multi_skilled_volunteer_to_preserve_requested_coverage():
+    _qualify(910101, 910101, 910102)
+    _qualify(910102, 910101)
+    _activate(requested_counts={910101: 1, 910102: 1})
+
+    first = store.commit(SATURDAY, 910101, time(6, 0), time(12, 0), NOW)
+    second = store.commit(SATURDAY, 910102, time(7, 0), time(11, 30), NOW)
+
+    assert first.status == second.status == "committed"
+    coverage = store.sr.match_commitments(
+        second.bundle.openings,
+        [
+            store.sr.Commitment(c.person_id, c.eligible_wc_ids)
+            for c in second.bundle.commitments
+            if c.status == "committed"
+        ],
+    )
+    assert coverage is not None
+    assert coverage.wc_by_person == {910101: 910102, 910102: 910101}
+
+
+def test_decline_suppresses_future_offer_for_same_saturday():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+
+    declined = store.decline(SATURDAY, PERSON_ID, NOW)
+
+    assert declined.status == "declined"
+    assert store.offer_for_person(PERSON_ID, NOW) is None
+
+
+def test_later_keeps_offer_and_reserves_no_capacity():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+
+    later = store.record_later(SATURDAY, PERSON_ID, NOW)
+
+    assert later.status == "later"
+    assert [item for item in later.bundle.commitments if item.status == "committed"] == []
+    assert store.offer_for_person(PERSON_ID, NOW) is not None
+
+
+def test_full_day_time_off_has_no_offer():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    db.execute(
+        "INSERT INTO time_off_requests "
+        "(person_odoo_id, shape, holiday_status_id, date_from, date_to, state) "
+        "VALUES (%s, 'full_day', 1, %s, %s, 'validate')",
+        (PERSON_ID, SATURDAY, SATURDAY),
+    )
+
+    assert store.offer_for_person(PERSON_ID, NOW) is None
+
+
+def test_salaried_person_has_no_offer():
+    _qualify(910103, 910101)
+    _activate(requested_counts={910101: 1})
+
+    assert store.offer_for_person(910103, NOW) is None
+
+
+def test_employee_cancel_before_cutoff_reopens_capacity():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    assert store.commit(SATURDAY, PERSON_ID, time(6, 0), time(12, 0), NOW).status == "committed"
+    before = store.home_banner(NOW)
+
+    cancelled = store.cancel_by_employee(SATURDAY, PERSON_ID, NOW + timedelta(hours=1))
+    after = store.home_banner(NOW + timedelta(hours=1))
+
+    assert cancelled.status == "cancelled"
+    assert before is None
+    assert after is not None
+    assert after.remaining_count == 1
+
+
+def test_employee_cancel_at_or_after_cutoff_is_rejected():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    store.commit(SATURDAY, PERSON_ID, time(6, 0), time(12, 0), NOW)
+
+    with pytest.raises(store.RecruitingClosed):
+        store.cancel_by_employee(SATURDAY, PERSON_ID, DEADLINE)
+
+
+def test_commitment_status_keeps_partial_hours_after_cutoff():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    store.commit(SATURDAY, PERSON_ID, time(7, 0), time(11, 30), NOW)
+
+    status = store.commitment_for_person(PERSON_ID, DEADLINE)
+
+    assert status == store.CommitmentStatus(
+        SATURDAY, time(7, 0), time(11, 30), DEADLINE, False
+    )
+
+
+def test_manager_cancel_after_cutoff_records_actor_and_reason():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    store.commit(SATURDAY, PERSON_ID, time(6, 0), time(12, 0), NOW)
+
+    cancelled = store.cancel_by_manager(
+        SATURDAY, PERSON_ID, "manager@gruberpallets.com", "Machine maintenance", DEADLINE
+    )
+    response = _response(PERSON_ID)
+
+    assert cancelled.status == "cancelled"
+    assert response["cancelled_by"] == "manager@gruberpallets.com"
+    assert response["cancellation_reason"] == "Machine maintenance"
+    assert response["cancelled_at"] == DEADLINE
+
+
+def test_repeated_identical_commit_is_idempotent():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    first = store.commit(SATURDAY, PERSON_ID, time(6, 0), time(12, 0), NOW)
+    committed_at = _response(PERSON_ID)["committed_at"]
+
+    second = store.commit(SATURDAY, PERSON_ID, time(6, 0), time(12, 0), NOW + timedelta(hours=1))
+
+    assert first.status == second.status == "committed"
+    assert db.query(
+        "SELECT count(*) AS count FROM saturday_work_responses WHERE day = %s AND person_id = %s",
+        (SATURDAY, PERSON_ID),
+    )[0]["count"] == 1
+    assert _response(PERSON_ID)["committed_at"] == committed_at
+
+
+def test_repeated_employee_cancel_is_idempotent():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    store.commit(SATURDAY, PERSON_ID, time(6, 0), time(12, 0), NOW)
+    first = store.cancel_by_employee(SATURDAY, PERSON_ID, NOW + timedelta(hours=1))
+    cancelled_at = _response(PERSON_ID)["cancelled_at"]
+
+    second = store.cancel_by_employee(SATURDAY, PERSON_ID, NOW + timedelta(hours=2))
+
+    assert first.status == second.status == "cancelled"
+    assert _response(PERSON_ID)["cancelled_at"] == cancelled_at
+
+
+def test_stale_decline_cannot_replace_commitment():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    store.commit(SATURDAY, PERSON_ID, time(6, 0), time(12, 0), NOW)
+
+    with pytest.raises(store.LifecycleConflict):
+        store.decline(SATURDAY, PERSON_ID, NOW + timedelta(minutes=1))
+
+    assert _response(PERSON_ID)["status"] == "committed"
+
+
+def test_stale_later_cannot_replace_commitment():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    store.commit(SATURDAY, PERSON_ID, time(6, 0), time(12, 0), NOW)
+
+    with pytest.raises(store.LifecycleConflict):
+        store.record_later(SATURDAY, PERSON_ID, NOW + timedelta(minutes=1))
+
+    assert _response(PERSON_ID)["status"] == "committed"
+
+
+def test_concurrent_final_slot_allows_exactly_one_commitment():
+    _qualify(910101, 910101)
+    _qualify(910102, 910101)
+    _activate(requested_counts={910101: 1})
+    barrier = Barrier(2)
+
+    def commit_together(person_id):
+        barrier.wait()
+        try:
+            return store.commit(SATURDAY, person_id, time(6, 0), time(12, 0), NOW)
+        except store.NoCompatibleOpening:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(commit_together, (910101, 910102)))
+
+    assert sum(result is not None for result in results) == 1
+    assert db.query(
+        "SELECT count(*) AS count FROM saturday_work_responses "
+        "WHERE day = %s AND status = 'committed'",
+        (SATURDAY,),
+    )[0]["count"] == 1
