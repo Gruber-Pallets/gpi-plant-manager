@@ -1183,6 +1183,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             status_code=400,
         )
     assignments: dict[str, list[str]] = {}
+    default_updates: list[tuple[object, list[str]]] = []
     for loc in staffing.LOCATIONS:
         picked = form.getlist(f"loc__{loc.name}")
         clean = [n.strip() for n in picked if n and n.strip()]
@@ -1195,7 +1196,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         if form.get(f"defaults_dirty__{loc.name}") == "1":
             picked_defaults = form.getlist(f"default__{loc.name}")
             clean_defaults = [n.strip() for n in picked_defaults if n and n.strip()]
-            work_centers_store.save_one(loc, {"default_people": clean_defaults})
+            default_updates.append((loc, clean_defaults))
     # Time-off is sourced from the Odoo mirror. The scheduler UI
     # no longer collects time-off entries via form fields, so we ignore any
     # `loc____time_off` values that a stale tab might still be posting.
@@ -1208,32 +1209,70 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             wc_notes[loc.name] = v
     testing_day = (form.get("testing_day") or "").strip() in ("1", "on", "true")
 
-    publish_block = _publish_shortages(assignments) if action == "publish" else []
     saturday_bundle = None
-    if action == "publish" and d.weekday() == 5:
+    if d.weekday() == 5:
         try:
             saturday_bundle = saturday_recruiting_store.get(d)
-            if saturday_bundle and saturday_bundle.recruitment.status != "cancelled":
-                if plant_now() < saturday_bundle.recruitment.response_deadline:
-                    saturday_block = [
-                        "Saturday recruiting stays open until "
-                        f"{sr.format_deadline(saturday_bundle.recruitment.response_deadline)}."
-                    ]
-                else:
-                    roster = staffing.load_roster()
-                    people_by_name = {person.name: person for person in roster}
-                    full_day_off_names = {
-                        entry["name"]
-                        for entry in _safe_time_off_entries(d)
-                        if entry.get("hours") is None
-                    }
-                    saturday_block = sr.validate_publish(
-                        saturday_bundle, assignments, people_by_name, full_day_off_names,
-                    )
-                publish_block = [*saturday_block, *publish_block]
+        except Exception:
+            log.exception("Saturday recruiting lookup failed for %s", d)
+
+    active_saturday_recruiting = bool(
+        saturday_bundle
+        and saturday_bundle.recruitment.status in {"recruiting", "closed", "published"}
+    )
+    if active_saturday_recruiting and action in {"save", "publish", "unpublish"}:
+        committed_names = {
+            item.person_name
+            for item in saturday_bundle.commitments
+            if item.status == "committed"
+        }
+        noncommitted_names = sorted({
+            name
+            for names in assignments.values()
+            for name in names
+            if name not in committed_names
+        })
+        if noncommitted_names:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Only committed Saturday volunteers can be scheduled.",
+                    "validation_errors": [
+                        f"{name} is not committed to Saturday." for name in noncommitted_names
+                    ],
+                },
+                status_code=409,
+            )
+
+    for loc, clean_defaults in default_updates:
+        work_centers_store.save_one(loc, {"default_people": clean_defaults})
+
+    publish_block = []
+    if action == "publish" and not active_saturday_recruiting:
+        publish_block = _publish_shortages(assignments)
+    if action == "publish" and active_saturday_recruiting:
+        try:
+            assert saturday_bundle is not None
+            if plant_now() < saturday_bundle.recruitment.response_deadline:
+                saturday_block = [
+                    "Saturday recruiting stays open until "
+                    f"{sr.format_deadline(saturday_bundle.recruitment.response_deadline)}."
+                ]
+            else:
+                roster = staffing.load_roster()
+                people_by_name = {person.name: person for person in roster}
+                full_day_off_names = {
+                    entry["name"]
+                    for entry in _safe_time_off_entries(d)
+                    if entry.get("hours") is None
+                }
+                saturday_block = sr.validate_publish(
+                    saturday_bundle, assignments, people_by_name, full_day_off_names,
+                )
+            publish_block = saturday_block
         except Exception:
             log.exception("Saturday publish validation failed for %s", d)
-            publish_block = ["Saturday recruiting could not be verified. Please try again.", *publish_block]
+            publish_block = ["Saturday recruiting could not be verified. Please try again."]
 
     existing = staffing.load_schedule(d)
 
