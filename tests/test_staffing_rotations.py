@@ -474,6 +474,128 @@ def _stub_recommendation_inputs(monkeypatch):
     return staffing_route
 
 
+def test_current_minimum_coverage_uses_displayed_safe_assignments(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    minimums = {"Loading/Jockeying": 1, "Tablets": 4}
+    required = {
+        "Loading/Jockeying": ("Loading", "CPUs/VDOs", "Trailer Jockeying"),
+        "Tablets": ("Tablets",),
+    }
+    monkeypatch.setattr(
+        staffing_route,
+        "_effective_minimum",
+        lambda loc: minimums.get(loc.name, loc.min_ops),
+    )
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "required_skills",
+        lambda loc: list(required.get(loc.name, staffing.required_skills_for(loc))),
+    )
+    roster = [
+        staffing.Person(
+            "Jesus Moreno",
+            skills={"Loading": 1, "CPUs/VDOs": 1, "Trailer Jockeying": 1},
+        ),
+        *[
+            staffing.Person(name, skills={"Tablets": 1})
+            for name in (
+                "Trent Iverson",
+                "Francisco Ramirez",
+                "Iban Penaloza",
+                "Isidro Moctezuma",
+                "Lauro Benitez",
+            )
+        ],
+    ]
+
+    issues = staffing_route._current_minimum_coverage_issues(
+        roster=roster,
+        assignments={
+            "Loading/Jockeying": ["Jesus Moreno"],
+            "Tablets": [
+                "Trent Iverson",
+                "Francisco Ramirez",
+                "Iban Penaloza",
+                "Isidro Moctezuma",
+                "Lauro Benitez",
+            ],
+        },
+        time_off_entries=[],
+        enabled_centers={"Loading/Jockeying", "Tablets"},
+    )
+
+    assert issues == ()
+
+
+def test_current_minimum_coverage_respects_effective_zero(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    loc = next(loc for loc in staffing.LOCATIONS if loc.name == "Repair 1")
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "effective",
+        lambda _loc: staffing_route.work_centers_store._shape_effective(
+            loc,
+            {"min_ops": 0, "max_ops": loc.max_ops},
+            ["Repair"],
+            [],
+        ),
+    )
+
+    issues = staffing_route._current_minimum_coverage_issues(
+        roster=[],
+        assignments={"Repair 1": []},
+        time_off_entries=[],
+        enabled_centers={"Repair 1"},
+    )
+
+    assert issues == ()
+
+
+def test_current_minimum_coverage_excludes_people_who_cannot_cover(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route,
+        "_effective_minimum",
+        lambda loc: 5 if loc.name == "Repair 1" else loc.min_ops,
+    )
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "required_skills",
+        lambda loc: ["Repair"] if loc.name == "Repair 1" else list(
+            staffing.required_skills_for(loc)
+        ),
+    )
+    roster = [
+        staffing.Person("Qualified", skills={"Repair": 1}),
+        staffing.Person("Inactive", active=False, skills={"Repair": 3}),
+        staffing.Person("Reserve", reserve=True, skills={"Repair": 3}),
+        staffing.Person("Unqualified", skills={"Repair": 0}),
+        staffing.Person("Absent", skills={"Repair": 3}),
+    ]
+
+    issues = staffing_route._current_minimum_coverage_issues(
+        roster=roster,
+        assignments={
+            "Repair 1": [
+                "Qualified", "Inactive", "Reserve", "Unqualified", "Absent", "Unknown",
+            ],
+        },
+        time_off_entries=[{"name": "Absent", "hours": None}],
+        enabled_centers={"Repair 1"},
+    )
+
+    assert len(issues) == 1
+    assert issues[0].code == "center_minimum_unmet"
+    assert issues[0].centers == ("Repair 1",)
+    assert issues[0].message == (
+        "Repair 1 is below its minimum staffing level: "
+        "1 qualified and present, minimum 5."
+    )
+
+
 def test_rebuild_infeasible_applies_empty_partial_schedule_and_reports_unplaced(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
@@ -1015,6 +1137,9 @@ def test_rebuild_applies_safe_partial_assignments_and_reports_unplaced(monkeypat
     assert body["applied"] is True
     assert body["assignments"]["Repair 1"] == ["Qualified"]
     assert body["unplaced"] == ["Missing"]
+    assert body["placement"]["issues"][0]["code"] == (
+        "person_no_enabled_qualified_center"
+    )
     assert saved[0].assignments["Repair 1"] == ["Qualified"]
 
 
@@ -1057,6 +1182,113 @@ def test_recycled_context_reports_invalid_minimum_above_maximum(monkeypatch):
 
     assert context["rotation_issues"][0]["code"] == "invalid_center_configuration"
     assert "minimum of 2 but a maximum of 1" in context["rotation_issues"][0]["message"]
+
+
+def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage(
+    monkeypatch,
+):
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    preview_message = "Repair 1 is below its minimum Auto staffing level."
+    monkeypatch.setattr(
+        staffing_route,
+        "_auto_group_maps",
+        lambda _enabled: ({"Repair": ("Repair 1",)}, {"Repair": ("Repair",)}),
+    )
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "required_skills",
+        lambda loc: ["Repair"] if loc.name == "Repair 1" else list(
+            staffing.required_skills_for(loc)
+        ),
+    )
+    monkeypatch.setattr(
+        rotation_suggestions,
+        "suggest_recycled_assignments",
+        lambda **_kwargs: rotation_suggestions.RecycledSuggestion(
+            assignments={},
+            sources={},
+            reasons={},
+            warnings=(preview_message, "Keep this training warning."),
+            group_locations={"Repair": ("Repair 1",)},
+            placement_issues=(
+                schedule_solver.PlacementIssue(
+                    code="center_minimum_unmet",
+                    centers=("Repair 1",),
+                    message=preview_message,
+                ),
+                schedule_solver.PlacementIssue(
+                    code="person_unplaced",
+                    person="Preview Person",
+                    message=(
+                        "Preview Person could not be placed in an enabled Auto work center."
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    context = staffing_route._recycled_context_for_day(
+        TARGET_DAY,
+        roster=[_person("Qualified", 3)],
+        mode="normal",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
+        enabled_work_centers={"Repair 1"},
+        assignment_sources={},
+        current_assignments={"Repair 1": ["Qualified"]},
+    )
+
+    assert context["rotation_issues"] == []
+    assert context["rotation_warnings"] == ["Keep this training warning."]
+
+
+def test_recycled_context_keeps_current_shortage_when_auto_preview_fails(monkeypatch):
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    monkeypatch.setattr(
+        staffing_route,
+        "_effective_minimum",
+        lambda loc: 1 if loc.name == "Repair 1" else loc.min_ops,
+    )
+    monkeypatch.setattr(
+        staffing_route.work_centers_store,
+        "required_skills",
+        lambda loc: ["Repair"] if loc.name == "Repair 1" else list(
+            staffing.required_skills_for(loc)
+        ),
+    )
+
+    def preview_unavailable(**_kwargs):
+        raise RuntimeError("preview unavailable")
+
+    monkeypatch.setattr(
+        rotation_suggestions,
+        "suggest_recycled_assignments",
+        preview_unavailable,
+    )
+
+    context = staffing_route._recycled_context_for_day(
+        TARGET_DAY,
+        roster=[_person("Qualified", 3)],
+        mode="normal",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
+        enabled_work_centers={"Repair 1"},
+        assignment_sources={},
+        current_assignments={"Repair 1": []},
+    )
+
+    assert context["rotation_issues"] == [{
+        "code": "center_minimum_unmet",
+        "message": (
+            "Repair 1 is below its minimum staffing level: "
+            "0 qualified and present, minimum 1."
+        ),
+        "person": None,
+        "centers": ["Repair 1"],
+        "rejections": [],
+    }]
 
 
 
@@ -2333,6 +2565,9 @@ def test_staffing_context_does_not_treat_exact_default_as_duplicate_lock(monkeyp
 
     assert captured["base_assignments"] == {}
     assert captured["locked_assignments"] == {}
+    assert captured["current_assignments"] == {
+        "Repair 2": ["Default Green"],
+    }
 
 
 def test_saved_day_hints_thread_stored_mode(monkeypatch):

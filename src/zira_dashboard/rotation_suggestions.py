@@ -960,15 +960,13 @@ def suggest_recycled_assignments(
     user_group_centers: Mapping[str, Sequence[str]] | None = None,
     minimum_only: bool = False,
 ) -> RecycledSuggestion:
-    """Suggest safe Recycled assignments for the Dismantler/Repair/Trim Saw groups.
+    """Suggest safe Recycled assignments for enabled Auto work centers.
 
-    Pure and deterministic: no clock or database reads (``day`` is part of the
-    stable interface for callers and future reasons). Non-Recycled assignments
-    and manual locks pass through unchanged; validated training-block effects
-    are reserved first; level 0 is only placed through a block effect; and
-    generated placements never seat a person at a second location. (Manual
-    inputs are trusted as given: a name that appears both in a lock and in a
-    pass-through base center is preserved in both places, not policed here.)
+    Assignments outside enabled Auto centers pass through unchanged. Within an
+    enabled center, valid unique assignments and locks are retained; duplicate,
+    unavailable, unqualified, or over-capacity assignments are removed before
+    greedy safe partial placement. Minimum/default/unplaced conditions are reported
+    without rolling back safe assignments.
     """
     if mode not in MODE_SKILL_POINTS:
         raise ValueError(f"Unknown recycled rotation mode: {mode!r}")

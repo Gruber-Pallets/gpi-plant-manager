@@ -227,9 +227,10 @@ def _shape_effective(loc: Location, rec: dict, req: list[str],
         # loading/jockeying skills; ignore stale saved rows such as Heat Treat.
         req = list(LOADING_JOCKEYING_REQUIRED_SKILLS)
     goal = rec.get("goal_per_day_override")
+    minimum = rec.get("min_ops")
     return {
         "goal_per_day": int(goal) if goal is not None else _default_goal_for(loc),
-        "min_ops": int(rec.get("min_ops") or loc.min_ops),
+        "min_ops": int(minimum) if minimum is not None else int(loc.min_ops),
         "max_ops": rec.get("max_ops") if rec.get("max_ops") is not None else loc.max_ops,
         "required_skills": req,
         "note": rec.get("note") or "",

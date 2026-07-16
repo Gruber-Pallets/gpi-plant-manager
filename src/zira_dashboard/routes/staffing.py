@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta, UTC
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import _http_cache, app_settings, attendance, auto_schedule_capacity, db, late_report, rotation_store, rotation_suggestions, rotation_training, schedule_store, shift_config, staffing, staffing_view, time_format, work_centers_store
+from .. import _http_cache, app_settings, attendance, auto_schedule_capacity, db, late_report, rotation_store, rotation_suggestions, rotation_training, schedule_solver, schedule_store, shift_config, staffing, staffing_view, time_format, work_centers_store
 from .._http_cache import invalidate_today_cache
 from ..deps import templates
 from ..plant_day import today as plant_today, now as plant_now
@@ -130,6 +130,48 @@ def _known_work_center_names() -> set[str]:
 def _effective_minimum(loc) -> int:
     """Read the authoritative configured minimum for a work center."""
     return work_centers_store.min_ops(loc)
+
+
+def _current_minimum_coverage_issues(
+    *, roster, assignments, time_off_entries, enabled_centers,
+) -> tuple[schedule_solver.PlacementIssue, ...]:
+    """Report minimum shortages in the saved schedule currently on screen."""
+    enabled = set(_ordered_work_center_names(enabled_centers))
+    absent = rotation_suggestions._full_day_time_off_names(time_off_entries or [])
+    by_name = {person.name: person for person in roster}
+    issues = []
+    for loc in staffing.LOCATIONS:
+        if loc.name not in enabled:
+            continue
+        try:
+            minimum = max(0, _effective_minimum(loc))
+        except Exception:
+            minimum = max(0, int(loc.min_ops))
+        try:
+            required = tuple(work_centers_store.required_skills(loc))
+        except Exception:
+            required = staffing.required_skills_for(loc)
+        safe_names = {
+            name
+            for name in (assignments or {}).get(loc.name, ())
+            if (
+                (person := by_name.get(name)) is not None
+                and person.active
+                and not person.reserve
+                and name not in absent
+                and all(person.level(skill) >= 1 for skill in required)
+            )
+        }
+        if len(safe_names) < minimum:
+            issues.append(schedule_solver.PlacementIssue(
+                code="center_minimum_unmet",
+                centers=(loc.name,),
+                message=(
+                    f"{loc.name} is below its minimum staffing level: "
+                    f"{len(safe_names)} qualified and present, minimum {minimum}."
+                ),
+            ))
+    return tuple(issues)
 
 
 def _minimum_crew_balance_for_day(*, roster, schedule, time_off_entries, enabled_centers):
@@ -610,13 +652,13 @@ def _training_blocks_context(active_blocks, d: date):
 
 def _recycled_context_for_day(
     d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries,
-    enabled_work_centers=None, assignment_sources=None,
+    enabled_work_centers=None, assignment_sources=None, current_assignments=None,
 ):
     """Recycled template context: mode, per-assignment reasons, warnings, blocks.
 
-    Computed once per GET and derived from a single engine run. Any failure
-    degrades to safe empty defaults so the staffing page never 500s on a
-    recommendation-data problem.
+    Current minimum coverage is computed before the Auto preview so displayed
+    shortages survive a preview failure. Recommendation-data failures retain
+    safe empty preview defaults so the staffing page never 500s.
     """
     ctx = {
         "recycled_rotation_mode": mode or "normal",
@@ -627,6 +669,33 @@ def _recycled_context_for_day(
         "active_training_blocks": [],
     }
     try:
+        enabled = set(
+            _ordered_work_center_names(
+                enabled_work_centers
+                if enabled_work_centers is not None
+                else _enabled_auto_work_centers(d)
+            )
+        )
+        current_minimum_issues = (
+            _current_minimum_coverage_issues(
+                roster=roster,
+                assignments=current_assignments,
+                time_off_entries=time_off_entries,
+                enabled_centers=enabled,
+            )
+            if current_assignments is not None
+            else ()
+        )
+        ctx["rotation_issues"] = [
+            issue.to_dict() for issue in current_minimum_issues
+        ]
+    except Exception:
+        log.exception(
+            "Current staffing coverage failed for %s; degrading to empty defaults", d,
+        )
+        return ctx
+
+    try:
         exact_defaults, group_defaults, user_group_centers = _default_inputs()
         preferences, history, block_effects, active_blocks = _gather_recycled_inputs(
             d,
@@ -636,13 +705,6 @@ def _recycled_context_for_day(
             user_group_centers=user_group_centers,
         )
         available = _roster_minus_full_day_off(roster, time_off_entries)
-        enabled = set(
-            _ordered_work_center_names(
-                enabled_work_centers
-                if enabled_work_centers is not None
-                else _enabled_auto_work_centers(d)
-            )
-        )
         group_locations, group_required_skills = _auto_group_maps(enabled)
         center_minimums = {
             loc.name: _effective_minimum(loc)
@@ -677,11 +739,29 @@ def _recycled_context_for_day(
         ctx["rotation_reason_codes"] = {
             wc: dict(values) for wc, values in suggestion.reason_codes.items()
         }
-        ctx["rotation_warnings"] = list(suggestion.warnings)
-        ctx["rotation_issues"] = [
-            issue.to_dict()
-            for issue in (*suggestion.issues, *suggestion.placement_issues)
+        action_only_codes = {"person_unplaced", "center_minimum_unmet"}
+        action_only_messages = {
+            issue.message
+            for issue in suggestion.placement_issues
+            if issue.code in action_only_codes
+        }
+        page_placement_issues = tuple(
+            issue
+            for issue in suggestion.placement_issues
+            if issue.code not in action_only_codes
+        )
+        ctx["rotation_warnings"] = [
+            warning
+            for warning in suggestion.warnings
+            if warning not in action_only_messages
         ]
+        ctx["rotation_issues"].extend(
+            issue.to_dict()
+            for issue in (
+                *suggestion.issues,
+                *page_placement_issues,
+            )
+        )
         ctx["active_training_blocks"] = _training_blocks_context(active_blocks, d)
     except Exception:
         log.exception("Recycled context failed for %s; degrading to empty defaults", d)
@@ -988,8 +1068,9 @@ def staffing_page(
         forklift_live_model = {"available": False}
 
     # Recycled rotation context: effective mode, per-assignment reasons,
-    # warnings, and active training blocks. Computed once from a single engine
-    # run; failures degrade to safe empty defaults so the page never 500s.
+    # warnings, and active training blocks. Current staffing issues are computed
+    # independently so they survive recommendation-preview failures; preview-only
+    # context degrades to safe empty defaults so the page never 500s.
     recycled_ctx = _recycled_context_for_day(
         d,
         roster,
@@ -1006,6 +1087,7 @@ def staffing_page(
         time_off_entries=time_off_entries,
         enabled_work_centers=enabled_auto_work_centers,
         assignment_sources=sched.assignment_sources,
+        current_assignments=sched.assignments,
     )
 
     with _Phase(phases, "render"):

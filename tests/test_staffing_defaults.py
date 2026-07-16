@@ -33,3 +33,16 @@ def test_loading_jockeying_effective_skills_ignore_stale_saved_required_skills(
     effective = work_centers_store._shape_effective(loc, rec, stored_required, [])
 
     assert effective["required_skills"] == list(LOADING_JOCKEYING_SKILLS)
+
+
+def test_effective_minimum_preserves_saved_zero():
+    loc = next(loc for loc in staffing.LOCATIONS if loc.name == "Repair 1")
+
+    effective = work_centers_store._shape_effective(
+        loc,
+        {"min_ops": 0, "max_ops": loc.max_ops},
+        ["Repair"],
+        [],
+    )
+
+    assert effective["min_ops"] == 0
