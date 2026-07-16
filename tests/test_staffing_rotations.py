@@ -1243,7 +1243,7 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
     assert context["rotation_warnings"] == ["Keep this training warning."]
 
 
-def test_recycled_context_keeps_current_shortage_when_auto_preview_fails(monkeypatch):
+def test_recycled_context_defers_current_minimum_shortage_until_an_action(monkeypatch):
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     monkeypatch.setattr(
         staffing_route,
@@ -1279,16 +1279,7 @@ def test_recycled_context_keeps_current_shortage_when_auto_preview_fails(monkeyp
         current_assignments={"Repair 1": []},
     )
 
-    assert context["rotation_issues"] == [{
-        "code": "center_minimum_unmet",
-        "message": (
-            "Repair 1 is below its minimum staffing level: "
-            "0 qualified and present, minimum 1."
-        ),
-        "person": None,
-        "centers": ["Repair 1"],
-        "rejections": [],
-    }]
+    assert context["rotation_issues"] == []
 
 
 
@@ -1415,7 +1406,6 @@ def test_auto_work_centers_endpoint_removes_non_empty_turn_off_selection(monkeyp
     client, rotations = _rotations_client(monkeypatch)
     _stub_recommendation_inputs(monkeypatch)
     saved: list[tuple[str, ...]] = []
-    suggested_enabled: list[tuple[str, ...]] = []
 
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(
@@ -1424,14 +1414,6 @@ def test_auto_work_centers_endpoint_removes_non_empty_turn_off_selection(monkeyp
         lambda d: staffing.Schedule(day=d),
     )
     monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda d: [])
-    monkeypatch.setattr(
-        rotations.staffing_route,
-        "_recycled_suggestion_for_day",
-        lambda *args, **kwargs: (
-            suggested_enabled.append(tuple(kwargs["enabled_work_centers"]))
-            or rotation_suggestions.RecycledSuggestion({}, {}, {}, ())
-        ),
-    )
     monkeypatch.setattr(
         rotations.staffing_route,
         "_save_enabled_auto_work_centers",
@@ -1452,43 +1434,19 @@ def test_auto_work_centers_endpoint_removes_non_empty_turn_off_selection(monkeyp
 
     assert response.status_code == 200
     assert response.json()["enabled_work_centers"] == ["Repair 1", "Dismantler 1"]
-    assert suggested_enabled == [("Repair 1", "Dismantler 1")]
     assert saved == [("Repair 1", "Dismantler 1")]
 
 
-def test_auto_center_selection_is_saved_and_reports_unresolved_coverage(monkeypatch):
+def test_auto_center_selection_saves_quietly_without_solver_preview(monkeypatch):
     from zira_dashboard import scheduler_time_off
 
     client, rotations = _rotations_client(monkeypatch)
     _stub_recommendation_inputs(monkeypatch)
     saved = []
-    issue = schedule_solver.CoverageIssue(
-        center="Dismantler 1",
-        group="Dismantler",
-        code="training_required",
-        message="Dismantler 1 could not be staffed. Training is required for Dismantler.",
-    )
     monkeypatch.setattr(
         rotations.staffing_route,
         "_recycled_suggestion_for_day",
-        lambda *args, **kwargs: rotation_suggestions.RecycledSuggestion(
-            assignments={"Repair 1": ["Qualified"]},
-            sources={"Repair 1": {"Qualified": "generated"}},
-            reasons={},
-            warnings=(issue.message,),
-            issues=(issue,),
-            staffed_centers=("Repair 1",),
-            unresolved_centers=("Dismantler 1",),
-            complete=False,
-            available_people=("Qualified", "Unplaced"),
-            placed_people=("Qualified",),
-            unused_people=("Unplaced",),
-            placement_issues=(schedule_solver.PlacementIssue(
-                code="person_no_enabled_qualified_center",
-                person="Unplaced",
-                message="Unplaced has no qualified enabled center.",
-            ),),
-        ),
+        lambda *args, **kwargs: pytest.fail("toggle must not build a solver preview"),
     )
     monkeypatch.setattr(
         rotations.staffing_route,
@@ -1516,15 +1474,16 @@ def test_auto_center_selection_is_saved_and_reports_unresolved_coverage(monkeypa
     assert resp.status_code == 200
     assert saved[-1] == ("Repair 1", "Dismantler 1")
     assert resp.json()["coverage"] == {
-        "staffed_centers": ["Repair 1"],
-        "unresolved_centers": ["Dismantler 1"],
-        "issues": [issue.to_dict()],
+        "staffed_centers": [],
+        "unresolved_centers": [],
+        "issues": [],
     }
-    assert resp.json()["placement"]["unplaced_people"] == ["Unplaced"]
+    assert resp.json()["warnings"] == []
+    assert resp.json()["placement"]["issues"] == []
     assert resp.json()["enabled_work_centers"] == ["Repair 1", "Dismantler 1"]
 
 
-def test_auto_center_endpoint_fails_closed_when_minimum_lookup_fails(monkeypatch):
+def test_auto_center_endpoint_saves_when_minimum_lookup_fails(monkeypatch):
     from zira_dashboard import scheduler_time_off
 
     client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
@@ -1554,11 +1513,11 @@ def test_auto_center_endpoint_fails_closed_when_minimum_lookup_fails(monkeypatch
         "turn_off": [],
     })
 
-    assert resp.status_code == 503
-    assert saved == []
+    assert resp.status_code == 200
+    assert saved == [["Hand Build #2"]]
 
 
-def test_auto_center_endpoint_fails_closed_when_training_effect_read_fails(monkeypatch):
+def test_auto_center_endpoint_saves_when_training_effect_read_fails(monkeypatch):
     from zira_dashboard import scheduler_time_off
 
     client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
@@ -1600,9 +1559,9 @@ def test_auto_center_endpoint_fails_closed_when_training_effect_read_fails(monke
         "turn_off": [],
     })
 
-    assert resp.status_code == 503
-    assert saved == []
-    assert invalidated == []
+    assert resp.status_code == 200
+    assert saved == [["Repair 1"]]
+    assert invalidated == ["today", "stable"]
 
 
 def test_auto_center_endpoint_fails_closed_when_time_off_read_fails(monkeypatch):
@@ -1637,7 +1596,7 @@ def test_auto_center_endpoint_fails_closed_when_time_off_read_fails(monkeypatch)
     assert saved == []
 
 
-def test_auto_center_endpoint_fails_closed_when_default_read_fails(monkeypatch):
+def test_auto_center_endpoint_saves_when_default_read_fails(monkeypatch):
     from zira_dashboard import scheduler_time_off
 
     client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
@@ -1666,8 +1625,8 @@ def test_auto_center_endpoint_fails_closed_when_default_read_fails(monkeypatch):
         "turn_off": [],
     })
 
-    assert resp.status_code == 503
-    assert saved == []
+    assert resp.status_code == 200
+    assert saved == [["Repair 1"]]
 
 
 def test_auto_work_centers_persists_selection_on_saturday(monkeypatch):

@@ -656,9 +656,9 @@ def _recycled_context_for_day(
 ):
     """Recycled template context: mode, per-assignment reasons, warnings, blocks.
 
-    Current minimum coverage is computed before the Auto preview so displayed
-    shortages survive a preview failure. Recommendation-data failures retain
-    safe empty preview defaults so the staffing page never 500s.
+    Passive page context defers minimum coverage warnings until an explicit
+    scheduling or publish action. Recommendation-data failures retain safe
+    empty preview defaults so the staffing page never 500s.
     """
     ctx = {
         "recycled_rotation_mode": mode or "normal",
@@ -676,19 +676,6 @@ def _recycled_context_for_day(
                 else _enabled_auto_work_centers(d)
             )
         )
-        current_minimum_issues = (
-            _current_minimum_coverage_issues(
-                roster=roster,
-                assignments=current_assignments,
-                time_off_entries=time_off_entries,
-                enabled_centers=enabled,
-            )
-            if current_assignments is not None
-            else ()
-        )
-        ctx["rotation_issues"] = [
-            issue.to_dict() for issue in current_minimum_issues
-        ]
     except Exception:
         log.exception(
             "Current staffing coverage failed for %s; degrading to empty defaults", d,

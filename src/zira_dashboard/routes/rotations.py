@@ -389,32 +389,7 @@ async def save_auto_work_centers(request: Request):
         sched = staffing.load_schedule(d)
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
-            exact_defaults, group_defaults, user_group_centers = (
-                staffing_route._default_inputs(strict=True)
-            )
-            locks = staffing_route._protected_locks(
-                sched.assignment_sources,
-                sched.assignments,
-                allowed_centers=enabled,
-                strict_default_reads=True,
-                include_saved_defaults=False,
-            )
         except Exception:
-            return _error("Could not verify daily staffing coverage.", 503)
-        suggestion = staffing_route._recycled_suggestion_for_day(
-            d,
-            roster,
-            sched.rotation_mode or "normal",
-            base_assignments={wc: list(values) for wc, values in sched.assignments.items()},
-            locked_assignments=locks,
-            time_off_entries=time_off,
-            enabled_work_centers=enabled,
-            assignment_sources=sched.assignment_sources,
-            exact_defaults=exact_defaults,
-            group_defaults=group_defaults,
-            user_group_centers=user_group_centers,
-        )
-        if suggestion is None:
             return _error("Could not verify daily staffing coverage.", 503)
         enabled = staffing_route._save_enabled_auto_work_centers(enabled)
         minimum_crew_balance = staffing_route._minimum_crew_balance_payload(
@@ -431,11 +406,19 @@ async def save_auto_work_centers(request: Request):
             "ok": True,
             "enabled_work_centers": enabled,
             "minimum_crew_balance": minimum_crew_balance,
-            "warnings": list(suggestion.warnings),
-            "coverage": _coverage_payload(suggestion),
-            "placement": _placement_payload(
-                suggestion, suggestion.placement_issues
-            ),
+            "warnings": [],
+            "coverage": {
+                "staffed_centers": [],
+                "unresolved_centers": [],
+                "issues": [],
+            },
+            "placement": {
+                "available_people": [],
+                "placed_people": [],
+                "unplaced_people": [],
+                "defaults": {},
+                "issues": [],
+            },
         })
 
     return await asyncio.to_thread(_work)

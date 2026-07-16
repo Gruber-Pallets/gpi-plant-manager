@@ -255,7 +255,7 @@ def test_rotation_warning_success_replaces_alert_with_authoritative_response():
         "async function rebuild(mode, options = {})", 1
     )[0]
 
-    call = "renderCoverageIssues(data.warnings, data.coverage?.issues || []);"
+    call = "clearStaleAutoWarnings();"
     assert call in save_auto
     assert """renderCoverageIssues(
         data.warnings,
@@ -378,7 +378,7 @@ def test_auto_center_success_requires_server_enabled_centers():
     assert "data.enabled_work_centers || requestedWorkCenters" not in js
     assert "data.enabled_work_centers || workCenters.filter" not in js
     assert save_auto.index("applyEnabledCenters(data.enabled_work_centers);") < save_auto.index(
-        "renderCoverageIssues(data.warnings, data.coverage?.issues || []);"
+        "clearStaleAutoWarnings();"
     )
 
 

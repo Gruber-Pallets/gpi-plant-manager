@@ -1591,7 +1591,7 @@
           throw new Error('Server did not return enabled Auto work centers.');
         }
         applyEnabledCenters(data.enabled_work_centers);
-        renderCoverageIssues(data.warnings, data.coverage?.issues || []);
+        clearStaleAutoWarnings();
         renderMinimumCrewBalance(data.minimum_crew_balance);
         if (window.showToast) showToast('Auto work centers saved');
       } catch (err) {
