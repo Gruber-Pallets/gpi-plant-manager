@@ -283,15 +283,20 @@ class ScheduleModel(object_api.ObjectModel):
     def create_record(self, values: dict, context: dict):
         day = date.fromisoformat(str(values["day"]))
         current = staffing.load_schedule(day)
+        content_fields = {"assignments", "notes", "work_center_notes", "testing_day"}
+        starts_draft = current.published and bool(content_fields.intersection(values))
+        if starts_draft:
+            current = staffing.draft_from_posted(current)
         sched = staffing.Schedule(
             day=day,
-            published=bool(values.get("published", current.published)),
+            published=False if starts_draft else bool(values.get("published", current.published)),
             assignments=dict(values.get("assignments") or current.assignments or {}),
             notes=str(values.get("notes", current.notes or "")),
             wc_notes=dict(values.get("work_center_notes") or current.wc_notes or {}),
             testing_day=bool(values.get("testing_day", current.testing_day)),
             custom_hours=current.custom_hours,
             published_snapshot=current.published_snapshot,
+            published_delivery=current.published_delivery,
             rotation_mode=current.rotation_mode,
             assignment_sources={
                 wc_name: dict(sources or {})
@@ -304,17 +309,7 @@ class ScheduleModel(object_api.ObjectModel):
     def write_records(self, ids: list, values: dict, context: dict) -> bool:
         for raw_id in ids:
             day = date.fromisoformat(str(raw_id))
-            current = staffing.load_schedule(day)
-            merged = {
-                "day": day.isoformat(),
-                "published": current.published,
-                "assignments": current.assignments,
-                "notes": current.notes,
-                "work_center_notes": current.wc_notes,
-                "testing_day": current.testing_day,
-            }
-            merged.update(values)
-            self.create_record(merged, context)
+            self.create_record({"day": day.isoformat(), **values}, context)
         return True
 
 

@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 
 from zira_dashboard import object_api, object_models
@@ -93,6 +95,36 @@ def test_schedule_model_create_saves_schedule(monkeypatch):
     assert saved["schedule"].testing_day is True
     assert saved["schedule"].rotation_mode == "training"
     assert saved["schedule"].assignment_sources == {"Repair 1": {"Dale": "manual"}}
+
+
+def test_schedule_model_content_edit_of_posted_schedule_starts_a_draft(monkeypatch):
+    saved = {}
+    posted = object_models.staffing.Schedule(
+        day=date(2026, 7, 6),
+        published=True,
+        assignments={"Repair 1": ["Dale"]},
+        notes="official note",
+        published_delivery={"version": "v1", "printed_at": "now"},
+    )
+    monkeypatch.setattr(object_models.staffing, "load_schedule", lambda _day: posted)
+    monkeypatch.setattr(
+        object_models.staffing,
+        "save_schedule",
+        lambda sched: saved.setdefault("schedule", sched),
+    )
+
+    assert object_models.ScheduleModel().write_records(
+        ["2026-07-06"], {"notes": "draft note"}, {}
+    ) is True
+
+    draft = saved["schedule"]
+    assert draft.published is False
+    assert draft.notes == "draft note"
+    assert draft.published_delivery == {}
+    assert draft.published_snapshot["notes"] == "official note"
+    assert draft.published_snapshot["published_delivery"] == {
+        "version": "v1", "printed_at": "now"
+    }
 
 
 def test_skill_model_reads_skill_definitions(monkeypatch):

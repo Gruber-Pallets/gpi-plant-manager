@@ -567,6 +567,7 @@ async def rebuild_rotation(request: Request):
                     testing_day=sched.testing_day,
                     published_snapshot=sched.published_snapshot,
                     custom_hours=sched.custom_hours,
+                    published_delivery=sched.published_delivery,
                     rotation_mode=sched.rotation_mode,
                     assignment_sources=sources,
                 ))
@@ -694,6 +695,7 @@ async def rebuild_rotation(request: Request):
             testing_day=sched.testing_day,
             published_snapshot=sched.published_snapshot,
             custom_hours=sched.custom_hours,
+            published_delivery=sched.published_delivery,
             rotation_mode=mode,
             assignment_sources=new_sources,
         ))
