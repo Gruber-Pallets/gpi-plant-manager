@@ -52,6 +52,19 @@ def test_name_tap_routes_eligible_employee_to_offer(monkeypatch):
     assert "/timeclock/saturday/" in response.headers["location"]
 
 
+def test_name_tap_after_cancel_routes_employee_back_to_offer(monkeypatch):
+    _person(monkeypatch)
+    monkeypatch.setattr(employee_notifications, "notifications_enabled", lambda: False)
+    monkeypatch.setattr(
+        timeclock.saturday_recruiting_store, "offer_for_person", lambda *_args: OFFER
+    )
+
+    response = client.get("/timeclock/start/1", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "/timeclock/saturday/" in response.headers["location"]
+
+
 def test_notifications_keep_priority(monkeypatch):
     _person(monkeypatch)
     monkeypatch.setattr(employee_notifications, "notifications_enabled", lambda: True)
@@ -77,6 +90,13 @@ def test_partial_options_and_tampered_minutes(monkeypatch):
     bad = client.post(f"/timeclock/saturday/partial/{token}", data={"availability_start": "07:15", "availability_end": "11:30"})
     assert bad.status_code == 422
     assert "30-minute increments" in bad.text
+    valid = client.post(
+        f"/timeclock/saturday/partial/{token}",
+        data={"availability_start": "07:30", "availability_end": "11:30"},
+    )
+    assert valid.status_code == 200
+    assert "Confirm your commitment" in valid.text
+    assert "7:30 AM–11:30 AM" in valid.text
 
 
 def test_yes_opens_confirmation_before_commit(monkeypatch):
