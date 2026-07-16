@@ -479,9 +479,9 @@
   window.PARTIAL_RANGE_BY_NAME = {{ partial_range_by_name|tojson }};
   window.PARTIAL_HOURS_BY_NAME = {{ partial_hours_by_name|tojson }};
   window.TIME_OFF_NAMES = {{ time_off_names|tojson }};
-  window.SATURDAY_RECRUITING = {{ is_saturday_recruiting|tojson }};
-  window.SATURDAY_COMMITTED_NAMES = {{ saturday_availability_by_name.keys()|list|tojson }};
-  window.SATURDAY_AVAILABILITY_BY_NAME = {{ saturday_availability_by_name|tojson }};
+  window.SATURDAY_RECRUITING = {{ is_saturday_recruiting|default(false, true)|tojson }};
+  window.SATURDAY_COMMITTED_NAMES = {{ (saturday_availability_by_name|default({}, true)).keys()|list|tojson }};
+  window.SATURDAY_AVAILABILITY_BY_NAME = {{ saturday_availability_by_name|default({}, true)|tojson }};
   window.FORKLIFT_LIVE_MODEL = {{ forklift_live_model|tojson }};
   window.TRAINING_PROTOCOLS = {{ active_training_blocks|tojson }};
   window.TRAINING_PROTOCOL_PEOPLE = {{ training_protocol_people|tojson }};
