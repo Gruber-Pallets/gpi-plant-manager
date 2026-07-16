@@ -341,6 +341,9 @@ def test_employee_cancel_before_cutoff_reopens_capacity():
     assert before is None
     assert after is not None
     assert after.remaining_count == 1
+    assert store.offer_for_person(PERSON_ID, NOW + timedelta(hours=1)) == store.Offer(
+        SATURDAY, time(6, 0), time(12, 0), DEADLINE, frozenset({910101})
+    )
 
 
 def test_employee_cancel_at_or_after_cutoff_is_rejected():
