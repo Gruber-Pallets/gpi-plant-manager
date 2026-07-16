@@ -341,3 +341,39 @@ def test_clock_out_saturday_reminder_is_spanish_first(monkeypatch):
     assert response.text.index("Recordatorio de trabajo del sábado") < response.text.index(
         "Saturday work reminder"
     )
+
+
+def test_clock_out_renders_both_time_off_and_saturday_reminders(monkeypatch):
+    from datetime import datetime, timezone
+    from zira_dashboard import (
+        auto_lunch, saturday_work_reminder, time_off_reminder, timeclock_sync,
+    )
+
+    monkeypatch.delenv("KIOSK_TIME_OFF_NOTIFY_ENABLED", raising=False)
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
+    monkeypatch.setattr(timeclock, "_time_off_redirect_if_salaried", lambda p, pid: None)
+    monkeypatch.setattr(
+        timeclock, "_open_log_row",
+        lambda *a, **k: (1, datetime(2026, 7, 24, 22, 0, tzinfo=timezone.utc)))
+    monkeypatch.setattr(auto_lunch, "note_employee_clock_out", lambda oid: None)
+    monkeypatch.setattr(timeclock_sync, "sync_one_by_id", lambda lid: None)
+    monkeypatch.setattr(
+        time_off_reminder, "reminder_for_person",
+        lambda oid, today: {
+            "full_day": True, "title_key": "Time off reminder",
+            "body_key": "Heads up — you have approved time off {day}. Enjoy!",
+            "day": "Monday, July 27", "hf": "", "ht": ""},
+    )
+    monkeypatch.setattr(
+        saturday_work_reminder, "claim_for_person",
+        lambda person_id, today, now: {
+            "day_label": "Saturday, July 25", "hours": "7:00 AM–11:30 AM",
+            "work_center": None},
+    )
+
+    response = client.post(f"/timeclock/clock-out/{timeclock._mint_token(1)}")
+
+    assert response.status_code == 200
+    assert "Time off reminder" in response.text
+    assert "Saturday work reminder" in response.text
+    assert "}, 3000)" not in response.text

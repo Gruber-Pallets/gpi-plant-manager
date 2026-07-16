@@ -22,10 +22,8 @@
         {{ t(time_off_reminder.body_key, day=time_off_reminder.day,
               hf=time_off_reminder.hf, ht=time_off_reminder.ht) }}</div>
     </div>
-    <a href="/timeclock" class="k-btn"
-       style="display: inline-block; text-decoration: none; margin-top: 2rem;
-              font-size: 1.75rem; padding: 1rem 3rem;">{{ t("Got it") }}</a>
-  {% elif saturday_work_reminder %}
+  {% endif %}
+  {% if saturday_work_reminder %}
     <div style="margin-top: 2rem; max-width: 680px; padding: 1.25rem 1.5rem;
                 background: #eff6ff; border-radius: 12px;
                 border-left: 10px solid #2563eb; text-align: left;">
@@ -43,6 +41,8 @@
         {% endif %}
       </div>
     </div>
+  {% endif %}
+  {% if time_off_reminder or saturday_work_reminder %}
     <a href="/timeclock" class="k-btn"
        style="display: inline-block; text-decoration: none; margin-top: 2rem;
               font-size: 1.75rem; padding: 1rem 3rem;">{{ t("Got it") }}</a>
