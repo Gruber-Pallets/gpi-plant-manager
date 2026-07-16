@@ -203,14 +203,16 @@ def test_staffing_print_balances_schedule_columns_and_keeps_fitting_name_pairs_i
 
     assert "table.sched { table-layout: fixed; }" in css
     assert "table.sched thead th.n, table.sched td.bay { width: 4.5rem; }" in css
-    assert "table.sched thead th.wc-col { width: 31%; }" in css
-    assert "table.sched thead th.dept { width: 14%; }" in css
-    assert "table.sched thead th.sched-col { width: 34%; }" in css
-    assert "table.sched thead th.wc-note-col { width: 16.5%; }" in css
+    assert "table.sched thead th.wc-col { width: 28%; }" in css
+    assert "table.sched thead th.dept { width: 12%; }" in css
+    assert "table.sched thead th.sched-col { width: 35%; }" in css
+    assert "table.sched thead th.wc-note-col { width: 20.5%; }" in css
     assert "table.sched th.wc-col,\ntable.sched td.station { padding-right: 2pt; }" in css
     assert "table.sched th.dept,\ntable.sched td.dept { padding-left: 2pt; padding-right: 2pt; }" in css
     assert "display: inline;" in css
     assert "margin-right: 0.45em;" in css
+    assert "tr:has(.wc-note-print:empty) .multi-dd .dd-summary-text" in css
+    assert "white-space: nowrap;" in css
 
 
 def test_forklift_live_recalc_hooks_assignment_changes():

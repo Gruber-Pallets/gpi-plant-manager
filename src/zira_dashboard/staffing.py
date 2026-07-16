@@ -111,7 +111,7 @@ LOCATIONS: tuple[Location, ...] = (
     # Maint.
     Location("Work Orders", "Mechanic", "Maint.", "Maintenance", None, min_ops=1, max_ops=None),
     # Transportation
-    Location("Truck Driver", "CDL (Automatics) Certified", "Transportation", "Transportation", None, min_ops=1, max_ops=None),
+    Location("Truck Driver", "CDL (Automatics) Certified", "Driving", "Transportation", None, min_ops=1, max_ops=None),
 )
 
 
