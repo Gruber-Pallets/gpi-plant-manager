@@ -1178,6 +1178,7 @@ def test_recycled_context_reports_invalid_minimum_above_maximum(monkeypatch):
         time_off_entries=[],
         enabled_work_centers={"Repair 1"},
         assignment_sources={},
+        work_weekdays=frozenset({0, 1, 2, 3, 4}),
     )
 
     assert context["rotation_issues"][0]["code"] == "invalid_center_configuration"
@@ -1237,10 +1238,51 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
         enabled_work_centers={"Repair 1"},
         assignment_sources={},
         current_assignments={"Repair 1": ["Qualified"]},
+        work_weekdays=frozenset({0, 1, 2, 3, 4}),
     )
 
     assert context["rotation_issues"] == []
     assert context["rotation_warnings"] == ["Keep this training warning."]
+
+
+def test_page_placement_issues_hide_only_disabled_defaults_on_off_saturday():
+    from zira_dashboard.routes import staffing as staffing_route
+
+    disabled_default = schedule_solver.PlacementIssue(
+        code="exact_default_center_disabled", person="Ana", centers=("Repair 1",),
+        message="Ana's default work center Repair 1 is not enabled.",
+    )
+    unrelated = schedule_solver.PlacementIssue(
+        code="exact_default_unqualified", person="Ben", centers=("Repair 2",),
+        message="Ben is not qualified for default work center Repair 2.",
+    )
+
+    assert staffing_route._page_placement_issues_for_day(
+        date(2026, 7, 18), frozenset({0, 1, 2, 3, 4}),
+        (disabled_default, unrelated),
+    ) == (unrelated,)
+
+
+@pytest.mark.parametrize(
+    ("day", "work_weekdays"),
+    [
+        (date(2026, 7, 17), frozenset({0, 1, 2, 3, 4})),
+        (date(2026, 7, 18), frozenset({0, 1, 2, 3, 4, 5})),
+    ],
+)
+def test_page_placement_issues_keep_disabled_defaults_on_working_days(
+    day, work_weekdays,
+):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    issue = schedule_solver.PlacementIssue(
+        code="exact_default_center_disabled", person="Ana", centers=("Repair 1",),
+        message="Ana's default work center Repair 1 is not enabled.",
+    )
+
+    assert staffing_route._page_placement_issues_for_day(
+        day, work_weekdays, (issue,),
+    ) == (issue,)
 
 
 def test_recycled_context_defers_current_minimum_shortage_until_an_action(monkeypatch):
@@ -1277,6 +1319,7 @@ def test_recycled_context_defers_current_minimum_shortage_until_an_action(monkey
         enabled_work_centers={"Repair 1"},
         assignment_sources={},
         current_assignments={"Repair 1": []},
+        work_weekdays=frozenset({0, 1, 2, 3, 4}),
     )
 
     assert context["rotation_issues"] == []
@@ -2225,6 +2268,7 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
     ctx = staffing_route._recycled_context_for_day(
         TARGET_DAY, roster=[_person("Green", 3)], mode="training",
         base_assignments={}, locked_assignments={}, time_off_entries=[],
+        work_weekdays=frozenset({0, 1, 2, 3, 4}),
     )
 
     assert ctx["recycled_rotation_mode"] == "training"
@@ -2346,6 +2390,7 @@ def test_recycled_context_uses_regular_preferences_when_preference_read_fails(mo
         locked_assignments={},
         time_off_entries=[],
         enabled_work_centers={"Repair 1"},
+        work_weekdays=frozenset({0, 1, 2, 3, 4}),
     )
 
     assert ctx["recycled_rotation_mode"] == "normal"
@@ -2465,6 +2510,11 @@ def _render_staffing_page(
 
     monkeypatch.setattr(staffing_routes, "plant_today", lambda: date(2026, 7, 13))
     monkeypatch.setattr(staffing_routes, "_next_working_day", lambda today: the_day)
+    monkeypatch.setattr(
+        staffing_routes.schedule_store,
+        "current",
+        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
+    )
     monkeypatch.setattr(staffing_routes._http_cache, "get_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "store_cached_response", lambda *a, **k: None)

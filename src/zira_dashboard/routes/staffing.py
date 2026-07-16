@@ -685,9 +685,24 @@ def _training_blocks_context(active_blocks, d: date):
     return out
 
 
+def _page_placement_issues_for_day(
+    d: date,
+    work_weekdays: frozenset[int],
+    issues: tuple[schedule_solver.PlacementIssue, ...],
+) -> tuple[schedule_solver.PlacementIssue, ...]:
+    """Return page-visible placement issues for the selected Staffing day."""
+    if d.weekday() != 5 or 5 in work_weekdays:
+        return tuple(issues)
+    return tuple(
+        issue for issue in issues
+        if issue.code != "exact_default_center_disabled"
+    )
+
+
 def _recycled_context_for_day(
     d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries,
     enabled_work_centers=None, assignment_sources=None, current_assignments=None,
+    *, work_weekdays: frozenset[int],
 ):
     """Recycled template context: mode, per-assignment reasons, warnings, blocks.
 
@@ -771,6 +786,9 @@ def _recycled_context_for_day(
             issue
             for issue in suggestion.placement_issues
             if issue.code not in action_only_codes
+        )
+        page_placement_issues = _page_placement_issues_for_day(
+            d, work_weekdays, page_placement_issues,
         )
         ctx["rotation_warnings"] = [
             warning
@@ -1187,6 +1205,9 @@ def staffing_page(
     # warnings, and active training blocks. Current staffing issues are computed
     # independently so they survive recommendation-preview failures; preview-only
     # context degrades to safe empty defaults so the page never 500s.
+    work_weekdays = (
+        schedule_store.current().work_weekdays or frozenset({0, 1, 2, 3, 4})
+    )
     recycled_ctx = _recycled_context_for_day(
         d,
         roster,
@@ -1204,6 +1225,7 @@ def staffing_page(
         enabled_work_centers=enabled_auto_work_centers,
         assignment_sources=sched.assignment_sources,
         current_assignments=sched.assignments,
+        work_weekdays=work_weekdays,
     )
 
     with _Phase(phases, "render"):
