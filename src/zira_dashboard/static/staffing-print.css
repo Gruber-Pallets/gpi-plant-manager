@@ -80,9 +80,10 @@ p.hint {
   margin: 0;
 }
 
-/* Stack multiple assigned people on separate lines per WC. */
+/* Keep short assigned-name pairs together when their natural wrapping permits. */
 .multi-dd .dd-summary-text > span[class^="lvl-"] {
-  display: block;
+  display: inline;
+  margin-right: 0.45em;
 }
 
 /* The picker is a <details>; force its <summary> to render as plain text
@@ -177,6 +178,16 @@ aside.day-context {
 
 /* Schedule table: tighter padding, no dark background, no row striping. */
 table.sched { font-size: 9pt; }
+table.sched { table-layout: fixed; }
+table.sched th.n, table.sched td.bay { width: 4.5rem; }
+table.sched th.wc-col { width: 31%; }
+table.sched th.dept { width: 14%; }
+table.sched th.sched-col { width: 34%; }
+table.sched th.wc-note-col { width: 16.5%; }
+table.sched th.wc-col,
+table.sched td.station { padding-right: 2pt; }
+table.sched th.dept,
+table.sched td.dept { padding-left: 2pt; padding-right: 2pt; }
 table.sched thead th { color: black; border-bottom: 1px solid black; }
 table.sched td {
   border-bottom: 1px solid #ccc;
