@@ -1,9 +1,22 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
+from zira_dashboard import slack_client, staffing
 from zira_dashboard.app import app
-from zira_dashboard import slack_client
+
+
+@pytest.fixture(autouse=True)
+def current_posted_delivery(monkeypatch):
+    monkeypatch.setattr(
+        staffing, "delivery_for_version", lambda _day, version: {"version": version},
+    )
+    monkeypatch.setattr(
+        staffing,
+        "record_delivery",
+        lambda _day, version, fields: {"version": version, **fields},
+    )
 
 
 def test_share_returns_ok_when_slack_succeeds(monkeypatch):
@@ -27,13 +40,15 @@ def test_share_returns_ok_when_slack_succeeds(monkeypatch):
         },
     ) as mock_upload:
         client = TestClient(app)
-        resp = client.post("/staffing/share-to-slack?day=2026-04-30")
+        resp = client.post("/staffing/share-to-slack?day=2026-04-30&version=v1")
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
     assert body["channel_name"] == "mgmt-sups"
     assert body["permalink"].startswith("https://slack.com/")
+    assert body["delivery"]["version"] == "v1"
+    assert "slack_posted_at" in body["delivery"]
 
     # The endpoint passed the right kwargs to upload_pdf.
     kwargs = mock_upload.call_args.kwargs
@@ -55,7 +70,7 @@ def test_share_returns_json_500_when_staffing_page_raises(monkeypatch):
     ):
         client = TestClient(app)
         resp = client.post(
-            "/staffing/share-to-slack?day=2026-04-30",
+            "/staffing/share-to-slack?day=2026-04-30&version=v1",
             # TestClient defaults to raising on server errors; we want
             # to inspect the response body instead.
         )
@@ -89,12 +104,12 @@ def test_share_passes_concrete_defaults_to_staffing_page(monkeypatch):
         return_value={"file_id": "F1", "permalink": "x", "channel_name": "y"},
     ):
         client = TestClient(app)
-        client.post("/staffing/share-to-slack?day=2026-04-30")
+        client.post("/staffing/share-to-slack?day=2026-04-30&version=v1")
 
     kwargs = mock_page.call_args.kwargs
     # Must be the concrete defaults, not Query() instances.
     assert kwargs["publish_blocked"] == 0
-    assert kwargs["view"] == "draft"
+    assert kwargs["view"] == "posted"
     assert isinstance(kwargs["publish_blocked"], int)
     assert isinstance(kwargs["view"], str)
 
@@ -113,7 +128,7 @@ def test_share_returns_500_when_pdf_render_fails(monkeypatch):
         side_effect=RuntimeError("css parse error"),
     ):
         client = TestClient(app)
-        resp = client.post("/staffing/share-to-slack?day=2026-04-30")
+        resp = client.post("/staffing/share-to-slack?day=2026-04-30&version=v1")
 
     assert resp.status_code == 500
     assert resp.json()["ok"] is False
@@ -137,7 +152,7 @@ def test_share_returns_502_on_slack_error(monkeypatch):
         side_effect=slack_client.SlackError("not_in_channel"),
     ):
         client = TestClient(app)
-        resp = client.post("/staffing/share-to-slack?day=2026-04-30")
+        resp = client.post("/staffing/share-to-slack?day=2026-04-30&version=v1")
 
     assert resp.status_code == 502
     body = resp.json()
@@ -169,7 +184,7 @@ def test_share_returns_json_502_when_slack_upload_hits_network_error(monkeypatch
         ),
     ):
         client = TestClient(app)
-        resp = client.post("/staffing/share-to-slack?day=2026-04-30")
+        resp = client.post("/staffing/share-to-slack?day=2026-04-30&version=v1")
 
     assert resp.status_code == 502
     body = resp.json()
@@ -194,9 +209,25 @@ def test_share_initial_comment_uses_short_date_format(monkeypatch):
         return_value={"file_id": "F1", "permalink": "x", "channel_name": "y"},
     ) as mock_upload:
         client = TestClient(app)
-        resp = client.post("/staffing/share-to-slack?day=2026-04-30")
+        resp = client.post("/staffing/share-to-slack?day=2026-04-30&version=v1")
 
     assert resp.status_code == 200
     comment = mock_upload.call_args.kwargs["initial_comment"]
     # 2026-04-30 was a Thursday
     assert "Thu 4/30" in comment
+
+
+def test_share_rejects_stale_version_before_render_or_upload(monkeypatch):
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C123")
+    monkeypatch.setattr(staffing, "delivery_for_version", lambda *_args: None)
+
+    with patch("zira_dashboard.routes.share._render_pdf") as render_pdf, patch(
+        "zira_dashboard.routes.share.slack_client.upload_pdf"
+    ) as upload_pdf:
+        response = TestClient(app).post(
+            "/staffing/share-to-slack?day=2026-04-30&version=stale"
+        )
+
+    assert response.status_code == 409
+    assert render_pdf.called is False
+    assert upload_pdf.called is False

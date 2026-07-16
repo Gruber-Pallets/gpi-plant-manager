@@ -12,7 +12,8 @@ from pathlib import Path
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
-from .. import slack_client
+from .. import slack_client, staffing
+from ..plant_day import now as plant_now
 from .staffing import staffing_page
 
 router = APIRouter()
@@ -96,6 +97,7 @@ def _render_pdf(html: str, base_url: str) -> bytes:
 def share_to_slack(
     request: Request,
     day: str = Query(...),
+    version: str = Query(...),
 ):
     """Render the day's scheduler -> PDF -> upload to Slack."""
     channel_id = os.environ.get("SLACK_CHANNEL_ID")
@@ -103,6 +105,16 @@ def share_to_slack(
         return JSONResponse(
             {"ok": False, "error": "Slack not configured (SLACK_CHANNEL_ID missing)"},
             status_code=500,
+        )
+
+    try:
+        target_day = date.fromisoformat(day)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
+    if not staffing.delivery_for_version(target_day, version):
+        return JSONResponse(
+            {"ok": False, "error": "This posted schedule has changed."},
+            status_code=409,
         )
 
     # 1. Render the scheduler page for this day by calling the existing
@@ -114,7 +126,7 @@ def share_to_slack(
     #    breaks anything that does e.g. int(publish_blocked or 0).
     try:
         response = staffing_page(
-            request, day=day, publish_blocked=0, view="draft"
+            request, day=day, publish_blocked=0, view="posted"
         )
         html = response.body.decode("utf-8")
     except Exception as e:
@@ -148,8 +160,22 @@ def share_to_slack(
             status_code=502,
         )
 
+    delivery = staffing.record_delivery(target_day, version, {
+        "slack_posted_at": plant_now().isoformat(),
+        "slack_permalink": result["permalink"],
+    })
+    if not delivery:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Schedule changed while Slack was posting; delivery was not marked.",
+            },
+            status_code=409,
+        )
+
     return JSONResponse({
         "ok": True,
         "channel_name": result["channel_name"],
         "permalink": result["permalink"],
+        "delivery": delivery,
     })

@@ -1549,6 +1549,29 @@ def staffing_live(day: str = Query(...)):
     return response
 
 
+@router.post("/staffing/mark-printed")
+def staffing_mark_printed(day: str = Query(...), version: str = Query(...)):
+    try:
+        target_day = date.fromisoformat(day)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
+    if not staffing.delivery_for_version(target_day, version):
+        return JSONResponse(
+            {"ok": False, "error": "This posted schedule has changed."},
+            status_code=409,
+        )
+    delivery = staffing.record_delivery(
+        target_day, version, {"printed_at": plant_now().isoformat()},
+    )
+    if not delivery:
+        return JSONResponse(
+            {"ok": False, "error": "This posted schedule has changed."},
+            status_code=409,
+        )
+    _http_cache.invalidate_today_cache()
+    return JSONResponse({"ok": True, "delivery": delivery})
+
+
 @router.post("/staffing/hours")
 async def staffing_hours_save(request: Request):
     """Persist a per-day shift override (or clear it via reset=1).
