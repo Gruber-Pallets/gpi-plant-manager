@@ -327,9 +327,12 @@ def _enabled_auto_work_centers(d: date) -> set[str]:
     return set(enabled)
 
 
-def _save_enabled_auto_work_centers(names) -> list[str]:
+def _save_enabled_auto_work_centers(names, *, cur=None) -> list[str]:
     enabled = _ordered_work_center_names(names)
-    app_settings.set_setting(AUTO_SCHEDULE_WC_SETTING, enabled)
+    if cur is None:
+        app_settings.set_setting(AUTO_SCHEDULE_WC_SETTING, enabled)
+    else:
+        app_settings.set_setting(AUTO_SCHEDULE_WC_SETTING, enabled, cur=cur)
     return enabled
 
 

@@ -395,21 +395,27 @@ async def save_auto_work_centers(request: Request):
             return _error("Could not verify daily staffing coverage.", 503)
         saturday_recruiting = None
         if d.weekday() == 5:
-            bundle = saturday_recruiting_store.get(d)
-            if bundle is not None and bundle.recruitment.status in {"recruiting", "closed"}:
-                try:
-                    updated_bundle = saturday_recruiting_store.update_openings(
-                        day=d,
-                        requested_counts=staffing_route._saturday_recruit_requested_counts(enabled),
-                        shift_start=bundle.recruitment.shift_start,
-                        shift_end=bundle.recruitment.shift_end,
-                        actor=None,
-                        now=plant_now(),
-                    )
-                except saturday_recruiting_store.SaturdayRecruitingError as exc:
-                    return _error(str(exc), 409)
-                saturday_recruiting = saturday_recruiting_store.serialize_bundle(updated_bundle)
-        enabled = staffing_route._save_enabled_auto_work_centers(enabled)
+            try:
+                with db.cursor() as cur:
+                    bundle = saturday_recruiting_store.get(d, cur=cur)
+                    if bundle is not None and bundle.recruitment.status in {"recruiting", "closed"}:
+                        updated_bundle = saturday_recruiting_store.update_openings(
+                            day=d,
+                            requested_counts=staffing_route._saturday_recruit_requested_counts(enabled),
+                            shift_start=bundle.recruitment.shift_start,
+                            shift_end=bundle.recruitment.shift_end,
+                            actor=None,
+                            now=plant_now(),
+                            cur=cur,
+                        )
+                        saturday_recruiting = saturday_recruiting_store.serialize_bundle(updated_bundle)
+                    enabled = staffing_route._save_enabled_auto_work_centers(enabled, cur=cur)
+            except saturday_recruiting_store.SaturdayRecruitingError as exc:
+                return _error(str(exc), 409)
+            except Exception:
+                return _error("Could not save work-center settings.", 503)
+        else:
+            enabled = staffing_route._save_enabled_auto_work_centers(enabled)
         minimum_crew_balance = staffing_route._minimum_crew_balance_payload(
             staffing_route._minimum_crew_balance_for_day(
                 roster=roster,

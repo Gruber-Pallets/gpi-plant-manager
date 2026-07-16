@@ -217,8 +217,10 @@ def _load_bundle(cur, day: date) -> RecruitmentBundle | None:
     return RecruitmentBundle(recruitment, openings, commitments)
 
 
-def get(day: date) -> RecruitmentBundle | None:
+def get(day: date, *, cur=None) -> RecruitmentBundle | None:
     """Return one persisted recruitment, including every response, if present."""
+    if cur is not None:
+        return _load_bundle(cur, day)
     from . import db
 
     with db.cursor() as cur:
@@ -732,6 +734,8 @@ def update_openings(
     shift_end: time,
     actor: str | None,
     now: datetime,
+    *,
+    cur=None,
 ) -> RecruitmentBundle:
     """Replace unfilled openings while preserving committed volunteer coverage."""
     del actor  # Audit columns for per-opening edits are intentionally not part of the schema.
@@ -739,60 +743,64 @@ def update_openings(
 
     _validate_shift(shift_start, shift_end)
     requested_counts = _normalize_counts(requested_counts)
-    with db.cursor() as cur:
-        cur.execute("SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE", (day,))
-        if cur.fetchone() is None:
-            raise LifecycleConflict("No Saturday recruiting round exists for this date")
-        bundle = _load_bundle(cur, day)
-        assert bundle is not None
-        if bundle.recruitment.status not in {"recruiting", "closed"}:
-            raise LifecycleConflict("Saturday recruiting openings can no longer be changed")
-        if (
-            (shift_start != bundle.recruitment.shift_start or shift_end != bundle.recruitment.shift_end)
-            and any(item.status == "committed" for item in bundle.commitments)
-        ):
-            raise LifecycleConflict("Saturday shift hours lock after the first commitment")
-        positions = _validate_positions(cur, requested_counts)
-        old_counts = {opening.wc_id: opening.requested_count for opening in bundle.openings}
-        if bundle.recruitment.status == "closed" and (
-            not set(requested_counts).issubset(old_counts)
-            or any(requested_counts[wc_id] > old_counts[wc_id] for wc_id in requested_counts)
-        ):
-            raise LifecycleConflict("Closed recruiting can only reduce unfilled openings")
-        proposed_openings = tuple(
-            sr.Opening(
-                wc_id,
-                positions[wc_id].wc_name,
-                requested_count,
-                positions[wc_id].required_skills,
+    if cur is None:
+        with db.cursor() as cur:
+            return update_openings(
+                day, requested_counts, shift_start, shift_end, None, now, cur=cur,
             )
-            for wc_id, requested_count in sorted(requested_counts.items())
+    cur.execute("SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE", (day,))
+    if cur.fetchone() is None:
+        raise LifecycleConflict("No Saturday recruiting round exists for this date")
+    bundle = _load_bundle(cur, day)
+    assert bundle is not None
+    if bundle.recruitment.status not in {"recruiting", "closed"}:
+        raise LifecycleConflict("Saturday recruiting openings can no longer be changed")
+    if (
+        (shift_start != bundle.recruitment.shift_start or shift_end != bundle.recruitment.shift_end)
+        and any(item.status == "committed" for item in bundle.commitments)
+    ):
+        raise LifecycleConflict("Saturday shift hours lock after the first commitment")
+    positions = _validate_positions(cur, requested_counts)
+    old_counts = {opening.wc_id: opening.requested_count for opening in bundle.openings}
+    if bundle.recruitment.status == "closed" and (
+        not set(requested_counts).issubset(old_counts)
+        or any(requested_counts[wc_id] > old_counts[wc_id] for wc_id in requested_counts)
+    ):
+        raise LifecycleConflict("Closed recruiting can only reduce unfilled openings")
+    proposed_openings = tuple(
+        sr.Opening(
+            wc_id,
+            positions[wc_id].wc_name,
+            requested_count,
+            positions[wc_id].required_skills,
         )
-        coverage = sr.match_commitments(
-            proposed_openings,
-            tuple(
-                sr.Commitment(item.person_id, item.eligible_wc_ids)
-                for item in bundle.commitments
-                if item.status == "committed"
-            ),
-        )
-        if coverage is None:
-            raise LifecycleConflict("Requested openings cannot drop below committed Saturday coverage")
+        for wc_id, requested_count in sorted(requested_counts.items())
+    )
+    coverage = sr.match_commitments(
+        proposed_openings,
+        tuple(
+            sr.Commitment(item.person_id, item.eligible_wc_ids)
+            for item in bundle.commitments
+            if item.status == "committed"
+        ),
+    )
+    if coverage is None:
+        raise LifecycleConflict("Requested openings cannot drop below committed Saturday coverage")
+    cur.execute(
+        "UPDATE saturday_recruitments SET shift_start = %s, shift_end = %s, updated_at = %s "
+        "WHERE day = %s",
+        (shift_start, shift_end, now, day),
+    )
+    cur.execute("DELETE FROM saturday_recruitment_openings WHERE day = %s", (day,))
+    for wc_id, requested_count in requested_counts.items():
         cur.execute(
-            "UPDATE saturday_recruitments SET shift_start = %s, shift_end = %s, updated_at = %s "
-            "WHERE day = %s",
-            (shift_start, shift_end, now, day),
+            "INSERT INTO saturday_recruitment_openings (day, wc_id, requested_count) "
+            "VALUES (%s, %s, %s)",
+            (day, wc_id, requested_count),
         )
-        cur.execute("DELETE FROM saturday_recruitment_openings WHERE day = %s", (day,))
-        for wc_id, requested_count in requested_counts.items():
-            cur.execute(
-                "INSERT INTO saturday_recruitment_openings (day, wc_id, requested_count) "
-                "VALUES (%s, %s, %s)",
-                (day, wc_id, requested_count),
-            )
-        updated = _load_bundle(cur, day)
-        assert updated is not None
-        return updated
+    updated = _load_bundle(cur, day)
+    assert updated is not None
+    return updated
 
 
 def close_due(now: datetime) -> int:

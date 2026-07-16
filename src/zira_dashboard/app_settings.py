@@ -35,12 +35,16 @@ def get_setting(key: str) -> Any | None:
     return raw
 
 
-def set_setting(key: str, value: Any) -> None:
+def set_setting(key: str, value: Any, *, cur=None) -> None:
     """Upsert ``key`` → ``value`` (JSON-encoded), stamping ``updated_at``."""
     from . import db
-    db.execute(
+    sql = (
         "INSERT INTO app_settings (key, value, updated_at) "
         "VALUES (%s, %s::jsonb, now()) "
-        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-        (key, json.dumps(value)),
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
     )
+    params = (key, json.dumps(value))
+    if cur is not None:
+        cur.execute(sql, params)
+    else:
+        db.execute(sql, params)
