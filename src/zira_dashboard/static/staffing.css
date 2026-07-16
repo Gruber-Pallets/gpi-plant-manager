@@ -102,10 +102,10 @@
     display: inline-block;
     margin-left: 0.25rem;
     padding: 0 0.35rem;
-    border: 1px solid #2563eb;
+    border: 1px solid var(--warn);
     border-radius: 4px;
-    background: #dbeafe;
-    color: #1d4ed8;
+    background: var(--warn-dim);
+    color: var(--warn);
     font-size: 0.65rem;
     font-weight: 700;
     line-height: 1.4;

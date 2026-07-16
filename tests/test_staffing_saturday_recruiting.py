@@ -335,6 +335,8 @@ def test_unknown_staffing_action_is_rejected_before_schedule_write(monkeypatch):
 def test_staffing_template_has_saturday_off_availability_and_publish_lock():
     template = Path("src/zira_dashboard/templates/staffing.html").read_text()
     script = Path("src/zira_dashboard/static/staffing.js").read_text()
+    css = Path("src/zira_dashboard/static/staffing.css").read_text()
+    badge_css = css.split(".saturday-availability-badge {", 1)[1].split("}", 1)[0]
 
     assert "'Unassigned' if is_saturday_recruiting else 'Unscheduled'" in template
     assert 'class="section saturday-off"' in template
@@ -345,3 +347,6 @@ def test_staffing_template_has_saturday_off_availability_and_publish_lock():
     assert "window.SATURDAY_COMMITTED_NAMES" in template
     assert "const __saturdayRecruiting = window.SATURDAY_RECRUITING;" in script
     assert "if (__saturdayRecruiting && !__saturdayCommittedNames.has(name)) return;" in script
+    assert "background: var(--warn-dim);" in badge_css
+    assert "color: var(--warn);" in badge_css
+    assert "border: 1px solid var(--warn);" in badge_css
