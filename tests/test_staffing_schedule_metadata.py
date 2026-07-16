@@ -24,6 +24,34 @@ def _schedule(**changes):
     return staffing.Schedule(**values)
 
 
+def test_snapshot_includes_hours_and_delivery():
+    posted = _schedule(
+        published=True,
+        custom_hours={"start": "06:00", "end": "12:00", "breaks": []},
+        published_delivery={"version": "v1", "printed_at": "2026-07-14T12:00:00+00:00"},
+    )
+
+    snapshot = staffing.snapshot_of(posted)
+
+    assert snapshot["custom_hours"] == posted.custom_hours
+    assert snapshot["published_delivery"] == posted.published_delivery
+
+
+def test_draft_from_posted_preserves_official_version_and_clears_draft_delivery():
+    posted = _schedule(
+        published=True,
+        notes="official",
+        published_delivery={"version": "v1", "printed_at": "now"},
+    )
+
+    draft = staffing.draft_from_posted(posted)
+
+    assert draft.published is False
+    assert draft.published_delivery == {}
+    assert draft.published_snapshot["notes"] == "official"
+    assert draft.published_snapshot["published_delivery"] == {"version": "v1", "printed_at": "now"}
+
+
 def _save_form(action, **fields):
     return FormData({"action": action, **fields})
 

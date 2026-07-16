@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import csv
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date, UTC
 from pathlib import Path
 from threading import RLock
+from typing import Mapping
+from uuid import uuid4
 
 # Skill categories (columns in Dale's Google Sheet skill matrix).
 SKILLS: tuple[str, ...] = (
@@ -345,6 +348,7 @@ class Schedule:
     # When the user edits a previously-posted day, we snapshot the posted version here
     # so they can toggle between draft and posted in the UI. Cleared on re-publish.
     published_snapshot: dict | None = None
+    published_delivery: dict[str, str] = field(default_factory=dict)
     # Per-day shift override: {"start": "HH:MM", "end": "HH:MM",
     # "breaks": [{"start": "HH:MM", "end": "HH:MM", "name": "..."}, ...]}.
     # None means "use the global schedule from schedule_store".
@@ -393,6 +397,30 @@ def _json_mapping(value) -> dict:
         return {}
 
 
+def new_published_delivery() -> dict[str, str]:
+    return {"version": uuid4().hex}
+
+
+def _delivery_mapping(value) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    keys = ("version", "printed_at", "slack_posted_at", "slack_permalink")
+    return {key: value[key] for key in keys if isinstance(value.get(key), str) and value[key]}
+
+
+def draft_from_posted(schedule: Schedule) -> Schedule:
+    if not schedule.published:
+        return schedule
+    draft = deepcopy(schedule)
+    draft.published_snapshot = (
+        deepcopy(schedule.published_snapshot)
+        if schedule.published_snapshot else snapshot_of(schedule)
+    )
+    draft.published = False
+    draft.published_delivery = {}
+    return draft
+
+
 def snapshot_of(sched: Schedule) -> dict:
     """Return a serializable snapshot of the schedule's posted-visible fields."""
     return {
@@ -400,6 +428,8 @@ def snapshot_of(sched: Schedule) -> dict:
         "notes": sched.notes or "",
         "wc_notes": dict(sched.wc_notes or {}),
         "testing_day": bool(sched.testing_day),
+        "custom_hours": deepcopy(sched.custom_hours),
+        "published_delivery": _delivery_mapping(sched.published_delivery),
         "rotation_mode": sched.rotation_mode or "normal",
         "assignment_sources": {
             wc_name: dict(sources or {})
@@ -460,7 +490,7 @@ def iter_saved_schedules():
 def _load_schedule_from_db(day: date) -> Schedule:
     from . import db
     rows = db.query(
-        "SELECT day, published, testing_day, notes, custom_hours, published_snapshot, "
+        "SELECT day, published, testing_day, notes, custom_hours, published_snapshot, published_delivery, "
         "recycled_rotation_mode, assignment_sources "
         "FROM schedules WHERE day = %s",
         (day,),
@@ -496,6 +526,7 @@ def _load_schedule_from_db(day: date) -> Schedule:
         testing_day=r["testing_day"],
         custom_hours=r["custom_hours"],
         published_snapshot=r["published_snapshot"],
+        published_delivery=_delivery_mapping(r.get("published_delivery")),
         rotation_mode=r.get("recycled_rotation_mode") or "normal",
         assignment_sources=_json_mapping(r.get("assignment_sources")),
     )
@@ -526,7 +557,7 @@ def load_schedules_bulk(
         conds.append("published = TRUE")
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
     sched_rows = db.query(
-        "SELECT day, published, testing_day, notes, custom_hours, published_snapshot, "
+        "SELECT day, published, testing_day, notes, custom_hours, published_snapshot, published_delivery, "
         "recycled_rotation_mode, assignment_sources "
         f"FROM schedules{where} ORDER BY day DESC",
         tuple(params) if params else None,
@@ -578,6 +609,7 @@ def load_schedules_bulk(
             testing_day=r["testing_day"],
             custom_hours=r["custom_hours"],
             published_snapshot=r["published_snapshot"],
+            published_delivery=_delivery_mapping(r.get("published_delivery")),
             rotation_mode=r.get("recycled_rotation_mode") or "normal",
             assignment_sources=_json_mapping(r.get("assignment_sources")),
         )))
@@ -593,14 +625,15 @@ def save_schedule(schedule: Schedule) -> None:
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO schedules (day, published, testing_day, notes, "
-            "custom_hours, published_snapshot, recycled_rotation_mode, assignment_sources, updated_at) "
-            "VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, now()) "
+            "custom_hours, published_snapshot, published_delivery, recycled_rotation_mode, assignment_sources, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s::jsonb, now()) "
             "ON CONFLICT (day) DO UPDATE SET "
             "  published = EXCLUDED.published, "
             "  testing_day = EXCLUDED.testing_day, "
             "  notes = EXCLUDED.notes, "
             "  custom_hours = EXCLUDED.custom_hours, "
             "  published_snapshot = EXCLUDED.published_snapshot, "
+            "  published_delivery = EXCLUDED.published_delivery, "
             "  recycled_rotation_mode = EXCLUDED.recycled_rotation_mode, "
             "  assignment_sources = EXCLUDED.assignment_sources, "
             "  updated_at = now()",
@@ -611,6 +644,7 @@ def save_schedule(schedule: Schedule) -> None:
                 schedule.notes or "",
                 json.dumps(schedule.custom_hours) if schedule.custom_hours else None,
                 json.dumps(schedule.published_snapshot) if schedule.published_snapshot else None,
+                json.dumps(_delivery_mapping(schedule.published_delivery)),
                 schedule.rotation_mode or "normal",
                 json.dumps(assignment_sources),
             ),
@@ -637,6 +671,60 @@ def save_schedule(schedule: Schedule) -> None:
                 "SELECT %s, wc.id, %s FROM work_centers wc WHERE wc.name = %s",
                 (schedule.day, note, wc_name),
             )
+
+
+def schedule_revision(day: date) -> str | None:
+    from . import db
+    rows = db.query(
+        "SELECT updated_at::text AS revision FROM schedules WHERE day = %s", (day,)
+    )
+    return rows[0]["revision"] if rows else None
+
+
+def delivery_for_version(day: date, version: str) -> dict[str, str] | None:
+    schedule = load_schedule(day)
+    current = _delivery_mapping(schedule.published_delivery)
+    if schedule.published and current.get("version") == version:
+        return current
+    prior = _delivery_mapping((schedule.published_snapshot or {}).get("published_delivery"))
+    return prior if prior.get("version") == version else None
+
+
+def record_delivery(
+    day: date, version: str, fields: Mapping[str, str],
+) -> dict[str, str] | None:
+    from . import db
+    patch = {
+        key: value for key, value in fields.items()
+        if key in {"printed_at", "slack_posted_at", "slack_permalink"}
+        and isinstance(value, str) and value
+    }
+    if not version or not patch:
+        return None
+    with db.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE schedules
+               SET published_delivery = CASE
+                     WHEN published THEN published_delivery || %s::jsonb
+                     ELSE published_delivery END,
+                   published_snapshot = CASE
+                     WHEN NOT published THEN jsonb_set(
+                       published_snapshot, '{published_delivery}',
+                       COALESCE(published_snapshot->'published_delivery', '{}'::jsonb) || %s::jsonb)
+                     ELSE published_snapshot END,
+                   updated_at = now()
+             WHERE day = %s
+               AND ((published AND published_delivery->>'version' = %s)
+                 OR (NOT published AND published_snapshot->'published_delivery'->>'version' = %s))
+             RETURNING CASE WHEN published THEN published_delivery
+                            ELSE published_snapshot->'published_delivery' END AS delivery
+            """,
+            (json.dumps(patch), json.dumps(patch), day, version, version),
+        )
+        row = cur.fetchone()
+    _invalidate_schedule_cache(day)
+    return _delivery_mapping(row["delivery"]) if row else None
 
 
 def default_assignments() -> dict[str, list[str]]:

@@ -17,6 +17,10 @@ def test_schedule_custom_hours_defaults_to_none():
     assert s.custom_hours is None
 
 
+def test_schedule_delivery_defaults_to_empty_mapping():
+    assert Schedule(day=date(2026, 4, 28)).published_delivery == {}
+
+
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
     reason="needs Postgres",

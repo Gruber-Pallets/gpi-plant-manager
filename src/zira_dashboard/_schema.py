@@ -190,6 +190,13 @@ CREATE TABLE IF NOT EXISTS schedule_wc_notes (
 
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS recycled_rotation_mode TEXT NOT NULL DEFAULT 'normal';
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS assignment_sources JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE schedules
+  ADD COLUMN IF NOT EXISTS published_delivery JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+UPDATE schedules
+   SET published_delivery = jsonb_build_object('version', 'legacy-' || day::text)
+ WHERE published
+   AND COALESCE(published_delivery->>'version', '') = '';
 
 CREATE TABLE IF NOT EXISTS person_rotation_preferences (
   person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
