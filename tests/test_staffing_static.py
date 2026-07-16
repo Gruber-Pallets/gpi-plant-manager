@@ -198,6 +198,13 @@ def test_staffing_print_hides_time_off_sync_note_and_top_aligns_context():
     assert "padding-top: 0;" in css
 
 
+def test_staffing_print_hides_schedule_goal_and_schedule_actions():
+    css = _print_css()
+
+    assert ".rotation-controls," in css
+    assert ".sidebar-schedule-actions" in css
+
+
 def test_staffing_print_balances_schedule_columns_and_keeps_fitting_name_pairs_inline():
     css = _print_css()
 
