@@ -381,9 +381,6 @@ async def save_auto_work_centers(request: Request):
         return _error("Invalid day.")
     if not isinstance(names, list) or not isinstance(turn_off, list):
         return _error("work_centers and turn_off must be lists.")
-    if d.weekday() == 5:
-        return _error("Automatic scheduling is unavailable on Saturday.")
-
     def _work():
         proposed = staffing_route._ordered_work_center_names(names)
         turn_off_names = set(staffing_route._ordered_work_center_names(turn_off))
@@ -517,9 +514,6 @@ async def rebuild_rotation(request: Request):
         return _error("Invalid day.")
     if mode not in _VALID_MODES:
         return _error(f"Unknown mode: {mode}")
-    if d.weekday() == 5:
-        return _error("Automatic scheduling is unavailable on Saturday.")
-
     def _work():
         roster = staffing.load_roster()
         sched = staffing.load_schedule(d)
