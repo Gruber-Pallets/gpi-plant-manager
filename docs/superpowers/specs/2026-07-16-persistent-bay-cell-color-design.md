@@ -13,14 +13,13 @@ background and text color whether their work center is enabled or disabled.
 
 ## Design
 
-Disabled work-center rows currently use row opacity to dim their contents. Add
-a more-specific bay-cell rule that restores full opacity for `td.bay` within a
-disabled row. The existing state-specific background override remains in place,
-so the bay background stays on `--panel-3` and its text is not faded.
+Disabled work-center rows currently use row opacity to dim their contents.
+Move that dimming to a selector that targets only non-bay cells in a disabled
+row. The bay cell then receives no opacity at all, while its existing
+state-specific background override keeps it on `--panel-3`.
 
 ## Testing
 
-Add a static CSS regression test that verifies the disabled-row selector keeps
-bay cells at full opacity and that it appears after the broad disabled-row
-opacity rule. Retain the existing test that verifies the bay background
-override remains after active and inactive background rules.
+Add a static CSS regression test that verifies disabled-row dimming targets
+non-bay cells and never the row itself. Retain the existing test that verifies
+the bay background override remains after active and inactive background rules.
