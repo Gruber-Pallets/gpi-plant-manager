@@ -397,6 +397,8 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
             "testing_day": False,
             "rotation_mode": "normal",
             "assignment_sources": posted_sources,
+            "custom_hours": {"start": "06:00", "end": "12:00", "breaks": []},
+            "published_delivery": {"version": "v1", "printed_at": "now"},
         },
     )
     staffing._schedule_cache.clear()
@@ -429,6 +431,7 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
     )
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", ())
     monkeypatch.setattr(staffing_routes.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(staffing_routes.staffing, "schedule_revision", lambda _day: "r1")
     monkeypatch.setattr(
         staffing_view,
         "build_staffing_bays",
@@ -439,8 +442,14 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
             "people_meta": {}, "all_active_people": [],
         },
     )
+    captured_context = {}
+
+    def render(_request, _template, context):
+        captured_context.update(context)
+        return type("Response", (), {"headers": {}})()
+
     monkeypatch.setattr(staffing_routes, "templates", type("Templates", (), {
-        "TemplateResponse": staticmethod(lambda *_args: type("Response", (), {"headers": {}})()),
+        "TemplateResponse": staticmethod(render),
     })())
 
     staffing_routes.staffing_page(
@@ -449,6 +458,12 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
 
     assert staffing.load_schedule(DAY).rotation_mode == "training"
     assert staffing.load_schedule(DAY).assignment_sources == draft_sources
+    assert captured_context["sched"].custom_hours == {
+        "start": "06:00", "end": "12:00", "breaks": [],
+    }
+    assert captured_context["posted_delivery"] == {"version": "v1", "printed_at": "now"}
+    assert captured_context["posted_version"] == "v1"
+    assert captured_context["schedule_revision"] == "r1"
 
     monkeypatch.setattr(staffing, "save_schedule", saved.append)
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair_1,))

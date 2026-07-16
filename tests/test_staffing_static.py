@@ -124,7 +124,7 @@ def test_staffing_publish_busy_state_preserves_publish_action():
     assert "form.appendChild(publishIntent);" in js
 
 
-def test_staffing_publish_banner_has_no_override_and_slack_stops_on_json_failure():
+def test_staffing_publish_banner_has_no_override_or_implicit_slack_publish():
     html = _template()
     js = _script()
     slack_post = js.split("async function postToSlack(btn) {", 1)[1].split(
@@ -134,57 +134,69 @@ def test_staffing_publish_banner_has_no_override_and_slack_stops_on_json_failure
     assert "Override &amp; Publish" not in html
     assert "publish-override" not in html
     assert 'class="override-btn' not in html
-    assert "if (!pubRes.ok)" in slack_post
-    assert slack_post.index("if (!pubRes.ok)") < slack_post.index("// Step 2: post the resulting PDF to Slack.")
+    assert "fd.set('action', 'publish')" not in slack_post
+    assert "/staffing/share-to-slack?day=" in slack_post
+    assert "&version=" in slack_post
 
 
-def test_current_published_schedule_has_a_local_edit_gate_but_snapshot_does_not():
+def test_header_uses_only_orange_draft_and_green_posted_toggle():
     html = _template()
+    css = _style()
+
+    assert 'class="draft-label"' not in html
+    assert 'id="edit-schedule-btn"' not in html
+    assert 'view-toggle-btn draft' in html
+    assert 'view-toggle-btn posted' in html
+    assert ".view-toggle-btn.active.draft {" in css
+    assert ".view-toggle-btn.active.posted {" in css
+
+
+def test_draft_has_publish_and_posted_has_delivery_actions():
+    html = _template()
+
+    assert "{% if published or viewing_posted %}" in html
+    assert 'onclick="printSchedule(this)"' in html
+    assert 'onclick="postToSlack(this)"' in html
+    assert "discard_draft" not in html
+    assert "save_notes" not in html
+
+
+def test_browser_records_print_after_dialog_and_polls_live_revision():
     js = _script()
 
-    assert "{% if published and not viewing_posted %}" in html
-    assert 'id="edit-schedule-btn"' in html
-    assert 'name="viewing_posted" value="1"' in html
-    assert "const __editScheduleBtn = document.getElementById('edit-schedule-btn');" in js
-    assert "if (__viewingPosted) return;" in js
-    assert "__unlocked = true;" in js
-    assert "__form.classList.remove('locked');" in js
-    assert "__editScheduleBtn.disabled = true;" in js
-    assert "__editScheduleBtn.hidden = true;" in js
+    assert "window.addEventListener('afterprint'" in js
+    assert "/staffing/mark-printed?day=" in js
+    assert "setInterval(checkLiveRevision, 3000);" in js
+    assert "/staffing/live?day=" in js
+    assert "window.SCHEDULE_REVISION = data.revision;" in js
 
 
-def test_posted_snapshot_blocks_autosave_and_mutating_client_handlers():
+def test_posted_save_transitions_to_draft_and_delivery_refreshes_live_revision():
     js = _script()
-    picker_handler = js.split("const item = e.target.closest('.multi-dd .dd-item');", 1)[1].split(
-        "// ---------- Per-dropdown quick clear", 1
-    )[0]
     autosave = js.split("function fireSave()", 1)[1].split("function onEdit()", 1)[0]
-    posted_view_setup = js.split("if (__viewingPosted) __form.classList.add('viewing-posted');", 1)[1].split(
-        "const __editScheduleBtn", 1
+    rebuild = js.split("async function rebuild(mode, options = {}) {", 1)[1].split(
+        "const resetScheduleBtn", 1
     )[0]
-    slack_post = js.split("async function postToSlack(btn) {", 1)[1].split(
-        "// ---------- Rotation goal", 1
-    )[0]
-    posted_picker_guard = picker_handler.split("if (__viewingPosted) {", 1)[1].split("    }", 1)[0]
 
-    assert "if (__viewingPosted) return;" in js
-    assert "if (__viewingPosted) { return; }" in js
-    assert autosave.index("if (__viewingPosted) { return; }") < autosave.index("new FormData(form)")
-    assert "document.querySelectorAll('button, input:not([type=\"hidden\"]), select').forEach(control => {" in posted_view_setup
-    assert "if (control.name === 'action' && control.value === 'discard_draft') return;" in posted_view_setup
-    assert "control.disabled = true;" in posted_view_setup
-    assert posted_picker_guard.index("e.preventDefault();") < posted_picker_guard.index("return;")
-    assert posted_picker_guard.index("e.stopPropagation();") < posted_picker_guard.index("return;")
-    assert slack_post.index("if (__viewingPosted) return;") < slack_post.index(
-        "const originalContent = btn.innerHTML;"
+    assert "const __scheduleReadOnly" not in js
+    assert "if (!data.published && window.SCHEDULE_PUBLISHED) {" in js
+    assert autosave.index("if (queued)") < autosave.index(
+        "if (!data.published && window.SCHEDULE_PUBLISHED) {"
     )
+    assert "if (window.SCHEDULE_PUBLISHED) {" in rebuild
+    assert rebuild.index("if (window.SCHEDULE_PUBLISHED) {") < rebuild.index(
+        "setActiveMode(mode);"
+    )
+    assert "async function refreshScheduleRevision()" in js
+    assert js.count("await refreshScheduleRevision();") == 2
 
 
 def test_staffing_slack_post_button_exposes_busy_state():
     html = _template()
     js = _script()
 
-    assert 'class="publish-btn icon-btn share-btn" onclick="postToSlack(this)" title="Post to Slack" aria-label="Post to Slack" aria-busy="false"' in html
+    assert 'class="publish-btn icon-btn share-btn{% if posted_delivery.slack_posted_at %} complete{% endif %}"' in html
+    assert 'onclick="postToSlack(this)"' in html
     assert "btn.setAttribute('aria-busy', 'true');" in js
     assert "btn.setAttribute('aria-busy', 'false');" in js
 

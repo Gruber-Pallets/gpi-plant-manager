@@ -388,7 +388,7 @@ async def save_auto_work_centers(request: Request):
         turn_off_names = set(staffing_route._ordered_work_center_names(turn_off))
         enabled = [name for name in proposed if name not in turn_off_names]
         roster = staffing.load_roster()
-        sched = staffing.load_schedule(d)
+        sched = staffing.draft_from_posted(staffing.load_schedule(d))
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
         except Exception:
@@ -524,7 +524,7 @@ async def rebuild_rotation(request: Request):
         return _error(f"Unknown mode: {mode}")
     def _work():
         roster = staffing.load_roster()
-        sched = staffing.load_schedule(d)
+        sched = staffing.draft_from_posted(staffing.load_schedule(d))
         base_assignments = {k: list(v) for k, v in sched.assignments.items()}
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
@@ -681,7 +681,7 @@ async def rebuild_rotation(request: Request):
                 warning_messages.append(message)
 
         # Persist the rebuild, preserving everything not owned by rotation
-        # (published state, snapshot, testing day, notes, custom hours).
+        # (the posted snapshot, testing day, notes, custom hours).
         staffing.save_schedule(staffing.Schedule(
             day=d,
             published=sched.published,

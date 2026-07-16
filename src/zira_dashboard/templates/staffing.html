@@ -167,39 +167,24 @@
           <button type="button" class="save"   id="hours-save" aria-busy="false">Save</button>
         </div>
       </div>
-      {% if has_snapshot %}
-        <div class="view-toggle" role="tablist" aria-label="Draft vs posted view">
-          <a href="/staffing?day={{ day }}&amp;view=draft"
-             class="view-toggle-btn {% if not viewing_posted %}active{% endif %}">Draft</a>
+      <div class="view-toggle" role="tablist" aria-label="Schedule version">
+        <a href="/staffing?day={{ day }}&amp;view=draft"
+           class="view-toggle-btn draft {% if not viewing_posted and not published %}active{% endif %}">Draft</a>
+        {% if published or has_snapshot %}
           <a href="/staffing?day={{ day }}&amp;view=posted"
-             class="view-toggle-btn {% if viewing_posted %}active{% endif %}">Posted</a>
-        </div>
-      {% endif %}
+             class="view-toggle-btn posted {% if viewing_posted or published %}active{% endif %}">Posted</a>
+        {% endif %}
+      </div>
       <div class="title-actions">
-        {% if viewing_posted %}
-          <span class="posted-badge">Viewing posted version</span>
-          <button type="submit" name="action" value="discard_draft" class="discard-btn"
-                  onclick="return confirm('Discard the current draft and keep the posted version?');">
-            Discard draft
-          </button>
-        {% else %}
-          {% if published %}
-            <span class="pub-pill on">Posted</span>
-            {% if published and not viewing_posted %}
-              <button type="button" id="edit-schedule-btn" class="publish-btn">Edit</button>
-            {% endif %}
-          {% else %}
-            <span class="draft-label">DRAFT</span>
-          {% endif %}
-          <span id="autosave-indicator" class="autosave clean" aria-live="polite"></span>
-          <button type="button" class="publish-btn icon-btn print-btn" onclick="printSchedule()" title="Print" aria-label="Print">
+        {% if published or viewing_posted %}
+          <button type="button" class="publish-btn icon-btn print-btn{% if posted_delivery.printed_at %} complete{% endif %}" onclick="printSchedule(this)" title="{{ 'Printed' if posted_delivery.printed_at else 'Print' }}" aria-label="{{ 'Printed' if posted_delivery.printed_at else 'Print' }}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <polyline points="6 9 6 2 18 2 18 9"/>
               <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
               <rect width="12" height="8" x="6" y="14"/>
             </svg>
           </button>
-          <button type="button" class="publish-btn icon-btn share-btn" onclick="postToSlack(this)" title="Post to Slack" aria-label="Post to Slack" aria-busy="false">
+          <button type="button" class="publish-btn icon-btn share-btn{% if posted_delivery.slack_posted_at %} complete{% endif %}" onclick="postToSlack(this)" title="{{ 'Posted to Slack' if posted_delivery.slack_posted_at else 'Post to Slack' }}" aria-label="{{ 'Posted to Slack' if posted_delivery.slack_posted_at else 'Post to Slack' }}" aria-busy="false">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path fill="#36C5F0" d="M5 14a2 2 0 1 1 0-4h2v4z"/>
               <path fill="#36C5F0" d="M6 14a2 2 0 0 1 4 0v6a2 2 0 0 1-4 0z"/>
@@ -211,6 +196,8 @@
               <path fill="#E01E5A" d="M14 18a2 2 0 0 1 0-4h6a2 2 0 0 1 0 4z"/>
             </svg>
           </button>
+        {% else %}
+          <span id="autosave-indicator" class="autosave clean" aria-live="polite"></span>
           {% if day_is_saturday and not saturday_recruiting and saturday_recruit_enabled_count %}
             <button type="button" class="save-button saturday-recruit-button"
                     data-saturday-action="activate-from-schedule" data-day="{{ day }}">
@@ -229,7 +216,7 @@
             <span id="saturday-publish-lock" class="save-block">{{ saturday_publish_lock_message }}</span>
           {% endif %}
           <button type="submit" name="action" value="publish" class="publish-btn publish-submit" aria-busy="false"
-                  {% if saturday_publish_locked %}disabled aria-describedby="saturday-publish-lock"{% endif %}>{{ 'Re-publish' if published else 'Publish' }}</button>
+                  {% if saturday_publish_locked %}disabled aria-describedby="saturday-publish-lock"{% endif %}>Publish</button>
         {% endif %}
       </div>
       </div>
@@ -485,6 +472,8 @@
   window.SCHEDULE_VIEW_MODE = {{ view_mode|tojson }};
   window.SCHEDULE_PUBLISHED = {{ published|tojson }};
   window.SCHEDULE_VIEWING_POSTED = {{ viewing_posted|tojson }};
+  window.SCHEDULE_POSTED_VERSION = {{ posted_version|tojson }};
+  window.SCHEDULE_REVISION = {{ schedule_revision|tojson }};
   window.DEFAULTS_BY_LOC = {{ defaults_by_loc|tojson }};
   window.SMART_DEFAULTS_BY_LOC = {{ smart_defaults_by_loc|tojson }};
   window.PEOPLE_META = {{ people_meta|tojson }};

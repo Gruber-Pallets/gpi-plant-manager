@@ -659,11 +659,12 @@ def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     prior = staffing.Schedule(
         day=TARGET_DAY,
+        published=True,
         assignments={"Truck Driver": ["Manual Driver"]},
         notes="keep",
         wc_notes={"Truck Driver": "keep"},
         custom_hours={"start": "06:00", "end": "14:30", "breaks": []},
-        published_snapshot={"assignments": {"Truck Driver": ["Manual Driver"]}},
+        published_delivery={"version": "v1"},
     )
     saved = []
     monkeypatch.setattr(
@@ -715,7 +716,8 @@ def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
     assert saved[0].notes == "keep"
     assert saved[0].wc_notes == {"Truck Driver": "keep"}
     assert saved[0].custom_hours == prior.custom_hours
-    assert saved[0].published_snapshot == prior.published_snapshot
+    assert saved[0].published is False
+    assert saved[0].published_snapshot == staffing.snapshot_of(prior)
     assert response.json()["placement"]["unplaced_people"] == []
 
 
@@ -2637,6 +2639,7 @@ def _render_staffing_page(
         staffing_mod, "load_schedule",
         lambda d: saved_schedule or staffing_mod.Schedule(day=d, published=False, assignments={}),
     )
+    monkeypatch.setattr(staffing_mod, "schedule_revision", lambda _day: "test")
     monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda d: [])
     monkeypatch.setattr(
         staffing_routes, "_safe_attendance",

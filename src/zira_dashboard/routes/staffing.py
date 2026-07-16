@@ -940,6 +940,8 @@ def staffing_page(
             wc_name: dict(sources or {})
             for wc_name, sources in (snap.get("assignment_sources") or {}).items()
         }
+        sched.custom_hours = copy.deepcopy(snap.get("custom_hours"))
+        sched.published_delivery = staffing._delivery_mapping(snap.get("published_delivery"))
     try:
         enabled_auto_work_centers = _ordered_work_center_names(_enabled_auto_work_centers(d))
     except Exception:
@@ -1231,6 +1233,11 @@ def staffing_page(
         work_weekdays=work_weekdays,
     )
 
+    posted_delivery = (
+        dict(sched.published_delivery or {}) if (sched.published or viewing_posted) else {}
+    )
+    posted_version = posted_delivery.get("version")
+
     with _Phase(phases, "render"):
         response = templates.TemplateResponse(
             request,
@@ -1259,6 +1266,9 @@ def staffing_page(
                 "tomorrow": _next_working_day(today).isoformat(),
                 "today": today.isoformat(),
                 "published": sched.published,
+                "posted_delivery": posted_delivery,
+                "posted_version": posted_version,
+                "schedule_revision": staffing.schedule_revision(d),
                 "notes": sched.notes or "",
                 "testing_day": bool(sched.testing_day),
                 # Pure per-WC render model + left-rail lists (bays,

@@ -282,17 +282,10 @@
   }
   .title-bar .view-toggle-btn:last-child { border-right: none; }
   .title-bar .view-toggle-btn:hover { color: var(--fg); }
-  .title-bar .view-toggle-btn.active { background: var(--accent-dim); color: var(--accent); }
-  .title-bar .posted-badge {
-    font-size: 0.78rem; color: var(--accent); font-weight: 600;
-    background: var(--accent-dim); padding: 0.25rem 0.6rem; border-radius: 6px;
-  }
-  .title-bar .discard-btn {
-    background: transparent; color: var(--muted);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.4rem 0.9rem; font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer;
-  }
-  .title-bar .discard-btn:hover { color: var(--bad); border-color: var(--bad); }
+  .title-bar .view-toggle-btn.active.draft { background: var(--warn-dim); color: var(--warn); }
+  .title-bar .view-toggle-btn.active.posted { background: var(--accent-dim); color: var(--accent); }
+  .title-bar .publish-btn.icon-btn.complete { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+  .title-bar .publish-btn.icon-btn.complete::after { content: "✓"; font-size: 0.72rem; font-weight: 800; margin-left: 0.2rem; }
 
   /* Schedule table */
   table.sched { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.9rem; }
@@ -639,16 +632,6 @@
      so the cell (and its row) stretches to fit the full text. */
   .wc-note-print { display: none; }
 
-  /* Draft / Posted header indicators */
-  .draft-label { color: var(--bad); font-weight: 800; font-size: 0.78rem; letter-spacing: 1.5px; padding: 0.1rem 0.45rem; border: 1px solid var(--bad); border-radius: 6px; }
-  .posted-edit-btn {
-    background: transparent; color: var(--muted);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.2rem 0.55rem; font: inherit; font-size: 0.78rem; cursor: pointer;
-  }
-  .posted-edit-btn:hover { color: var(--fg); border-color: var(--muted); }
-  .posted-edit-btn.editing { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
-
   /* Clear schedule button */
   .clear-btn {
     background: transparent; color: var(--muted);
@@ -786,7 +769,7 @@
   }
   .coverage-why ul { margin: 0.35rem 0 0.1rem 1.1rem; }
   .coverage-why li { margin: 0.15rem 0; }
-  /* Lock inputs on posted days until Edit */
+  /* Lock controls while showing a posted schedule. */
   form.locked select,
   form.locked textarea,
   form.locked input[type=text],
@@ -795,15 +778,6 @@
     pointer-events: none;
     opacity: 0.7;
   }
-  /* …except notes (day-level + per-WC). Supervisors need to update notes
-     after publishing without unlocking the whole schedule. Saves via the
-     dedicated `save_notes` action that keeps the published state. */
-  form.locked:not(.viewing-posted) textarea[name="notes"],
-  form.locked:not(.viewing-posted) textarea[name^="wc_note__"] {
-    pointer-events: auto;
-    opacity: 1;
-  }
-
   .save-block {
     background: var(--bad-dim); color: var(--bad);
     border: 1px solid var(--bad); border-radius: 8px;
