@@ -1842,12 +1842,17 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert 'class="ops-range-min"' in html
     assert "function renderMinimumCrewBalance(balance)" in js
     assert "function renderMinimumCrewBalanceFromGrid()" in js
+    assert "summary.classList.toggle('is-balanced', balance?.direction === 'ready');" in js
+    assert "summary.classList.toggle('is-unbalanced', balance?.direction !== 'ready');" in js
+    assert "setWorkCenterOnState(name, !enabled);\n      renderMinimumCrewBalanceFromGrid();\n      saveAutoCenters();" in js
     assert "const waitingEl = document.getElementById('minimum-crew-waiting');" not in js
     assert "const slotsEl = document.getElementById('minimum-crew-slots');" not in js
     assert "function clearStaleAutoWarnings()" in js
     assert ".rotation-mode {\n    display: flex; flex-wrap: nowrap;" in css
     assert "width: 100%;" in css
     assert ".minimum-crew-balance { gap: 0.45rem; margin-left: auto; }" in css
+    assert ".minimum-crew-balance.is-balanced #minimum-crew-action { color: var(--accent); }" in css
+    assert ".minimum-crew-balance.is-unbalanced #minimum-crew-action { color: var(--bad); }" in css
     assert ".work-center-off" in css
     assert '.ops-range-min { display: none; }' in css
     assert 'tr.work-center-off .ops-range-full { display: none; }' in css

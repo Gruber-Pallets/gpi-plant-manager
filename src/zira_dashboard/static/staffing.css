@@ -708,9 +708,9 @@
   }
   .rotation-auto-summary strong { color: var(--fg); font-size: 0.9rem; }
   .minimum-crew-balance { gap: 0.45rem; margin-left: auto; }
-  .minimum-crew-balance #minimum-crew-action {
-    color: var(--warn); font-weight: 750;
-  }
+  .minimum-crew-balance #minimum-crew-action { font-weight: 750; }
+  .minimum-crew-balance.is-balanced #minimum-crew-action { color: var(--accent); }
+  .minimum-crew-balance.is-unbalanced #minimum-crew-action { color: var(--bad); }
   .rotation-warning {
     flex: 1 1 16rem; min-width: 0;
     background: var(--warn-dim); color: var(--warn);

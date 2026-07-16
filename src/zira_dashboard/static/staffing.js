@@ -1489,6 +1489,8 @@
     function renderMinimumCrewBalance(balance) {
       const summary = document.getElementById('rotation-auto-summary');
       if (!summary) return;
+      summary.classList.toggle('is-balanced', balance?.direction === 'ready');
+      summary.classList.toggle('is-unbalanced', balance?.direction !== 'ready');
       const count = Number(balance?.center_count || 0);
       summary.dataset.minimumCrewBalance = JSON.stringify(balance || {});
       const actionEl = document.getElementById('minimum-crew-action');
@@ -1715,6 +1717,7 @@
       if (!name) return;
       const enabled = row.dataset.on === 'true';
       setWorkCenterOnState(name, !enabled);
+      renderMinimumCrewBalanceFromGrid();
       saveAutoCenters();
     }
 
