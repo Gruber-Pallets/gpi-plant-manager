@@ -186,10 +186,15 @@ def _minimum_crew_balance_payload(balance) -> dict[str, object]:
     }
 
 
-def _publish_shortages(assignments: dict[str, list[str]]) -> list[str]:
-    """Return each configured work center whose submitted crew is below minimum."""
+def _publish_shortages(
+    assignments: dict[str, list[str]], enabled_work_centers,
+) -> list[str]:
+    """Return each enabled work center whose submitted crew is below minimum."""
+    enabled = set(enabled_work_centers)
     shortages = []
     for loc in staffing.LOCATIONS:
+        if loc.name not in enabled:
+            continue
         minimum = _effective_minimum(loc)
         count = len(assignments.get(loc.name, []))
         if count < minimum:
@@ -911,6 +916,7 @@ def staffing_page(
         sched=sched,
         time_off_entries=time_off_entries,
         publish_blocked=publish_blocked,
+        enabled_work_centers=enabled_auto_work_centers,
     )
     unscheduled_count = len(bay_model.get("unassigned") or ())
     auto_on_count = len(enabled_auto_work_centers)
@@ -1123,7 +1129,10 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             wc_notes[loc.name] = v
     testing_day = (form.get("testing_day") or "").strip() in ("1", "on", "true")
 
-    publish_block = _publish_shortages(assignments) if action == "publish" else []
+    publish_block = (
+        _publish_shortages(assignments, _enabled_auto_work_centers(d))
+        if action == "publish" else []
+    )
 
     existing = staffing.load_schedule(d)
 

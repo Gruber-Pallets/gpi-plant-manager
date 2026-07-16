@@ -2205,7 +2205,9 @@ def _render_staffing_page(
     if recycled_context is not None:
         monkeypatch.setattr(staffing_routes, "_recycled_context_for_day", recycled_context)
 
-    def fake_build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
+    def fake_build_staffing_bays(
+        roster, sched, time_off_entries, publish_blocked, **_kwargs,
+    ):
         default_model = {
             "bays": [], "publish_block_reasons": [], "defaults_by_loc": {},
             "unassigned": [], "reserves": [], "time_off_names": [], "time_off_entries": [],

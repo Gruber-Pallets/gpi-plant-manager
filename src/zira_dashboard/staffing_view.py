@@ -17,7 +17,9 @@ already leans on and that the staffing tests monkeypatch.
 from __future__ import annotations
 
 
-def build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
+def build_staffing_bays(
+    roster, sched, time_off_entries, publish_blocked, enabled_work_centers=None,
+):
     """Build the per-work-center render model from already-fetched inputs.
 
     Parameters (all supplied by the route after its I/O completes):
@@ -30,6 +32,9 @@ def build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
                          partials carry a numeric off-span.
       publish_blocked:   truthy only on the bounce-back after a failed publish;
                          gates ``publish_block_reasons``.
+      enabled_work_centers:
+                         work centers currently On in the scheduler. Disabled
+                         centers do not participate in publish minimum checks.
 
     Returns a dict of exactly the bands-A+B context keys the route merges
     into its TemplateResponse: bays, publish_block_reasons, defaults_by_loc,
@@ -210,8 +215,14 @@ def build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
     # Only populate block reasons if we just came back from a failed publish attempt.
     publish_block_reasons = []
     if publish_blocked:
+        enabled = (
+            {loc.name for loc in staffing.LOCATIONS}
+            if enabled_work_centers is None else set(enabled_work_centers)
+        )
         for bay in bays:
             for r in bay["rows"]:
+                if r["loc"].name not in enabled:
+                    continue
                 if len(r["assigned"]) < r["min_ops"]:
                     publish_block_reasons.append(
                         f"{r['loc'].name} requires {r['min_ops']} operators — currently {len(r['assigned'])}."

@@ -30,6 +30,9 @@ def test_staffing_template_exposes_smart_defaults():
         partial_hours_by_name={},
         time_off_names=[],
         forklift_live_model={"available": False},
+        active_training_blocks=[],
+        training_protocol_people=[],
+        training_protocol_work_centers=[],
     )
 
     assert "window.SMART_DEFAULTS_BY_LOC" in rendered
@@ -80,7 +83,9 @@ def test_staffing_page_leaves_empty_day_unseeded(monkeypatch):
         lambda d, roster, defaults, time_off, **kwargs: {"Trim Saw 1": ["Smart"]},
     )
 
-    def fake_build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
+    def fake_build_staffing_bays(
+        roster, sched, time_off_entries, publish_blocked, **_kwargs,
+    ):
         captured["assignments"] = dict(sched.assignments)
         return {
             "bays": [],
@@ -167,7 +172,9 @@ def test_staffing_page_preserves_saved_manual_trim_saw_assignments(monkeypatch):
 
     monkeypatch.setattr(staffing_routes, "_smart_defaults_for_day", fake_smart_defaults)
 
-    def fake_build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
+    def fake_build_staffing_bays(
+        roster, sched, time_off_entries, publish_blocked, **_kwargs,
+    ):
         captured["assignments"] = {k: list(v) for k, v in sched.assignments.items()}
         return {
             "bays": [],

@@ -400,3 +400,24 @@ def test_publish_block_reasons_include_every_below_minimum_work_center(patch_wcs
         "Hand Build #1 requires 2 operators — currently 1.",
         "Junior #1 requires 1 operators — currently 0.",
     ]
+
+
+def test_publish_block_reasons_exclude_work_centers_that_are_off(patch_wcs):
+    enabled = _loc("Hand Build #1", bay="Bay 6", min_ops=2, max_ops=2, required=("Repair",))
+    disabled = _loc("Junior #1", bay="Bay 16", min_ops=1, max_ops=1, required=("Repair",))
+    patch_wcs([
+        (enabled, {"required": ("Repair",), "min": 2, "max": 2, "defaults": []}),
+        (disabled, {"required": ("Repair",), "min": 1, "max": 1, "defaults": []}),
+    ])
+
+    model = staffing_view.build_staffing_bays(
+        roster=[_person("Jordan", Repair=3)],
+        sched=_sched({"Hand Build #1": ["Jordan"]}),
+        time_off_entries=[],
+        publish_blocked=1,
+        enabled_work_centers={"Hand Build #1"},
+    )
+
+    assert model["publish_block_reasons"] == [
+        "Hand Build #1 requires 2 operators — currently 1.",
+    ]

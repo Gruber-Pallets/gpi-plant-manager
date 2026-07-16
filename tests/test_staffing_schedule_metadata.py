@@ -54,6 +54,11 @@ def _capture_publish(monkeypatch, locs, existing=None):
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: existing)
     monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(
+        staffing_routes,
+        "_enabled_auto_work_centers",
+        lambda _day: {loc.name for loc in locs},
+    )
     return saved
 
 
@@ -85,6 +90,30 @@ def test_publish_blocks_an_empty_one_person_work_center(monkeypatch):
     )
 
     assert saved[0].published is False
+
+
+def test_publish_ignores_minimums_for_work_centers_that_are_off(monkeypatch):
+    enabled = _publish_location("Hand Build #1", min_ops=2)
+    disabled = _publish_location("Junior #1", min_ops=1)
+    saved = _capture_publish(monkeypatch, [enabled, disabled])
+    monkeypatch.setattr(
+        staffing_routes,
+        "_enabled_auto_work_centers",
+        lambda _day: {"Hand Build #1"},
+    )
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), DAY, 0,
+        FormData([
+            ("action", "publish"),
+            ("loc__Hand Build #1", "Jordan"),
+            ("loc__Hand Build #1", "Taylor"),
+        ]),
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/staffing?day={DAY.isoformat()}"
+    assert saved[0].published is True
 
 
 def test_json_publish_below_minimum_returns_conflict_with_shortages(monkeypatch):
