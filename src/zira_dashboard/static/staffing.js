@@ -1688,7 +1688,7 @@
       btn.addEventListener('click', () => rebuild(btn.dataset.rotationMode));
     });
     function isRowToggleInteractive(target) {
-      return target.closest('a, button, input, select, textarea, label, summary, [contenteditable="true"], .sched-dd');
+      return target.closest('a, button, input, select, textarea, label, summary, [contenteditable="true"], .sched-dd, .sub');
     }
 
     document.addEventListener('click', event => {

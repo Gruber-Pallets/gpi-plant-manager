@@ -348,7 +348,7 @@ def test_work_center_row_click_toggles_only_noninteractive_row_space():
     js = _script()
 
     assert "function isRowToggleInteractive(target) {" in js
-    assert "target.closest('a, button, input, select, textarea, label, summary, [contenteditable=\"true\"], .sched-dd')" in js
+    assert "target.closest('a, button, input, select, textarea, label, summary, [contenteditable=\"true\"], .sched-dd, .sub')" in js
     assert "document.addEventListener('click', event => {" in js
     assert "const row = event.target.closest('tr[data-loc]');" in js
     assert "if (!row || isRowToggleInteractive(event.target) || savingAutoCenters) return;" in js
