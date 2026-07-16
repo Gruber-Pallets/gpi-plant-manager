@@ -1558,6 +1558,19 @@
       renderMinimumCrewBalanceFromGrid();
     }
 
+    function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
+      const demand = document.querySelector('[data-saturday-recruit-demand]');
+      if (!demand) return;
+      if (!bundle) {
+        demand.textContent = `${(enabledCenters || []).length} work centers`;
+        return;
+      }
+      const coverage = bundle.coverage || {};
+      const requested = Number(coverage.requested || 0);
+      const filled = Number(coverage.total || 0);
+      demand.textContent = `${Math.max(0, requested - filled)} needed`;
+    }
+
     function postAutoCenters(workCenters, turnOff) {
       return fetch('/api/rotations/auto-work-centers', {
         method: 'POST',
@@ -1591,6 +1604,7 @@
           throw new Error('Server did not return enabled Auto work centers.');
         }
         applyEnabledCenters(data.enabled_work_centers);
+        renderSaturdayRecruitingDemand(data.saturday_recruiting, data.enabled_work_centers);
         clearStaleAutoWarnings();
         renderMinimumCrewBalance(data.minimum_crew_balance);
         if (window.showToast) showToast('Auto work centers saved');

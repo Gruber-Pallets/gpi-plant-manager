@@ -214,10 +214,11 @@
           {% if day_is_saturday and not saturday_recruiting and saturday_recruit_enabled_count %}
             <button type="button" class="save-button saturday-recruit-button"
                     data-saturday-action="activate-from-schedule" data-day="{{ day }}">
-              Recruit for {{ saturday_recruit_enabled_count }} work centers
+              Recruit for <span data-saturday-recruit-demand>{{ saturday_recruit_enabled_count }} work centers</span>
             </button>
           {% elif day_is_saturday and saturday_recruiting and saturday_recruiting.status != 'cancelled' %}
             <div class="saturday-response-summary" aria-label="Saturday recruiting responses">
+              <span data-saturday-recruit-demand>{{ [(saturday_coverage.requested - saturday_coverage.total) if saturday_coverage else 0, 0]|max }} needed</span> ·
               {% for key, label in [('yes', 'yes'), ('no', 'no'), ('deciding', 'still deciding')] %}
                 <span class="saturday-response-count" tabindex="0"
                       title="{{ saturday_response_summary[key]|join(', ') or 'None' }}">{{ saturday_response_summary[key]|length }} {{ label }}</span>{% if not loop.last %} · {% endif %}
