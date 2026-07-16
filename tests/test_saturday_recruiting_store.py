@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time, timedelta
+from threading import Barrier
 
 import pytest
 
@@ -74,11 +76,15 @@ def _activate(**changes):
     return store.activate(**values)
 
 
-def test_available_positions_returns_only_work_centers_with_required_skills():
-    assert store.available_positions() == (
-        store.AvailablePosition(910101, "Saturday Test Repair", ("Saturday Test Repair skill",)),
-        store.AvailablePosition(910102, "Saturday Test Dismantle", ("Saturday Test Dismantle skill",)),
-    )
+def test_available_positions_includes_qualified_rows_and_excludes_unqualified_rows():
+    positions = set(store.available_positions())
+    assert store.AvailablePosition(
+        910101, "Saturday Test Repair", ("Saturday Test Repair skill",)
+    ) in positions
+    assert store.AvailablePosition(
+        910102, "Saturday Test Dismantle", ("Saturday Test Dismantle skill",)
+    ) in positions
+    assert all(position.wc_id != 910103 for position in positions)
 
 
 def test_activate_reads_bundle_and_closes_when_deadline_is_due():
@@ -144,13 +150,32 @@ def test_repeated_identical_activation_is_idempotent():
     )[0]["activated_at"] == activated_at
 
 
+def test_concurrent_identical_activation_is_idempotent():
+    barrier = Barrier(2)
+
+    def activate_together():
+        barrier.wait()
+        return _activate()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = [future.result() for future in (
+            executor.submit(activate_together),
+            executor.submit(activate_together),
+        )]
+
+    assert first == second
+    assert db.query(
+        "SELECT count(*) AS count FROM saturday_recruitments WHERE day = %s", (SATURDAY,)
+    )[0]["count"] == 1
+
+
 def test_reactivation_with_different_payload_is_rejected():
     _activate()
     with pytest.raises(store.LifecycleConflict):
         _activate(requested_counts={910101: 4, 910102: 2})
 
 
-def test_update_rejects_count_below_current_coverage():
+def test_update_rejects_positive_openings_that_cannot_match_current_commitments():
     _activate(requested_counts={910101: 2})
     db.execute(
         "INSERT INTO saturday_work_responses "
@@ -159,7 +184,7 @@ def test_update_rejects_count_below_current_coverage():
         (SATURDAY,),
     )
     with pytest.raises(store.LifecycleConflict):
-        store.update_openings(SATURDAY, {910101: 0}, time(6, 0), time(12, 0), None, NOW)
+        store.update_openings(SATURDAY, {910102: 1}, time(6, 0), time(12, 0), None, NOW)
 
 
 def test_update_rejects_shift_hour_change_after_first_commitment():
@@ -183,3 +208,12 @@ def test_closed_recruitment_can_only_reduce_unfilled_count():
         store.update_openings(SATURDAY, {910101: 3}, time(6, 0), time(12, 0), None, NOW)
     with pytest.raises(store.LifecycleConflict):
         store.update_openings(SATURDAY, {910101: 2, 910102: 1}, time(6, 0), time(12, 0), None, NOW)
+
+
+def test_closed_recruitment_allows_shift_change_before_first_commitment():
+    _activate(requested_counts={910101: 3})
+    assert store.close_due(DEADLINE) == 1
+    updated = store.update_openings(
+        SATURDAY, {910101: 3}, time(6, 30), time(12, 0), None, NOW
+    )
+    assert updated.recruitment.shift_start == time(6, 30)

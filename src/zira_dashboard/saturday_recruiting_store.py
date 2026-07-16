@@ -226,6 +226,11 @@ def activate(
         raise LifecycleConflict("Saturday response deadline has already passed")
     requested_counts = _normalize_counts(requested_counts)
     with db.cursor() as cur:
+        # A missing row cannot be protected by SELECT ... FOR UPDATE. Serialize
+        # activation attempts for this one calendar day before checking it so
+        # concurrent identical requests see the first inserted round and take
+        # the idempotent branch rather than racing its primary-key insert.
+        cur.execute("SELECT pg_advisory_xact_lock(%s::bigint)", (day.toordinal(),))
         positions = _validate_positions(cur, requested_counts)
         cur.execute(
             "SELECT published FROM schedules WHERE day = %s FOR UPDATE",
@@ -295,9 +300,7 @@ def update_openings(
             raise LifecycleConflict("Saturday recruiting openings can no longer be changed")
         if (
             (shift_start != bundle.recruitment.shift_start or shift_end != bundle.recruitment.shift_end)
-            and (bundle.recruitment.status != "recruiting" or any(
-                item.status == "committed" for item in bundle.commitments
-            ))
+            and any(item.status == "committed" for item in bundle.commitments)
         ):
             raise LifecycleConflict("Saturday shift hours lock after the first commitment")
         positions = _validate_positions(cur, requested_counts)
