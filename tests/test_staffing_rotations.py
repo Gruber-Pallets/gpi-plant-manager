@@ -1971,6 +1971,20 @@ def test_manual_locks_from_sources_extracts_manual_only():
     assert locks == {"Repair 1": ["Manual Person"]}
 
 
+def test_auto_solver_base_assignments_keeps_only_centers_outside_auto_scope():
+    from zira_dashboard.routes import staffing as staffing_route
+
+    assert staffing_route._auto_solver_base_assignments(
+        {
+            "Work Orders": ["Default Mechanic"],
+            "Tablets": ["Old Generated"],
+            "Repair 1": ["Manual Repair"],
+            "Truck Driver": ["Outside Auto"],
+        },
+        {"Work Orders", "Tablets", "Repair 1"},
+    ) == {"Truck Driver": ["Outside Auto"]}
+
+
 def test_default_people_locks_merge_with_manual_locks(monkeypatch):
     from zira_dashboard.routes import staffing as staffing_route
 

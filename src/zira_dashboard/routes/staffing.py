@@ -327,6 +327,16 @@ def _default_inputs(strict: bool = False):
         return {}, {}, {}
 
 
+def _auto_solver_base_assignments(base_assignments, enabled_centers):
+    """Keep only assignments outside the Auto solver's owned centers."""
+    enabled = set(enabled_centers)
+    return {
+        center: list(names or [])
+        for center, names in (base_assignments or {}).items()
+        if center not in enabled
+    }
+
+
 def _absence_by_day_for_block(block, d: date):
     """Full-day-off names per date across the block's bounded planning window.
 
@@ -471,12 +481,13 @@ def _recycled_suggestion_for_day(
             for wc, names in (locked_assignments or {}).items()
             if wc in enabled
         }
+        solver_base_assignments = _auto_solver_base_assignments(base_assignments, enabled)
         suggestion = rotation_suggestions.suggest_recycled_assignments(
             day=d,
             mode=mode,
             roster=available,
             preferences=preferences,
-            base_assignments=base_assignments,
+            base_assignments=solver_base_assignments,
             group_locations=group_locations,
             group_required_skills=group_required_skills,
             history=history,
