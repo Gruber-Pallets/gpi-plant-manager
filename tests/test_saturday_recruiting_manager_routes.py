@@ -55,7 +55,7 @@ def test_non_saturday_activation_is_422():
     assert response.status_code == 422
 
 
-def test_openings_can_increase_while_recruiting(monkeypatch):
+def test_openings_can_add_a_new_requested_work_center_while_recruiting(monkeypatch):
     captured = {}
     monkeypatch.setattr(routes.store, "update_openings", lambda **kw: captured.update(kw) or _bundle())
     monkeypatch.setattr(routes, "plant_now", lambda: NOW)
@@ -63,11 +63,11 @@ def test_openings_can_increase_while_recruiting(monkeypatch):
 
     response = client.post("/api/staffing/saturday-recruiting/openings", json={
         "day": "2026-07-25", "shift_start": "06:00", "shift_end": "12:00",
-        "requested_counts": {"17": 4},
+        "requested_counts": {"17": 4, "22": 1},
     })
 
     assert response.status_code == 200
-    assert captured["requested_counts"] == {17: 4}
+    assert captured["requested_counts"] == {17: 4, 22: 1}
 
 
 def test_filled_count_reduction_returns_409(monkeypatch):

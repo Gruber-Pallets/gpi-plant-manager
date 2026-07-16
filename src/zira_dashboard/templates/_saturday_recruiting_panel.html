@@ -66,6 +66,7 @@
       <button type="button" data-saturday-action="activate" {% if not saturday_positions %}disabled{% endif %}>Activate recruiting</button>
     {% elif saturday_recruiting.status == 'recruiting' %}
       <button type="button" data-saturday-action="add-opening">Add position</button>
+      <button type="button" data-saturday-action="save-openings">Save positions</button>
       <button type="button" class="danger" data-saturday-action="cancel">Cancel Saturday</button>
     {% elif saturday_recruiting.status in ('closed', 'published') %}
       <button type="button" class="danger" data-saturday-action="cancel">Cancel Saturday</button>

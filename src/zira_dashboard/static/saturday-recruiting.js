@@ -8,7 +8,17 @@
   const endpoint = '/api/staffing/saturday-recruiting';
 
   function showError(message) { error.textContent = message; error.hidden = !message; }
-  function busy(value) { panel.querySelectorAll('button').forEach(button => { button.disabled = value || button.disabled; }); }
+  function busy(value) {
+    panel.querySelectorAll('button').forEach(button => {
+      if (value) {
+        button.dataset.saturdayWasDisabled = String(button.disabled);
+        button.disabled = true;
+      } else {
+        button.disabled = button.dataset.saturdayWasDisabled === 'true';
+        delete button.dataset.saturdayWasDisabled;
+      }
+    });
+  }
   function shiftValues() { return { shift_start: panel.querySelector('[data-shift-start]').value, shift_end: panel.querySelector('[data-shift-end]').value }; }
   function requestedCounts() {
     const counts = {};
@@ -26,7 +36,7 @@
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || 'Could not update Saturday recruiting.');
       window.location.assign('/staffing?day=' + encodeURIComponent(day));
-    } catch (err) { showError(err.message); panel.querySelectorAll('button').forEach(button => { button.disabled = false; }); }
+    } catch (err) { showError(err.message); busy(false); }
   }
   function addDraft() { rows.appendChild(template.content.cloneNode(true)); }
   panel.addEventListener('click', event => {
@@ -34,6 +44,7 @@
     if (button.dataset.saturdayAction === 'add-draft-opening') return addDraft();
     if (button.dataset.saturdayAction === 'activate') return post('/activate', { day, ...shiftValues(), requested_counts: requestedCounts() });
     if (button.dataset.saturdayAction === 'add-opening') return addDraft();
+    if (button.dataset.saturdayAction === 'save-openings') return post('/openings', { day, ...shiftValues(), requested_counts: requestedCounts() });
     if (button.dataset.saturdayAction === 'cancel') {
       const names = Array.from(panel.querySelectorAll('[data-committed-name]')).map(node => node.dataset.committedName);
       const warning = names.length ? `Committed: ${names.join(', ')}. ` : '';
