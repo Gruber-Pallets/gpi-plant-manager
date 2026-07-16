@@ -1543,6 +1543,11 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "function renderMinimumCrewBalanceFromGrid()" in js
     assert "function clearStaleAutoWarnings()" in js
     assert ".work-center-off" in css
+    assert '<span class="ops-range">min {{ row.min_ops }} · max {{ row.max_ops_label }}</span>' in html
+    assert "tr.work-center-off td { background: var(--panel-2); }" in css
+    assert "tr.work-center-off .sched-cell > *," in css
+    assert "tr.work-center-off .wc-note-cell > * { display: none; }" in css
+    assert "tr.work-center-off .dept," not in css
 
 
 def test_skills_matrix_exposes_scheduling_preferences_without_training_controls():

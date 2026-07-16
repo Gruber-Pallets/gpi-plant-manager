@@ -311,7 +311,7 @@
             {% endif %}
             <td class="station">
               <div class="name">
-                {{ row.loc.name }}
+                <span>{{ row.loc.name }}</span>
                 {% if auto_scheduler_available %}
                 <label class="wc-auto-toggle" title="Include this work center when automatic scheduling runs">
                   <input type="checkbox" class="wc-auto-cb" data-loc="{{ row.loc.name }}"
@@ -319,11 +319,9 @@
                   <span class="wc-on-off-label">{{ 'On' if _center_on else 'Off' }}</span>
                 </label>
                 {% endif %}
-              </div>
-              <div class="sub">
                 <span class="ops-range">min {{ row.min_ops }} · max {{ row.max_ops_label }}</span>
-                {% if row.loc.note %}· {{ row.loc.note }}{% endif %}
               </div>
+              {% if row.loc.note %}<div class="sub">{{ row.loc.note }}</div>{% endif %}
             </td>
             <td class="dept">{{ row.loc.department }}</td>
             <td class="sched-cell">

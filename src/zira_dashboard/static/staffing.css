@@ -286,7 +286,8 @@
   table.sched thead th { color: var(--muted); font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; text-align: left; padding: 0.25rem 0.6rem; border-bottom: 1px solid var(--border); }
   table.sched thead th.n    { width: 92px; text-align: center; }
   table.sched thead th.wc-col { width: 1%; white-space: nowrap; }
-  table.sched tbody td.station .name { white-space: nowrap; }
+  table.sched tbody td.station { min-width: 17rem; }
+  table.sched tbody td.station .name { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
   table.sched thead th.dept { width: 110px; }
   table.sched thead th.sched-col    { width: 36%; }
   table.sched thead th.wc-note-col  { width: 22%; }
@@ -460,13 +461,15 @@
   .wc-auto-toggle input { accent-color: var(--accent); margin: 0; }
   .wc-auto-toggle:has(input:checked) { color: var(--accent); }
   .wc-on-off-label { min-width: 1.35rem; }
-  tr.work-center-off { opacity: 0.58; background: var(--panel-2); }
-  tr.work-center-off .dept,
+  .ops-range { margin-left: auto; color: var(--muted); font-size: 0.66rem; font-style: italic; font-weight: 500; }
+  tr.work-center-off { opacity: 0.58; }
+  tr.work-center-off td { background: var(--panel-2); }
+  tr.work-center-off .dept { padding: 0; color: transparent; font-size: 0; }
   tr.work-center-off .sched-cell,
-  tr.work-center-off .wc-note-cell { display: none; }
+  tr.work-center-off .wc-note-cell { padding: 0; }
+  tr.work-center-off .sched-cell > *,
+  tr.work-center-off .wc-note-cell > * { display: none; }
   tr.work-center-off .station { padding-top: 0.32rem; padding-bottom: 0.32rem; }
-  tr.work-center-off .sub { display: inline; margin-left: 0.3rem; }
-  tr.work-center-off .ops-range { font-size: 0.72rem; }
 
   /* Compact comma-list picker matching Settings' skills-picker style */
   .sched-picker { display: block; }
