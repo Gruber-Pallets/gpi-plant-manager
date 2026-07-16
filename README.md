@@ -45,14 +45,14 @@ Pure-logic tests run anywhere; tests that touch Postgres are skipped unless
 
 ### Optional Saturday recruiting
 
-When optional Saturday work is needed, managers choose the requested position
-counts on the Saturday Staffing page, then activate and confirm the snapshotted
-shift and response deadline. Qualified hourly employees can commit through
-Timeclock. Recruiting closes automatically at the nearest prior workday's
-start time; then assign volunteers from **Unassigned**, resolve every
-qualification shortage, and publish the schedule. Partial commitments use
-30-minute increments. Employees whose exact Spanish skill level is 3 see
-personalized Timeclock screens Spanish-first.
+When optional Saturday work is needed, open the Saturday Scheduler, turn on
+the work centers you plan to run, and click the blue **Recruit for X work
+centers** action. Each enabled center requests its configured minimum crew and
+the offer immediately appears in Timeclock. Accepted people appear in
+**Unassigned** for normal assignment; green **Publish** remains the final
+step. Recruiting closes automatically at the nearest prior workday's start
+time. Partial commitments use 30-minute increments. Employees whose exact
+Spanish skill level is 3 see personalized Timeclock screens Spanish-first.
 
 ## Layout
 
