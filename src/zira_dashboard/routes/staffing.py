@@ -1210,11 +1210,22 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
     testing_day = (form.get("testing_day") or "").strip() in ("1", "on", "true")
 
     saturday_bundle = None
+    saturday_lookup_failed = False
     if d.weekday() == 5:
         try:
             saturday_bundle = saturday_recruiting_store.get(d)
         except Exception:
+            saturday_lookup_failed = True
             log.exception("Saturday recruiting lookup failed for %s", d)
+
+    if saturday_lookup_failed and action in {"save", "publish", "unpublish"}:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Saturday recruiting state could not be verified. No schedule changes were saved.",
+            },
+            status_code=409,
+        )
 
     active_saturday_recruiting = bool(
         saturday_bundle

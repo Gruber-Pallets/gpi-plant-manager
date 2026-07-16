@@ -237,6 +237,38 @@ def test_saturday_save_rejects_noncommitted_assignment_without_persisting(monkey
     assert saved == []
 
 
+@pytest.mark.parametrize("action", ["save", "publish"])
+def test_saturday_recruiting_lookup_failure_blocks_schedule_writes(monkeypatch, action):
+    saved = []
+    default_updates = []
+    repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair,))
+    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: staffing.Schedule(day=SATURDAY, assignments={}))
+    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(staffing_routes.work_centers_store, "save_one", lambda *args: default_updates.append(args))
+    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
+
+    def _lookup_failed(_day):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", _lookup_failed)
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), SATURDAY, 0,
+        FormData([
+            ("action", action),
+            ("loc__Repair 1", "Ana"),
+            ("defaults_dirty__Repair 1", "1"),
+            ("default__Repair 1", "Ana"),
+        ]),
+    )
+
+    assert response.status_code == 409
+    assert b"Saturday recruiting state could not be verified" in response.body
+    assert saved == []
+    assert default_updates == []
+
+
 def test_staffing_template_has_saturday_off_availability_and_publish_lock():
     template = Path("src/zira_dashboard/templates/staffing.html").read_text()
     script = Path("src/zira_dashboard/static/staffing.js").read_text()
