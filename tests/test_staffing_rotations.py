@@ -2032,7 +2032,8 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert 'title="Optimized: strongest coverage"' in html
     assert 'title="Normal: balanced coverage and fair rotation"' in html
     assert 'title="Training: develop operator skills"' in html
-    assert '⚡⚡⚡' in html
+    assert 'title="Optimized: strongest coverage">⚡</button>' in html
+    assert '⚡⚡⚡' not in html
     assert '⚖' in html
     assert '🎓' in html
     assert 'data-work-center-toggle' in html

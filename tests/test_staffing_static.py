@@ -498,6 +498,9 @@ def test_clear_schedule_remains_a_distinct_local_autosave_action():
 
     assert 'id="reset-schedule-btn" class="clear-btn">Reset to defaults</button>' in html
     assert 'id="clear-schedule-btn" class="clear-btn clear-schedule-btn">Clear schedule</button>' in html
+    controls = html.split('<div class="rotation-controls"', 1)[1].split('</aside>', 1)[0]
+    assert controls.index('id="reset-schedule-btn"') < controls.index('id="clear-schedule-btn"')
+    assert controls.index('id="clear-schedule-btn"') < controls.rindex('</div>')
     assert "Clear every Scheduled cell for this day?" in js
     assert "const resetScheduleBtn = document.getElementById('reset-schedule-btn');" in js
     assert "const __clearBtn = document.getElementById('clear-schedule-btn');" in js
