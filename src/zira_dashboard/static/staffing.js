@@ -1358,7 +1358,7 @@
     const modeBtns = [...controls.querySelectorAll('.rotation-mode-btn')];
     const warnBox = document.getElementById('rotation-warnings');
     const helpEl = document.getElementById('rotation-mode-help');
-    const autoCbs = [...document.querySelectorAll('.wc-auto-cb')];
+    const workCenterRows = [...document.querySelectorAll('tr[data-loc]')];
     const day = controls.dataset.day || window.SCHEDULE_DAY;
     let rebuilding = false;
     let savingAutoCenters = false;
@@ -1468,7 +1468,10 @@
     }
 
     function selectedAutoCenters() {
-      return autoCbs.filter(cb => cb.checked).map(cb => cb.dataset.loc).filter(Boolean);
+      return workCenterRows
+        .filter(row => row.dataset.on === 'true')
+        .map(row => row.dataset.loc)
+        .filter(Boolean);
     }
 
     function renderMinimumCrewBalance(balance) {
@@ -1528,17 +1531,16 @@
       if (!row) return;
       row.dataset.on = enabled ? 'true' : 'false';
       row.classList.toggle('work-center-off', !enabled);
-      const label = row.querySelector('.wc-on-off-label');
-      if (label) label.textContent = enabled ? 'On' : 'Off';
+      const toggle = row.querySelector('[data-work-center-toggle]');
+      if (toggle) toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
     }
 
     function applyEnabledCenters(names) {
       const enabled = new Set(names || []);
       window.AUTO_SCHEDULE_WC_NAMES = [...enabled];
-      autoCbs.forEach(cb => {
-        cb.checked = enabled.has(cb.dataset.loc);
-        setWorkCenterOnState(cb.dataset.loc, cb.checked);
-      });
+      workCenterRows.forEach(row => setWorkCenterOnState(
+        row.dataset.loc, enabled.has(row.dataset.loc),
+      ));
       renderMinimumCrewBalanceFromGrid();
     }
 
@@ -1552,19 +1554,18 @@
 
     function setAutoCentersSaving(saving) {
       savingAutoCenters = saving;
-      autoCbs.forEach(cb => { cb.disabled = saving; });
+      workCenterRows.forEach(row => {
+        row.classList.toggle('work-center-saving', saving);
+        row.setAttribute('aria-busy', saving ? 'true' : 'false');
+        const toggle = row.querySelector('[data-work-center-toggle]');
+        if (toggle) toggle.setAttribute('aria-disabled', saving ? 'true' : 'false');
+      });
     }
 
-    async function saveAutoCenters(changedCb) {
-      if (__viewingPosted || (__isPublished && !__unlocked)) {
-        changedCb.checked = !changedCb.checked;
-        return;
-      }
+    async function saveAutoCenters() {
+      if (__viewingPosted || (__isPublished && !__unlocked)) return;
       if (savingAutoCenters) return;
       const requestedWorkCenters = selectedAutoCenters();
-      // Browser checkbox changes are optimistic by default.  Put this one
-      // straight back until the server has accepted the requested selection.
-      changedCb.checked = !changedCb.checked;
       setAutoCentersSaving(true);
       try {
         const resp = await postAutoCenters(requestedWorkCenters, []);
@@ -1581,6 +1582,7 @@
         if (window.showToast) showToast('Auto work centers saved');
       } catch (err) {
         const message = 'Auto toggle failed: ' + (err.message || 'network error');
+        applyEnabledCenters(window.AUTO_SCHEDULE_WC_NAMES || []);
         renderCoverageFailure(message);
         if (window.showToast) showToast(message, null, 'error');
       } finally {
@@ -1691,21 +1693,30 @@
       btn.addEventListener('click', () => rebuild(btn.dataset.rotationMode));
     });
     function isRowToggleInteractive(target) {
-      return target.closest('a, button, input, select, textarea, label, summary, [contenteditable="true"], .sched-dd, .sub');
+      return target.closest('a, button, input, select, textarea, label, summary, [contenteditable="true"], .sched-cell, .wc-note-cell, .sub');
+    }
+
+    function toggleWorkCenterRow(row) {
+      if (!row || savingAutoCenters) return;
+      if (__viewingPosted || (__isPublished && !__unlocked)) return;
+      const name = row.dataset.loc;
+      if (!name) return;
+      const enabled = row.dataset.on === 'true';
+      setWorkCenterOnState(name, !enabled);
+      saveAutoCenters();
     }
 
     document.addEventListener('click', event => {
       const row = event.target.closest('tr[data-loc]');
       if (!row || isRowToggleInteractive(event.target) || savingAutoCenters) return;
-      if (__viewingPosted || (__isPublished && !__unlocked)) return;
-      const cb = row.querySelector('.wc-auto-cb');
-      if (!cb || cb.disabled) return;
-      cb.checked = !cb.checked;
-      cb.dispatchEvent(new Event('change', { bubbles: true }));
+      toggleWorkCenterRow(row);
     });
 
-    autoCbs.forEach(cb => {
-      cb.addEventListener('change', () => saveAutoCenters(cb));
+    document.addEventListener('keydown', event => {
+      const toggle = event.target.closest('[data-work-center-toggle]');
+      if (!toggle || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault();
+      toggleWorkCenterRow(toggle.closest('tr[data-loc]'));
     });
     document.addEventListener('staffing:selection-changed', () => {
       clearStaleAutoWarnings();

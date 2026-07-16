@@ -1575,7 +1575,11 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert '⚡⚡⚡' in html
     assert '⚖' in html
     assert '🎓' in html
-    assert 'class="wc-auto-cb"' in html
+    assert 'data-work-center-toggle' in html
+    assert 'role="switch"' in html
+    assert 'aria-checked="{{ _center_on|tojson }}"' in html
+    assert 'class="wc-auto-cb"' not in html
+    assert 'class="wc-on-off-label"' not in html
     assert "rotation_reasons" not in html
     assert "ROTATION_REASONS" not in html
     assert "ROTATION_REASONS" not in js
@@ -1602,7 +1606,8 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert 'id="minimum-crew-waiting"' not in html
     assert 'id="minimum-crew-slots"' not in html
     assert 'id="minimum-crew-action"' in html
-    assert 'class="wc-on-off-label"' in html
+    assert 'class="ops-range-full"' in html
+    assert 'class="ops-range-min"' in html
     assert "function renderMinimumCrewBalance(balance)" in js
     assert "function renderMinimumCrewBalanceFromGrid()" in js
     assert "const waitingEl = document.getElementById('minimum-crew-waiting');" not in js
@@ -1612,7 +1617,11 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "width: 100%;" in css
     assert ".minimum-crew-balance { gap: 0.45rem; margin-left: auto; }" in css
     assert ".work-center-off" in css
-    assert '<span class="ops-range">min {{ row.min_ops }} · max {{ row.max_ops_label }}</span>' in html
+    assert '.ops-range-min { display: none; }' in css
+    assert 'tr.work-center-off .ops-range-full { display: none; }' in css
+    assert 'tr.work-center-off .ops-range-min { display: inline; }' in css
+    assert 'tr[data-loc][data-on="true"] td { background: var(--accent-dim); }' in css
+    assert '.wc-auto-toggle' not in css
     assert "tr.work-center-off td { background: var(--panel-2); }" in css
     assert "tr.work-center-off .sched-cell > *," in css
     assert "tr.work-center-off .wc-note-cell > * { display: none; }" in css
@@ -2279,7 +2288,7 @@ def test_staffing_template_renders_auto_controls_from_the_available_context():
 
     assert "{% if auto_scheduler_available %}" in html
     assert 'class="rotation-controls"' in html
-    assert 'class="wc-auto-cb"' in html
+    assert 'data-work-center-toggle' in html
 
 
 def test_saved_staffing_day_context_hydrates_stored_mode(monkeypatch):

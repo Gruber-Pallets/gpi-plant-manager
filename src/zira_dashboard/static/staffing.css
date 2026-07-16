@@ -448,20 +448,20 @@
   .multi-dd .dd-list .dd-reserves[open] > summary { color: #581c87; }
   .multi-dd .dd-list .dd-reserves-count { color: var(--muted); font-weight: 500; margin-left: 0.15rem; font-size: 0.75rem; }
 
-  /* On/Off toggles sit next to the Work Center name. */
-  .wc-auto-toggle {
-    display: inline-flex; align-items: center; gap: 0.25rem;
-    margin-left: 0.5rem;
-    font-size: 0.7rem; font-weight: 500;
-    color: var(--muted); cursor: pointer;
-    user-select: none;
-    vertical-align: middle;
+  /* A work center is toggled from unused row space, not from a checkbox. */
+  .work-center-toggle { cursor: pointer; }
+  .work-center-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 3px;
   }
-  .wc-auto-toggle { margin-left: 0.35rem; }
-  .wc-auto-toggle input { accent-color: var(--accent); margin: 0; }
-  .wc-auto-toggle:has(input:checked) { color: var(--accent); }
-  .wc-on-off-label { min-width: 1.35rem; }
+  tr[data-loc] td.station,
+  tr[data-loc] td.dept { cursor: pointer; }
+  tr[data-loc][data-on="true"] td { background: var(--accent-dim); }
+  tr.work-center-saving { cursor: progress; }
+  tr.work-center-saving .work-center-toggle { cursor: progress; }
   .ops-range { margin-left: auto; color: var(--muted); font-size: 0.66rem; font-style: italic; font-weight: 500; }
+  .ops-range-min { display: none; }
   tr.work-center-off { opacity: 0.58; }
   tr.work-center-off td { background: var(--panel-2); }
   tr.work-center-off .dept { padding: 0; color: transparent; font-size: 0; }
@@ -470,6 +470,8 @@
   tr.work-center-off .sched-cell > *,
   tr.work-center-off .wc-note-cell > * { display: none; }
   tr.work-center-off .station { padding-top: 0.32rem; padding-bottom: 0.32rem; }
+  tr.work-center-off .ops-range-full { display: none; }
+  tr.work-center-off .ops-range-min { display: inline; }
 
   /* Compact comma-list picker matching Settings' skills-picker style */
   .sched-picker { display: block; }

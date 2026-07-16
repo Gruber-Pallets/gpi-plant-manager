@@ -308,16 +308,18 @@
               </td>
             {% endif %}
             <td class="station">
-              <div class="name">
+              <div class="name work-center-toggle"
+                   data-work-center-toggle
+                   tabindex="0"
+                   role="switch"
+                   aria-checked="{{ _center_on|tojson }}"
+                   aria-disabled="false"
+                   aria-label="Toggle automatic scheduling for {{ row.loc.name }}">
                 <span>{{ row.loc.name }}</span>
-                {% if auto_scheduler_available %}
-                <label class="wc-auto-toggle" title="Include this work center when automatic scheduling runs">
-                  <input type="checkbox" class="wc-auto-cb" data-loc="{{ row.loc.name }}"
-                         {% if _center_on %}checked{% endif %}>
-                  <span class="wc-on-off-label">{{ 'On' if _center_on else 'Off' }}</span>
-                </label>
-                {% endif %}
-                <span class="ops-range">min {{ row.min_ops }} · max {{ row.max_ops_label }}</span>
+                <span class="ops-range">
+                  <span class="ops-range-full">min {{ row.min_ops }} · max {{ row.max_ops_label }}</span>
+                  <span class="ops-range-min">min {{ row.min_ops }}</span>
+                </span>
               </div>
               {% if row.loc.note %}<div class="sub">{{ row.loc.note }}</div>{% endif %}
             </td>
