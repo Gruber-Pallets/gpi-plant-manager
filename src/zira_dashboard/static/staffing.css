@@ -670,6 +670,15 @@
     flex: 1 1 15rem; margin: 0; min-width: 0; padding: 0;
     text-align: left; font-style: italic;
   }
+  .rotation-auto-summary {
+    display: flex; align-items: baseline; gap: 0.35rem; margin-left: auto;
+    color: var(--muted); font-size: 0.78rem; font-style: normal; white-space: nowrap;
+  }
+  .rotation-auto-label {
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.6px;
+    text-transform: uppercase;
+  }
+  .rotation-auto-summary strong { color: var(--fg); font-size: 0.9rem; }
   .rotation-warning {
     flex: 1 1 16rem; min-width: 0;
     background: var(--warn-dim); color: var(--warn);

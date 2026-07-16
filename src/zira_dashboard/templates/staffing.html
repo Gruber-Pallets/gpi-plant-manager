@@ -224,6 +224,12 @@
                 data-rotation-mode="training" aria-pressed="{{ (recycled_rotation_mode == 'training')|tojson }}"
                 aria-label="Training schedule goal" title="Training: develop operator skills">🎓</button>
         <p class="hint rotation-mode-help" id="rotation-mode-help">{{ rotation_mode_help }}</p>
+        <output class="rotation-auto-summary" id="rotation-auto-summary"
+                data-unscheduled-count="{{ rotation_auto_summary.unscheduled_count }}">
+          <span class="rotation-auto-label">Auto mode</span>
+          <strong id="rotation-auto-delta">{% if rotation_auto_summary.delta > 0 %}+{% endif %}{{ rotation_auto_summary.delta }}</strong>
+          <span><span id="rotation-unscheduled-count">{{ rotation_auto_summary.unscheduled_count }}</span> unscheduled / <span id="rotation-auto-on-count">{{ rotation_auto_summary.auto_on_count }}</span> Auto On</span>
+        </output>
       </div>
       <div class="rotation-warning" id="rotation-warnings" role="alert"
            {% if not rotation_warnings and not rotation_issues %}hidden{% endif %}>

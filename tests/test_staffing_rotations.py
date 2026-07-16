@@ -1531,6 +1531,12 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "btn.addEventListener('click', () => rebuild(btn.dataset.rotationMode));" in js
     assert "data.unplaced" in js
     assert "could not be placed in an enabled Auto work center" in js
+    assert 'id="rotation-auto-summary"' in html
+    assert 'data-unscheduled-count="{{ rotation_auto_summary.unscheduled_count }}"' in html
+    assert 'id="rotation-auto-delta"' in html
+    assert "function renderAutoSummary()" in js
+    assert "renderAutoSummary();" in js
+    assert ".rotation-auto-summary" in css
 
 
 def test_skills_matrix_exposes_scheduling_preferences_without_training_controls():
@@ -2056,6 +2062,7 @@ def _render_staffing_page(
     auto_centers=None,
     default_people=None,
     recycled_context=None,
+    bay_model=None,
 ):
     """Render the staffing page with all I/O stubbed, returning the captured
     template context. Mirrors the harness in test_staffing_trim_saw_defaults.
@@ -2110,12 +2117,13 @@ def _render_staffing_page(
         monkeypatch.setattr(staffing_routes, "_recycled_context_for_day", recycled_context)
 
     def fake_build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
-        return {
+        default_model = {
             "bays": [], "publish_block_reasons": [], "defaults_by_loc": {},
             "unassigned": [], "reserves": [], "time_off_names": [], "time_off_entries": [],
             "partial_hours_by_name": {}, "partial_range_by_name": {},
             "partial_clear_by_name": {}, "people_meta": {}, "all_active_people": [],
         }
+        return bay_model or default_model
 
     monkeypatch.setattr(staffing_view, "build_staffing_bays", fake_build_staffing_bays)
 
@@ -2141,6 +2149,26 @@ def test_blank_staffing_day_context_defaults_to_normal(monkeypatch):
     assert ctx["rotation_reasons"] == {}
     assert ctx["rotation_warnings"] == []
     assert ctx["active_training_blocks"] == []
+
+
+def test_staffing_context_exposes_auto_summary_counts(monkeypatch):
+    ctx = _render_staffing_page(
+        monkeypatch,
+        auto_centers={"Repair 1", "Dismantler 1"},
+        bay_model={
+            "bays": [], "publish_block_reasons": [], "defaults_by_loc": {},
+            "unassigned": ["A", "B", "C"], "reserves": [],
+            "time_off_names": [], "time_off_entries": [],
+            "partial_hours_by_name": {}, "partial_range_by_name": {},
+            "partial_clear_by_name": {}, "people_meta": {}, "all_active_people": [],
+        },
+    )
+
+    assert ctx["rotation_auto_summary"] == {
+        "unscheduled_count": 3,
+        "auto_on_count": 2,
+        "delta": -1,
+    }
 
 
 def test_blank_staffing_day_stays_empty_without_default_or_smart_seed(monkeypatch):

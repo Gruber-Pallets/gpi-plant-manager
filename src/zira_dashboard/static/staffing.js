@@ -1470,12 +1470,30 @@
       return autoCbs.filter(cb => cb.checked).map(cb => cb.dataset.loc).filter(Boolean);
     }
 
+    function renderAutoSummary() {
+      const summary = document.getElementById('rotation-auto-summary');
+      if (!summary) return;
+      const unscheduled = document.querySelectorAll(
+        '.section.unscheduled ul li:not(.empty)',
+      ).length;
+      const autoOn = autoCbs.filter(cb => cb.checked).length;
+      const delta = autoOn - unscheduled;
+      const deltaEl = document.getElementById('rotation-auto-delta');
+      const unscheduledEl = document.getElementById('rotation-unscheduled-count');
+      const autoOnEl = document.getElementById('rotation-auto-on-count');
+      summary.dataset.unscheduledCount = String(unscheduled);
+      if (deltaEl) deltaEl.textContent = `${delta > 0 ? '+' : ''}${delta}`;
+      if (unscheduledEl) unscheduledEl.textContent = String(unscheduled);
+      if (autoOnEl) autoOnEl.textContent = String(autoOn);
+    }
+
     function applyEnabledCenters(names) {
       const enabled = new Set(names || []);
       window.AUTO_SCHEDULE_WC_NAMES = [...enabled];
       autoCbs.forEach(cb => {
         cb.checked = enabled.has(cb.dataset.loc);
       });
+      renderAutoSummary();
     }
 
     function postAutoCenters(workCenters, turnOff) {
@@ -1549,6 +1567,7 @@
         [...(data.coverage?.issues || []), ...partialPlacementIssues(data)],
       );
       syncLeftRailWithSchedule();
+      renderAutoSummary();
       refreshPickerVisibility();
     }
 
@@ -1624,6 +1643,7 @@
     autoCbs.forEach(cb => {
       cb.addEventListener('change', () => saveAutoCenters(cb));
     });
+    renderAutoSummary();
   })();
 
   // ---------- Unified training protocol setup + lifecycle ----------

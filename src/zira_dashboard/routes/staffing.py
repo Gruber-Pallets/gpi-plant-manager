@@ -856,6 +856,13 @@ def staffing_page(
         time_off_entries=time_off_entries,
         publish_blocked=publish_blocked,
     )
+    unscheduled_count = len(bay_model.get("unassigned") or ())
+    auto_on_count = len(enabled_auto_work_centers)
+    rotation_auto_summary = {
+        "unscheduled_count": unscheduled_count,
+        "auto_on_count": auto_on_count,
+        "delta": auto_on_count - unscheduled_count,
+    }
     raw_defaults_by_loc = bay_model.get("defaults_by_loc") or {}
     if sched.assignments and auto_scheduler_available:
         # A saved day keeps its stored mode so the empty-slot fill hints agree
@@ -945,6 +952,7 @@ def staffing_page(
                 "auto_scheduler_available": auto_scheduler_available,
                 "auto_schedule_enabled_wc_names": enabled_auto_work_centers,
                 "auto_schedule_available_wc_names": [loc.name for loc in staffing.LOCATIONS],
+                "rotation_auto_summary": rotation_auto_summary,
                 "recycled_wc_names": _recycled_wc_names(),
                 "training_protocol_people": sorted(
                     (person.name for person in roster if person.active), key=str.lower
