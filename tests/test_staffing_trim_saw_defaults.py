@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, time
 from pathlib import Path
+from types import SimpleNamespace
 
 from zira_dashboard.deps import templates
 
@@ -23,6 +24,8 @@ def test_staffing_template_exposes_smart_defaults():
         view_mode="draft",
         published=False,
         viewing_posted=False,
+        posted_version=None,
+        schedule_revision="test",
         defaults_by_loc={"Trim Saw 1": ["Stored"]},
         smart_defaults_by_loc={"Trim Saw 1": ["Smart"]},
         people_meta={},
@@ -49,12 +52,18 @@ def test_staffing_page_leaves_empty_day_unseeded(monkeypatch):
 
     monkeypatch.setattr(staffing_routes, "plant_today", lambda: date(2026, 7, 6))
     monkeypatch.setattr(staffing_routes, "_next_working_day", lambda today: target_day)
+    monkeypatch.setattr(
+        staffing_routes.schedule_store,
+        "current",
+        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
+    )
     monkeypatch.setattr(staffing_routes._http_cache, "get_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "store_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes.app_settings, "get_setting", lambda key: ["Trim Saw 1"])
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
     monkeypatch.setattr(staffing_mod, "load_roster", lambda: [])
+    monkeypatch.setattr(staffing_mod, "schedule_revision", lambda d: "test")
     monkeypatch.setattr(
         staffing_mod,
         "load_schedule",
@@ -133,12 +142,18 @@ def test_staffing_page_preserves_saved_manual_trim_saw_assignments(monkeypatch):
 
     monkeypatch.setattr(staffing_routes, "plant_today", lambda: date(2026, 7, 6))
     monkeypatch.setattr(staffing_routes, "_next_working_day", lambda today: target_day)
+    monkeypatch.setattr(
+        staffing_routes.schedule_store,
+        "current",
+        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
+    )
     monkeypatch.setattr(staffing_routes._http_cache, "get_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "store_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes.app_settings, "get_setting", lambda key: ["Trim Saw 1"])
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
     monkeypatch.setattr(staffing_mod, "load_roster", lambda: [])
+    monkeypatch.setattr(staffing_mod, "schedule_revision", lambda d: "test")
     monkeypatch.setattr(
         staffing_mod,
         "load_schedule",
