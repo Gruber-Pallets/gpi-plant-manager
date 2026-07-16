@@ -817,9 +817,9 @@ def staffing_page(
     except Exception:
         log.exception("Could not load auto-schedule work-center settings for %s", d)
         enabled_auto_work_centers = []
-    # New schedules intentionally start blank. Automatic scheduling remains an
-    # explicit action, and Saturday schedules are manual-only in the UI.
-    auto_scheduler_available = d.weekday() != 5
+    # Automatic scheduling is an explicit manager action and is available for
+    # every displayed calendar day.
+    auto_scheduler_available = True
 
     # Now that the schedule is in hand, kick off attendance in parallel
     # with our render-prep work below.

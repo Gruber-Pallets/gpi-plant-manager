@@ -2201,13 +2201,18 @@ def test_blank_staffing_day_stays_empty_without_default_or_smart_seed(monkeypatc
     assert ctx["auto_scheduler_available"] is True
 
 
-def test_saturday_staffing_context_is_manual_only(monkeypatch):
-    ctx = _render_staffing_page(monkeypatch, day=date(2026, 7, 18))
+@pytest.mark.parametrize("day", [
+    date(2026, 7, 13),  # Monday
+    date(2026, 7, 18),  # Saturday
+    date(2026, 7, 19),  # Sunday
+])
+def test_staffing_context_enables_auto_scheduler_every_day(monkeypatch, day):
+    ctx = _render_staffing_page(monkeypatch, day=day)
 
-    assert ctx["auto_scheduler_available"] is False
+    assert ctx["auto_scheduler_available"] is True
 
 
-def test_staffing_template_gates_auto_controls_for_saturday():
+def test_staffing_template_renders_auto_controls_from_the_available_context():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
 
     assert "{% if auto_scheduler_available %}" in html
