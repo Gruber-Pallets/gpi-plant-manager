@@ -1,13 +1,29 @@
-.saturday-recruiting { margin: 0 0 1rem; padding: 1rem; border: 1px solid #d7dce7; border-radius: .65rem; background: #f8fafc; }
-.saturday-recruiting__heading { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
-.saturday-recruiting h2 { margin: .15rem 0 .6rem; font-size: 1.1rem; }
-.saturday-recruiting .eyebrow { color: #475569; font-size: .72rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
-.saturday-opening-row, .saturday-opening-draft { display: flex; align-items: center; gap: .5rem; margin: .35rem 0; }
-.saturday-opening-row span { flex: 1; }.saturday-opening-row strong { min-width: 3.75rem; text-align: right; }
-.saturday-opening-draft select { min-width: 13rem; }.saturday-opening-draft input { width: 5rem; }
-.saturday-shift input { margin: 0 .25rem; }.saturday-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
-.saturday-commitments { margin: .65rem 0; padding-left: 1.15rem; }.saturday-commitments li { display: flex; gap: .5rem; justify-content: space-between; align-items: center; }
-.saturday-actions .danger { background: #b42318; border-color: #b42318; color: #fff; }
-#saturday-recruiting-error { margin: .5rem 0; color: #b42318; font-weight: 600; }
-.saturday-config-error { color: #92400e; }.status-pill { padding: .2rem .45rem; border-radius: 999px; background: #e2e8f0; color: #334155; font-size: .72rem; font-weight: 800; }
-@media (max-width: 640px) { .saturday-recruiting__heading { display: block; }.saturday-opening-row, .saturday-opening-draft { align-items: stretch; flex-wrap: wrap; }.saturday-opening-draft select { min-width: 0; flex: 1; } }
+.saturday-recruit-button {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.saturday-recruit-button:hover,
+.saturday-recruit-button:focus-visible {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.saturday-response-summary {
+  display: inline-flex;
+  gap: .35rem;
+  font-weight: 700;
+  color: #475569;
+  align-items: center;
+}
+
+.saturday-response-count {
+  cursor: help;
+  text-decoration: underline dotted;
+}
+
+.saturday-response-count:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: 3px;
+}

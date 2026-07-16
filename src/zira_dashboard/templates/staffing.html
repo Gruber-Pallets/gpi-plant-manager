@@ -213,6 +213,19 @@
               <path fill="#E01E5A" d="M14 18a2 2 0 0 1 0-4h6a2 2 0 0 1 0 4z"/>
             </svg>
           </button>
+          {% if day_is_saturday and not saturday_recruiting and saturday_recruit_enabled_count %}
+            <button type="button" class="save-button saturday-recruit-button"
+                    data-saturday-action="activate-from-schedule" data-day="{{ day }}">
+              Recruit for {{ saturday_recruit_enabled_count }} work centers
+            </button>
+          {% elif day_is_saturday and saturday_recruiting and saturday_recruiting.status != 'cancelled' %}
+            <div class="saturday-response-summary" aria-label="Saturday recruiting responses">
+              {% for key, label in [('yes', 'yes'), ('no', 'no'), ('deciding', 'still deciding')] %}
+                <span class="saturday-response-count" tabindex="0"
+                      title="{{ saturday_response_summary[key]|join(', ') or 'None' }}">{{ saturday_response_summary[key]|length }} {{ label }}</span>{% if not loop.last %} · {% endif %}
+              {% endfor %}
+            </div>
+          {% endif %}
           {% if saturday_publish_locked %}
             <span id="saturday-publish-lock" class="save-block">{{ saturday_publish_lock_message }}</span>
           {% endif %}
@@ -222,8 +235,6 @@
       </div>
       </div>
     </div>
-
-    {% include "_saturday_recruiting_panel.html" %}
 
     {# Auto-scheduler controls. The mode buttons set the goal for the enabled
        work centers; manual/default locks always survive. #}
