@@ -237,7 +237,7 @@ def test_saturday_save_rejects_noncommitted_assignment_without_persisting(monkey
     assert saved == []
 
 
-@pytest.mark.parametrize("action", ["save", "publish"])
+@pytest.mark.parametrize("action", ["save", "publish", "save_notes", "discard_draft"])
 def test_saturday_recruiting_lookup_failure_blocks_schedule_writes(monkeypatch, action):
     saved = []
     default_updates = []
@@ -267,6 +267,44 @@ def test_saturday_recruiting_lookup_failure_blocks_schedule_writes(monkeypatch, 
     assert b"Saturday recruiting state could not be verified" in response.body
     assert saved == []
     assert default_updates == []
+
+
+def test_discard_saturday_draft_rejects_noncommitted_snapshot_assignment(monkeypatch):
+    saved = []
+    repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
+    posted = staffing.Schedule(day=SATURDAY, published=True, assignments={"Repair 1": ["Cara"]})
+    existing = staffing.Schedule(
+        day=SATURDAY, published=False, assignments={"Repair 1": ["Ana"]},
+        published_snapshot=staffing.snapshot_of(posted),
+    )
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair,))
+    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: existing)
+    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: _repair_only_bundle())
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), SATURDAY, 0,
+        FormData([("action", "discard_draft")]),
+    )
+
+    assert response.status_code == 409
+    assert b"Cara is not committed to Saturday." in response.body
+    assert saved == []
+
+
+def test_unknown_staffing_action_is_rejected_before_schedule_write(monkeypatch):
+    saved = []
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", ())
+    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), SATURDAY, 0,
+        FormData([("action", "surprise")]),
+    )
+
+    assert response.status_code == 400
+    assert saved == []
 
 
 def test_staffing_template_has_saturday_off_availability_and_publish_lock():

@@ -1177,6 +1177,8 @@ async def staffing_save(
 
 def _staffing_save_work(request: Request, d: date, auto: int, form):
     action = (form.get("action") or "save").strip().lower()
+    if action not in {"save", "publish", "unpublish", "save_notes", "discard_draft"}:
+        return JSONResponse({"ok": False, "error": "Unknown staffing action."}, status_code=400)
     if (form.get("viewing_posted") or "").strip() == "1" and action != "discard_draft":
         return JSONResponse(
             {"ok": False, "error": "The posted schedule view is read-only."},
@@ -1218,7 +1220,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             saturday_lookup_failed = True
             log.exception("Saturday recruiting lookup failed for %s", d)
 
-    if saturday_lookup_failed and action in {"save", "publish", "unpublish"}:
+    if saturday_lookup_failed:
         return JSONResponse(
             {
                 "ok": False,
@@ -1231,18 +1233,24 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         saturday_bundle
         and saturday_bundle.recruitment.status in {"recruiting", "closed", "published"}
     )
-    if active_saturday_recruiting and action in {"save", "publish", "unpublish"}:
+    committed_names = set()
+    if active_saturday_recruiting:
         committed_names = {
             item.person_name
             for item in saturday_bundle.commitments
             if item.status == "committed"
         }
-        noncommitted_names = sorted({
+
+    def _noncommitted_names(candidate_assignments):
+        return sorted({
             name
-            for names in assignments.values()
+            for names in candidate_assignments.values()
             for name in names
             if name not in committed_names
         })
+
+    if active_saturday_recruiting and action in {"save", "publish", "unpublish"}:
+        noncommitted_names = _noncommitted_names(assignments)
         if noncommitted_names:
             return JSONResponse(
                 {
@@ -1316,10 +1324,26 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
     # Discard-draft action: restore the posted snapshot, clear it, and re-publish.
     if action == "discard_draft" and existing.published_snapshot:
         snap = existing.published_snapshot
+        restored_assignments = {
+            k: list(v) for k, v in (snap.get("assignments") or {}).items()
+        }
+        if active_saturday_recruiting:
+            noncommitted_names = _noncommitted_names(restored_assignments)
+            if noncommitted_names:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Only committed Saturday volunteers can be scheduled.",
+                        "validation_errors": [
+                            f"{name} is not committed to Saturday." for name in noncommitted_names
+                        ],
+                    },
+                    status_code=409,
+                )
         restored = staffing.Schedule(
             day=d,
             published=True,
-            assignments={k: list(v) for k, v in (snap.get("assignments") or {}).items()},
+            assignments=restored_assignments,
             notes=str(snap.get("notes") or ""),
             wc_notes=dict(snap.get("wc_notes") or {}),
             testing_day=bool(snap.get("testing_day", False)),
