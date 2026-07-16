@@ -8,6 +8,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta, UTC
 
 from fastapi import APIRouter, Query, Request
@@ -330,6 +331,21 @@ def _save_enabled_auto_work_centers(names) -> list[str]:
     enabled = _ordered_work_center_names(names)
     app_settings.set_setting(AUTO_SCHEDULE_WC_SETTING, enabled)
     return enabled
+
+
+def _saturday_recruit_requested_counts(enabled: Sequence[str]) -> dict[int, int]:
+    enabled_names = set(enabled)
+    positions_by_name = {
+        position.wc_name: position.wc_id
+        for position in saturday_recruiting_store.available_positions()
+    }
+    return {
+        positions_by_name[location.name]: _effective_minimum(location)
+        for location in staffing.LOCATIONS
+        if location.name in enabled_names
+        and location.name in positions_by_name
+        and _effective_minimum(location) > 0
+    }
 
 
 def _auto_group_maps(

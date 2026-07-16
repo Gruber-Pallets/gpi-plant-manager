@@ -27,11 +27,13 @@ from .. import (
     db,
     rotation_store,
     rotation_suggestions,
+    saturday_recruiting_store,
     schedule_solver,
     scheduler_time_off,
     staffing,
 )
 from . import staffing as staffing_route
+from ..plant_day import now as plant_now
 
 router = APIRouter()
 
@@ -391,6 +393,22 @@ async def save_auto_work_centers(request: Request):
             time_off = scheduler_time_off.time_off_entries_for_day(d)
         except Exception:
             return _error("Could not verify daily staffing coverage.", 503)
+        saturday_recruiting = None
+        if d.weekday() == 5:
+            bundle = saturday_recruiting_store.get(d)
+            if bundle is not None and bundle.recruitment.status in {"recruiting", "closed"}:
+                try:
+                    updated_bundle = saturday_recruiting_store.update_openings(
+                        day=d,
+                        requested_counts=staffing_route._saturday_recruit_requested_counts(enabled),
+                        shift_start=bundle.recruitment.shift_start,
+                        shift_end=bundle.recruitment.shift_end,
+                        actor=None,
+                        now=plant_now(),
+                    )
+                except saturday_recruiting_store.SaturdayRecruitingError as exc:
+                    return _error(str(exc), 409)
+                saturday_recruiting = saturday_recruiting_store.serialize_bundle(updated_bundle)
         enabled = staffing_route._save_enabled_auto_work_centers(enabled)
         minimum_crew_balance = staffing_route._minimum_crew_balance_payload(
             staffing_route._minimum_crew_balance_for_day(
@@ -405,6 +423,7 @@ async def save_auto_work_centers(request: Request):
         return JSONResponse({
             "ok": True,
             "enabled_work_centers": enabled,
+            "saturday_recruiting": saturday_recruiting,
             "minimum_crew_balance": minimum_crew_balance,
             "warnings": [],
             "coverage": {
