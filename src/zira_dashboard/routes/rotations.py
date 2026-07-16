@@ -388,11 +388,14 @@ async def save_auto_work_centers(request: Request):
         turn_off_names = set(staffing_route._ordered_work_center_names(turn_off))
         enabled = [name for name in proposed if name not in turn_off_names]
         roster = staffing.load_roster()
-        sched = staffing.draft_from_posted(staffing.load_schedule(d))
+        existing = staffing.load_schedule(d)
+        sched = staffing.draft_from_posted(existing)
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
         except Exception:
             return _error("Could not verify daily staffing coverage.", 503)
+        if existing.published:
+            staffing.save_schedule(sched)
         saturday_recruiting = None
         if d.weekday() == 5:
             try:

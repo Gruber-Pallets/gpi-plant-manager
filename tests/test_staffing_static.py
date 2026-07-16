@@ -191,6 +191,32 @@ def test_posted_save_transitions_to_draft_and_delivery_refreshes_live_revision()
     assert js.count("await refreshScheduleRevision();") == 2
 
 
+def test_posted_auto_toggle_reloads_draft_and_delivery_owns_revision_window():
+    js = _script()
+    save_auto = js.split("async function saveAutoCenters() {", 1)[1].split(
+        "// Ordinary rebuilds", 1,
+    )[0]
+    delivery = js.split("let localDeliveryInFlight = false;", 1)[1].split(
+        "// ---------- Rotation goal", 1,
+    )[0]
+    live_poll = js.split("async function checkLiveRevision() {", 1)[1].split(
+        "// ---------- Rotation goal", 1,
+    )[0]
+
+    assert "if (window.SCHEDULE_PUBLISHED) {" in save_auto
+    assert "window.location.reload();" in save_auto
+    assert "let localDeliveryInFlight = false;" in js
+    assert delivery.count("localDeliveryInFlight = true;") == 2
+    assert delivery.count("localDeliveryInFlight = false;") == 2
+    assert delivery.index("await refreshScheduleRevision();") < delivery.index(
+        "localDeliveryInFlight = false;"
+    )
+    assert delivery.rindex("await refreshScheduleRevision();") < delivery.rindex(
+        "localDeliveryInFlight = false;"
+    )
+    assert "if (localDeliveryInFlight) return;" in live_poll
+
+
 def test_staffing_slack_post_button_exposes_busy_state():
     html = _template()
     js = _script()

@@ -1116,6 +1116,7 @@
   })();
 
   let pendingPrintButton = null;
+  let localDeliveryInFlight = false;
 
   function printSchedule(button) {
     if (!window.SCHEDULE_POSTED_VERSION) return;
@@ -1127,15 +1128,25 @@
     const button = pendingPrintButton;
     pendingPrintButton = null;
     if (!button || !window.SCHEDULE_POSTED_VERSION) return;
-    const url = '/staffing/mark-printed?day=' + encodeURIComponent(window.SCHEDULE_DAY)
-      + '&version=' + encodeURIComponent(window.SCHEDULE_POSTED_VERSION);
-    const response = await fetch(url, {method: 'POST', headers: {'Accept': 'application/json'}});
-    const data = await response.json();
-    if (!response.ok) return showToast(data.error || 'Print status was not saved', null, 'error');
-    button.classList.add('complete');
-    button.title = 'Printed';
-    button.setAttribute('aria-label', 'Printed');
-    await refreshScheduleRevision();
+    localDeliveryInFlight = true;
+    try {
+      const url = '/staffing/mark-printed?day=' + encodeURIComponent(window.SCHEDULE_DAY)
+        + '&version=' + encodeURIComponent(window.SCHEDULE_POSTED_VERSION);
+      const response = await fetch(url, {method: 'POST', headers: {'Accept': 'application/json'}});
+      const data = await response.json();
+      if (!response.ok) {
+        showToast(data.error || 'Print status was not saved', null, 'error');
+        return;
+      }
+      button.classList.add('complete');
+      button.title = 'Printed';
+      button.setAttribute('aria-label', 'Printed');
+      await refreshScheduleRevision();
+    } catch (error) {
+      showToast(error.message || 'Print status was not saved', null, 'error');
+    } finally {
+      localDeliveryInFlight = false;
+    }
   });
 
   function showToast(message, link, severity) {
@@ -1299,6 +1310,7 @@
         return;
       }
 
+      localDeliveryInFlight = true;
       const url = '/staffing/share-to-slack?day=' + encodeURIComponent(day)
         + '&version=' + encodeURIComponent(window.SCHEDULE_POSTED_VERSION);
       const r = await fetch(url, {
@@ -1315,6 +1327,7 @@
     } catch (e) {
       showToast(e.message || 'Slack post failed', null, 'error');
     } finally {
+      if (localDeliveryInFlight) localDeliveryInFlight = false;
       btn.disabled = false;
       btn.setAttribute('aria-busy', 'false');
       btn.innerHTML = originalContent;
@@ -1332,11 +1345,12 @@
 
   async function checkLiveRevision() {
     if (document.visibilityState !== 'visible' || !window.SCHEDULE_DAY) return;
+    if (localDeliveryInFlight) return;
     const response = await fetch('/staffing/live?day=' + encodeURIComponent(window.SCHEDULE_DAY), {
       headers: {'Accept': 'application/json', 'Cache-Control': 'no-cache'},
     });
     const data = await response.json();
-    if (!response.ok || !data.revision || data.revision === window.SCHEDULE_REVISION) return;
+    if (!response.ok || !data.revision || data.revision === window.SCHEDULE_REVISION || localDeliveryInFlight) return;
     if (window.schedulerAutosaveBusy) return;
     showToast('Schedule updated by another user — refreshed just now.');
     window.location.reload();
@@ -1587,6 +1601,10 @@
         }
         if (!Array.isArray(data.enabled_work_centers)) {
           throw new Error('Server did not return enabled Auto work centers.');
+        }
+        if (window.SCHEDULE_PUBLISHED) {
+          window.location.reload();
+          return;
         }
         applyEnabledCenters(data.enabled_work_centers);
         renderSaturdayRecruitingDemand(data.saturday_recruiting, data.enabled_work_centers);

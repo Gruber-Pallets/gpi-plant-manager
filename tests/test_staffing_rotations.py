@@ -1536,6 +1536,52 @@ def test_auto_center_selection_saves_quietly_without_solver_preview(monkeypatch)
     assert resp.json()["enabled_work_centers"] == ["Repair 1", "Dismantler 1"]
 
 
+def test_auto_center_selection_persists_posted_schedule_as_draft_first(monkeypatch):
+    """A current Posted page must land on its persisted Draft after a toggle."""
+    from zira_dashboard import scheduler_time_off
+
+    client, rotations = _rotations_client(monkeypatch)
+    _stub_recommendation_inputs(monkeypatch)
+    events: list[str] = []
+    saved_schedules: list[staffing.Schedule] = []
+    posted = staffing.Schedule(
+        day=TARGET_DAY,
+        published=True,
+        assignments={"Repair 1": ["Qualified"]},
+        published_delivery={"version": "posted-v1"},
+    )
+
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Qualified", 3)])
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: posted)
+    monkeypatch.setattr(
+        rotations.staffing,
+        "save_schedule",
+        lambda schedule: events.append("schedule") or saved_schedules.append(schedule),
+    )
+    monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_save_enabled_auto_work_centers",
+        lambda centers: events.append("centers") or list(centers),
+    )
+    monkeypatch.setattr(rotations.staffing_route.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
+
+    response = client.post("/api/rotations/auto-work-centers", json={
+        "day": "2026-07-14",
+        "work_centers": ["Repair 1"],
+        "turn_off": [],
+    })
+
+    assert response.status_code == 200
+    assert events == ["schedule", "centers"]
+    assert len(saved_schedules) == 1
+    assert saved_schedules[0].published is False
+    assert saved_schedules[0].published_snapshot["assignments"] == {"Repair 1": ["Qualified"]}
+    assert saved_schedules[0].published_delivery == {}
+
+
 def test_auto_center_endpoint_saves_when_minimum_lookup_fails(monkeypatch):
     from zira_dashboard import scheduler_time_off
 
