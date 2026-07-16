@@ -289,7 +289,7 @@
           <tr class="{% if not _center_on %}work-center-off{% endif %}" data-loc="{{ row.loc.name }}" data-on="{{ _center_on|tojson }}" data-minimum="{{ row.min_ops }}">
             {% if loop.first %}
               <td class="bay" rowspan="{{ bay.rows|length }}">
-                <div class="bay-screen-label">{{ bay.name }}</div>
+                <div class="bay-screen-label{% if bay.name == 'Transportation' %} transportation-bay-label{% endif %}">{{ bay.name }}</div>
                 {% if bay.name == 'Transportation' %}<div class="bay-print-label">Driving</div>{% endif %}
                 {% if bay.name == 'Forklift' and forklift_advisor and forklift_advisor.available %}
                   {% set _fk_gap = forklift_advisor.coverage.gap if forklift_advisor.coverage else 2 %}

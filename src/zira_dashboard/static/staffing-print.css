@@ -199,7 +199,8 @@ table.sched td.bay {
   color: black;
   border-right: 1px solid black;
 }
-.bay-screen-label { display: none !important; }
+.bay-screen-label { display: block !important; }
+.transportation-bay-label { display: none !important; }
 .bay-print-label { display: block !important; }
 table.sched td.bay .bay-sub,
 table.sched td.station .sub,

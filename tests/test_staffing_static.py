@@ -220,10 +220,11 @@ def test_staffing_print_scopes_driving_label_to_transportation_bay_only():
     screen_css = _style()
     print_css = _print_css()
 
-    assert "<div class=\"bay-screen-label\">{{ bay.name }}</div>" in html
+    assert 'class="bay-screen-label{% if bay.name == \'Transportation\' %} transportation-bay-label{% endif %}"' in html
     assert "{% if bay.name == 'Transportation' %}<div class=\"bay-print-label\">Driving</div>{% endif %}" in html
     assert ".bay-print-label { display: none; }" in screen_css
-    assert ".bay-screen-label { display: none !important; }" in print_css
+    assert ".bay-screen-label { display: block !important; }" in print_css
+    assert ".transportation-bay-label { display: none !important; }" in print_css
     assert ".bay-print-label { display: block !important; }" in print_css
 
 
