@@ -344,6 +344,19 @@ def test_auto_center_success_requires_server_enabled_centers():
     )
 
 
+def test_work_center_row_click_toggles_only_noninteractive_row_space():
+    js = _script()
+
+    assert "function isRowToggleInteractive(target) {" in js
+    assert "target.closest('a, button, input, select, textarea, label, summary, [contenteditable=\"true\"]')" in js
+    assert "document.addEventListener('click', event => {" in js
+    assert "const row = event.target.closest('tr[data-loc]');" in js
+    assert "if (!row || isRowToggleInteractive(event.target) || savingAutoCenters) return;" in js
+    assert "const cb = row.querySelector('.wc-auto-cb');" in js
+    assert "cb.checked = !cb.checked;" in js
+    assert "cb.dispatchEvent(new Event('change', { bubbles: true }));" in js
+
+
 def test_clear_schedule_remains_a_distinct_local_autosave_action():
     html = _template()
     js = _script()

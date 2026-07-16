@@ -1687,6 +1687,19 @@
     modeBtns.forEach(btn => {
       btn.addEventListener('click', () => rebuild(btn.dataset.rotationMode));
     });
+    function isRowToggleInteractive(target) {
+      return target.closest('a, button, input, select, textarea, label, summary, [contenteditable="true"]');
+    }
+
+    document.addEventListener('click', event => {
+      const row = event.target.closest('tr[data-loc]');
+      if (!row || isRowToggleInteractive(event.target) || savingAutoCenters) return;
+      const cb = row.querySelector('.wc-auto-cb');
+      if (!cb || cb.disabled) return;
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
     autoCbs.forEach(cb => {
       cb.addEventListener('change', () => saveAutoCenters(cb));
     });
