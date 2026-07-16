@@ -129,3 +129,57 @@ def match_commitments(
     for wc_id in wc_by_person.values():
         filled_by_wc[wc_id] += 1
     return Coverage(len(by_person), filled_by_wc, wc_by_person)
+
+
+def validate_publish(bundle, assignments, people_by_name, full_day_off_names) -> list[str]:
+    """Return every reason a recruited Saturday schedule cannot be published."""
+    openings_by_name = {opening.wc_name: opening for opening in bundle.openings}
+    committed = {
+        item.person_name: item
+        for item in bundle.commitments
+        if item.status == "committed"
+    }
+    reasons: list[str] = []
+    seen: set[str] = set()
+    assigned_names: set[str] = set()
+    qualified_count = {opening.wc_name: 0 for opening in bundle.openings}
+
+    for wc_name, names in (assignments or {}).items():
+        opening = openings_by_name.get(wc_name)
+        for name in names:
+            if name in seen:
+                reasons.append(f"{name} is assigned more than once.")
+                continue
+            seen.add(name)
+            assigned_names.add(name)
+            person = people_by_name.get(name)
+            if name not in committed:
+                reasons.append(f"{name} is not committed to Saturday.")
+            if person is None or not person.active:
+                reasons.append(f"{name} is inactive.")
+            if name in full_day_off_names:
+                reasons.append(f"{name} has approved full-day time off.")
+            if opening is not None:
+                is_qualified = person is not None and all(
+                    person.level(skill) in (2, 3) for skill in opening.required_skills
+                )
+                if not is_qualified:
+                    qualification_label = (
+                        opening.required_skills[0]
+                        if len(opening.required_skills) == 1 else wc_name
+                    )
+                    reasons.append(f"{name} is no longer qualified for {qualification_label}.")
+                elif name in committed and person is not None and person.active and name not in full_day_off_names:
+                    qualified_count[wc_name] += 1
+
+    for name in committed:
+        if name not in assigned_names:
+            reasons.append(f"{name} committed to Saturday but is not assigned.")
+    for opening in bundle.openings:
+        current = qualified_count[opening.wc_name]
+        if current < opening.requested_count:
+            suffix = "operator" if opening.requested_count == 1 else "operators"
+            reasons.append(
+                f"{opening.wc_name} requires {opening.requested_count} qualified {suffix} — currently {current}."
+            )
+    return reasons

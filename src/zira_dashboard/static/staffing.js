@@ -525,6 +525,9 @@
 
   // Per-person metadata (reserve flag) for routing add-backs to the right list.
   const __peopleMeta = window.PEOPLE_META;
+  const __saturdayRecruiting = window.SATURDAY_RECRUITING;
+  const __saturdayCommittedNames = new Set(window.SATURDAY_COMMITTED_NAMES || []);
+  const __saturdayAvailabilityByName = window.SATURDAY_AVAILABILITY_BY_NAME || {};
 
   // Partial-day off labels (name -> "arrives 11:30am" / "gone 10am–12pm" /
   // hours). Used to re-attach the amber "off" badge when a partial person is
@@ -584,6 +587,13 @@
     a.textContent = name;
     li.appendChild(a);
     appendCertBadges(li, name);
+    const availability = __saturdayAvailabilityByName[name];
+    if (availability) {
+      const badge = document.createElement('span');
+      badge.className = 'saturday-availability-badge';
+      badge.textContent = availability;
+      li.appendChild(badge);
+    }
     _appendPartialBadge(li, name);
     const existing = [...ul.querySelectorAll('li:not(.empty)')];
     // Sort by data-name (textContent now includes cert badge text).
@@ -593,6 +603,7 @@
 
   function addToUnscheduled(name) {
     if (!name) return;
+    if (__saturdayRecruiting && !__saturdayCommittedNames.has(name)) return;
     // Belt-and-suspenders: never add a time-off person here, regardless of
     // which caller decided to add them. The earlier guard in
     // addBackToCorrectList catches the common path; this catches any
@@ -634,6 +645,7 @@
   function addBackToCorrectList(name) {
     if (!name) return;
     if (__timeOffNames.has(name)) return;
+    if (__saturdayRecruiting && !__saturdayCommittedNames.has(name)) return;
     const meta = __peopleMeta[name];
     if (!meta) return;  // unknown person (e.g., old-name reference); silently noop
     if (meta.reserve) {

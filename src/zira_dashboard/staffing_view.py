@@ -17,7 +17,9 @@ already leans on and that the staffing tests monkeypatch.
 from __future__ import annotations
 
 
-def build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
+def build_staffing_bays(
+    roster, sched, time_off_entries, publish_blocked, saturday_commitments=None,
+):
     """Build the per-work-center render model from already-fetched inputs.
 
     Parameters (all supplied by the route after its I/O completes):
@@ -123,6 +125,25 @@ def build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
         _options_cache[required] = rows
         return rows
 
+    # Saturday recruiting deliberately begins with the plant closed.  Only
+    # volunteers are allowed into the staffing grid; stale draft placements
+    # must not make a non-volunteer look scheduled.
+    is_saturday_recruiting = saturday_commitments is not None
+    committed_names = set(saturday_commitments or ())
+    if is_saturday_recruiting:
+        assignments = {
+            wc_name: [name for name in names if name in committed_names]
+            for wc_name, names in (sched.assignments or {}).items()
+        }
+    else:
+        assignments = sched.assignments or {}
+
+    saturday_availability_by_name = {
+        name: f"{start.strftime('%I:%M %p').lstrip('0')}–{end.strftime('%I:%M %p').lstrip('0')}"
+        for name, value in (saturday_commitments or {}).items()
+        for start, end in [(value["start"], value["end"])]
+    }
+
     # Build a location-level render model and group by bay (preserving LOCATIONS order).
     bays: list[dict] = []
     current_bay: str | None = None
@@ -130,7 +151,7 @@ def build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
         required = tuple(work_centers_store.required_skills(loc))
         min_ops = work_centers_store.min_ops(loc)
         max_ops = work_centers_store.max_ops(loc)
-        assigned_names = sched.assignments.get(loc.name, [])
+        assigned_names = assignments.get(loc.name, [])
         assigned = []
         for n in assigned_names:
             p = all_by_name.get(n)
@@ -150,6 +171,9 @@ def build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
         # already historically assigned to this WC, so dirty data won't be
         # silently dropped.
         pool = [r for r in options_for(required) if r["name"] not in time_off_set]
+        if is_saturday_recruiting:
+            assigned_safety_net = set(assigned_names)
+            pool = [r for r in pool if r["name"] in committed_names or r["name"] in assigned_safety_net]
         assigned_set = {a["name"] for a in assigned}
         # Ensure currently-assigned people appear in pool even if below the filter.
         # (Assigned names are already in the pool since options_for returns everyone,
@@ -228,15 +252,28 @@ def build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
     # Reserves (office staff / managers) live in their own list regardless of state.
     assigned_today = {
         n
-        for key, names in sched.assignments.items()
+        for key, names in assignments.items()
         if key != staffing.TIME_OFF_KEY
         for n in names
     }
-    unassigned = [
-        p.name
-        for p in active_people
-        if not p.reserve and p.name not in assigned_today and p.name not in time_off_set
-    ]
+    if is_saturday_recruiting:
+        unassigned = [
+            p.name for p in active_people
+            if not p.reserve and p.name in committed_names
+            and p.name not in assigned_today and p.name not in time_off_set
+        ]
+        off = [
+            p.name for p in active_people
+            if not p.reserve and p.name not in committed_names
+            and p.name not in assigned_today and p.name not in time_off_set
+        ]
+    else:
+        unassigned = [
+            p.name
+            for p in active_people
+            if not p.reserve and p.name not in assigned_today and p.name not in time_off_set
+        ]
+        off = []
     reserves = [p.name for p in active_people if p.reserve and p.name not in time_off_set]
 
     return {
@@ -252,6 +289,9 @@ def build_staffing_bays(roster, sched, time_off_entries, publish_blocked):
         "partial_range_by_name": partial_range_by_name,
         "partial_clear_by_name": partial_clear_by_name,
         "unassigned": sorted(unassigned),
+        "off": sorted(off),
+        "saturday_availability_by_name": saturday_availability_by_name,
+        "is_saturday_recruiting": is_saturday_recruiting,
         "reserves": sorted(reserves),
         # JS uses this to route auto-removed people back to the right
         # left-rail list (Unscheduled vs Reserves) on uncheck/X.

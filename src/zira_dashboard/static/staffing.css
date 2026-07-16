@@ -98,6 +98,19 @@
   button.partial-hours-badge {
     cursor: pointer;
   }
+  .saturday-availability-badge {
+    display: inline-block;
+    margin-left: 0.25rem;
+    padding: 0 0.35rem;
+    border: 1px solid #2563eb;
+    border-radius: 4px;
+    background: #dbeafe;
+    color: #1d4ed8;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
   /* Clickable partial pill: click anywhere on the badge to clear the
      partial. Hover treatment makes the click affordance obvious. */
   .partial-hours-badge.clearable {
