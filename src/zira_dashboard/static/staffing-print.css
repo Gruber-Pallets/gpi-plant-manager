@@ -180,10 +180,10 @@ aside.day-context {
 table.sched { font-size: 9pt; }
 table.sched { table-layout: fixed; }
 table.sched thead th.n, table.sched td.bay { width: 4.5rem; }
-table.sched thead th.wc-col { width: 31%; }
-table.sched thead th.dept { width: 14%; }
-table.sched thead th.sched-col { width: 34%; }
-table.sched thead th.wc-note-col { width: 16.5%; }
+table.sched thead th.wc-col { width: 28%; }
+table.sched thead th.dept { width: 12%; }
+table.sched thead th.sched-col { width: 35%; }
+table.sched thead th.wc-note-col { width: 20.5%; }
 table.sched th.wc-col,
 table.sched td.station { padding-right: 2pt; }
 table.sched th.dept,
@@ -199,6 +199,8 @@ table.sched td.bay {
   color: black;
   border-right: 1px solid black;
 }
+.bay-screen-label { display: none !important; }
+.bay-print-label { display: block !important; }
 table.sched td.bay .bay-sub,
 table.sched td.station .sub,
 table.sched td.dept { color: #333; }
@@ -217,6 +219,9 @@ table.sched tbody tr:last-child td { border-bottom: 1px solid black !important; 
   white-space: pre-wrap;
   word-wrap: break-word;
   overflow-wrap: break-word;
+}
+tr:has(.wc-note-print:empty) .multi-dd .dd-summary-text {
+  white-space: nowrap;
 }
 /* Top-align the table cells so a long note doesn't visually
    float in the middle of an otherwise-short row. */

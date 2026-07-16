@@ -314,6 +314,7 @@
     letter-spacing: 0.5px;
     color: var(--fg);
   }
+  .bay-print-label { display: none; }
   table.sched td.bay .bay-sub { font-weight: 400; font-size: 0.65rem; font-style: italic; color: var(--muted); margin-top: 0.25rem; }
   table.sched td.bay .forklift-bay-summary {
     display: flex;

@@ -203,14 +203,28 @@ def test_staffing_print_balances_schedule_columns_and_keeps_fitting_name_pairs_i
 
     assert "table.sched { table-layout: fixed; }" in css
     assert "table.sched thead th.n, table.sched td.bay { width: 4.5rem; }" in css
-    assert "table.sched thead th.wc-col { width: 31%; }" in css
-    assert "table.sched thead th.dept { width: 14%; }" in css
-    assert "table.sched thead th.sched-col { width: 34%; }" in css
-    assert "table.sched thead th.wc-note-col { width: 16.5%; }" in css
+    assert "table.sched thead th.wc-col { width: 28%; }" in css
+    assert "table.sched thead th.dept { width: 12%; }" in css
+    assert "table.sched thead th.sched-col { width: 35%; }" in css
+    assert "table.sched thead th.wc-note-col { width: 20.5%; }" in css
     assert "table.sched th.wc-col,\ntable.sched td.station { padding-right: 2pt; }" in css
     assert "table.sched th.dept,\ntable.sched td.dept { padding-left: 2pt; padding-right: 2pt; }" in css
     assert "display: inline;" in css
     assert "margin-right: 0.45em;" in css
+    assert "tr:has(.wc-note-print:empty) .multi-dd .dd-summary-text" in css
+    assert "white-space: nowrap;" in css
+
+
+def test_staffing_print_scopes_driving_label_to_transportation_bay_only():
+    html = _template()
+    screen_css = _style()
+    print_css = _print_css()
+
+    assert "<div class=\"bay-screen-label\">{{ bay.name }}</div>" in html
+    assert "{% if bay.name == 'Transportation' %}<div class=\"bay-print-label\">Driving</div>{% endif %}" in html
+    assert ".bay-print-label { display: none; }" in screen_css
+    assert ".bay-screen-label { display: none !important; }" in print_css
+    assert ".bay-print-label { display: block !important; }" in print_css
 
 
 def test_forklift_live_recalc_hooks_assignment_changes():
