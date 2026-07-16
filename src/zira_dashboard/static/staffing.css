@@ -47,7 +47,7 @@
 
   /* Main layout */
   .layout { padding: 1rem 1.5rem; display: grid; grid-template-columns: 200px minmax(0, 1fr) 280px; gap: 1rem; max-width: 1700px; margin-left: auto; margin-right: auto; }
-  .day-context { min-width: 0; }
+  .day-context { min-width: 0; position: sticky; top: 1rem; align-self: start; }
   .side .section h3 {
     margin: 0 0 0.55rem;
     font-size: 0.82rem;
@@ -711,6 +711,12 @@
   .minimum-crew-balance #minimum-crew-action { font-weight: 750; }
   .minimum-crew-balance.is-balanced #minimum-crew-action { color: var(--accent); }
   .minimum-crew-balance.is-unbalanced #minimum-crew-action { color: var(--bad); }
+  .day-context .rotation-controls { display: block; margin: 0.85rem 0 0; }
+  .day-context .rotation-mode { flex-wrap: wrap; }
+  .day-context .rotation-mode-help.hint { flex-basis: 100%; }
+  .day-context .minimum-crew-balance { margin-left: 0; }
+  .sidebar-schedule-actions { display: flex; gap: 0.45rem; }
+  .sidebar-schedule-actions .clear-btn { flex: 1 1 0; }
   .rotation-warning {
     flex: 1 1 16rem; min-width: 0;
     background: var(--warn-dim); color: var(--warn);
@@ -843,7 +849,7 @@
 
   @media (max-width: 1100px) {
     .layout { grid-template-columns: 1fr; }
-    .day-context { order: 3; }
+    .day-context { order: 3; position: static; }
   }
 
   /* Hours pill — shows effective hours for the day, accent-colored when an

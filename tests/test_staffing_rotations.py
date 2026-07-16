@@ -1886,6 +1886,17 @@ def test_staffing_keeps_automation_controls_in_the_notes_sidebar():
     assert 'id="clear-schedule-btn"' not in main
 
 
+def test_staffing_notes_sidebar_is_sticky_and_mobile_safe():
+    css = (ROOT / "src/zira_dashboard/static/staffing.css").read_text()
+
+    assert ".day-context { min-width: 0; position: sticky;" in css
+    assert "top: 1rem; align-self: start;" in css
+    assert ".sidebar-schedule-actions { display: flex; gap: 0.45rem; }" in css
+    assert ".sidebar-schedule-actions .clear-btn { flex: 1 1 0; }" in css
+    assert "@media (max-width: 1100px)" in css
+    assert ".day-context { order: 3; position: static; }" in css
+
+
 def test_skills_matrix_exposes_scheduling_preferences_without_training_controls():
     html = (ROOT / "src/zira_dashboard/templates/skills.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/skills-page.js").read_text()
