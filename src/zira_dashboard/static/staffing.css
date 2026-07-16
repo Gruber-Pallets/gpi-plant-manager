@@ -475,7 +475,7 @@
   tr.work-center-saving .work-center-toggle { cursor: progress; }
   .ops-range { margin-left: auto; color: var(--muted); font-size: 0.66rem; font-style: italic; font-weight: 500; }
   .ops-range-min { display: none; }
-  tr.work-center-off { opacity: 0.58; }
+  tr.work-center-off td:not(.bay) { opacity: 0.58; }
   tr.work-center-off td { background: var(--panel-2); }
   tr[data-loc][data-on="true"] td.bay,
   tr.work-center-off td.bay { background: var(--panel-3); }

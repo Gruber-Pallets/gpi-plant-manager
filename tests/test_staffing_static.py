@@ -44,6 +44,15 @@ def test_staffing_bay_cells_keep_panel_background_across_work_center_states():
     assert css.index(bay_override) > css.index(inactive)
 
 
+def test_staffing_disabled_rows_dim_non_bay_cells_only():
+    css = _style()
+
+    dimmed_non_bay_cells = 'tr.work-center-off td:not(.bay) { opacity: 0.58; }'
+
+    assert dimmed_non_bay_cells in css
+    assert 'tr.work-center-off { opacity: 0.58; }' not in css
+
+
 def test_staffing_partial_time_off_controls_name_the_person():
     html = _template()
     js = _script()
