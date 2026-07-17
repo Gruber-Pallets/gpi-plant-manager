@@ -45,6 +45,52 @@ def _work_center_names() -> list[str]:
     return [loc.name for loc in staffing.LOCATIONS]
 
 
+def _unexpected_worker_rows(events: list[dict]) -> list[dict]:
+    """Shape unresolved leave clock-ins with actionable staffing guidance."""
+    from .routes import staffing as staffing_routes
+
+    shortages_by_day: dict[date, list[str]] = {}
+
+    def shortages_for(day: date) -> list[str]:
+        if day in shortages_by_day:
+            return shortages_by_day[day]
+        schedule = staffing.load_schedule(day)
+        enabled = set(staffing_routes._enabled_auto_work_centers(day))
+        shortages = []
+        for location in staffing.LOCATIONS:
+            if location.name not in enabled:
+                continue
+            minimum = max(0, int(staffing_routes._effective_minimum(location)))
+            assigned = len((schedule.assignments or {}).get(location.name, ()))
+            if assigned < minimum:
+                shortages.append(f"{location.name} ({assigned}/{minimum})")
+        shortages_by_day[day] = shortages
+        return shortages
+
+    rows = []
+    for event in events:
+        event_day = event.get("day")
+        if not isinstance(event_day, date):
+            event_day = date.fromisoformat(str(event_day))
+        shortages = shortages_for(event_day)
+        detail = f"Clocked in at {event.get('clock_in_wc') or 'an unknown work center'}"
+        if shortages:
+            detail += f" · Staffing below minimum: {', '.join(shortages)}."
+        else:
+            detail += " · No enabled work centers are below minimum."
+        rows.append({
+            "name": event.get("person_name") or f"Worker #{event.get('person_odoo_id')}",
+            "label": "Unexpected clock-in",
+            "detail": detail,
+            "priority": "urgent",
+            "badge": "Staffing",
+            "href": f"/staffing?day={event_day.isoformat()}",
+            "row_key": _row_key("unexpected_worker", event_day.isoformat(), event.get("person_odoo_id")),
+            "item_key": inbox_keys.unexpected_worker(event_day.isoformat(), event.get("person_odoo_id")),
+        })
+    return rows
+
+
 _SCHEDULE_REMINDER_CUTOFF = time(13, 30)
 
 
@@ -176,7 +222,7 @@ def _queue_from_sections(sections: list[dict]) -> list[dict]:
 
 
 def build_summary() -> dict:
-    from . import missing_wc, missed_punch_out, machine_breakdown
+    from . import missing_wc, missed_punch_out, machine_breakdown, unexpected_worker
     from .routes import staffing as staffing_routes
 
     today = plant_day.today()
@@ -188,6 +234,9 @@ def build_summary() -> dict:
     missing_rows = _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
     breakdown_rows = _capture(source_errors, "Machine Breakdown", machine_breakdown.current_rows, [])
+    unexpected_rows = _capture(
+        source_errors, "Unexpected Workers", lambda: unexpected_worker.open_events(today), []
+    )
     schedule_count = _capture(
         source_errors, "Plant Schedule", lambda: _plant_schedule_reminder()[0], 0
     )
@@ -205,6 +254,7 @@ def build_summary() -> dict:
         + len(late.get("unscheduled_late") or [])
         + missing_count
         + missed_count
+        + len(unexpected_rows)
         + pending_urgent_count
         + sum(1 for r in breakdown_rows if r.get("priority") == "urgent")
     )
@@ -214,6 +264,7 @@ def build_summary() -> dict:
         + late_count
         + missing_count
         + missed_count
+        + len(unexpected_rows)
         + pending_count
         + breakdown_count
     )
@@ -232,6 +283,7 @@ def build_summary() -> dict:
             "late": late_count,
             "missing_wc": missing_count,
             "missed_punch_out": missed_count,
+            "unexpected_workers": len(unexpected_rows),
             "time_off": pending_count,
             "breakdown": breakdown_count,
         },
@@ -239,7 +291,7 @@ def build_summary() -> dict:
 
 
 def build_snapshot() -> dict:
-    from . import missing_wc, missed_punch_out, machine_breakdown
+    from . import missing_wc, missed_punch_out, machine_breakdown, unexpected_worker
     from .routes import staffing as staffing_routes
 
     today = plant_day.today()
@@ -251,6 +303,12 @@ def build_snapshot() -> dict:
     missing_rows = _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
     breakdown_rows = _capture(source_errors, "Machine Breakdown", machine_breakdown.current_rows, [])
+    unexpected_rows = _capture(
+        source_errors,
+        "Unexpected Workers",
+        lambda: _unexpected_worker_rows(unexpected_worker.open_events(today)),
+        [],
+    )
     schedule_count, schedule_rows = _capture(
         source_errors, "Plant Schedule", _plant_schedule_reminder, (0, [])
     )
@@ -444,6 +502,18 @@ def build_snapshot() -> dict:
                 }
                 for r in missed_rows
             ],
+        },
+        {
+            "id": "unexpected_workers",
+            "title": "Unexpected Workers",
+            "count": len(unexpected_rows),
+            "tone": "bad",
+            "action_key": None,
+            "action_label": None,
+            "href": f"/staffing?day={today.isoformat()}",
+            "empty": "All clear",
+            "context": {},
+            "rows": unexpected_rows,
         },
         {
             "id": "breakdown",

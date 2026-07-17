@@ -1,0 +1,34 @@
+{% extends "timeclock_base.html" %}
+{% block title %}Confirm Clock In — Kiosk{% endblock %}
+{% block content %}
+<div class="k-header" style="position: relative;">
+  <a href="/timeclock" class="k-back">{{ t("‹ Done") }}</a>
+  <span style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 2.25rem; white-space: nowrap; pointer-events: none;">{{ person.name }}</span>
+  {% include "_timeclock_brand.html" %}
+</div>
+<div class="k-main" style="align-items: center; justify-content: flex-start; padding-top: 2rem;">
+  <h2>Approved time off today</h2>
+  {% if error %}
+    <div class="k-warning" style="max-width: 720px; text-align: left;">{{ error }}</div>
+  {% else %}
+    <p style="font-size: 1.3rem; color: #64748b; max-width: 680px; text-align: center; margin-bottom: 2rem;">
+      You selected <strong>{{ wc_name }}</strong>. Confirming will cancel today's approved time off in Odoo and clock you in.
+    </p>
+  {% endif %}
+  <form method="post" action="/timeclock/clock-in/confirm/{{ token }}" class="k-punch-form" style="margin: 0;">
+    <input type="hidden" name="wc_name" value="{{ wc_name }}" />
+    <input type="hidden" name="scheduled_wc_name" value="{{ scheduled_wc_name }}" />
+    <button type="submit" class="k-btn success" aria-busy="false">Confirm — Clock In</button>
+  </form>
+</div>
+<script>
+  document.querySelectorAll('.k-punch-form').forEach(function (form) {
+    form.addEventListener('submit', function () {
+      var btn = form.querySelector('button[type="submit"]');
+      if (!btn) return;
+      btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
+    });
+  });
+</script>
+{% endblock %}

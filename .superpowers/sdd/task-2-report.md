@@ -1,89 +1,156 @@
-# Task 2 — Live recruiting-demand display
+# Task 2 Report: Fixed Schedule Tools Card and Responsive Fallback
 
-## Implementation
+## Implementation summary
 
-- Added `data-saturday-recruit-demand` to the scheduler Recruit control. Before
-  activation it displays the enabled-work-center count; while recruiting it
-  displays the server-rendered remaining demand.
-- Added `renderSaturdayRecruitingDemand(bundle, enabledCenters)` to
-  `staffing.js`. It uses the returned `coverage.requested` and `coverage.total`,
-  and falls back to the enabled-center count when no recruiting bundle is
-  returned.
-- Called the renderer immediately after `applyEnabledCenters(...)` only in the
-  successful `saveAutoCenters` path. The failure path remains unchanged.
-- Added static contracts for the demand target and successful-save renderer
-  invocation; updated the existing Recruit-control assertion for its new span.
+Styled the existing Schedule Tools controls as a fixed lower-right utility card
+above the 1100px breakpoint. The card has the requested fixed placement,
+bounded responsive width, accent-tinted panel background, rounded border, and
+shadow. Its mode row stays compact, adds an accent status dot, hides the inline
+help text, and places the dynamic minimum-crew status and Reset/Clear actions
+inside the card.
+
+At 1100px and below, the controls return to normal document flow with automatic
+width. No template or JavaScript was changed, so the existing keyboard, hover,
+active, disabled/pending, Reset, Clear, and dynamic-status behavior is
+preserved.
+
+## Changed files
+
+- `src/zira_dashboard/static/staffing.css`
+- `tests/test_staffing_rotations.py`
 
 ## TDD evidence
 
 ### RED
 
-The requested bare command, `pytest tests/test_saturday_recruiting_static.py
-tests/test_staffing_rotations.py -k 'recruiting_demand' -v`, could not run
-because `pytest` is not on `PATH`. The equivalent managed command was used:
+Added the eight specified CSS contract assertions to
+`test_staffing_has_rotation_mode_controls_without_automated_person_notes`, then
+ran:
 
-```sh
-uv run pytest tests/test_saturday_recruiting_static.py tests/test_staffing_rotations.py -k 'recruiting_demand' -v
+```text
+ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_staffing_rotations.py::test_staffing_has_rotation_mode_controls_without_automated_person_notes -q
 ```
 
-Result before implementation: `2 failed, 1 passed, 108 deselected`.
-
-- The template target was absent.
-- The JavaScript renderer and successful-save invocation were absent.
+Result: `1 failed in 0.25s`, as expected. The new assertion for
+`position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 20;` was absent
+before the stylesheet change.
 
 ### GREEN
 
-```sh
-uv run pytest tests/test_saturday_recruiting_static.py tests/test_staffing_rotations.py -k 'recruiting_demand' -v
+Added the prescribed card declarations and responsive fallback, then ran:
+
+```text
+ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_staffing_rotations.py::test_staffing_has_rotation_mode_controls_without_automated_person_notes tests/test_staffing_static.py::test_clear_schedule_remains_a_distinct_local_autosave_action -q
 ```
 
-Result: `3 passed, 108 deselected in 0.25s`.
+Result: `2 passed in 0.11s`.
 
-### Approved API-contract correction
+The full staffing suite initially found a stale static assertion for the
+pre-card action-row declaration. Updated it to include the required
+`margin-top: 0.6rem;` declaration, then re-ran the suite.
 
-The initial brief named `coverage.requested_count` and `coverage.filled_count`.
-Inspection showed Task 1's actual response contract is `coverage.requested` and
-`coverage.total`. The user approved using the actual fields. A focused static
-contract for those fields was added and run before changing the renderer:
+## Verification
 
-```sh
-uv run pytest tests/test_saturday_recruiting_static.py tests/test_staffing_rotations.py -k 'recruiting_demand' -v
-```
+```text
+ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_staffing_static.py tests/test_staffing_rotations.py -q
+141 passed in 0.33s
 
-Result before the correction: `1 failed, 2 passed, 108 deselected`; the
-renderer still referenced `requested_count`. After updating it to
-`requested - total`, the same command passed: `3 passed, 108 deselected in
-0.18s`.
-
-## Regression verification
-
-```sh
-uv run pytest tests/test_saturday_recruiting_static.py tests/test_saturday_recruiting_manager_routes.py tests/test_staffing_rotations.py -v
 git diff --check
+exit 0
 ```
-
-Result: `119 passed, 2 skipped in 9.25s`; `git diff --check` exited 0.
 
 ## Self-review
 
-- The server response is the only post-save source used for active recruiting
-  demand.
-- The pre-recruit display preserves the enabled-center count.
-- Error handling does not mutate the recruiting-demand target.
-- The changes are limited to the requested template, JavaScript, static test,
-  and this report.
+- The existing Schedule Tools DOM and JavaScript are untouched.
+- Existing `.rotation-mode-btn` hover, active, and disabled rules remain
+  unchanged.
+- Existing `.clear-schedule-btn:hover` and Reset/Clear sizing rules remain in
+  place.
+- The card is fixed only above 1100px; the required mobile normal-flow override
+  is inside the existing `@media (max-width: 1100px)` block.
+- The full diff is limited to the specified stylesheet and static contract test.
 
 ## Concerns
 
-None. The API-field deviation from the brief was explicitly approved and is
-covered by the static contract.
+No implementation concerns. The required task report is intentionally not part
+of the feature commit; unrelated untracked documentation and `uv.lock` were
+left untouched. The feature commit was not pushed because the sandbox could not
+resolve GitHub and the escalated push request was not approved.
 
-## Commit scope repair
+---
 
-An initial scoped commit accidentally included this unrelated, already-staged
-file. It was removed from the commit index without changing its worktree
-content, restoring it to its pre-commit untracked state:
+# Final-review correction — Minimum-crew status row
 
-- `docs/superpowers/specs/2026-07-16-scheduler-draft-posted-delivery-lifecycle-design.md`
+## Implementation
 
-Final scoped commit: `feat: show live Saturday recruiting demand`.
+- Updated the desktop fixed-card override so `.day-context .rotation-mode`
+  wraps its flex items.
+- Updated `.day-context .minimum-crew-balance` with `flex: 0 0 100%`, retaining
+  its existing `display`, margin, and white-space declarations. This reserves a
+  full status row beneath the goal controls within the 17.5rem card.
+- Added static CSS contract assertions covering both declarations.
+
+## Changed files
+
+- `src/zira_dashboard/static/staffing.css`
+- `tests/test_staffing_rotations.py`
+- `.superpowers/sdd/task-2-report.md`
+
+## TDD evidence
+
+### RED
+
+After adding the two static-contract assertions and before modifying the
+stylesheet, ran:
+
+```text
+ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_staffing_rotations.py::test_staffing_has_rotation_mode_controls_without_automated_person_notes -q
+```
+
+Output:
+
+```text
+FAILED tests/test_staffing_rotations.py::test_staffing_has_rotation_mode_controls_without_automated_person_notes
+1 failed in 0.22s
+```
+
+The failure was the expected missing contract for
+`.day-context .rotation-mode { flex-wrap: wrap; ... }`; the existing CSS used
+`flex-wrap: nowrap`.
+
+### GREEN
+
+Applied the two CSS declarations, then ran the focused test:
+
+```text
+ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_staffing_rotations.py::test_staffing_has_rotation_mode_controls_without_automated_person_notes -q
+```
+
+Output:
+
+```text
+1 passed in 0.11s
+```
+
+## Full verification
+
+```text
+ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_staffing_static.py tests/test_staffing_rotations.py -q
+........................................................................ [ 51%]
+.....................................................................    [100%]
+141 passed in 0.37s
+```
+
+## Self-review
+
+- No DOM, IDs, JavaScript behavior, goal-button behavior, or Reset/Clear
+  behavior changed.
+- The change is limited to the desktop fixed-card override; the existing
+  `@media (max-width: 1100px)` fallback remains untouched.
+- The minimum-crew status retains its existing margin and status styling while
+  being guaranteed a separate flex row.
+- Unrelated untracked files were not modified or staged.
+
+## Concerns
+
+None.

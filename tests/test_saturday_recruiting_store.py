@@ -341,6 +341,34 @@ def test_employee_cancel_before_cutoff_reopens_capacity():
     assert before is None
     assert after is not None
     assert after.remaining_count == 1
+    assert store.offer_for_person(PERSON_ID, NOW + timedelta(hours=1)) == store.Offer(
+        SATURDAY, time(6, 0), time(12, 0), DEADLINE, frozenset({910101})
+    )
+
+
+def test_cancelled_employee_can_recommit_partial_availability_before_deadline():
+    _qualify(PERSON_ID, 910101)
+    _activate(requested_counts={910101: 1})
+    store.commit(SATURDAY, PERSON_ID, time(7, 0), time(11, 30), NOW)
+    store.cancel_by_employee(SATURDAY, PERSON_ID, NOW + timedelta(hours=1))
+
+    recommitted = store.commit(
+        SATURDAY, PERSON_ID, time(6, 30), time(11, 0), NOW + timedelta(hours=2)
+    )
+
+    assert recommitted.status == "committed"
+    commitment = next(item for item in recommitted.bundle.commitments if item.person_id == PERSON_ID)
+    assert (commitment.availability_start, commitment.availability_end) == (
+        time(6, 30),
+        time(11, 0),
+    )
+    assert (
+        _response(PERSON_ID)["availability_start"],
+        _response(PERSON_ID)["availability_end"],
+    ) == (
+        time(6, 30),
+        time(11, 0),
+    )
 
 
 def test_employee_cancel_at_or_after_cutoff_is_rejected():

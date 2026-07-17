@@ -443,7 +443,7 @@ def offer_for_person(person_id: int, now: datetime) -> Offer | None:
             bundle = _load_bundle(cur, row["day"])
             assert bundle is not None
             existing = next((item for item in bundle.commitments if item.person_id == person_id), None)
-            if existing is not None and existing.status in {"declined", "committed", "cancelled"}:
+            if existing is not None and existing.status in {"declined", "committed"}:
                 continue
             eligible_wc_ids = _eligible_wc_ids_for_person(
                 cur, person_id, bundle.openings, bundle.recruitment.day
@@ -562,7 +562,7 @@ def commit(
                 and existing["availability_end"] == end
             ):
                 return _result(cur, day, "committed")
-            if existing["status"] != "later":
+            if existing["status"] not in {"later", "cancelled"}:
                 raise LifecycleConflict("Your Saturday response has already been finalized")
         bundle = _load_bundle(cur, day)
         assert bundle is not None

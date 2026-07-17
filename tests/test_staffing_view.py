@@ -106,6 +106,7 @@ def test_return_keys_are_exactly_the_bands_ab_context_keys(patch_wcs):
         "partial_clear_by_name",
         "unassigned",
         "off",
+        "saturday_committed_names",
         "saturday_availability_by_name",
         "is_saturday_recruiting",
         "reserves",

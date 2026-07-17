@@ -839,6 +839,25 @@ CREATE INDEX IF NOT EXISTS time_off_requests_state_idx
 CREATE UNIQUE INDEX IF NOT EXISTS time_off_requests_odoo_leave_id_uniq
   ON time_off_requests (odoo_leave_id) WHERE odoo_leave_id IS NOT NULL;
 
+-- A durable staffing-resolution task created when an employee works despite
+-- an approved full-day leave. Deliberately no FK to time_off_requests: the
+-- leave mirror is Odoo-owned and can be deleted by its poller, while this
+-- operational audit record must remain available to the Exception Inbox.
+CREATE TABLE IF NOT EXISTS unexpected_worker_events (
+  id                  BIGSERIAL PRIMARY KEY,
+  day                 DATE NOT NULL,
+  person_odoo_id      INTEGER NOT NULL,
+  time_off_request_id BIGINT,
+  odoo_leave_id       INTEGER,
+  clock_in_wc         TEXT NOT NULL,
+  confirmed_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at         TIMESTAMPTZ,
+  UNIQUE (day, person_odoo_id)
+);
+CREATE INDEX IF NOT EXISTS unexpected_worker_events_open_day_idx
+  ON unexpected_worker_events (day, confirmed_at)
+  WHERE resolved_at IS NULL;
+
 -- Per-(person, leave_type) balance cache. Refreshed by the poller from
 -- Odoo `hr.leave.allocation` + tallied `hr.leave` rows so the kiosk can
 -- show "X days available" without an Odoo round-trip per render.

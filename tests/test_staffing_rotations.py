@@ -659,11 +659,12 @@ def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     prior = staffing.Schedule(
         day=TARGET_DAY,
+        published=True,
         assignments={"Truck Driver": ["Manual Driver"]},
         notes="keep",
         wc_notes={"Truck Driver": "keep"},
         custom_hours={"start": "06:00", "end": "14:30", "breaks": []},
-        published_snapshot={"assignments": {"Truck Driver": ["Manual Driver"]}},
+        published_delivery={"version": "v1"},
     )
     saved = []
     monkeypatch.setattr(
@@ -715,7 +716,8 @@ def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
     assert saved[0].notes == "keep"
     assert saved[0].wc_notes == {"Truck Driver": "keep"}
     assert saved[0].custom_hours == prior.custom_hours
-    assert saved[0].published_snapshot == prior.published_snapshot
+    assert saved[0].published is False
+    assert saved[0].published_snapshot == staffing.snapshot_of(prior)
     assert response.json()["placement"]["unplaced_people"] == []
 
 
@@ -794,6 +796,32 @@ def test_normal_rebuild_uses_enabled_auto_centers_to_distribute_defaults(
         "Repair 2": ["First Repair"],
         "Repair 3": ["Second Repair"],
         "Truck Driver": ["Outside Auto"],
+    }
+
+
+def test_defaults_only_assignments_pins_exact_and_rotates_group_defaults():
+    from zira_dashboard.routes import staffing as staffing_route
+
+    assignments, sources = staffing_route._defaults_only_assignments(
+        roster=[_person("Pinned", 1), _person("Ana", 1), _person("Bob", 1)],
+        full_day_off_names=set(),
+        exact_defaults={"Repair 1": ("Pinned",)},
+        group_defaults={"Repair": ("Ana", "Bob")},
+        user_group_centers={"Repair": ("Repair 1", "Repair 2", "Repair 3")},
+        enabled_centers={"Repair 1", "Repair 2", "Repair 3"},
+        center_capacities={"Repair 1": 1, "Repair 2": 1, "Repair 3": 1},
+        history=rotation_suggestions.RecycledHistory(),
+    )
+
+    assert assignments == {
+        "Repair 1": ["Pinned"],
+        "Repair 2": ["Ana"],
+        "Repair 3": ["Bob"],
+    }
+    assert sources == {
+        "Repair 1": {"Pinned": "default"},
+        "Repair 2": {"Ana": "default"},
+        "Repair 3": {"Bob": "default"},
     }
 
 
@@ -1534,6 +1562,52 @@ def test_auto_center_selection_saves_quietly_without_solver_preview(monkeypatch)
     assert resp.json()["enabled_work_centers"] == ["Repair 1", "Dismantler 1"]
 
 
+def test_auto_center_selection_persists_posted_schedule_as_draft_first(monkeypatch):
+    """A current Posted page must land on its persisted Draft after a toggle."""
+    from zira_dashboard import scheduler_time_off
+
+    client, rotations = _rotations_client(monkeypatch)
+    _stub_recommendation_inputs(monkeypatch)
+    events: list[str] = []
+    saved_schedules: list[staffing.Schedule] = []
+    posted = staffing.Schedule(
+        day=TARGET_DAY,
+        published=True,
+        assignments={"Repair 1": ["Qualified"]},
+        published_delivery={"version": "posted-v1"},
+    )
+
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Qualified", 3)])
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: posted)
+    monkeypatch.setattr(
+        rotations.staffing,
+        "save_schedule",
+        lambda schedule: events.append("schedule") or saved_schedules.append(schedule),
+    )
+    monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_save_enabled_auto_work_centers",
+        lambda centers: events.append("centers") or list(centers),
+    )
+    monkeypatch.setattr(rotations.staffing_route.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
+
+    response = client.post("/api/rotations/auto-work-centers", json={
+        "day": "2026-07-14",
+        "work_centers": ["Repair 1"],
+        "turn_off": [],
+    })
+
+    assert response.status_code == 200
+    assert events == ["schedule", "centers"]
+    assert len(saved_schedules) == 1
+    assert saved_schedules[0].published is False
+    assert saved_schedules[0].published_snapshot["assignments"] == {"Repair 1": ["Qualified"]}
+    assert saved_schedules[0].published_delivery == {}
+
+
 def test_auto_center_endpoint_saves_when_minimum_lookup_fails(monkeypatch):
     from zira_dashboard import scheduler_time_off
 
@@ -1984,7 +2058,8 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert 'title="Optimized: strongest coverage"' in html
     assert 'title="Normal: balanced coverage and fair rotation"' in html
     assert 'title="Training: develop operator skills"' in html
-    assert '⚡⚡⚡' in html
+    assert 'title="Optimized: strongest coverage">⚡</button>' in html
+    assert '⚡⚡⚡' not in html
     assert '⚖' in html
     assert '🎓' in html
     assert 'data-work-center-toggle' in html
@@ -2043,6 +2118,16 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "tr.work-center-off .sched-cell > *," in css
     assert "tr.work-center-off .wc-note-cell > * { display: none; }" in css
     assert "tr.work-center-off .dept," not in css
+    assert ".day-context .rotation-controls {" in css
+    assert "position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 20;" in css
+    assert "box-shadow: 0 16px 36px rgba(31, 41, 55, 0.18);" in css
+    assert "background: linear-gradient(135deg, var(--panel), color-mix(in srgb, var(--accent-dim) 32%, var(--panel)));" in css
+    assert ".day-context .rotation-mode { flex-wrap: wrap; width: auto; padding: 0; border: 0; background: transparent; }" in css
+    assert ".day-context .minimum-crew-balance { display: block; flex: 0 0 100%; margin: 0.55rem 0 0; white-space: normal; }" in css
+    assert ".day-context .rotation-mode-label::before" in css
+    assert "content: '•';" in css
+    assert "@media (max-width: 1100px)" in css
+    assert ".day-context .rotation-controls { position: static; width: auto; }" in css
 
 
 def test_staffing_keeps_automation_controls_in_the_notes_sidebar():
@@ -2071,7 +2156,7 @@ def test_staffing_notes_sidebar_is_sticky_and_mobile_safe():
 
     assert ".day-context { min-width: 0; position: sticky;" in css
     assert "top: 1rem; align-self: start;" in css
-    assert ".sidebar-schedule-actions { display: flex; gap: 0.45rem; }" in css
+    assert ".sidebar-schedule-actions { display: flex; gap: 0.45rem; margin-top: 0.6rem; }" in css
     assert ".sidebar-schedule-actions .clear-btn { flex: 1 1 0; }" in css
     assert "@media (max-width: 1100px)" in css
     assert ".day-context { order: 3; position: static; }" in css
@@ -2598,6 +2683,13 @@ def _render_staffing_page(
     *,
     saved_schedule=None,
     day=None,
+    schedule_revision="test",
+    roster=None,
+    time_off_entries=None,
+    default_inputs=None,
+    center_capacities=None,
+    history=None,
+    saved_schedules=None,
     smart_defaults=None,
     auto_centers=None,
     default_people=None,
@@ -2632,12 +2724,29 @@ def _render_staffing_page(
         lambda key: list(auto_centers or []),
     )
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
-    monkeypatch.setattr(staffing_mod, "load_roster", lambda: [])
+    monkeypatch.setattr(staffing_mod, "load_roster", lambda: list(roster or []))
     monkeypatch.setattr(
         staffing_mod, "load_schedule",
         lambda d: saved_schedule or staffing_mod.Schedule(day=d, published=False, assignments={}),
     )
-    monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(staffing_mod, "schedule_revision", lambda _day: schedule_revision)
+    monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda _day: list(time_off_entries or []))
+    monkeypatch.setattr(staffing_routes, "_default_inputs", default_inputs or (lambda strict=False: ({}, {}, {})))
+    monkeypatch.setattr(
+        staffing_routes,
+        "_configured_center_capacities",
+        center_capacities or (lambda centers, strict=False: {center: None for center in centers}),
+    )
+    monkeypatch.setattr(
+        staffing_routes.rotation_suggestions,
+        "_load_recycled_history",
+        history or (lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory()),
+    )
+    monkeypatch.setattr(
+        staffing_mod,
+        "save_schedule",
+        lambda schedule: saved_schedules.append(schedule) if saved_schedules is not None else None,
+    )
     monkeypatch.setattr(
         staffing_routes, "_safe_attendance",
         lambda d, sched, today: {"by_name": {}, "name_to_id": {}},
@@ -2718,16 +2827,87 @@ def test_staffing_context_exposes_auto_summary_counts(monkeypatch):
     }
 
 
-def test_blank_staffing_day_stays_empty_without_default_or_smart_seed(monkeypatch):
-    calls = []
+def test_first_future_staffing_view_saves_exact_and_group_defaults(monkeypatch):
+    saved = []
     ctx = _render_staffing_page(
         monkeypatch,
-        smart_defaults=lambda *args, **kwargs: calls.append(args) or {"Repair 1": ["Unexpected"]},
+        schedule_revision=None,
+        roster=[_person("Pinned", 1), _person("Ana", 1), _person("Bob", 1)],
+        auto_centers={"Repair 1", "Repair 2", "Repair 3"},
+        default_inputs=lambda strict=False: (
+            {"Repair 1": ("Pinned",)},
+            {"Repair": ("Ana", "Bob")},
+            {"Repair": ("Repair 1", "Repair 2", "Repair 3")},
+        ),
+        center_capacities=lambda centers, strict=False: {center: 1 for center in centers},
+        saved_schedules=saved,
     )
 
-    assert calls == []
+    assert len(saved) == 1
+    assert saved[0].published is False
+    assert saved[0].assignments == {
+        "Repair 1": ["Pinned"],
+        "Repair 2": ["Ana"],
+        "Repair 3": ["Bob"],
+    }
+    assert saved[0].assignment_sources == {
+        "Repair 1": {"Pinned": "default"},
+        "Repair 2": {"Ana": "default"},
+        "Repair 3": {"Bob": "default"},
+    }
+    assert ctx["sched"] is saved[0]
+
+
+def test_saved_blank_future_draft_is_not_reseeded(monkeypatch):
+    saved = []
+    blank = staffing.Schedule(day=TARGET_DAY, published=False, assignments={})
+
+    ctx = _render_staffing_page(
+        monkeypatch,
+        saved_schedule=blank,
+        schedule_revision="already-saved",
+        roster=[_person("Pinned", 1)],
+        auto_centers={"Repair 1"},
+        default_inputs=lambda strict=False: ({"Repair 1": ("Pinned",)}, {}, {}),
+        saved_schedules=saved,
+    )
+
+    assert saved == []
+    assert ctx["sched"] is blank
     assert ctx["sched"].assignments == {}
-    assert ctx["auto_scheduler_available"] is True
+
+
+def test_first_future_staffing_view_keeps_blank_draft_when_defaults_fail(monkeypatch):
+    saved = []
+    ctx = _render_staffing_page(
+        monkeypatch,
+        schedule_revision=None,
+        roster=[_person("Pinned", 1)],
+        default_inputs=lambda strict=False: (_ for _ in ()).throw(RuntimeError("settings offline")),
+        saved_schedules=saved,
+    )
+
+    assert saved == []
+    assert ctx["sched"].assignments == {}
+
+
+def test_future_draft_is_not_overwritten_when_revision_lookup_fails(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    blank = staffing.Schedule(day=TARGET_DAY, published=False, assignments={})
+    monkeypatch.setattr(
+        staffing_route.staffing,
+        "schedule_revision",
+        lambda _day: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    assert staffing_route._seed_new_future_draft(
+        TARGET_DAY,
+        date(2026, 7, 13),
+        blank,
+        [],
+        [],
+    ) is blank
 
 
 @pytest.mark.parametrize("day", [
@@ -2876,6 +3056,7 @@ def test_rebuild_does_not_restore_person_after_clear_removes_manual_source(monke
         staffing_route.staffing, "load_schedule", lambda _day: schedule_before_clear,
     )
     monkeypatch.setattr(staffing_route.staffing, "save_schedule", cleared.append)
+    monkeypatch.setattr(staffing_route.staffing, "schedule_revision", lambda _day: "test")
     monkeypatch.setattr(staffing_route._http_cache, "invalidate_today_cache", lambda: None)
 
     staffing_route._staffing_save_work(

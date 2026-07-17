@@ -19,7 +19,7 @@ from __future__ import annotations
 
 def build_staffing_bays(
     roster, sched, time_off_entries, publish_blocked, enabled_work_centers=None,
-    saturday_commitments=None,
+    saturday_commitments=None, saturday_shift=None,
 ):
     """Build the per-work-center render model from already-fetched inputs.
 
@@ -146,6 +146,7 @@ def build_staffing_bays(
         name: f"{start.strftime('%I:%M %p').lstrip('0')}–{end.strftime('%I:%M %p').lstrip('0')}"
         for name, value in (saturday_commitments or {}).items()
         for start, end in [(value["start"], value["end"])]
+        if saturday_shift is None or (start, end) != saturday_shift
     }
 
     # Build a location-level render model and group by bay (preserving LOCATIONS order).
@@ -300,6 +301,7 @@ def build_staffing_bays(
         "partial_clear_by_name": partial_clear_by_name,
         "unassigned": sorted(unassigned),
         "off": sorted(off),
+        "saturday_committed_names": sorted(committed_names),
         "saturday_availability_by_name": saturday_availability_by_name,
         "is_saturday_recruiting": is_saturday_recruiting,
         "reserves": sorted(reserves),

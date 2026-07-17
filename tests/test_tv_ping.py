@@ -1,10 +1,8 @@
 """GET /tv/ping — the tiny probe target for tv-refresh.js.
 
-The TVs probe before reloading; the probe must be (a) nearly free — a
-bodyless 204 instead of the full dashboard document — and (b) behind the
-auth middleware, so an expired/missing session still produces the
-redirect-to-login signal (opaqueredirect => resp.ok === false) that
-tv-refresh.js treats as "don't reload".
+The TVs probe before reloading; the probe must be nearly free — a bodyless
+204 instead of the full dashboard document — and anonymous like every other
+`/tv/*` route.
 """
 
 from pathlib import Path
@@ -24,21 +22,17 @@ def test_tv_ping_returns_204_no_body():
     assert r.content == b""
 
 
-def test_tv_ping_is_not_in_auth_bypass_list(monkeypatch):
-    """With auth enforced and no session, /tv/ping must redirect to login —
-    NOT return 204. tv-refresh.js relies on that redirect to detect a dead
-    session and hold the current frame instead of reloading into a login
-    page."""
+def test_tv_ping_bypasses_auth_without_session(monkeypatch):
+    """With auth enforced and no session, /tv/ping remains anonymous."""
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
     c = TestClient(app)
     r = c.get("/tv/ping", follow_redirects=False)
-    assert r.status_code == 302
-    assert "/auth/login" in r.headers["location"]
+    assert r.status_code == 204
+    assert r.content == b""
 
 
 def test_tv_ping_allows_ip_allowlisted_tvs(monkeypatch):
-    """Shop-floor TVs auth via TV_ALLOWED_IPS on /tv/* paths; the probe
-    lives under /tv/ precisely so it authenticates like the dashboards."""
+    """TV_ALLOWED_IPS does not interfere with anonymous TV probes."""
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
     monkeypatch.setenv("TV_ALLOWED_IPS", "127.0.0.1")
     c = TestClient(app, client=("127.0.0.1", 12345))
@@ -47,8 +41,7 @@ def test_tv_ping_allows_ip_allowlisted_tvs(monkeypatch):
 
 
 def test_tv_ping_allows_device_token_tvs(monkeypatch):
-    """Off-network TVs carry a ?device= token; tv-refresh.js copies it from
-    the page URL onto the probe."""
+    """Device query parameters are optional for anonymous TV probes."""
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
     from zira_dashboard import device_tokens as dt
     monkeypatch.setattr(
@@ -58,7 +51,7 @@ def test_tv_ping_allows_device_token_tvs(monkeypatch):
     c = TestClient(app)
     assert c.get("/tv/ping?device=fake.signed").status_code == 204
     r = c.get("/tv/ping?device=garbage", follow_redirects=False)
-    assert r.status_code == 302
+    assert r.status_code == 204
 
 
 def test_tv_refresh_js_probes_tv_ping():

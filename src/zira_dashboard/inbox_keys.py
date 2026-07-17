@@ -35,6 +35,11 @@ def plant_schedule(day) -> str:
     return f"plant_schedule:{day}"
 
 
+def unexpected_worker(day, person_odoo_id) -> str:
+    """Identity for a worker clocking in while on approved leave."""
+    return f"unexpected_worker:{day}:{person_odoo_id}"
+
+
 def breakdown(wc_name, stop_iso, person_name=None) -> str:
     """The incident's own key when person_name is None (the card header /
     dismiss target); a distinct per-operator key otherwise (the Transfer /

@@ -1,7 +1,9 @@
 import asyncio
+import json
 from datetime import date, time
 from types import SimpleNamespace
 
+import pytest
 from starlette.datastructures import FormData
 
 from zira_dashboard import staffing
@@ -129,6 +131,11 @@ def test_publish_ignores_minimums_for_work_centers_that_are_off(monkeypatch):
         "_enabled_auto_work_centers",
         lambda _day: {"Hand Build #1"},
     )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "new_published_delivery",
+        lambda: {"version": "v2"},
+    )
 
     response = staffing_routes._staffing_save_work(
         SimpleNamespace(headers={}), DAY, 0,
@@ -142,6 +149,7 @@ def test_publish_ignores_minimums_for_work_centers_that_are_off(monkeypatch):
     assert response.status_code == 303
     assert response.headers["location"] == f"/staffing?day={DAY.isoformat()}"
     assert saved[0].published is True
+    assert saved[0].published_delivery == {"version": "v2"}
 
 
 def test_json_publish_below_minimum_returns_conflict_with_shortages(monkeypatch):
@@ -167,6 +175,11 @@ def test_failed_republish_preserves_the_posted_version_as_a_snapshot(monkeypatch
         day=DAY, published=True, assignments={"Hand Build #1": ["Jordan", "Taylor"]},
     )
     saved = _capture_publish(monkeypatch, [pair], existing=posted)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "new_published_delivery",
+        lambda: (_ for _ in ()).throw(AssertionError("failed publish must not create a version")),
+    )
 
     staffing_routes._staffing_save_work(
         SimpleNamespace(headers={}), DAY, 0,
@@ -177,15 +190,22 @@ def test_failed_republish_preserves_the_posted_version_as_a_snapshot(monkeypatch
     assert saved[0].published_snapshot == staffing.snapshot_of(posted)
 
 
-def test_notes_only_save_preserves_rotation_metadata(monkeypatch):
-    saved = _capture_route_save(monkeypatch, _schedule(published=True))
+def test_notes_save_on_posted_schedule_creates_draft_snapshot(monkeypatch):
+    existing = _schedule(
+        published=True,
+        notes="posted",
+        published_delivery={"version": "v1", "printed_at": "now"},
+    )
+    saved = _capture_route_save(monkeypatch, existing)
 
     staffing_routes._staffing_save_work(
-        SimpleNamespace(headers={}), DAY, 0, _save_form("save_notes", notes="updated"),
+        SimpleNamespace(headers={}), DAY, 0, _save_form("save", notes="draft note"),
     )
 
-    assert saved[0].rotation_mode == "training"
-    assert saved[0].assignment_sources == SOURCES
+    assert saved[0].published is False
+    assert saved[0].notes == "draft note"
+    assert saved[0].published_delivery == {}
+    assert saved[0].published_snapshot["published_delivery"]["version"] == "v1"
 
 
 def test_regular_save_drops_sources_for_people_removed_from_schedule(monkeypatch):
@@ -239,43 +259,13 @@ def test_posted_snapshot_rejects_ordinary_save_without_persisting(monkeypatch):
     assert saved == []
 
 
-def test_posted_snapshot_allows_discard_draft(monkeypatch):
-    snapshot = staffing.snapshot_of(_schedule(published=True))
-    saved = _capture_route_save(
-        monkeypatch, _schedule(published=False, published_snapshot=snapshot),
-    )
-
-    response = staffing_routes._staffing_save_work(
-        SimpleNamespace(headers={}), DAY, 0,
-        _save_form("discard_draft", viewing_posted="1"),
-    )
-
-    assert response.status_code == 303
-    assert saved[0].published is True
-
-
-def test_discard_draft_restores_rotation_metadata_from_snapshot(monkeypatch):
-    snapshot = staffing.snapshot_of(_schedule())
-    saved = _capture_route_save(
-        monkeypatch,
-        _schedule(
-            rotation_mode="normal",
-            assignment_sources={},
-            published_snapshot=snapshot,
-        ),
-    )
-
-    staffing_routes._staffing_save_work(
-        SimpleNamespace(headers={}), DAY, 0, _save_form("discard_draft"),
-    )
-
-    assert saved[0].rotation_mode == "training"
-    assert saved[0].assignment_sources == SOURCES
-
-
-def test_clear_testing_day_preserves_rotation_metadata(monkeypatch):
+def test_clear_testing_day_starts_draft_and_preserves_rotation_metadata(monkeypatch):
     saved = []
-    existing = _schedule(testing_day=True)
+    existing = _schedule(
+        published=True,
+        testing_day=True,
+        published_delivery={"version": "v1"},
+    )
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: existing)
     monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
     monkeypatch.setattr(staffing_routes, "_bust_after_mutation", lambda: None)
@@ -287,8 +277,105 @@ def test_clear_testing_day_preserves_rotation_metadata(monkeypatch):
     response = asyncio.run(staffing_routes.staffing_clear_testing_day(Request()))
 
     assert response.status_code == 200
+    assert saved[0].published is False
+    assert saved[0].published_delivery == {}
+    assert saved[0].published_snapshot["published_delivery"]["version"] == "v1"
     assert saved[0].rotation_mode == "training"
     assert saved[0].assignment_sources == SOURCES
+
+
+@pytest.mark.parametrize(
+    ("handler", "report_method"),
+    [
+        (staffing_routes.staffing_clear_partial, "clear_partial_by_name"),
+        (staffing_routes.staffing_restore_partial, "restore_partial_by_name"),
+    ],
+)
+def test_partial_time_off_mutation_starts_draft(monkeypatch, handler, report_method):
+    saved = []
+    posted = _schedule(published=True, published_delivery={"version": "v1"})
+    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: posted)
+    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(staffing_routes.late_report, report_method, lambda *_args: None)
+    monkeypatch.setattr(staffing_routes, "_bust_after_mutation", lambda: None)
+
+    class Request:
+        async def json(self):
+            return {"day": DAY.isoformat(), "name": "Jordan"}
+
+    response = asyncio.run(handler(Request()))
+
+    assert response.status_code == 200
+    assert saved[0].published is False
+    assert saved[0].published_delivery == {}
+    assert saved[0].published_snapshot["published_delivery"]["version"] == "v1"
+
+
+class _FormRequest:
+    def __init__(self, values):
+        self._values = FormData(values)
+
+    async def form(self):
+        return self._values
+
+
+def test_hours_save_on_posted_schedule_starts_draft(monkeypatch):
+    saved = []
+    posted = staffing.Schedule(day=DAY, published=True, published_delivery={"version": "v1"})
+    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: posted)
+    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = asyncio.run(staffing_routes.staffing_hours_save(_FormRequest({
+        "day": DAY.isoformat(), "start": "06:00", "end": "12:00",
+    })))
+
+    assert response.status_code == 200
+    assert saved[0].published is False
+    assert saved[0].published_snapshot["published_delivery"]["version"] == "v1"
+
+
+def test_json_save_includes_lifecycle_fields(monkeypatch):
+    saved = _capture_route_save(
+        monkeypatch,
+        _schedule(published=True, published_delivery={"version": "v1"}),
+    )
+    monkeypatch.setattr(staffing_routes.staffing, "schedule_revision", lambda _day: "r1")
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}), DAY, 0,
+        _save_form("save", notes="draft note"),
+    )
+
+    assert saved[0].published is False
+    assert json.loads(response.body) == {
+        "ok": True,
+        "revision": "r1",
+        "published": False,
+        "has_snapshot": True,
+        "posted_version": "v1",
+        "testing_day": False,
+    }
+
+
+def test_staffing_live_returns_no_store_lifecycle_revision(monkeypatch):
+    draft = _schedule(
+        published=False,
+        published_snapshot={"published_delivery": {"version": "v1"}},
+    )
+    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: draft)
+    monkeypatch.setattr(staffing_routes.staffing, "schedule_revision", lambda _day: "r1")
+
+    response = staffing_routes.staffing_live(DAY.isoformat())
+
+    assert response.headers["cache-control"] == "no-store"
+    assert json.loads(response.body) == {
+        "ok": True,
+        "revision": "r1",
+        "published": False,
+        "has_snapshot": True,
+        "posted_version": "v1",
+    }
 
 
 def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
@@ -310,6 +397,8 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
             "testing_day": False,
             "rotation_mode": "normal",
             "assignment_sources": posted_sources,
+            "custom_hours": {"start": "06:00", "end": "12:00", "breaks": []},
+            "published_delivery": {"version": "v1", "printed_at": "now"},
         },
     )
     staffing._schedule_cache.clear()
@@ -335,8 +424,14 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
     monkeypatch.setattr(staffing_routes.shift_config, "configured_shift_end_for", lambda _d: time(15, 30))
     monkeypatch.setattr(staffing_routes.shift_config, "configured_breaks_for", lambda _d: [])
     monkeypatch.setattr(staffing_routes.shift_config, "scheduler_hours_source", lambda *_args: "weekday_default")
+    monkeypatch.setattr(
+        staffing_routes.schedule_store,
+        "current",
+        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
+    )
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", ())
     monkeypatch.setattr(staffing_routes.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(staffing_routes.staffing, "schedule_revision", lambda _day: "r1")
     monkeypatch.setattr(
         staffing_view,
         "build_staffing_bays",
@@ -347,8 +442,14 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
             "people_meta": {}, "all_active_people": [],
         },
     )
+    captured_context = {}
+
+    def render(_request, _template, context):
+        captured_context.update(context)
+        return type("Response", (), {"headers": {}})()
+
     monkeypatch.setattr(staffing_routes, "templates", type("Templates", (), {
-        "TemplateResponse": staticmethod(lambda *_args: type("Response", (), {"headers": {}})()),
+        "TemplateResponse": staticmethod(render),
     })())
 
     staffing_routes.staffing_page(
@@ -357,6 +458,12 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
 
     assert staffing.load_schedule(DAY).rotation_mode == "training"
     assert staffing.load_schedule(DAY).assignment_sources == draft_sources
+    assert captured_context["sched"].custom_hours == {
+        "start": "06:00", "end": "12:00", "breaks": [],
+    }
+    assert captured_context["posted_delivery"] == {"version": "v1", "printed_at": "now"}
+    assert captured_context["posted_version"] == "v1"
+    assert captured_context["schedule_revision"] == "r1"
 
     monkeypatch.setattr(staffing, "save_schedule", saved.append)
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair_1,))

@@ -102,10 +102,10 @@
     display: inline-block;
     margin-left: 0.25rem;
     padding: 0 0.35rem;
-    border: 1px solid #2563eb;
+    border: 1px solid var(--warn);
     border-radius: 4px;
-    background: #dbeafe;
-    color: #1d4ed8;
+    background: var(--warn-dim);
+    color: var(--warn);
     font-size: 0.65rem;
     font-weight: 700;
     line-height: 1.4;
@@ -282,17 +282,10 @@
   }
   .title-bar .view-toggle-btn:last-child { border-right: none; }
   .title-bar .view-toggle-btn:hover { color: var(--fg); }
-  .title-bar .view-toggle-btn.active { background: var(--accent-dim); color: var(--accent); }
-  .title-bar .posted-badge {
-    font-size: 0.78rem; color: var(--accent); font-weight: 600;
-    background: var(--accent-dim); padding: 0.25rem 0.6rem; border-radius: 6px;
-  }
-  .title-bar .discard-btn {
-    background: transparent; color: var(--muted);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.4rem 0.9rem; font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer;
-  }
-  .title-bar .discard-btn:hover { color: var(--bad); border-color: var(--bad); }
+  .title-bar .view-toggle-btn.active.draft { background: var(--warn-dim); color: var(--warn); }
+  .title-bar .view-toggle-btn.active.posted { background: var(--accent-dim); color: var(--accent); }
+  .title-bar .publish-btn.icon-btn.complete { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+  .title-bar .publish-btn.icon-btn.complete::after { content: "✓"; font-size: 0.72rem; font-weight: 800; margin-left: 0.2rem; }
 
   /* Schedule table */
   table.sched { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.9rem; }
@@ -640,16 +633,6 @@
      so the cell (and its row) stretches to fit the full text. */
   .wc-note-print { display: none; }
 
-  /* Draft / Posted header indicators */
-  .draft-label { color: var(--bad); font-weight: 800; font-size: 0.78rem; letter-spacing: 1.5px; padding: 0.1rem 0.45rem; border: 1px solid var(--bad); border-radius: 6px; }
-  .posted-edit-btn {
-    background: transparent; color: var(--muted);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.2rem 0.55rem; font: inherit; font-size: 0.78rem; cursor: pointer;
-  }
-  .posted-edit-btn:hover { color: var(--fg); border-color: var(--muted); }
-  .posted-edit-btn.editing { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
-
   /* Clear schedule button */
   .clear-btn {
     background: transparent; color: var(--muted);
@@ -712,11 +695,20 @@
   .minimum-crew-balance #minimum-crew-action { font-weight: 750; }
   .minimum-crew-balance.is-balanced #minimum-crew-action { color: var(--accent); }
   .minimum-crew-balance.is-unbalanced #minimum-crew-action { color: var(--bad); }
-  .day-context .rotation-controls { display: block; margin: 0.85rem 0 0; }
-  .day-context .rotation-mode { flex-wrap: wrap; }
-  .day-context .rotation-mode-help.hint { flex-basis: 100%; }
-  .day-context .minimum-crew-balance { margin-left: 0; }
-  .sidebar-schedule-actions { display: flex; gap: 0.45rem; }
+  .day-context .rotation-controls {
+    position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 20;
+    display: block; width: min(17.5rem, calc(100vw - 2.5rem)); margin: 0;
+    padding: 0.65rem; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+    border-radius: 16px;
+    background: linear-gradient(135deg, var(--panel), color-mix(in srgb, var(--accent-dim) 32%, var(--panel)));
+    box-shadow: 0 16px 36px rgba(31, 41, 55, 0.18);
+  }
+  .day-context .rotation-mode { flex-wrap: wrap; width: auto; padding: 0; border: 0; background: transparent; }
+  .day-context .rotation-mode-label { display: flex; align-items: center; gap: 0.35rem; margin-right: auto; }
+  .day-context .rotation-mode-label::before { content: '•'; color: var(--accent); font-size: 1rem; line-height: 1; }
+  .day-context .rotation-mode-help.hint { display: none; }
+  .day-context .minimum-crew-balance { display: block; flex: 0 0 100%; margin: 0.55rem 0 0; white-space: normal; }
+  .sidebar-schedule-actions { display: flex; gap: 0.45rem; margin-top: 0.6rem; }
   .sidebar-schedule-actions .clear-btn { flex: 1 1 0; }
   .rotation-warning {
     flex: 1 1 16rem; min-width: 0;
@@ -787,7 +779,7 @@
   }
   .coverage-why ul { margin: 0.35rem 0 0.1rem 1.1rem; }
   .coverage-why li { margin: 0.15rem 0; }
-  /* Lock inputs on posted days until Edit */
+  /* Lock controls while showing a posted schedule. */
   form.locked select,
   form.locked textarea,
   form.locked input[type=text],
@@ -796,15 +788,6 @@
     pointer-events: none;
     opacity: 0.7;
   }
-  /* …except notes (day-level + per-WC). Supervisors need to update notes
-     after publishing without unlocking the whole schedule. Saves via the
-     dedicated `save_notes` action that keeps the published state. */
-  form.locked:not(.viewing-posted) textarea[name="notes"],
-  form.locked:not(.viewing-posted) textarea[name^="wc_note__"] {
-    pointer-events: auto;
-    opacity: 1;
-  }
-
   .save-block {
     background: var(--bad-dim); color: var(--bad);
     border: 1px solid var(--bad); border-radius: 8px;
@@ -851,6 +834,7 @@
   @media (max-width: 1100px) {
     .layout { grid-template-columns: 1fr; }
     .day-context { order: 3; position: static; }
+    .day-context .rotation-controls { position: static; width: auto; }
   }
 
   /* Hours pill — shows effective hours for the day, accent-colored when an

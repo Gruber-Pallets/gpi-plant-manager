@@ -43,6 +43,12 @@ def mini_app(fixed_secret):
     @app.get("/favicon.ico")
     def _fav(): return PlainTextResponse("ok")
 
+    @app.get("/tv/dismantler-1")
+    def _tv_slug(): return PlainTextResponse("tv-slug-ok")
+
+    @app.get("/tv/d/dismantler-1")
+    def _tv_legacy(): return PlainTextResponse("tv-legacy-ok")
+
     return app
 
 
@@ -62,6 +68,20 @@ def test_unauthed_root_redirects_to_bare_login(mini_app):
     assert r.status_code in (302, 404)
     if r.status_code == 302:
         assert r.headers["location"] == "/auth/login"
+
+
+def test_tv_slug_path_bypasses_auth_without_device_setup(mini_app):
+    c = TestClient(mini_app)
+    r = c.get("/tv/dismantler-1", follow_redirects=False)
+    assert r.status_code == 200
+    assert r.text == "tv-slug-ok"
+
+
+def test_legacy_tv_path_bypasses_auth_without_device_setup(mini_app):
+    c = TestClient(mini_app)
+    r = c.get("/tv/d/dismantler-1", follow_redirects=False)
+    assert r.status_code == 200
+    assert r.text == "tv-legacy-ok"
 
 
 def test_authed_with_valid_cookie_passes_through(mini_app, fixed_secret):
@@ -163,8 +183,8 @@ def test_tv_path_with_valid_device_token_passes(mini_app, monkeypatch):
     assert r.text == "tv-ok"
 
 
-def test_tv_path_with_invalid_device_token_redirects(mini_app, monkeypatch):
-    """Invalid (signature-bad or revoked) token: redirect to login."""
+def test_tv_path_with_invalid_device_token_still_bypasses_auth(mini_app, monkeypatch):
+    """TV routes are anonymous even when a stale device token is present."""
     from zira_dashboard import device_tokens as dt
     monkeypatch.setattr(dt, "lookup_active", lambda signed: None)
     from starlette.responses import PlainTextResponse
@@ -172,8 +192,8 @@ def test_tv_path_with_invalid_device_token_redirects(mini_app, monkeypatch):
     def _tv(): return PlainTextResponse("tv-ok")
     c = TestClient(mini_app)
     r = c.get("/tv/bar?device=garbage", follow_redirects=False)
-    assert r.status_code == 302
-    assert "/auth/login" in r.headers["location"]
+    assert r.status_code == 200
+    assert r.text == "tv-ok"
 
 
 def test_non_tv_path_with_device_token_still_redirects(mini_app, monkeypatch):
@@ -190,15 +210,15 @@ def test_non_tv_path_with_device_token_still_redirects(mini_app, monkeypatch):
     assert "/auth/login" in r.headers["location"]
 
 
-def test_tv_path_without_device_token_redirects(mini_app):
-    """A bare /tv/foo without ?device= must also redirect — the path
-    being under /tv/ doesn't grant a free pass."""
+def test_tv_path_without_device_token_bypasses_auth(mini_app):
+    """A bare /tv/foo is anonymous without a device token."""
     from starlette.responses import PlainTextResponse
     @mini_app.get("/tv/baz")
     def _tv(): return PlainTextResponse("tv-ok")
     c = TestClient(mini_app)
     r = c.get("/tv/baz", follow_redirects=False)
-    assert r.status_code == 302
+    assert r.status_code == 200
+    assert r.text == "tv-ok"
 
 
 def test_session_sets_request_state(mini_app, fixed_secret):
@@ -220,9 +240,8 @@ def test_session_sets_request_state(mini_app, fixed_secret):
     assert r.json() == {"upn": "dale@gruberpallets.com", "name": "Dale"}
 
 
-def test_device_token_sets_request_state(mini_app, monkeypatch):
-    """Device-token-authed /tv/* requests get a `device:<name>` UPN so
-    downstream code can distinguish humans from TVs."""
+def test_tv_bypass_does_not_set_request_state_from_device_token(mini_app, monkeypatch):
+    """Anonymous TV routes bypass device-token parsing and request state."""
     from zira_dashboard import device_tokens as dt
     monkeypatch.setattr(dt, "lookup_active",
         lambda signed: {"id": 1, "name": "Bay 3 TV"} if signed == "fake.signed" else None,
@@ -240,7 +259,7 @@ def test_device_token_sets_request_state(mini_app, monkeypatch):
     c = TestClient(mini_app)
     r = c.get("/tv/whoami?device=fake.signed")
     assert r.status_code == 200
-    assert r.json() == {"upn": "device:Bay 3 TV", "name": "Bay 3 TV"}
+    assert r.json() == {"upn": None, "name": None}
 
 
 def test_tv_path_with_ip_allowlist_passes(mini_app, monkeypatch):
@@ -270,8 +289,8 @@ def test_tv_path_with_ip_allowlist_cidr_passes(mini_app, monkeypatch):
     assert r.text == "tv-ok"
 
 
-def test_tv_path_with_ip_allowlist_miss_redirects(mini_app, monkeypatch):
-    """IPs NOT in TV_ALLOWED_IPS still get bounced to login."""
+def test_tv_path_with_ip_allowlist_miss_bypasses_auth(mini_app, monkeypatch):
+    """TV routes are anonymous even from IPs outside the allowlist."""
     monkeypatch.setenv("TV_ALLOWED_IPS", "10.20.30.40")
     from starlette.responses import PlainTextResponse
     @mini_app.get("/tv/miss")
@@ -279,7 +298,8 @@ def test_tv_path_with_ip_allowlist_miss_redirects(mini_app, monkeypatch):
     # client.host = "8.8.8.8" — not in the allowlist
     c = TestClient(mini_app, client=("8.8.8.8", 12345))
     r = c.get("/tv/miss", follow_redirects=False)
-    assert r.status_code == 302
+    assert r.status_code == 200
+    assert r.text == "tv-ok"
 
 
 def test_ip_allowlist_does_not_grant_non_tv_paths(mini_app, monkeypatch):
@@ -293,16 +313,16 @@ def test_ip_allowlist_does_not_grant_non_tv_paths(mini_app, monkeypatch):
     assert "/auth/login" in r.headers["location"]
 
 
-def test_ip_allowlist_unset_env_no_op(mini_app, monkeypatch):
-    """When TV_ALLOWED_IPS is unset, /tv/* paths still require a token
-    (status quo behavior preserved)."""
+def test_tv_path_bypasses_auth_when_ip_allowlist_is_unset(mini_app, monkeypatch):
+    """TV routes are anonymous when no TV_ALLOWED_IPS value is configured."""
     monkeypatch.delenv("TV_ALLOWED_IPS", raising=False)
     from starlette.responses import PlainTextResponse
     @mini_app.get("/tv/none")
     def _tv(): return PlainTextResponse("tv-ok")
     c = TestClient(mini_app, client=("127.0.0.1", 12345))
     r = c.get("/tv/none", follow_redirects=False)
-    assert r.status_code == 302
+    assert r.status_code == 200
+    assert r.text == "tv-ok"
 
 
 def test_ip_allowlist_malformed_entry_falls_back(mini_app, monkeypatch):

@@ -47,7 +47,17 @@
       </a>
     </div>
   {% else %}
-    {% if scheduled_wc %}
+    {% if approved_full_day_leave %}
+      <h2>You have approved time off today</h2>
+      <p style="font-size: 1.25rem; color: #64748b; margin-bottom: 2rem; max-width: 620px; text-align: center;">
+        Choose the work center you are reporting to. You'll confirm that your time off should be cleared before clocking in.
+      </p>
+      <a href="/timeclock/pick-wc/{{ token }}?purpose=clock_in{% if scheduled_wc %}&scheduled={{ scheduled_wc|urlencode }}{% endif %}"
+         class="k-btn success"
+         style="text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">
+        Pick Work Center
+      </a>
+    {% elif scheduled_wc %}
       <h2>{{ t("Today you're scheduled on") }}</h2>
       <h1 style="font-size: 3rem; color: #ea580c;">{{ scheduled_wc }}</h1>
       <form method="post" action="/timeclock/clock-in/{{ token }}" class="k-punch-form"

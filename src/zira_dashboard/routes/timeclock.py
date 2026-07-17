@@ -61,6 +61,8 @@ from .. import (
     saturday_recruiting_store,
     timeclock_i18n,
     timeclock_sync,
+    unexpected_worker,
+    odoo_client,
 )
 from .. import employee_notifications, saturday_work_reminder, time_off_reminder
 # Not called directly here, but the state-reconciliation tests patch
@@ -247,6 +249,37 @@ def _scheduled_wc_for(person_name: str) -> str | None:
         if person_name in names:
             return wc_name
     return None
+
+
+def _approved_full_day_leave_today(person_odoo_id: int) -> dict | None:
+    """The approved full-day leave that must be cleared before a punch."""
+    return unexpected_worker.approved_full_day_leave(person_odoo_id, plant_today())
+
+
+def _time_off_override_confirmation(
+    request: Request,
+    *,
+    person: dict,
+    person_id: int,
+    wc_name: str,
+    scheduled_wc_name: str,
+    error: str | None = None,
+    status_code: int = 200,
+):
+    """Render the explicit acknowledgement required before overriding leave."""
+    return templates.TemplateResponse(
+        request,
+        "timeclock_time_off_override_confirm.html",
+        {
+            "person": person,
+            "token": _mint_token(person_id),
+            "wc_name": wc_name,
+            "scheduled_wc_name": scheduled_wc_name,
+            "error": error,
+            **timeclock_i18n.context_for_person(person),
+        },
+        status_code=status_code,
+    )
 
 
 def _fmt_time(dt: datetime) -> str:
@@ -548,6 +581,10 @@ def timeclock_dashboard(request: Request, token: str):
 
     sync_warning = _sync_error_warning(p["odoo_id"]) if p.get("odoo_id") else None
     scheduled_wc = _scheduled_wc_for(p["name"])
+    approved_leave = (
+        _approved_full_day_leave_today(p["odoo_id"])
+        if p.get("odoo_id") else None
+    )
 
     # Refresh the token so a slow user (reading the scheduled WC, picking
     # WCs) doesn't time out mid-action.
@@ -574,6 +611,7 @@ def timeclock_dashboard(request: Request, token: str):
             "on_lunch": on_lunch,
             "check_in_display": _fmt_time(state["check_in_ts"]) if state["check_in_ts"] else None,
             "scheduled_wc": scheduled_wc,
+            "approved_full_day_leave": approved_leave,
             "sync_warning": sync_warning,
             "time_off_enabled": time_off_on,
             "pending_time_off_count": pending_time_off,
@@ -683,11 +721,95 @@ def kiosk_clock_in(
     if salaried:
         return salaried
     odoo_id = p["odoo_id"]
+    if _approved_full_day_leave_today(odoo_id):
+        return _time_off_override_confirmation(
+            request,
+            person=p,
+            person_id=person_id,
+            wc_name=wc_name,
+            scheduled_wc_name=scheduled_wc_name,
+        )
     log_id, rounded_at = _open_log_row(odoo_id, "clock_in", wc_name)
     # Odoo write runs after the response is sent. FastAPI runs sync `def`
     # background tasks in a threadpool, so the XML-RPC call doesn't block
     # the event loop. The 60s sweep worker remains a safety net for
     # transient failures.
+    background_tasks.add_task(timeclock_sync.sync_one_by_id, log_id)
+    if scheduled_wc_name and scheduled_wc_name != wc_name:
+        _log_variance(odoo_id, scheduled_wc_name, wc_name)
+    return templates.TemplateResponse(
+        request,
+        "timeclock_success.html",
+        {
+            "person": p,
+            "message": f"Clocked in to {wc_name}",
+            "time": _fmt_time(rounded_at),
+            **timeclock_i18n.context_for_person(p),
+        },
+    )
+
+
+@router.post("/timeclock/clock-in/confirm/{token}", response_class=HTMLResponse)
+def kiosk_clock_in_confirm_time_off_override(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    token: str,
+    wc_name: str = Form(...),
+    scheduled_wc_name: str = Form(default=""),
+):
+    """Clear approved leave synchronously, then create the clock-in.
+
+    Odoo refusal is deliberately on the request path: no local punch may be
+    created if the leave cannot be cleared there.  Once refused, the local
+    mirror and audit event are updated before the normal async attendance
+    sync is queued.
+    """
+    person_id = _verify_token(token)
+    if person_id is None:
+        return _expired_redirect(request)
+    p = _person_by_id(person_id)
+    if not p or not p.get("odoo_id"):
+        return RedirectResponse(url="/timeclock", status_code=303)
+    salaried = _time_off_redirect_if_salaried(p, person_id)
+    if salaried:
+        return salaried
+
+    odoo_id = p["odoo_id"]
+    leave = _approved_full_day_leave_today(odoo_id)
+    if not leave or not leave.get("odoo_leave_id"):
+        return _time_off_override_confirmation(
+            request,
+            person=p,
+            person_id=person_id,
+            wc_name=wc_name,
+            scheduled_wc_name=scheduled_wc_name,
+            error="Your approved time off could not be confirmed. Please see a manager.",
+            status_code=409,
+        )
+    try:
+        odoo_client.refuse_leave(int(leave["odoo_leave_id"]))
+    except Exception:
+        _log.exception("Could not refuse leave %s for kiosk clock-in", leave["odoo_leave_id"])
+        return _time_off_override_confirmation(
+            request,
+            person=p,
+            person_id=person_id,
+            wc_name=wc_name,
+            scheduled_wc_name=scheduled_wc_name,
+            error="We could not clear your approved time off. No clock-in was recorded; please try again or see a manager.",
+            status_code=502,
+        )
+
+    db.execute(
+        "UPDATE time_off_requests SET state = %s, synced_to_odoo = TRUE, "
+        "sync_error = NULL, updated_at = now() WHERE id = %s",
+        ("refuse", leave["id"]),
+    )
+    unexpected_worker.record(
+        day=plant_today(), person_odoo_id=odoo_id, leave=leave,
+        clock_in_wc=wc_name,
+    )
+    log_id, rounded_at = _open_log_row(odoo_id, "clock_in", wc_name)
     background_tasks.add_task(timeclock_sync.sync_one_by_id, log_id)
     if scheduled_wc_name and scheduled_wc_name != wc_name:
         _log_variance(odoo_id, scheduled_wc_name, wc_name)

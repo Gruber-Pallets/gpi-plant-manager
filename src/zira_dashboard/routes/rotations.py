@@ -388,11 +388,14 @@ async def save_auto_work_centers(request: Request):
         turn_off_names = set(staffing_route._ordered_work_center_names(turn_off))
         enabled = [name for name in proposed if name not in turn_off_names]
         roster = staffing.load_roster()
-        sched = staffing.load_schedule(d)
+        existing = staffing.load_schedule(d)
+        sched = staffing.draft_from_posted(existing)
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
         except Exception:
             return _error("Could not verify daily staffing coverage.", 503)
+        if existing.published:
+            staffing.save_schedule(sched)
         saturday_recruiting = None
         if d.weekday() == 5:
             try:
@@ -465,47 +468,6 @@ def _build_assignment_sources(existing_sources, suggestion) -> dict[str, dict[st
     return new_sources
 
 
-def _defaults_only_assignments(
-    *, roster, full_day_off_names, exact_defaults, group_defaults,
-    user_group_centers, enabled_centers, center_capacities, history,
-) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
-    available = {
-        person.name for person in roster
-        if person.active and not person.reserve and person.name not in full_day_off_names
-    }
-    assignments: dict[str, list[str]] = {}
-    sources: dict[str, dict[str, str]] = {}
-    assigned: set[str] = set()
-
-    def place(center: str, name: str) -> None:
-        if not center or name not in available or name in assigned:
-            return
-        assignments.setdefault(center, []).append(name)
-        sources.setdefault(center, {})[name] = "default"
-        assigned.add(name)
-
-    for center, names in exact_defaults.items():
-        for raw_name in names:
-            place(str(center).strip(), str(raw_name).strip())
-
-    enabled = set(enabled_centers)
-    for group, names in group_defaults.items():
-        group_centers = tuple(center for center in user_group_centers.get(group, ()) if center in enabled)
-        for raw_name in names:
-            name = str(raw_name).strip()
-            available_centers = tuple(
-                center for center in group_centers
-                if center_capacities.get(center) is None
-                or len(assignments.get(center, ())) < center_capacities[center]
-            )
-            if not available_centers or name not in available or name in assigned:
-                continue
-            least_load = min(len(assignments.get(center, ())) for center in available_centers)
-            tied_centers = tuple(center for center in available_centers if len(assignments.get(center, ())) == least_load)
-            place(rotation_suggestions.choose_center(name, str(group), tied_centers, history), name)
-    return assignments, sources
-
-
 @router.post("/api/rotations/rebuild")
 async def rebuild_rotation(request: Request):
     body = await _json_body(request)
@@ -524,7 +486,7 @@ async def rebuild_rotation(request: Request):
         return _error(f"Unknown mode: {mode}")
     def _work():
         roster = staffing.load_roster()
-        sched = staffing.load_schedule(d)
+        sched = staffing.draft_from_posted(staffing.load_schedule(d))
         base_assignments = {k: list(v) for k, v in sched.assignments.items()}
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
@@ -545,7 +507,7 @@ async def rebuild_rotation(request: Request):
                     group_locations=staffing_route._auto_history_group_locations(),
                     user_group_centers=user_group_centers,
                 )
-                assignments, sources = _defaults_only_assignments(
+                assignments, sources = staffing_route._defaults_only_assignments(
                     roster=roster,
                     full_day_off_names=absent,
                     exact_defaults=exact_defaults,
@@ -564,6 +526,7 @@ async def rebuild_rotation(request: Request):
                     testing_day=sched.testing_day,
                     published_snapshot=sched.published_snapshot,
                     custom_hours=sched.custom_hours,
+                    published_delivery=sched.published_delivery,
                     rotation_mode=sched.rotation_mode,
                     assignment_sources=sources,
                 ))
@@ -681,7 +644,7 @@ async def rebuild_rotation(request: Request):
                 warning_messages.append(message)
 
         # Persist the rebuild, preserving everything not owned by rotation
-        # (published state, snapshot, testing day, notes, custom hours).
+        # (the posted snapshot, testing day, notes, custom hours).
         staffing.save_schedule(staffing.Schedule(
             day=d,
             published=sched.published,
@@ -691,6 +654,7 @@ async def rebuild_rotation(request: Request):
             testing_day=sched.testing_day,
             published_snapshot=sched.published_snapshot,
             custom_hours=sched.custom_hours,
+            published_delivery=sched.published_delivery,
             rotation_mode=mode,
             assignment_sources=new_sources,
         ))

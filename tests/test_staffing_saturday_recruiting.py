@@ -54,10 +54,13 @@ def test_only_commitments_enter_saturday_unassigned(patch_wcs):
             "Ana": {"start": time(6, 0), "end": time(12, 0)},
             "Bob": {"start": time(7, 0), "end": time(11, 30)},
         },
+        saturday_shift=(time(6), time(12)),
     )
 
     assert model["unassigned"] == ["Ana", "Bob"]
     assert model["off"] == ["Cara"]
+    assert model["saturday_committed_names"] == ["Ana", "Bob"]
+    assert "Ana" not in model["saturday_availability_by_name"]
     assert model["saturday_availability_by_name"]["Bob"] == "7:00 AM–11:30 AM"
     assert model["is_saturday_recruiting"] is True
 
@@ -96,6 +99,7 @@ def test_partial_commitment_keeps_availability_after_assignment(patch_wcs):
         roster=[_person("Bob", Repair=2)],
         sched=_sched({"Repair 1": ["Bob"]}), time_off_entries=[], publish_blocked=0,
         saturday_commitments={"Bob": {"start": time(7, 0), "end": time(11, 30)}},
+        saturday_shift=(time(6), time(12)),
     )
 
     assert model["unassigned"] == []
@@ -211,6 +215,29 @@ def test_publish_before_deadline_is_blocked(monkeypatch):
     assert saved[0].published is False
 
 
+def test_recruiting_saturday_can_save_a_draft_before_publish_deadline(monkeypatch):
+    bundle = _bundle(status="recruiting")
+    saved = []
+    repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
+    dismantle = staffing.Location("Dismantle", "Dismantle", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair, dismantle))
+    monkeypatch.setattr(staffing_routes.work_centers_store, "min_ops", lambda loc: loc.min_ops)
+    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: staffing.Schedule(day=SATURDAY, assignments={}))
+    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: bundle)
+    monkeypatch.setattr(staffing_routes, "plant_now", lambda: datetime(2026, 7, 23, 8, tzinfo=SITE_TZ))
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={}), SATURDAY, 0,
+        FormData([("action", "save"), ("loc__Repair 1", "Ana"), ("loc__Dismantle", "Bob")]),
+    )
+
+    assert response.headers["location"] == f"/staffing?day={SATURDAY.isoformat()}"
+    assert len(saved) == 1
+    assert saved[0].published is False
+
+
 def test_post_deadline_publish_uses_only_requested_saturday_positions(monkeypatch):
     bundle = _repair_only_bundle()
     saved = []
@@ -260,7 +287,7 @@ def test_saturday_save_rejects_noncommitted_assignment_without_persisting(monkey
     assert saved == []
 
 
-@pytest.mark.parametrize("action", ["save", "publish", "save_notes", "discard_draft"])
+@pytest.mark.parametrize("action", ["save", "publish"])
 def test_saturday_recruiting_lookup_failure_blocks_schedule_writes(monkeypatch, action):
     saved = []
     default_updates = []
@@ -292,81 +319,6 @@ def test_saturday_recruiting_lookup_failure_blocks_schedule_writes(monkeypatch, 
     assert default_updates == []
 
 
-def test_discard_saturday_draft_rejects_noncommitted_snapshot_assignment(monkeypatch):
-    saved = []
-    repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
-    posted = staffing.Schedule(day=SATURDAY, published=True, assignments={"Repair 1": ["Cara"]})
-    existing = staffing.Schedule(
-        day=SATURDAY, published=False, assignments={"Repair 1": ["Ana"]},
-        published_snapshot=staffing.snapshot_of(posted),
-    )
-    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair,))
-    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: existing)
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
-    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
-    monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: _repair_only_bundle())
-
-    response = staffing_routes._staffing_save_work(
-        SimpleNamespace(headers={}), SATURDAY, 0,
-        FormData([("action", "discard_draft")]),
-    )
-
-    assert response.status_code == 409
-    assert b"Cara is not committed to Saturday." in response.body
-    assert saved == []
-
-
-def _draft_with_snapshot(assignments):
-    posted = staffing.Schedule(day=SATURDAY, published=True, assignments=assignments)
-    return staffing.Schedule(
-        day=SATURDAY, published=False, assignments={"Repair 1": ["Ana"]},
-        published_snapshot=staffing.snapshot_of(posted),
-    )
-
-
-def test_discard_saturday_draft_is_blocked_before_recruiting_deadline(monkeypatch):
-    saved = []
-    repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
-    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair,))
-    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: _draft_with_snapshot({"Repair 1": ["Ana"]}))
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
-    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
-    monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: _repair_only_bundle(status="recruiting"))
-    monkeypatch.setattr(staffing_routes, "plant_now", lambda: datetime(2026, 7, 23, 8, tzinfo=SITE_TZ))
-
-    response = staffing_routes._staffing_save_work(
-        SimpleNamespace(headers={}), SATURDAY, 0,
-        FormData([("action", "discard_draft")]),
-    )
-
-    assert response.status_code == 409
-    assert b"Saturday recruiting stays open until" in response.body
-    assert saved == []
-
-
-def test_discard_saturday_draft_validates_requested_coverage_before_restore(monkeypatch):
-    saved = []
-    repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
-    dismantle = staffing.Location("Dismantle", "Dismantle", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
-    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair, dismantle))
-    monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: _draft_with_snapshot({"Repair 1": ["Ana"]}))
-    monkeypatch.setattr(staffing_routes.staffing, "load_roster", lambda: [_person("Ana", Repair=3), _person("Bob", Dismantle=3)])
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
-    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
-    monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: _bundle())
-    monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda _day: [])
-    monkeypatch.setattr(staffing_routes, "plant_now", lambda: datetime(2026, 7, 25, 8, tzinfo=SITE_TZ))
-
-    response = staffing_routes._staffing_save_work(
-        SimpleNamespace(headers={}), SATURDAY, 0,
-        FormData([("action", "discard_draft")]),
-    )
-
-    assert response.status_code == 409
-    assert b"Bob committed to Saturday but is not assigned." in response.body
-    assert saved == []
-
-
 def test_unknown_staffing_action_is_rejected_before_schedule_write(monkeypatch):
     saved = []
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", ())
@@ -384,6 +336,8 @@ def test_unknown_staffing_action_is_rejected_before_schedule_write(monkeypatch):
 def test_staffing_template_has_saturday_off_availability_and_publish_lock():
     template = Path("src/zira_dashboard/templates/staffing.html").read_text()
     script = Path("src/zira_dashboard/static/staffing.js").read_text()
+    css = Path("src/zira_dashboard/static/staffing.css").read_text()
+    badge_css = css.split(".saturday-availability-badge {", 1)[1].split("}", 1)[0]
 
     assert "'Unassigned' if is_saturday_recruiting else 'Unscheduled'" in template
     assert 'class="section saturday-off"' in template
@@ -392,5 +346,9 @@ def test_staffing_template_has_saturday_off_availability_and_publish_lock():
     assert 'disabled aria-describedby="saturday-publish-lock"' in template
     assert "window.SATURDAY_RECRUITING" in template
     assert "window.SATURDAY_COMMITTED_NAMES" in template
+    assert "window.SATURDAY_COMMITTED_NAMES = {{ saturday_committed_names|default([], true)|tojson }};" in template
     assert "const __saturdayRecruiting = window.SATURDAY_RECRUITING;" in script
     assert "if (__saturdayRecruiting && !__saturdayCommittedNames.has(name)) return;" in script
+    assert "background: var(--warn-dim);" in badge_css
+    assert "color: var(--warn);" in badge_css
+    assert "border: 1px solid var(--warn);" in badge_css

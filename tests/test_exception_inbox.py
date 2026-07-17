@@ -5,7 +5,10 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from zira_dashboard import db, exception_inbox, machine_breakdown, missing_wc, missed_punch_out, staffing
+from zira_dashboard import (
+    db, exception_inbox, machine_breakdown, missing_wc, missed_punch_out,
+    staffing, unexpected_worker,
+)
 from zira_dashboard.app import app
 from zira_dashboard.routes import exceptions as exceptions_route
 from zira_dashboard.routes import staffing as staffing_routes
@@ -90,6 +93,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
         {"attendance_id": 11, "name": "Dee", "check_in_label": "1:00 PM Thu"},
     ])
     monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: ["Repair 1"])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (
         1,
@@ -115,6 +119,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
         "late": 2,
         "missing_wc": 1,
         "missed_punch_out": 1,
+        "unexpected_workers": 0,
         "breakdown": 0,
         "time_off": 1,
     }
@@ -166,6 +171,92 @@ def test_build_snapshot_maps_running_late_to_muted_follow_up(monkeypatch):
     assert snap["follow_up_total"] == 1
 
 
+def test_unexpected_workers_are_urgent_and_clear_after_published_placement(monkeypatch):
+    """The inbox delegates lifecycle clearing to unexpected_worker.open_events."""
+    day = date(2026, 7, 17)
+    monkeypatch.setattr(exception_inbox.plant_day, "today", lambda: day)
+    monkeypatch.setattr(staffing_routes, "assignments_todo_payload", lambda: {"count": 0})
+    monkeypatch.setattr(staffing_routes, "late_report_payload", lambda: {"count": 0})
+    monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
+    monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda _day: (0, []))
+    monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
+    monkeypatch.setattr(
+        unexpected_worker,
+        "open_events",
+        lambda _day: [{
+            "id": 9,
+            "day": day,
+            "person_odoo_id": 7,
+            "person_name": "Maria Delgado",
+            "clock_in_wc": "Repair 1",
+        }],
+    )
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda _day: staffing.Schedule(day=day, assignments={"Repair 1": ["Ana"]}),
+    )
+    monkeypatch.setattr(
+        staffing_routes,
+        "_enabled_auto_work_centers",
+        lambda _day: {"Repair 1", "Dismantler 1"},
+    )
+    monkeypatch.setattr(
+        staffing_routes,
+        "_effective_minimum",
+        lambda loc: 2 if loc.name == "Repair 1" else 1,
+    )
+
+    snap = exception_inbox.build_snapshot()
+    section = next(s for s in snap["sections"] if s["id"] == "unexpected_workers")
+    row = section["rows"][0]
+
+    assert section["tone"] == "bad"
+    assert row["name"] == "Maria Delgado"
+    assert row["priority"] == "urgent"
+    assert row["href"] == "/staffing?day=2026-07-17"
+    assert row["item_key"] == "unexpected_worker:2026-07-17:7"
+    assert row["detail"] == (
+        "Clocked in at Repair 1 · Staffing below minimum: "
+        "Repair 1 (1/2), Dismantler 1 (0/1)."
+    )
+
+    # A published assignment is cleared inside open_events, so a later inbox
+    # refresh sees no row rather than trying to resolve it here.
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    cleared = exception_inbox.build_snapshot()
+    cleared_section = next(s for s in cleared["sections"] if s["id"] == "unexpected_workers")
+    assert cleared_section["count"] == 0
+
+
+def test_unexpected_worker_routes_to_staffing_when_enabled_centers_are_covered(monkeypatch):
+    day = date(2026, 7, 17)
+    monkeypatch.setattr(exception_inbox.plant_day, "today", lambda: day)
+    monkeypatch.setattr(staffing_routes, "assignments_todo_payload", lambda: {"count": 0})
+    monkeypatch.setattr(staffing_routes, "late_report_payload", lambda: {"count": 0})
+    monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
+    monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda _day: (0, []))
+    monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [{
+        "day": day, "person_odoo_id": 7, "person_name": "Maria Delgado", "clock_in_wc": "Repair 1",
+    }])
+    monkeypatch.setattr(
+        staffing, "load_schedule", lambda _day: staffing.Schedule(day=day, assignments={"Repair 1": ["Ana"]})
+    )
+    monkeypatch.setattr(staffing_routes, "_enabled_auto_work_centers", lambda _day: {"Repair 1"})
+    monkeypatch.setattr(staffing_routes, "_effective_minimum", lambda _loc: 1)
+
+    snap = exception_inbox.build_snapshot()
+    row = next(s for s in snap["sections"] if s["id"] == "unexpected_workers")["rows"][0]
+
+    assert row["href"] == "/staffing?day=2026-07-17"
+    assert row["detail"] == "Clocked in at Repair 1 · No enabled work centers are below minimum."
+
+
 def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     monkeypatch.setattr(exception_inbox.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(
@@ -185,6 +276,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [{"attendance_id": 10}])
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [{"attendance_id": 11}])
     monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off_counts", lambda today: (4, 2))
 
     summary = exception_inbox.build_summary()
@@ -201,6 +293,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
         "late": 3,
         "missing_wc": 1,
         "missed_punch_out": 1,
+        "unexpected_workers": 0,
         "breakdown": 0,
         "time_off": 4,
     }
@@ -332,6 +425,7 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
     monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
 
@@ -345,6 +439,7 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
         "late",
         "missing_wc",
         "missed_punch_out",
+        "unexpected_workers",
         "breakdown",
         "time_off",
     ]

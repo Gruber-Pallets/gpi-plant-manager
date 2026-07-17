@@ -13,33 +13,13 @@
     });
   }
 
-  // ---------- Posted schedule lock / Edit gate ----------
-  const __isPublished = !!window.SCHEDULE_PUBLISHED;
+  // ---------- Posted schedule lock ----------
   const __viewingPosted = !!window.SCHEDULE_VIEWING_POSTED;
   const __form = document.getElementById('staffing-form');
-  let __unlocked = !__isPublished && !__viewingPosted;
-  if (__isPublished || __viewingPosted) {
+  if (__viewingPosted) {
     __form.classList.add('locked');
   }
   if (__viewingPosted) __form.classList.add('viewing-posted');
-  if (__viewingPosted) {
-    document.querySelectorAll('button, input:not([type="hidden"]), select').forEach(control => {
-      if (control.name === 'action' && control.value === 'discard_draft') return;
-      control.disabled = true;
-    });
-  }
-  const __editScheduleBtn = document.getElementById('edit-schedule-btn');
-  if (__editScheduleBtn) {
-    __editScheduleBtn.addEventListener('click', () => {
-      if (__viewingPosted) return;
-      __unlocked = true;
-      __form.classList.remove('locked');
-      __editScheduleBtn.disabled = true;
-      __editScheduleBtn.hidden = true;
-      const control = document.querySelector('details.sched-dd summary, details.sched-dd input, .rotation-mode button');
-      if (control) control.focus();
-    });
-  }
 
   // Wake the autosave controller after a programmatic DOM mutation (pill
   // remove, checkbox toggled by code, options stripped from a select, etc.).
@@ -55,10 +35,6 @@
   if (__clearBtn) {
     __clearBtn.addEventListener('click', () => {
       if (__viewingPosted) return;
-      if (__isPublished && !__unlocked) {
-        alert('This schedule is Posted. Click Edit first if you need to clear it.');
-        return;
-      }
       if (!confirm('Clear every Scheduled cell for this day?\n\n(Time off and notes stay. You can undo this before leaving the page.)')) return;
       document.querySelectorAll('details.sched-dd').forEach(dd => {
         dd.querySelectorAll('.dd-item.selected').forEach(item => {
@@ -347,10 +323,8 @@
     kickAutosave();
   }
 
-  // × inside the Testing Day pill: hits the dedicated clear endpoint
-  // (the regular save path can't reach testing_day on a posted schedule
-  // because save_notes deliberately preserves it). Syncs the hidden form
-  // input so subsequent autosaves don't re-add the flag.
+  // × inside the Testing Day pill: hits the dedicated clear endpoint and
+  // syncs the hidden form input so subsequent autosaves do not re-add it.
   (function() {
     const btn = document.getElementById('testing-pill-clear');
     if (!btn) return;
@@ -849,10 +823,6 @@
     e.preventDefault();
     e.stopPropagation();
     if (__viewingPosted) return;
-    if (__isPublished && !__unlocked) {
-      alert("This schedule is Posted. Click Edit first if you need to clear it.");
-      return;
-    }
     const dd = document.querySelector('details.sched-dd[data-loc="' + CSS.escape(btn.dataset.loc) + '"]');
     if (!dd) return;
     const cleared = [...dd.querySelectorAll('.dd-item.selected')].map(i => i.dataset.name);
@@ -1145,9 +1115,39 @@
     });
   })();
 
-  function printSchedule() {
+  let pendingPrintButton = null;
+  let localDeliveryInFlight = 0;
+
+  function printSchedule(button) {
+    if (!window.SCHEDULE_POSTED_VERSION) return;
+    pendingPrintButton = button;
     window.print();
   }
+
+  window.addEventListener('afterprint', async () => {
+    const button = pendingPrintButton;
+    pendingPrintButton = null;
+    if (!button || !window.SCHEDULE_POSTED_VERSION) return;
+    localDeliveryInFlight += 1;
+    try {
+      const url = '/staffing/mark-printed?day=' + encodeURIComponent(window.SCHEDULE_DAY)
+        + '&version=' + encodeURIComponent(window.SCHEDULE_POSTED_VERSION);
+      const response = await fetch(url, {method: 'POST', headers: {'Accept': 'application/json'}});
+      const data = await response.json();
+      if (!response.ok) {
+        showToast(data.error || 'Print status was not saved', null, 'error');
+        return;
+      }
+      button.classList.add('complete');
+      button.title = 'Printed';
+      button.setAttribute('aria-label', 'Printed');
+      await refreshScheduleRevision();
+    } catch (error) {
+      showToast(error.message || 'Print status was not saved', null, 'error');
+    } finally {
+      localDeliveryInFlight -= 1;
+    }
+  });
 
   function showToast(message, link, severity) {
     let host = document.getElementById('toast-host');
@@ -1191,12 +1191,14 @@
     if (!form) return;
 
     const indicator = document.getElementById('autosave-indicator');
+    window.schedulerAutosaveBusy = false;
     const DEBOUNCE_MS = 750;
     let debounceTimer = null;
     let inFlight = null;
     let queued = false;
 
     function setState(state) {
+      window.schedulerAutosaveBusy = state !== 'clean';
       if (!indicator) return;
       indicator.classList.remove('clean', 'dirty', 'saving');
       indicator.classList.add(state);
@@ -1207,12 +1209,7 @@
       if (__viewingPosted) { return; }
       setState('saving');
       const formData = new FormData(form);
-      // On a published-and-still-locked schedule, the only fields the user
-      // can edit are the notes textareas (CSS exempts them from .locked).
-      // Save those through the notes-only path so the schedule stays
-      // Published instead of dropping back to Draft.
-      const notesOnly = __isPublished && !__unlocked;
-      formData.set('action', notesOnly ? 'save_notes' : 'save');
+      formData.set('action', 'save');
       const url = form.getAttribute('action')
         || (window.location.pathname + window.location.search);
       inFlight = fetch(url, {
@@ -1224,13 +1221,16 @@
           if (!r.ok && !(r.status >= 300 && r.status < 400)) {
             throw new Error('HTTP ' + r.status);
           }
-          return r;
+          return r.json();
         })
-        .then(() => {
+        .then(data => {
+          if (data.revision) window.SCHEDULE_REVISION = data.revision;
           inFlight = null;
           if (queued) {
             queued = false;
             fireSave();
+          } else if (!data.published && window.SCHEDULE_PUBLISHED) {
+            window.location.reload();
           } else {
             setState('clean');
           }
@@ -1297,7 +1297,8 @@
   })();
 
   async function postToSlack(btn) {
-    if (__viewingPosted) return;
+    if (!window.SCHEDULE_POSTED_VERSION) return;
+    let slackDeliveryInFlight = false;
     const originalContent = btn.innerHTML;
     btn.disabled = true;
     btn.setAttribute('aria-busy', 'true');
@@ -1310,54 +1311,54 @@
         return;
       }
 
-      // Re-publish confirmation if the schedule has been published before.
-      if (window.SCHEDULE_PUBLISHED) {
-        const ok = confirm(
-          'Re-publish and post to Slack? Anyone with the previous version will see the revised schedule.'
-        );
-        if (!ok) return;
-      }
-
-      // Make sure any pending autosave finishes before publishing.
-      if (window.flushAutosave) {
-        await window.flushAutosave();
-      }
-
-      // Step 1: publish via the form's POST endpoint with action=publish.
-      const form = document.getElementById('staffing-form');
-      const fd = new FormData(form);
-      fd.set('action', 'publish');
-      const formAction = form.getAttribute('action')
-        || ('/staffing?day=' + encodeURIComponent(day));
-      const pubRes = await fetch(formAction, {
-        method: 'POST',
-        body: fd,
-        headers: { 'Accept': 'application/json' },
-      });
-      if (!pubRes.ok) {
-        const data = await pubRes.json().catch(() => ({}));
-        throw new Error(data.error || ('Publish failed: HTTP ' + pubRes.status));
-      }
-
-      // Step 2: post the resulting PDF to Slack.
-      const r = await fetch('/staffing/share-to-slack?day=' + encodeURIComponent(day), {
+      localDeliveryInFlight += 1;
+      slackDeliveryInFlight = true;
+      const url = '/staffing/share-to-slack?day=' + encodeURIComponent(day)
+        + '&version=' + encodeURIComponent(window.SCHEDULE_POSTED_VERSION);
+      const r = await fetch(url, {
         method: 'POST',
         headers: { 'Accept': 'application/json' },
       });
       const data = await r.json();
-      if (data.ok) {
-        showToast('Published & posted to #' + data.channel_name, data.permalink);
-      } else {
-        showToast('Slack post failed: ' + data.error, null, 'error');
-      }
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Slack post failed');
+      btn.classList.add('complete');
+      btn.title = 'Posted to Slack';
+      btn.setAttribute('aria-label', 'Posted to Slack');
+      await refreshScheduleRevision();
+      showToast('Posted to #' + data.channel_name, data.permalink);
     } catch (e) {
       showToast(e.message || 'Slack post failed', null, 'error');
     } finally {
+      if (slackDeliveryInFlight) localDeliveryInFlight -= 1;
       btn.disabled = false;
       btn.setAttribute('aria-busy', 'false');
       btn.innerHTML = originalContent;
     }
   }
+
+  async function refreshScheduleRevision() {
+    if (!window.SCHEDULE_DAY) return;
+    const response = await fetch('/staffing/live?day=' + encodeURIComponent(window.SCHEDULE_DAY), {
+      headers: {'Accept': 'application/json', 'Cache-Control': 'no-cache'},
+    });
+    const data = await response.json();
+    if (response.ok && data.revision) window.SCHEDULE_REVISION = data.revision;
+  }
+
+  async function checkLiveRevision() {
+    if (document.visibilityState !== 'visible' || !window.SCHEDULE_DAY) return;
+    if (localDeliveryInFlight > 0) return;
+    const response = await fetch('/staffing/live?day=' + encodeURIComponent(window.SCHEDULE_DAY), {
+      headers: {'Accept': 'application/json', 'Cache-Control': 'no-cache'},
+    });
+    const data = await response.json();
+    if (!response.ok || !data.revision || data.revision === window.SCHEDULE_REVISION || localDeliveryInFlight > 0) return;
+    if (window.schedulerAutosaveBusy) return;
+    showToast('Schedule updated by another user — refreshed just now.');
+    window.location.reload();
+  }
+  document.addEventListener('visibilitychange', checkLiveRevision);
+  setInterval(checkLiveRevision, 3000);
 
   // ---------- Rotation goal (mode buttons + auto-center toggles) ----------
   // The three mode buttons set the goal (optimized / normal / training) and
@@ -1590,7 +1591,7 @@
     }
 
     async function saveAutoCenters() {
-      if (__viewingPosted || (__isPublished && !__unlocked)) return;
+      if (__viewingPosted) return;
       if (savingAutoCenters) return;
       const requestedWorkCenters = selectedAutoCenters();
       setAutoCentersSaving(true);
@@ -1602,6 +1603,10 @@
         }
         if (!Array.isArray(data.enabled_work_centers)) {
           throw new Error('Server did not return enabled Auto work centers.');
+        }
+        if (window.SCHEDULE_PUBLISHED) {
+          window.location.reload();
+          return;
         }
         applyEnabledCenters(data.enabled_work_centers);
         renderSaturdayRecruitingDemand(data.saturday_recruiting, data.enabled_work_centers);
@@ -1654,10 +1659,6 @@
     async function rebuild(mode, options = {}) {
       if (__viewingPosted) return false;
       if (rebuilding || !mode) return false;
-      if (__isPublished && !__unlocked) {
-        alert('This schedule is Posted. Click Edit first to change the Recycled goal.');
-        return false;
-      }
       rebuilding = true;
       controls.classList.add('rebuilding');
       modeBtns.forEach(b => { b.disabled = true; });
@@ -1675,6 +1676,10 @@
         if (!resp.ok || !data.ok) {
           renderPlacementFailure(data);
           return false;
+        }
+        if (window.SCHEDULE_PUBLISHED) {
+          window.location.reload();
+          return true;
         }
         setActiveMode(mode);
         applyRebuild(data, options);
@@ -1696,10 +1701,6 @@
     if (resetScheduleBtn) {
       resetScheduleBtn.addEventListener('click', async () => {
         if (__viewingPosted) return;
-        if (__isPublished && !__unlocked) {
-          alert('This schedule is Posted. Click Edit first if you need to reset it.');
-          return;
-        }
         if (!confirm(
           'Replace every assignment with saved defaults and next group rotations?\n\n' +
           'This removes manual and automated assignments. Notes, time off, and schedule settings stay.'
@@ -1726,7 +1727,7 @@
 
     function toggleWorkCenterRow(row) {
       if (!row || savingAutoCenters) return;
-      if (__viewingPosted || (__isPublished && !__unlocked)) return;
+      if (__viewingPosted) return;
       const name = row.dataset.loc;
       if (!name) return;
       const enabled = row.dataset.on === 'true';
