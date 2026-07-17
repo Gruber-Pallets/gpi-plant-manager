@@ -930,7 +930,7 @@ def _seed_new_future_draft(
         if staffing.schedule_revision(day) is not None:
             return sched
         exact_defaults, group_defaults, user_group_centers = _default_inputs(strict=True)
-        enabled_centers = _ordered_work_center_names(_enabled_auto_work_centers(day))
+        enabled_centers = _default_auto_work_centers(day)
         center_capacities = _configured_center_capacities(enabled_centers, strict=True)
         history = rotation_suggestions._load_recycled_history(
             day,
@@ -960,6 +960,7 @@ def _seed_new_future_draft(
         custom_hours=sched.custom_hours,
         rotation_mode=sched.rotation_mode,
         assignment_sources=sources,
+        auto_enabled_work_centers=enabled_centers,
     )
     if staffing.create_schedule_if_absent(seeded):
         _http_cache.invalidate_today_cache()
@@ -1070,7 +1071,10 @@ def staffing_page(
         sched.custom_hours = copy.deepcopy(snap.get("custom_hours"))
         sched.published_delivery = staffing._delivery_mapping(snap.get("published_delivery"))
     try:
-        enabled_auto_work_centers = _ordered_work_center_names(_enabled_auto_work_centers(d))
+        if staffing.schedule_revision(d) is None:
+            enabled_auto_work_centers = _default_auto_work_centers(d)
+        else:
+            enabled_auto_work_centers = list(sched.auto_enabled_work_centers)
     except Exception:
         log.exception("Could not load auto-schedule work-center settings for %s", d)
         enabled_auto_work_centers = []
