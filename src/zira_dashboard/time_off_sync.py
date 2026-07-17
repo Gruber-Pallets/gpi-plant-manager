@@ -394,6 +394,18 @@ def poll_odoo_leaves() -> int:
     if full_pass:
         # ONLY here — never against an incremental result (see docstring).
         _delete_missing_from_odoo(seen_ids, start_d, end_d)
+
+    # Today's leave records are always fetched in full so a leave hard-deleted
+    # in Odoo is reflected in the kiosk within the next one-minute tick.
+    today_leaves = odoo_client.fetch_leaves_for_range(today, today)
+    today_existing = _existing_rows_by_leave_id(
+        [leave["id"] for leave in today_leaves])
+    today_seen_ids: set[int] = set()
+    for leave in today_leaves:
+        today_seen_ids.add(leave["id"])
+        _upsert_one(leave, today_existing.get(leave["id"]))
+    _delete_missing_from_odoo(today_seen_ids, today, today)
+
     _last_poll_started_at = poll_started_at
     return len(leaves)
 

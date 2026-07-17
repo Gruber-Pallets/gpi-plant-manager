@@ -537,24 +537,47 @@ def test_poll_keeps_hour_unit_full_day_with_complete_bounds_full_day(monkeypatch
 def test_poll_incremental_tick_filters_by_write_date_and_skips_deletes(
         monkeypatch, fake_db):
     """Tick 1 after boot is a FULL pass (no write_date filter, deletion
-    detection runs); tick 2 is incremental (write_date filter, NO deletion
-    detection — diffing a subset would delete live rows)."""
+    detection runs); tick 2 is incremental (write_date filter, NO rolling
+    deletion detection — only the dedicated today reconciliation runs)."""
     _reset_poll_state()
     fake_db["query_result"] = []
     fetches = []
     monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leaves_for_range",
-                        lambda s, e, **kw: (fetches.append(kw), [])[1])
+                        lambda s, e, **kw: (fetches.append((s, e, kw)), [])[1])
     deletes = []
     monkeypatch.setattr(time_off_sync, "_delete_missing_from_odoo",
                         lambda seen, s, e: deletes.append(seen))
 
     time_off_sync.poll_odoo_leaves()
-    assert fetches[0].get("modified_since") is None  # full window
-    assert len(deletes) == 1  # deletion detection ran on the full pass
+    assert fetches[0][2].get("modified_since") is None  # full window
+    assert len(deletes) == 2  # full window and today's full reconciliation
 
     time_off_sync.poll_odoo_leaves()
-    assert fetches[1].get("modified_since") is not None  # incremental
-    assert len(deletes) == 1  # NOT run against the incremental result
+    assert fetches[2][2].get("modified_since") is not None  # incremental
+    assert len(deletes) == 3  # only today's reconciliation runs on tick 2
+
+
+def test_incremental_poll_reconciles_hard_deleted_current_day_leave(monkeypatch):
+    """Every tick fully reconciles today, including Odoo-side deletions."""
+    _reset_poll_state()
+    calls, deletions = [], []
+    monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leave_types", lambda: [])
+    monkeypatch.setattr(
+        time_off_sync.odoo_client, "fetch_leaves_for_range",
+        lambda start, end, modified_since=None:
+        calls.append((start, end, modified_since)) or [],
+    )
+    monkeypatch.setattr(time_off_sync, "_existing_rows_by_leave_id", lambda _ids: {})
+    monkeypatch.setattr(
+        time_off_sync, "_delete_missing_from_odoo",
+        lambda ids, start, end: deletions.append((ids, start, end)),
+    )
+
+    time_off_sync.poll_odoo_leaves()
+
+    today = date.today()
+    assert (today, today, None) in calls
+    assert (set(), today, today) in deletions
 
 
 def test_poll_runs_full_pass_every_tenth_tick(monkeypatch, fake_db):
@@ -564,16 +587,17 @@ def test_poll_runs_full_pass_every_tenth_tick(monkeypatch, fake_db):
     fake_db["query_result"] = []
     fetches = []
     monkeypatch.setattr(time_off_sync.odoo_client, "fetch_leaves_for_range",
-                        lambda s, e, **kw: (fetches.append(kw), [])[1])
+                        lambda s, e, **kw: (fetches.append((s, e, kw)), [])[1])
     deletes = []
     monkeypatch.setattr(time_off_sync, "_delete_missing_from_odoo",
                         lambda seen, s, e: deletes.append(seen))
 
     for _ in range(10):
         time_off_sync.poll_odoo_leaves()
-    full = [kw for kw in fetches if kw.get("modified_since") is None]
+    full = [kw for s, e, kw in fetches
+            if s != e and kw.get("modified_since") is None]
     assert len(full) == 2      # tick 1 (boot) and tick 10
-    assert len(deletes) == 2   # deletion detection only on those two
+    assert len(deletes) == 12  # rolling full passes plus daily reconciliation
 
 
 def test_delete_missing_hard_deletes_and_reverse_cascades(monkeypatch, fake_db):
