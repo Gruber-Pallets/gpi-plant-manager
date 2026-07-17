@@ -10,17 +10,14 @@ def test_work_center_settings_render_default_auto_toggle_for_each_location():
 
 def test_work_center_settings_save_writes_default_not_daily_state(monkeypatch):
     from zira_dashboard.routes import settings
+    from zira_dashboard.routes.staffing import DEFAULT_AUTO_WORK_CENTERS_SETTING
 
-    saved = []
     monkeypatch.setattr(settings.work_centers_store, "registered_groups", lambda: [])
     monkeypatch.setattr(settings.work_centers_store, "all_group_names", lambda _kind: [])
     monkeypatch.setattr(settings.work_centers_store, "replace_default_targets", lambda **_kwargs: None)
     monkeypatch.setattr(settings.work_centers_store, "save_one", lambda *_args: None)
-    monkeypatch.setattr(settings.app_settings, "set_setting", lambda key, value: saved.append((key, value)))
-
-    # The endpoint test harness supplies a form with Repair 2 selected.
     assert settings._ordered_default_auto_work_centers(["Repair 2", "Unknown"]) == ["Repair 2"]
-    assert settings.DEFAULT_AUTO_WORK_CENTERS_SETTING == "rotation_auto_enabled_work_centers"
+    assert DEFAULT_AUTO_WORK_CENTERS_SETTING == "rotation_auto_enabled_work_centers"
 
 
 def test_settings_page_renders_default_auto_work_centers(monkeypatch):
@@ -35,13 +32,13 @@ def test_settings_page_renders_default_auto_work_centers(monkeypatch):
         saturday_schedule_store,
         work_schedule_store,
     )
-    from zira_dashboard.routes import settings, staffing as staffing_routes
+    from zira_dashboard.routes import settings
 
     monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: False)
     monkeypatch.setattr(odoo_sync, "sync", lambda *, force: None)
     monkeypatch.setattr(settings.shift_config, "productive_minutes_per_day", lambda: 480)
     monkeypatch.setattr(settings.staffing, "load_roster", lambda: [])
-    monkeypatch.setattr(staffing_routes, "_default_auto_work_centers", lambda _day: [])
+    monkeypatch.setattr(settings, "_default_auto_work_centers", lambda _day: [])
     monkeypatch.setattr(settings.settings_context, "work_center_rows", lambda *_args: [])
     monkeypatch.setattr(settings.settings_context, "group_summary", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
@@ -68,3 +65,17 @@ def test_settings_page_renders_default_auto_work_centers(monkeypatch):
     response_context = settings.settings_page(SimpleNamespace())
 
     assert response_context["default_auto_work_centers"] == []
+def test_settings_missing_default_uses_staffing_first_run_resolver(monkeypatch):
+    from datetime import date
+    from zira_dashboard.routes import settings
+
+    resolved = []
+    monkeypatch.setattr(settings, "plant_today", lambda: date(2026, 7, 14))
+    monkeypatch.setattr(
+        settings,
+        "_default_auto_work_centers",
+        lambda day: resolved.append(day) or ["Repair 1"],
+    )
+
+    assert settings._settings_default_auto_work_centers() == ["Repair 1"]
+    assert resolved == [date(2026, 7, 14)]
