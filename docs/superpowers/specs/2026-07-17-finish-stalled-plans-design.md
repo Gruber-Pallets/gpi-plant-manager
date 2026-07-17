@@ -29,6 +29,8 @@ Port only these plan-owned artifacts from `fix/recycling-dashboard-scaling`:
 
 - `src/zira_dashboard/static/recycling.css`
 - `src/zira_dashboard/static/dashboard-grid.js`
+- `src/zira_dashboard/static/wc_dashboard.css`
+- `src/zira_dashboard/templates/recycling.html`
 - `scripts/preview_recycling.py`
 - `tests/test_recycling_scaling_static.py`
 - the preview-output ignore rule in `.gitignore`
@@ -36,7 +38,8 @@ Port only these plan-owned artifacts from `fix/recycling-dashboard-scaling`:
 Do not port the branch's Trim Saw rotation, People Matrix skills, Odoo,
 auto-lunch, time-off, Slack, template, or test-debt changes. The scaling result
 continues to use the current Gridstack/container-query layout and adds only the
-proportional sizing rules, obsolete media-query removal, and font-ready TV-grid
+proportional sizing rules, the matching operator-dashboard KPI rule, the
+default bar-widget height, obsolete media-query removal, and font-ready TV-grid
 refit defined in the existing scaling plan.
 
 ## Integration strategy
