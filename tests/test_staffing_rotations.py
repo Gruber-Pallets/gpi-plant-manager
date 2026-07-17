@@ -2961,6 +2961,10 @@ def test_blank_staffing_day_context_defaults_to_normal(monkeypatch):
 def test_staffing_context_exposes_auto_summary_counts(monkeypatch):
     ctx = _render_staffing_page(
         monkeypatch,
+        saved_schedule=staffing.Schedule(
+            day=TARGET_DAY,
+            auto_enabled_work_centers=["Repair 1", "Dismantler 1"],
+        ),
         auto_centers={"Repair 1", "Dismantler 1"},
         bay_model={
             "bays": [], "publish_block_reasons": [], "defaults_by_loc": {},
@@ -3050,6 +3054,32 @@ def test_first_future_staffing_view_saves_exact_and_group_defaults(monkeypatch):
         "Repair 3": {"Bob": "default"},
     }
     assert ctx["sched"] is saved[0]
+
+
+def test_first_future_staffing_view_copies_default_auto_work_centers(monkeypatch):
+    saved = []
+    _render_staffing_page(
+        monkeypatch,
+        schedule_revision=None,
+        auto_centers={"Repair 1", "Repair 2"},
+        saved_schedules=saved,
+    )
+
+    assert saved[0].auto_enabled_work_centers == ["Repair 1", "Repair 2"]
+
+
+def test_saved_day_uses_its_auto_work_centers_not_current_defaults(monkeypatch):
+    schedule = staffing.Schedule(
+        day=TARGET_DAY, auto_enabled_work_centers=["Repair 3"],
+    )
+
+    ctx = _render_staffing_page(
+        monkeypatch,
+        saved_schedule=schedule,
+        auto_centers={"Repair 1", "Repair 2"},
+    )
+
+    assert ctx["auto_schedule_enabled_wc_names"] == ["Repair 3"]
 
 
 def test_saved_blank_future_draft_is_not_reseeded(monkeypatch):
@@ -3209,6 +3239,7 @@ def test_staffing_context_does_not_treat_exact_default_as_duplicate_lock(monkeyp
         day=TARGET_DAY,
         assignments={"Repair 2": ["Default Green"]},
         assignment_sources={"Repair 2": {"Default Green": "generated"}},
+        auto_enabled_work_centers=["Repair 1", "Repair 2"],
     )
 
     def fake_recycled_context(*args, **kwargs):
