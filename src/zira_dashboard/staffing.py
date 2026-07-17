@@ -675,76 +675,92 @@ def load_schedules_bulk(
     return out
 
 
-def save_schedule(schedule: Schedule) -> None:
-    """Upsert the day's schedule + replace its assignments / time off /
-    wc_notes atomically (delete-then-insert inside one transaction)."""
-    from . import db
+def _save_schedule_with_cursor(
+    cur,
+    schedule: Schedule,
+    assignment_sources: dict[str, dict[str, str]],
+    saturday_availability_overrides: dict[str, str],
+) -> None:
+    """Write one schedule through an existing transaction cursor."""
+    cur.execute(
+        "INSERT INTO schedules (day, published, testing_day, notes, "
+        "custom_hours, published_snapshot, published_delivery, recycled_rotation_mode, "
+        "saturday_availability_overrides, assignment_sources, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s::jsonb, now()) "
+        "ON CONFLICT (day) DO UPDATE SET "
+        "  published = EXCLUDED.published, "
+        "  testing_day = EXCLUDED.testing_day, "
+        "  notes = EXCLUDED.notes, "
+        "  custom_hours = EXCLUDED.custom_hours, "
+        "  published_snapshot = CASE "
+        "    WHEN schedules.published AND NOT EXCLUDED.published "
+        "      AND EXCLUDED.published_snapshot IS NOT NULL "
+        "      AND NULLIF(schedules.published_delivery->>'version', '') IS NOT NULL "
+        "      AND schedules.published_delivery->>'version' = "
+        "          EXCLUDED.published_snapshot->'published_delivery'->>'version' "
+        "    THEN jsonb_set(EXCLUDED.published_snapshot, '{published_delivery}', "
+        "                   schedules.published_delivery) "
+        "    ELSE EXCLUDED.published_snapshot "
+        "  END, "
+        "  published_delivery = EXCLUDED.published_delivery, "
+        "  recycled_rotation_mode = EXCLUDED.recycled_rotation_mode, "
+        "  saturday_availability_overrides = EXCLUDED.saturday_availability_overrides, "
+        "  assignment_sources = EXCLUDED.assignment_sources, "
+        "  updated_at = now()",
+        (
+            schedule.day,
+            schedule.published,
+            bool(schedule.testing_day),
+            schedule.notes or "",
+            json.dumps(schedule.custom_hours) if schedule.custom_hours else None,
+            json.dumps(schedule.published_snapshot) if schedule.published_snapshot else None,
+            json.dumps(_delivery_mapping(schedule.published_delivery)),
+            schedule.rotation_mode or "normal",
+            json.dumps(saturday_availability_overrides),
+            json.dumps(assignment_sources),
+        ),
+    )
+    cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (schedule.day,))
+    cur.execute("DELETE FROM schedule_wc_notes WHERE day = %s", (schedule.day,))
+    for wc_name, names in (schedule.assignments or {}).items():
+        if wc_name == TIME_OFF_KEY:
+            # Legacy in-memory key from older snapshots; time-off is now
+            # StratusTime-driven and never persisted locally. Skip silently.
+            continue
+        for i, n in enumerate(names or []):
+            cur.execute(
+                "INSERT INTO schedule_assignments (day, wc_id, person_id, sort_order) "
+                "SELECT %s, wc.id, pe.id, %s FROM work_centers wc, people pe "
+                "WHERE wc.name = %s AND pe.name = %s",
+                (schedule.day, i, wc_name, n),
+            )
+    for wc_name, note in (schedule.wc_notes or {}).items():
+        if not note:
+            continue
+        cur.execute(
+            "INSERT INTO schedule_wc_notes (day, wc_id, note) "
+            "SELECT %s, wc.id, %s FROM work_centers wc WHERE wc.name = %s",
+            (schedule.day, note, wc_name),
+        )
+
+
+def save_schedule(schedule: Schedule, *, cur=None) -> None:
+    """Persist one schedule, optionally inside an existing transaction."""
     assignment_sources = _validate_assignment_sources(schedule.assignment_sources)
     saturday_availability_overrides = _validate_saturday_availability_overrides(
         schedule.saturday_availability_overrides
     )
     _invalidate_schedule_cache(schedule.day)
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO schedules (day, published, testing_day, notes, "
-            "custom_hours, published_snapshot, published_delivery, recycled_rotation_mode, "
-            "saturday_availability_overrides, assignment_sources, updated_at) "
-            "VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s::jsonb, now()) "
-            "ON CONFLICT (day) DO UPDATE SET "
-            "  published = EXCLUDED.published, "
-            "  testing_day = EXCLUDED.testing_day, "
-            "  notes = EXCLUDED.notes, "
-            "  custom_hours = EXCLUDED.custom_hours, "
-            "  published_snapshot = CASE "
-            "    WHEN schedules.published AND NOT EXCLUDED.published "
-            "      AND EXCLUDED.published_snapshot IS NOT NULL "
-            "      AND NULLIF(schedules.published_delivery->>'version', '') IS NOT NULL "
-            "      AND schedules.published_delivery->>'version' = "
-            "          EXCLUDED.published_snapshot->'published_delivery'->>'version' "
-            "    THEN jsonb_set(EXCLUDED.published_snapshot, '{published_delivery}', "
-            "                   schedules.published_delivery) "
-            "    ELSE EXCLUDED.published_snapshot "
-            "  END, "
-            "  published_delivery = EXCLUDED.published_delivery, "
-            "  recycled_rotation_mode = EXCLUDED.recycled_rotation_mode, "
-            "  saturday_availability_overrides = EXCLUDED.saturday_availability_overrides, "
-            "  assignment_sources = EXCLUDED.assignment_sources, "
-            "  updated_at = now()",
-            (
-                schedule.day,
-                schedule.published,
-                bool(schedule.testing_day),
-                schedule.notes or "",
-                json.dumps(schedule.custom_hours) if schedule.custom_hours else None,
-                json.dumps(schedule.published_snapshot) if schedule.published_snapshot else None,
-                json.dumps(_delivery_mapping(schedule.published_delivery)),
-                schedule.rotation_mode or "normal",
-                json.dumps(saturday_availability_overrides),
-                json.dumps(assignment_sources),
-            ),
+    if cur is not None:
+        _save_schedule_with_cursor(
+            cur, schedule, assignment_sources, saturday_availability_overrides,
         )
-        cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (schedule.day,))
-        cur.execute("DELETE FROM schedule_wc_notes WHERE day = %s", (schedule.day,))
-        for wc_name, names in (schedule.assignments or {}).items():
-            if wc_name == TIME_OFF_KEY:
-                # Legacy in-memory key from older snapshots; time-off is now
-                # StratusTime-driven and never persisted locally. Skip silently.
-                continue
-            for i, n in enumerate(names or []):
-                cur.execute(
-                    "INSERT INTO schedule_assignments (day, wc_id, person_id, sort_order) "
-                    "SELECT %s, wc.id, pe.id, %s FROM work_centers wc, people pe "
-                    "WHERE wc.name = %s AND pe.name = %s",
-                    (schedule.day, i, wc_name, n),
-                )
-        for wc_name, note in (schedule.wc_notes or {}).items():
-            if not note:
-                continue
-            cur.execute(
-                "INSERT INTO schedule_wc_notes (day, wc_id, note) "
-                "SELECT %s, wc.id, %s FROM work_centers wc WHERE wc.name = %s",
-                (schedule.day, note, wc_name),
-            )
+        return
+    from . import db
+    with db.cursor() as own_cur:
+        _save_schedule_with_cursor(
+            own_cur, schedule, assignment_sources, saturday_availability_overrides,
+        )
 
 
 def create_schedule_if_absent(schedule: Schedule) -> bool:

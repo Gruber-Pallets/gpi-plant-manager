@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import date
 
 from fastapi import APIRouter, Request
@@ -390,16 +391,22 @@ async def save_auto_work_centers(request: Request):
         roster = staffing.load_roster()
         existing = staffing.load_schedule(d)
         sched = staffing.draft_from_posted(existing)
+        assignments = {
+            wc_name: list(people)
+            for wc_name, people in sched.assignments.items()
+            if wc_name not in turn_off_names
+        }
+        did_remove_assignments = assignments != sched.assignments
+        if did_remove_assignments:
+            sched = replace(sched, assignments=assignments)
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
         except Exception:
             return _error("Could not verify daily staffing coverage.", 503)
-        if existing.published:
-            staffing.save_schedule(sched)
         saturday_recruiting = None
-        if d.weekday() == 5:
-            try:
-                with db.cursor() as cur:
+        try:
+            with db.cursor() as cur:
+                if d.weekday() == 5:
                     bundle = saturday_recruiting_store.get(d, cur=cur)
                     if bundle is not None and bundle.recruitment.status == "recruiting":
                         updated_bundle = saturday_recruiting_store.update_openings(
@@ -417,13 +424,13 @@ async def save_auto_work_centers(request: Request):
                         # Keep it intact while allowing the internal schedule
                         # configuration to change.
                         saturday_recruiting = saturday_recruiting_store.serialize_bundle(bundle)
-                    enabled = staffing_route._save_enabled_auto_work_centers(enabled, cur=cur)
-            except saturday_recruiting_store.SaturdayRecruitingError as exc:
-                return _error(str(exc), 409)
-            except Exception:
-                return _error("Could not save work-center settings.", 503)
-        else:
-            enabled = staffing_route._save_enabled_auto_work_centers(enabled)
+                if did_remove_assignments or existing.published:
+                    staffing.save_schedule(sched, cur=cur)
+                enabled = staffing_route._save_enabled_auto_work_centers(enabled, cur=cur)
+        except saturday_recruiting_store.SaturdayRecruitingError as exc:
+            return _error(str(exc), 409)
+        except Exception:
+            return _error("Could not save work-center settings.", 503)
         minimum_crew_balance = staffing_route._minimum_crew_balance_payload(
             staffing_route._minimum_crew_balance_for_day(
                 roster=roster,
@@ -437,6 +444,7 @@ async def save_auto_work_centers(request: Request):
         return JSONResponse({
             "ok": True,
             "enabled_work_centers": enabled,
+            "assignments": {wc_name: list(people) for wc_name, people in sched.assignments.items()},
             "saturday_recruiting": saturday_recruiting,
             "minimum_crew_balance": minimum_crew_balance,
             "warnings": [],
