@@ -182,9 +182,9 @@ aside.day-context {
 table.sched { font-size: 9pt; }
 table.sched { table-layout: fixed; }
 table.sched thead th.n, table.sched td.bay { width: 4.5rem; }
-table.sched thead th.wc-col { width: 28%; }
+table.sched thead th.wc-col { width: 22%; }
 table.sched thead th.dept { width: 12%; }
-table.sched thead th.sched-col { width: 35%; }
+table.sched thead th.sched-col { width: 41%; }
 table.sched thead th.wc-note-col { width: 20.5%; }
 table.sched th.wc-col,
 table.sched td.station { padding-right: 2pt; }
