@@ -43,12 +43,8 @@ def tv_ping():
     dashboard URL downloaded the whole page just to throw it away (then
     again on reload), so the TVs probe this empty 204 instead.
 
-    Deliberately NOT in the auth bypass list: it sits behind
-    RequireAuthMiddleware exactly like the dashboards, so a missing or
-    expired session still produces the redirect-to-login signal
-    (``redirect: "manual"`` => opaqueredirect => ``resp.ok === false``)
-    that tv-refresh.js treats as "don't reload". The path lives under
-    /tv/ so the TVs' IP-allowlist / ?device= token auth applies.
+    This endpoint is anonymous along with every ``/tv/*`` route, so
+    unattended screens can probe the backend before refreshing the dashboard.
     """
     return Response(status_code=204)
 

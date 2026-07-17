@@ -6,10 +6,10 @@
  * a network blip — the browser replaces the dashboard with the edge's
  * "upstream error" page and the screen goes black until the next reload.
  *
- * Instead we PROBE first: hit the tiny /tv/ping endpoint (an empty 204 behind
- * the same auth middleware as the dashboards — probing the full page URL
- * downloaded the entire document twice per reload), and only reload when it
- * comes back OK. On any failure we leave the last good frame on screen and
+ * Instead we PROBE first: hit the tiny anonymous /tv/ping endpoint (an empty
+ * 204 — probing the full page URL downloaded the entire document twice per
+ * reload), and only reload when it comes back OK. On any failure we leave the
+ * last good frame on screen and
  * re-check sooner, so a brief outage is invisible on the floor and the board
  * snaps back on its own once the backend is answering again.
  */
@@ -19,9 +19,8 @@
   var NORMAL_MS = 60000; // steady-state refresh cadence (matches the old reload)
   var RETRY_MS = 7000; // while the backend is unreachable, re-check faster
 
-  // Off-network TVs authenticate via a ?device= token in the page URL; carry
-  // it onto the probe so /tv/ping authenticates exactly like the page does
-  // (session cookie, IP allowlist, or device token).
+  // /tv/ping is anonymous. Preserve a page's ?device= token for compatibility
+  // with deployments that expect it in TV URLs.
   var PROBE_URL = (function () {
     var url = "/tv/ping";
     try {
