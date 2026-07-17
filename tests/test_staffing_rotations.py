@@ -2683,6 +2683,13 @@ def _render_staffing_page(
     *,
     saved_schedule=None,
     day=None,
+    schedule_revision="test",
+    roster=None,
+    time_off_entries=None,
+    default_inputs=None,
+    center_capacities=None,
+    history=None,
+    saved_schedules=None,
     smart_defaults=None,
     auto_centers=None,
     default_people=None,
@@ -2717,13 +2724,29 @@ def _render_staffing_page(
         lambda key: list(auto_centers or []),
     )
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
-    monkeypatch.setattr(staffing_mod, "load_roster", lambda: [])
+    monkeypatch.setattr(staffing_mod, "load_roster", lambda: list(roster or []))
     monkeypatch.setattr(
         staffing_mod, "load_schedule",
         lambda d: saved_schedule or staffing_mod.Schedule(day=d, published=False, assignments={}),
     )
-    monkeypatch.setattr(staffing_mod, "schedule_revision", lambda _day: "test")
-    monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda d: [])
+    monkeypatch.setattr(staffing_mod, "schedule_revision", lambda _day: schedule_revision)
+    monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda _day: list(time_off_entries or []))
+    monkeypatch.setattr(staffing_routes, "_default_inputs", default_inputs or (lambda strict=False: ({}, {}, {})))
+    monkeypatch.setattr(
+        staffing_routes,
+        "_configured_center_capacities",
+        center_capacities or (lambda centers, strict=False: {center: None for center in centers}),
+    )
+    monkeypatch.setattr(
+        staffing_routes.rotation_suggestions,
+        "_load_recycled_history",
+        history or (lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory()),
+    )
+    monkeypatch.setattr(
+        staffing_mod,
+        "save_schedule",
+        lambda schedule: saved_schedules.append(schedule) if saved_schedules is not None else None,
+    )
     monkeypatch.setattr(
         staffing_routes, "_safe_attendance",
         lambda d, sched, today: {"by_name": {}, "name_to_id": {}},
@@ -2804,16 +2827,87 @@ def test_staffing_context_exposes_auto_summary_counts(monkeypatch):
     }
 
 
-def test_blank_staffing_day_stays_empty_without_default_or_smart_seed(monkeypatch):
-    calls = []
+def test_first_future_staffing_view_saves_exact_and_group_defaults(monkeypatch):
+    saved = []
     ctx = _render_staffing_page(
         monkeypatch,
-        smart_defaults=lambda *args, **kwargs: calls.append(args) or {"Repair 1": ["Unexpected"]},
+        schedule_revision=None,
+        roster=[_person("Pinned", 1), _person("Ana", 1), _person("Bob", 1)],
+        auto_centers={"Repair 1", "Repair 2", "Repair 3"},
+        default_inputs=lambda strict=False: (
+            {"Repair 1": ("Pinned",)},
+            {"Repair": ("Ana", "Bob")},
+            {"Repair": ("Repair 1", "Repair 2", "Repair 3")},
+        ),
+        center_capacities=lambda centers, strict=False: {center: 1 for center in centers},
+        saved_schedules=saved,
     )
 
-    assert calls == []
+    assert len(saved) == 1
+    assert saved[0].published is False
+    assert saved[0].assignments == {
+        "Repair 1": ["Pinned"],
+        "Repair 2": ["Ana"],
+        "Repair 3": ["Bob"],
+    }
+    assert saved[0].assignment_sources == {
+        "Repair 1": {"Pinned": "default"},
+        "Repair 2": {"Ana": "default"},
+        "Repair 3": {"Bob": "default"},
+    }
+    assert ctx["sched"] is saved[0]
+
+
+def test_saved_blank_future_draft_is_not_reseeded(monkeypatch):
+    saved = []
+    blank = staffing.Schedule(day=TARGET_DAY, published=False, assignments={})
+
+    ctx = _render_staffing_page(
+        monkeypatch,
+        saved_schedule=blank,
+        schedule_revision="already-saved",
+        roster=[_person("Pinned", 1)],
+        auto_centers={"Repair 1"},
+        default_inputs=lambda strict=False: ({"Repair 1": ("Pinned",)}, {}, {}),
+        saved_schedules=saved,
+    )
+
+    assert saved == []
+    assert ctx["sched"] is blank
     assert ctx["sched"].assignments == {}
-    assert ctx["auto_scheduler_available"] is True
+
+
+def test_first_future_staffing_view_keeps_blank_draft_when_defaults_fail(monkeypatch):
+    saved = []
+    ctx = _render_staffing_page(
+        monkeypatch,
+        schedule_revision=None,
+        roster=[_person("Pinned", 1)],
+        default_inputs=lambda strict=False: (_ for _ in ()).throw(RuntimeError("settings offline")),
+        saved_schedules=saved,
+    )
+
+    assert saved == []
+    assert ctx["sched"].assignments == {}
+
+
+def test_future_draft_is_not_overwritten_when_revision_lookup_fails(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    blank = staffing.Schedule(day=TARGET_DAY, published=False, assignments={})
+    monkeypatch.setattr(
+        staffing_route.staffing,
+        "schedule_revision",
+        lambda _day: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    assert staffing_route._seed_new_future_draft(
+        TARGET_DAY,
+        date(2026, 7, 13),
+        blank,
+        [],
+        [],
+    ) is blank
 
 
 @pytest.mark.parametrize("day", [

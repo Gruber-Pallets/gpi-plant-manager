@@ -902,6 +902,55 @@ def _smart_defaults_for_day(
         return {k: list(v) for k, v in (defaults or {}).items()}
 
 
+def _seed_new_future_draft(
+    day: date,
+    today: date,
+    sched: staffing.Schedule,
+    roster: Sequence[staffing.Person],
+    time_off_entries,
+) -> staffing.Schedule:
+    if day <= today:
+        return sched
+    try:
+        if staffing.schedule_revision(day) is not None:
+            return sched
+        exact_defaults, group_defaults, user_group_centers = _default_inputs(strict=True)
+        enabled_centers = _ordered_work_center_names(_enabled_auto_work_centers(day))
+        center_capacities = _configured_center_capacities(enabled_centers, strict=True)
+        history = rotation_suggestions._load_recycled_history(
+            day,
+            group_locations=_auto_history_group_locations(),
+            user_group_centers=user_group_centers,
+        )
+        assignments, sources = _defaults_only_assignments(
+            roster=roster,
+            full_day_off_names=rotation_suggestions._full_day_time_off_names(time_off_entries),
+            exact_defaults=exact_defaults,
+            group_defaults=group_defaults,
+            user_group_centers=user_group_centers,
+            enabled_centers=enabled_centers,
+            center_capacities=center_capacities,
+            history=history,
+        )
+    except Exception:
+        log.exception("Could not seed default staffing draft for %s", day)
+        return sched
+    seeded = staffing.Schedule(
+        day=day,
+        published=False,
+        assignments=assignments,
+        notes=sched.notes,
+        wc_notes=dict(sched.wc_notes),
+        testing_day=sched.testing_day,
+        custom_hours=sched.custom_hours,
+        rotation_mode=sched.rotation_mode,
+        assignment_sources=sources,
+    )
+    staffing.save_schedule(seeded)
+    _http_cache.invalidate_today_cache()
+    return seeded
+
+
 @router.get("/staffing", response_class=HTMLResponse)
 def staffing_page(
     request: Request,
@@ -967,6 +1016,7 @@ def staffing_page(
         roster = f_roster.result()
         sched = f_sched.result()
         time_off_entries = f_time_off_entries.result()
+    sched = _seed_new_future_draft(d, today, sched, roster, time_off_entries)
     # If this day has both a current draft and a posted snapshot, the user may want
     # to view the posted version. Swap the visible fields in from the snapshot.
     has_snapshot = bool(sched.published_snapshot) and not sched.published
