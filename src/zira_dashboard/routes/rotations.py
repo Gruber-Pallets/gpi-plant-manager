@@ -491,12 +491,18 @@ async def rebuild_rotation(request: Request):
         sched = staffing.draft_from_posted(staffing.load_schedule(d))
         base_assignments = {k: list(v) for k, v in sched.assignments.items()}
         try:
+            if staffing.schedule_revision(d) is None:
+                sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
+            else:
+                sched.auto_enabled_work_centers = staffing_route._ordered_work_center_names(
+                    staffing_route._enabled_auto_work_centers(d)
+                )
             time_off = scheduler_time_off.time_off_entries_for_day(d)
             exact_defaults, group_defaults, user_group_centers = (
                 staffing_route._default_inputs(strict=True)
             )
             enabled_centers = staffing_route._ordered_work_center_names(
-                staffing_route._enabled_auto_work_centers(d)
+                sched.auto_enabled_work_centers
             )
             center_capacities = staffing_route._configured_center_capacities(
                 enabled_centers,

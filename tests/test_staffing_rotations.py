@@ -62,6 +62,7 @@ def _rotations_client(monkeypatch, *, raise_server_exceptions: bool = True):
         "update_auto_enabled_work_centers",
         update_auto_enabled_work_centers,
     )
+    monkeypatch.setattr(rotations.staffing, "schedule_revision", lambda _day: "saved")
 
     app = FastAPI()
     app.include_router(rotations.router)
@@ -821,6 +822,57 @@ def test_normal_rebuild_uses_enabled_auto_centers_to_distribute_defaults(
         "Repair 3": ["Second Repair"],
         "Truck Driver": ["Outside Auto"],
     }
+
+
+def test_rebuild_unsaved_day_uses_and_persists_default_auto_centers(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    prior = staffing.Schedule(day=TARGET_DAY, assignments={})
+    captured = {}
+    saved = []
+
+    monkeypatch.setattr(rotations.staffing, "schedule_revision", lambda _day: None)
+    monkeypatch.setattr(
+        staffing_route,
+        "_default_auto_work_centers",
+        lambda _day: ["Repair 2"],
+    )
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _day: set())
+    monkeypatch.setattr(staffing_route, "_effective_minimum", lambda _loc: 0)
+    monkeypatch.setattr(
+        staffing_route,
+        "_configured_center_capacities",
+        lambda enabled, strict=False: {name: 3 for name in enabled},
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Repairer", 3)])
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: prior)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_route,
+        "_recycled_suggestion_for_day",
+        lambda *args, **kwargs: (
+            captured.update(kwargs)
+            or rotation_suggestions.RecycledSuggestion(
+                assignments={"Repair 2": ["Repairer"]},
+                sources={"Repair 2": {"Repairer": "generated"}},
+                reasons={},
+                warnings=(),
+                complete=True,
+                available_people=("Repairer",),
+                placed_people=("Repairer",),
+            )
+        ),
+    )
+
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={"day": TARGET_DAY.isoformat(), "mode": "normal"},
+    )
+
+    assert response.status_code == 200
+    assert captured["enabled_work_centers"] == ["Repair 2"]
+    assert saved[0].auto_enabled_work_centers == ["Repair 2"]
+    assert response.json()["enabled_work_centers"] == ["Repair 2"]
 
 
 def test_defaults_only_assignments_pins_exact_and_rotates_group_defaults():
