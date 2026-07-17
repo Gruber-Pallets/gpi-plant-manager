@@ -666,6 +666,7 @@ def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
         wc_notes={"Truck Driver": "keep"},
         custom_hours={"start": "06:00", "end": "14:30", "breaks": []},
         published_delivery={"version": "v1"},
+        auto_enabled_work_centers=["Repair 1", "Repair 2"],
     )
     saved = []
     monkeypatch.setattr(
@@ -719,6 +720,7 @@ def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
     assert saved[0].custom_hours == prior.custom_hours
     assert saved[0].published is False
     assert saved[0].published_snapshot == staffing.snapshot_of(prior)
+    assert saved[0].auto_enabled_work_centers == ["Repair 1", "Repair 2"]
     assert response.json()["placement"]["unplaced_people"] == []
 
 
@@ -836,6 +838,7 @@ def test_reset_to_defaults_replaces_assignments_and_never_runs_auto_solver(monke
         notes="keep", wc_notes={"Repair 1": "keep"}, testing_day=True,
         published_snapshot={"assignments": {"Repair 1": ["Old Auto"]}},
         custom_hours={"start": "06:00", "end": "14:30", "breaks": []}, rotation_mode="training",
+        auto_enabled_work_centers=["Repair 2"],
     )
     saved = []
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: prior)
@@ -861,6 +864,7 @@ def test_reset_to_defaults_replaces_assignments_and_never_runs_auto_solver(monke
     assert saved[0].published_snapshot == prior.published_snapshot
     assert saved[0].custom_hours == prior.custom_hours
     assert saved[0].rotation_mode == prior.rotation_mode
+    assert saved[0].auto_enabled_work_centers == ["Repair 2"]
     assert response.json()["assignments"] == saved[0].assignments
     assert response.json()["sources"] == saved[0].assignment_sources
     assert response.json()["enabled_work_centers"] == ["Repair 2"]

@@ -542,6 +542,7 @@ async def rebuild_rotation(request: Request):
                     published_delivery=sched.published_delivery,
                     rotation_mode=sched.rotation_mode,
                     assignment_sources=sources,
+                    auto_enabled_work_centers=sched.auto_enabled_work_centers,
                 ))
                 _http_cache.invalidate_today_cache()
                 return JSONResponse({
@@ -670,6 +671,7 @@ async def rebuild_rotation(request: Request):
             published_delivery=sched.published_delivery,
             rotation_mode=mode,
             assignment_sources=new_sources,
+            auto_enabled_work_centers=sched.auto_enabled_work_centers,
         ))
         _http_cache.invalidate_today_cache()
         return JSONResponse({
