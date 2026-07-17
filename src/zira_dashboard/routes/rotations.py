@@ -401,7 +401,7 @@ async def save_auto_work_centers(request: Request):
             try:
                 with db.cursor() as cur:
                     bundle = saturday_recruiting_store.get(d, cur=cur)
-                    if bundle is not None and bundle.recruitment.status in {"recruiting", "closed"}:
+                    if bundle is not None and bundle.recruitment.status == "recruiting":
                         updated_bundle = saturday_recruiting_store.update_openings(
                             day=d,
                             requested_counts=staffing_route._saturday_recruit_requested_counts(enabled),
@@ -412,6 +412,11 @@ async def save_auto_work_centers(request: Request):
                             cur=cur,
                         )
                         saturday_recruiting = saturday_recruiting_store.serialize_bundle(updated_bundle)
+                    elif bundle is not None and bundle.recruitment.status == "closed":
+                        # The volunteer round is a snapshot after its deadline.
+                        # Keep it intact while allowing the internal schedule
+                        # configuration to change.
+                        saturday_recruiting = saturday_recruiting_store.serialize_bundle(bundle)
                     enabled = staffing_route._save_enabled_auto_work_centers(enabled, cur=cur)
             except saturday_recruiting_store.SaturdayRecruitingError as exc:
                 return _error(str(exc), 409)

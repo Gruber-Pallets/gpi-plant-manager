@@ -1828,6 +1828,43 @@ def test_auto_work_centers_updates_open_saturday_recruiting_demand(monkeypatch):
     assert response.json()["saturday_recruiting"] == {"updated": True}
 
 
+def test_auto_work_centers_allows_toggling_after_saturday_recruiting_closes(monkeypatch):
+    """A closed volunteer round must not prevent an internal center toggle."""
+    client, rotations = _rotations_client(monkeypatch)
+    bundle = SimpleNamespace(
+        recruitment=SimpleNamespace(status="closed", shift_start=time(6), shift_end=time(12)),
+    )
+    saved = []
+    monkeypatch.setattr(rotations.db, "cursor", _RouteTransaction)
+    monkeypatch.setattr(rotations.saturday_recruiting_store, "get", lambda day, *, cur: bundle)
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store,
+        "update_openings",
+        lambda **kwargs: pytest.fail("closed recruiting must not be expanded by a center toggle"),
+    )
+    monkeypatch.setattr(rotations.saturday_recruiting_store, "serialize_bundle", lambda _: {"closed": True})
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: staffing.Schedule(day=d))
+    monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda d: [])
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_save_enabled_auto_work_centers",
+        lambda centers, *, cur: saved.append(tuple(centers)) or list(centers),
+    )
+    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_for_day", lambda **kwargs: ())
+    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_payload", lambda balance: {})
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
+
+    response = client.post("/api/rotations/auto-work-centers", json={
+        "day": "2026-07-18", "work_centers": ["Junior #3"], "turn_off": [],
+    })
+
+    assert response.status_code == 200
+    assert saved == [("Junior #3",)]
+    assert response.json()["saturday_recruiting"] == {"closed": True}
+
+
 def test_auto_work_centers_rejects_saturday_toggle_that_breaks_commitments(monkeypatch):
     client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
     saved = []
