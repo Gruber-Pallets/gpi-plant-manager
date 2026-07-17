@@ -55,7 +55,7 @@ def _unexpected_worker_rows(events: list[dict]) -> list[dict]:
         if day in shortages_by_day:
             return shortages_by_day[day]
         schedule = staffing.load_schedule(day)
-        enabled = set(staffing_routes._enabled_auto_work_centers(day))
+        enabled = set(schedule.auto_enabled_work_centers)
         shortages = []
         for location in staffing.LOCATIONS:
             if location.name not in enabled:

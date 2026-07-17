@@ -196,12 +196,11 @@ def test_unexpected_workers_are_urgent_and_clear_after_published_placement(monke
     monkeypatch.setattr(
         staffing,
         "load_schedule",
-        lambda _day: staffing.Schedule(day=day, assignments={"Repair 1": ["Ana"]}),
-    )
-    monkeypatch.setattr(
-        staffing_routes,
-        "_enabled_auto_work_centers",
-        lambda _day: {"Repair 1", "Dismantler 1"},
+        lambda _day: staffing.Schedule(
+            day=day,
+            assignments={"Repair 1": ["Ana"]},
+            auto_enabled_work_centers=["Repair 1", "Dismantler 1"],
+        ),
     )
     monkeypatch.setattr(
         staffing_routes,
@@ -245,9 +244,14 @@ def test_unexpected_worker_routes_to_staffing_when_enabled_centers_are_covered(m
         "day": day, "person_odoo_id": 7, "person_name": "Maria Delgado", "clock_in_wc": "Repair 1",
     }])
     monkeypatch.setattr(
-        staffing, "load_schedule", lambda _day: staffing.Schedule(day=day, assignments={"Repair 1": ["Ana"]})
+        staffing,
+        "load_schedule",
+        lambda _day: staffing.Schedule(
+            day=day,
+            assignments={"Repair 1": ["Ana"]},
+            auto_enabled_work_centers=["Repair 1"],
+        ),
     )
-    monkeypatch.setattr(staffing_routes, "_enabled_auto_work_centers", lambda _day: {"Repair 1"})
     monkeypatch.setattr(staffing_routes, "_effective_minimum", lambda _loc: 1)
 
     snap = exception_inbox.build_snapshot()

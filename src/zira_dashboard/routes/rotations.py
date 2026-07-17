@@ -396,9 +396,11 @@ async def save_auto_work_centers(request: Request):
             for wc_name, people in sched.assignments.items()
             if wc_name not in turn_off_names
         }
-        did_remove_assignments = assignments != sched.assignments
-        if did_remove_assignments:
-            sched = replace(sched, assignments=assignments)
+        sched = replace(
+            sched,
+            assignments=assignments,
+            auto_enabled_work_centers=enabled,
+        )
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
         except Exception:
@@ -424,9 +426,7 @@ async def save_auto_work_centers(request: Request):
                         # Keep it intact while allowing the internal schedule
                         # configuration to change.
                         saturday_recruiting = saturday_recruiting_store.serialize_bundle(bundle)
-                if did_remove_assignments or existing.published:
-                    staffing.save_schedule(sched, cur=cur)
-                enabled = staffing_route._save_enabled_auto_work_centers(enabled, cur=cur)
+                staffing.save_schedule(sched, cur=cur)
         except saturday_recruiting_store.SaturdayRecruitingError as exc:
             return _error(str(exc), 409)
         except Exception:
@@ -443,7 +443,7 @@ async def save_auto_work_centers(request: Request):
         _http_cache.invalidate_stable_cache()
         return JSONResponse({
             "ok": True,
-            "enabled_work_centers": enabled,
+            "enabled_work_centers": list(sched.auto_enabled_work_centers),
             "assignments": {wc_name: list(people) for wc_name, people in sched.assignments.items()},
             "saturday_recruiting": saturday_recruiting,
             "minimum_crew_balance": minimum_crew_balance,

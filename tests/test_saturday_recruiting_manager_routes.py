@@ -63,7 +63,11 @@ def test_activate_from_schedule_uses_enabled_center_minimums(monkeypatch):
     location = staffing.Location(
         "Repair 1", "Repair", "Bay", "Recycled", None, min_ops=2, max_ops=4,
     )
-    monkeypatch.setattr(routes.staffing_routes, "_enabled_auto_work_centers", lambda _: {"Repair 1"})
+    monkeypatch.setattr(
+        routes.staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(day=day, auto_enabled_work_centers=["Repair 1"]),
+    )
     monkeypatch.setattr(routes.staffing_routes, "_effective_minimum", lambda _loc: 3)
     monkeypatch.setattr(routes.staffing, "LOCATIONS", (location,))
     monkeypatch.setattr(
@@ -95,7 +99,11 @@ def test_activate_from_schedule_uses_enabled_center_minimums(monkeypatch):
 
 
 def test_activate_from_schedule_rejects_no_enabled_centers(monkeypatch):
-    monkeypatch.setattr(routes.staffing_routes, "_enabled_auto_work_centers", lambda _: set())
+    monkeypatch.setattr(
+        routes.staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(day=day, auto_enabled_work_centers=[]),
+    )
 
     response = client.post(
         "/api/staffing/saturday-recruiting/activate-from-schedule",
@@ -237,7 +245,11 @@ def test_schedule_activation_makes_timeclock_banner_live(monkeypatch, request):
         "INSERT INTO work_center_required_skills (wc_id, skill_id) VALUES (%s, %s)",
         (work_center_id, skill_id),
     )
-    monkeypatch.setattr(routes.staffing_routes, "_enabled_auto_work_centers", lambda _: {work_center_name})
+    monkeypatch.setattr(
+        routes.staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(day=day, auto_enabled_work_centers=[work_center_name]),
+    )
     monkeypatch.setattr(routes.staffing, "LOCATIONS", (location,))
     monkeypatch.setattr(
         routes.schedule_store,

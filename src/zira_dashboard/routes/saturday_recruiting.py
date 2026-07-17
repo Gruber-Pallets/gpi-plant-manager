@@ -105,7 +105,7 @@ async def activate_from_schedule(request: Request):
         raise HTTPException(status_code=422, detail="Saturday recruiting requires a Saturday")
 
     try:
-        enabled = set(staffing_routes._enabled_auto_work_centers(day))
+        enabled = set(staffing.load_schedule(day).auto_enabled_work_centers)
         if not enabled:
             raise HTTPException(
                 status_code=422,

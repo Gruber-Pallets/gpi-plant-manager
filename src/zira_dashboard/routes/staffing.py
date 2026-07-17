@@ -340,15 +340,8 @@ def _save_default_auto_work_centers(names, *, cur=None) -> list[str]:
     return enabled
 
 
-# Temporary compatibility for the existing daily controls. Task 4 replaces
-# these with schedule-owned reads and writes; Settings itself only uses the
-# explicit default-template helpers above.
 def _enabled_auto_work_centers(d: date) -> set[str]:
-    return set(_default_auto_work_centers(d))
-
-
-def _save_enabled_auto_work_centers(names, *, cur=None) -> list[str]:
-    return _save_default_auto_work_centers(names, cur=cur)
+    return set(staffing.load_schedule(d).auto_enabled_work_centers)
 
 
 def _saturday_recruit_requested_counts(enabled: Sequence[str]) -> dict[int, int]:
@@ -1071,10 +1064,7 @@ def staffing_page(
         sched.custom_hours = copy.deepcopy(snap.get("custom_hours"))
         sched.published_delivery = staffing._delivery_mapping(snap.get("published_delivery"))
     try:
-        if staffing.schedule_revision(d) is None:
-            enabled_auto_work_centers = _default_auto_work_centers(d)
-        else:
-            enabled_auto_work_centers = list(sched.auto_enabled_work_centers)
+        enabled_auto_work_centers = list(sched.auto_enabled_work_centers)
     except Exception:
         log.exception("Could not load auto-schedule work-center settings for %s", d)
         enabled_auto_work_centers = []
@@ -1583,12 +1573,14 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
                 status_code=409,
             )
 
+    existing = staffing.load_schedule(d)
+
     for loc, clean_defaults in default_updates:
         work_centers_store.save_one(loc, {"default_people": clean_defaults})
 
     publish_block = []
     if action == "publish" and not active_saturday_recruiting:
-        publish_block = _publish_shortages(assignments, _enabled_auto_work_centers(d))
+        publish_block = _publish_shortages(assignments, existing.auto_enabled_work_centers)
     if action == "publish" and active_saturday_recruiting:
         try:
             assert saturday_bundle is not None
@@ -1612,7 +1604,6 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             log.exception("Saturday publish validation failed for %s", d)
             publish_block = ["Saturday recruiting could not be verified. Please try again."]
 
-    existing = staffing.load_schedule(d)
     if action == "save" or (action == "publish" and publish_block):
         existing = staffing.draft_from_posted(existing)
 
@@ -1655,6 +1646,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         rotation_mode=existing.rotation_mode,
         assignment_sources=assignment_sources,
         saturday_availability_overrides=existing.saturday_availability_overrides,
+        auto_enabled_work_centers=existing.auto_enabled_work_centers,
     ))
     if action == "publish" and published and saturday_bundle is not None:
         try:
