@@ -302,6 +302,7 @@ class ScheduleModel(object_api.ObjectModel):
                 wc_name: dict(sources or {})
                 for wc_name, sources in current.assignment_sources.items()
             },
+            auto_enabled_work_centers=current.auto_enabled_work_centers,
         )
         staffing.save_schedule(sched)
         return day.isoformat()

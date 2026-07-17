@@ -74,6 +74,7 @@ def test_schedule_model_create_saves_schedule(monkeypatch):
             assignments={},
             rotation_mode="training",
             assignment_sources={"Repair 1": {"Dale": "manual"}},
+            auto_enabled_work_centers=["Repair 1"],
         ),
     )
     monkeypatch.setattr(
@@ -95,6 +96,7 @@ def test_schedule_model_create_saves_schedule(monkeypatch):
     assert saved["schedule"].testing_day is True
     assert saved["schedule"].rotation_mode == "training"
     assert saved["schedule"].assignment_sources == {"Repair 1": {"Dale": "manual"}}
+    assert saved["schedule"].auto_enabled_work_centers == ["Repair 1"]
 
 
 def test_schedule_model_content_edit_of_posted_schedule_starts_a_draft(monkeypatch):
@@ -105,6 +107,7 @@ def test_schedule_model_content_edit_of_posted_schedule_starts_a_draft(monkeypat
         assignments={"Repair 1": ["Dale"]},
         notes="official note",
         published_delivery={"version": "v1", "printed_at": "now"},
+        auto_enabled_work_centers=["Repair 1"],
     )
     monkeypatch.setattr(object_models.staffing, "load_schedule", lambda _day: posted)
     monkeypatch.setattr(
@@ -125,6 +128,7 @@ def test_schedule_model_content_edit_of_posted_schedule_starts_a_draft(monkeypat
     assert draft.published_snapshot["published_delivery"] == {
         "version": "v1", "printed_at": "now"
     }
+    assert draft.auto_enabled_work_centers == ["Repair 1"]
 
 
 def test_skill_model_reads_skill_definitions(monkeypatch):

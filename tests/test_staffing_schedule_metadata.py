@@ -91,7 +91,12 @@ def _publish_location(name, *, min_ops):
 
 def _capture_publish(monkeypatch, locs, existing=None):
     saved = []
-    existing = existing or staffing.Schedule(day=DAY, published=False, assignments={})
+    existing = existing or staffing.Schedule(
+        day=DAY,
+        published=False,
+        assignments={},
+        auto_enabled_work_centers=[loc.name for loc in locs],
+    )
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", tuple(locs))
     monkeypatch.setattr(
         staffing_routes.work_centers_store, "min_ops", lambda loc: loc.min_ops,
@@ -99,11 +104,6 @@ def _capture_publish(monkeypatch, locs, existing=None):
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: existing)
     monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
-    monkeypatch.setattr(
-        staffing_routes,
-        "_enabled_auto_work_centers",
-        lambda _day: {loc.name for loc in locs},
-    )
     return saved
 
 
@@ -144,11 +144,15 @@ def test_publish_blocks_an_empty_one_person_work_center(monkeypatch):
 def test_publish_ignores_minimums_for_work_centers_that_are_off(monkeypatch):
     enabled = _publish_location("Hand Build #1", min_ops=2)
     disabled = _publish_location("Junior #1", min_ops=1)
-    saved = _capture_publish(monkeypatch, [enabled, disabled])
-    monkeypatch.setattr(
-        staffing_routes,
-        "_enabled_auto_work_centers",
-        lambda _day: {"Hand Build #1"},
+    saved = _capture_publish(
+        monkeypatch,
+        [enabled, disabled],
+        existing=staffing.Schedule(
+            day=DAY,
+            published=False,
+            assignments={},
+            auto_enabled_work_centers=["Hand Build #1"],
+        ),
     )
     monkeypatch.setattr(
         staffing_routes.staffing,
@@ -191,7 +195,10 @@ def test_json_publish_below_minimum_returns_conflict_with_shortages(monkeypatch)
 def test_failed_republish_preserves_the_posted_version_as_a_snapshot(monkeypatch):
     pair = _publish_location("Hand Build #1", min_ops=2)
     posted = staffing.Schedule(
-        day=DAY, published=True, assignments={"Hand Build #1": ["Jordan", "Taylor"]},
+        day=DAY,
+        published=True,
+        assignments={"Hand Build #1": ["Jordan", "Taylor"]},
+        auto_enabled_work_centers=["Hand Build #1"],
     )
     saved = _capture_publish(monkeypatch, [pair], existing=posted)
     monkeypatch.setattr(
@@ -284,6 +291,7 @@ def test_clear_testing_day_starts_draft_and_preserves_rotation_metadata(monkeypa
         published=True,
         testing_day=True,
         published_delivery={"version": "v1"},
+        auto_enabled_work_centers=["Repair 1"],
     )
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: existing)
     monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
@@ -301,6 +309,7 @@ def test_clear_testing_day_starts_draft_and_preserves_rotation_metadata(monkeypa
     assert saved[0].published_snapshot["published_delivery"]["version"] == "v1"
     assert saved[0].rotation_mode == "training"
     assert saved[0].assignment_sources == SOURCES
+    assert saved[0].auto_enabled_work_centers == ["Repair 1"]
 
 
 @pytest.mark.parametrize(
@@ -409,6 +418,7 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
         assignments={"Repair 1": ["Jordan"]},
         rotation_mode="training",
         assignment_sources=draft_sources,
+        auto_enabled_work_centers=["Dismantler 1"],
         published_snapshot={
             "assignments": {"Repair 1": ["Taylor"]},
             "notes": "posted",
@@ -416,6 +426,7 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
             "testing_day": False,
             "rotation_mode": "normal",
             "assignment_sources": posted_sources,
+            "auto_enabled_work_centers": ["Unknown", "Repair 1"],
             "custom_hours": {"start": "06:00", "end": "12:00", "breaks": []},
             "published_delivery": {"version": "v1", "printed_at": "now"},
         },
@@ -448,7 +459,7 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
         "current",
         lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
     )
-    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", ())
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair_1,))
     monkeypatch.setattr(staffing_routes.work_centers_store, "default_people", lambda _loc: [])
     monkeypatch.setattr(staffing_routes.staffing, "schedule_revision", lambda _day: "r1")
     monkeypatch.setattr(
@@ -483,6 +494,7 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
     assert captured_context["posted_delivery"] == {"version": "v1", "printed_at": "now"}
     assert captured_context["posted_version"] == "v1"
     assert captured_context["schedule_revision"] == "r1"
+    assert captured_context["auto_schedule_enabled_wc_names"] == ["Repair 1"]
 
     monkeypatch.setattr(staffing, "save_schedule", saved.append)
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair_1,))

@@ -1061,6 +1061,9 @@ def staffing_page(
         sched.saturday_availability_overrides = dict(
             snap.get("saturday_availability_overrides") or {}
         )
+        sched.auto_enabled_work_centers = staffing._normalize_auto_enabled_work_centers(
+            snap.get("auto_enabled_work_centers")
+        )
         sched.custom_hours = copy.deepcopy(snap.get("custom_hours"))
         sched.published_delivery = staffing._delivery_mapping(snap.get("published_delivery"))
     try:
@@ -2562,6 +2565,7 @@ async def staffing_clear_testing_day(request: Request):
                 wc_name: dict(sources or {})
                 for wc_name, sources in existing.assignment_sources.items()
             },
+            auto_enabled_work_centers=existing.auto_enabled_work_centers,
         ))
         _bust_after_mutation()
         return JSONResponse({"ok": True})
