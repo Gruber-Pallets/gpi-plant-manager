@@ -40,6 +40,20 @@ def test_snapshot_includes_hours_and_delivery():
     assert snapshot["published_delivery"] == posted.published_delivery
 
 
+def test_invalidate_all_schedule_caches_clears_every_cached_day(monkeypatch):
+    monday = date(2026, 7, 20)
+    tuesday = date(2026, 7, 21)
+    monkeypatch.setattr(
+        staffing,
+        "_schedule_cache",
+        {monday: _schedule(day=monday), tuesday: _schedule(day=tuesday)},
+    )
+
+    staffing.invalidate_all_schedule_caches()
+
+    assert staffing._schedule_cache == {}
+
+
 def test_draft_from_posted_preserves_official_version_and_clears_draft_delivery():
     posted = _schedule(
         published=True,

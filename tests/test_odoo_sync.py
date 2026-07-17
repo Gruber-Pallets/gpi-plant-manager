@@ -90,6 +90,14 @@ def test_sync_skips_when_within_ttl(monkeypatch):
 
 
 def test_sync_force_refreshes_even_within_ttl(monkeypatch):
+    from zira_dashboard import staffing
+
+    cleared_schedule_caches = []
+    monkeypatch.setattr(
+        staffing,
+        "invalidate_all_schedule_caches",
+        lambda: cleared_schedule_caches.append(True),
+    )
     _stub_client(
         monkeypatch,
         employees=[{"id": 99001, "name": "TestAlice", "active": True, "work_email": False}],
@@ -104,6 +112,7 @@ def test_sync_force_refreshes_even_within_ttl(monkeypatch):
     assert result.refreshed is True
     assert result.employee_count == 1
     assert result.skill_column_count == 2
+    assert cleared_schedule_caches == [True]
     from zira_dashboard import db
     rows = db.query(
         "SELECT pe.name, ps.level, sk.name AS skill_name "

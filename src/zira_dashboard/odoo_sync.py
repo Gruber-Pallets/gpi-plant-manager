@@ -379,6 +379,7 @@ def sync(force: bool = False) -> SyncResult:
     from . import cert_lookup, staffing
     cert_lookup.invalidate_cache()
     staffing._invalidate_roster_cache()
+    staffing.invalidate_all_schedule_caches()
 
     # Best-effort: refresh per-schedule rounding overrides' hours from Odoo.
     # A failure here must not fail the (already-committed) employee sync.

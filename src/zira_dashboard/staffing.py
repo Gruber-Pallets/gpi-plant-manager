@@ -509,6 +509,12 @@ def invalidate_schedule_cache(day: date) -> None:
     _invalidate_schedule_cache(day)
 
 
+def invalidate_all_schedule_caches() -> None:
+    """Discard cached schedules after a roster-wide display-name change."""
+    with _schedule_cache_lock:
+        _schedule_cache.clear()
+
+
 def load_schedule(day: date) -> Schedule:
     """Hydrate a Schedule from Postgres (schedules + schedule_assignments
     + schedule_wc_notes). Returns an empty Schedule
