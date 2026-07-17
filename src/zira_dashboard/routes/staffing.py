@@ -11,14 +11,15 @@ from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, UTC
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import _http_cache, app_settings, attendance, auto_schedule_capacity, db, late_report, rotation_store, rotation_suggestions, rotation_training, saturday_recruiting as sr, saturday_recruiting_store, schedule_solver, schedule_store, shift_config, staffing, staffing_view, time_format, work_centers_store
+from .. import _http_cache, app_settings, attendance, auto_schedule_capacity, db, late_report, rotation_store, rotation_suggestions, rotation_training, saturday_recruiting as sr, saturday_recruiting_store, schedule_solver, schedule_store, scheduler_time_off, shift_config, staffing, staffing_view, time_format, time_off_sync, work_centers_store
 from .._http_cache import invalidate_today_cache
 from ..deps import templates
 from ..plant_day import today as plant_today, now as plant_now
 from ..staffing_attendance import _late_emp_ids, _safe_attendance, _safe_time_off_entries, _time_off_entries_cached
+from ..time_off_wizard import shape_to_hour_bounds
 
 log = logging.getLogger(__name__)
 
@@ -2157,6 +2158,162 @@ def _bust_after_mutation() -> None:
     _bust_late_report_cache()
     _bust_assignments_todo_cache()
     _http_cache.invalidate_today_cache()
+
+
+def _queue_time_off_push(request_id: int) -> None:
+    """Push one staged scheduler edit to Odoo (kept patchable for routes)."""
+    time_off_sync.push_one(request_id)
+
+
+def _editable_time_off_for_day(request_id: int, day: date) -> dict | None:
+    """Return a visible, Odoo-backed leave a supervisor may change."""
+    rows = db.query(
+        "SELECT id, shape, holiday_status_id, date_from, date_to, hour_from, hour_to, "
+        "odoo_leave_id FROM time_off_requests WHERE id = %s "
+        "AND odoo_leave_id IS NOT NULL AND NOT local_record "
+        "AND state = ANY(%s) AND date_from <= %s AND date_to >= %s",
+        (request_id, list(scheduler_time_off._VISIBLE_STATES), day, day),
+    )
+    return rows[0] if rows else None
+
+
+def _stage_supervisor_time_off_edit(
+    *,
+    request_id: int,
+    date_from: date,
+    date_to: date,
+    hour_from: float | None,
+    hour_to: float | None,
+    shape: str,
+    holiday_status_id: int,
+) -> None:
+    """Stage a supervisor edit without changing its leave type or Odoo id."""
+    db.execute(
+        "UPDATE time_off_requests SET shape = %s, date_from = %s, date_to = %s, "
+        "hour_from = %s, hour_to = %s, state = 'draft_edit', "
+        "synced_to_odoo = FALSE, sync_error = NULL, updated_at = now() "
+        "WHERE id = %s AND holiday_status_id = %s",
+        (shape, date_from, date_to, hour_from, hour_to, request_id, holiday_status_id),
+    )
+
+
+def _stage_supervisor_time_off_cancel(request_id: int) -> None:
+    """Stage cancellation of an Odoo-backed leave for the sync worker."""
+    db.execute(
+        "UPDATE time_off_requests SET state = 'draft_cancel', "
+        "synced_to_odoo = FALSE, sync_error = NULL, updated_at = now() "
+        "WHERE id = %s",
+        (request_id,),
+    )
+
+
+def _scheduler_shift_bounds(day: date) -> tuple[float, float]:
+    start = shift_config.configured_shift_start_for(day)
+    end = shift_config.configured_shift_end_for(day)
+    return (
+        start.hour + start.minute / 60,
+        end.hour + end.minute / 60,
+    )
+
+
+def _parse_scheduler_editor_body(body: dict) -> tuple[date, date, date, str, str] | JSONResponse:
+    try:
+        day = date.fromisoformat(body["day"])
+        date_from = date.fromisoformat(body["date_from"])
+        date_to = date.fromisoformat(body["date_to"])
+    except (KeyError, TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "invalid date"}, status_code=422)
+    if date_to < date_from:
+        return JSONResponse({"ok": False, "error": "date_to precedes date_from"}, status_code=422)
+    return day, date_from, date_to, body.get("time_from") or "", body.get("time_to") or ""
+
+
+def _edit_scheduler_time_off(
+    request_id: int,
+    body: dict,
+    background_tasks: BackgroundTasks | None = None,
+) -> JSONResponse:
+    parsed = _parse_scheduler_editor_body(body)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    day, date_from, date_to, time_from, time_to = parsed
+    row = _editable_time_off_for_day(request_id, day)
+    if row is None:
+        return JSONResponse({"ok": False, "error": "time off request not found"}, status_code=404)
+
+    # Whole-day leaves have no hour window; only partials need the configured
+    # schedule bounds and therefore the schedule-store read.
+    shift_from, shift_to = (
+        _scheduler_shift_bounds(date_from)
+        if row["shape"] != "full_day" else (0.0, 0.0)
+    )
+    hour_from, hour_to, error = shape_to_hour_bounds(
+        row["shape"], time_from, time_to, shift_from, shift_to,
+    )
+    if error:
+        return JSONResponse({"ok": False, "error": error}, status_code=422)
+
+    _stage_supervisor_time_off_edit(
+        request_id=request_id,
+        date_from=date_from,
+        date_to=date_to,
+        hour_from=hour_from,
+        hour_to=hour_to,
+        shape=row["shape"],
+        holiday_status_id=row["holiday_status_id"],
+    )
+    invalidate_today_cache()
+    if background_tasks is None:
+        _queue_time_off_push(request_id)
+    else:
+        background_tasks.add_task(_queue_time_off_push, request_id)
+    return JSONResponse({"ok": True})
+
+
+def _cancel_scheduler_time_off(
+    request_id: int,
+    body: dict,
+    background_tasks: BackgroundTasks | None = None,
+) -> JSONResponse:
+    try:
+        day = date.fromisoformat(body["day"])
+    except (KeyError, TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "invalid date"}, status_code=422)
+    if _editable_time_off_for_day(request_id, day) is None:
+        return JSONResponse({"ok": False, "error": "time off request not found"}, status_code=404)
+    _stage_supervisor_time_off_cancel(request_id)
+    invalidate_today_cache()
+    if background_tasks is None:
+        _queue_time_off_push(request_id)
+    else:
+        background_tasks.add_task(_queue_time_off_push, request_id)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/api/staffing/time-off/{request_id}/edit")
+async def edit_scheduler_time_off(
+    request_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 -- respond consistently to malformed JSON
+        body = {}
+    return _edit_scheduler_time_off(request_id, body, background_tasks)
+
+
+@router.post("/api/staffing/time-off/{request_id}/cancel")
+async def cancel_scheduler_time_off(
+    request_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 -- respond consistently to malformed JSON
+        body = {}
+    return _cancel_scheduler_time_off(request_id, body, background_tasks)
 
 
 @router.post("/api/staffing/clear-partial")
