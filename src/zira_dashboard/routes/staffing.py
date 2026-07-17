@@ -346,6 +346,15 @@ def _enabled_auto_work_centers(d: date) -> set[str]:
     return set(staffing.load_schedule(d).auto_enabled_work_centers)
 
 
+def _posted_auto_enabled_work_centers(snapshot, daily_centers) -> list[str]:
+    """Use the row value when an older posted snapshot has no toggle field."""
+    if isinstance(snapshot, dict) and "auto_enabled_work_centers" in snapshot:
+        return staffing._normalize_auto_enabled_work_centers(
+            snapshot["auto_enabled_work_centers"]
+        )
+    return staffing._normalize_auto_enabled_work_centers(daily_centers)
+
+
 def _saturday_recruit_requested_counts(enabled: Sequence[str]) -> dict[int, int]:
     enabled_names = set(enabled)
     positions_by_name = {
@@ -1060,8 +1069,8 @@ def staffing_page(
             wc_name: dict(sources or {})
             for wc_name, sources in (snap.get("assignment_sources") or {}).items()
         }
-        sched.auto_enabled_work_centers = staffing._normalize_auto_enabled_work_centers(
-            snap.get("auto_enabled_work_centers")
+        sched.auto_enabled_work_centers = _posted_auto_enabled_work_centers(
+            snap, sched.auto_enabled_work_centers,
         )
         sched.saturday_availability_overrides = dict(
             snap.get("saturday_availability_overrides") or {}

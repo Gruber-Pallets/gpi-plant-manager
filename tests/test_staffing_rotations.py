@@ -8,6 +8,7 @@ recommendation inputs stubbed, so nothing here touches Postgres or the clock.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from contextlib import nullcontext
 from datetime import date, time, timedelta
 from pathlib import Path
@@ -39,6 +40,28 @@ def _person(name: str, level: int, group: str = "Repair", *, active: bool = True
 
 def _rotations_client(monkeypatch, *, raise_server_exceptions: bool = True):
     from zira_dashboard.routes import rotations
+
+    # Route tests replace the persistence boundary with local spies. Keep that
+    # contract while the narrow SQL path itself is covered in
+    # test_rotation_store.py.
+    def update_auto_enabled_work_centers(day, *, enabled, turn_off, cur):
+        schedule = staffing.draft_from_posted(
+            deepcopy(rotations.staffing.load_schedule(day))
+        )
+        schedule.assignments = {
+            wc_name: list(people)
+            for wc_name, people in schedule.assignments.items()
+            if wc_name not in turn_off
+        }
+        schedule.auto_enabled_work_centers = list(enabled)
+        rotations.staffing.save_schedule(schedule, cur=cur)
+        return schedule
+
+    monkeypatch.setattr(
+        rotations.staffing,
+        "update_auto_enabled_work_centers",
+        update_auto_enabled_work_centers,
+    )
 
     app = FastAPI()
     app.include_router(rotations.router)

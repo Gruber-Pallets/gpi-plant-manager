@@ -289,6 +289,68 @@ def test_schedule_auto_enabled_work_centers_round_trip(monkeypatch):
     assert staffing.snapshot_of(hydrated)["auto_enabled_work_centers"] == ["Repair 1", "Repair 2"]
 
 
+def test_schema_initializes_missing_auto_template_from_recent_history_before_snapshotting():
+    from zira_dashboard._schema import SCHEMA_DDL
+
+    migration = SCHEMA_DDL.split(
+        "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS auto_enabled_work_centers JSONB;",
+        1,
+    )[1].split("-- Outbox", 1)[0]
+
+    assert "INSERT INTO app_settings (key, value, updated_at)" in migration
+    assert "schedule_assignments" in migration
+    assert migration.index("INSERT INTO app_settings") < migration.index(
+        "UPDATE schedules\n   SET auto_enabled_work_centers"
+    )
+
+
+def test_schema_normalizes_legacy_auto_template_to_known_canonical_centers():
+    from zira_dashboard._schema import SCHEMA_DDL
+
+    migration = SCHEMA_DDL.split(
+        "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS auto_enabled_work_centers JSONB;",
+        1,
+    )[1].split("-- Outbox", 1)[0]
+
+    assert "jsonb_array_elements_text" in migration
+    assert "SELECT DISTINCT" in migration
+    assert "WITH ORDINALITY" in migration
+
+
+def test_narrow_auto_center_update_uses_locked_latest_assignments(monkeypatch):
+    from zira_dashboard import staffing
+
+    current = staffing.Schedule(
+        day=date(2026, 7, 14),
+        assignments={"Repair 1": ["Concurrent save"], "Repair 2": ["Turned off"]},
+        auto_enabled_work_centers=["Repair 1", "Repair 2"],
+    )
+    executed = []
+
+    class Cursor:
+        def execute(self, sql, params=None):
+            executed.append((sql, params))
+
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule_for_update",
+        lambda _day, *, cur: current,
+        raising=False,
+    )
+
+    updated = staffing.update_auto_enabled_work_centers(
+        current.day,
+        enabled=["Repair 1"],
+        turn_off={"Repair 2"},
+        cur=Cursor(),
+    )
+
+    assert updated.assignments == {"Repair 1": ["Concurrent save"]}
+    assert updated.auto_enabled_work_centers == ["Repair 1"]
+    assert any("UPDATE schedules SET auto_enabled_work_centers" in sql for sql, _ in executed)
+    assert not any("INSERT INTO schedules" in sql for sql, _ in executed)
+
+
 def test_schedule_saturday_availability_overrides_round_trip(monkeypatch):
     from zira_dashboard import db, staffing
 

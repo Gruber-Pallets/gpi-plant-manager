@@ -500,3 +500,12 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
     assert saved[0].rotation_mode == "training"
     assert saved[0].assignment_sources == draft_sources
     assert saved[0].auto_enabled_work_centers == draft_auto_enabled_work_centers
+
+
+def test_posted_view_uses_daily_auto_centers_when_legacy_snapshot_omits_them():
+    legacy_snapshot = {"assignments": {"Repair 1": ["Taylor"]}}
+
+    assert staffing_routes._posted_auto_enabled_work_centers(
+        legacy_snapshot,
+        ["Repair 2"],
+    ) == ["Repair 2"]

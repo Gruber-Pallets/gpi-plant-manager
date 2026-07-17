@@ -388,11 +388,62 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS auto_enabled_work_centers JSONB;
 
+-- Initialize the Settings-owned template before copying it into legacy
+-- schedules.  A missing key follows the same recent-history first-run rule as
+-- the application; an existing legacy key is reduced to known, ordered names.
+INSERT INTO app_settings (key, value, updated_at)
+SELECT 'rotation_auto_enabled_work_centers',
+       COALESCE((
+         SELECT jsonb_agg(ordered.name ORDER BY ordered.ordinality)
+         FROM unnest(ARRAY[
+           'Repair 1', 'Repair 2', 'Repair 3', 'Dismantler 4', 'Dismantler 3',
+           'Dismantler 2', 'Dismantler 1', 'Trim Saw 1', 'Master Recycler',
+           'Repair 4', 'Repair 5', 'Hand Build #2', 'Hand Build #1',
+           'Chop/Notch', 'Big Build #1', 'Woodpecker #1', 'Junior #1',
+           'Junior #2', 'Junior #3', 'Loading/Jockeying', 'Tablets',
+           'Work Orders', 'Truck Driver'
+         ]) WITH ORDINALITY AS ordered(name, ordinality)
+         WHERE EXISTS (
+           SELECT 1
+           FROM schedule_assignments sa
+           JOIN schedules s ON s.day = sa.day
+           JOIN work_centers wc ON wc.id = sa.wc_id
+           WHERE wc.name = ordered.name
+             AND s.day < CURRENT_DATE
+             AND s.day >= CURRENT_DATE - 28
+             AND COALESCE((s.published_snapshot->>'testing_day')::boolean, s.testing_day, FALSE) = FALSE
+         )
+       ), '[]'::jsonb), now()
+WHERE NOT EXISTS (
+  SELECT 1 FROM app_settings WHERE key = 'rotation_auto_enabled_work_centers'
+);
+
+UPDATE app_settings settings
+   SET value = COALESCE((
+         SELECT jsonb_agg(ordered.name ORDER BY ordered.ordinality)
+         FROM unnest(ARRAY[
+           'Repair 1', 'Repair 2', 'Repair 3', 'Dismantler 4', 'Dismantler 3',
+           'Dismantler 2', 'Dismantler 1', 'Trim Saw 1', 'Master Recycler',
+           'Repair 4', 'Repair 5', 'Hand Build #2', 'Hand Build #1',
+           'Chop/Notch', 'Big Build #1', 'Woodpecker #1', 'Junior #1',
+           'Junior #2', 'Junior #3', 'Loading/Jockeying', 'Tablets',
+           'Work Orders', 'Truck Driver'
+         ]) WITH ORDINALITY AS ordered(name, ordinality)
+         JOIN (
+           SELECT DISTINCT value AS name
+           FROM jsonb_array_elements_text(
+             CASE WHEN jsonb_typeof(settings.value) = 'array'
+                  THEN settings.value ELSE '[]'::jsonb END
+           )
+         ) legacy USING (name)
+       ), '[]'::jsonb),
+       updated_at = now()
+ WHERE settings.key = 'rotation_auto_enabled_work_centers';
+
 UPDATE schedules
-   SET auto_enabled_work_centers = COALESCE(
-         (SELECT value FROM app_settings
-           WHERE key = 'rotation_auto_enabled_work_centers'),
-         '[]'::jsonb
+   SET auto_enabled_work_centers = (
+         SELECT value FROM app_settings
+          WHERE key = 'rotation_auto_enabled_work_centers'
        )
  WHERE auto_enabled_work_centers IS NULL;
 

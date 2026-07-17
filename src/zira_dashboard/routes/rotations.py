@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from datetime import date
 
 from fastapi import APIRouter, Request
@@ -389,18 +388,6 @@ async def save_auto_work_centers(request: Request):
         turn_off_names = set(staffing_route._ordered_work_center_names(turn_off))
         enabled = [name for name in proposed if name not in turn_off_names]
         roster = staffing.load_roster()
-        existing = staffing.load_schedule(d)
-        sched = staffing.draft_from_posted(existing)
-        assignments = {
-            wc_name: list(people)
-            for wc_name, people in sched.assignments.items()
-            if wc_name not in turn_off_names
-        }
-        sched = replace(
-            sched,
-            assignments=assignments,
-            auto_enabled_work_centers=enabled,
-        )
         try:
             time_off = scheduler_time_off.time_off_entries_for_day(d)
         except Exception:
@@ -426,7 +413,9 @@ async def save_auto_work_centers(request: Request):
                         # Keep it intact while allowing the internal schedule
                         # configuration to change.
                         saturday_recruiting = saturday_recruiting_store.serialize_bundle(bundle)
-                staffing.save_schedule(sched, cur=cur)
+                sched = staffing.update_auto_enabled_work_centers(
+                    d, enabled=enabled, turn_off=turn_off_names, cur=cur,
+                )
         except saturday_recruiting_store.SaturdayRecruitingError as exc:
             return _error(str(exc), 409)
         except Exception:

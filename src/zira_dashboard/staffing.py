@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import json
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, UTC
 from pathlib import Path
 from threading import RLock
@@ -608,6 +608,120 @@ def _load_schedule_from_db(day: date) -> Schedule:
             r.get("saturday_availability_overrides")
         ),
     )
+
+
+def load_schedule_for_update(day: date, *, cur) -> Schedule:
+    """Load a schedule through ``cur`` while holding its row lock.
+
+    Toggle saves only own the enabled-center list and disabled-center rows, so
+    they must read assignments after acquiring this lock rather than from the
+    request's earlier cached snapshot.
+    """
+    cur.execute(
+        "SELECT day, published, testing_day, notes, custom_hours, published_snapshot, "
+        "published_delivery, recycled_rotation_mode, assignment_sources, "
+        "auto_enabled_work_centers, saturday_availability_overrides "
+        "FROM schedules WHERE day = %s FOR UPDATE",
+        (day,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return Schedule(day=day, published=False, assignments={})
+    cur.execute(
+        "SELECT wc.name AS wc_name, pe.name AS person_name "
+        "FROM schedule_assignments sa "
+        "JOIN work_centers wc ON wc.id = sa.wc_id "
+        "JOIN people pe ON pe.id = sa.person_id "
+        "WHERE sa.day = %s ORDER BY sa.wc_id, sa.sort_order",
+        (day,),
+    )
+    assignments: dict[str, list[str]] = {}
+    for assignment in cur.fetchall():
+        assignments.setdefault(assignment["wc_name"], []).append(assignment["person_name"])
+    cur.execute(
+        "SELECT wc.name AS wc_name, sn.note "
+        "FROM schedule_wc_notes sn JOIN work_centers wc ON wc.id = sn.wc_id "
+        "WHERE sn.day = %s",
+        (day,),
+    )
+    wc_notes = {note["wc_name"]: note["note"] for note in cur.fetchall()}
+    return Schedule(
+        day=day,
+        published=row["published"],
+        assignments=assignments,
+        notes=row["notes"] or "",
+        wc_notes=wc_notes,
+        testing_day=row["testing_day"],
+        custom_hours=row["custom_hours"],
+        published_snapshot=row["published_snapshot"],
+        published_delivery=_delivery_mapping(row.get("published_delivery")),
+        rotation_mode=row.get("recycled_rotation_mode") or "normal",
+        assignment_sources=_json_mapping(row.get("assignment_sources")),
+        auto_enabled_work_centers=_normalize_auto_enabled_work_centers(
+            row.get("auto_enabled_work_centers")
+        ),
+        saturday_availability_overrides=_json_saturday_availability_overrides(
+            row.get("saturday_availability_overrides")
+        ),
+    )
+
+
+def update_auto_enabled_work_centers(
+    day: date,
+    *,
+    enabled,
+    turn_off: set[str],
+    cur,
+) -> Schedule:
+    """Persist a daily toggle without replacing assignments saved concurrently."""
+    existing = load_schedule_for_update(day, cur=cur)
+    normalized_enabled = _normalize_auto_enabled_work_centers(enabled)
+    normalized_turn_off = set(_normalize_auto_enabled_work_centers(list(turn_off)))
+    sched = draft_from_posted(existing)
+    sched = replace(
+        sched,
+        assignments={
+            wc_name: list(people)
+            for wc_name, people in sched.assignments.items()
+            if wc_name not in normalized_turn_off
+        },
+        auto_enabled_work_centers=normalized_enabled,
+    )
+    if existing.published:
+        cur.execute(
+            "UPDATE schedules SET published = FALSE, published_snapshot = %s::jsonb, "
+            "published_delivery = '{}'::jsonb, auto_enabled_work_centers = %s::jsonb, "
+            "updated_at = now() WHERE day = %s",
+            (
+                json.dumps(sched.published_snapshot),
+                json.dumps(normalized_enabled),
+                day,
+            ),
+        )
+    else:
+        cur.execute(
+            "UPDATE schedules SET auto_enabled_work_centers = %s::jsonb, "
+            "updated_at = now() WHERE day = %s",
+            (json.dumps(normalized_enabled), day),
+        )
+    if getattr(cur, "rowcount", 1) == 0:
+        _save_schedule_with_cursor(
+            cur,
+            sched,
+            _validate_assignment_sources(sched.assignment_sources),
+            _validate_saturday_availability_overrides(sched.saturday_availability_overrides),
+        )
+        _invalidate_schedule_cache(day)
+        return sched
+    if normalized_turn_off:
+        cur.execute(
+            "DELETE FROM schedule_assignments "
+            "WHERE day = %s AND wc_id IN ("
+            "SELECT id FROM work_centers WHERE name = ANY(%s))",
+            (day, list(normalized_turn_off)),
+        )
+    _invalidate_schedule_cache(day)
+    return sched
 
 
 def load_schedules_bulk(
