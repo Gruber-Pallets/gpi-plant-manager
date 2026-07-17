@@ -138,6 +138,75 @@ def _merge_legacy_skill_name_collision(cur, *, skill_odoo_id: int, skill_name: s
         )
 
 
+def _roster_names(employees: list[dict]) -> dict[int, str]:
+    """Return compact, unambiguous roster labels keyed by Odoo employee id.
+
+    Labels start as ``First L.``.  When that would be ambiguous, letters from
+    the second name token are added until it is distinct.  Remaining collisions
+    use later-name initials, then the stable Odoo id as a final fallback.
+    """
+    parts_by_id = {
+        int(emp["id"]): (emp.get("name") or "").strip().split()
+        for emp in employees
+    }
+    surname_lengths = {
+        employee_id: 1
+        for employee_id, parts in parts_by_id.items()
+        if len(parts) >= 2
+    }
+
+    def _base_label(employee_id: int) -> str:
+        parts = parts_by_id[employee_id]
+        if len(parts) < 2:
+            return " ".join(parts)
+        return f"{parts[0]} {parts[1][:surname_lengths[employee_id]]}."
+
+    def _collision_groups(labels: dict[int, str]) -> list[list[int]]:
+        groups: dict[str, list[int]] = {}
+        for employee_id, label in labels.items():
+            groups.setdefault(label.casefold(), []).append(employee_id)
+        return [group for group in groups.values() if len(group) > 1]
+
+    while True:
+        labels = {
+            employee_id: _base_label(employee_id)
+            for employee_id in parts_by_id
+        }
+        expanded = False
+        for group in _collision_groups(labels):
+            for employee_id in group:
+                parts = parts_by_id[employee_id]
+                if (
+                    len(parts) >= 2
+                    and surname_lengths[employee_id] < len(parts[1])
+                ):
+                    surname_lengths[employee_id] += 1
+                    expanded = True
+        if not expanded:
+            break
+
+    labels = {
+        employee_id: _base_label(employee_id)
+        for employee_id in parts_by_id
+    }
+    for group in _collision_groups(labels):
+        for employee_id in group:
+            parts = parts_by_id[employee_id]
+            if len(parts) > 2:
+                later_initials = " ".join(
+                    f"{part[0]}." for part in parts[2:] if part
+                )
+                labels[employee_id] = (
+                    f"{parts[0]} {parts[1][:surname_lengths[employee_id]]} "
+                    f"{later_initials}"
+                )
+
+    for group in _collision_groups(labels):
+        for employee_id in group:
+            labels[employee_id] = f"{labels[employee_id]} #{employee_id}"
+    return labels
+
+
 def sync(force: bool = False) -> SyncResult:
     last = _read_last_sync()
     now = datetime.now(UTC)
@@ -180,14 +249,7 @@ def sync(force: bool = False) -> SyncResult:
     columns = [c["name"] for c in columns_meta]
     type_by_skill = {c["name"]: c.get("type", "") for c in columns_meta}
     pulled_at = now
-
-    def _short_name(full: str) -> str:
-        """Take first two whitespace-delimited tokens. Odoo employee
-        cards often have 3–5 word full names (e.g. "Adrian Aragon
-        Olivera"); the dashboard displays the first two ("Adrian Aragon")
-        for compact matrix rows."""
-        parts = (full or "").strip().split()
-        return " ".join(parts[:2]) if parts else (full or "")
+    roster_names = _roster_names(employees)
     with db.cursor() as cur:
         # Skills first (employees + person_skills FK them).
         for i, m in enumerate(columns_meta):
@@ -249,7 +311,7 @@ def sync(force: bool = False) -> SyncResult:
                 "resource_calendar_id = EXCLUDED.resource_calendar_id, "
                 "is_flexible = EXCLUDED.is_flexible, "
                 "last_pulled_at = EXCLUDED.last_pulled_at",
-                (emp["id"], _short_name(emp["name"]), bool(emp.get("active", True)),
+                (emp["id"], roster_names[int(emp["id"])], bool(emp.get("active", True)),
                  wage_type, spanish_speaker, spanish_level,
                  _m2o_id(emp.get("resource_calendar_id")), is_flex, pulled_at),
             )
