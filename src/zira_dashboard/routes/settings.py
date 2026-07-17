@@ -367,7 +367,6 @@ def settings_page(
     forklift_ctx: dict | None = None
     try:
         from .. import forklift_advisor, forklift_settings
-        from ..plant_day import today as plant_today
         from .staffing import _next_working_day
         _fl = forklift_settings.current()
         _target_day = _next_working_day(plant_today())
