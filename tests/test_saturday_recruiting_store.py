@@ -366,7 +366,7 @@ def test_home_banner_becomes_today_plan_until_the_snapshotted_shift_ends():
 
 def test_home_banner_never_shows_a_cancelled_saturday():
     _activate(requested_counts={910101: 1})
-    store.cancel_recruitment(SATURDAY, "manager@gruberpallets.com", DEADLINE)
+    store.cancel_recruitment(SATURDAY, "scheduler-manager", DEADLINE)
 
     assert store.home_banner(datetime(2026, 7, 24, 8, tzinfo=SITE_TZ)) is None
 
