@@ -799,6 +799,32 @@ def test_normal_rebuild_uses_enabled_auto_centers_to_distribute_defaults(
     }
 
 
+def test_defaults_only_assignments_pins_exact_and_rotates_group_defaults():
+    from zira_dashboard.routes import staffing as staffing_route
+
+    assignments, sources = staffing_route._defaults_only_assignments(
+        roster=[_person("Pinned", 1), _person("Ana", 1), _person("Bob", 1)],
+        full_day_off_names=set(),
+        exact_defaults={"Repair 1": ("Pinned",)},
+        group_defaults={"Repair": ("Ana", "Bob")},
+        user_group_centers={"Repair": ("Repair 1", "Repair 2", "Repair 3")},
+        enabled_centers={"Repair 1", "Repair 2", "Repair 3"},
+        center_capacities={"Repair 1": 1, "Repair 2": 1, "Repair 3": 1},
+        history=rotation_suggestions.RecycledHistory(),
+    )
+
+    assert assignments == {
+        "Repair 1": ["Pinned"],
+        "Repair 2": ["Ana"],
+        "Repair 3": ["Bob"],
+    }
+    assert sources == {
+        "Repair 1": {"Pinned": "default"},
+        "Repair 2": {"Ana": "default"},
+        "Repair 3": {"Bob": "default"},
+    }
+
+
 def test_reset_to_defaults_replaces_assignments_and_never_runs_auto_solver(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)

@@ -466,6 +466,52 @@ def _default_inputs(strict: bool = False):
         return {}, {}, {}
 
 
+def _defaults_only_assignments(
+    *, roster, full_day_off_names, exact_defaults, group_defaults,
+    user_group_centers, enabled_centers, center_capacities, history,
+) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
+    available = {
+        person.name for person in roster
+        if person.active and not person.reserve and person.name not in full_day_off_names
+    }
+    assignments: dict[str, list[str]] = {}
+    sources: dict[str, dict[str, str]] = {}
+    assigned: set[str] = set()
+
+    def place(center: str, name: str) -> None:
+        if not center or name not in available or name in assigned:
+            return
+        assignments.setdefault(center, []).append(name)
+        sources.setdefault(center, {})[name] = "default"
+        assigned.add(name)
+
+    for center, names in exact_defaults.items():
+        for raw_name in names:
+            place(str(center).strip(), str(raw_name).strip())
+
+    enabled = set(enabled_centers)
+    for group, names in group_defaults.items():
+        group_centers = tuple(
+            center for center in user_group_centers.get(group, ()) if center in enabled
+        )
+        for raw_name in names:
+            name = str(raw_name).strip()
+            available_centers = tuple(
+                center for center in group_centers
+                if center_capacities.get(center) is None
+                or len(assignments.get(center, ())) < center_capacities[center]
+            )
+            if not available_centers or name not in available or name in assigned:
+                continue
+            least_load = min(len(assignments.get(center, ())) for center in available_centers)
+            tied_centers = tuple(
+                center for center in available_centers
+                if len(assignments.get(center, ())) == least_load
+            )
+            place(rotation_suggestions.choose_center(name, str(group), tied_centers, history), name)
+    return assignments, sources
+
+
 def _auto_solver_base_assignments(base_assignments, enabled_centers):
     """Keep only assignments outside the Auto solver's owned centers."""
     enabled = set(enabled_centers)
