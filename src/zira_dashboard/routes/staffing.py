@@ -94,7 +94,10 @@ def _forklift_scheduled_counts(assignments, overload_responders, wc_names):
 # Recycled rotation is scoped to the three groups the design covers; the daily
 # development cap defaults to the engine's own default (two) for Task 4.
 _RECYCLED_TRAINING_CAP = 2
-AUTO_SCHEDULE_WC_SETTING = "rotation_auto_enabled_work_centers"
+DEFAULT_AUTO_WORK_CENTERS_SETTING = "rotation_auto_enabled_work_centers"
+# Retained until the daily-state migration in Task 4.  Settings now owns the
+# same persisted value strictly as a default template for new staffing days.
+AUTO_SCHEDULE_WC_SETTING = DEFAULT_AUTO_WORK_CENTERS_SETTING
 AUTO_SCHEDULE_HISTORY_DAYS = 28
 
 # Short per-mode help line for the Staffing schedule-goal control.
@@ -323,6 +326,23 @@ def _recently_used_work_centers(d: date) -> list[str]:
         (d, start),
     )
     return _ordered_work_center_names(row.get("name") for row in rows)
+
+
+def _default_auto_work_centers(d: date) -> list[str]:
+    """Return the default template used when a staffing day is first created."""
+    saved = app_settings.get_setting(DEFAULT_AUTO_WORK_CENTERS_SETTING)
+    if isinstance(saved, list):
+        return _ordered_work_center_names(saved)
+    defaults = _recently_used_work_centers(d)
+    app_settings.set_setting(DEFAULT_AUTO_WORK_CENTERS_SETTING, defaults)
+    return defaults
+
+
+def _save_default_auto_work_centers(names, *, cur=None) -> list[str]:
+    """Persist the Settings-owned default template in canonical location order."""
+    enabled = _ordered_work_center_names(names)
+    app_settings.set_setting(DEFAULT_AUTO_WORK_CENTERS_SETTING, enabled, cur=cur)
+    return enabled
 
 
 def _enabled_auto_work_centers(d: date) -> set[str]:

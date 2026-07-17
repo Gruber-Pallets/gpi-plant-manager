@@ -17,6 +17,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import (
+    app_settings,
     auth,
     schedule_store,
     settings_context,
@@ -27,6 +28,10 @@ from .. import (
 )
 from ..deps import templates
 from ..stations import CATEGORIES, STATIONS
+from .staffing import (
+    DEFAULT_AUTO_WORK_CENTERS_SETTING,
+    _save_default_auto_work_centers,
+)
 
 router = APIRouter()
 
@@ -79,6 +84,16 @@ def _loc_by_key(key: str):
         if (loc.meter_id or f"name:{loc.name}") == key:
             return loc
     return None
+
+
+def _ordered_default_auto_work_centers(names) -> list[str]:
+    """Normalize a Settings default-template selection to location order."""
+    selected = {
+        str(name).strip()
+        for name in (names or [])
+        if str(name or "").strip() in {loc.name for loc in staffing.LOCATIONS}
+    }
+    return [loc.name for loc in staffing.LOCATIONS if loc.name in selected]
 
 
 def _split_roster_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -290,6 +305,9 @@ def settings_page(
     wc_rows = settings_context.work_center_rows(
         staffing.LOCATIONS, active_people_objs, work_centers_store.effective
     )
+    default_auto_work_centers = _ordered_default_auto_work_centers(
+        app_settings.get_setting(DEFAULT_AUTO_WORK_CENTERS_SETTING)
+    )
     group_rows = settings_context.group_summary(
         "group",
         all_names=work_centers_store.all_group_names,
@@ -384,6 +402,7 @@ def settings_page(
         "settings.html",
         {
             "wc_rows": wc_rows,
+            "default_auto_work_centers": default_auto_work_centers,
             "skills_all": skills_all,
             "departments": work_centers_store.synced_departments(),
             "groups_all": work_centers_store.registered_groups(),
@@ -993,6 +1012,8 @@ async def settings_save_work_centers(request: Request):
             exact_by_center=exact_defaults,
             group_by_name=group_defaults,
         )
+        if "default_auto_work_centers_present" in form:
+            _save_default_auto_work_centers(form.getlist("default_auto_work_centers"))
         if (request.headers.get("accept") or "").startswith("application/json"):
             return JSONResponse({"ok": True})
         return RedirectResponse(url="/settings?saved=1&section=work_centers", status_code=303)
