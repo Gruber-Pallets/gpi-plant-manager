@@ -70,6 +70,18 @@
         <div class="defaults-error" role="alert" aria-live="assertive">{{ defaults_error }}</div>
       {% endif %}
 
+      <section class="default-auto-centers">
+        <h3 class="section-title">Default Auto Work Centers</h3>
+        <p class="note">Used only when a new staffing day is created. Saved days keep their own On/Off choices.</p>
+        <input type="hidden" name="default_auto_work_centers_present" value="1">
+        <div class="default-auto-centers-grid">
+          {% for row in wc_rows %}
+          <label><input type="checkbox" name="default_auto_work_centers" value="{{ row.name }}"
+                        {% if row.name in default_auto_work_centers %}checked{% endif %}>{{ row.name }}</label>
+          {% endfor %}
+        </div>
+      </section>
+
       <table class="wc-table">
         <thead>
           <tr>

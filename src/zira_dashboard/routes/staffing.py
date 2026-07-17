@@ -94,7 +94,7 @@ def _forklift_scheduled_counts(assignments, overload_responders, wc_names):
 # Recycled rotation is scoped to the three groups the design covers; the daily
 # development cap defaults to the engine's own default (two) for Task 4.
 _RECYCLED_TRAINING_CAP = 2
-AUTO_SCHEDULE_WC_SETTING = "rotation_auto_enabled_work_centers"
+DEFAULT_AUTO_WORK_CENTERS_SETTING = "rotation_auto_enabled_work_centers"
 AUTO_SCHEDULE_HISTORY_DAYS = 28
 
 # Short per-mode help line for the Staffing schedule-goal control.
@@ -325,22 +325,30 @@ def _recently_used_work_centers(d: date) -> list[str]:
     return _ordered_work_center_names(row.get("name") for row in rows)
 
 
-def _enabled_auto_work_centers(d: date) -> set[str]:
-    saved = app_settings.get_setting(AUTO_SCHEDULE_WC_SETTING)
+def _default_auto_work_centers(d: date) -> list[str]:
+    saved = app_settings.get_setting(DEFAULT_AUTO_WORK_CENTERS_SETTING)
     if isinstance(saved, list):
-        return set(_ordered_work_center_names(saved))
-    enabled = _recently_used_work_centers(d)
-    app_settings.set_setting(AUTO_SCHEDULE_WC_SETTING, enabled)
-    return set(enabled)
+        return _ordered_work_center_names(saved)
+    defaults = _recently_used_work_centers(d)
+    app_settings.set_setting(DEFAULT_AUTO_WORK_CENTERS_SETTING, defaults)
+    return defaults
+
+
+def _save_default_auto_work_centers(names, *, cur=None) -> list[str]:
+    enabled = _ordered_work_center_names(names)
+    app_settings.set_setting(DEFAULT_AUTO_WORK_CENTERS_SETTING, enabled, cur=cur)
+    return enabled
+
+
+# Temporary compatibility for the existing daily controls. Task 4 replaces
+# these with schedule-owned reads and writes; Settings itself only uses the
+# explicit default-template helpers above.
+def _enabled_auto_work_centers(d: date) -> set[str]:
+    return set(_default_auto_work_centers(d))
 
 
 def _save_enabled_auto_work_centers(names, *, cur=None) -> list[str]:
-    enabled = _ordered_work_center_names(names)
-    if cur is None:
-        app_settings.set_setting(AUTO_SCHEDULE_WC_SETTING, enabled)
-    else:
-        app_settings.set_setting(AUTO_SCHEDULE_WC_SETTING, enabled, cur=cur)
-    return enabled
+    return _save_default_auto_work_centers(names, cur=cur)
 
 
 def _saturday_recruit_requested_counts(enabled: Sequence[str]) -> dict[int, int]:
