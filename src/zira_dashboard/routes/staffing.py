@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, UTC
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -958,6 +959,7 @@ def staffing_page(
     request: Request,
     day: str | None = Query(default=None),
     publish_blocked: int = Query(default=0),
+    publish_error: list[str] = Query(default=[]),
     view: str = Query(default="draft"),
 ):
     from .. import cert_lookup
@@ -978,8 +980,12 @@ def staffing_page(
     # show up on the next reload regardless of TTL.
     is_today = d >= today
     view_mode_normalized = view if view in ("draft", "posted") else "draft"
+    publish_errors = tuple(
+        str(error) for error in publish_error
+    ) if isinstance(publish_error, (list, tuple)) else ()
     response_cache_key = (
-        "staffing", d.isoformat(), view_mode_normalized, int(publish_blocked or 0)
+        "staffing", d.isoformat(), view_mode_normalized, int(publish_blocked or 0),
+        publish_errors,
     )
     cached_resp = _http_cache.get_cached_response(response_cache_key, includes_today=is_today)
     if cached_resp is not None:
@@ -1150,6 +1156,7 @@ def staffing_page(
         time_off_entries=time_off_entries,
         publish_blocked=publish_blocked,
         enabled_work_centers=enabled_auto_work_centers,
+        publish_errors=publish_errors,
     )
     unscheduled_count = len(bay_model.get("unassigned") or ())
     auto_on_count = len(enabled_auto_work_centers)
@@ -1284,6 +1291,7 @@ def staffing_page(
             sched=sched,
             time_off_entries=time_off_entries,
             publish_blocked=publish_blocked,
+            enabled_work_centers=enabled_auto_work_centers,
             saturday_commitments=saturday_staffing_commitments or {},
             saturday_shift=(
                 (saturday_bundle.recruitment.shift_start, saturday_bundle.recruitment.shift_end)
@@ -1291,6 +1299,7 @@ def staffing_page(
                 else None
             ),
             saturday_availability_overrides=sched.saturday_availability_overrides,
+            publish_errors=publish_errors,
         )
 
     # Forklift demand advisor (read-only; never blocks scheduling).
@@ -1557,26 +1566,21 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
     if action == "publish" and active_saturday_recruiting:
         try:
             assert saturday_bundle is not None
-            if plant_now() < saturday_bundle.recruitment.response_deadline:
-                saturday_block = [
-                    "Saturday recruiting stays open until "
-                    f"{sr.format_deadline(saturday_bundle.recruitment.response_deadline)}."
-                ]
-            else:
-                roster = staffing.load_roster()
-                people_by_name = {person.name: person for person in roster}
-                full_day_off_names = {
-                    entry["name"]
-                    for entry in _safe_time_off_entries(d)
-                    if entry.get("hours") is None
-                }
-                saturday_block = sr.validate_publish(
-                    saturday_bundle,
-                    assignments,
-                    people_by_name,
-                    full_day_off_names,
-                    available_names=saturday_available_names,
-                )
+            roster = staffing.load_roster()
+            people_by_name = {person.name: person for person in roster}
+            full_day_off_names = {
+                entry["name"]
+                for entry in _safe_time_off_entries(d)
+                if entry.get("hours") is None
+            }
+            saturday_block = sr.validate_publish(
+                saturday_bundle,
+                assignments,
+                people_by_name,
+                full_day_off_names,
+                available_names=saturday_available_names,
+                require_coverage=False,
+            )
             publish_block = saturday_block
         except Exception:
             log.exception("Saturday publish validation failed for %s", d)
@@ -1662,7 +1666,11 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
 
     # If publish was blocked, bounce back to the same day with a flag so the UI can show the alert.
     if publish_block:
-        return RedirectResponse(f"/staffing?day={d.isoformat()}&publish_blocked=1", status_code=303)
+        query = urlencode(
+            [("day", d.isoformat()), ("publish_blocked", "1")]
+            + [("publish_error", reason) for reason in publish_block],
+        )
+        return RedirectResponse(f"/staffing?{query}", status_code=303)
 
     # Successful publish leaves the next working day untouched. New schedules
     # start blank and automatic scheduling is always an explicit action.

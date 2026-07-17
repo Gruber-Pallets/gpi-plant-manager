@@ -2,6 +2,7 @@ import asyncio
 import json
 from datetime import date, time
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from starlette.datastructures import FormData
@@ -106,7 +107,11 @@ def test_publish_override_cannot_bypass_two_person_minimum(monkeypatch):
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/staffing?day={DAY.isoformat()}&publish_blocked=1"
+    assert parse_qs(urlparse(response.headers["location"]).query) == {
+        "day": [DAY.isoformat()],
+        "publish_blocked": ["1"],
+        "publish_error": ["Hand Build #1 requires 2 operators — currently 1."],
+    }
     assert saved[0].published is False
     assert saved[0].assignments == {"Hand Build #1": ["Jordan"]}
 

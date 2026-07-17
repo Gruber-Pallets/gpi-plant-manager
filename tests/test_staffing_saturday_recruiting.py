@@ -205,6 +205,30 @@ def test_publish_requires_commitments_and_requested_coverage():
     assert "Dismantle requires 1 qualified operator — currently 0." in reasons
 
 
+def test_publish_can_treat_missing_saturday_coverage_as_advisory():
+    reasons = sr.validate_publish(
+        _bundle(), {"Repair 1": ["Ana"]}, _people(), set(),
+        require_coverage=False,
+    )
+
+    assert reasons == []
+
+
+def test_publish_banner_uses_the_server_validation_reason(patch_wcs):
+    model = staffing_view.build_staffing_bays(
+        roster=[_person("Ana", Repair=3)],
+        sched=_sched({"Repair 1": ["Ana"]}),
+        time_off_entries=[],
+        publish_blocked=1,
+        enabled_work_centers={"Repair 1"},
+        publish_errors=["Saturday recruiting stays open until Friday, July 24 at 7:00 AM."],
+    )
+
+    assert model["publish_block_reasons"] == [
+        "Saturday recruiting stays open until Friday, July 24 at 7:00 AM.",
+    ]
+
+
 def test_publish_accepts_manager_marked_saturday_unassigned_person():
     reasons = sr.validate_publish(
         _repair_only_bundle(),
@@ -233,9 +257,10 @@ def test_publish_validation_reports_each_saturday_blocker(
     assert expected in sr.validate_publish(_bundle(), assignments, people, full_day_off_names)
 
 
-def test_publish_before_deadline_is_blocked(monkeypatch):
+def test_manager_can_publish_saturday_before_recruiting_deadline(monkeypatch):
     bundle = _bundle(status="recruiting")
     saved = []
+    marked = []
     repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
     dismantle = staffing.Location("Dismantle", "Dismantle", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair, dismantle))
@@ -245,6 +270,9 @@ def test_publish_before_deadline_is_blocked(monkeypatch):
     monkeypatch.setattr(staffing_routes.staffing, "schedule_revision", lambda _day: None)
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: bundle)
+    monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "mark_published", lambda *args: marked.append(args))
+    monkeypatch.setattr(staffing_routes.staffing, "load_roster", lambda: [_person("Ana", Repair=3), _person("Bob", Dismantle=3)])
+    monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda _day: [])
     monkeypatch.setattr(staffing_routes, "plant_now", lambda: datetime(2026, 7, 23, 8, tzinfo=SITE_TZ))
 
     response = staffing_routes._staffing_save_work(
@@ -252,8 +280,9 @@ def test_publish_before_deadline_is_blocked(monkeypatch):
         FormData([("action", "publish"), ("loc__Repair 1", "Ana"), ("loc__Dismantle", "Bob")]),
     )
 
-    assert "publish_blocked=1" in response.headers["location"]
-    assert saved[0].published is False
+    assert response.headers["location"] == f"/staffing?day={SATURDAY.isoformat()}"
+    assert saved[0].published is True
+    assert marked
 
 
 def test_recruiting_saturday_can_save_a_draft_before_publish_deadline(monkeypatch):

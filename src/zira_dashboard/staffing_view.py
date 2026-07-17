@@ -20,6 +20,7 @@ from __future__ import annotations
 def build_staffing_bays(
     roster, sched, time_off_entries, publish_blocked, enabled_work_centers=None,
     saturday_commitments=None, saturday_shift=None, saturday_availability_overrides=None,
+    publish_errors=None,
 ):
     """Build the per-work-center render model from already-fetched inputs.
 
@@ -243,7 +244,9 @@ def build_staffing_bays(
 
     # Only populate block reasons if we just came back from a failed publish attempt.
     publish_block_reasons = []
-    if publish_blocked:
+    if publish_errors:
+        publish_block_reasons = list(publish_errors)
+    elif publish_blocked:
         enabled = (
             {loc.name for loc in staffing.LOCATIONS}
             if enabled_work_centers is None else set(enabled_work_centers)

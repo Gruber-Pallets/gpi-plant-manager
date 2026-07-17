@@ -137,6 +137,7 @@ def validate_publish(
     people_by_name,
     full_day_off_names,
     available_names=None,
+    require_coverage: bool = True,
 ) -> list[str]:
     """Return every reason a recruited Saturday schedule cannot be published."""
     openings_by_name = {opening.wc_name: opening for opening in bundle.openings}
@@ -179,14 +180,15 @@ def validate_publish(
                 elif name in available and person is not None and person.active and name not in full_day_off_names:
                     qualified_count[wc_name] += 1
 
-    for name in available:
-        if name not in assigned_names:
-            reasons.append(f"{name} committed to Saturday but is not assigned.")
-    for opening in bundle.openings:
-        current = qualified_count[opening.wc_name]
-        if current < opening.requested_count:
-            suffix = "operator" if opening.requested_count == 1 else "operators"
-            reasons.append(
-                f"{opening.wc_name} requires {opening.requested_count} qualified {suffix} — currently {current}."
-            )
+    if require_coverage:
+        for name in available:
+            if name not in assigned_names:
+                reasons.append(f"{name} committed to Saturday but is not assigned.")
+        for opening in bundle.openings:
+            current = qualified_count[opening.wc_name]
+            if current < opening.requested_count:
+                suffix = "operator" if opening.requested_count == 1 else "operators"
+                reasons.append(
+                    f"{opening.wc_name} requires {opening.requested_count} qualified {suffix} — currently {current}."
+                )
     return reasons

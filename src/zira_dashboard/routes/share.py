@@ -126,7 +126,7 @@ def share_to_slack(
     #    breaks anything that does e.g. int(publish_blocked or 0).
     try:
         response = staffing_page(
-            request, day=day, publish_blocked=0, view="posted"
+            request, day=day, publish_blocked=0, publish_error=[], view="posted"
         )
         html = response.body.decode("utf-8")
     except Exception as e:
