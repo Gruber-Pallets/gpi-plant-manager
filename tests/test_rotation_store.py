@@ -253,6 +253,42 @@ def test_schedule_metadata_round_trips(monkeypatch):
     assert hydrated.assignment_sources == {"Repair 1": {"Jordan": "manual"}}
 
 
+def test_schedule_auto_enabled_work_centers_round_trip(monkeypatch):
+    from zira_dashboard import db, staffing
+
+    schedule = staffing.Schedule(
+        day=date(2026, 7, 14),
+        auto_enabled_work_centers=["Repair 2", "Repair 1", "Unknown", "Repair 1"],
+    )
+    executed = []
+
+    class Cursor:
+        def execute(self, sql, params=None):
+            executed.append((sql, params))
+
+    @contextmanager
+    def fake_cursor():
+        yield Cursor()
+
+    monkeypatch.setattr(db, "cursor", fake_cursor)
+    staffing.save_schedule(schedule)
+
+    assert "auto_enabled_work_centers" in executed[0][0]
+    assert "[\"Repair 1\", \"Repair 2\"]" in executed[0][1]
+
+    monkeypatch.setattr(db, "query", lambda sql, params=None: [{
+        "day": schedule.day, "published": False, "testing_day": False,
+        "notes": "", "custom_hours": None, "published_snapshot": None,
+        "published_delivery": {}, "recycled_rotation_mode": "normal",
+        "assignment_sources": {}, "saturday_availability_overrides": {},
+        "auto_enabled_work_centers": ["Repair 2", "Unknown", "Repair 1"],
+    }] if "FROM schedules" in sql else [])
+
+    hydrated = staffing._load_schedule_from_db(schedule.day)
+    assert hydrated.auto_enabled_work_centers == ["Repair 1", "Repair 2"]
+    assert staffing.snapshot_of(hydrated)["auto_enabled_work_centers"] == ["Repair 1", "Repair 2"]
+
+
 def test_schedule_saturday_availability_overrides_round_trip(monkeypatch):
     from zira_dashboard import db, staffing
 

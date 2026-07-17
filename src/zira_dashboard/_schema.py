@@ -386,6 +386,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS auto_enabled_work_centers JSONB;
+
+UPDATE schedules
+   SET auto_enabled_work_centers = COALESCE(
+         (SELECT value FROM app_settings
+           WHERE key = 'rotation_auto_enabled_work_centers'),
+         '[]'::jsonb
+       )
+ WHERE auto_enabled_work_centers IS NULL;
+
 -- Outbox for future two-way sync (not actively drained in Phase 1) ----
 
 CREATE TABLE IF NOT EXISTS sync_outbox (
