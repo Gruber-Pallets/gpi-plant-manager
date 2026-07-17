@@ -1442,7 +1442,7 @@
           inFlight = null;
           if (queued) {
             queued = false;
-            fireSave();
+            return fireSave();
           } else if (!data.published && window.SCHEDULE_PUBLISHED) {
             window.location.reload();
           } else {
@@ -1814,6 +1814,7 @@
 
     function setAutoCentersSaving(saving) {
       savingAutoCenters = saving;
+      __form.inert = saving;
       workCenterRows.forEach(row => {
         row.classList.toggle('work-center-saving', saving);
         row.setAttribute('aria-busy', saving ? 'true' : 'false');
@@ -1825,9 +1826,10 @@
     async function saveAutoCenters(turnOff = []) {
       if (__viewingPosted) return;
       if (savingAutoCenters) return;
-      const requestedWorkCenters = selectedAutoCenters();
       setAutoCentersSaving(true);
       try {
+        await window.flushAutosave();
+        const requestedWorkCenters = selectedAutoCenters();
         const resp = await postAutoCenters(requestedWorkCenters, turnOff);
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || !data.ok) {

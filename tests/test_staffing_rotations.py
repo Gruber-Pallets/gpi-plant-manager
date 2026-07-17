@@ -1998,6 +1998,52 @@ def test_auto_work_centers_rolls_back_recruiting_when_settings_persist_fails(mon
     assert persisted == {"recruiting": {17: 1}, "enabled": ["Repair 1"]}
 
 
+def test_auto_work_centers_rolls_back_schedule_when_settings_persist_fails(monkeypatch):
+    """Clearing a disabled center and saving its setting are one transaction."""
+    client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
+    persisted = {
+        "assignments": {"Repair 1": ["Jordan"], "Work Orders": ["Juan"]},
+    }
+
+    class Transaction:
+        def __enter__(self):
+            self.before = {key: value.copy() for key, value in persisted.items()}
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            if exc_type is not None:
+                persisted.clear()
+                persisted.update(self.before)
+            return False
+
+    schedule = staffing.Schedule(day=TARGET_DAY, assignments=persisted["assignments"])
+    monkeypatch.setattr(rotations.db, "cursor", Transaction)
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: schedule)
+    monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
+    monkeypatch.setattr(
+        rotations.staffing,
+        "save_schedule",
+        lambda changed, *, cur: persisted.update(assignments=changed.assignments.copy()),
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_save_enabled_auto_work_centers",
+        lambda centers, *, cur: (_ for _ in ()).throw(OSError("settings unavailable")),
+    )
+
+    response = client.post("/api/rotations/auto-work-centers", json={
+        "day": TARGET_DAY.isoformat(),
+        "work_centers": ["Repair 1"],
+        "turn_off": ["Work Orders"],
+    })
+
+    assert response.status_code == 503
+    assert persisted == {
+        "assignments": {"Repair 1": ["Jordan"], "Work Orders": ["Juan"]},
+    }
+
+
 def test_auto_work_centers_uses_real_saturday_demand_derivation(monkeypatch):
     """The route filters enabled centers and maps their configured crew demand."""
     from zira_dashboard import saturday_recruiting_store as store
@@ -2184,7 +2230,7 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "function renderMinimumCrewBalanceFromGrid()" in js
     assert "summary.classList.toggle('is-balanced', balance?.direction === 'ready');" in js
     assert "summary.classList.toggle('is-unbalanced', balance?.direction !== 'ready');" in js
-    assert "setWorkCenterOnState(name, !enabled);\n      renderMinimumCrewBalanceFromGrid();\n      saveAutoCenters();" in js
+    assert "setWorkCenterOnState(name, !enabled);\n      renderMinimumCrewBalanceFromGrid();\n      saveAutoCenters(enabled ? [name] : []);" in js
     assert "const waitingEl = document.getElementById('minimum-crew-waiting');" not in js
     assert "const slotsEl = document.getElementById('minimum-crew-slots');" not in js
     assert "function clearStaleAutoWarnings()" in js

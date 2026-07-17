@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import textwrap
 
 
 def _template():
@@ -538,6 +540,74 @@ def test_turning_off_a_work_center_sends_it_and_reconciles_returned_assignments(
     assert "refreshPickerVisibility();" in helper
     assert "changedCb.checked = !changedCb.checked;" not in js
     assert "const autoCbs =" not in js
+
+
+def test_flush_autosave_waits_for_a_queued_save_before_resolving():
+    """A center toggle must not race a manual edit saved behind an in-flight POST."""
+    js = _script()
+    controller = js.split("  // ---------- Autosave controller ----------", 1)[1].split(
+        "  // ---------- Publish submit busy state ----------", 1
+    )[0]
+    harness = textwrap.dedent(
+        f"""
+        const controller = {controller!r};
+        const listeners = {{}};
+        const form = {{
+          addEventListener(type, listener) {{ listeners[type] = listener; }},
+          getAttribute() {{ return '/staffing'; }},
+        }};
+        const resolvers = [];
+        global.window = {{}};
+        global.document = {{
+          getElementById(id) {{ return id === 'staffing-form' ? form : null; }},
+        }};
+        global.FormData = class FormData {{ set() {{}} }};
+        global.fetch = () => new Promise(resolve => resolvers.push(resolve));
+        const __viewingPosted = false;
+        eval(controller);
+
+        listeners.change();
+        window.flushAutosave();
+        listeners.change();
+        const drained = window.flushAutosave();
+        resolvers.shift()({{ ok: true, json: async () => ({{}}) }});
+        await new Promise(resolve => setImmediate(resolve));
+
+        let settled = false;
+        drained.then(() => {{ settled = true; }});
+        if (resolvers.length !== 1) throw new Error('queued autosave did not start');
+        await new Promise(resolve => setImmediate(resolve));
+        if (settled) throw new Error('flush resolved before queued autosave completed');
+
+        resolvers.shift()({{ ok: true, json: async () => ({{}}) }});
+        await drained;
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_work_center_toggle_drains_autosave_and_locks_picker_edits_in_flight():
+    js = _script()
+    save_auto = js.split("async function saveAutoCenters(turnOff = []) {", 1)[1].split(
+        "// Ordinary rebuilds", 1
+    )[0]
+    saving_state = js.split("function setAutoCentersSaving(saving) {", 1)[1].split(
+        "async function saveAutoCenters", 1
+    )[0]
+
+    assert "await window.flushAutosave();" in save_auto
+    assert save_auto.index("await window.flushAutosave();") < save_auto.index(
+        "postAutoCenters(requestedWorkCenters, turnOff)"
+    )
+    assert "__form.inert = saving;" in saving_state
 
 
 def test_clear_schedule_remains_a_distinct_local_autosave_action():
