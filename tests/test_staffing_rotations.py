@@ -2978,6 +2978,49 @@ def test_staffing_context_exposes_auto_summary_counts(monkeypatch):
     }
 
 
+def test_minimum_crew_balance_uses_explicit_saturday_available_names(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_routes
+
+    location = staffing.Location(
+        "Repair 1", "Repair", "Bay 1", "Recycled", None,
+        min_ops=1, max_ops=2, required_skills=("Repair",),
+    )
+    monkeypatch.setattr(staffing, "LOCATIONS", (location,))
+    monkeypatch.setattr(staffing_routes, "_effective_minimum", lambda _loc: 1)
+
+    result = staffing_routes._minimum_crew_balance_for_day(
+        roster=[_person("Off Person", 3)],
+        schedule=staffing.Schedule(day=date(2026, 7, 18), assignments={}),
+        time_off_entries=[],
+        enabled_centers=(),
+        available_names=(),
+    )
+
+    assert result.unassigned_people == 0
+    assert result.direction == "ready"
+    assert result.center_count == 0
+    assert result.recommended_centers == ()
+
+
+def test_saturday_context_uses_final_unassigned_names_for_schedule_goal(monkeypatch):
+    ctx = _render_staffing_page(
+        monkeypatch,
+        day=date(2026, 7, 18),
+        roster=[_person("Off Person", 3)],
+        bay_model={
+            "bays": [], "publish_block_reasons": [], "defaults_by_loc": {},
+            "unassigned": [], "off": ["Off Person"], "reserves": [],
+            "time_off_names": [], "time_off_entries": [],
+            "partial_hours_by_name": {}, "partial_range_by_name": {},
+            "partial_clear_by_name": {}, "people_meta": {}, "all_active_people": [],
+        },
+    )
+
+    assert ctx["minimum_crew_balance"]["unassigned_people"] == 0
+    assert ctx["minimum_crew_balance"]["direction"] == "ready"
+    assert ctx["minimum_crew_balance"]["center_count"] == 0
+
+
 def test_first_future_staffing_view_saves_exact_and_group_defaults(monkeypatch):
     saved = []
     ctx = _render_staffing_page(

@@ -8,7 +8,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import date, datetime, timedelta, UTC
 from urllib.parse import urlencode
 
@@ -196,7 +196,10 @@ def _current_minimum_coverage_issues(
     return tuple(issues)
 
 
-def _minimum_crew_balance_for_day(*, roster, schedule, time_off_entries, enabled_centers):
+def _minimum_crew_balance_for_day(
+    *, roster, schedule, time_off_entries, enabled_centers,
+    available_names: Collection[str] | None = None,
+):
     """Compare people waiting with enabled work centers' open minimum slots."""
     enabled = _ordered_work_center_names(enabled_centers)
     enabled_set = set(enabled)
@@ -206,9 +209,11 @@ def _minimum_crew_balance_for_day(*, roster, schedule, time_off_entries, enabled
         name for center, names in (schedule.assignments or {}).items()
         if center != staffing.TIME_OFF_KEY for name in (names or [])
     }
+    available = set(available_names) if available_names is not None else None
     waiting = sum(
         person.active and not person.reserve and person.name not in absent
         and person.name not in assigned
+        and (available is None or person.name in available)
         for person in roster
     )
     slots = {}
@@ -1300,6 +1305,15 @@ def staffing_page(
             ),
             saturday_availability_overrides=sched.saturday_availability_overrides,
             publish_errors=publish_errors,
+        )
+        minimum_crew_balance = _minimum_crew_balance_payload(
+            _minimum_crew_balance_for_day(
+                roster=roster,
+                schedule=sched,
+                time_off_entries=time_off_entries,
+                enabled_centers=enabled_auto_work_centers,
+                available_names=bay_model.get("unassigned") or (),
+            )
         )
 
     # Forklift demand advisor (read-only; never blocks scheduling).
