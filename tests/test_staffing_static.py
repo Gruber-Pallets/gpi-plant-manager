@@ -226,7 +226,7 @@ def test_posted_save_transitions_to_draft_and_delivery_refreshes_live_revision()
 
 def test_posted_auto_toggle_reloads_draft_and_delivery_owns_revision_window():
     js = _script()
-    save_auto = js.split("async function saveAutoCenters() {", 1)[1].split(
+    save_auto = js.split("async function saveAutoCenters(turnOff = []) {", 1)[1].split(
         "// Ordinary rebuilds", 1,
     )[0]
     delivery = js.split("let localDeliveryInFlight = 0;", 1)[1].split(
@@ -365,7 +365,7 @@ def test_rotation_warning_supports_structured_coverage_issues():
 
 def test_rotation_warning_success_replaces_alert_with_authoritative_response():
     js = _script()
-    save_auto = js.split("async function saveAutoCenters() {", 1)[1].split(
+    save_auto = js.split("async function saveAutoCenters(turnOff = []) {", 1)[1].split(
         "// Reconcile every enabled Auto picker's checkboxes", 1
     )[0]
     apply_rebuild = js.split("function applyRebuild(", 1)[1].split(
@@ -386,7 +386,7 @@ def test_auto_toggle_failures_preserve_current_issues_and_append_once():
     helper = js.split("function renderCoverageFailure(message) {", 1)[1].split(
         "function selectedAutoCenters()", 1
     )[0]
-    save_auto = js.split("async function saveAutoCenters() {", 1)[1].split(
+    save_auto = js.split("async function saveAutoCenters(turnOff = []) {", 1)[1].split(
         "// Reconcile every enabled Auto picker's checkboxes", 1
     )[0]
     assert "const warnings = [...(window.ROTATION_WARNINGS || [])];" in helper
@@ -485,7 +485,7 @@ def test_auto_capacity_turn_off_dialog_is_removed():
 
 def test_auto_center_success_requires_server_enabled_centers():
     js = _script()
-    signature = "async function saveAutoCenters() {"
+    signature = "async function saveAutoCenters(turnOff = []) {"
     assert signature in js
     save_auto = js.split(signature, 1)[1].split(
         "// Reconcile every enabled Auto picker's checkboxes", 1
@@ -506,7 +506,7 @@ def test_work_center_row_clicks_and_keyboard_use_the_row_state_model():
     assert ".filter(row => row.dataset.on === 'true')" in js
     assert "function toggleWorkCenterRow(row) {" in js
     assert "setWorkCenterOnState(name, !enabled);" in js
-    assert "saveAutoCenters();" in js
+    assert "saveAutoCenters(enabled ? [name] : []);" in js
     assert "document.addEventListener('keydown', event => {" in js
     assert "if (!toggle || (event.key !== 'Enter' && event.key !== ' ')) return;" in js
 
@@ -517,6 +517,25 @@ def test_work_center_row_toggle_excludes_controls_and_rolls_back_failures():
     assert ".sched-cell, .wc-note-cell" in js
     assert "target.closest('a, button, input, select, textarea, label, summary, [contenteditable=\"true\"], .sched-cell, .wc-note-cell, .sub')" in js
     assert "applyEnabledCenters(window.AUTO_SCHEDULE_WC_NAMES || []);" in js
+
+
+def test_turning_off_a_work_center_sends_it_and_reconciles_returned_assignments():
+    js = _script()
+
+    assert "async function saveAutoCenters(turnOff = []) {" in js
+    assert "postAutoCenters(requestedWorkCenters, turnOff)" in js
+    assert "saveAutoCenters(enabled ? [name] : []);" in js
+    assert "function applyAutoCenterAssignments(assignments) {" in js
+    assert "applyAutoCenterAssignments(data.assignments);" in js
+    save_auto = js.split("async function saveAutoCenters(turnOff = []) {", 1)[1].split(
+        "// Ordinary rebuilds", 1
+    )[0]
+    assert "kickAutosave();" not in save_auto
+    helper = js.split("function applyAutoCenterAssignments(assignments) {", 1)[1].split(
+        "function renderSaturdayRecruitingDemand", 1
+    )[0]
+    assert "syncLeftRailWithSchedule();" in helper
+    assert "refreshPickerVisibility();" in helper
     assert "changedCb.checked = !changedCb.checked;" not in js
     assert "const autoCbs =" not in js
 

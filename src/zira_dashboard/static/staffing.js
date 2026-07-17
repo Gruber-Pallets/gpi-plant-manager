@@ -1773,6 +1773,24 @@
       renderMinimumCrewBalanceFromGrid();
     }
 
+    function applyAutoCenterAssignments(assignments) {
+      const wantedByCenter = assignments || {};
+      workCenterRows.forEach(row => {
+        const picker = row.querySelector('details.sched-dd');
+        if (!picker) return;
+        const wanted = new Set(wantedByCenter[row.dataset.loc] || []);
+        picker.querySelectorAll('.dd-item').forEach(item => {
+          const cb = item.querySelector('input[type=checkbox]');
+          if (!cb) return;
+          cb.checked = wanted.has(item.dataset.name);
+          item.classList.toggle('selected', cb.checked);
+        });
+        updateDdSummary(picker);
+      });
+      syncLeftRailWithSchedule();
+      refreshPickerVisibility();
+    }
+
     function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       const demand = document.querySelector('[data-saturday-recruit-demand]');
       if (!demand) return;
@@ -1804,13 +1822,13 @@
       });
     }
 
-    async function saveAutoCenters() {
+    async function saveAutoCenters(turnOff = []) {
       if (__viewingPosted) return;
       if (savingAutoCenters) return;
       const requestedWorkCenters = selectedAutoCenters();
       setAutoCentersSaving(true);
       try {
-        const resp = await postAutoCenters(requestedWorkCenters, []);
+        const resp = await postAutoCenters(requestedWorkCenters, turnOff);
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || !data.ok) {
           throw new Error((data && data.error) || ('HTTP ' + resp.status));
@@ -1823,6 +1841,7 @@
           return;
         }
         applyEnabledCenters(data.enabled_work_centers);
+        applyAutoCenterAssignments(data.assignments);
         renderSaturdayRecruitingDemand(data.saturday_recruiting, data.enabled_work_centers);
         clearStaleAutoWarnings();
         renderMinimumCrewBalance(data.minimum_crew_balance);
@@ -1947,7 +1966,7 @@
       const enabled = row.dataset.on === 'true';
       setWorkCenterOnState(name, !enabled);
       renderMinimumCrewBalanceFromGrid();
-      saveAutoCenters();
+      saveAutoCenters(enabled ? [name] : []);
     }
 
     document.addEventListener('click', event => {
