@@ -402,7 +402,14 @@ def test_schedule_manual_and_generated_assignment_sources_round_trip(monkeypatch
     monkeypatch.setattr(db, "cursor", fake_cursor)
     staffing.save_schedule(schedule)
 
-    assert executed[0][1][-1] == '{"Repair 1": {"Jordan": "manual", "Taylor": "generated"}}'
+    insert_sql, insert_params = executed[0]
+    columns = insert_sql.split("INSERT INTO schedules (", 1)[1].split(") VALUES", 1)[0]
+    assignment_sources_index = [column.strip() for column in columns.split(",")].index(
+        "assignment_sources"
+    )
+    assert insert_params[assignment_sources_index] == (
+        '{"Repair 1": {"Jordan": "manual", "Taylor": "generated"}}'
+    )
 
     def fake_query(sql, params=None):
         if "FROM schedules" in sql:
@@ -441,7 +448,12 @@ def test_schedule_default_assignment_source_round_trips_through_persistence_vali
     monkeypatch.setattr(db, "cursor", fake_cursor)
     staffing.save_schedule(schedule)
 
-    assert executed[0][1][-1] == '{"Repair 1": {"Jordan": "default"}}'
+    insert_sql, insert_params = executed[0]
+    columns = insert_sql.split("INSERT INTO schedules (", 1)[1].split(") VALUES", 1)[0]
+    assignment_sources_index = [column.strip() for column in columns.split(",")].index(
+        "assignment_sources"
+    )
+    assert insert_params[assignment_sources_index] == '{"Repair 1": {"Jordan": "default"}}'
 
     def fake_query(sql, params=None):
         if "FROM schedules" in sql:
