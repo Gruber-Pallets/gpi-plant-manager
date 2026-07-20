@@ -41,7 +41,8 @@ def _weekly_trends_or_none() -> dict | None:
 
 
 def _today_hourly_shape_or_none() -> list | None:
-    """Today's dashboard hourly shape (hourlyClaimAvgs); None on any error."""
+    """Today's dashboard hourly shape (hourlyClaimAvgs, raw 15-minute slots);
+    None on any error. Folded to clock hours in `_forecast`."""
     try:
         from . import forklift_client
         dash = forklift_client.fetch_dashboard()
@@ -87,7 +88,10 @@ def _forecast(target_day: date, history_samples: int,
 
     forecast = forklift_demand.predict_from_history(snaps)
     if forecast.basis == "none":
-        shape = _today_hourly_shape_or_none()
+        # The feed's hourly shape is in 15-minute slots; fold to clock hours so
+        # the cold-start forecast is sized per-hour with real hour labels.
+        shape = forklift_demand.fold_quarter_hour_slots(
+            _today_hourly_shape_or_none())
         if coldstart_calls_per_day > 0:
             # Manual cold-start: assume this daily volume, shaped by today's hours.
             forecast = forklift_demand.forecast_from_total_and_shape(
@@ -128,6 +132,28 @@ def _recommend_for_target(forecast: forklift_demand.DemandForecast,
     stays under `target_seconds`, sized to the chosen percentile's hour."""
     _, lam = forklift_demand.demand_at_percentile(forecast.by_hour, params.percentile)
     return forklift_queue.recommend_for_target(lam, mean_handle, target_seconds, k)
+
+
+def _guard_overload(rec: forklift_queue.RecResult,
+                    forecast: forklift_demand.DemandForecast,
+                    resolved: forklift_settings.Resolved,
+                    mean_handle: float,
+                    calib: forklift_queue.CalibResult) -> forklift_queue.RecResult:
+    """Suppress a spurious 'overloaded' verdict from an untrustworthy model.
+
+    When the calibration fit slams the upper clamp (k == CALIB_CLAMP max), the
+    queue model under-predicts real claim times so badly that its "no crew up to
+    MAX_DRIVERS can meet the target" verdict is not credible. In that case re-size
+    against the raw (uninflated, k=1.0) model and surface that best-effort crew
+    instead of the alarming 'Overloaded / Target missed' badge. A genuinely
+    extreme forecast that overloads even the raw model is left untouched."""
+    if not rec.overloaded or calib.uncalibrated:
+        return rec
+    if calib.k < forklift_queue.CALIB_CLAMP[1]:
+        return rec
+    raw = _recommend_for_target(forecast, resolved, mean_handle, 1.0,
+                                resolved.target_claim_seconds)
+    return raw if raw.drivers is not None else rec
 
 
 def _status_for_prediction(predicted_seconds: float | None, target_seconds: float,
@@ -212,6 +238,7 @@ def build_advisor(target_day: date, scheduled: int, backups: int) -> dict:
         forecast.by_hour, resolved.percentile)
     rec = _recommend_for_target(forecast, resolved, mean_handle, calib.k,
                                 resolved.target_claim_seconds)
+    rec = _guard_overload(rec, forecast, resolved, mean_handle, calib)
     # Algorithm baseline = same calc at the DEFAULT target (the discreet tick).
     algo_rec = _recommend_for_target(
         forecast, resolved, mean_handle, calib.k,
@@ -303,6 +330,7 @@ def demand_summary(target_day: date) -> dict:
         calib = _fit_calibration(mean_handle)
         rec = _recommend_for_target(forecast, resolved, mean_handle, calib.k,
                                     resolved.target_claim_seconds)
+        rec = _guard_overload(rec, forecast, resolved, mean_handle, calib)
         algo_rec = _recommend_for_target(
             forecast, resolved, mean_handle, calib.k,
             forklift_settings.DEFAULT_TARGET_CLAIM_SECONDS)

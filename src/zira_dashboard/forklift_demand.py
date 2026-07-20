@@ -86,6 +86,26 @@ def bootstrap_from_trends(weekly_trends: dict, operating_days: int = 5) -> Deman
     return DemandForecast(total_calls=round(per_day, 1), basis="bootstrap", n_days=0)
 
 
+def fold_quarter_hour_slots(slots: list[dict] | None) -> list[dict]:
+    """Fold the forklift dashboard's 15-minute buckets into clock-hour buckets.
+
+    The feed's `hourlyClaimAvgs` are quarter-hour slots (slot 27 = 06:45,
+    slot 59 = 14:45), so slot // 4 is the clock hour. Sums the calls landing in
+    the same hour and returns `[{"slot": hour, "calls": total}, ...]` sorted by
+    hour, so downstream sizing treats each bucket as calls-per-hour. Skips
+    entries with no usable slot; never raises."""
+    by_hour: dict[int, float] = {}
+    for s in slots or []:
+        if not isinstance(s, dict) or s.get("slot") is None:
+            continue
+        try:
+            hour = int(s["slot"]) // 4
+            by_hour[hour] = by_hour.get(hour, 0.0) + float(s.get("calls") or 0)
+        except (TypeError, ValueError):
+            continue
+    return [{"slot": h, "calls": c} for h, c in sorted(by_hour.items())]
+
+
 def forecast_from_total_and_shape(total_calls: float, hourly_slots: list[dict]) -> DemandForecast:
     """Cold-start forecast: daily VOLUME from weekly trends, hourly SHAPE from
     today's dashboard hourlyClaimAvgs (each {slot, calls}). Distributes the

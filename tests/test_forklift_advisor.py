@@ -154,8 +154,10 @@ def test_cold_start_uses_today_shape_for_recommendation(monkeypatch):
                         lambda wd, limit=8: [])
     monkeypatch.setattr(forklift_advisor, "_weekly_trends_or_none",
                         lambda: {"weeks": [{"claimedCalls": 500}]})  # /5 = 100/day
+    # The live dashboard reports 15-minute slots: hour 8 = slots 32-35,
+    # hour 9 = slots 36-39. Folded, that is 30 calls in hour 8, 70 in hour 9.
     monkeypatch.setattr(forklift_advisor, "_today_hourly_shape_or_none",
-                        lambda: [{"slot": 8, "calls": 30}, {"slot": 9, "calls": 70}])
+                        lambda: [{"slot": 32, "calls": 30}, {"slot": 36, "calls": 70}])
     monkeypatch.setattr(forklift_advisor.app_settings, "get_setting", lambda k: [])
     monkeypatch.setattr("zira_dashboard.forklift_store.mean_handle_seconds",
                         lambda window_days=90: 180.0)
@@ -164,9 +166,58 @@ def test_cold_start_uses_today_shape_for_recommendation(monkeypatch):
     adv = forklift_advisor.build_advisor(date(2026, 6, 26), scheduled=2, backups=1)
     assert adv["available"] is True and adv["basis"] == "bootstrap"
     assert adv["total_calls"] == 100
-    # peak hour = 100/day * 70/100 = 70 calls/hr -> SLA recommends 5 @ 240s, k=1
+    # peak hour = 9 (a real clock hour, not slot 36); 100/day * 70/100 = 70
+    # calls/hr -> SLA recommends 5 @ 240s, k=1
+    assert adv["peak_label"].startswith("9:")
     assert adv["recommended"] == 5
     assert adv["coverage"].status == "short"   # 5 needed, 2 scheduled
+
+
+def test_cold_start_shape_never_produces_impossible_hours(monkeypatch):
+    """Regression: the raw dashboard slots (27-59) are 15-minute buckets. They
+    must fold to clock hours 0-23, not leak through as bogus hours like 39."""
+    monkeypatch.setattr(forklift_advisor.forklift_store, "calls_daily_for_weekday",
+                        lambda wd, limit=8: [])
+    monkeypatch.setattr(forklift_advisor, "_weekly_trends_or_none",
+                        lambda: {"weeks": [{"claimedCalls": 500}]})
+    monkeypatch.setattr(forklift_advisor, "_today_hourly_shape_or_none",
+                        lambda: [{"slot": s, "calls": 10} for s in range(27, 60)])
+    monkeypatch.setattr(forklift_advisor.app_settings, "get_setting", lambda k: [])
+    monkeypatch.setattr("zira_dashboard.forklift_store.mean_handle_seconds",
+                        lambda window_days=90: 180.0)
+    monkeypatch.setattr("zira_dashboard.forklift_store.calibration_samples",
+                        lambda window_days=90: [])
+    adv = forklift_advisor.build_advisor(date(2026, 6, 26), scheduled=4, backups=0)
+    # peak_label is "H:00–H+1:00"; the leading hour must be a real clock hour.
+    peak_hour = int(adv["peak_label"].split(":")[0])
+    assert 0 <= peak_hour <= 23
+
+
+def test_build_advisor_suppresses_overloaded_when_calibration_maxed(monkeypatch):
+    """Guard: when the fit slams the upper clamp (k == 5.0), the queue model
+    under-predicts so badly that its 'no crew can meet the target' verdict is not
+    trustworthy. build_advisor must NOT show 'Overloaded'; it falls back to the
+    raw (uninflated) crew size instead."""
+    from zira_dashboard import forklift_advisor as adv
+    from zira_dashboard import forklift_demand as dem
+    monkeypatch.setattr(adv, "_forecast",
+                        lambda target_day, history_samples, coldstart_calls_per_day: dem.DemandForecast(
+                            total_calls=2000, by_hour={9: 210.0}, peak_hour=9,
+                            peak_calls=210.0, basis="history", n_days=8))
+    monkeypatch.setattr("zira_dashboard.forklift_store.mean_handle_seconds",
+                        lambda window_days=90: 180.0)
+    # Samples whose actual waits dwarf the model prediction -> median ratio pinned
+    # at the 5.0 clamp (calibrated, not uncalibrated).
+    monkeypatch.setattr("zira_dashboard.forklift_store.calibration_samples",
+                        lambda window_days=90: [
+                            {"day": None, "avg_lambda": 50.0, "crew": 6,
+                             "actual_wait_seconds": 600.0} for _ in range(6)])
+    monkeypatch.setattr(adv.app_settings, "get_setting", lambda k: [])
+    out = adv.build_advisor(date(2026, 6, 30), scheduled=4, backups=0)
+    assert out["available"] is True
+    assert out["backtest"]["uncalibrated"] is False
+    assert out["overloaded"] is False              # NOT the alarming verdict
+    assert out["recommended"] is not None and 1 <= out["recommended"] <= 12
 
 
 def test_cold_start_without_shape_suppresses_recommendation(monkeypatch):

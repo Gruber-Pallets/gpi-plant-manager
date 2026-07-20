@@ -59,6 +59,27 @@ def test_assess_coverage_ok_and_short():
     assert short.status == "short" and short.gap == 2
 
 
+def test_fold_quarter_hour_slots_aggregates_into_clock_hours():
+    # The forklift dashboard reports 15-minute buckets (slot 27 = 06:45,
+    # slot 59 = 14:45). Folding must produce real clock hours 0-23 and sum the
+    # calls that fall in the same hour so downstream treats them as calls/hour.
+    slots = [
+        {"slot": 24, "calls": 5}, {"slot": 25, "calls": 6},
+        {"slot": 26, "calls": 7}, {"slot": 27, "calls": 8},   # all hour 6
+        {"slot": 36, "calls": 10}, {"slot": 39, "calls": 20},  # hour 9
+    ]
+    folded = fd.fold_quarter_hour_slots(slots)
+    by = {s["slot"]: s["calls"] for s in folded}
+    assert by == {6: 26, 9: 30}
+    assert all(0 <= s["slot"] <= 23 for s in folded)
+
+
+def test_fold_quarter_hour_slots_handles_empty_and_junk():
+    assert fd.fold_quarter_hour_slots([]) == []
+    assert fd.fold_quarter_hour_slots(None) == []
+    assert fd.fold_quarter_hour_slots([{"calls": 3}, None, {"slot": None, "calls": 1}]) == []
+
+
 def test_demand_at_percentile_busiest_typical_and_empty():
     by_hour = {8: 30.0, 9: 70.0, 10: 50.0}  # sorted by calls: 30(8),50(10),70(9)
     assert fd.demand_at_percentile(by_hour, 1.0) == (9, 70.0)   # busiest
