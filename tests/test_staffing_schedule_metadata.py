@@ -14,6 +14,13 @@ from zira_dashboard.routes import staffing as staffing_routes
 
 DAY = date(2026, 7, 14)
 SOURCES = {"Repair 1": {"Jordan": "manual"}}
+SCHEDULE_CLEAR_DAY = date(2099, 12, 30)
+SCHEDULE_CLEAR_WORK_CENTERS = ("Schedule Clear Test Repair 1", "Schedule Clear Test Repair 2")
+SCHEDULE_CLEAR_PEOPLE = (
+    "Schedule Clear Test Jordan",
+    "Schedule Clear Test Taylor",
+    "Schedule Clear Test Morgan",
+)
 
 
 def _schedule(**changes):
@@ -28,9 +35,8 @@ def _schedule(**changes):
     return staffing.Schedule(**values)
 
 
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs Postgres")
-def test_remove_person_from_schedule_clears_assignments_and_sources():
-    staffing.save_schedule(staffing.Schedule(
+def test_schedule_without_person_clears_assignments_and_sources():
+    schedule = staffing.Schedule(
         day=DAY,
         assignments={
             "Repair 1": ["Jordan", "Taylor"],
@@ -40,28 +46,104 @@ def test_remove_person_from_schedule_clears_assignments_and_sources():
             "Repair 1": {"Jordan": "manual", "Taylor": "generated"},
             "Repair 2": {"Taylor": "default", "Morgan": "manual"},
         },
-    ))
+    )
 
-    changed = staffing.remove_person_from_schedule(DAY, "Taylor")
+    cleaned, changed = staffing._schedule_without_person(schedule, "Taylor")
 
-    saved = staffing.load_schedule(DAY)
     assert changed is True
-    assert saved.assignments == {"Repair 1": ["Jordan"], "Repair 2": ["Morgan"]}
-    assert saved.assignment_sources == {
+    assert cleaned.assignments == {"Repair 1": ["Jordan"], "Repair 2": ["Morgan"]}
+    assert cleaned.assignment_sources == {
         "Repair 1": {"Jordan": "manual"}, "Repair 2": {"Morgan": "manual"},
     }
 
 
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs Postgres")
-def test_remove_person_from_schedule_is_noop_when_person_is_not_assigned():
-    staffing.save_schedule(staffing.Schedule(
+def test_schedule_without_person_clears_source_only_entry():
+    schedule = staffing.Schedule(
         day=DAY,
         assignments={"Repair 1": ["Jordan"]},
-        assignment_sources={"Repair 1": {"Jordan": "manual"}},
+        assignment_sources={"Repair 1": {"Jordan": "manual", "Taylor": "generated"}},
+    )
+
+    cleaned, changed = staffing._schedule_without_person(schedule, "Taylor")
+
+    assert changed is True
+    assert cleaned.assignments == {"Repair 1": ["Jordan"]}
+    assert cleaned.assignment_sources == {"Repair 1": {"Jordan": "manual"}}
+
+
+@pytest.fixture
+def schedule_clear_store():
+    from zira_dashboard import db
+
+    db.bootstrap_schema()
+    db.execute("DELETE FROM schedules WHERE day = %s", (SCHEDULE_CLEAR_DAY,))
+    staffing.invalidate_schedule_cache(SCHEDULE_CLEAR_DAY)
+    for work_center in SCHEDULE_CLEAR_WORK_CENTERS:
+        db.execute(
+            "INSERT INTO work_centers (name, category) VALUES (%s, 'Repair') "
+            "ON CONFLICT (name) DO NOTHING",
+            (work_center,),
+        )
+    for person in SCHEDULE_CLEAR_PEOPLE:
+        db.execute(
+            "INSERT INTO people (name) VALUES (%s) ON CONFLICT (name) DO NOTHING",
+            (person,),
+        )
+    yield
+    db.execute("DELETE FROM schedules WHERE day = %s", (SCHEDULE_CLEAR_DAY,))
+    staffing.invalidate_schedule_cache(SCHEDULE_CLEAR_DAY)
+    db.execute("DELETE FROM people WHERE name = ANY(%s)", (list(SCHEDULE_CLEAR_PEOPLE),))
+    db.execute("DELETE FROM work_centers WHERE name = ANY(%s)", (list(SCHEDULE_CLEAR_WORK_CENTERS),))
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs Postgres")
+def test_remove_person_from_schedule_clears_assignments_and_sources(schedule_clear_store):
+    staffing.save_schedule(staffing.Schedule(
+        day=SCHEDULE_CLEAR_DAY,
+        assignments={
+            SCHEDULE_CLEAR_WORK_CENTERS[0]: [
+                SCHEDULE_CLEAR_PEOPLE[0], SCHEDULE_CLEAR_PEOPLE[1],
+            ],
+            SCHEDULE_CLEAR_WORK_CENTERS[1]: [
+                SCHEDULE_CLEAR_PEOPLE[1], SCHEDULE_CLEAR_PEOPLE[2],
+            ],
+        },
+        assignment_sources={
+            SCHEDULE_CLEAR_WORK_CENTERS[0]: {
+                SCHEDULE_CLEAR_PEOPLE[0]: "manual", SCHEDULE_CLEAR_PEOPLE[1]: "generated",
+            },
+            SCHEDULE_CLEAR_WORK_CENTERS[1]: {
+                SCHEDULE_CLEAR_PEOPLE[1]: "default", SCHEDULE_CLEAR_PEOPLE[2]: "manual",
+            },
+        },
     ))
 
-    assert staffing.remove_person_from_schedule(DAY, "Taylor") is False
-    assert staffing.load_schedule(DAY).assignments == {"Repair 1": ["Jordan"]}
+    changed = staffing.remove_person_from_schedule(SCHEDULE_CLEAR_DAY, SCHEDULE_CLEAR_PEOPLE[1])
+
+    saved = staffing.load_schedule(SCHEDULE_CLEAR_DAY)
+    assert changed is True
+    assert saved.assignments == {
+        SCHEDULE_CLEAR_WORK_CENTERS[0]: [SCHEDULE_CLEAR_PEOPLE[0]],
+        SCHEDULE_CLEAR_WORK_CENTERS[1]: [SCHEDULE_CLEAR_PEOPLE[2]],
+    }
+    assert saved.assignment_sources == {
+        SCHEDULE_CLEAR_WORK_CENTERS[0]: {SCHEDULE_CLEAR_PEOPLE[0]: "manual"},
+        SCHEDULE_CLEAR_WORK_CENTERS[1]: {SCHEDULE_CLEAR_PEOPLE[2]: "manual"},
+    }
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs Postgres")
+def test_remove_person_from_schedule_is_noop_when_person_is_not_assigned(schedule_clear_store):
+    staffing.save_schedule(staffing.Schedule(
+        day=SCHEDULE_CLEAR_DAY,
+        assignments={SCHEDULE_CLEAR_WORK_CENTERS[0]: [SCHEDULE_CLEAR_PEOPLE[0]]},
+        assignment_sources={SCHEDULE_CLEAR_WORK_CENTERS[0]: {SCHEDULE_CLEAR_PEOPLE[0]: "manual"}},
+    ))
+
+    assert staffing.remove_person_from_schedule(SCHEDULE_CLEAR_DAY, SCHEDULE_CLEAR_PEOPLE[1]) is False
+    assert staffing.load_schedule(SCHEDULE_CLEAR_DAY).assignments == {
+        SCHEDULE_CLEAR_WORK_CENTERS[0]: [SCHEDULE_CLEAR_PEOPLE[0]],
+    }
 
 
 def test_snapshot_includes_hours_and_delivery():

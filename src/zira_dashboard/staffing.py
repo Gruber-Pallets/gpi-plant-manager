@@ -666,6 +666,21 @@ def load_schedule_for_update(day: date, *, cur) -> Schedule | None:
     )
 
 
+def _schedule_without_person(schedule: Schedule, person_name: str) -> tuple[Schedule, bool]:
+    """Return ``schedule`` with one person's assignments and sources removed."""
+    assignments = {
+        wc_name: [name for name in names if name != person_name]
+        for wc_name, names in schedule.assignments.items()
+    }
+    sources = {
+        wc_name: {name: source for name, source in people.items() if name != person_name}
+        for wc_name, people in schedule.assignment_sources.items()
+    }
+    sources = {wc_name: people for wc_name, people in sources.items() if people}
+    changed = assignments != schedule.assignments or sources != schedule.assignment_sources
+    return replace(schedule, assignments=assignments, assignment_sources=sources), changed
+
+
 def remove_person_from_schedule(day: date, person_name: str) -> bool:
     """Remove one person from every saved assignment for ``day``."""
     from . import db
@@ -674,18 +689,10 @@ def remove_person_from_schedule(day: date, person_name: str) -> bool:
         schedule = load_schedule_for_update(day, cur=cur)
         if schedule is None:
             return False
-        assignments = {
-            wc_name: [name for name in names if name != person_name]
-            for wc_name, names in schedule.assignments.items()
-        }
-        if assignments == schedule.assignments:
+        cleaned, changed = _schedule_without_person(schedule, person_name)
+        if not changed:
             return False
-        sources = {
-            wc_name: {name: source for name, source in people.items() if name != person_name}
-            for wc_name, people in schedule.assignment_sources.items()
-        }
-        sources = {wc_name: people for wc_name, people in sources.items() if people}
-        save_schedule(replace(schedule, assignments=assignments, assignment_sources=sources), cur=cur)
+        save_schedule(cleaned, cur=cur)
     return True
 
 
