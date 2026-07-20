@@ -10,6 +10,30 @@ from zira_dashboard.routes import late_report as late_report_routes
 FIXED_DAY = date(2026, 6, 17)
 
 
+def test_declare_absent_sync_clears_saved_schedule_after_local_absence(monkeypatch):
+    clear_schedule = MagicMock(return_value=True)
+    declare_absent = MagicMock()
+    monkeypatch.setattr(late_report_routes, "plant_today", lambda: FIXED_DAY)
+    monkeypatch.setattr(
+        late_report_routes.absence_sync, "create_absence_for_day",
+        MagicMock(return_value={"holiday_status_id": 42, "leave_id": 777, "state": "validate"}),
+    )
+    monkeypatch.setattr(late_report_routes.absence_sync, "mirror_approved_absence", MagicMock())
+    monkeypatch.setattr(late_report_routes.late_report, "declare_absent", declare_absent)
+    monkeypatch.setattr(late_report_routes.staffing, "remove_person_from_schedule", clear_schedule)
+    monkeypatch.setattr(late_report_routes.db, "execute", MagicMock())
+    monkeypatch.setattr(late_report_routes.inbox_log, "log_event_safe", lambda **_kwargs: 123)
+    monkeypatch.setattr(late_report_routes, "_bust_caches", lambda: None)
+
+    response = late_report_routes._declare_absent_sync({
+        "emp_id": "5", "name": "Test Person", "reason": "No call no show",
+    })
+
+    assert response.status_code == 200
+    declare_absent.assert_called_once()
+    clear_schedule.assert_called_once_with(FIXED_DAY, "Test Person")
+
+
 def test_declare_absent_sync_posts_absence_to_odoo_before_local_write(monkeypatch):
     create_absence = MagicMock(return_value={
         "holiday_status_id": 42,
@@ -23,6 +47,7 @@ def test_declare_absent_sync_posts_absence_to_odoo_before_local_write(monkeypatc
     monkeypatch.setattr(late_report_routes.absence_sync, "create_absence_for_day", create_absence)
     monkeypatch.setattr(late_report_routes.absence_sync, "mirror_approved_absence", mirror_absence)
     monkeypatch.setattr(late_report_routes.late_report, "declare_absent", declare_absent)
+    monkeypatch.setattr(late_report_routes.staffing, "remove_person_from_schedule", MagicMock())
     monkeypatch.setattr(late_report_routes.db, "execute", db_execute)
     monkeypatch.setattr(late_report_routes, "_bust_caches", lambda: None)
 
@@ -64,6 +89,7 @@ def test_declare_absent_sync_mirrors_approved_absence_locally(monkeypatch):
     monkeypatch.setattr(late_report_routes.absence_sync.db, "query", db_query)
     monkeypatch.setattr(late_report_routes.absence_sync.db, "execute", db_execute)
     monkeypatch.setattr(late_report_routes.db, "execute", db_execute)
+    monkeypatch.setattr(late_report_routes.staffing, "remove_person_from_schedule", MagicMock())
     monkeypatch.setattr(late_report_routes.inbox_log, "log_event_safe", lambda **k: 123)
     monkeypatch.setattr(late_report_routes, "_bust_caches", lambda: None)
 
@@ -118,6 +144,7 @@ def test_declare_absent_sync_records_locally_when_odoo_rejects(monkeypatch):
     monkeypatch.setattr(late_report_routes.absence_sync, "create_absence_for_day", _reject)
     monkeypatch.setattr(late_report_routes.absence_sync, "mirror_approved_absence", mirror_absence)
     monkeypatch.setattr(late_report_routes.late_report, "declare_absent", declare_absent)
+    monkeypatch.setattr(late_report_routes.staffing, "remove_person_from_schedule", MagicMock())
     monkeypatch.setattr(late_report_routes.db, "execute", db_execute)
     monkeypatch.setattr(late_report_routes.inbox_log, "log_event_safe", lambda **k: 123)
     monkeypatch.setattr(late_report_routes, "_bust_caches", lambda: None)

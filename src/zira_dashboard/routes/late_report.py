@@ -29,6 +29,7 @@ from .. import (
     inbox_log,
     late_report,
     shift_config,
+    staffing,
     timeclock_sync,
 )
 from ..plant_day import now as plant_now, today as plant_today
@@ -116,6 +117,7 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
             reason=reason,
             odoo_leave_id=odoo_leave_id,
         )
+        staffing.remove_person_from_schedule(today, name)
         db.execute(
             "DELETE FROM late_snoozes WHERE day = %s AND emp_id = %s",
             (today, emp_id),
