@@ -12,7 +12,9 @@ from zira_dashboard.routes import staffing as staffing_route
 
 def _read_enabled_auto_work_centers(day: date) -> set[str]:
     """Resolve Auto centers without running the normal first-use settings write."""
-    saved = staffing_route.app_settings.get_setting(staffing_route.AUTO_SCHEDULE_WC_SETTING)
+    saved = staffing_route.app_settings.get_setting(
+        staffing_route.DEFAULT_AUTO_WORK_CENTERS_SETTING
+    )
     if isinstance(saved, list):
         return set(staffing_route._ordered_work_center_names(saved))
     return set(staffing_route._recently_used_work_centers(day))
