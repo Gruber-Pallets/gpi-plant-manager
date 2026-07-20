@@ -250,8 +250,13 @@
     </div>
 
     {% macro scheduled_operator_name(name) %}
-      {%- set parts = name.split() -%}
-      {{- parts[0] if parts|length == 1 else parts[0] ~ ' ' ~ parts[-1][0] ~ '.' -}}
+      {#- people.name is already the canonical, minimal, collision-free roster
+          label (odoo_sync._roster_names): "First L." normally, expanded to
+          "First La."/"First Mo." etc. only enough to stay unique. Show it
+          verbatim — re-abbreviating the surname to one initial here collapses
+          distinct labels (e.g. "Jesus Ma." and "Jesus Mo.") back into an
+          identical, ambiguous "Jesus M.". -#}
+      {{- name -}}
     {%- endmacro %}
     <table class="sched">
       <thead>
