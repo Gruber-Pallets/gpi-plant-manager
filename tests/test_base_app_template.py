@@ -9,7 +9,10 @@ docs/superpowers/specs/2026-07-21-ui-consolidation.md.
 import re
 from pathlib import Path
 
-import pytest
+from starlette.testclient import TestClient
+
+from zira_dashboard.app import app
+from zira_dashboard.routes import dashboard as dashboard_route
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "zira_dashboard"
 TEMPLATES = SRC / "templates"
@@ -50,10 +53,6 @@ def test_full_page_templates_extend_a_base():
             )
 
 
-@pytest.mark.xfail(
-    reason="auth_denied.html links nonexistent dashboard.css — fixed in Wave 1 Task 2",
-    strict=True,
-)
 def test_template_static_references_exist():
     """Every /static/<file> referenced by a template must exist on disk."""
     pattern = re.compile(r"/static/([A-Za-z0-9._-]+\.(?:css|js|png|ico|svg))")
@@ -63,3 +62,15 @@ def test_template_static_references_exist():
             if not (STATIC / name).exists():
                 missing.append(f"{path.name} -> /static/{name}")
     assert missing == [], f"templates reference missing static assets: {missing}"
+
+
+def test_work_centers_filter_posts_back_to_work_centers(monkeypatch):
+    # The Day/Category form must post to /work-centers itself. It used to
+    # post to "/", which 307-redirects to /recycling and drops the query
+    # string — silently losing the user's filter.
+    monkeypatch.setattr(dashboard_route, "leaderboard", lambda *a, **k: [])
+    client = TestClient(app)
+    resp = client.get("/work-centers")
+    assert resp.status_code == 200
+    assert 'action="/work-centers"' in resp.text
+    assert 'action="/"' not in resp.text
