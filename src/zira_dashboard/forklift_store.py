@@ -156,6 +156,21 @@ def recent_driver_throughput(days: int = 28) -> float | None:
     return calls / hours
 
 
+def recent_claim_seconds(window_days: int = 90) -> float | None:
+    """Observed mean time-to-claim (seconds) over the window: the calls-weighted
+    mean of forklift_driver_daily.avg_ms. None when there are no calls. This is a
+    MEASURED outcome, not a prediction."""
+    from . import db
+    rows = db.query(
+        "SELECT COALESCE(SUM(avg_ms * calls),0) AS wms, COALESCE(SUM(calls),0) AS calls "
+        "FROM forklift_driver_daily WHERE day >= (CURRENT_DATE - %s::int)",
+        (window_days,),
+    )
+    if not rows or not rows[0]["calls"]:
+        return None
+    return float(rows[0]["wms"]) / float(rows[0]["calls"]) / 1000.0
+
+
 def history_day_count() -> int:
     """How many distinct days of demand history we've snapshotted. Used to
     decide whether to run the one-time full-history backfill."""

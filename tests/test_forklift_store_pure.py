@@ -36,3 +36,15 @@ def test_operating_hours_skips_non_dict_hour_payload():
 def test_operating_hours_empty_or_none():
     assert forklift_store._operating_hours({}) == 0
     assert forklift_store._operating_hours(None) == 0
+
+
+def test_recent_claim_seconds_calls_weighted_mean(monkeypatch):
+    from zira_dashboard import db
+    monkeypatch.setattr(db, "query", lambda *a, **k: [{"wms": 3_000_000, "calls": 20}])
+    assert forklift_store.recent_claim_seconds(90) == 150.0
+
+
+def test_recent_claim_seconds_none_on_no_calls(monkeypatch):
+    from zira_dashboard import db
+    monkeypatch.setattr(db, "query", lambda *a, **k: [{"wms": 0, "calls": 0}])
+    assert forklift_store.recent_claim_seconds(90) is None
