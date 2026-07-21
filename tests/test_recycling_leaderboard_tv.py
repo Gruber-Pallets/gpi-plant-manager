@@ -214,3 +214,28 @@ def test_direct_tv_recycling_leaderboard_uses_saved_theme(monkeypatch):
     r = TestClient(app).get("/tv/recycling-leaderboard")
     assert r.status_code == 200
     assert 'data-tv-theme="light"' in r.text
+
+
+def test_tv_recycling_leaderboard_has_no_desktop_chrome(monkeypatch):
+    """Chrome-consolidation guard: TV variant renders no topnav/footer."""
+    monkeypatch.setattr(
+        "zira_dashboard.routes.recycling_leaderboard._leaderboard_payload",
+        lambda today: _fake_recycling_leaderboard_data(),
+    )
+    r = TestClient(app).get("/tv/recycling-leaderboard")
+    assert r.status_code == 200
+    assert "<title>Recycling-leaderboard</title>" in r.text  # suffix-less TV title
+    assert 'class="brand-row"' not in r.text
+    assert "changelog-modal" not in r.text
+    assert r.text.lower().count("<!doctype") == 1
+
+
+def test_desktop_recycling_leaderboard_has_single_chrome(monkeypatch):
+    monkeypatch.setattr(
+        "zira_dashboard.routes.recycling_leaderboard._leaderboard_payload",
+        lambda today: _fake_recycling_leaderboard_data(),
+    )
+    r = TestClient(app).get("/recycling-leaderboard")
+    assert r.status_code == 200
+    assert r.text.count('class="brand-row"') == 1
+    assert "data-tv-theme" not in r.text
