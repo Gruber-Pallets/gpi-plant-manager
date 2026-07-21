@@ -865,7 +865,7 @@
         <div style="color:#666;font-size:0.82rem;margin-top:0.4rem">
           Recommend <strong>{{ forklift.recommended }}</strong> to keep
           time-to-claim under {{ _tmin }} min
-          {% if forklift.predicted_claim_seconds is not none %}
+          {% if forklift.predicted_claim_seconds is defined and forklift.predicted_claim_seconds is not none %}
             &middot; predicted ~{{ '%.1f'|format(forklift.predicted_claim_seconds / 60.0) }} min
           {% endif %}
         </div>
@@ -944,6 +944,10 @@
         algorithm default). NO client-side Erlang-C — the recommendation/predicted/
         back-test numbers above are server-rendered for the saved settings.
       #}
+      {# Guarded: the capacity-coverage advisor no longer serves a
+         target_minutes range — hide the legacy slider when absent so the
+         page never 500s (see the route's forklift_ctx contract). #}
+      {% if forklift.ranges is defined and forklift.ranges.target_minutes is defined %}
       {% set _t_min = forklift.target_minutes if forklift.target_minutes is defined else 4 %}
       {% set _t_override = forklift.overrides.target if forklift.overrides.target is defined else none %}
       <div class="fl-slider fl-target" data-field="target_claim_seconds"
@@ -970,6 +974,7 @@
                  value="{% if _t_override is none %}auto{% else %}{{ '%g'|format(_t_min) }}{% endif %}">
         </div>
       </div>
+      {% endif %}
 
       {{ fl_slider('plan_for', 'Plan for',
             'Size for a typical hour, or the busiest. Toward typical → fewer drivers.',
