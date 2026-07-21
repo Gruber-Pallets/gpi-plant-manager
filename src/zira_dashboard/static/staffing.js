@@ -215,31 +215,6 @@
     return picker.querySelectorAll('input[type=checkbox]:checked').length;
   }
 
-  function erlangCWaitSeconds(c, lambdaPerHr, meanHandleSeconds) {
-    if (c < 1 || lambdaPerHr <= 0 || meanHandleSeconds <= 0) return 0;
-    const mu = 3600 / meanHandleSeconds;
-    const a = lambdaPerHr / mu;
-    if (c <= a) return Infinity;
-    let summ = 0;
-    let term = 1;
-    for (let k = 0; k < c; k += 1) {
-      if (k > 0) term *= a / k;
-      summ += term;
-    }
-    const acOverCfact = term * (a / c);
-    const top = acOverCfact * (c / (c - a));
-    const pWait = top / (summ + top);
-    const wqHours = pWait / (c * mu - lambdaPerHr);
-    return wqHours * 3600;
-  }
-
-  function forkliftStatusForPrediction(predictedSeconds, targetSeconds, overloaded) {
-    if (overloaded || predictedSeconds == null) return 'danger';
-    if (predictedSeconds <= targetSeconds) return 'ok';
-    if (predictedSeconds <= targetSeconds * 1.5) return 'warn';
-    return 'danger';
-  }
-
   function countScheduledForkliftDrivers(model) {
     const names = new Set();
     (model.driver_wc_names || []).forEach(loc => {
@@ -256,36 +231,17 @@
     const summary = document.querySelector('.forklift-bay-summary');
     if (!summary) return;
     const suggested = summary.querySelector('.forklift-bay-suggested');
-    const prediction = summary.querySelector('.forklift-bay-prediction');
-    if (!prediction) return;
-
     if (suggested && model.recommended) {
-      suggested.textContent = model.recommended + ' Suggested';
+      suggested.textContent = model.recommended + ' suggested';
     }
     const scheduled = countScheduledForkliftDrivers(model);
-    const raw = erlangCWaitSeconds(
-      scheduled,
-      Number(model.lambda_per_hr || 0),
-      Number(model.mean_handle_seconds || 0)
-    );
-    const overloaded = scheduled < 1 || !Number.isFinite(raw);
-    const predicted = overloaded ? null : Number(model.calibration_k || 1) * raw;
-    const status = forkliftStatusForPrediction(
-      predicted,
-      Number(model.target_seconds || 0),
-      overloaded
-    );
-
+    const gap = (model.recommended || 0) - scheduled;
+    const status = gap <= 0 ? 'ok' : (gap === 1 ? 'warn' : 'danger');
     summary.classList.remove('ok', 'warn', 'danger');
     summary.classList.add(status);
-    if (overloaded) {
-      prediction.textContent = 'TTC overloaded';
-      summary.title = 'Scheduled drivers overloaded';
-    } else {
-      const minutes = predicted / 60;
-      prediction.textContent = 'Predicted Time-to-Claim ' + minutes.toFixed(1) + ' min';
-      summary.title = 'Predicted scheduled time-to-claim: ' + minutes.toFixed(1) + ' min';
-    }
+    summary.title = gap <= 0
+      ? 'Coverage satisfied'
+      : gap + ' driver' + (gap === 1 ? '' : 's') + ' short';
   }
 
   function syncSummary(picker) {

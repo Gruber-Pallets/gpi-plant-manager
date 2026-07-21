@@ -285,23 +285,18 @@
                 {% if bay.name == 'Transportation' %}<div class="bay-print-label">Driving</div>{% endif %}
                 {% if bay.name == 'Forklift' and forklift_advisor and forklift_advisor.available %}
                   {% set _fk_gap = forklift_advisor.coverage.gap if forklift_advisor.coverage else 2 %}
-                  {% set _fk_status = forklift_advisor.scheduled_prediction_status or ('ok' if _fk_gap <= 0 else ('warn' if _fk_gap == 1 else 'danger')) %}
-                  <div class="forklift-bay-summary {{ _fk_status }}" title="{% if forklift_advisor.scheduled_prediction_overloaded %}Scheduled drivers overloaded{% elif forklift_advisor.predicted_scheduled_claim_seconds is not none %}Predicted scheduled time-to-claim: {{ '%.1f'|format(forklift_advisor.predicted_scheduled_claim_seconds / 60.0) }} min{% elif _fk_status == 'ok' %}Coverage satisfied{% elif forklift_advisor.coverage %}{{ forklift_advisor.coverage.gap }} driver{{ forklift_advisor.coverage.gap != 1 and 's' or '' }} short{% elif forklift_advisor.overloaded %}Busiest hour overloaded{% else %}Forklift recommendation pending{% endif %}">
-                    {% if forklift_advisor.overloaded %}
-                      <span>Overloaded</span>
-                      <span>Target missed</span>
-                    {% elif forklift_advisor.recommended %}
-                      <span class="forklift-bay-suggested">{{ forklift_advisor.recommended }} Suggested</span>
-                      {% if forklift_advisor.scheduled_prediction_overloaded %}
-                        <span class="forklift-bay-prediction">TTC overloaded</span>
-                      {% elif forklift_advisor.predicted_scheduled_claim_seconds is not none %}
-                        <span class="forklift-bay-prediction">Predicted Time-to-Claim {{ '%.1f'|format(forklift_advisor.predicted_scheduled_claim_seconds / 60.0) }} min</span>
+                  {% set _fk_status = ('ok' if _fk_gap <= 0 else ('warn' if _fk_gap == 1 else 'danger')) %}
+                  <div class="forklift-bay-summary {{ _fk_status }}" title="{% if _fk_status == 'ok' %}Coverage satisfied{% elif forklift_advisor.coverage %}{{ forklift_advisor.coverage.gap }} driver{{ forklift_advisor.coverage.gap != 1 and 's' or '' }} short{% else %}Forklift coverage pending{% endif %}">
+                    {% if forklift_advisor.recommended %}
+                      <span class="forklift-bay-suggested">{{ forklift_advisor.recommended }} suggested</span>
+                      {% if forklift_advisor.observed_claim_seconds is not none %}
+                        <span class="forklift-bay-prediction">recent avg claim {{ '%.1f'|format(forklift_advisor.observed_claim_seconds / 60.0) }} min</span>
                       {% else %}
-                        <span class="forklift-bay-prediction">TTC building</span>
+                        <span class="forklift-bay-prediction">claim time building</span>
                       {% endif %}
                     {% else %}
-                      <span>History building</span>
-                      <span class="forklift-bay-prediction">TTC pending</span>
+                      <span>coverage building</span>
+                      <span class="forklift-bay-prediction">history accruing</span>
                     {% endif %}
                   </div>
                 {% endif %}

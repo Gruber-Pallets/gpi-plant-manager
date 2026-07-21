@@ -334,13 +334,19 @@ def test_staffing_print_scopes_driving_label_to_transportation_bay_only():
 def test_forklift_live_recalc_hooks_assignment_changes():
     js = _script()
 
-    assert "function erlangCWaitSeconds(c, lambdaPerHr, meanHandleSeconds)" in js
     assert "function recalcForkliftBaySummary()" in js
+    assert "function countScheduledForkliftDrivers(model)" in js
     assert "window.FORKLIFT_LIVE_MODEL" in js
     assert "details.sched-dd[data-loc=\"" in js
     assert "recalcForkliftBaySummary();" in js
-    assert "Predicted Time-to-Claim " in js
-    assert "TTC overloaded" in js
+    # capacity-coverage badge: live gap-based severity + suggested count,
+    # no client-side Erlang-C / SLA prediction.
+    assert "' suggested'" in js
+    assert "Coverage satisfied" in js
+    assert "' short'" in js
+    # retired SLA JS is gone
+    assert "erlangCWaitSeconds" not in js
+    assert "Predicted Time-to-Claim" not in js
 
 
 def test_reset_to_defaults_reconciles_left_rail():
