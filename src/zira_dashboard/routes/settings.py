@@ -781,10 +781,6 @@ def _parse_forklift_overrides(form) -> forklift_settings.Settings:  # noqa: F821
         return int(round(v)) if integer else round(v, 4)
 
     coldstart = _override("coldstart_calls_per_day", 0.0, 100000.0, integer=False)
-    # Target time-to-claim: the UI posts MINUTES; store SECONDS, clamp 30-1200s
-    # (0.5-20 min). blank/"auto" -> None (follow the algorithm default of 240s).
-    target_claim = _override("target_claim_seconds", 30.0, 1200.0,
-                             integer=False, scale=60.0)
     return forklift_settings.Settings(
         enabled=bool(form.get("enabled")),
         throughput_override=_override("throughput", 5.0, 30.0, integer=False),
@@ -792,7 +788,6 @@ def _parse_forklift_overrides(form) -> forklift_settings.Settings:  # noqa: F821
                                        integer=False, scale=0.01),
         plan_for_percentile_override=_override("plan_for", 0.5, 1.0, integer=False),
         history_samples_override=_override("history_samples", 2, 20, integer=True),
-        target_claim_seconds=target_claim,
         include_loading_jockeying=bool(form.get("include_loading_jockeying")),
         coldstart_calls_per_day=coldstart if coldstart is not None else 0.0,
         # GOAT composite-score overrides (blank/"auto" -> None; clamp per knob).

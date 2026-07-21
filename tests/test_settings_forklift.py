@@ -25,30 +25,13 @@ def test_parse_forklift_overrides_clamps():
     assert s.throughput_override == 0.1 or s.throughput_override >= 1  # clamp >0 (floor 5)
 
 
-def test_parse_forklift_overrides_target_claim_minutes_to_seconds():
-    # UI posts MINUTES; parser converts to seconds. 4 min -> 240s.
-    s = settings_route._parse_forklift_overrides({"target_claim_seconds": "4"})
-    assert s.target_claim_seconds == 240.0
-    s2 = settings_route._parse_forklift_overrides({"target_claim_seconds": "2.5"})
-    assert s2.target_claim_seconds == 150.0
-
-
-def test_parse_forklift_overrides_target_claim_auto_clears():
-    # blank / "auto" -> None (follow the algorithm's default 240s).
-    assert settings_route._parse_forklift_overrides(
-        {"target_claim_seconds": "auto"}).target_claim_seconds is None
-    assert settings_route._parse_forklift_overrides(
-        {"target_claim_seconds": ""}).target_claim_seconds is None
-    assert settings_route._parse_forklift_overrides(
-        {}).target_claim_seconds is None
-
-
-def test_parse_forklift_overrides_target_claim_clamps_seconds():
-    # clamp 30-1200s (0.5-20 min). 0.1 min = 6s -> 30s; 100 min = 6000s -> 1200s.
-    assert settings_route._parse_forklift_overrides(
-        {"target_claim_seconds": "0.1"}).target_claim_seconds == 30.0
-    assert settings_route._parse_forklift_overrides(
-        {"target_claim_seconds": "100"}).target_claim_seconds == 1200.0
+def test_parse_forklift_overrides_utilization_percent_to_fraction():
+    from zira_dashboard.routes.settings import _parse_forklift_overrides
+    s = _parse_forklift_overrides({"enabled": "1", "utilization_pct": "80"})
+    assert s.utilization_override == 0.8
+    # blank/auto -> None
+    s2 = _parse_forklift_overrides({"enabled": "1", "utilization_pct": "auto"})
+    assert s2.utilization_override is None
 
 
 def test_parse_forklift_overrides_disabled_and_unchecked():
