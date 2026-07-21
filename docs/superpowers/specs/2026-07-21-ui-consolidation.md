@@ -55,6 +55,12 @@ and must not break:
   live smoke test of the rotation UI surfaces.
 - Anything discovered that needs fixing on those surfaces is reported and scheduled
   with Dale, not changed opportunistically.
+- **TV URLs never change (Dale, 2026-07-21).** Every `/tv/*` path — including the
+  registry slugs, `?theme=` params, and the legacy `/tv/new-vs` and `/tv/d/{slug}`
+  redirects — is pinned by plant-floor TV bookmarks that nobody wants to re-type
+  on a TV remote. No wave or phase may rename, move, or delete a `/tv/*` URL; the
+  Phase 3 IA realignment applies to desktop URLs only, and the page-usage-driven
+  legacy-redirect cleanup explicitly excludes `/tv/*` unless Dale signs off per-URL.
 
 ## Phase 1 design
 
