@@ -1,0 +1,28 @@
+/* Design tokens — the single source of the shared light-theme palette.
+ *
+ * Loaded by _base_app.html on every desktop page, BEFORE topnav.css and
+ * each page's own stylesheet, so pages and tv-mode.css can still override
+ * (tv-mode.css re-themes these under html[data-tv-theme=...]).
+ *
+ * Page-SPECIFIC variables (e.g. index.css --running, exceptions.css --info)
+ * stay in their page's stylesheet. exceptions.css deliberately overrides
+ * --muted / --panel-2 / --bad for its denser text UI.
+ *
+ * The kiosk (timeclock_base.html) intentionally does not load this file.
+ * Guard: tests/test_base_app_template.py::test_shared_palette_lives_only_in_tokens_css
+ */
+:root {
+  --bg: #f1f4f7;
+  --panel: #ffffff;
+  --panel-2: #f1f4f7;
+  --panel-3: #e3e8ee;
+  --border: #d8dee5;
+  --fg: #1f2937;
+  --muted: #6b7280;
+  --accent: #16a34a;
+  --accent-dim: #dcfce7;
+  --warn: #a16207;
+  --warn-dim: #fef3c7;
+  --bad: #ef4444;
+  --bad-dim: #fee2e2;
+}

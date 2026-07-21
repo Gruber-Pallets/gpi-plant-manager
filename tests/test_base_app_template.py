@@ -47,6 +47,37 @@ def test_full_page_templates_extend_a_base():
             )
 
 
+def test_shared_palette_lives_only_in_tokens_css():
+    """Phase 2 ratchet: the shared palette is defined once, in tokens.css.
+
+    Pages keep page-specific variables; tv-mode.css re-themes under
+    html[data-tv-theme] (not :root); exceptions.css keeps three deliberate
+    overrides for its denser text UI. Nothing else may redefine a shared
+    token, and no template may carry a :root block.
+    """
+    unified = ("--bg:", "--panel:", "--panel-3:", "--border:", "--fg:",
+               "--accent:", "--accent-dim:", "--warn:", "--warn-dim:",
+               "--bad-dim:")
+    overridable = ("--muted:", "--panel-2:", "--bad:")
+    allowed_overrides = {"exceptions.css"}
+    offenders = []
+    for path in sorted(STATIC.glob("*.css")):
+        if path.name in ("tokens.css", "tv-mode.css"):
+            continue
+        src = path.read_text(encoding="utf-8")
+        for tok in unified:
+            if tok in src:
+                offenders.append(f"{path.name} defines {tok}")
+        if path.name not in allowed_overrides:
+            for tok in overridable:
+                if tok in src:
+                    offenders.append(f"{path.name} defines {tok}")
+    for path in sorted(TEMPLATES.glob("*.html")):
+        if ":root" in path.read_text(encoding="utf-8"):
+            offenders.append(f"{path.name} carries a :root block")
+    assert offenders == [], f"shared palette must live only in tokens.css: {offenders}"
+
+
 def test_template_static_references_exist():
     """Every /static/<file> referenced by a template must exist on disk."""
     pattern = re.compile(r"/static/([A-Za-z0-9._-]+\.(?:css|js|png|ico|svg))")
