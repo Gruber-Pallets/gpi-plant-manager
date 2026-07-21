@@ -1,23 +1,22 @@
+{% extends "_base_app.html" %}
 {% from "_tv_header.html" import tv_header %}
 {% set is_tv = tv_mode | default(true) %}
-<!doctype html>
-<html lang="en"{% if is_tv %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/png" href="/static/gpi-logo.png">
-{% if is_tv %}<title>New-Leaderboard</title>{% else %}<title>New-Leaderboard - GPI Plant Manager</title>{% endif %}
+{% block html_attrs %}{% if is_tv %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}{% endblock %}
+{# This page is TV-first and keeps its exact historical titles (the TV one
+   has no site suffix), so it overrides the whole <title> element. #}
+{% block title_tag %}{% if is_tv %}<title>New-Leaderboard</title>{% else %}<title>New-Leaderboard - GPI Plant Manager</title>{% endif %}{% endblock %}
+{% block head %}
 {% if is_tv %}
 <link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
 {% else %}
-<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 {% endif %}
 <link rel="stylesheet" href="/static/recycling_leaderboard.css?v={{ static_v('recycling_leaderboard.css') }}">
 <link rel="stylesheet" href="/static/new_leaderboard.css?v={{ static_v('new_leaderboard.css') }}">
 {% if is_tv %}<script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>{% endif %}
-</head>
-<body class="{% if is_tv %}recycling-leaderboard-tv new-leaderboard-tv{% else %}recycling-leaderboard-page new-leaderboard-page{% endif %}">
+{% endblock %}
+{% block body_attrs %} class="{% if is_tv %}recycling-leaderboard-tv new-leaderboard-tv{% else %}recycling-leaderboard-page new-leaderboard-page{% endif %}"{% endblock %}
+{% block header %}
   {% if is_tv %}
   {{ tv_header(
       "New-Leaderboard",
@@ -28,9 +27,12 @@
   ) }}
   {% else %}
   <header>{% set active_nav = 'dashboards' %}{% include "_topnav.html" %}</header>
-  {% include "_dashboards_subnav.html" %}
   {% endif %}
-  <main class="rlb-main">
+{% endblock %}
+{% block subnav %}{% if not is_tv %}{% include "_dashboards_subnav.html" %}{% endif %}{% endblock %}
+{% block main_attrs %} class="rlb-main"{% endblock %}
+{% block footer %}{% endblock %}
+{% block content %}
     <div class="rlb-range">
       <span>YTD: {{ data.ytd_start.strftime('%b %-d') }}-{{ data.ytd_end.strftime('%b %-d') }}</span>
       <span>L30: {{ data.l30_start.strftime('%b %-d') }}-{{ data.l30_end.strftime('%b %-d') }}</span>
@@ -85,6 +87,4 @@
       </section>
     </section>
     {% endif %}
-  </main>
-</body>
-</html>
+{% endblock %}
