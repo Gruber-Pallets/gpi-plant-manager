@@ -18,7 +18,6 @@ DEFAULT_UTILIZATION = 0.75
 DEFAULT_PLAN_FOR_PERCENTILE = 1.0   # 1.0 = busiest hour; lower = more typical
 DEFAULT_HISTORY_SAMPLES = 8
 DEFAULT_THROUGHPUT = 16.0           # fallback when no data-derived rate yet
-DEFAULT_TARGET_CLAIM_SECONDS = 240.0   # SLA recommender target = 4 min
 
 
 @dataclass(frozen=True)
@@ -28,7 +27,6 @@ class Settings:
     utilization_override: float | None = None
     plan_for_percentile_override: float | None = None
     history_samples_override: int | None = None
-    target_claim_seconds: float | None = None   # NULL = auto (240s / 4 min)
     include_loading_jockeying: bool = False
     coldstart_calls_per_day: float = 0.0
     # GOAT composite-score overrides (NULL = auto / forklift_score default).
@@ -55,7 +53,6 @@ class Resolved:
     utilization: float
     percentile: float
     history_samples: int
-    target_claim_seconds: float = DEFAULT_TARGET_CLAIM_SECONDS
     # Score-config overrides threaded from Settings (None = auto).
     score_w_calls: float | None = None
     score_w_ontime: float | None = None
@@ -101,7 +98,6 @@ def resolve(s: Settings, *, algo_throughput: float) -> Resolved:
         utilization=s.utilization_override if s.utilization_override is not None else DEFAULT_UTILIZATION,
         percentile=s.plan_for_percentile_override if s.plan_for_percentile_override is not None else DEFAULT_PLAN_FOR_PERCENTILE,
         history_samples=s.history_samples_override if s.history_samples_override is not None else DEFAULT_HISTORY_SAMPLES,
-        target_claim_seconds=_f(s.target_claim_seconds, DEFAULT_TARGET_CLAIM_SECONDS),
         score_w_calls=s.score_w_calls,
         score_w_ontime=s.score_w_ontime,
         score_w_speed=s.score_w_speed,
@@ -133,7 +129,6 @@ def _row_to_settings(row: dict) -> Settings:
         utilization_override=_f(row.get("utilization_override")),
         plan_for_percentile_override=_f(row.get("plan_for_percentile_override")),
         history_samples_override=_i(row.get("history_samples_override")),
-        target_claim_seconds=_f(row.get("target_claim_seconds")),
         include_loading_jockeying=bool(row.get("include_loading_jockeying", False)),
         coldstart_calls_per_day=float(row.get("coldstart_calls_per_day") or 0.0),
         score_w_calls=_f(row.get("score_w_calls")),
@@ -153,7 +148,6 @@ def _load_from_db() -> Settings:
     rows = db.query(
         "SELECT enabled, throughput_override, utilization_override, "
         "plan_for_percentile_override, history_samples_override, "
-        "target_claim_seconds, "
         "include_loading_jockeying, coldstart_calls_per_day, "
         "score_w_calls, score_w_ontime, score_w_speed, score_w_util, "
         "score_target_calls, score_ontime_floor, score_fast_secs, "
@@ -180,18 +174,16 @@ def save(s: Settings) -> None:
         "INSERT INTO forklift_settings "
         "(id, enabled, throughput_override, utilization_override, "
         "plan_for_percentile_override, history_samples_override, "
-        "target_claim_seconds, "
         "include_loading_jockeying, coldstart_calls_per_day, "
         "score_w_calls, score_w_ontime, score_w_speed, score_w_util, "
         "score_target_calls, score_ontime_floor, score_fast_secs, "
         "score_slow_secs, score_min_calls) "
-        "VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, "
         "throughput_override = EXCLUDED.throughput_override, "
         "utilization_override = EXCLUDED.utilization_override, "
         "plan_for_percentile_override = EXCLUDED.plan_for_percentile_override, "
         "history_samples_override = EXCLUDED.history_samples_override, "
-        "target_claim_seconds = EXCLUDED.target_claim_seconds, "
         "include_loading_jockeying = EXCLUDED.include_loading_jockeying, "
         "coldstart_calls_per_day = EXCLUDED.coldstart_calls_per_day, "
         "score_w_calls = EXCLUDED.score_w_calls, "
@@ -205,7 +197,6 @@ def save(s: Settings) -> None:
         "score_min_calls = EXCLUDED.score_min_calls",
         (s.enabled, s.throughput_override, s.utilization_override,
          s.plan_for_percentile_override, s.history_samples_override,
-         s.target_claim_seconds,
          s.include_loading_jockeying, s.coldstart_calls_per_day,
          s.score_w_calls, s.score_w_ontime, s.score_w_speed, s.score_w_util,
          s.score_target_calls, s.score_ontime_floor, s.score_fast_secs,
