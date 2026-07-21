@@ -18,18 +18,13 @@ def test_resolve_uses_algorithm_values_when_overrides_none():
     assert round(r.effective_throughput, 2) == round(18.0 * 0.75, 2)
 
 
-def test_target_claim_seconds_default_and_override():
-    s = fs.Settings()  # all overrides None
-    r = fs.resolve(s, algo_throughput=16)
-    assert r.target_claim_seconds == 240.0   # 4 min default
-    s2 = fs.Settings(target_claim_seconds=300)
-    assert fs.resolve(s2, algo_throughput=16).target_claim_seconds == 300.0
-
-
-def test_algorithm_values_target_claim_is_default():
-    s = fs.Settings(target_claim_seconds=300.0)
-    a = fs.algorithm_values(s, algo_throughput=16)
-    assert a.target_claim_seconds == 240.0   # baseline ignores the override
+def test_resolve_has_no_target_claim_field():
+    from zira_dashboard import forklift_settings as fs
+    r = fs.resolve(fs.Settings(), algo_throughput=19.0)
+    assert not hasattr(r, "target_claim_seconds")
+    # utilization headroom lever is present
+    assert 0.0 < r.utilization <= 1.0
+    assert r.effective_throughput > 0
 
 
 def test_resolve_prefers_overrides():
@@ -83,14 +78,14 @@ class TestDbRoundtrip:
             "UPDATE forklift_settings SET enabled=TRUE, throughput_override=NULL, "
             "utilization_override=NULL, plan_for_percentile_override=NULL, "
             "history_samples_override=NULL, include_loading_jockeying=FALSE, "
-            "coldstart_calls_per_day=0, target_claim_seconds=NULL WHERE id=1")
+            "coldstart_calls_per_day=0 WHERE id=1")
         fs.reload()
         yield
         db.execute(
             "UPDATE forklift_settings SET enabled=TRUE, throughput_override=NULL, "
             "utilization_override=NULL, plan_for_percentile_override=NULL, "
             "history_samples_override=NULL, include_loading_jockeying=FALSE, "
-            "coldstart_calls_per_day=0, target_claim_seconds=NULL WHERE id=1")
+            "coldstart_calls_per_day=0 WHERE id=1")
         fs.reload()
 
     def test_defaults_when_seeded_are_auto(self):
@@ -109,8 +104,7 @@ class TestDbRoundtrip:
         fs.save(fs.Settings(
             enabled=False, throughput_override=24.0, utilization_override=0.8,
             plan_for_percentile_override=None, history_samples_override=12,
-            include_loading_jockeying=True, coldstart_calls_per_day=300.0,
-            target_claim_seconds=300.0))
+            include_loading_jockeying=True, coldstart_calls_per_day=300.0))
         s = fs.current()
         assert s.enabled is False
         assert s.throughput_override == 24.0
@@ -119,7 +113,6 @@ class TestDbRoundtrip:
         assert s.history_samples_override == 12
         assert s.include_loading_jockeying is True
         assert s.coldstart_calls_per_day == 300.0
-        assert s.target_claim_seconds == 300.0
         # A direct DB change is not seen until reload (proves caching).
         db.execute("UPDATE forklift_settings SET history_samples_override=4 WHERE id=1")
         assert fs.current().history_samples_override == 12
