@@ -6,6 +6,15 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8137", "--directory", "scripts/_preview_out"],
       "port": 8137
+    },
+    {
+      "name": "staffing-dev",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "AUTH_DISABLED=1 SESSION_SECRET='preview-secret-32-bytes-of-data!!!!' ZIRA_API_KEY=test DATABASE_URL='postgresql://postgres:@/postgres?host=/private/var/folders/kb/_s890z613fv448fv990lz7fr0000gn/T/gpi-test-pg-defaults' .venv/bin/python -m uvicorn zira_dashboard.app:app --port 8138"
+      ],
+      "port": 8138
     }
   ]
 }

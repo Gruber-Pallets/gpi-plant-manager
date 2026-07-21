@@ -1864,8 +1864,8 @@
       resetScheduleBtn.addEventListener('click', async () => {
         if (__viewingPosted) return;
         if (!confirm(
-          'Replace every assignment with saved defaults and next group rotations?\n\n' +
-          'This removes manual and automated assignments. Notes, time off, and schedule settings stay.'
+          'Clear this schedule and load the default schedule?\n\n' +
+          'This removes manual and automated assignments everywhere, then reloads the automatic default schedule. Notes, time off, and schedule settings stay.'
         )) return;
         resetScheduleBtn.disabled = true;
         try {
