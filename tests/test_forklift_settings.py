@@ -12,10 +12,10 @@ def test_resolve_uses_algorithm_values_when_overrides_none():
     s = fs.Settings()  # all overrides None
     r = fs.resolve(s, algo_throughput=18.0)
     assert r.throughput == 18.0
-    assert r.utilization == fs.DEFAULT_UTILIZATION == 0.65
+    assert r.utilization == fs.DEFAULT_UTILIZATION == 0.75
     assert r.percentile == fs.DEFAULT_PLAN_FOR_PERCENTILE == 1.0
     assert r.history_samples == fs.DEFAULT_HISTORY_SAMPLES == 8
-    assert round(r.effective_throughput, 2) == round(18.0 * 0.65, 2)
+    assert round(r.effective_throughput, 2) == round(18.0 * 0.75, 2)
 
 
 def test_target_claim_seconds_default_and_override():
@@ -42,7 +42,7 @@ def test_resolve_prefers_overrides():
 def test_algorithm_values_ignores_overrides():
     s = fs.Settings(throughput_override=24.0, utilization_override=0.9)
     a = fs.algorithm_values(s, algo_throughput=18.0)
-    assert a.throughput == 18.0 and a.utilization == 0.65 and a.percentile == 1.0
+    assert a.throughput == 18.0 and a.utilization == 0.75 and a.percentile == 1.0
 
 
 def test_effective_throughput_floor():

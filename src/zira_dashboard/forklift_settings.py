@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 # The algorithm's own default values for the policy knobs (driver throughput is
 # data-derived elsewhere and passed in). These are the grey "tick" values.
-DEFAULT_UTILIZATION = 0.65
+DEFAULT_UTILIZATION = 0.75
 DEFAULT_PLAN_FOR_PERCENTILE = 1.0   # 1.0 = busiest hour; lower = more typical
 DEFAULT_HISTORY_SAMPLES = 8
 DEFAULT_THROUGHPUT = 16.0           # fallback when no data-derived rate yet
