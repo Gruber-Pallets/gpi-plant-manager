@@ -165,41 +165,35 @@ def test_build_advisor_unavailable_when_disabled(monkeypatch):
 
 
 def test_demand_summary_keys_and_recommendation(monkeypatch):
-    """demand_summary returns the documented keys and the SAME SLA recommendation
-    the scheduler card shows: smallest crew whose predicted time-to-claim stays
-    under the target (NOT the old capacity ratio). The user-facing capacity number
-    is gone."""
+    """demand_summary returns the documented keys and the SAME capacity-coverage
+    recommendation the scheduler card shows: ceil(planned-hour lambda /
+    (throughput * utilization)). The retired SLA keys are gone."""
     monkeypatch.setattr(forklift_advisor.forklift_store, "calls_daily_for_weekday",
                         lambda wd, limit=8: [
                             {"day": date(2026, 6, 19), "total_calls": 420,
                              "by_hour": {"9": {"calls": 70}, "8": {"calls": 30}},
                              "by_station": {}}])
-    monkeypatch.setattr("zira_dashboard.forklift_store.mean_handle_seconds",
-                        lambda window_days=90: 180.0)
-    monkeypatch.setattr("zira_dashboard.forklift_store.calibration_samples",
-                        lambda window_days=90: [])
+    monkeypatch.setattr("zira_dashboard.forklift_store.recent_driver_throughput",
+                        lambda days=28: None)   # -> DEFAULT_THROUGHPUT 16
+    monkeypatch.setattr("zira_dashboard.forklift_store.recent_claim_seconds",
+                        lambda window_days=90: 250.0)
     summary = forklift_advisor.demand_summary(date(2026, 6, 26))  # Friday
     assert set(summary) == {
         "total_calls", "peak_calls", "peak_hour", "peak_label", "basis",
-        "n_days", "recommended", "enabled", "overloaded",
-        "target_seconds", "predicted_claim_seconds", "backtest", "target_minutes",
+        "n_days", "recommended", "enabled", "observed_claim_seconds",
         "algo_recommended", "algo_values", "resolved_values", "overrides",
         "hour_values", "ranges",
     }
-    # The retired capacity-ratio number must not surface.
-    assert "effective_throughput" not in summary
+    assert "overloaded" not in summary
+    assert "target_seconds" not in summary
+    assert "predicted_claim_seconds" not in summary
     assert summary["enabled"] is True
     assert summary["total_calls"] == 420
     assert summary["peak_calls"] == 70.0
     assert summary["peak_hour"] == 9
     assert summary["basis"] == "history"
-    # SLA model: 70 calls/hr @ 180s handle, target 240s, k=1 -> 5 drivers.
-    assert summary["recommended"] == 5
-    assert summary["overloaded"] is False
-    assert summary["target_seconds"] == 240.0
-    assert summary["predicted_claim_seconds"] is not None
-    assert summary["predicted_claim_seconds"] <= 240.0
-    assert summary["backtest"]["uncalibrated"] is True
+    assert summary["recommended"] == 6
+    assert summary["observed_claim_seconds"] == 250.0
 
 
 def test_demand_summary_no_signal_has_none_recommendation(monkeypatch):
@@ -217,16 +211,13 @@ def test_demand_summary_carries_algo_and_overrides_and_hour_values(monkeypatch):
                         lambda wd, limit=8: [{"day": date(2026, 6, 19), "total_calls": 420,
                                               "by_hour": {"9": {"calls": 70}, "8": {"calls": 30}},
                                               "by_station": {}}])
-    monkeypatch.setattr(forklift_advisor.forklift_store, "recent_driver_throughput",
-                        lambda days=28: None)  # -> DEFAULT_THROUGHPUT 16
-    monkeypatch.setattr("zira_dashboard.forklift_store.mean_handle_seconds",
-                        lambda window_days=90: 180.0)
-    monkeypatch.setattr("zira_dashboard.forklift_store.calibration_samples",
-                        lambda window_days=90: [])
+    monkeypatch.setattr("zira_dashboard.forklift_store.recent_driver_throughput",
+                        lambda days=28: None)   # -> DEFAULT_THROUGHPUT 16
+    monkeypatch.setattr("zira_dashboard.forklift_store.recent_claim_seconds",
+                        lambda window_days=90: 250.0)
     s = forklift_advisor.demand_summary(date(2026, 6, 26))
     # all-auto (default 240s target): user recommendation matches the baseline.
-    assert s["recommended"] == s["algo_recommended"] == 5
-    assert s["target_seconds"] == 240.0
+    assert s["recommended"] == s["algo_recommended"] == 6
     assert s["hour_values"] == [30.0, 70.0]          # sorted ascending for JS preview
     # plan-for + history sliders survive; their algorithm ticks are still carried.
     assert s["algo_values"]["percentile"] == 1.0
@@ -237,3 +228,24 @@ def test_demand_summary_carries_algo_and_overrides_and_hour_values(monkeypatch):
     # slider ranges present (capacity knobs retired but ranges dict keeps its keys
     # so the JS live-preview still resolves plan_for/history).
     assert {"plan_for", "history_samples"} <= set(s["ranges"])
+
+
+def test_demand_summary_user_and_algo_recommendations_can_diverge(monkeypatch):
+    # by_hour has a clear busiest (70) vs quietest (30) hour. The algorithm plans
+    # for the busiest hour (percentile 1.0); a plan_for override of 0.0 makes the
+    # USER recommendation size to the quietest hour -> the two must differ.
+    monkeypatch.setattr(forklift_advisor, "_cfg",
+                        lambda: forklift_advisor.forklift_settings.Settings(
+                            plan_for_percentile_override=0.0))
+    monkeypatch.setattr(forklift_advisor.forklift_store, "calls_daily_for_weekday",
+                        lambda wd, limit=8: [{"day": date(2026, 6, 19), "total_calls": 420,
+                                              "by_hour": {"9": {"calls": 70}, "8": {"calls": 30}},
+                                              "by_station": {}}])
+    monkeypatch.setattr("zira_dashboard.forklift_store.recent_driver_throughput",
+                        lambda days=28: None)   # -> DEFAULT_THROUGHPUT 16, effective 12
+    monkeypatch.setattr("zira_dashboard.forklift_store.recent_claim_seconds",
+                        lambda window_days=90: 250.0)
+    s = forklift_advisor.demand_summary(date(2026, 6, 26))
+    # algo plans busiest hour 70 -> ceil(70/12)=6 ; user plans quietest 30 -> ceil(30/12)=3
+    assert s["algo_recommended"] == 6
+    assert s["recommended"] == 3
