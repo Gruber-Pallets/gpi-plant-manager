@@ -4,7 +4,11 @@
   dashboard pages suppress chrome by overriding `header`/`footer`.
 
   Blocks (all optional except content):
+    html_attrs   — attributes on <html> (TV pages: data-tv-theme)
+    body_attrs   — attributes on <body> (page body classes)
     title        — page name; rendered as "{title} — GPI Plant Manager"
+    title_tag    — the whole <title> element, for pages whose title
+                   doesn't fit the suffix pattern (leaderboard TVs)
     head         — page <link>/<style> tags
     topnav       — override to set the active menu item, e.g.
                    {% block topnav %}{% set active_nav = 'staffing' %}{% include "_topnav.html" %}{% endblock %}
@@ -22,16 +26,16 @@
   CSS file until Phase 2 (tokens.css) lands.
 #}
 <!doctype html>
-<html lang="en">
+<html lang="en"{% block html_attrs %}{% endblock %}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/static/gpi-logo.png">
-<title>{% block title %}Home{% endblock %} — GPI Plant Manager</title>
+{% block title_tag %}<title>{% block title %}Home{% endblock %} — GPI Plant Manager</title>{% endblock %}
 <link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
 {% block head %}{% endblock %}
 </head>
-<body>
+<body{% block body_attrs %}{% endblock %}>
 {% block header %}
 <header class="app">
   {% block topnav %}{% include "_topnav.html" %}{% endblock %}
