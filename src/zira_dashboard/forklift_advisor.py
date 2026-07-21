@@ -114,6 +114,17 @@ def _mean_handle_or_none() -> float | None:
         return None
 
 
+_CLAIM_WINDOW_DAYS = 90
+
+
+def _observed_claim_or_none() -> float | None:
+    """History-derived mean time-to-claim (seconds); None on no data / failure."""
+    try:
+        return forklift_store.recent_claim_seconds(_CLAIM_WINDOW_DAYS)
+    except Exception:
+        return None
+
+
 def _fit_calibration(mean_handle: float) -> forklift_queue.CalibResult:
     """Calibrate the queue model against actual recorded waits. Defensive: a
     store-read failure yields an uncalibrated (k=1.0) result, never raises."""
@@ -185,10 +196,6 @@ def build_advisor(target_day: date, scheduled: int, backups: int) -> dict:
     algo_throughput = _algo_throughput()
     resolved = forklift_settings.resolve(cfg, algo_throughput=algo_throughput)
 
-    # v1 simplification: build a single forecast from the *resolved* history
-    # window and size both recommendations from it. The window only affects
-    # demand smoothing (second-order for the baseline display), so reusing the
-    # same forecast is acceptable and keeps this cheap.
     forecast = _forecast(target_day, resolved.history_samples, cfg.coldstart_calls_per_day)
     if forecast.basis == "none" or forecast.total_calls <= 0:
         return {"available": False}
@@ -203,80 +210,38 @@ def build_advisor(target_day: date, scheduled: int, backups: int) -> dict:
         if forecast.peak_hour is not None else "—"
     )
 
-    base = {
+    # Capacity-coverage recommendation: smallest crew that can physically keep up
+    # with the planned-hour call volume (throughput x utilization headroom).
+    _, planned_lambda = forklift_demand.demand_at_percentile(
+        forecast.by_hour, resolved.percentile)
+    recommended = None
+    if forecast.by_hour and planned_lambda > 0:
+        recommended = forklift_demand.recommend_drivers(
+            planned_lambda, resolved.effective_throughput)
+
+    observed_claim = _observed_claim_or_none()
+    coverage = (forklift_demand.assess_coverage(recommended, scheduled, backups)
+                if recommended else None)
+
+    return {
         "available": True,
         "day_label": target_day.strftime("%a %b %-d"),
         "total_calls": int(round(forecast.total_calls)),
         "peak_label": peak_label,
         "hours": hours,
-        "coverage": None,
         "basis": forecast.basis,
         "n_days": forecast.n_days,
         "backup_names": backup_names,
-        # SLA fields (default to the no-data / cold-start shape; filled below).
-        "recommended": None,
-        "algo_recommended": None,
-        "overloaded": False,
-        "predicted_claim_seconds": None,
-        "predicted_scheduled_claim_seconds": None,
-        "scheduled_prediction_overloaded": False,
-        "scheduled_prediction_status": None,
-        "live_model": {"available": False},
-        "target_seconds": resolved.target_claim_seconds,
-        "backtest": None,
-    }
-
-    # SLA recommendation: needs handling time + a forecast with hourly shape.
-    mean_handle = _mean_handle_or_none()
-    if mean_handle is None or not forecast.by_hour:
-        # No signal yet for the queue model: degrade quietly (recommendation
-        # "builds as history accrues"), but keep the demand summary above.
-        return base
-
-    calib = _fit_calibration(mean_handle)
-    _, planned_lambda = forklift_demand.demand_at_percentile(
-        forecast.by_hour, resolved.percentile)
-    rec = _recommend_for_target(forecast, resolved, mean_handle, calib.k,
-                                resolved.target_claim_seconds)
-    rec = _guard_overload(rec, forecast, resolved, mean_handle, calib)
-    # Algorithm baseline = same calc at the DEFAULT target (the discreet tick).
-    algo_rec = _recommend_for_target(
-        forecast, resolved, mean_handle, calib.k,
-        forklift_settings.DEFAULT_TARGET_CLAIM_SECONDS)
-    scheduled_pred, scheduled_overloaded = _scheduled_prediction(
-        scheduled, planned_lambda, mean_handle, calib.k)
-
-    coverage = (forklift_demand.assess_coverage(rec.drivers, scheduled, backups)
-                if rec.drivers else None)
-
-    base.update({
-        "recommended": rec.drivers,
-        "algo_recommended": algo_rec.drivers,
-        "overloaded": rec.overloaded,
-        "predicted_claim_seconds": rec.predicted_seconds,
-        "predicted_scheduled_claim_seconds": scheduled_pred,
-        "scheduled_prediction_overloaded": scheduled_overloaded,
-        "scheduled_prediction_status": _status_for_prediction(
-            scheduled_pred, resolved.target_claim_seconds, scheduled_overloaded),
-        "live_model": {
-            "available": True,
-            "recommended": rec.drivers,
-            "target_seconds": resolved.target_claim_seconds,
-            "lambda_per_hr": planned_lambda,
-            "mean_handle_seconds": mean_handle,
-            "calibration_k": calib.k,
-            "overloaded": rec.overloaded,
-        },
-        "target_seconds": resolved.target_claim_seconds,
+        "recommended": recommended,
+        "observed_claim_seconds": observed_claim,
         "coverage": coverage,
-        "backtest": {
-            "n_samples": calib.n_samples,
-            "mean_actual_seconds": calib.mean_actual_seconds,
-            "mean_pred_seconds": calib.mean_pred_seconds,
-            "uncalibrated": calib.uncalibrated,
+        "live_model": {
+            "available": recommended is not None,
+            "recommended": recommended,
+            "lambda_per_hr": planned_lambda,
+            "effective_throughput": resolved.effective_throughput,
         },
-    })
-    return base
+    }
 
 
 def _resolved_dict(r: forklift_settings.Resolved) -> dict:
