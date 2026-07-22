@@ -1,8 +1,7 @@
 """Department dashboard pages: GET /recycling and GET /new.
 
-Legacy URLs /new-vs and /tv/new-vs remain mounted as 301 redirects so
-existing TV bookmarks and external links keep working after the
-2026-05-26 rename."""
+(The pre-2026-05-26 legacy URLs /new-vs and /tv/new-vs were removed
+2026-07-22 after 30 days of zero traffic — Dale signed off per-URL.)"""
 
 from __future__ import annotations
 
@@ -760,17 +759,6 @@ def new_dept(
     )
 
 
-@router.get("/new-vs", include_in_schema=False)
-def new_vs_redirect(request: Request):
-    """Legacy URL — kept as a 301 so existing TV bookmarks and external
-    links don't break after the 2026-05-26 rename to /new. Preserves
-    the original query string (e.g. ?day=2026-05-20)."""
-    from fastapi.responses import RedirectResponse
-    q = request.url.query
-    target = "/new" + (f"?{q}" if q else "")
-    return RedirectResponse(url=target, status_code=301)
-
-
 def _render_new_dept(
     request: Request,
     *,
@@ -870,7 +858,7 @@ def _render_new_dept(
     }
 
     # Inline-assign popover: today only. Mirrors the recycling route so the
-    # "(no assignment)" bars on /new-vs become click-to-attribute buttons.
+    # "(no assignment)" bars on /new become click-to-attribute buttons.
     assignments_todo_by_wc: dict[str, dict] = {}
     all_active_people: list[str] = []
     if is_today:
@@ -953,12 +941,3 @@ def tv_new_dept(request: Request, theme: str | None = Query(default=None)):
     )
 
 
-@router.get("/tv/new-vs", include_in_schema=False)
-def tv_new_vs_redirect(request: Request):
-    """Legacy TV URL — 301 to /tv/new, carrying through the optional
-    `?theme=` query so existing TV bookmarks keep their light/dark
-    setting."""
-    from fastapi.responses import RedirectResponse
-    q = request.url.query
-    target = "/tv/new" + (f"?{q}" if q else "")
-    return RedirectResponse(url=target, status_code=301)

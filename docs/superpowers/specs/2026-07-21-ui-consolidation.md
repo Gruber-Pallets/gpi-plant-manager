@@ -61,6 +61,8 @@ and must not break:
   on a TV remote. No wave or phase may rename, move, or delete a `/tv/*` URL; the
   Phase 3 IA realignment applies to desktop URLs only, and the page-usage-driven
   legacy-redirect cleanup explicitly excludes `/tv/*` unless Dale signs off per-URL.
+  (Signed off 2026-07-22: `/tv/new-vs` removed after 30 days of zero traffic,
+  together with `/kiosk*` and `/new-vs`. `/tv/d/{slug}` stays — still receiving hits.)
 
 ## Phase 1 design
 

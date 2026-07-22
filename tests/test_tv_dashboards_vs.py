@@ -84,14 +84,12 @@ def test_tv_recycling_supports_light_theme_via_query(monkeypatch):
     assert 'data-tv-theme="light"' in r.text
 
 
-def test_tv_new_vs_renders_with_default_dark_theme(monkeypatch):
+def test_tv_new_renders_with_default_dark_theme(monkeypatch):
     _stub_data(monkeypatch)
     with patch("zira_dashboard.routes.departments.leaderboard", return_value=[]), \
          patch("zira_dashboard.routes.departments.shift_elapsed_minutes", return_value=60):
         c = TestClient(app)
-        # /tv/new-vs is a legacy URL that 301s to /tv/new; TestClient
-        # follows redirects by default, so this still tests the final page.
-        r = c.get("/tv/new-vs")
+        r = c.get("/tv/new")
     assert r.status_code == 200
     assert 'data-tv-theme="dark"' in r.text
     assert "/static/tv-mode.css" in r.text

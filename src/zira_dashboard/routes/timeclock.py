@@ -76,26 +76,6 @@ router = APIRouter()
 _log = logging.getLogger(__name__)
 
 
-# ---------- back-compat: /kiosk → /timeclock ----------
-# The timeclock app moved from /kiosk to /timeclock. These redirects keep
-# old bookmarks working — most importantly the plant tablet pinned to
-# /kiosk — and catch any internal link that still points at the old path.
-@router.get("/kiosk")
-def _legacy_kiosk_root(request: Request):
-    q = request.url.query
-    return RedirectResponse(
-        url="/timeclock" + (f"?{q}" if q else ""), status_code=307
-    )
-
-
-@router.get("/kiosk/{rest:path}")
-def _legacy_kiosk_deep(request: Request, rest: str):
-    q = request.url.query
-    return RedirectResponse(
-        url=f"/timeclock/{rest}" + (f"?{q}" if q else ""), status_code=307
-    )
-
-
 # ---------- session tokens ----------
 
 _SESSION_SECRET = os.environ.get("KIOSK_SESSION_SECRET") or secrets.token_hex(32)
