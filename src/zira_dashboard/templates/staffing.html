@@ -1,13 +1,8 @@
+{% extends "_base_app.html" %}
 {% from "_cert_badges.html" import cert_badges, cert_badges_css %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/png" href="/static/gpi-logo.png">
-<title>Plant Scheduler — GPI Plant Manager</title>
-<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
+{% block title %}Plant Scheduler{% endblock %}
+{% block head %}
 <link rel="stylesheet" href="/static/staffing.css?v={{ static_v('staffing.css') }}">
 <link rel="stylesheet" href="/static/saturday-recruiting.css?v={{ static_v('saturday-recruiting.css') }}">
 <link rel="stylesheet" media="print" href="/static/staffing-print.css?v={{ static_v('staffing-print.css') }}">
@@ -17,8 +12,10 @@
   /* Save toast (top-center) — shared with skills + settings. */
   {% include "_save_toast.html" %}
 </style>
-</head>
-<body>
+{% endblock %}
+{% block header %}
+{# The print-header sits above the app header: staffing.css hides it on
+   screen; staffing-print.css shows it (and hides the chrome) on paper. #}
 <div class="print-header">
   <div class="title">Plant Scheduler</div>
   <div class="date">{{ day_pretty }}</div>
@@ -33,9 +30,9 @@
     <button type="button" class="redo-btn header-undo-redo" id="redo-btn" title="Redo" aria-label="Redo" disabled>↷</button>
   </div>
 </header>
-
-{% include '_staffing_subnav.html' %}
-
+{% endblock %}
+{% block subnav %}{% include '_staffing_subnav.html' %}{% endblock %}
+{% block content %}
 <form method="post" action="/staffing?day={{ day }}" id="staffing-form">
   {% if viewing_posted %}<input type="hidden" name="viewing_posted" value="1">{% endif %}
 <input type="hidden" name="testing_day" id="testing-day-input" value="{{ '1' if testing_day else '0' }}">
@@ -562,7 +559,7 @@
 
 <script src="/static/staffing.js?v={{ static_v('staffing.js') }}"></script>
 <script src="/static/saturday-recruiting.js?v={{ static_v('saturday-recruiting.js') }}"></script>
-{% include '_footer.html' %}
+{% endblock %}
+{% block scripts %}
 {{ hover_tip_clamp_script() }}
-</body>
-</html>
+{% endblock %}

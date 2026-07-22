@@ -24,10 +24,9 @@ BASES = {"_base_app.html", "timeclock_base.html"}
 
 # auth_denied.html stays standalone permanently: it renders for
 # UNAUTHENTICATED users and must not include _topnav.html (which calls
-# nav_inbox_summary()). Everything else is queued for conversion.
+# nav_inbox_summary()). Every other full-page template extends a base.
 ALLOWED_STANDALONE = {
     "auth_denied.html",             # permanent
-    "staffing.html",                # Wave 3
 }
 
 
