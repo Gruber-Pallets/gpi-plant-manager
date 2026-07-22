@@ -742,6 +742,26 @@ def test_completed_training_block_promotes_to_one_and_never_repeats(monkeypatch)
             "active", [b for b in state["active"] if b.id != bid]
         ),
     )
+    # The durable-claim redesign added three more collaborators; keep the
+    # fakes faithful to the store contract: no completing leftovers, a claim
+    # succeeds only while the block is still active, and elapsed-day
+    # recording (covered by its own tests) stays out of this fake DB.
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "completing_blocks", lambda: []
+    )
+    monkeypatch.setattr(
+        rotation_training.rotation_store,
+        "claim_completion",
+        lambda bid: any(b.id == bid for b in state["active"]),
+    )
+    monkeypatch.setattr(
+        rotation_training.rotation_store,
+        "release_completion_claim",
+        lambda bid: None,
+    )
+    monkeypatch.setattr(
+        rotation_training, "_record_elapsed_day_outcomes", lambda block, as_of: None
+    )
 
     assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == [42]
     assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == []

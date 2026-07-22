@@ -1,13 +1,4 @@
-:root {
-  --bg: #f1f4f7;
-  --panel: #ffffff;
-  --panel-2: #f1f4f7;
-  --border: #d8dee5;
-  --fg: #1f2937;
-  --muted: #6b7280;
-  --accent: #16a34a;
-  --accent-dim: #dcfce7;
-}
+/* Shared palette comes from tokens.css. */
 * {
   box-sizing: border-box;
 }

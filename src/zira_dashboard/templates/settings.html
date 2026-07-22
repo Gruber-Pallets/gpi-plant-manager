@@ -1,22 +1,16 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/png" href="/static/gpi-logo.png">
-<title>Settings — GPI Plant Manager</title>
-<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
+{% extends "_base_app.html" %}
+{% block title %}Settings{% endblock %}
+{% block head %}
 <link rel="stylesheet" href="/static/settings.css?v={{ static_v('settings.css') }}">
-</head>
-<body>
-<header>
-  {% set active_nav = 'settings' %}{% include "_topnav.html" %}
+{% endblock %}
+{% block topnav %}{% set active_nav = 'settings' %}{% include "_topnav.html" %}{% endblock %}
+{% block header_extra %}
   <div class="page-actions">
     <button type="button" class="undo-btn" id="page-undo-btn" title="Undo last save" aria-label="Undo" disabled>↶</button>
     <button type="button" class="redo-btn" id="page-redo-btn" title="Redo" aria-label="Redo" disabled>↷</button>
   </div>
-</header>
-<main>
+{% endblock %}
+{% block content %}
 <div class="settings-shell">
   <aside class="settings-sidebar" aria-label="Settings sections">
     <a href="?section=work_centers"
@@ -1369,10 +1363,8 @@
 
   </div>
 </div>
-</main>
-
+{% endblock %}
+{% block scripts %}
 <script>window.PROD_MIN = {{ productive_minutes }};</script>
 <script src="/static/settings.js?v={{ static_v('settings.js') }}"></script>
-{% include '_footer.html' %}
-</body>
-</html>
+{% endblock %}

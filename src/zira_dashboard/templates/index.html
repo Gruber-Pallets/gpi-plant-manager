@@ -1,18 +1,12 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/png" href="/static/gpi-logo.png">
-<title>Work Centers — GPI Plant Manager</title>
-<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
+{% extends "_base_app.html" %}
+{% block title %}Work Centers{% endblock %}
+{% block head %}
 <link rel="stylesheet" href="/static/index.css?v={{ static_v('index.css') }}">
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
-</head>
-<body>
-<header>
-  {% set active_nav = 'dashboards' %}{% include "_topnav.html" %}
-  <form method="get" action="/">
+{% endblock %}
+{% block topnav %}{% set active_nav = 'dashboards' %}{% include "_topnav.html" %}{% endblock %}
+{% block header_extra %}
+  <form method="get" action="/work-centers">
     <label for="day">Day</label>
     <input id="day" type="date" name="day" value="{{ day }}" max="{{ today }}">
     <label for="category">Category</label>
@@ -23,9 +17,9 @@
     </select>
     <button type="submit">Update</button>
   </form>
-</header>
-{% include "_dashboards_subnav.html" %}
-<main>
+{% endblock %}
+{% block subnav %}{% include "_dashboards_subnav.html" %}{% endblock %}
+{% block content %}
   {% if is_today %}
   <div class="summary">
     <span class="pill running">{{ counts.Running }} running</span>
@@ -90,10 +84,9 @@
   <div class="footer">
     Refreshed {{ refreshed_at }}{% if is_today %} · auto-refresh 60s{% endif %}
   </div>
-</main>
+{% endblock %}
+{% block scripts %}
 {% if is_today %}
 <script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>
 {% endif %}
-{% include '_footer.html' %}
-</body>
-</html>
+{% endblock %}

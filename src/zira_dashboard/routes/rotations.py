@@ -16,6 +16,7 @@ GET reflects them.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 from datetime import date
 
@@ -26,7 +27,6 @@ from .. import (
     _http_cache,
     db,
     rotation_store,
-    rotation_suggestions,
     saturday_recruiting_store,
     schedule_solver,
     scheduler_time_off,
@@ -37,7 +37,18 @@ from ..plant_day import now as plant_now
 
 router = APIRouter()
 
+log = logging.getLogger(__name__)
+
 _VALID_MODES = ("optimized", "normal", "training")
+
+# Validation failures that must never be persisted, whichever path produced
+# the proposal (goal-button rebuild, reset, or new-day seeding).
+_HARD_ISSUE_CODES = frozenset({
+    "person_assigned_multiple_centers",
+    "center_capacity_exceeded",
+    "generated_assignment_unqualified",
+    "generated_assignment_center_disabled",
+})
 
 
 def _error(message: str, status_code: int = 422) -> JSONResponse:
@@ -470,6 +481,91 @@ def _build_assignment_sources(existing_sources, suggestion) -> dict[str, dict[st
     return new_sources
 
 
+def default_complete_schedule(
+    d: date,
+    roster,
+    time_off_entries,
+    *,
+    mode: str = "normal",
+    enabled_centers,
+):
+    """The day's "default schedule": a clean-slate complete rebuild.
+
+    Runs the same engine the goal buttons use, but with no base assignments,
+    no manual locks, and no prior sources — exactly what Reset to defaults
+    produces. Returns ``(assignments, sources)`` only when every available
+    person places safely; any read failure, incomplete solve, or unsafe
+    placement returns ``None`` so callers fall back instead of persisting a
+    partial schedule. New-day seeding (``_seed_new_future_draft``) and the
+    reset path of ``POST /api/rotations/rebuild`` must stay in lockstep — a
+    fresh day and a reset day are the same product state.
+    """
+    try:
+        enabled = staffing_route._ordered_work_center_names(enabled_centers)
+        if not enabled:
+            return None
+        exact_defaults, group_defaults, user_group_centers = (
+            staffing_route._default_inputs(strict=True)
+        )
+        center_capacities = staffing_route._configured_center_capacities(
+            enabled, strict=True,
+        )
+        center_minimums = {
+            loc.name: staffing_route._effective_minimum(loc)
+            for loc in staffing.LOCATIONS if loc.name in enabled
+        }
+        group_locations, group_required_skills = staffing_route._auto_group_maps(enabled)
+        required_skills = {
+            center: group_required_skills[group]
+            for group, centers in group_locations.items()
+            for center in centers
+        }
+    except Exception:
+        log.exception("Could not load default-schedule inputs for %s", d)
+        return None
+    suggestion = staffing_route._recycled_suggestion_for_day(
+        d,
+        roster,
+        mode,
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=time_off_entries,
+        enabled_work_centers=enabled,
+        assignment_sources={},
+        center_minimums=center_minimums,
+        center_capacities=center_capacities,
+        exact_defaults=exact_defaults,
+        group_defaults=group_defaults,
+        user_group_centers=user_group_centers,
+        minimum_only=True,
+    )
+    if suggestion is None or not suggestion.complete:
+        return None
+    try:
+        assignments = staffing_route._merge_recycled_assignments({}, suggestion)
+        sources = _build_assignment_sources({}, suggestion)
+        validation_issues = _validate_complete_rebuild(
+            available_people=suggestion.available_people,
+            protected_assignments={},
+            enabled_centers=enabled,
+            center_minimums=center_minimums,
+            center_capacities=center_capacities,
+            required_skills=required_skills,
+            roster=staffing_route._roster_minus_full_day_off(roster, time_off_entries),
+            exact_defaults=exact_defaults,
+            group_defaults=group_defaults,
+            user_group_centers=user_group_centers,
+            proposed_assignments=assignments,
+            proposed_sources=sources,
+        )
+    except Exception:
+        log.exception("Could not validate the default schedule for %s", d)
+        return None
+    if any(issue.code in _HARD_ISSUE_CODES for issue in validation_issues):
+        return None
+    return assignments, sources
+
+
 @router.post("/api/rotations/rebuild")
 async def rebuild_rotation(request: Request):
     body = await _json_body(request)
@@ -489,7 +585,15 @@ async def rebuild_rotation(request: Request):
     def _work():
         roster = staffing.load_roster()
         sched = staffing.draft_from_posted(staffing.load_schedule(d))
-        base_assignments = {k: list(v) for k, v in sched.assignments.items()}
+        # Reset rebuilds from a clean slate: every prior assignment (manual
+        # picks and non-Auto centers included) and every prior source is
+        # discarded before the complete rebuild, so a reset day matches what a
+        # brand-new day is seeded with (see ``default_complete_schedule``).
+        base_assignments = (
+            {} if reset_to_defaults
+            else {k: list(v) for k, v in sched.assignments.items()}
+        )
+        existing_sources = {} if reset_to_defaults else sched.assignment_sources
         try:
             if staffing.schedule_revision(d) is None:
                 sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
@@ -508,69 +612,13 @@ async def rebuild_rotation(request: Request):
                 enabled_centers,
                 strict=True,
             )
-            if reset_to_defaults:
-                absent = rotation_suggestions._full_day_time_off_names(time_off)
-                history = rotation_suggestions._load_recycled_history(
-                    d,
-                    group_locations=staffing_route._auto_history_group_locations(),
-                    user_group_centers=user_group_centers,
-                )
-                assignments, sources = staffing_route._defaults_only_assignments(
-                    roster=roster,
-                    full_day_off_names=absent,
-                    exact_defaults=exact_defaults,
-                    group_defaults=group_defaults,
-                    user_group_centers=user_group_centers,
-                    enabled_centers=enabled_centers,
-                    center_capacities=center_capacities,
-                    history=history,
-                )
-                staffing.save_schedule(staffing.Schedule(
-                    day=d,
-                    published=sched.published,
-                    assignments=assignments,
-                    notes=sched.notes,
-                    wc_notes=dict(sched.wc_notes),
-                    testing_day=sched.testing_day,
-                    published_snapshot=sched.published_snapshot,
-                    custom_hours=sched.custom_hours,
-                    published_delivery=sched.published_delivery,
-                    rotation_mode=sched.rotation_mode,
-                    assignment_sources=sources,
-                    auto_enabled_work_centers=list(sched.auto_enabled_work_centers),
-                ))
-                _http_cache.invalidate_today_cache()
-                return JSONResponse({
-                    "ok": True,
-                    "applied": True,
-                    "assignments": assignments,
-                    "sources": sources,
-                    "reasons": {},
-                    "warnings": [],
-                    "unplaced": [],
-                    "coverage": {
-                        "staffed_centers": [],
-                        "unresolved_centers": [],
-                        "issues": [],
-                    },
-                    "enabled_work_centers": enabled_centers,
-                    "placement": {
-                        "available_people": [],
-                        "placed_people": [],
-                        "unplaced_people": [],
-                        "defaults": {},
-                        "issues": [],
-                    },
-                })
-            manual_locks = staffing_route._protected_locks(
-                sched.assignment_sources,
-                sched.assignments,
+            manual_locks = {} if reset_to_defaults else staffing_route._protected_locks(
+                existing_sources,
+                base_assignments,
                 allowed_centers=enabled_centers,
                 strict_default_reads=True,
                 include_saved_defaults=False,
             )
-            if reset_to_defaults:
-                manual_locks = {}
             center_minimums = {
                 loc.name: staffing_route._effective_minimum(loc)
                 for loc in staffing.LOCATIONS if loc.name in enabled_centers
@@ -595,7 +643,7 @@ async def rebuild_rotation(request: Request):
             locked_assignments=manual_locks,
             time_off_entries=time_off,
             enabled_work_centers=enabled_centers,
-            assignment_sources=sched.assignment_sources,
+            assignment_sources=existing_sources,
             center_minimums=center_minimums,
             center_capacities=center_capacities,
             exact_defaults=exact_defaults,
@@ -605,9 +653,28 @@ async def rebuild_rotation(request: Request):
         )
         if suggestion is None:
             return _error("Could not rebuild the schedule.", 503)
+        if reset_to_defaults and not suggestion.complete:
+            # A goal rebuild that can't place everyone leaves the base
+            # assignments in the suggestion, so saving is a no-op. Reset has
+            # no base — persisting an incomplete solve would wipe the day, so
+            # keep the prior schedule and report why instead.
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": (
+                        "Auto could not safely place everyone for a full reset. "
+                        "Previous schedule kept."
+                    ),
+                    "schedule_kept": True,
+                    "placement": _placement_payload(
+                        suggestion, suggestion.placement_issues,
+                    ),
+                },
+                status_code=422,
+            )
 
         new_assignments = staffing_route._merge_recycled_assignments(base_assignments, suggestion)
-        new_sources = _build_assignment_sources(sched.assignment_sources, suggestion)
+        new_sources = _build_assignment_sources(existing_sources, suggestion)
 
         validation_issues = _validate_complete_rebuild(
             available_people=suggestion.available_people,
@@ -623,14 +690,8 @@ async def rebuild_rotation(request: Request):
             proposed_assignments=new_assignments,
             proposed_sources=new_sources,
         )
-        hard_codes = {
-            "person_assigned_multiple_centers",
-            "center_capacity_exceeded",
-            "generated_assignment_unqualified",
-            "generated_assignment_center_disabled",
-        }
         hard_issues = tuple(
-            issue for issue in validation_issues if issue.code in hard_codes
+            issue for issue in validation_issues if issue.code in _HARD_ISSUE_CODES
         )
         if hard_issues:
             return JSONResponse(
@@ -644,7 +705,7 @@ async def rebuild_rotation(request: Request):
             )
 
         reporting_issues = tuple(suggestion.placement_issues) + tuple(
-            issue for issue in validation_issues if issue.code not in hard_codes
+            issue for issue in validation_issues if issue.code not in _HARD_ISSUE_CODES
         )
         warning_messages = list(suggestion.warnings)
         for issue in reporting_issues:

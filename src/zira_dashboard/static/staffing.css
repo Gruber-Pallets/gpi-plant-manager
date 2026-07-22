@@ -1,17 +1,5 @@
+  /* Shared palette comes from tokens.css; only page-specific vars here. */
   :root {
-    --bg: #f1f4f7;
-    --panel: #ffffff;
-    --panel-2: #f1f4f7;
-    --panel-3: #e3e8ee;
-    --border: #d8dee5;
-    --fg: #1f2937;
-    --muted: #6b7280;
-    --accent: #16a34a;
-    --accent-dim: #dcfce7;
-    --warn: #a16207;
-    --warn-dim: #fef3c7;
-    --bad: #ef4444;
-    --bad-dim: #fee2e2;
     --neutral-pill: #e3e8ee;
   }
   * { box-sizing: border-box; }

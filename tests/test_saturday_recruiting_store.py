@@ -276,8 +276,20 @@ def test_decline_suppresses_future_offer_for_same_saturday():
     assert store.offer_for_person(PERSON_ID, NOW) is None
 
 
-@pytest.mark.parametrize("earlier_response", ["declined", "cancelled"])
-def test_earlier_saturday_response_does_not_suppress_later_offer(earlier_response):
+@pytest.mark.parametrize(
+    ("earlier_response", "expected_day"),
+    [
+        # A decline is final for that Saturday — the next one is offered.
+        ("declined", NEXT_SATURDAY),
+        # A cancellation re-opens the SAME Saturday (ef8a2ee: a mistaken
+        # cancel must be recoverable from the kiosk), so the earlier
+        # Saturday is offered again ahead of the later one.
+        ("cancelled", SATURDAY),
+    ],
+)
+def test_earlier_saturday_response_does_not_suppress_later_offer(
+    earlier_response, expected_day
+):
     _qualify(PERSON_ID, 910101)
     _activate(requested_counts={910101: 1})
     _activate(
@@ -294,7 +306,7 @@ def test_earlier_saturday_response_does_not_suppress_later_offer(earlier_respons
     offer = store.offer_for_person(PERSON_ID, NOW + timedelta(hours=2))
 
     assert offer is not None
-    assert offer.day == NEXT_SATURDAY
+    assert offer.day == expected_day
 
 
 def test_later_keeps_offer_and_reserves_no_capacity():

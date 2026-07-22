@@ -6,10 +6,17 @@ from zira_dashboard.app import app
 from zira_dashboard.routes import timeclock, timeclock_saturday
 from zira_dashboard import employee_notifications, staffing
 from zira_dashboard.saturday_recruiting_store import HomeBanner, Offer
+from zira_dashboard.shift_config import SITE_TZ
 
 client = TestClient(app)
 PERSON = {"id": 1, "name": "Ana", "odoo_id": 11, "wage_type": "hourly", "spanish_level": 3}
-OFFER = Offer(date(2026, 7, 25), time(7), time(12), datetime(2026, 7, 24, 7), frozenset({1}))
+# The deadline must be tz-aware like the real store persists it: a naive
+# datetime is reinterpreted in the SYSTEM timezone by format_deadline's
+# astimezone(), which renders 2:00 AM on UTC CI runners but 7:00 AM locally.
+OFFER = Offer(
+    date(2026, 7, 25), time(7), time(12),
+    datetime(2026, 7, 24, 7, tzinfo=SITE_TZ), frozenset({1}),
+)
 AVAILABLE_BANNER = HomeBanner(
     OFFER.day, OFFER.response_deadline, 1, "available", time(7), time(12)
 )

@@ -1,3 +1,4 @@
+{% extends "_base_app.html" %}
 {# Operator dashboard. Two routes share this template:
    - /wc/{slug}        screen editor view (gridstack enabled, WC picker visible)
    - /tv/wc/{slug}     TV view (chrome stripped, picker hidden)
@@ -23,15 +24,10 @@
   {%- set c = customs.get(id, {}).get('color') -%}
   {%- if c -%}style="--wc: {{ c }}; {{ role }}: {{ c }} !important"{%- endif -%}
 {%- endmacro %}
-<!doctype html>
-<html lang="en"{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/png" href="/static/gpi-logo.png">
-<title>{% if tv_mode %}TV · {% endif %}{{ wc_name }} — GPI Plant Manager</title>
+{% block html_attrs %}{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}{% endblock %}
+{% block title %}{% if tv_mode %}TV · {% endif %}{{ wc_name }}{% endblock %}
+{% block head %}
 <link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
-<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
 <link rel="stylesheet" href="/static/wc_dashboard.css?v={{ static_v('wc_dashboard.css') }}">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
@@ -41,8 +37,9 @@
 {% endif %}
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 <style>{{ goat_badges_css() }}</style>
-</head>
-<body class="wc-dashboard">
+{% endblock %}
+{% block body_attrs %} class="wc-dashboard"{% endblock %}
+{% block header %}
 {% if tv_mode %}
   {% call tv_header(
       wc_name,
@@ -53,6 +50,10 @@
   <header>
     {% set active_nav = 'dashboards' %}{% include "_topnav.html" %}
   </header>
+{% endif %}
+{% endblock %}
+{% block subnav %}
+{% if not tv_mode %}
   {% include "_dashboards_subnav.html" %}
   {# One unified chrome strip: WC picker (acts as the page title) +
      scheduled operator(s) on the left; save indicator + Reset Layout
@@ -92,8 +93,9 @@
   zero until someone clocks in here.
 </div>
 {% endif %}
+{% endblock %}
 
-<main>
+{% block content %}
 <div class="grid-stack" data-layout-page="operator" data-tv-mode="{{ '1' if tv_mode else '0' }}" data-fallback-rows="25">
 
   {# Pallets / hr KPI — the only standalone KPI now; Units / Up Time /
@@ -297,13 +299,13 @@
   </div>
 
 </div>{# /.grid-stack #}
-</main>
-
+{% endblock %}
+{% block footer %}{% endblock %}
+{% block scripts %}
 <script src="/static/vendor/gridstack-all.js?v={{ static_v('vendor/gridstack-all.js') }}"></script>
 {# Gridstack init / layout persistence / WC picker / widget edit controls —
    shared with /recycling; parameterized by the data attributes on
    .grid-stack above. #}
 <script src="/static/dashboard-grid.js?v={{ static_v('dashboard-grid.js') }}"></script>
 {{ hover_tip_clamp_script() }}
-</body>
-</html>
+{% endblock %}

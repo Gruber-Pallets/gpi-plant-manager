@@ -933,24 +933,40 @@ def _seed_new_future_draft(
     try:
         if staffing.schedule_revision(day) is not None:
             return staffing.load_schedule(day)
-        exact_defaults, group_defaults, user_group_centers = _default_inputs(strict=True)
         enabled_centers = _default_auto_work_centers(day)
-        center_capacities = _configured_center_capacities(enabled_centers, strict=True)
-        history = rotation_suggestions._load_recycled_history(
+        # A brand-new day starts with "the defaults loaded": the same
+        # clean-slate complete rebuild Reset to defaults produces. When that
+        # solve is unavailable or can't place everyone safely, fall back to
+        # defaults-only placement rather than leaving the day blank.
+        from . import rotations as rotations_route
+
+        complete = rotations_route.default_complete_schedule(
             day,
-            group_locations=_auto_history_group_locations(),
-            user_group_centers=user_group_centers,
-        )
-        assignments, sources = _defaults_only_assignments(
-            roster=roster,
-            full_day_off_names=rotation_suggestions._full_day_time_off_names(time_off_entries),
-            exact_defaults=exact_defaults,
-            group_defaults=group_defaults,
-            user_group_centers=user_group_centers,
+            roster,
+            time_off_entries,
+            mode="normal",
             enabled_centers=enabled_centers,
-            center_capacities=center_capacities,
-            history=history,
         )
+        if complete is not None:
+            assignments, sources = complete
+        else:
+            exact_defaults, group_defaults, user_group_centers = _default_inputs(strict=True)
+            center_capacities = _configured_center_capacities(enabled_centers, strict=True)
+            history = rotation_suggestions._load_recycled_history(
+                day,
+                group_locations=_auto_history_group_locations(),
+                user_group_centers=user_group_centers,
+            )
+            assignments, sources = _defaults_only_assignments(
+                roster=roster,
+                full_day_off_names=rotation_suggestions._full_day_time_off_names(time_off_entries),
+                exact_defaults=exact_defaults,
+                group_defaults=group_defaults,
+                user_group_centers=user_group_centers,
+                enabled_centers=enabled_centers,
+                center_capacities=center_capacities,
+                history=history,
+            )
     except Exception:
         log.exception("Could not seed default staffing draft for %s", day)
         return sched

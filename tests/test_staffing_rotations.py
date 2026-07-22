@@ -901,7 +901,10 @@ def test_defaults_only_assignments_pins_exact_and_rotates_group_defaults():
     }
 
 
-def test_reset_to_defaults_replaces_assignments_and_never_runs_auto_solver(monkeypatch):
+def test_reset_to_defaults_clears_schedule_and_runs_clean_slate_rebuild(monkeypatch):
+    """Reset = the same complete rebuild, but from a clean slate: every prior
+    assignment (manual picks and non-Auto centers included) is discarded so
+    the result matches what a brand-new day is seeded with."""
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     prior = staffing.Schedule(
@@ -913,34 +916,100 @@ def test_reset_to_defaults_replaces_assignments_and_never_runs_auto_solver(monke
         custom_hours={"start": "06:00", "end": "14:30", "breaks": []}, rotation_mode="training",
     )
     saved = []
+    captured = {}
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: prior)
     monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
-    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Exact", 1), _person("Rotate", 1), _person("Absent", 1)])
-    monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [{"name": "Absent", "hours": None}])
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Rotate", 3)])
+    monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
     monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _day: {"Repair 2"})
-    monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({"Truck Driver": ("Exact",), "Repair 1": ("Absent",)}, {"Repair": ("Rotate",)}, {"Repair": ("Repair 1", "Repair 2")}))
-    monkeypatch.setattr(rotation_suggestions, "_load_recycled_history", lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory())
-    monkeypatch.setattr(staffing_route, "_recycled_suggestion_for_day", lambda *_args, **_kwargs: pytest.fail("reset must not run automatic scheduling"))
-    monkeypatch.setattr(rotations, "_validate_complete_rebuild", lambda *_args, **_kwargs: pytest.fail("reset must not validate a complete rebuild"))
+    monkeypatch.setattr(
+        staffing_route,
+        "_recycled_suggestion_for_day",
+        lambda *args, **kwargs: (
+            captured.update(kwargs)
+            or rotation_suggestions.RecycledSuggestion(
+                assignments={"Repair 2": ["Rotate"]},
+                sources={"Repair 2": {"Rotate": "generated"}},
+                reasons={},
+                warnings=(),
+                group_locations={"Repair": ("Repair 2",)},
+                complete=True,
+                available_people=("Rotate",),
+                placed_people=("Rotate",),
+            )
+        ),
+    )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
     response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
 
     assert response.status_code == 200
+    # The rebuild started from a clean slate: no base, no locks, no sources.
+    assert captured["base_assignments"] == {}
+    assert captured["locked_assignments"] == {}
+    assert captured["assignment_sources"] == {}
     assert len(saved) == 1
-    assert saved[0].assignments == {"Truck Driver": ["Exact"], "Repair 2": ["Rotate"]}
-    assert saved[0].assignment_sources == {"Truck Driver": {"Exact": "default"}, "Repair 2": {"Rotate": "default"}}
+    # The manual Truck Driver assignment (outside Auto centers) is cleared too.
+    assert saved[0].assignments == {"Repair 2": ["Rotate"]}
+    assert saved[0].assignment_sources == {"Repair 2": {"Rotate": "generated"}}
     assert saved[0].notes == prior.notes
     assert saved[0].wc_notes == prior.wc_notes
     assert saved[0].testing_day is True
     assert saved[0].published_snapshot == prior.published_snapshot
     assert saved[0].custom_hours == prior.custom_hours
-    assert saved[0].rotation_mode == prior.rotation_mode
     assert response.json()["assignments"] == saved[0].assignments
     assert response.json()["sources"] == saved[0].assignment_sources
     assert response.json()["enabled_work_centers"] == ["Repair 2"]
-    assert response.json()["coverage"]["issues"] == []
-    assert response.json()["placement"]["issues"] == []
+
+
+def test_reset_to_defaults_keeps_prior_schedule_when_rebuild_is_incomplete(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    prior = staffing.Schedule(
+        day=TARGET_DAY,
+        assignments={"Repair 1": ["Old Auto"]},
+        assignment_sources={"Repair 1": {"Old Auto": "generated"}},
+    )
+    saved = []
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: prior)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Rotate", 3), _person("Left Out", 3)])
+    monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
+    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _day: {"Repair 2"})
+    monkeypatch.setattr(
+        staffing_route,
+        "_recycled_suggestion_for_day",
+        lambda *args, **kwargs: rotation_suggestions.RecycledSuggestion(
+            assignments={},
+            sources={},
+            reasons={},
+            warnings=(),
+            group_locations={"Repair": ("Repair 2",)},
+            complete=False,
+            available_people=("Left Out", "Rotate"),
+            placed_people=(),
+            unused_people=("Left Out", "Rotate"),
+            placement_issues=(
+                schedule_solver.PlacementIssue(
+                    code="person_unplaced",
+                    person="Left Out",
+                    message="Left Out could not be placed in an enabled Auto work center.",
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
+
+    assert response.status_code == 422
+    assert saved == []
+    body = response.json()
+    assert body["ok"] is False
+    assert body["schedule_kept"] is True
+    assert any(
+        issue["code"] == "person_unplaced" for issue in body["placement"]["issues"]
+    )
 
 
 def test_reset_to_defaults_spreads_group_people_across_enabled_auto_centers(monkeypatch):
@@ -955,41 +1024,49 @@ def test_reset_to_defaults_spreads_group_people_across_enabled_auto_centers(monk
     monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({}, {"Repair": ("Ana", "Bob", "Cara")}, {"Repair": ("Repair 1", "Repair 2", "Repair 3")}))
     # Capacities must not force this distribution: least-load selection should.
     monkeypatch.setattr(staffing_route, "_configured_center_capacities", lambda centers, strict=False: {center: 3 for center in centers})
-    monkeypatch.setattr(rotations.rotation_suggestions, "_load_recycled_history", lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory())
+    monkeypatch.setattr(rotation_suggestions, "_load_recycled_history", lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory())
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
     response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
 
     assert response.status_code == 200
-    assert saved[0].assignments == {"Repair 1": ["Ana"], "Repair 2": ["Bob"], "Repair 3": ["Cara"]}
+    placed = saved[0].assignments
+    assert {name for names in placed.values() for name in names} == {"Ana", "Bob", "Cara"}
+    assert all(len(placed.get(center, [])) == 1 for center in ("Repair 1", "Repair 2", "Repair 3"))
 
 
-def test_reset_to_defaults_counts_exact_defaults_and_skips_full_group_centers(monkeypatch):
+def test_reset_to_defaults_never_saves_a_partial_schedule(monkeypatch):
+    """Capacity for 2 but 3 available people: the clean-slate rebuild is
+    incomplete, so reset keeps the prior schedule instead of saving a wipe."""
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
+    prior = staffing.Schedule(day=TARGET_DAY, assignments={"Repair 1": ["Old Auto"]})
     saved = []
-    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=TARGET_DAY))
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: prior)
     monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Pinned", 1), _person("Ana", 1), _person("Bob", 1)])
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
     monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _day: {"Repair 1", "Repair 2"})
     monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({"Repair 1": ("Pinned",)}, {"Repair": ("Ana", "Bob")}, {"Repair": ("Repair 1", "Repair 2")}))
     monkeypatch.setattr(staffing_route, "_configured_center_capacities", lambda centers, strict=False: {"Repair 1": 1, "Repair 2": 1})
-    monkeypatch.setattr(rotations.rotation_suggestions, "_load_recycled_history", lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory())
+    monkeypatch.setattr(rotation_suggestions, "_load_recycled_history", lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory())
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
     response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
 
-    assert response.status_code == 200
-    assert saved[0].assignments == {"Repair 1": ["Pinned"], "Repair 2": ["Ana"]}
-    assert "Bob" not in {name for names in saved[0].assignments.values() for name in names}
+    assert response.status_code == 422
+    assert saved == []
+    body = response.json()
+    assert body["schedule_kept"] is True
+    assert body["placement"]["issues"]
 
 
-def test_reset_to_defaults_skips_group_default_without_enabled_member(monkeypatch):
+def test_reset_to_defaults_keeps_prior_when_someone_cannot_be_placed(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
+    prior = staffing.Schedule(day=TARGET_DAY, assignments={"Repair 1": ["Old Auto"]})
     saved = []
-    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=TARGET_DAY))
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: prior)
     monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Rotate", 1)])
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
@@ -1000,9 +1077,83 @@ def test_reset_to_defaults_skips_group_default_without_enabled_member(monkeypatc
 
     response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
 
-    assert response.status_code == 200
-    assert saved[0].assignments == {}
-    assert saved[0].assignment_sources == {}
+    assert response.status_code == 422
+    assert saved == []
+    assert response.json()["schedule_kept"] is True
+
+
+def _suggestion(assignments, sources, *, complete=True, group_locations=None, people=()):
+    return rotation_suggestions.RecycledSuggestion(
+        assignments=assignments,
+        sources=sources,
+        reasons={},
+        warnings=(),
+        group_locations=group_locations or {"Repair": ("Repair 1", "Repair 2")},
+        complete=complete,
+        available_people=tuple(people),
+        placed_people=tuple(people) if complete else (),
+    )
+
+
+def test_default_complete_schedule_returns_full_assignments(monkeypatch):
+    from zira_dashboard.routes import rotations
+
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    monkeypatch.setattr(
+        staffing_route,
+        "_recycled_suggestion_for_day",
+        lambda *_args, **_kwargs: _suggestion(
+            {"Repair 2": ["Rotate"]},
+            {"Repair 2": {"Rotate": "generated"}},
+            people=("Rotate",),
+        ),
+    )
+
+    result = rotations.default_complete_schedule(
+        TARGET_DAY, [_person("Rotate", 3)], [], mode="normal",
+        enabled_centers=["Repair 2"],
+    )
+
+    assert result == (
+        {"Repair 2": ["Rotate"]},
+        {"Repair 2": {"Rotate": "generated"}},
+    )
+
+
+def test_default_complete_schedule_returns_none_when_solve_is_incomplete(monkeypatch):
+    from zira_dashboard.routes import rotations
+
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    monkeypatch.setattr(
+        staffing_route,
+        "_recycled_suggestion_for_day",
+        lambda *_args, **_kwargs: _suggestion({}, {}, complete=False, people=("Rotate",)),
+    )
+
+    assert rotations.default_complete_schedule(
+        TARGET_DAY, [_person("Rotate", 3)], [], mode="normal",
+        enabled_centers=["Repair 2"],
+    ) is None
+
+
+def test_default_complete_schedule_returns_none_on_unsafe_placement(monkeypatch):
+    from zira_dashboard.routes import rotations
+
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    monkeypatch.setattr(
+        staffing_route,
+        "_recycled_suggestion_for_day",
+        lambda *_args, **_kwargs: _suggestion(
+            {"Repair 1": ["Rotate"], "Repair 2": ["Rotate"]},
+            {"Repair 1": {"Rotate": "generated"}, "Repair 2": {"Rotate": "generated"}},
+            people=("Rotate",),
+        ),
+    )
+
+    assert rotations.default_complete_schedule(
+        TARGET_DAY, [_person("Rotate", 3)], [], mode="normal",
+        enabled_centers=["Repair 1", "Repair 2"],
+    ) is None
 
 
 def test_rebuild_rejects_non_boolean_reset_flag(monkeypatch):
@@ -2890,6 +3041,7 @@ def _render_staffing_page(
     default_people=None,
     recycled_context=None,
     bay_model=None,
+    complete_default_schedule=None,
 ):
     """Render the staffing page with all I/O stubbed, returning the captured
     template context. Mirrors the harness in test_staffing_trim_saw_defaults.
@@ -2940,6 +3092,16 @@ def _render_staffing_page(
         staffing_routes,
         "_configured_center_capacities",
         center_capacities or (lambda centers, strict=False: {center: None for center in centers}),
+    )
+    # Seeding a new day tries the clean-slate complete rebuild first; the
+    # harness pins it unavailable so the defaults-only fallback stays the
+    # deterministic default. Tests for the rebuild path override the knob.
+    from zira_dashboard.routes import rotations as rotations_routes
+    monkeypatch.setattr(
+        rotations_routes,
+        "default_complete_schedule",
+        complete_default_schedule or (lambda *_args, **_kwargs: None),
+        raising=False,
     )
     monkeypatch.setattr(
         staffing_routes.rotation_suggestions,
@@ -3086,7 +3248,47 @@ def test_saturday_context_uses_final_unassigned_names_for_schedule_goal(monkeypa
     assert ctx["minimum_crew_balance"]["center_count"] == 0
 
 
+def test_first_future_staffing_view_seeds_the_complete_default_schedule(monkeypatch):
+    """A brand-new future day starts with "the defaults loaded": the same
+    clean-slate complete rebuild Reset to defaults produces."""
+    saved = []
+    captured = {}
+
+    def fake_complete(day, roster, time_off_entries, *, mode, enabled_centers):
+        captured.update(
+            day=day, mode=mode, enabled_centers=list(enabled_centers),
+            roster=[person.name for person in roster],
+        )
+        return (
+            {"Repair 1": ["Ana"], "Repair 2": ["Bob"]},
+            {"Repair 1": {"Ana": "generated"}, "Repair 2": {"Bob": "generated"}},
+        )
+
+    ctx = _render_staffing_page(
+        monkeypatch,
+        schedule_revision=None,
+        roster=[_person("Ana", 1), _person("Bob", 1)],
+        auto_centers={"Repair 1", "Repair 2"},
+        complete_default_schedule=fake_complete,
+        saved_schedules=saved,
+    )
+
+    assert captured["day"] == TARGET_DAY
+    assert captured["mode"] == "normal"
+    assert sorted(captured["enabled_centers"]) == ["Repair 1", "Repair 2"]
+    assert len(saved) == 1
+    assert saved[0].published is False
+    assert saved[0].assignments == {"Repair 1": ["Ana"], "Repair 2": ["Bob"]}
+    assert saved[0].assignment_sources == {
+        "Repair 1": {"Ana": "generated"},
+        "Repair 2": {"Bob": "generated"},
+    }
+    assert ctx["sched"] is saved[0]
+
+
 def test_first_future_staffing_view_saves_exact_and_group_defaults(monkeypatch):
+    """When the complete rebuild is unavailable, seeding falls back to the
+    defaults-only placement rather than leaving the day blank."""
     saved = []
     ctx = _render_staffing_page(
         monkeypatch,

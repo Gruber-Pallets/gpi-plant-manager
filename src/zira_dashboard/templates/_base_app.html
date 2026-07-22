@@ -1,0 +1,53 @@
+{#
+  _base_app.html — the single document shell for desktop pages.
+  Kiosk pages extend timeclock_base.html instead. TV variants of the
+  dashboard pages suppress chrome by overriding `header`/`footer`.
+
+  Blocks (all optional except content):
+    html_attrs   — attributes on <html> (TV pages: data-tv-theme)
+    body_attrs   — attributes on <body> (page body classes)
+    title        — page name; rendered as "{title} — GPI Plant Manager"
+    title_tag    — the whole <title> element, for pages whose title
+                   doesn't fit the suffix pattern (leaderboard TVs)
+    head         — page <link>/<style> tags
+    topnav       — override to set the active menu item, e.g.
+                   {% block topnav %}{% set active_nav = 'staffing' %}{% include "_topnav.html" %}{% endblock %}
+    header_extra — extra controls inside <header class="app">
+    header       — whole-header override (TV mode only)
+    subnav       — sub-navigation strip under the header
+    main_attrs   — attributes appended to <main>
+    content      — page body
+    footer       — footer include; TV pages override to empty
+    body_end     — trailing script region (intermediate bases add shared
+                   scripts here and re-declare `scripts` inside it)
+    scripts      — page <script> tags
+
+  No inline styles here on purpose: page styling stays in each page's
+  CSS file until Phase 2 (tokens.css) lands.
+#}
+<!doctype html>
+<html lang="en"{% block html_attrs %}{% endblock %}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/static/gpi-logo.png">
+{% block title_tag %}<title>{% block title %}Home{% endblock %} — GPI Plant Manager</title>{% endblock %}
+<link rel="stylesheet" href="/static/tokens.css?v={{ static_v('tokens.css') }}">
+<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body{% block body_attrs %}{% endblock %}>
+{% block header %}
+<header class="app">
+  {% block topnav %}{% include "_topnav.html" %}{% endblock %}
+  {% block header_extra %}{% endblock %}
+</header>
+{% endblock %}
+{% block subnav %}{% endblock %}
+<main{% block main_attrs %}{% endblock %}>
+{% block content %}{% endblock %}
+</main>
+{% block footer %}{% include '_footer.html' %}{% endblock %}
+{% block body_end %}{% block scripts %}{% endblock %}{% endblock %}
+</body>
+</html>

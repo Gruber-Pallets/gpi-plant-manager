@@ -1,19 +1,11 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/png" href="/static/gpi-logo.png">
-<title>Exception Inbox — GPI Plant Manager</title>
-<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
+{% extends "_base_app.html" %}
+{% block title %}Exception Inbox{% endblock %}
+{% block head %}
 <link rel="stylesheet" href="/static/exceptions.css?v={{ static_v('exceptions.css') }}">
-</head>
-<body>
-<header class="app">
-  {% set active_nav = 'inbox' %}{% include "_topnav.html" %}
-</header>
-
-<main class="inbox-shell">
+{% endblock %}
+{% block topnav %}{% set active_nav = 'inbox' %}{% include "_topnav.html" %}{% endblock %}
+{% block main_attrs %} class="inbox-shell"{% endblock %}
+{% block content %}
   <div class="inbox-title">
     <div>
       <h2>Exception Inbox</h2>
@@ -212,9 +204,7 @@
       <button type="button" class="refresh-btn small archive-more" data-archive-more hidden>Show earlier</button>
     </div>
   </div>
-</main>
-{# Inbox-count bootstrap blob is emitted by _topnav.html (included above). #}
-{% include '_footer.html' %}
+{% endblock %}
+{% block scripts %}
 <script src="/static/exceptions.js?v={{ static_v('exceptions.js') }}"></script>
-</body>
-</html>
+{% endblock %}

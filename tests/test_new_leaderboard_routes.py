@@ -236,3 +236,28 @@ def test_new_leaderboard_response_cache_avoids_duplicate_payload(monkeypatch):
     assert client.get("/new-leaderboard").status_code == 200
     assert client.get("/new-leaderboard").status_code == 200
     assert len(calls) == 1
+
+
+def test_tv_new_leaderboard_has_no_desktop_chrome(monkeypatch):
+    """Chrome-consolidation guard: TV variant renders no topnav/footer."""
+    monkeypatch.setattr(
+        "zira_dashboard.routes.new_leaderboard._leaderboard_payload",
+        lambda today: fake_payload(),
+    )
+    r = TestClient(app).get("/tv/new-leaderboard")
+    assert r.status_code == 200
+    assert "<title>New-Leaderboard</title>" in r.text  # suffix-less TV title
+    assert 'class="brand-row"' not in r.text
+    assert "changelog-modal" not in r.text
+    assert r.text.lower().count("<!doctype") == 1
+
+
+def test_desktop_new_leaderboard_has_single_chrome(monkeypatch):
+    monkeypatch.setattr(
+        "zira_dashboard.routes.new_leaderboard._leaderboard_payload",
+        lambda today: fake_payload(),
+    )
+    r = TestClient(app).get("/new-leaderboard")
+    assert r.status_code == 200
+    assert r.text.count('class="brand-row"') == 1
+    assert "data-tv-theme" not in r.text

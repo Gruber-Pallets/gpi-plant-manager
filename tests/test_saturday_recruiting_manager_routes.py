@@ -191,7 +191,7 @@ def test_full_cancel_unpublishes_and_clears_assignments_atomically(monkeypatch):
     db.execute("DELETE FROM schedule_assignments WHERE day = %s", (SATURDAY,))
     db.execute("DELETE FROM schedules WHERE day = %s", (SATURDAY,))
     db.execute(
-        "INSERT INTO schedules (day, published, notes, wc_notes) VALUES (%s, TRUE, 'keep', '{\"Repair\": \"note\"}'::jsonb)",
+        "INSERT INTO schedules (day, published, notes) VALUES (%s, TRUE, 'keep')",
         (SATURDAY,),
     )
     db.execute("INSERT INTO work_centers (id, name, category) VALUES (910117, 'Cancel Test', 'Repair') ON CONFLICT (id) DO NOTHING")
@@ -235,8 +235,11 @@ def test_schedule_activation_makes_timeclock_banner_live(monkeypatch, request):
     db.bootstrap_schema()
     clear_test_data()
     request.addfinalizer(clear_test_data)
+    # min_ops must mirror the Location: _effective_minimum reads the DB row
+    # (work_centers.min_ops, NOT NULL DEFAULT 1), not the code-side Location.
     db.execute(
-        "INSERT INTO work_centers (id, name, category) VALUES (%s, %s, 'Repair')",
+        "INSERT INTO work_centers (id, name, category, min_ops, max_ops) "
+        "VALUES (%s, %s, 'Repair', 2, 4)",
         (work_center_id, work_center_name),
     )
     db.execute(
@@ -247,7 +250,14 @@ def test_schedule_activation_makes_timeclock_banner_live(monkeypatch, request):
         "INSERT INTO work_center_required_skills (wc_id, skill_id) VALUES (%s, %s)",
         (work_center_id, skill_id),
     )
-    monkeypatch.setattr(routes.staffing_routes, "_enabled_auto_work_centers", lambda _: {work_center_name})
+    # The route reads the day's enabled Auto centers from the saved schedule
+    # (auto_enabled_work_centers) — the old _enabled_auto_work_centers helper
+    # is gone.
+    monkeypatch.setattr(
+        routes.staffing,
+        "load_schedule",
+        lambda _day: SimpleNamespace(auto_enabled_work_centers={work_center_name}),
+    )
     monkeypatch.setattr(routes.staffing, "LOCATIONS", (location,))
     monkeypatch.setattr(
         routes.schedule_store,

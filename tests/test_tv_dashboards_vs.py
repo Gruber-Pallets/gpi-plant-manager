@@ -129,3 +129,35 @@ def test_screen_recycling_unaffected_by_tv_changes(monkeypatch):
     assert "data-tv-theme" not in r.text, "screen page must not set data-tv-theme"
     assert "/static/tv-mode.css" not in r.text, "screen page must not link tv-mode.css"
     assert 'class="tv-header"' not in r.text, "screen page must not render TV header"
+
+
+def test_tv_recycling_has_no_desktop_chrome(monkeypatch):
+    """Chrome-consolidation guard: the TV variant must render NO desktop
+    chrome at all — no topnav, no footer, exactly one document shell."""
+    _stub_data(monkeypatch)
+    with patch("zira_dashboard.routes.departments.leaderboard", return_value=[]), \
+         patch("zira_dashboard.routes.departments.shift_elapsed_minutes", return_value=60):
+        c = TestClient(app)
+        r = c.get("/tv/recycling")
+    assert r.status_code == 200
+    assert 'data-tv-theme="dark"' in r.text
+    assert 'class="brand-row"' not in r.text, "TV page must not render the topnav"
+    assert "changelog-modal" not in r.text, "TV page must not render the footer"
+    assert r.text.lower().count("<!doctype") == 1
+
+
+def test_tv_new_has_no_desktop_chrome(monkeypatch):
+    """Chrome-consolidation guard for /tv/new — mirror of the recycling one."""
+    _stub_data(monkeypatch)
+    from zira_dashboard.routes import departments
+    monkeypatch.setattr(departments, "_new_day_data",
+                        lambda *a, **k: _empty_new_day())
+    with patch("zira_dashboard.routes.departments.leaderboard", return_value=[]), \
+         patch("zira_dashboard.routes.departments.shift_elapsed_minutes", return_value=60):
+        c = TestClient(app)
+        r = c.get("/tv/new")
+    assert r.status_code == 200
+    assert 'data-tv-theme="dark"' in r.text
+    assert 'class="brand-row"' not in r.text, "TV page must not render the topnav"
+    assert "changelog-modal" not in r.text, "TV page must not render the footer"
+    assert r.text.lower().count("<!doctype") == 1

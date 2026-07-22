@@ -144,6 +144,12 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
 
 def test_build_snapshot_maps_running_late_to_muted_follow_up(monkeypatch):
     monkeypatch.setattr(exception_inbox.plant_day, "today", lambda: date(2026, 7, 13))
+    # The publish-tomorrow reminder fires from the REAL clock after its
+    # afternoon cutoff and would pollute the totals when the suite runs
+    # late in the day; it has its own dedicated tests below.
+    monkeypatch.setattr(
+        exception_inbox, "_plant_schedule_reminder", lambda: (0, [])
+    )
     monkeypatch.setattr(staffing_routes, "assignments_todo_payload", lambda: {"count": 0})
     monkeypatch.setattr(staffing_routes, "late_report_payload", lambda: {
         "count": 0, "scheduled_late": [], "unscheduled_late": [],

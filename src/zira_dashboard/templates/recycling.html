@@ -1,17 +1,5 @@
-<!doctype html>
-<html lang="en"{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/png" href="/static/gpi-logo.png">
-<title>{% if tv_mode %}TV · {% endif %}Departments — Recycling — GPI Plant Manager</title>
-<link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
-<link rel="stylesheet" href="/static/topnav.css?v={{ static_v('topnav.css') }}">
-<link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
-<link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
-{% if tv_mode %}
-<link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
-{% endif %}
+{% extends "_base_app.html" %}
+{% from "_tv_header.html" import tv_header %}
 {% from "_goat_badges.html" import goat_badges, goat_badges_css, hover_tip_clamp_script %}
 {% from "_widget_edit_controls.html" import edit_controls with context %}
 {% from "_department_dashboard_widgets.html" import
@@ -19,18 +7,29 @@
    department_progress_chart,
    department_downtime_report
    with context %}
+{% block html_attrs %}{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}{% endblock %}
+{% block title %}{% if tv_mode %}TV · {% endif %}Departments — Recycling{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
+<link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
+<link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
+{% if tv_mode %}
+<link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
+{% endif %}
 <style>{{ goat_badges_css() }}</style>
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
-</head>
-<body>
+{% endblock %}
+{% block header %}
 {% if tv_mode %}
-{% from "_tv_header.html" import tv_header %}
 {% call tv_header("Recycling", crumb="DEPARTMENTS · TODAY") %}{% include "_goat_watch_banner.html" %}{% endcall %}
-{% endif %}
-{% if not tv_mode %}
+{% else %}
 <header>
   {% set active_nav = 'dashboards' %}{% include "_topnav.html" %}
 </header>
+{% endif %}
+{% endblock %}
+{% block subnav %}
+{% if not tv_mode %}
 {% include "_dashboards_subnav.html" %}
 <form class="rc-toolbar" method="get" action="/recycling">
   <span class="rc-tool-label">Range:</span>
@@ -59,7 +58,11 @@
     <button type="button" id="reset-layout">Reset Layout</button>
   </div>
 </form>
+{# TV mode seats the banner in the header center (tv_header {% call %}
+   above); screen mode keeps it here below the edit bar. #}
+{% include "_goat_watch_banner.html" %}
 {% endif %}
+{% endblock %}
 {% macro widget_attrs(id, dx, dy, dw, dh) -%}
   {%- set l = layout.get(id, {'x': dx, 'y': dy, 'w': dw, 'h': dh}) -%}
   gs-id="{{ id }}" gs-x="{{ l.x }}" gs-y="{{ l.y }}" gs-w="{{ l.w }}" gs-h="{{ l.h }}"
@@ -72,11 +75,7 @@
   {%- if c -%}style="--wc: {{ c }}; {{ role }}: {{ c }} !important"{%- endif -%}
 {%- endmacro %}
 
-{# TV mode seats the banner in the header center (tv_header {% call %}
-   above); screen mode keeps it here below the edit bar. #}
-{% if not tv_mode %}{% include "_goat_watch_banner.html" %}{% endif %}
-
-<main>
+{% block content %}
   <div class="grid-stack" data-layout-page="recycling" data-tv-mode="{{ '1' if tv_mode else '0' }}" data-fallback-rows="30">
 
     {# Total Downtime KPI dropped 2026-05-14 + Up Time KPI dropped 2026-05-15 —
@@ -204,8 +203,9 @@
     {% if elapsed_minutes > 0 %} · shift elapsed: {{ elapsed_minutes }}m{% endif %}
   </div>
   {% endif %}
-</main>
-
+{% endblock %}
+{% block footer %}{% if not tv_mode %}{% include '_footer.html' %}{% endif %}{% endblock %}
+{% block scripts %}
 <script src="/static/vendor/gridstack-all.js?v={{ static_v('vendor/gridstack-all.js') }}"></script>
 {# Gridstack init / layout persistence / widget edit controls — shared with
    /wc/{slug}; parameterized by the data attributes on .grid-stack above.
@@ -225,7 +225,5 @@
 {% if tv_mode or range_includes_today %}
 <script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>
 {% endif %}
-{% if not tv_mode %}{% include '_footer.html' %}{% endif %}
 {{ hover_tip_clamp_script() }}
-</body>
-</html>
+{% endblock %}

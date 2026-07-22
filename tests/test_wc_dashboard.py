@@ -318,3 +318,15 @@ def test_pallets_banner_renders_start_and_now_ticks(monkeypatch):
     assert "start ·" in r.text
     # `now ·` only renders on today's date; the test runs today by default.
     assert "now ·" in r.text
+
+
+def test_tv_route_has_no_desktop_chrome(monkeypatch):
+    """Chrome-consolidation guard: the TV operator view must render no
+    topnav, no footer, and exactly one document shell."""
+    _stub_wc(monkeypatch)
+    c = TestClient(app)
+    r = c.get("/tv/wc/repair-1")
+    assert r.status_code == 200
+    assert 'class="brand-row"' not in r.text, "TV page must not render the topnav"
+    assert "changelog-modal" not in r.text, "TV page must not render the footer"
+    assert r.text.lower().count("<!doctype") == 1
