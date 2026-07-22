@@ -73,11 +73,10 @@
     btn.className = 'whatsnew-btn';
     btn.setAttribute('aria-label', "What's new");
     btn.setAttribute('aria-haspopup', 'dialog');
-    btn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" '
+    btn.innerHTML = '<svg class="whatsnew-lightbulb" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" '
       + 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-      + 'stroke-linejoin="round"><path d="M12 3v3.5M12 17.5v3.5M3 12h3.5'
-      + 'M17.5 12h3.5M15.5 8.5l2.1-2.1M8.5 8.5l-2.1-2.1M15.5 15.5l2.1 2.1'
-      + 'M8.5 15.5l-2.1 2.1"></path></svg>'
+      + 'stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5C17.5 10.5 18 9.2 18 8A6 6 0 0 0 6 8c0 1.2.5 2.5 1.5 3.5.7.7 1.3 1.5 1.5 2.5"></path>'
+      + '<path d="M9 18h6"></path><path d="M10 22h4"></path></svg>'
       + '<span class="whatsnew-dot" hidden></span>';
     dot = btn.querySelector('.whatsnew-dot');
     var slot = document.createElement('div');

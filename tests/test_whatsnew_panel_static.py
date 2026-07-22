@@ -96,3 +96,25 @@ def test_footer_js_uses_dedicated_header_slot_for_trigger():
     assert "slot.className = 'whatsnew-slot'" in js
     assert "header.appendChild(slot)" in js
     assert "header.children[header.children.length - 1].appendChild(btn)" not in js
+
+
+def test_whatsnew_uses_lucide_lightbulb_icon_button():
+    css = CSS.read_text(encoding="utf-8")
+    js = JS.read_text(encoding="utf-8")
+
+    # The trigger uses the accessible, outline-only Lucide lightbulb.
+    assert "btn.setAttribute('aria-label', \"What's new\")" in js
+    assert 'class="whatsnew-lightbulb"' in js
+    assert 'width="24" height="24"' in js
+    assert 'stroke-width="2"' in js
+    lightbulb_path = (
+        'M15 14c.2-1 .7-1.7 1.5-2.5C17.5 10.5 18 9.2 18 8A6 6 0 0 0 6 8'
+        'c0 1.2.5 2.5 1.5 3.5.7.7 1.3 1.5 1.5 2.5'
+    )
+    assert lightbulb_path in js
+
+    # The button chrome is a quiet 44px card with an 8px corner radius.
+    assert ".whatsnew-btn" in css
+    assert "width: 44px" in css
+    assert "height: 44px" in css
+    assert "border-radius: 8px" in css

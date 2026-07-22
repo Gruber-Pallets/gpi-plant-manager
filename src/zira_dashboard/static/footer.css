@@ -28,16 +28,23 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
-    height: 30px;
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
     padding: 0;
     cursor: pointer;
-    background: transparent;
-    color: var(--accent, #16a34a);
-    border: 1px solid var(--accent, #16a34a);
+    background: var(--panel, #fff);
+    color: var(--fg, #1f2937);
+    border: 1px solid rgba(31, 41, 55, 0.12);
     border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
   }
-  .whatsnew-btn:hover { background: var(--accent-dim, #dcfce7); }
+  .whatsnew-btn:hover { background: var(--muted-bg, #f3f4f6); }
+  .whatsnew-btn:focus-visible {
+    outline: 2px solid var(--accent, #16a34a);
+    outline-offset: 2px;
+  }
   .whatsnew-dot {
     position: absolute;
     top: -3px;
