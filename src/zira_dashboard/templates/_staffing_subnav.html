@@ -1,10 +1,6 @@
-{# Staffing sub-nav. Pass `active` = "plant"|"time_off"|"time_off_approvals"|"skills"|"people"|"past". #}
+{# Staffing sub-nav. Pass `active` = "plant"|"time_off"|"skills". #}
 <div class="sub-nav">
   <a href="/staffing"            class="{% if active == 'plant'     %}active{% endif %}">Plant Scheduler</a>
   <a href="/staffing/time-off"   class="{% if active == 'time_off'  %}active{% endif %}">Time Off</a>
-  <a href="/staffing/time-off/approvals"   class="{% if active == 'time_off_approvals'  %}active{% endif %}">Approvals</a>
   <a href="/staffing/skills"     class="{% if active == 'skills'    %}active{% endif %}">Skills Matrix</a>
-  <a href="/staffing/people"     class="{% if active == 'people'    %}active{% endif %}">People</a>
-  <a href="/staffing/forklift"   class="{% if active == 'forklift_leaderboards' %}active{% endif %}">Forklift</a>
-  <a href="/staffing/past"       class="{% if active == 'past'      %}active{% endif %}">Past Schedules</a>
 </div>

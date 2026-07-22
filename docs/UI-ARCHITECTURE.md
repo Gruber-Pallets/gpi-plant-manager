@@ -18,9 +18,16 @@ binding product decision (Dale, 2026-07-21, recorded in the spec).
 
 **Performance** (Dale, 2026-07-22) is the one home for every "how are we
 doing" page: the department dashboards, the operator view, the work-center
-grid, the department leaderboard pages, the plant leaderboards, and the
-Trophy Case — all tabs of `_performance_subnav.html`. URLs did not change
-(e.g. `/staffing/leaderboards` keeps its path; only the nav moved).
+grid, the department leaderboard pages, the plant leaderboards, the forklift
+leaderboards, and the Trophy Case — all tabs of `_performance_subnav.html`.
+URLs did not change (e.g. `/staffing/leaderboards` and `/staffing/forklift`
+keep their paths; only the nav moved).
+
+**Staffing** has three tabs: Plant Scheduler, Time Off (which includes the
+approvals panel — the old `/staffing/time-off/approvals` page 301s there),
+and Skills Matrix. Past schedules are a link beside the scheduler's day
+picker; `/staffing/people` (no tab) lands on the first player card — every
+person's name across the app links to their card.
 
 ## Templates: two base layouts, nothing else
 

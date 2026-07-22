@@ -87,7 +87,7 @@ def forklift_leaderboards(
         request,
         "forklift_leaderboards.html",
         {
-            "active": "forklift_leaderboards",
+            "active": "forklift",
             "window": window,
             "window_label": label,
             "custom_range_active": custom_range_active,

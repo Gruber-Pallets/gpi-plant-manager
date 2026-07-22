@@ -209,6 +209,14 @@ def staffing_time_off(
         ctx["prev_date"] = date(cursor.year - 1, cursor.month, 1).isoformat()
         ctx["next_date"] = date(cursor.year + 1, cursor.month, 1).isoformat()
 
+    # Approvals panel (merged from the old /staffing/time-off/approvals page,
+    # 2026-07-22). At worst 60s stale via the response cache; the Inbox is
+    # the prompt alert path for new requests.
+    from .time_off_approvals import _pending_payload, _recent_payload
+
+    ctx["pending"] = _pending_payload(today)
+    ctx["recent"] = _recent_payload(days=30)
+
     response = templates.TemplateResponse(request, "time_off.html", ctx)
     _http_cache.set_cache_headers(response, includes_today=is_today)
     _http_cache.store_cached_response(cache_key, includes_today=is_today, response=response)

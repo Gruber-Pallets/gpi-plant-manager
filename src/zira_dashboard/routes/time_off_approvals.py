@@ -10,11 +10,9 @@ from datetime import date, datetime, UTC
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
 
 from .. import time_off_audit, time_off_context
-from ..deps import templates
-from ..plant_day import SITE_TZ, today as plant_today
+from ..plant_day import SITE_TZ
 
 router = APIRouter()
 
@@ -117,16 +115,9 @@ def _recent_payload(days: int = 30) -> list[dict[str, Any]]:
     ]
 
 
-@router.get("/staffing/time-off/approvals", response_class=HTMLResponse)
+@router.get("/staffing/time-off/approvals", include_in_schema=False)
 def time_off_approvals(request: Request):
-    today = plant_today()
-    return templates.TemplateResponse(
-        request,
-        "time_off_approvals.html",
-        {
-            "active": "time_off_approvals",
-            "today_iso": today.isoformat(),
-            "pending": _pending_payload(today),
-            "recent": _recent_payload(days=30),
-        },
-    )
+    """The approvals page merged into /staffing/time-off (2026-07-22)."""
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse(url="/staffing/time-off", status_code=301)

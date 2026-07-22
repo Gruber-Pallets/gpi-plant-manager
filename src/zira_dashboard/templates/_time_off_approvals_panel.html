@@ -1,18 +1,15 @@
-{% extends "_staffing_base.html" %}
-{% block title %}Time Off Approvals{% endblock %}
-
-{% block extra_head %}
-<link rel="stylesheet" href="/static/exceptions.css?v={{ static_v('exceptions.css') }}">
-{% endblock %}
-
-{% block content %}
+{# Approvals panel — pending Odoo time-off requests + recent decisions.
+   Rendered at the bottom of /staffing/time-off (the standalone
+   /staffing/time-off/approvals page merged in 2026-07-22; its URL 301s
+   here). Needs exceptions.css + time_off_approvals.js and the
+   `pending` / `recent` context from time_off_approvals helpers. #}
 <div class="inbox-shell">
   <div class="inbox-title">
     <div>
       <h2>Time off approvals</h2>
       <p><span data-pending-count>{{ pending | length }}</span> pending</p>
     </div>
-    <a class="refresh-btn" href="/staffing/time-off/approvals">Refresh</a>
+    <a class="refresh-btn" href="/staffing/time-off">Refresh</a>
   </div>
 
   <div class="section-stack">
@@ -94,8 +91,3 @@
     </section>
   </div>
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script src="/static/time_off_approvals.js?v={{ static_v('time_off_approvals.js') }}"></script>
-{% endblock %}

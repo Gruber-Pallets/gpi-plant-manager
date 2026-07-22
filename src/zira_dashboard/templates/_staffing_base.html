@@ -45,9 +45,9 @@
 </style>
 {% block extra_head %}{% endblock %}
 {% endblock %}
-{% block topnav %}{% set active_nav = 'performance' if active in ['trophies', 'leaderboards'] else 'staffing' %}{% include "_topnav.html" %}{% endblock %}
+{% block topnav %}{% set active_nav = 'performance' if active in ['trophies', 'leaderboards', 'forklift'] else 'staffing' %}{% include "_topnav.html" %}{% endblock %}
 {% block subnav %}
-{% if active in ['trophies', 'leaderboards'] %}
+{% if active in ['trophies', 'leaderboards', 'forklift'] %}
 {% with active_dashboard_key = active %}{% include '_performance_subnav.html' %}{% endwith %}
 {% else %}
 {% with active=active %}{% include '_staffing_subnav.html' %}{% endwith %}

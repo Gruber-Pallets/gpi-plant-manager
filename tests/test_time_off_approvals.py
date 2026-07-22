@@ -118,13 +118,18 @@ def test_recent_payload_formats_decision_time_in_plant_timezone(monkeypatch):
     assert rows[0]["date_label"] == "2026-06-25 - 8:30 AM to 12:15 PM"
 
 
-def test_approvals_page_renders_200(monkeypatch):
+def test_approvals_url_redirects_to_merged_time_off_page(monkeypatch):
+    # The standalone approvals page merged into /staffing/time-off
+    # (2026-07-22); the old URL 301s so bookmarks keep working.
     monkeypatch.setattr(page, "_pending_payload", lambda today: [])
     monkeypatch.setattr(page.time_off_audit, "recent_decisions", lambda days=30: [])
     client = TestClient(app)
 
-    resp = client.get("/staffing/time-off/approvals")
+    bare = client.get("/staffing/time-off/approvals", follow_redirects=False)
+    assert bare.status_code == 301
+    assert bare.headers["location"] == "/staffing/time-off"
 
+    resp = client.get("/staffing/time-off/approvals")
     assert resp.status_code == 200
     assert "Time off approvals" in resp.text
     assert 'data-recent-decisions' in resp.text
@@ -160,7 +165,7 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
     }])
     client = TestClient(app)
 
-    resp = client.get("/staffing/time-off/approvals")
+    resp = client.get("/staffing/time-off")
 
     assert resp.status_code == 200
     assert "Maria Delgado" in resp.text
@@ -175,7 +180,9 @@ def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch
     assert 'data-pending-count' in resp.text
     assert 'data-recent-decisions' in resp.text
     assert 'aria-label="Reason to deny time off"' in resp.text
-    assert 'href="/staffing/time-off/approvals"   class="active">Approvals</a>' in resp.text
+    # The Approvals tab is gone; the merged page lives under Time Off.
+    assert "Approvals</a>" not in resp.text
+    assert 'href="/staffing/time-off"   class="active">Time Off</a>' in resp.text
 
 
 def test_approvals_js_removes_resolved_rows_and_updates_pending_counts():

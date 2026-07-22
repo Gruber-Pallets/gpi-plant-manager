@@ -130,6 +130,7 @@
       <input type="date" id="day-picker" value="{{ day }}" class="date-input" title="Jump to another day">
       <a href="/staffing?day={{ today }}" class="day-hot {% if day == today %}active{% endif %}" title="Jump to today">Today</a>
       <a href="/staffing?day={{ tomorrow }}" class="day-hot {% if day == tomorrow %}active{% endif %}" title="Jump to the next working day">Next Day</a>
+      <a href="/staffing/past" class="day-hot" title="Browse previously published schedules">Past</a>
       <button type="button" class="hours-pill {% if hours_source == 'custom' %}custom{% elif hours_source == 'saturday_default' %}saturday-default{% endif %}" id="hours-pill"
               title="Click to edit shift hours for this day" aria-label="Edit shift hours for {{ day }}"
               aria-controls="hours-editor" aria-expanded="false">

@@ -1,6 +1,10 @@
 {% extends "_staffing_base.html" %}
 {% block title %}Time Off{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="/static/exceptions.css?v={{ static_v('exceptions.css') }}">
+{% endblock %}
+
 {% block styles %}
   .cal-header { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; }
   .cal-header .title { font-size: 1.15rem; font-weight: 600; }
@@ -209,4 +213,10 @@
   Source is the Odoo time-off mirror. Pending requests appear on the Plant
   Scheduler (tagged <em>pending</em>) until HR approves them.
 </p>
+
+{% include "_time_off_approvals_panel.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/time_off_approvals.js?v={{ static_v('time_off_approvals.js') }}"></script>
 {% endblock %}
