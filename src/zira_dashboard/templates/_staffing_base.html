@@ -8,6 +8,8 @@
 #}
 {% block title %}Staffing{% endblock %}
 {% block head %}
+{# Trophies/Leaderboards render the Performance sub-nav (.dash-subnav). #}
+<link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 <style>
   /* Palette comes from tokens.css (linked by _base_app.html). */
   * { box-sizing: border-box; }
@@ -43,10 +45,10 @@
 </style>
 {% block extra_head %}{% endblock %}
 {% endblock %}
-{% block topnav %}{% set active_nav = 'trophies' if active in ['trophies', 'leaderboards'] else 'staffing' %}{% include "_topnav.html" %}{% endblock %}
+{% block topnav %}{% set active_nav = 'performance' if active in ['trophies', 'leaderboards'] else 'staffing' %}{% include "_topnav.html" %}{% endblock %}
 {% block subnav %}
 {% if active in ['trophies', 'leaderboards'] %}
-{% with active=active %}{% include '_trophies_subnav.html' %}{% endwith %}
+{% with active_dashboard_key = active %}{% include '_performance_subnav.html' %}{% endwith %}
 {% else %}
 {% with active=active %}{% include '_staffing_subnav.html' %}{% endwith %}
 {% endif %}

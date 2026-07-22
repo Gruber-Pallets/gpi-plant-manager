@@ -8,13 +8,19 @@ for the first time. (Consolidated 2026-07-21 — spec:
 
 | Surface | Audience | Entry points | Auth |
 |---|---|---|---|
-| **Desktop app** | managers/office | topnav: Dashboards, Trophy Case, Inbox, Staffing, Settings (`/` → `/recycling`) | Azure AD login |
+| **Desktop app** | managers/office | topnav: Performance, Staffing, Inbox, Settings (`/` → `/recycling`) | Azure AD login |
 | **TV displays** | plant floor, read-only, auto-refresh 60s | `/tv/...` (registry-dispatched via `/tv/{slug}`) | none (IP allowlist) |
 | **Timeclock kiosk** | shop-floor touchscreens | `/timeclock...` | device tokens |
 
 **TV URLs are permanent.** Never rename, move, or delete a `/tv/*` path —
 plant TVs bookmark them and there is no keyboard on a TV remote. This is a
 binding product decision (Dale, 2026-07-21, recorded in the spec).
+
+**Performance** (Dale, 2026-07-22) is the one home for every "how are we
+doing" page: the department dashboards, the operator view, the work-center
+grid, the department leaderboard pages, the plant leaderboards, and the
+Trophy Case — all tabs of `_performance_subnav.html`. URLs did not change
+(e.g. `/staffing/leaderboards` keeps its path; only the nav moved).
 
 ## Templates: two base layouts, nothing else
 

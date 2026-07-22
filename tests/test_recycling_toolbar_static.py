@@ -10,7 +10,7 @@ SHARED = ROOT / "src" / "zira_dashboard" / "templates" / "_department_dashboard_
 def test_recycling_range_toolbar_sits_below_subnav_not_header():
     html = TEMPLATE.read_text(encoding="utf-8")
     header_end = html.index("</header>")
-    subnav = html.index('{% include "_dashboards_subnav.html" %}')
+    subnav = html.index('{% include "_performance_subnav.html" %}')
     toolbar = html.index('<form class="rc-toolbar"')
 
     assert toolbar > header_end

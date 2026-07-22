@@ -48,13 +48,13 @@
   ) %}{% include "_goat_watch_banner.html" %}{% endcall %}
 {% else %}
   <header>
-    {% set active_nav = 'dashboards' %}{% include "_topnav.html" %}
+    {% set active_nav = 'performance' %}{% include "_topnav.html" %}
   </header>
 {% endif %}
 {% endblock %}
 {% block subnav %}
 {% if not tv_mode %}
-  {% include "_dashboards_subnav.html" %}
+  {% include "_performance_subnav.html" %}
   {# One unified chrome strip: WC picker (acts as the page title) +
      scheduled operator(s) on the left; save indicator + Reset Layout
      button on the right. Replaces the previous 3-row stack (wc-picker

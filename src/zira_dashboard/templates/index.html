@@ -4,7 +4,7 @@
 <link rel="stylesheet" href="/static/index.css?v={{ static_v('index.css') }}">
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 {% endblock %}
-{% block topnav %}{% set active_nav = 'dashboards' %}{% include "_topnav.html" %}{% endblock %}
+{% block topnav %}{% set active_nav = 'performance' %}{% include "_topnav.html" %}{% endblock %}
 {% block header_extra %}
   <form method="get" action="/work-centers">
     <label for="day">Day</label>
@@ -18,7 +18,7 @@
     <button type="submit">Update</button>
   </form>
 {% endblock %}
-{% block subnav %}{% include "_dashboards_subnav.html" %}{% endblock %}
+{% block subnav %}{% include "_performance_subnav.html" %}{% endblock %}
 {% block content %}
   {% if is_today %}
   <div class="summary">

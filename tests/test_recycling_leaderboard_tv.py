@@ -181,7 +181,7 @@ def test_dashboard_recycling_leaderboard_renders_as_dashboards_tab(monkeypatch):
     assert r.status_code == 200
     assert 'data-tv-theme="' not in r.text
     assert "tv-refresh.js" not in r.text
-    assert ">Dashboards<" in r.text
+    assert ">Performance<" in r.text
     assert 'href="/recycling-leaderboard"' in r.text
     assert "Recycling-leaderboard" in r.text
     assert "Maria S." in r.text

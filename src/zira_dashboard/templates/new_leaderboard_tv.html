@@ -26,10 +26,10 @@
       right_class="rlb-goat-banner",
   ) }}
   {% else %}
-  <header>{% set active_nav = 'dashboards' %}{% include "_topnav.html" %}</header>
+  <header>{% set active_nav = 'performance' %}{% include "_topnav.html" %}</header>
   {% endif %}
 {% endblock %}
-{% block subnav %}{% if not is_tv %}{% include "_dashboards_subnav.html" %}{% endif %}{% endblock %}
+{% block subnav %}{% if not is_tv %}{% include "_performance_subnav.html" %}{% endif %}{% endblock %}
 {% block main_attrs %} class="rlb-main"{% endblock %}
 {% block footer %}{% endblock %}
 {% block content %}

@@ -1,0 +1,44 @@
+{# Performance sub-nav — dashboards first, then leaderboards, then trophies.
+   (One home for all "how are we doing" content — Dale, 2026-07-22.)
+
+   Context required:
+     active_dashboard_key — one of 'vs_recycling', 'vs_new',
+                            'vs_work_centers', 'vs_recycling_leaderboard',
+                            'vs_new_leaderboard', 'trophies', 'leaderboards',
+                            or a string starting with 'wc:' (any WC =
+                            Operator tab active).
+#}
+<nav class="dash-subnav">
+  <a href="/recycling"
+     class="subnav-item {% if active_dashboard_key == 'vs_recycling' %}active{% endif %}">
+    Recycling
+  </a>
+  <a href="/new"
+     class="subnav-item {% if active_dashboard_key == 'vs_new' %}active{% endif %}">
+    New
+  </a>
+  <a href="/operator"
+     class="subnav-item {% if active_dashboard_key and active_dashboard_key.startswith('wc:') %}active{% endif %}">
+    Operator
+  </a>
+  <a href="/work-centers"
+     class="subnav-item {% if active_dashboard_key == 'vs_work_centers' %}active{% endif %}">
+    Work Centers
+  </a>
+  <a href="/recycling-leaderboard"
+     class="subnav-item {% if active_dashboard_key == 'vs_recycling_leaderboard' %}active{% endif %}">
+    Recycling-leaderboard
+  </a>
+  <a href="/new-leaderboard"
+     class="subnav-item {% if active_dashboard_key == 'vs_new_leaderboard' %}active{% endif %}">
+    New-Leaderboard
+  </a>
+  <a href="/staffing/leaderboards"
+     class="subnav-item {% if active_dashboard_key == 'leaderboards' %}active{% endif %}">
+    Leaderboards
+  </a>
+  <a href="/trophies"
+     class="subnav-item {% if active_dashboard_key == 'trophies' %}active{% endif %}">
+    Trophies
+  </a>
+</nav>

@@ -102,7 +102,7 @@ def test_new_keeps_shared_dashboard_surfaces_and_refresh_behavior():
     html = _html()
     for surface in (
         'include "_topnav.html"',
-        'include "_dashboards_subnav.html"',
+        'include "_performance_subnav.html"',
         'include "_goat_watch_banner.html"',
         '/static/assign-popover.js',
         '/static/tv-refresh.js',

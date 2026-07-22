@@ -2,7 +2,9 @@
   Shared top navigation menu — the single source of truth for the main menu.
   Include inside a page <header>, setting active_nav to highlight the current page:
     {% set active_nav = 'staffing' %}{% include "_topnav.html" %}
-  Valid active_nav values: dashboards, trophies, inbox, staffing, settings.
+  Valid active_nav values: performance, staffing, inbox, settings.
+  (Four sections per Dale, 2026-07-22: Performance absorbs the old
+  Dashboards section, Trophy Case, and the plant leaderboards.)
   Styling lives in topnav.css (load it in the page <head>), so the menu looks
   and sits identically on every page.
 
@@ -21,8 +23,8 @@
     <h1>Plant Manager</h1>
   </a>
   <nav>
-    <a href="/recycling"{% if active_nav == 'dashboards' %} class="active"{% endif %}>Dashboards</a>
-    <a href="/trophies"{% if active_nav == 'trophies' %} class="active"{% endif %}>Trophy Case</a>
+    <a href="/recycling"{% if active_nav == 'performance' %} class="active"{% endif %}>Performance</a>
+    <a href="/staffing"{% if active_nav == 'staffing' %} class="active"{% endif %}>Staffing</a>
     <a href="/exceptions"
        class="inbox-nav-link
          {%- if active_nav == 'inbox' %} active{% endif %}
@@ -33,7 +35,6 @@
       <span class="inbox-nav-label">Inbox</span>
       <span class="inbox-nav-count"{% if nav_inbox_total <= 0 and not nav_inbox_degraded %} hidden{% endif %}>{% if nav_inbox_degraded and nav_inbox_total <= 0 %}!{% elif nav_inbox_total > 99 %}99+{% else %}{{ nav_inbox_total }}{% endif %}</span>
     </a>
-    <a href="/staffing"{% if active_nav == 'staffing' %} class="active"{% endif %}>Staffing</a>
     <a href="/settings"{% if active_nav == 'settings' %} class="active"{% endif %}>Settings</a>
   </nav>
 </div>

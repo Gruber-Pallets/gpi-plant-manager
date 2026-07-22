@@ -168,7 +168,7 @@ def test_recycling_downtime_row_renders_person_and_wc_stacked(monkeypatch):
 def test_top_nav_renamed_and_work_centers_dropped():
     client = TestClient(app)
     html = client.get("/recycling").text
-    assert ">Dashboards<" in html
+    assert ">Performance<" in html
     # The top-nav "Work Centers" link is gone (subnav still has it)
     # We can assert by counting: there should be exactly one "Work Centers" string
     # (in the subnav).
@@ -207,7 +207,7 @@ def test_all_three_dashboard_pages_render_200():
         assert ">New<" in resp.text
         assert ">Work Centers<" in resp.text
         # top nav rename
-        assert ">Dashboards<" in resp.text
+        assert ">Performance<" in resp.text
 
 
 def test_recycling_renders_edit_controls_after_partial_extraction():
