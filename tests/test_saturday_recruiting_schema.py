@@ -19,6 +19,7 @@ def test_schema_defines_saturday_recruiting_tables_and_notification_key():
     assert "saturday_day DATE" in SCHEMA_DDL
     assert "employee_notifications_saturday_dedupe" in SCHEMA_DDL
     assert "(person_odoo_id, saturday_day, kind)" in SCHEMA_DDL
+    assert "staffing_prepared_at TIMESTAMPTZ" in SCHEMA_DDL
 
 
 def test_lifecycle_rows_are_immutable_value_objects_without_database():

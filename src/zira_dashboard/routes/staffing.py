@@ -990,6 +990,102 @@ def defaults_only_schedule(
     )
 
 
+def saturday_defaults_only_schedule(
+    day: date,
+    roster: Sequence[staffing.Person],
+    time_off_entries,
+    enabled_centers,
+) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
+    """Place willing Saturday staff in their defaults, but only when enabled."""
+    enabled = _ordered_work_center_names(enabled_centers)
+    enabled_set = set(enabled)
+    exact_defaults, group_defaults, user_group_centers = _default_inputs(strict=True)
+    exact_defaults = {
+        center: names for center, names in exact_defaults.items() if center in enabled_set
+    }
+    user_group_centers = {
+        group: tuple(center for center in centers if center in enabled_set)
+        for group, centers in user_group_centers.items()
+    }
+    center_capacities = _configured_center_capacities(enabled, strict=True)
+    history = rotation_suggestions._load_recycled_history(
+        day,
+        group_locations=_auto_history_group_locations(),
+        user_group_centers=user_group_centers,
+    )
+    return _defaults_only_assignments(
+        roster=roster,
+        full_day_off_names=rotation_suggestions._full_day_time_off_names(time_off_entries),
+        exact_defaults=exact_defaults,
+        group_defaults=group_defaults,
+        user_group_centers=user_group_centers,
+        enabled_centers=enabled,
+        center_capacities=center_capacities,
+        history=history,
+    )
+
+
+def _prepare_closed_saturday_schedule(
+    day: date,
+    roster: Sequence[staffing.Person],
+    time_off_entries,
+) -> staffing.Schedule | None:
+    """Apply defaults once after recruiting closes; never invoke the Auto solver."""
+    with db.cursor() as cur:
+        bundle = saturday_recruiting_store.get(day, cur=cur)
+        if bundle is None or bundle.recruitment.status != "closed":
+            return None
+        locked = staffing.load_schedule_for_update(day, cur=cur)
+        if locked is None:
+            locked = staffing.Schedule(day=day)
+        if bundle.recruitment.staffing_prepared_at is not None:
+            return locked
+        if locked.assignments:
+            raise saturday_recruiting_store.LifecycleConflict(
+                "Saturday staffing was changed before recruiting closed"
+            )
+        commitments = {
+            item.person_name: {"start": item.availability_start, "end": item.availability_end}
+            for item in bundle.commitments
+            if item.status == "committed"
+            and item.availability_start is not None
+            and item.availability_end is not None
+        }
+        committed_names = set(staffing.effective_saturday_commitments(
+            commitments,
+            locked.saturday_availability_overrides,
+            bundle.recruitment.shift_start,
+            bundle.recruitment.shift_end,
+        ))
+        committed_roster = [person for person in roster if person.name in committed_names]
+        assignments, sources = saturday_defaults_only_schedule(
+            day,
+            committed_roster,
+            time_off_entries,
+            locked.auto_enabled_work_centers,
+        )
+        prepared = staffing.Schedule(
+            day=day,
+            published=locked.published,
+            assignments=assignments,
+            notes=locked.notes,
+            wc_notes=dict(locked.wc_notes),
+            testing_day=locked.testing_day,
+            custom_hours=locked.custom_hours,
+            published_snapshot=locked.published_snapshot,
+            published_delivery=dict(locked.published_delivery),
+            rotation_mode=locked.rotation_mode,
+            assignment_sources=sources,
+            auto_enabled_work_centers=list(locked.auto_enabled_work_centers),
+            saturday_availability_overrides=dict(locked.saturday_availability_overrides),
+        )
+        staffing.save_schedule(prepared, cur=cur)
+        saturday_recruiting_store.mark_staffing_prepared(day, plant_now(), cur=cur)
+    staffing.invalidate_schedule_cache(day)
+    _http_cache.invalidate_today_cache()
+    return prepared
+
+
 def _seed_new_future_draft(
     day: date,
     today: date,
@@ -1002,14 +1098,18 @@ def _seed_new_future_draft(
     try:
         if staffing.schedule_revision(day) is not None:
             return staffing.load_schedule(day)
-        enabled_centers = _default_auto_work_centers(day)
+        if day.weekday() == 5:
+            enabled_centers = []
+            assignments, sources = {}, {}
+        else:
+            enabled_centers = _default_auto_work_centers(day)
         # A brand-new day opens with "the defaults loaded": only the people set
         # as a work-center or group default, exactly what Reset to defaults
         # produces. A read failure raises and leaves no persisted row so the
         # next view retries rather than freezing the day in a partial state.
-        assignments, sources = defaults_only_schedule(
-            day, roster, time_off_entries, enabled_centers,
-        )
+            assignments, sources = defaults_only_schedule(
+                day, roster, time_off_entries, enabled_centers,
+            )
     except Exception:
         log.exception("Could not seed default staffing draft for %s", day)
         return sched
@@ -1147,6 +1247,24 @@ def staffing_page(
     # Automatic scheduling is an explicit manager action and is available for
     # every displayed calendar day.
     auto_scheduler_available = True
+
+    # Closing recruiting deliberately does not schedule anyone. Opening the
+    # finished Saturday is the manager's explicit preparation action: defaults
+    # are applied once to willing staff, with every remaining volunteer left
+    # Unassigned for manual or button-triggered Auto scheduling.
+    if d.weekday() == 5:
+        try:
+            initial_saturday_bundle = saturday_recruiting_store.get(d)
+            if (
+                initial_saturday_bundle
+                and initial_saturday_bundle.recruitment.status == "closed"
+                and initial_saturday_bundle.recruitment.staffing_prepared_at is None
+            ):
+                prepared = _prepare_closed_saturday_schedule(d, roster, time_off_entries)
+                if prepared is not None:
+                    sched = prepared
+        except Exception:
+            log.exception("Could not prepare closed Saturday recruiting for %s", d)
 
     # Now that the schedule is in hand, kick off attendance in parallel
     # with our render-prep work below.
@@ -1291,9 +1409,13 @@ def staffing_page(
     saturday_deadline = None
     saturday_recruit_enabled_count = 0
     saturday_response_summary = {"yes": [], "no": [], "deciding": []}
+    saturday_staffing_prepared = False
     if d.weekday() == 5:
         try:
             saturday_bundle = saturday_recruiting_store.get(d)
+            saturday_staffing_prepared = bool(
+                saturday_bundle and saturday_bundle.recruitment.staffing_prepared_at
+            )
             saturday_positions = saturday_recruiting_store.available_positions()
             enabled_saturday_centers = set(enabled_auto_work_centers)
             saturday_recruit_enabled_count = sum(
@@ -1334,6 +1456,7 @@ def staffing_page(
     saturday_context = {
         "day_is_saturday": d.weekday() == 5,
         "saturday_recruiting": saturday_bundle.recruitment if saturday_bundle else None,
+        "saturday_staffing_prepared": saturday_staffing_prepared,
         "saturday_recruit_enabled_count": saturday_recruit_enabled_count,
         "saturday_response_summary": saturday_response_summary,
         "saturday_positions": saturday_positions,
@@ -1636,6 +1759,14 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         })
 
     if active_saturday_recruiting and action in {"save", "publish"}:
+        if saturday_bundle and saturday_bundle.recruitment.status == "recruiting" and assignments:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Saturday recruiting must close before scheduling people.",
+                },
+                status_code=409,
+            )
         noncommitted_names = _noncommitted_names(assignments)
         if noncommitted_names:
             return JSONResponse(

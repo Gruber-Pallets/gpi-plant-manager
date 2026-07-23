@@ -257,7 +257,7 @@ def test_publish_validation_reports_each_saturday_blocker(
     assert expected in sr.validate_publish(_bundle(), assignments, people, full_day_off_names)
 
 
-def test_manager_can_publish_saturday_before_recruiting_deadline(monkeypatch):
+def test_manager_cannot_publish_saturday_before_recruiting_closes(monkeypatch):
     bundle = _bundle(status="recruiting")
     saved = []
     marked = []
@@ -280,12 +280,13 @@ def test_manager_can_publish_saturday_before_recruiting_deadline(monkeypatch):
         FormData([("action", "publish"), ("loc__Repair 1", "Ana"), ("loc__Dismantle", "Bob")]),
     )
 
-    assert response.headers["location"] == f"/staffing?day={SATURDAY.isoformat()}"
-    assert saved[0].published is True
-    assert marked
+    assert response.status_code == 409
+    assert b"Saturday recruiting must close before scheduling people." in response.body
+    assert saved == []
+    assert marked == []
 
 
-def test_recruiting_saturday_can_save_a_draft_before_publish_deadline(monkeypatch):
+def test_recruiting_saturday_stays_blank_before_the_deadline(monkeypatch):
     bundle = _bundle(status="recruiting")
     saved = []
     repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
@@ -303,9 +304,9 @@ def test_recruiting_saturday_can_save_a_draft_before_publish_deadline(monkeypatc
         FormData([("action", "save"), ("loc__Repair 1", "Ana"), ("loc__Dismantle", "Bob")]),
     )
 
-    assert response.headers["location"] == f"/staffing?day={SATURDAY.isoformat()}"
-    assert len(saved) == 1
-    assert saved[0].published is False
+    assert response.status_code == 409
+    assert b"Saturday recruiting must close before scheduling people." in response.body
+    assert saved == []
 
 
 def test_post_deadline_publish_uses_only_requested_saturday_positions(monkeypatch):
@@ -353,7 +354,10 @@ def test_saturday_save_rejects_noncommitted_assignment_without_persisting(monkey
     )
 
     assert response.status_code == 409
-    assert b"Cara is not committed to Saturday." in response.body
+    if status == "recruiting":
+        assert b"Saturday recruiting must close before scheduling people." in response.body
+    else:
+        assert b"Cara is not committed to Saturday." in response.body
     assert saved == []
 
 

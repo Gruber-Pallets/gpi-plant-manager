@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from zira_dashboard import (
     db, exception_inbox, machine_breakdown, missing_wc, missed_punch_out,
-    staffing, unexpected_worker,
+    saturday_recruiting_store, staffing, unexpected_worker,
 )
 from zira_dashboard.app import app
 from zira_dashboard.routes import exceptions as exceptions_route
@@ -95,6 +95,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
     monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
     monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: ["Repair 1"])
+    monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _today: (0, []))
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (
         1,
         [{
@@ -116,6 +117,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
     assert counts == {
         "assignments": 1,
         "plant_schedule": 0,
+        "saturday_recruiting": 0,
         "late": 2,
         "missing_wc": 1,
         "missed_punch_out": 1,
@@ -288,6 +290,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
     monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off_counts", lambda today: (4, 2))
+    monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _today: (0, []))
 
     summary = exception_inbox.build_summary()
 
@@ -300,6 +303,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     assert summary["sections"] == {
         "assignments": 2,
         "plant_schedule": 0,
+        "saturday_recruiting": 0,
         "late": 3,
         "missing_wc": 1,
         "missed_punch_out": 1,
@@ -438,6 +442,7 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
+    monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _today: (0, []))
 
     snap = exception_inbox.build_snapshot()
 
@@ -446,6 +451,7 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     assert [s["id"] for s in snap["sections"]] == [
         "assignments",
         "plant_schedule",
+        "saturday_recruiting",
         "late",
         "missing_wc",
         "missed_punch_out",
@@ -478,6 +484,41 @@ def _empty_inbox_sources(monkeypatch):
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
     monkeypatch.setattr(exception_inbox, "_pending_time_off_counts", lambda today: (0, 0))
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
+    monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _today: (0, []))
+
+
+def test_closed_saturday_recruiting_is_an_inbox_action(monkeypatch):
+    saturday = date(2026, 7, 25)
+    bundle = saturday_recruiting_store.RecruitmentBundle(
+        recruitment=saturday_recruiting_store.Recruitment(
+            saturday, "closed", datetime.min.time(), datetime.max.time(), datetime.now(timezone.utc),
+        ),
+        openings=(),
+        commitments=(
+            saturday_recruiting_store.StoredCommitment(
+                1, 10, "Ana", "committed", datetime.min.time(), datetime.max.time(), frozenset(),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        exception_inbox.saturday_recruiting_store,
+        "list_closed_unprepared",
+        lambda start_day: (bundle,),
+    )
+
+    count, rows = exception_inbox._saturday_staffing_actions(date(2026, 7, 20))
+
+    assert count == 1
+    assert rows == [{
+        "name": "Saturday recruitment",
+        "label": "Saturday, Jul 25",
+        "detail": "1 committed · Ready to schedule",
+        "priority": "warn",
+        "badge": "Schedule",
+        "href": "/staffing?day=2026-07-25",
+        "row_key": "saturday_recruitment:2026-07-25",
+        "item_key": "saturday_recruitment:2026-07-25",
+    }]
 
 
 def test_plant_schedule_reminder_waits_until_cutoff(monkeypatch):

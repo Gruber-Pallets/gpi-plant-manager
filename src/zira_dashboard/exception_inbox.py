@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import date, time, timedelta
 
-from . import plant_day, schedule_store, staffing
+from . import plant_day, saturday_recruiting_store, schedule_store, staffing
 from . import inbox_keys
 from . import time_off_context
 
@@ -124,6 +124,26 @@ def _plant_schedule_reminder() -> tuple[int, list[dict]]:
         "row_key": _row_key("plant_schedule", target_day.isoformat()),
         "item_key": inbox_keys.plant_schedule(target_day.isoformat()),
     }]
+
+
+def _saturday_staffing_actions(today: date) -> tuple[int, list[dict]]:
+    """Surface closed volunteer rounds until a manager opens their schedule."""
+    bundles = saturday_recruiting_store.list_closed_unprepared(today)
+    rows = []
+    for bundle in bundles:
+        day = bundle.recruitment.day
+        committed = sum(item.status == "committed" for item in bundle.commitments)
+        rows.append({
+            "name": "Saturday recruitment",
+            "label": day.strftime("%A, %b %-d"),
+            "detail": f"{committed} committed · Ready to schedule",
+            "priority": "warn",
+            "badge": "Schedule",
+            "href": f"/staffing?day={day.isoformat()}",
+            "row_key": _row_key("saturday_recruitment", day.isoformat()),
+            "item_key": inbox_keys.saturday_recruitment(day.isoformat()),
+        })
+    return len(rows), rows
 
 
 def _row_key(kind: str, *parts) -> str:
@@ -240,6 +260,9 @@ def build_summary() -> dict:
     schedule_count = _capture(
         source_errors, "Plant Schedule", lambda: _plant_schedule_reminder()[0], 0
     )
+    saturday_recruiting_count = _capture(
+        source_errors, "Saturday Recruiting", lambda: _saturday_staffing_actions(today)[0], 0
+    )
     pending_count, pending_urgent_count = _capture(
         source_errors, "Pending Time Off", lambda: _pending_time_off_counts(today), (0, 0)
     )
@@ -261,6 +284,7 @@ def build_summary() -> dict:
     total = (
         assignment_count
         + schedule_count
+        + saturday_recruiting_count
         + late_count
         + missing_count
         + missed_count
@@ -280,6 +304,7 @@ def build_summary() -> dict:
         "sections": {
             "assignments": assignment_count,
             "plant_schedule": schedule_count,
+            "saturday_recruiting": saturday_recruiting_count,
             "late": late_count,
             "missing_wc": missing_count,
             "missed_punch_out": missed_count,
@@ -311,6 +336,9 @@ def build_snapshot() -> dict:
     )
     schedule_count, schedule_rows = _capture(
         source_errors, "Plant Schedule", _plant_schedule_reminder, (0, [])
+    )
+    saturday_recruiting_count, saturday_recruiting_rows = _capture(
+        source_errors, "Saturday Recruiting", lambda: _saturday_staffing_actions(today), (0, [])
     )
     pending_count, pending_rows = _capture(
         source_errors, "Pending Time Off", lambda: _pending_time_off(today), (0, [])
@@ -438,6 +466,18 @@ def build_snapshot() -> dict:
             "empty": "All clear",
             "context": {},
             "rows": schedule_rows,
+        },
+        {
+            "id": "saturday_recruiting",
+            "title": "Saturday Recruiting",
+            "count": saturday_recruiting_count,
+            "tone": "warn",
+            "action_key": None,
+            "action_label": None,
+            "href": saturday_recruiting_rows[0]["href"] if saturday_recruiting_rows else "/staffing",
+            "empty": "All clear",
+            "context": {},
+            "rows": saturday_recruiting_rows,
         },
         {
             "id": "late",

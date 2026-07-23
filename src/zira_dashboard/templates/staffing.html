@@ -196,10 +196,11 @@
           </button>
         {% else %}
           <span id="autosave-indicator" class="autosave clean" aria-live="polite"></span>
-          {% if day_is_saturday and not saturday_recruiting and saturday_recruit_enabled_count %}
-            <button type="button" class="save-button saturday-recruit-button"
-                    data-saturday-action="activate-from-schedule" data-day="{{ day }}">
-              Recruit for <span data-saturday-recruit-demand>{{ saturday_recruit_enabled_count }} work centers</span>
+          {% if day_is_saturday and not saturday_recruiting %}
+            <button type="button" class="publish-btn saturday-recruit-button"
+                    data-saturday-action="activate-from-schedule" data-day="{{ day }}"
+                    {% if not saturday_recruit_enabled_count %}hidden disabled{% endif %}>
+              Recruit <span data-saturday-recruit-demand>{{ saturday_recruit_enabled_count }}</span>
             </button>
           {% elif day_is_saturday and saturday_recruiting and saturday_recruiting.status != 'cancelled' %}
             <div class="saturday-response-summary" aria-label="Saturday recruiting responses">
@@ -388,7 +389,7 @@
       <label class="notes-label" for="notes-textarea">Notes for the day <span class="hint">— shown with the published schedule</span></label>
       <textarea id="notes-textarea" name="notes" rows="6" placeholder=""{% if viewing_posted %} readonly{% endif %}>{{ notes }}</textarea>
     </div>
-    {% if auto_scheduler_available %}
+    {% if auto_scheduler_available and (not day_is_saturday or saturday_staffing_prepared) %}
     <div class="rotation-controls" data-day="{{ day }}">
       <div class="rotation-mode" role="group" aria-labelledby="rotation-mode-label">
         <span class="rotation-mode-label" id="rotation-mode-label">Schedule goal</span>

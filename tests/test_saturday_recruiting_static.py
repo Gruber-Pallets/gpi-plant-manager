@@ -5,7 +5,9 @@ def test_scheduler_uses_recruit_action_not_separate_panel():
     template = Path("src/zira_dashboard/templates/staffing.html").read_text()
 
     assert 'data-saturday-action="activate-from-schedule"' in template
-    assert 'Recruit for <span data-saturday-recruit-demand>{{ saturday_recruit_enabled_count }} work centers</span>' in template
+    assert 'class="publish-btn saturday-recruit-button"' in template
+    assert 'Recruit <span data-saturday-recruit-demand>{{ saturday_recruit_enabled_count }}</span>' in template
+    assert '{% if not saturday_recruit_enabled_count %}hidden disabled{% endif %}' in template
     assert "_saturday_recruiting_panel.html" not in template
 
 
@@ -20,6 +22,8 @@ def test_work_center_save_renders_server_recruiting_demand():
 
     assert "function renderSaturdayRecruitingDemand(bundle, enabledCenters)" in js
     assert "renderSaturdayRecruitingDemand(data.saturday_recruiting, data.enabled_work_centers);" in js
+    assert "button.hidden = count === 0;" in js
+    assert "button.disabled = count === 0;" in js
     assert "const requested = Number(coverage.requested || 0);" in js
     assert "const filled = Number(coverage.total || 0);" in js
 

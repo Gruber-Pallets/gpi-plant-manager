@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from contextlib import nullcontext
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 
-from zira_dashboard import rotation_suggestions, schedule_solver, staffing
+from zira_dashboard import rotation_suggestions, saturday_recruiting_store, schedule_solver, staffing
 
 
 TARGET_DAY = date(2026, 7, 14)
@@ -2228,6 +2228,18 @@ def test_rebuild_persists_schedule_on_saturday(monkeypatch):
     saturday = date(2026, 7, 18)
     saved: list[staffing.Schedule] = []
     prior = staffing.Schedule(day=saturday)
+    saturday_bundle = saturday_recruiting_store.RecruitmentBundle(
+        recruitment=saturday_recruiting_store.Recruitment(
+            saturday, "closed", time(6), time(12), datetime.now(), datetime.now(),
+        ),
+        openings=(),
+        commitments=(
+            saturday_recruiting_store.StoredCommitment(
+                1, 1, "Green", "committed", time(6), time(12), frozenset(),
+            ),
+        ),
+    )
+    monkeypatch.setattr(rotations.saturday_recruiting_store, "get", lambda _day: saturday_bundle)
     monkeypatch.setattr(
         staffing_route,
         "_configured_center_capacities",
@@ -2262,6 +2274,28 @@ def test_rebuild_persists_schedule_on_saturday(monkeypatch):
     assert response.json()["applied"] is True
     assert [schedule.day for schedule in saved] == [saturday]
     assert saved[0].assignments == {"Repair 1": ["Green"]}
+
+
+def test_saturday_auto_rejects_before_recruiting_has_closed(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    saturday = date(2026, 7, 18)
+    bundle = saturday_recruiting_store.RecruitmentBundle(
+        recruitment=saturday_recruiting_store.Recruitment(
+            saturday, "recruiting", time(6), time(12), datetime.now(),
+        ),
+        openings=(),
+        commitments=(),
+    )
+    monkeypatch.setattr(rotations.saturday_recruiting_store, "get", lambda _day: bundle)
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=saturday))
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green", 3)])
+
+    response = client.post("/api/rotations/rebuild", json={
+        "day": saturday.isoformat(), "mode": "normal",
+    })
+
+    assert response.status_code == 422
+    assert response.json()["error"] == "Saturday recruiting must close before Auto scheduling."
 
 
 def test_rebuild_rejects_unknown_mode(monkeypatch):
@@ -3272,6 +3306,60 @@ def test_first_future_staffing_view_seeds_and_persists_only_defaults(monkeypatch
     assert ctx["sched"] is saved[0]
 
 
+def test_first_future_saturday_view_starts_blank_with_no_enabled_work_centers(monkeypatch):
+    saved = []
+
+    ctx = _render_staffing_page(
+        monkeypatch,
+        day=date(2026, 7, 18),
+        schedule_revision=None,
+        roster=[_person("Pinned", 1)],
+        auto_centers={"Repair 1", "Repair 2"},
+        default_inputs=lambda strict=False: ({"Repair 1": ("Pinned",)}, {}, {}),
+        saved_schedules=saved,
+    )
+
+    assert len(saved) == 1
+    assert saved[0].assignments == {}
+    assert saved[0].assignment_sources == {}
+    assert saved[0].auto_enabled_work_centers == []
+    assert ctx["sched"] is saved[0]
+
+
+def test_saturday_preparation_only_places_defaults_in_enabled_work_centers(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route,
+        "_default_inputs",
+        lambda strict=False: (
+            {"Repair 1": ("Pinned",), "Repair 2": ("Not enabled",)},
+            {"Repair": ("Group default",)},
+            {"Repair": ("Repair 1", "Repair 2")},
+        ),
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "_configured_center_capacities",
+        lambda centers, strict=False: {name: 2 for name in centers},
+    )
+    monkeypatch.setattr(
+        staffing_route.rotation_suggestions,
+        "_load_recycled_history",
+        lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory(),
+    )
+
+    assignments, sources = staffing_route.saturday_defaults_only_schedule(
+        date(2026, 7, 18),
+        [_person("Pinned", 1), _person("Not enabled", 1), _person("Group default", 1)],
+        [],
+        ["Repair 1"],
+    )
+
+    assert assignments == {"Repair 1": ["Pinned", "Group default"]}
+    assert sources == {"Repair 1": {"Pinned": "default", "Group default": "default"}}
+
+
 def test_first_future_staffing_view_does_not_run_the_auto_solver(monkeypatch):
     """Seeding loads defaults only — it must never invoke the rotation engine
     (the goal button does that on demand)."""
@@ -3486,7 +3574,7 @@ def test_staffing_context_enables_auto_scheduler_every_day(monkeypatch, day):
 def test_staffing_template_renders_auto_controls_from_the_available_context():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
 
-    assert "{% if auto_scheduler_available %}" in html
+    assert "{% if auto_scheduler_available and (not day_is_saturday or saturday_staffing_prepared) %}" in html
     assert 'class="rotation-controls"' in html
     assert 'data-work-center-toggle' in html
 

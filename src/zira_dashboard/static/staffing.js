@@ -1718,13 +1718,19 @@
       refreshPickerVisibility();
     }
 
-    function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
+function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       const demand = document.querySelector('[data-saturday-recruit-demand]');
       if (!demand) return;
-      if (!bundle) {
-        demand.textContent = `${(enabledCenters || []).length} work centers`;
-        return;
-      }
+  if (!bundle) {
+    const count = (enabledCenters || []).length;
+    demand.textContent = String(count);
+    const button = demand.closest('[data-saturday-action="activate-from-schedule"]');
+    if (button) {
+      button.hidden = count === 0;
+      button.disabled = count === 0;
+    }
+    return;
+  }
       const coverage = bundle.coverage || {};
       const requested = Number(coverage.requested || 0);
       const filled = Number(coverage.total || 0);

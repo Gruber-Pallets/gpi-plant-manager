@@ -40,6 +40,7 @@ class Recruitment:
     shift_start: time
     shift_end: time
     response_deadline: datetime
+    staffing_prepared_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -164,7 +165,7 @@ def _json_ids(value) -> frozenset[int]:
 
 def _load_bundle(cur, day: date) -> RecruitmentBundle | None:
     cur.execute(
-        "SELECT day, status, shift_start, shift_end, response_deadline "
+        "SELECT day, status, shift_start, shift_end, response_deadline, staffing_prepared_at "
         "FROM saturday_recruitments WHERE day = %s",
         (day,),
     )
@@ -177,6 +178,7 @@ def _load_bundle(cur, day: date) -> RecruitmentBundle | None:
         shift_start=row["shift_start"],
         shift_end=row["shift_end"],
         response_deadline=row["response_deadline"],
+        staffing_prepared_at=row["staffing_prepared_at"],
     )
     cur.execute(
         "SELECT o.wc_id, wc.name AS wc_name, o.requested_count, "
@@ -300,7 +302,7 @@ def available_positions() -> tuple[AvailablePosition, ...]:
 
 def _lock_recruitment(cur, day: date) -> Recruitment:
     cur.execute(
-        "SELECT day, status, shift_start, shift_end, response_deadline "
+        "SELECT day, status, shift_start, shift_end, response_deadline, staffing_prepared_at "
         "FROM saturday_recruitments WHERE day = %s FOR UPDATE",
         (day,),
     )
@@ -313,6 +315,7 @@ def _lock_recruitment(cur, day: date) -> Recruitment:
         shift_start=row["shift_start"],
         shift_end=row["shift_end"],
         response_deadline=row["response_deadline"],
+        staffing_prepared_at=row["staffing_prepared_at"],
     )
 
 
@@ -720,15 +723,39 @@ def activate(
         cur.execute("SELECT pg_advisory_xact_lock(%s::bigint)", (day.toordinal(),))
         positions = _validate_positions(cur, requested_counts)
         cur.execute(
-            "SELECT published FROM schedules WHERE day = %s FOR UPDATE",
+            "SELECT published, assignment_sources FROM schedules WHERE day = %s FOR UPDATE",
             (day,),
         )
         schedule = cur.fetchone()
         if schedule and schedule["published"]:
             raise LifecycleConflict("A published Saturday schedule cannot enter recruiting")
-        cur.execute("SELECT 1 FROM schedule_assignments WHERE day = %s LIMIT 1", (day,))
-        if cur.fetchone() is not None:
-            raise LifecycleConflict("Clear existing Saturday assignments before activating recruiting.")
+        cur.execute(
+            "SELECT wc.name AS wc_name, pe.name AS person_name "
+            "FROM schedule_assignments sa "
+            "JOIN work_centers wc ON wc.id = sa.wc_id "
+            "JOIN people pe ON pe.id = sa.person_id "
+            "WHERE sa.day = %s",
+            (day,),
+        )
+        assignments = cur.fetchall()
+        if assignments:
+            raw_sources = schedule["assignment_sources"] if schedule else {}
+            if isinstance(raw_sources, str):
+                try:
+                    raw_sources = json.loads(raw_sources)
+                except json.JSONDecodeError:
+                    raw_sources = {}
+            default_only = isinstance(raw_sources, Mapping) and all(
+                raw_sources.get(row["wc_name"], {}).get(row["person_name"]) == "default"
+                for row in assignments
+            )
+            if not default_only:
+                raise LifecycleConflict("Clear existing Saturday assignments before activating recruiting.")
+            cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (day,))
+            cur.execute(
+                "UPDATE schedules SET assignment_sources = '{}'::jsonb, updated_at = %s WHERE day = %s",
+                (now, day),
+            )
         cur.execute("SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE", (day,))
         if cur.fetchone() is not None:
             existing = _load_bundle(cur, day)
@@ -851,6 +878,40 @@ def close_due(now: datetime) -> int:
             (now, now, now),
         )
         return cur.rowcount
+
+
+def mark_staffing_prepared(day: date, now: datetime, *, cur) -> RecruitmentBundle:
+    """Record the one-time manager-facing preparation of a closed Saturday."""
+    recruitment = _lock_recruitment(cur, day)
+    if recruitment.status != "closed":
+        raise LifecycleConflict("Saturday recruiting must close before scheduling volunteers")
+    if recruitment.staffing_prepared_at is None:
+        cur.execute(
+            "UPDATE saturday_recruitments SET staffing_prepared_at = %s, updated_at = %s "
+            "WHERE day = %s",
+            (now, now, day),
+        )
+    prepared = _load_bundle(cur, day)
+    assert prepared is not None
+    return prepared
+
+
+def list_closed_unprepared(start_day: date) -> tuple[RecruitmentBundle, ...]:
+    """Return closed rounds that still need a manager to prepare staffing."""
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT day FROM saturday_recruitments "
+            "WHERE status = 'closed' AND staffing_prepared_at IS NULL AND day >= %s "
+            "ORDER BY day",
+            (start_day,),
+        )
+        return tuple(
+            bundle
+            for row in cur.fetchall()
+            if (bundle := _load_bundle(cur, row["day"])) is not None
+        )
 
 
 def mark_published(day: date, now: datetime) -> RecruitmentBundle:

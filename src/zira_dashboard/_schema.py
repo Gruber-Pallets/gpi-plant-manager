@@ -979,12 +979,16 @@ CREATE TABLE IF NOT EXISTS saturday_recruitments (
   activated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   closed_at TIMESTAMPTZ,
   published_at TIMESTAMPTZ,
+  staffing_prepared_at TIMESTAMPTZ,
   cancelled_by TEXT,
   cancelled_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (shift_end > shift_start)
 );
+
+ALTER TABLE saturday_recruitments
+  ADD COLUMN IF NOT EXISTS staffing_prepared_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS saturday_recruitment_openings (
   day DATE NOT NULL REFERENCES saturday_recruitments(day) ON DELETE CASCADE,

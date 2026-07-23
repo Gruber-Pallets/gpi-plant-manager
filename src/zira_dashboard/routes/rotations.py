@@ -481,6 +481,58 @@ def _build_assignment_sources(existing_sources, suggestion) -> dict[str, dict[st
     return new_sources
 
 
+def _saturday_auto_roster(
+    day: date,
+    roster: Sequence[staffing.Person],
+    sched: staffing.Schedule,
+) -> list[staffing.Person]:
+    """Return only prepared, effectively available Saturday volunteers."""
+    bundle = saturday_recruiting_store.get(day)
+    if bundle is None or bundle.recruitment.status != "closed":
+        raise saturday_recruiting_store.LifecycleConflict(
+            "Saturday recruiting must close before Auto scheduling."
+        )
+    if bundle.recruitment.staffing_prepared_at is None:
+        raise saturday_recruiting_store.LifecycleConflict(
+            "Open the closed Saturday schedule before Auto scheduling."
+        )
+    commitments = {
+        item.person_name: {"start": item.availability_start, "end": item.availability_end}
+        for item in bundle.commitments
+        if item.status == "committed"
+        and item.availability_start is not None
+        and item.availability_end is not None
+    }
+    available_names = set(staffing.effective_saturday_commitments(
+        commitments,
+        sched.saturday_availability_overrides,
+        bundle.recruitment.shift_start,
+        bundle.recruitment.shift_end,
+    ))
+    return [person for person in roster if person.name in available_names]
+
+
+def _saturday_protected_locks(
+    schedule: staffing.Schedule,
+    available_names: set[str],
+    enabled_centers: Sequence[str],
+) -> dict[str, list[str]]:
+    """Keep manual and prepared-default volunteers in place during Auto."""
+    enabled = set(enabled_centers)
+    locks: dict[str, list[str]] = {}
+    for center, names in schedule.assignments.items():
+        if center not in enabled:
+            continue
+        kept = [
+            name for name in names
+            if name in available_names
+            and schedule.assignment_sources.get(center, {}).get(name) in {"manual", "default"}
+        ]
+        if kept:
+            locks[center] = kept
+    return locks
+
+
 @router.post("/api/rotations/rebuild")
 async def rebuild_rotation(request: Request):
     body = await _json_body(request)
@@ -510,6 +562,8 @@ async def rebuild_rotation(request: Request):
         sched = staffing.draft_from_posted(staffing.load_schedule(d))
         roster = staffing.load_roster()
         try:
+            if d.weekday() == 5:
+                roster = _saturday_auto_roster(d, roster, sched)
             if staffing.schedule_revision(d) is None:
                 sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
             else:
@@ -520,9 +574,13 @@ async def rebuild_rotation(request: Request):
                 sched.auto_enabled_work_centers
             )
             time_off = scheduler_time_off.time_off_entries_for_day(d)
-            assignments, sources = staffing_route.defaults_only_schedule(
-                d, roster, time_off, enabled_centers,
+            defaults_fn = (
+                staffing_route.saturday_defaults_only_schedule
+                if d.weekday() == 5 else staffing_route.defaults_only_schedule
             )
+            assignments, sources = defaults_fn(d, roster, time_off, enabled_centers)
+        except saturday_recruiting_store.LifecycleConflict as exc:
+            return _error(str(exc))
         except Exception:
             log.exception("Could not reset the schedule to defaults for %s", d)
             return _error("Could not reset the schedule to defaults.", 503)
@@ -559,6 +617,11 @@ async def rebuild_rotation(request: Request):
             return _reset_to_defaults()
         roster = staffing.load_roster()
         sched = staffing.draft_from_posted(staffing.load_schedule(d))
+        if d.weekday() == 5:
+            try:
+                roster = _saturday_auto_roster(d, roster, sched)
+            except saturday_recruiting_store.LifecycleConflict as exc:
+                return _error(str(exc))
         base_assignments = {k: list(v) for k, v in sched.assignments.items()}
         existing_sources = sched.assignment_sources
         try:
@@ -579,13 +642,18 @@ async def rebuild_rotation(request: Request):
                 enabled_centers,
                 strict=True,
             )
-            manual_locks = staffing_route._protected_locks(
-                existing_sources,
-                base_assignments,
-                allowed_centers=enabled_centers,
-                strict_default_reads=True,
-                include_saved_defaults=False,
-            )
+            if d.weekday() == 5:
+                manual_locks = _saturday_protected_locks(
+                    sched, {person.name for person in roster}, enabled_centers,
+                )
+            else:
+                manual_locks = staffing_route._protected_locks(
+                    existing_sources,
+                    base_assignments,
+                    allowed_centers=enabled_centers,
+                    strict_default_reads=True,
+                    include_saved_defaults=False,
+                )
             center_minimums = {
                 loc.name: staffing_route._effective_minimum(loc)
                 for loc in staffing.LOCATIONS if loc.name in enabled_centers
@@ -616,10 +684,10 @@ async def rebuild_rotation(request: Request):
             exact_defaults=exact_defaults,
             group_defaults=group_defaults,
             user_group_centers=user_group_centers,
-            # The goal button staffs to minimum crew; the user balances Auto
-            # centers with the advisory. (Reset to defaults is handled in its
-            # own branch above and never reaches here.)
-            minimum_only=True,
+            # Weekdays staff to their configured minimum. A manager's explicit
+            # Saturday Auto action instead places remaining volunteers around
+            # the prepared defaults/manual locks.
+            minimum_only=d.weekday() != 5,
         )
         if suggestion is None:
             return _error("Could not rebuild the schedule.", 503)

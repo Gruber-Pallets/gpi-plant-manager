@@ -35,6 +35,11 @@ def plant_schedule(day) -> str:
     return f"plant_schedule:{day}"
 
 
+def saturday_recruitment(day) -> str:
+    """Identity for a closed Saturday recruiting round awaiting preparation."""
+    return f"saturday_recruitment:{day}"
+
+
 def unexpected_worker(day, person_odoo_id) -> str:
     """Identity for a worker clocking in while on approved leave."""
     return f"unexpected_worker:{day}:{person_odoo_id}"
