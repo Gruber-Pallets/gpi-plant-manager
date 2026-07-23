@@ -519,6 +519,7 @@
   tr[data-loc] td.station,
   tr[data-loc] td.dept { cursor: pointer; }
   tr[data-loc][data-on="true"] td { background: var(--accent-dim); }
+  tr.custom-hours-day[data-on="true"] td { background: #dbeafe; }
   tr.work-center-saving { cursor: progress; }
   tr.work-center-saving .work-center-toggle { cursor: progress; }
   .ops-range { margin-left: auto; color: var(--muted); font-size: 0.66rem; font-style: italic; font-weight: 500; }
@@ -527,6 +528,7 @@
   tr.work-center-off td { background: var(--panel-2); }
   tr[data-loc][data-on="true"] td.bay,
   tr.work-center-off td.bay { background: var(--panel-3); }
+  tr.custom-hours-day[data-on="true"] td.bay { background: var(--panel-3); }
   tr.work-center-off .dept { padding: 0; color: transparent; font-size: 0; }
   tr.work-center-off .sched-cell,
   tr.work-center-off .wc-note-cell { padding: 0; }

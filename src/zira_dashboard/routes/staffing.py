@@ -1400,6 +1400,10 @@ def staffing_page(
     ]
     hours_source = shift_config.scheduler_hours_source(d, sched.custom_hours is not None)
     eff_hours_label = f"{eff_start.strftime('%H:%M')}–{eff_end.strftime('%H:%M')}"
+    eff_custom_hours_label = (
+        f"{eff_start.strftime('%I:%M').lstrip('0')}–"
+        f"{eff_end.strftime('%I:%M').lstrip('0')}{eff_end.strftime('%p').lower()[0]}"
+    )
 
     saturday_bundle = None
     saturday_positions = []
@@ -1632,6 +1636,7 @@ def staffing_page(
                 "eff_breaks": eff_breaks,
                 "hours_source": hours_source,
                 "eff_hours_label": eff_hours_label,
+                "eff_custom_hours_label": eff_custom_hours_label,
                 "person_certs": person_certs,
                 "assignments_todo": assignments_todo,
                 "assignments_done": assignments_done,

@@ -136,6 +136,29 @@ def test_staffing_custom_hours_controls_are_named_and_busy():
     assert "save.setAttribute('aria-busy', 'false');" in js
 
 
+def test_staffing_title_uses_date_picker_without_past_shortcut():
+    html = _template()
+
+    assert 'href="/staffing/past"' not in html
+
+
+def test_staffing_custom_hours_badge_uses_compact_copy_and_toggles_editor():
+    html = _template()
+    js = _script()
+
+    assert '<span class="label">Custom</span>' in html
+    assert '<span>{{ eff_custom_hours_label }}</span>' in html
+    assert "pill.addEventListener('click', () => editor.hidden ? open() : close());" in js
+
+
+def test_custom_hours_enabled_work_centers_use_soft_blue():
+    html = _template()
+    css = _style()
+
+    assert "custom-hours-day" in html
+    assert 'tr.custom-hours-day[data-on="true"] td { background: #dbeafe; }' in css
+
+
 def test_staffing_custom_hours_panel_manages_focus_and_escape():
     html = _template()
     js = _script()

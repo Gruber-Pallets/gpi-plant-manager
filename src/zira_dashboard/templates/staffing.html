@@ -130,13 +130,17 @@
       <input type="date" id="day-picker" value="{{ day }}" class="date-input" title="Jump to another day">
       <a href="/staffing?day={{ today }}" class="day-hot {% if day == today %}active{% endif %}" title="Jump to today">Today</a>
       <a href="/staffing?day={{ tomorrow }}" class="day-hot {% if day == tomorrow %}active{% endif %}" title="Jump to the next working day">Next Day</a>
-      <a href="/staffing/past" class="day-hot" title="Browse previously published schedules">Past</a>
       <button type="button" class="hours-pill {% if hours_source == 'custom' %}custom{% elif hours_source == 'saturday_default' %}saturday-default{% endif %}" id="hours-pill"
               title="Click to edit shift hours for this day" aria-label="Edit shift hours for {{ day }}"
               aria-controls="hours-editor" aria-expanded="false">
-        <span class="label">Hours</span>
-        <span>{{ eff_hours_label }}</span>
-        {% if hours_source != 'weekday_default' %}<span>· {{ eff_breaks|length }} break{{ eff_breaks|length != 1 and 's' or '' }}</span>{% endif %}{% if hours_source == 'saturday_default' %}<span>· Saturday default</span>{% endif %}
+        {% if hours_source == 'custom' %}
+          <span class="label">Custom</span>
+          <span>{{ eff_custom_hours_label }}</span>
+        {% else %}
+          <span class="label">Hours</span>
+          <span>{{ eff_hours_label }}</span>
+          {% if hours_source != 'weekday_default' %}<span>· {{ eff_breaks|length }} break{{ eff_breaks|length != 1 and 's' or '' }}</span>{% endif %}{% if hours_source == 'saturday_default' %}<span>· Saturday default</span>{% endif %}
+        {% endif %}
       </button>
 
       <div id="hours-editor" class="hours-editor" role="dialog" aria-modal="false" aria-labelledby="hours-editor-title" hidden>
@@ -211,11 +215,13 @@
               {% endfor %}
             </div>
           {% endif %}
-          {% if saturday_publish_locked %}
-            <span id="saturday-publish-lock" class="save-block">{{ saturday_publish_lock_message }}</span>
+          {% if not (day_is_saturday and saturday_recruiting and saturday_recruiting.status == 'recruiting') %}
+            {% if saturday_publish_locked %}
+              <span id="saturday-publish-lock" class="save-block">{{ saturday_publish_lock_message }}</span>
+            {% endif %}
+            <button type="submit" name="action" value="publish" class="publish-btn publish-submit" aria-busy="false"
+                    {% if saturday_publish_locked %}disabled aria-describedby="saturday-publish-lock"{% endif %}>Publish</button>
           {% endif %}
-          <button type="submit" name="action" value="publish" class="publish-btn publish-submit" aria-busy="false"
-                  {% if saturday_publish_locked %}disabled aria-describedby="saturday-publish-lock"{% endif %}>Publish</button>
         {% endif %}
       </div>
       </div>
@@ -277,7 +283,7 @@
           {% set _attrib_names_for_row = _wc_attribs_for_row | map(attribute='person_name') | list %}
           {% set visible_assigned = row.present_assigned | rejectattr('name', 'in', _attrib_names_for_row) | list %}
           {% set _center_on = row.loc.name in auto_schedule_enabled_wc_names %}
-          <tr class="{% if not _center_on %}work-center-off{% endif %}" data-loc="{{ row.loc.name }}" data-on="{{ _center_on|tojson }}" data-minimum="{{ row.min_ops }}">
+          <tr class="{% if hours_source == 'custom' %}custom-hours-day {% endif %}{% if not _center_on %}work-center-off{% endif %}" data-loc="{{ row.loc.name }}" data-on="{{ _center_on|tojson }}" data-minimum="{{ row.min_ops }}">
             {% if loop.first %}
               <td class="bay" rowspan="{{ bay.rows|length }}">
                 <div class="bay-screen-label{% if bay.name == 'Transportation' %} transportation-bay-label{% endif %}">{{ bay.name }}</div>

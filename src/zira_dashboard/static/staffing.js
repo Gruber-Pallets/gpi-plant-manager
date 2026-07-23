@@ -1145,7 +1145,7 @@
       pill.setAttribute('aria-expanded', 'false');
       pill.focus();
     }
-    pill.addEventListener('click', open);
+    pill.addEventListener('click', () => editor.hidden ? open() : close());
     cancel.addEventListener('click', close);
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !editor.hidden) close();

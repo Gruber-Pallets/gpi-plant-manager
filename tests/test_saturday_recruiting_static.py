@@ -11,6 +11,13 @@ def test_scheduler_uses_recruit_action_not_separate_panel():
     assert "_saturday_recruiting_panel.html" not in template
 
 
+def test_recruiting_saturday_hides_publish_until_recruiting_is_finished():
+    template = Path("src/zira_dashboard/templates/staffing.html").read_text()
+
+    assert "saturday_recruiting.status == 'recruiting'" in template
+    assert "not (day_is_saturday and saturday_recruiting" in template
+
+
 def test_staffing_template_has_live_saturday_recruiting_demand_target():
     template = Path("src/zira_dashboard/templates/staffing.html").read_text()
 
@@ -49,4 +56,5 @@ def test_scheduler_recruit_style_has_blue_button_and_accessible_summary_focus():
 
     assert ".saturday-recruit-button" in css
     assert "background: #2563eb" in css
+    assert ".title-bar .publish-btn.saturday-recruit-button" in css
     assert ".saturday-response-count:focus" in css
