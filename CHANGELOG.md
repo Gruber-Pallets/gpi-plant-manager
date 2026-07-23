@@ -17,6 +17,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **Weekend and special-hour time bubbles are shorter.** Saturdays, Sundays, and days with special hours now show a small blue Custom bubble. Normal Monday–Friday schedules keep the full Hours bubble.
 - **Weekend and special-hour schedules are easier to spot.** Work centers that are turned on now show in soft blue on Saturdays, Sundays, and days with special hours. Regular Monday–Friday schedules stay green.
 
+### Fixes
+
+- **Saturday recruiting now waits for the schedule to save.** If you clear the Saturday schedule and click Recruit right away, the app saves the empty schedule first. If saving fails, recruiting does not start.
+
 ## 2026-07-14
 
 ### Features

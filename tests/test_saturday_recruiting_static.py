@@ -50,6 +50,20 @@ def test_scheduler_recruit_script_posts_directly_without_confirmation_dialog():
     assert "window.confirm" not in js
 
 
+def test_scheduler_recruit_waits_for_autosave_before_activation():
+    js = Path("src/zira_dashboard/static/saturday-recruiting.js").read_text()
+
+    flush_call = "await window.flushAutosave();"
+    activation_call = (
+        "const response = await fetch("
+        "'/api/staffing/saturday-recruiting/activate-from-schedule'"
+    )
+    assert flush_call in js
+    assert activation_call in js
+    assert js.index(flush_call) < js.index(activation_call)
+    assert "Could not save the schedule. Recruiting was not started." in js
+
+
 def test_scheduler_recruit_style_has_blue_button_and_accessible_summary_focus():
     css = Path("src/zira_dashboard/static/saturday-recruiting.css").read_text()
 
