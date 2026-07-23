@@ -59,3 +59,33 @@ persists zero assignment rows for work centers missing from the
 `work_centers` table — seed those rows (with real `min_ops`/`max_ops`; the
 column default of 1 breaks Trim Saw's paired minimum) before trusting a local
 end-to-end run.
+
+## Addendum 2026-07-23 — why new days stayed blank in prod, and the fix
+
+The seed above shipped running the engine with `minimum_only=True` (the goal
+button's minimum-crew mode). In production that solve is deterministically
+incomplete: the default Auto set's minimum slots (27) are fewer than the
+available people (~30), and Work Orders carries 3 exact defaults on a min-1
+center — in minimum-crew mode exact defaults are hard edge restrictions, so
+two of them can never seat. Every midnight the page warmer rendered
+`/staffing` (next working day), the solve failed, and the seed *persisted*
+the defaults-only fallback (3 people, sources `default`). That row made
+`schedule_revision` non-None, so no later view ever reseeded — the day was
+frozen near-blank.
+
+Two changes (2026-07-23):
+
+1. **The clean-slate rebuild fills past minimums.** `default_complete_schedule`
+   and the rebuild endpoint's `reset_to_defaults` path now pass
+   `minimum_only=False`: capacity-bounded, so "place everyone exactly once"
+   is feasible unattended. Verified against prod data: 30/30 placed, all 3
+   Work Orders defaults honored, only Woodpecker #1 goes one above its
+   minimum. The non-reset goal button keeps minimum-crew + advisory.
+2. **The fallback is display-only.** When the solve fails, the seed renders
+   the defaults-only placement but persists nothing, so the next view retries
+   the complete rebuild.
+
+Rows created by the old code before the fix (e.g. 07/24, 07/27) still exist
+and block seeding; one Reset-to-defaults click per affected day replaces them
+with the full default schedule (Reset now succeeds — it uses the same
+capacity-bounded solve).

@@ -950,6 +950,11 @@ def _seed_new_future_draft(
         if complete is not None:
             assignments, sources = complete
         else:
+            # Defaults-only placement is a DISPLAY fallback. It must never be
+            # persisted: a saved row makes ``schedule_revision`` non-None, so
+            # every later view would skip seeding and the day would be frozen
+            # in this near-blank state (the prod midnight-warmer rows that
+            # blocked new days from ever loading the complete schedule).
             exact_defaults, group_defaults, user_group_centers = _default_inputs(strict=True)
             center_capacities = _configured_center_capacities(enabled_centers, strict=True)
             history = rotation_suggestions._load_recycled_history(
@@ -982,6 +987,10 @@ def _seed_new_future_draft(
         assignment_sources=sources,
         auto_enabled_work_centers=enabled_centers,
     )
+    if complete is None:
+        # Render the fallback but leave no persisted row, so the next view
+        # retries the complete rebuild once its inputs are healthy again.
+        return seeded
     if staffing.create_schedule_if_absent(seeded):
         _http_cache.invalidate_today_cache()
         return seeded

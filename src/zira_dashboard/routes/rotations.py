@@ -499,6 +499,14 @@ def default_complete_schedule(
     partial schedule. New-day seeding (``_seed_new_future_draft``) and the
     reset path of ``POST /api/rotations/rebuild`` must stay in lockstep — a
     fresh day and a reset day are the same product state.
+
+    Unlike the interactive goal button (which staffs to minimum crew and
+    relies on the user balancing Auto centers with the advisory), this solve
+    runs unattended, so it fills past minimums up to each center's capacity —
+    the only way "place everyone exactly once" is feasible when more people
+    are present than the enabled minimum slots, or when a center's exact
+    defaults exceed its minimum (Work Orders runs 3 defaults on a min-1
+    center in production; the minimum-capped solve could never seat them).
     """
     try:
         enabled = staffing_route._ordered_work_center_names(enabled_centers)
@@ -537,7 +545,7 @@ def default_complete_schedule(
         exact_defaults=exact_defaults,
         group_defaults=group_defaults,
         user_group_centers=user_group_centers,
-        minimum_only=True,
+        minimum_only=False,
     )
     if suggestion is None or not suggestion.complete:
         return None
@@ -649,7 +657,10 @@ async def rebuild_rotation(request: Request):
             exact_defaults=exact_defaults,
             group_defaults=group_defaults,
             user_group_centers=user_group_centers,
-            minimum_only=True,
+            # Reset fills past minimums so every person places (lockstep with
+            # the new-day seed in ``default_complete_schedule``); the non-reset
+            # goal button keeps its minimum-crew contract with the advisory.
+            minimum_only=not reset_to_defaults,
         )
         if suggestion is None:
             return _error("Could not rebuild the schedule.", 503)
