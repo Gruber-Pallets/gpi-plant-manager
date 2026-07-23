@@ -179,6 +179,51 @@ def test_spanish_primary_offer_localizes_date_deadline_and_errors(monkeypatch):
     assert "La disponibilidad debe usar incrementos de 30 minutos" in bad.text
 
 
+def test_unanswered_saturday_offer_has_no_back_exit(monkeypatch):
+    _person(monkeypatch)
+    monkeypatch.setattr(timeclock_saturday.store, "offer_for_person", lambda *_args: OFFER)
+
+    response = client.get(f"/timeclock/saturday/{timeclock._mint_token(1)}")
+
+    assert response.status_code == 200
+    assert 'class="k-back"' not in response.text
+    assert 'action="/timeclock/saturday/confirm/' in response.text
+    assert 'action="/timeclock/saturday/decline/' in response.text
+    assert 'action="/timeclock/saturday/later/' in response.text
+
+
+def test_unanswered_saturday_offer_keeps_normal_idle_timeout(monkeypatch):
+    _person(monkeypatch)
+    monkeypatch.setattr(timeclock_saturday.store, "offer_for_person", lambda *_args: OFFER)
+
+    response = client.get(f"/timeclock/saturday/{timeclock._mint_token(1)}")
+
+    assert "timer = setTimeout(function() { location.href = '/timeclock'; }, ms);" in response.text
+    assert "return 30000;" in response.text
+
+
+def test_filled_saturday_offer_error_keeps_back_exit(monkeypatch):
+    _person(monkeypatch)
+    monkeypatch.setattr(timeclock_saturday.store, "offer_for_person", lambda *_args: None)
+    monkeypatch.setattr(
+        timeclock_saturday.store,
+        "commit",
+        lambda *_args: (_ for _ in ()).throw(timeclock_saturday.store.NoCompatibleOpening),
+    )
+
+    response = client.post(
+        f"/timeclock/saturday/commit/{timeclock._mint_token(1)}",
+        data={
+            "day": "2026-07-25",
+            "availability_start": "07:00",
+            "availability_end": "12:00",
+        },
+    )
+
+    assert response.status_code == 409
+    assert 'class="k-back"' in response.text
+
+
 def test_unexpected_decision_store_errors_fail_safe(monkeypatch):
     _person(monkeypatch)
     token = timeclock._mint_token(1)

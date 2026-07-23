@@ -1,7 +1,7 @@
 {% extends "timeclock_base.html" %}
 {% block title %}Saturday Work{% endblock %}
 {% block content %}
-<div class="k-header"><a href="/timeclock/dashboard/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>{% include "_timeclock_brand.html" %}</div>
+<div class="k-header">{% if not offer %}<a href="/timeclock/dashboard/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>{% endif %}{% include "_timeclock_brand.html" %}</div>
 <main class="k-main" style="align-items:center; text-align:center; padding-top:3rem;">
   {% if error %}<div class="k-error">{{ t(error) }}</div>{% endif %}
   {% if offer %}
