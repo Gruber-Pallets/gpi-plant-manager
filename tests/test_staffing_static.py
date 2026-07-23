@@ -654,6 +654,48 @@ def test_flush_autosave_waits_for_a_queued_save_before_resolving():
     assert result.returncode == 0, result.stderr
 
 
+def test_flush_autosave_force_saves_the_current_grid_when_clean():
+    """Recruiting must persist its visible empty grid even without a dirty event."""
+    js = _script()
+    controller = js.split("  // ---------- Autosave controller ----------", 1)[1].split(
+        "  // ---------- Publish submit busy state ----------", 1
+    )[0]
+    harness = textwrap.dedent(
+        f"""
+        const controller = {controller!r};
+        const listeners = {{}};
+        const form = {{
+          addEventListener(type, listener) {{ listeners[type] = listener; }},
+          getAttribute() {{ return '/staffing'; }},
+        }};
+        let saves = 0;
+        global.window = {{}};
+        global.document = {{
+          getElementById(id) {{ return id === 'staffing-form' ? form : null; }},
+        }};
+        global.FormData = class FormData {{ set() {{}} }};
+        global.fetch = async () => {{
+          saves += 1;
+          return {{ ok: true, json: async () => ({{}}) }};
+        }};
+        const __viewingPosted = false;
+        eval(controller);
+
+        await window.flushAutosave({{force: true}});
+        if (saves !== 1) throw new Error('forced autosave did not save the clean grid');
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_flush_autosave_rejects_when_a_manual_save_fails():
     """A center toggle must not reconcile over a manual edit that failed to save."""
     js = _script()

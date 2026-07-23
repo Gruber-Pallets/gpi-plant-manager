@@ -1322,7 +1322,8 @@
   // Debounced fetch POST of the scheduler form. Three states reflected
   // in #autosave-indicator: clean (hidden), dirty (red dot), saving
   // (spinner). Exposes window.flushAutosave() for the publish/share
-  // flow to await any in-flight save.
+  // flow to await any in-flight save. Callers can force a fresh save when
+  // their next action must use the grid exactly as it is currently displayed.
   (function () {
     const form = document.getElementById('staffing-form');
     if (!form) return;
@@ -1402,7 +1403,7 @@
     form.addEventListener('input', onEdit);
     form.addEventListener('change', onEdit);
 
-    window.flushAutosave = async function () {
+    window.flushAutosave = async function ({force = false} = {}) {
       if (debounceTimer) {
         clearTimeout(debounceTimer);
         debounceTimer = null;
@@ -1410,6 +1411,10 @@
       }
       await (inFlight || Promise.resolve());
       if (lastAutosaveError) throw lastAutosaveError;
+      if (force) {
+        await fireSave();
+        if (lastAutosaveError) throw lastAutosaveError;
+      }
     };
   })();
 

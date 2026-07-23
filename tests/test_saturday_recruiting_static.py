@@ -53,7 +53,7 @@ def test_scheduler_recruit_script_posts_directly_without_confirmation_dialog():
 def test_scheduler_recruit_waits_for_autosave_before_activation():
     js = Path("src/zira_dashboard/static/saturday-recruiting.js").read_text()
 
-    flush_call = "await window.flushAutosave();"
+    flush_call = "await window.flushAutosave({force: true});"
     activation_call = (
         "const response = await fetch("
         "'/api/staffing/saturday-recruiting/activate-from-schedule'"

@@ -9,7 +9,7 @@ document.addEventListener('click', async event => {
       throw new Error(saveErrorMessage);
     }
     try {
-      await window.flushAutosave();
+      await window.flushAutosave({force: true});
     } catch (_error) {
       throw new Error(saveErrorMessage);
     }
