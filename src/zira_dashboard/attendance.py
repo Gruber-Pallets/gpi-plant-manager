@@ -92,6 +92,19 @@ def name_to_person_id() -> dict:
     return {r["name"]: str(r["odoo_id"]) for r in rows}
 
 
+def full_name_by_roster_name() -> dict:
+    """{roster_name: full Odoo name} for active people that have a stored
+    full name. Used to display un-abbreviated names on the leaderboards;
+    people synced before the `full_name` column existed are simply absent
+    (callers fall back to the roster label)."""
+    from . import db
+    rows = db.query(
+        "SELECT name, full_name FROM people "
+        "WHERE active = TRUE AND full_name IS NOT NULL AND full_name <> ''"
+    )
+    return {r["name"]: r["full_name"] for r in rows}
+
+
 def person_id_to_name(name_to_id: dict | None = None) -> dict:
     """{str(person_odoo_id): roster_name} — the inverse of name_to_person_id().
 

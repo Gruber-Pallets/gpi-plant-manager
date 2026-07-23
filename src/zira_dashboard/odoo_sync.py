@@ -301,17 +301,20 @@ def sync(force: bool = False) -> SyncResult:
             spanish_speaker = spanish_level > 0
             is_flex = _m2o_id(emp.get("resource_calendar_id")) in flex_cal_ids
             cur.execute(
-                "INSERT INTO people (odoo_id, name, active, wage_type, spanish_speaker, "
-                "spanish_level, resource_calendar_id, is_flexible, last_pulled_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "INSERT INTO people (odoo_id, name, full_name, active, wage_type, "
+                "spanish_speaker, spanish_level, resource_calendar_id, is_flexible, "
+                "last_pulled_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
+                "full_name = EXCLUDED.full_name, "
                 "active = EXCLUDED.active, wage_type = EXCLUDED.wage_type, "
                 "spanish_speaker = EXCLUDED.spanish_speaker, "
                 "spanish_level = EXCLUDED.spanish_level, "
                 "resource_calendar_id = EXCLUDED.resource_calendar_id, "
                 "is_flexible = EXCLUDED.is_flexible, "
                 "last_pulled_at = EXCLUDED.last_pulled_at",
-                (emp["id"], roster_names[int(emp["id"])], bool(emp.get("active", True)),
+                (emp["id"], roster_names[int(emp["id"])],
+                 (emp.get("name") or "").strip(), bool(emp.get("active", True)),
                  wage_type, spanish_speaker, spanish_level,
                  _m2o_id(emp.get("resource_calendar_id")), is_flex, pulled_at),
             )

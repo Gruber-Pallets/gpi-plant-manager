@@ -83,6 +83,9 @@ ALTER TABLE people DROP CONSTRAINT IF EXISTS people_spanish_level_check;
 ALTER TABLE people ADD CONSTRAINT people_spanish_level_check
   CHECK (spanish_level BETWEEN 0 AND 3);
 ALTER TABLE people ADD COLUMN IF NOT EXISTS resource_calendar_id INTEGER;
+-- Raw Odoo name, kept alongside the compact roster label in `name` so the
+-- leaderboards can display un-abbreviated names.
+ALTER TABLE people ADD COLUMN IF NOT EXISTS full_name TEXT;
 
 CREATE TABLE IF NOT EXISTS skills (
   id              SERIAL PRIMARY KEY,

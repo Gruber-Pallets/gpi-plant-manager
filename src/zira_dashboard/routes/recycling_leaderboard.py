@@ -38,6 +38,47 @@ def _leaderboard_payload(today: date) -> dict:
     )
 
 
+def _full_names() -> dict[str, str]:
+    """{roster_label: full name} for active people, or {} if unavailable.
+
+    A display nicety only, so a DB hiccup must never blank the leaderboard —
+    an empty map leaves every name as its stored roster label.
+    """
+    from .. import attendance
+
+    try:
+        return attendance.full_name_by_roster_name()
+    except Exception:  # noqa: BLE001 - display nicety must never blank the page
+        return {}
+
+
+def _apply_full_names(data: dict, full_names: dict[str, str]) -> None:
+    """Rewrite roster-label names to full names for display, in place.
+
+    Leaderboard rows, Gold Ribbon winners, and current-goat entries whose
+    stored name is a known roster label are shown with the person's full Odoo
+    name. Names with no mapping (e.g. already-full historical strings) are left
+    unchanged, so rows are never merged — this only de-abbreviates the label.
+    """
+    if not full_names:
+        return
+
+    def full(name):
+        return full_names.get(name, name)
+
+    for block in data.get("roles", {}).values():
+        for row in block.get("rows", []):
+            row["name"] = full(row["name"])
+    for month in data.get("ribbons", []):
+        for key in ("repair", "dismantler"):
+            winner = month.get(key)
+            if winner and winner.get("name"):
+                winner["name"] = full(winner["name"])
+    for goat in data.get("current_goats", []):
+        if goat.get("name"):
+            goat["name"] = full(goat["name"])
+
+
 def _current_recycling_goats() -> list[dict]:
     goats: list[dict] = []
     for label, group_name in _CURRENT_GOAT_GROUPS:
@@ -85,6 +126,7 @@ def _render_recycling_leaderboard(
     data = _leaderboard_payload(today)
     if "current_goats" not in data:
         data["current_goats"] = _current_recycling_goats()
+    _apply_full_names(data, _full_names())
     context = {
         "tv_mode": tv_mode,
         "tv_theme": tv_theme if tv_theme in ("light", "dark") else "dark",

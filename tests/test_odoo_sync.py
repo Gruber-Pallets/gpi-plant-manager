@@ -151,6 +151,28 @@ def test_sync_persists_exact_spanish_level_and_derived_speaker_flag(monkeypatch)
     ]
 
 
+def test_sync_persists_full_name_alongside_roster_label(monkeypatch):
+    from zira_dashboard import db
+
+    _stub_client(
+        monkeypatch,
+        employees=[
+            {"id": 99006, "name": "Test Fullname", "active": True, "work_email": False},
+        ],
+        skills_for={},
+        columns_meta=[],
+        buckets={},
+    )
+
+    assert odoo_sync.sync(force=True).ok is True
+
+    rows = db.query(
+        "SELECT name, full_name FROM people WHERE odoo_id = 99006"
+    )
+    # Roster label is the compact "First L." form; full_name is the raw name.
+    assert rows == [{"name": "Test F.", "full_name": "Test Fullname"}]
+
+
 def test_sync_stores_skill_odoo_ids(monkeypatch):
     from zira_dashboard import db
 

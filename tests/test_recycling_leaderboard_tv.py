@@ -230,6 +230,60 @@ def test_tv_recycling_leaderboard_has_no_desktop_chrome(monkeypatch):
     assert r.text.lower().count("<!doctype") == 1
 
 
+def test_apply_full_names_rewrites_rows_ribbons_and_goats():
+    from zira_dashboard.routes import recycling_leaderboard
+
+    data = _fake_recycling_leaderboard_data()
+    recycling_leaderboard._apply_full_names(
+        data,
+        {"Maria S.": "Maria Sanchez", "Daniel M.": "Daniel Morales"},
+    )
+
+    assert data["roles"]["Repair"]["rows"][0]["name"] == "Maria Sanchez"
+    # Unmapped label falls through unchanged.
+    assert data["roles"]["Repair"]["rows"][1]["name"] == "Luis A."
+    assert data["ribbons"][0]["repair"]["name"] == "Maria Sanchez"
+    assert data["ribbons"][0]["dismantler"]["name"] == "Daniel Morales"
+    goat_names = {g["name"] for g in data["current_goats"]}
+    assert goat_names == {"Maria Sanchez", "Daniel Morales"}
+
+
+def test_apply_full_names_empty_map_is_noop():
+    from zira_dashboard.routes import recycling_leaderboard
+
+    data = _fake_recycling_leaderboard_data()
+    recycling_leaderboard._apply_full_names(data, {})
+
+    assert data["roles"]["Repair"]["rows"][0]["name"] == "Maria S."
+    assert data["ribbons"][0]["repair"]["name"] == "Maria S."
+
+
+def test_tv_recycling_leaderboard_shows_full_names(monkeypatch):
+    from zira_dashboard.routes import recycling_leaderboard
+
+    monkeypatch.setattr(
+        recycling_leaderboard,
+        "_leaderboard_payload",
+        lambda today: _fake_recycling_leaderboard_data(),
+    )
+    monkeypatch.setattr(
+        recycling_leaderboard,
+        "_full_names",
+        lambda: {"Maria S.": "Maria Sanchez", "Daniel M.": "Daniel Morales"},
+    )
+
+    r = TestClient(app).get("/tv/recycling-leaderboard")
+
+    assert r.status_code == 200
+    assert "Maria Sanchez" in r.text
+    assert "Daniel Morales" in r.text
+    # The abbreviated labels are fully replaced.
+    assert "Maria S." not in r.text
+    assert "Daniel M." not in r.text
+    # An unmapped label still renders as-is.
+    assert "Luis A." in r.text
+
+
 def test_desktop_recycling_leaderboard_has_single_chrome(monkeypatch):
     monkeypatch.setattr(
         "zira_dashboard.routes.recycling_leaderboard._leaderboard_payload",
