@@ -53,19 +53,46 @@ def test_name_map_overrides():
     assert forklift_store.name_map("driver")["Luke"] == "Luke Gruber"
 
 
-def test_recent_driver_throughput_from_driver_daily():
+def test_recent_driver_throughput_pairs_daily_calls_and_on_call_time():
     from zira_dashboard import db
+
     db.bootstrap_schema()
     d = date(2026, 6, 25)
     db.execute("DELETE FROM forklift_driver_daily WHERE day = %s", (d,))
-    # 80 calls over 4 on-call hours (14_400_000 ms) -> 20 calls/hr fleet
+    db.execute("DELETE FROM forklift_calls_daily WHERE day = %s", (d,))
+    forklift_store.upsert_calls_daily({
+        "day": d,
+        "total_calls": 80,
+        "urgent_calls": 0,
+        "overload_count": 0,
+        "neglected_count": 0,
+        "by_hour": {},
+        "by_station": {},
+        "by_skill": {},
+    })
+    # Reconstructed driver rows may have valid time while per-driver calls are
+    # missing. The daily demand table supplies the numerator.
     forklift_store.upsert_driver_daily([
-        {"day": d, "driver_id": "fk-a", "name": "A", "calls": 80, "on_time": 70,
-         "late": 10, "avg_ms": 200000, "max_ms": 700000, "utilization_pct": 90,
-         "on_call_ms": 14_400_000, "available_ms": 16_000_000},
+        {
+            "day": d,
+            "driver_id": "fk-a",
+            "name": "A",
+            "calls": 0,
+            "on_time": 70,
+            "late": 10,
+            "avg_ms": 0,
+            "max_ms": 0,
+            "utilization_pct": 90,
+            "on_call_ms": 14_400_000,
+            "available_ms": 16_000_000,
+        },
     ])
+
     rate = forklift_store.recent_driver_throughput(days=3650)
+
     assert rate is not None and 19.0 < rate < 21.0
+    db.execute("DELETE FROM forklift_driver_daily WHERE day = %s", (d,))
+    db.execute("DELETE FROM forklift_calls_daily WHERE day = %s", (d,))
 
 
 def test_recent_driver_throughput_none_on_thin_data():

@@ -138,13 +138,28 @@ _MIN_ONCALL_HOURS = 2.0
 
 
 def recent_driver_throughput(days: int = 28) -> float | None:
-    """Data-derived per-driver throughput (calls/hour) = total completed calls
-    / total on-call hours across forklift_driver_daily in the last `days`.
-    None when there isn't enough on-call time to be meaningful."""
+    """Fleet calls/hour from days with both demand and on-call history.
+
+    Daily call totals are authoritative in ``forklift_calls_daily``. Historical
+    utilization reconstruction can create ``forklift_driver_daily`` rows with
+    valid on-call time but no per-driver calls, so using that table for both
+    sides would understate throughput. Return None when the paired signal is too
+    thin so the advisor keeps its existing default-throughput fallback.
+    """
     from . import db
+
     rows = db.query(
-        "SELECT COALESCE(SUM(calls),0) AS calls, COALESCE(SUM(on_call_ms),0) AS ms "
-        "FROM forklift_driver_daily WHERE day >= (CURRENT_DATE - %s::int)",
+        "WITH driver_days AS ("
+        "  SELECT day, COALESCE(SUM(on_call_ms), 0) AS ms "
+        "  FROM forklift_driver_daily "
+        "  WHERE day >= (CURRENT_DATE - %s::int) "
+        "  GROUP BY day"
+        ") "
+        "SELECT COALESCE(SUM(c.total_calls), 0) AS calls, "
+        "       COALESCE(SUM(d.ms), 0) AS ms "
+        "FROM driver_days d "
+        "JOIN forklift_calls_daily c ON c.day = d.day "
+        "WHERE d.ms > 0 AND c.total_calls > 0",
         (days,),
     )
     if not rows:
