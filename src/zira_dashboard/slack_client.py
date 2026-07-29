@@ -25,16 +25,27 @@ class SlackError(Exception):
     """Raised on any Slack API failure or missing config."""
 
 
-def post_message(*, channel_id: str, text: str, blocks: list[dict]) -> dict:
+def post_message(
+    *, channel_id: str, text: str, blocks: list[dict], client_msg_id: str | None = None
+) -> dict:
     """Post Block Kit content and return Slack's stable message timestamp."""
     token = os.environ.get("SLACK_BOT_TOKEN")
     if not token:
         raise SlackError("Slack not configured (SLACK_BOT_TOKEN missing)")
     try:
+        payload = {
+            "channel": channel_id,
+            "text": text,
+            "blocks": blocks,
+            "unfurl_links": False,
+            "unfurl_media": False,
+        }
+        if client_msg_id is not None:
+            payload["client_msg_id"] = client_msg_id
         response = requests.post(
             "https://slack.com/api/chat.postMessage",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"},
-            json={"channel": channel_id, "text": text, "blocks": blocks, "unfurl_links": False, "unfurl_media": False},
+            json=payload,
             timeout=15,
         )
         response.raise_for_status()

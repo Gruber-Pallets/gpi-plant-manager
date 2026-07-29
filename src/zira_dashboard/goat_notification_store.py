@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from uuid import uuid4
 
 from . import shift_config
 
@@ -36,11 +37,10 @@ def unfinalized_workdays(through_day: date) -> list[date]:
         )
         finalized_days = {row["day"] for row in cur.fetchall()}
 
-    work_weekdays = shift_config.work_weekdays()
     days: list[date] = []
     current = enabled_on
     while current <= through_day:
-        if current.weekday() in work_weekdays and current not in finalized_days:
+        if shift_config.is_workday(current) and current not in finalized_days:
             days.append(current)
         current += timedelta(days=1)
     return days
@@ -70,7 +70,10 @@ def insert_alert_and_delivery(alert: dict) -> int | None:
         if row is None:
             return None
         alert_id = int(row["id"])
-        cur.execute("INSERT INTO goat_slack_deliveries (goat_alert_id) VALUES (%s)", (alert_id,))
+        cur.execute(
+            "INSERT INTO goat_slack_deliveries (goat_alert_id, client_msg_id) VALUES (%s, %s)",
+            (alert_id, str(uuid4())),
+        )
         return alert_id
 
 
@@ -82,10 +85,12 @@ def claim_delivery() -> dict | None:
             "WITH candidate AS (SELECT id FROM goat_slack_deliveries "
             "WHERE status = 'pending' OR (status = 'sending' AND attempted_at < now() - interval '5 minutes') "
             "ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) "
-            "UPDATE goat_slack_deliveries delivery SET status = 'sending', attempts = delivery.attempts + 1, attempted_at = now() "
+            "UPDATE goat_slack_deliveries delivery SET status = 'sending', attempts = delivery.attempts + 1, attempted_at = now(), "
+            "client_msg_id = COALESCE(delivery.client_msg_id, %s::uuid) "
             "FROM candidate, goat_alerts alert "
             "WHERE delivery.id = candidate.id AND alert.id = delivery.goat_alert_id "
-            "RETURNING delivery.id, delivery.goat_alert_id, alert.achieved_day, alert.group_name, alert.person, alert.wc_name, alert.units, alert.prior_record_units, alert.prior_record_holder, alert.prior_record_day"
+            "RETURNING delivery.id, delivery.goat_alert_id, delivery.client_msg_id, alert.achieved_day, alert.group_name, alert.person, alert.wc_name, alert.units, alert.prior_record_units, alert.prior_record_holder, alert.prior_record_day",
+            (str(uuid4()),),
         )
         return cur.fetchone()
 

@@ -727,6 +727,7 @@ CREATE TABLE IF NOT EXISTS goat_notification_days (
 CREATE TABLE IF NOT EXISTS goat_slack_deliveries (
   id                BIGSERIAL PRIMARY KEY,
   goat_alert_id     INTEGER NOT NULL UNIQUE REFERENCES goat_alerts(id) ON DELETE CASCADE,
+  client_msg_id     UUID NOT NULL,
   status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sending', 'sent')),
   attempts          INTEGER NOT NULL DEFAULT 0,
   last_error        TEXT,
@@ -735,6 +736,9 @@ CREATE TABLE IF NOT EXISTS goat_slack_deliveries (
   slack_message_ts  TEXT,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The initial GOAT outbox shipped without this id. Keep bootstrap safe for
+-- already-created databases; legacy rows receive an id when first claimed.
+ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS client_msg_id UUID;
 CREATE INDEX IF NOT EXISTS idx_goat_slack_deliveries_claim
   ON goat_slack_deliveries (status, attempted_at, id);
 

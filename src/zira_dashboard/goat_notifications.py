@@ -121,7 +121,12 @@ def drain_deliveries() -> int:
     while delivery := store.claim_delivery():
         text, blocks = message_payload(delivery)
         try:
-            result = slack_client.post_message(channel_id=channel_id, text=text, blocks=blocks)
+            result = slack_client.post_message(
+                channel_id=channel_id,
+                text=text,
+                blocks=blocks,
+                client_msg_id=str(delivery["client_msg_id"]),
+            )
         except slack_client.SlackError as exc:
             store.return_delivery_to_pending(delivery["id"], str(exc))
             break
@@ -131,9 +136,8 @@ def drain_deliveries() -> int:
 
 
 def _prior_configured_workday(day: date) -> date:
-    work_weekdays = shift_config.work_weekdays()
     candidate = day - timedelta(days=1)
-    while candidate.weekday() not in work_weekdays:
+    while not shift_config.is_workday(candidate):
         candidate -= timedelta(days=1)
     return candidate
 

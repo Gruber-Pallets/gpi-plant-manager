@@ -39,6 +39,26 @@ def test_post_message_posts_fallback_and_blocks(monkeypatch):
     assert result == {"message_ts": "1722280000.000100"}
 
 
+def test_post_message_includes_client_message_id_when_provided(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    response = _ok_response({"ok": True, "ts": "1722280000.000100"})
+    seen = {}
+
+    def fake_post(url, **kwargs):
+        seen.update(kwargs)
+        return response
+
+    monkeypatch.setattr(slack_client.requests, "post", fake_post)
+    slack_client.post_message(
+        channel_id="C-MGMT",
+        text="GOAT",
+        blocks=[],
+        client_msg_id="1f7194a2-79de-4e95-a5f4-087743431fe9",
+    )
+
+    assert seen["json"]["client_msg_id"] == "1f7194a2-79de-4e95-a5f4-087743431fe9"
+
+
 def test_post_message_wraps_api_error(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setattr(slack_client.requests, "post", lambda *args, **kwargs: _ok_response({"ok": False, "error": "not_in_channel"}))

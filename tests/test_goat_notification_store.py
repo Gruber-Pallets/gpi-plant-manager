@@ -68,6 +68,8 @@ def test_schema_defines_durable_goat_notification_tables():
     assert "CREATE TABLE IF NOT EXISTS goat_notification_days" in SCHEMA_DDL
     assert "CREATE TABLE IF NOT EXISTS goat_slack_deliveries" in SCHEMA_DDL
     assert "goat_alert_id     INTEGER NOT NULL UNIQUE REFERENCES goat_alerts(id) ON DELETE CASCADE" in SCHEMA_DDL
+    assert "client_msg_id     UUID NOT NULL" in SCHEMA_DDL
+    assert "ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS client_msg_id UUID" in SCHEMA_DDL
     assert "idx_goat_slack_deliveries_claim" in SCHEMA_DDL
 
 
@@ -126,6 +128,7 @@ def test_claim_retry_and_sent_updates_target_the_same_delivery(monkeypatch):
         "prior_record_units": 891,
         "prior_record_holder": "Jose Ochoa",
         "prior_record_day": date(2026, 6, 10),
+        "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9",
     }
     first_claim = _RecordingCursor(fetchone_results=[delivery])
     return_to_pending = _RecordingCursor()
@@ -143,11 +146,28 @@ def test_claim_retry_and_sent_updates_target_the_same_delivery(monkeypatch):
     assert first == second == delivery
     claim_sql = first_claim.executed[0][0]
     assert "attempts = delivery.attempts + 1" in claim_sql
+    assert "client_msg_id = COALESCE(delivery.client_msg_id, %s::uuid)" in claim_sql
     assert "FROM candidate, goat_alerts alert" in claim_sql
     assert "WHERE delivery.id = candidate.id AND alert.id = delivery.goat_alert_id" in claim_sql
     assert "JOIN goat_alerts" not in claim_sql
     assert return_to_pending.executed[0][1] == ("not_in_channel", delivery["id"])
     assert mark_sent.executed[0][1] == ("1722280000.000100", delivery["id"])
+
+
+def test_insert_alert_persists_a_client_message_id(monkeypatch):
+    alert_id = 23
+    client_message_id = uuid4()
+    insert_alert = _RecordingCursor(fetchone_results=[{"id": alert_id}])
+    _patch_cursors(monkeypatch, insert_alert)
+    monkeypatch.setattr(store, "uuid4", lambda: client_message_id)
+
+    assert store.insert_alert_and_delivery(_alert()) == alert_id
+    assert insert_alert.executed[1:] == [
+        (
+            "INSERT INTO goat_slack_deliveries (goat_alert_id, client_msg_id) VALUES (%s, %s)",
+            (alert_id, str(client_message_id)),
+        )
+    ]
 
 
 def test_unfinalized_workdays_exclude_days_recorded_as_finalized(monkeypatch):
@@ -170,6 +190,18 @@ def test_unfinalized_workdays_exclude_days_recorded_as_finalized(monkeypatch):
         "SELECT day FROM goat_notification_days WHERE day BETWEEN %s AND %s",
         (enabled_on, through_day),
     )
+
+
+def test_unfinalized_workdays_includes_a_published_saturday(monkeypatch):
+    saturday = date(2026, 8, 1)
+    cursor = _RecordingCursor(
+        fetchone_results=[{"enabled_on": saturday}],
+        fetchall_results=[[]],
+    )
+    _patch_cursors(monkeypatch, cursor)
+    monkeypatch.setattr(store.shift_config, "is_workday", lambda day: day == saturday)
+
+    assert store.unfinalized_workdays(saturday) == [saturday]
 
 
 def test_record_finalized_day_uses_an_idempotent_insert(monkeypatch):
