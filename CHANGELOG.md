@@ -18,6 +18,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Fixes
 
+- **Staffing safety checks now run safely in the background.** This helps the schedule page stay quick and reliable while it checks each work center.
 - **Staffing warnings now check the schedule you are looking at.** You see problems in the people and work centers on the screen, not an Auto schedule idea.
 - **Staffing safety checks are stronger.** Plant Manager can spot when a work group needs a trained helper. This helps supervisors catch a problem sooner.
 - **Inbox numbers now catch up right away.** If a task is already cleared, the Inbox number updates as soon as you open a page, so it does not send you to an empty Inbox.

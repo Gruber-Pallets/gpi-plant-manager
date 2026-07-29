@@ -286,6 +286,11 @@ def _parse_current_validation_snapshot(
             names.append(name)
         assignments[center] = names
 
+    return day, assignments, enabled
+
+
+def _validate_current_validation_capacities(assignments: Mapping[str, Sequence[str]]) -> None:
+    """Check snapshot capacities in the endpoint's blocking worker."""
     capacities = staffing_route._configured_center_capacities(
         assignments.keys(), strict=True,
     )
@@ -295,7 +300,6 @@ def _parse_current_validation_snapshot(
             raise ValueError(
                 f"assignments for {center} exceed its maximum of {maximum}."
             )
-    return day, assignments, enabled
 
 
 @router.post("/api/rotations/validate-current")
@@ -309,14 +313,16 @@ async def validate_current_rotation_view(request: Request):
         return _error(str(exc))
 
     def _work():
-        return JSONResponse({
-            "ok": True,
-            "issues": staffing_route.current_view_validation_for_day(
+        try:
+            _validate_current_validation_capacities(assignments)
+            issues = staffing_route.current_view_validation_for_day(
                 day=day,
                 assignments=assignments,
                 enabled_work_centers=enabled,
-            ),
-        })
+            )
+        except ValueError as exc:
+            return _error(str(exc))
+        return JSONResponse({"ok": True, "issues": issues})
 
     return await asyncio.to_thread(_work)
 

@@ -133,6 +133,68 @@ def test_live_validation_endpoint_rejects_unknown_center_and_duplicate_names(mon
     assert response.json()["ok"] is False
 
 
+def test_live_validation_endpoint_rejects_duplicate_names_in_known_center(monkeypatch):
+    client, _rotations = _rotations_client(monkeypatch)
+
+    response = client.post("/api/rotations/validate-current", json={
+        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Repair 1"],
+        "assignments": {"Repair 1": ["Alex", "Alex"]},
+    })
+
+    assert response.status_code == 422
+    assert response.json()["ok"] is False
+
+
+def test_live_validation_endpoint_runs_capacity_validation_in_the_worker(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    events: list[str] = []
+    real_to_thread = rotations.asyncio.to_thread
+
+    async def traced_to_thread(function, /, *args, **kwargs):
+        events.append("worker_dispatched")
+        return await real_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(rotations.asyncio, "to_thread", traced_to_thread)
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_configured_center_capacities",
+        lambda centers, strict=False: (
+            events.append("capacity_read")
+            or {center: 2 for center in centers}
+        ),
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "current_view_validation_for_day",
+        lambda **_kwargs: events.append("view_validated") or [],
+    )
+
+    response = client.post("/api/rotations/validate-current", json={
+        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Repair 1"],
+        "assignments": {"Repair 1": ["Alex"]},
+    })
+
+    assert response.status_code == 200
+    assert events == ["worker_dispatched", "capacity_read", "view_validated"]
+
+
+def test_live_validation_endpoint_returns_422_for_worker_capacity_errors(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_configured_center_capacities",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad capacity")),
+    )
+
+    response = client.post("/api/rotations/validate-current", json={
+        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Repair 1"],
+        "assignments": {"Repair 1": ["Alex"]},
+    })
+
+    assert response.status_code == 422
+    assert response.json() == {"ok": False, "error": "bad capacity"}
+
+
 def test_current_view_validation_uses_the_visible_safe_trim_saw_crew(monkeypatch):
     from zira_dashboard.routes import staffing as staffing_route
 
