@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-07-29
 
+### 01:25 PM - Sidebar warning plan
+
+- **A clearer schedule warning layout is planned.** Warnings will move beside the schedule, below the Notes and Auto tools. This is the plan; the app has not changed yet.
+
 ### 01:21 PM - Holiday workday plan
 
 - **A holiday work plan is ready.** Odoo holidays will start closed in Plant Manager. If the plant works one, supervisors will use the same volunteer steps and schedule screen they already use for Saturdays. This is the plan; the app has not changed yet.
