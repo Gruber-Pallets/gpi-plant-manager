@@ -214,118 +214,19 @@ def contenders_for_now(day: date, now_utc: datetime) -> list[Contender]:
 
 # ---------- persisted NEW GOAT alerts ----------
 
+def _zira_client():
+    from .deps import client
+    return client
+
+
 def finalize_day(day: date) -> list[dict]:
-    """Idempotent end-of-day sweep.
-
-    For each group, find every WC whose `day` total strictly beat the
-    prior group GOAT record. Write one `goat_alerts` row per match.
-    Skips WCs already finalized (UNIQUE (achieved_day, group_name,
-    wc_name)).
-
-    Returns the list of rows written (or [] when nothing qualified or
-    the table is unavailable).
-    """
-    from . import db, work_centers_store
-
-    written: list[dict] = []
-    for group_name in _group_names_today():
-        # A goat_alerts row is written when today's WC total > the SECOND-best
-        # person-day in the group's all-time history. That's the prior record
-        # from today's perspective — `awards.goat()` would include today's
-        # data so it can't be used directly.
-        prior_record = _prior_record_excluding_day(group_name, day)
-        prior_units = int(prior_record["units"]) if prior_record else 0
-        if prior_units <= 0:
-            continue
-
-        for loc in work_centers_store.members("group", group_name):
-            units_today = _wc_units_today(loc.name, day)
-            if units_today <= prior_units:
-                continue
-            person = _primary_operator(loc.name, day)
-            if not person:
-                continue
-            row = {
-                "achieved_day": day,
-                "group_name": group_name,
-                "person": person,
-                "wc_name": loc.name,
-                "units": units_today,
-                "prior_record_units": prior_units,
-                "prior_record_holder": str(prior_record.get("name") or ""),
-                "prior_record_day": prior_record.get("day"),
-            }
-            try:
-                db.execute(
-                    "INSERT INTO goat_alerts "
-                    "  (achieved_day, group_name, person, wc_name, units, "
-                    "   prior_record_units, prior_record_holder, prior_record_day) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (achieved_day, group_name, wc_name) DO NOTHING",
-                    (
-                        row["achieved_day"],
-                        row["group_name"],
-                        row["person"],
-                        row["wc_name"],
-                        row["units"],
-                        row["prior_record_units"],
-                        row["prior_record_holder"],
-                        row["prior_record_day"],
-                    ),
-                )
-                written.append(row)
-            except Exception:
-                # Don't let one bad insert kill the rest of the sweep.
-                continue
-    return written
+    from . import goat_notifications
+    return goat_notifications.finalize_day(day, _zira_client())
 
 
-def _prior_record_excluding_day(group_name: str, day: date) -> dict | None:
-    """All-time best person-day in `group_name`, EXCLUDING `day`.
-
-    Used at finalize-time to determine the record-to-beat. Without
-    excluding `day`, today's own data would already be reflected in
-    `awards.goat()` and we'd never detect a beat.
-    """
-    from . import awards
-    try:
-        rows = awards.person_days_in_group(group_name, date(1970, 1, 1), date(9999, 12, 31))
-    except Exception:
-        return None
-    rows = [r for r in rows if r.get("day") != day]
-    if not rows:
-        return None
-    rows.sort(key=lambda r: (-int(r["units"]), r["day"], r["name"]))
-    top = rows[0]
-    return {"name": top["name"], "day": top["day"], "units": int(top["units"])}
-
-
-# In-process "already finalized this day" memo — avoids running the
-# end-of-shift sweep on every render after the shift ends. Resets on
-# worker restart; the DB-level UNIQUE constraint makes re-runs safe.
-_FINALIZED_DAYS: set[date] = set()
-
-
-def maybe_finalize_today(today: date) -> None:
-    """Lazily run `finalize_day(today)` once per process after the
-    shift has ended. Idempotent: in-memory flag prevents repeat
-    sweeps, and the goat_alerts UNIQUE constraint prevents duplicates
-    across worker restarts.
-    """
-    if today in _FINALIZED_DAYS:
-        return
-    from . import shift_config
-    try:
-        now_local = datetime.now(UTC).astimezone(shift_config.SITE_TZ)
-        shift_end = shift_config.shift_end_for(today)
-    except Exception:
-        return
-    if now_local.date() < today:
-        return
-    if now_local.date() == today and now_local.time() < shift_end:
-        return
-    finalize_day(today)
-    _FINALIZED_DAYS.add(today)
+def maybe_finalize_today(today: date | None = None) -> None:
+    from . import goat_notifications
+    goat_notifications.run_due(datetime.now(UTC), _zira_client())
 
 
 def active_alerts(today: date) -> list[dict]:

@@ -100,6 +100,12 @@ async def _tick_live_cache():
     await asyncio.to_thread(live_cache.refresh_production, today, _zira_client())
 
 
+async def _tick_goat_notifications():
+    """Finalize due GOAT records and deliver pending celebrations."""
+    from . import goat_notifications
+    await asyncio.to_thread(goat_notifications.run_due, datetime.now(UTC), _zira_client())
+
+
 async def _tick_timeclock_sync():
     """Retry any timeclock_punches_log rows still flagged unsynced to Odoo."""
     from . import timeclock_sync
@@ -334,6 +340,7 @@ async def _tick_saturday_recruiting():
 _WARMERS = [
     ("Zira cache", _tick_zira_cache, 30),
     ("live_cache", _tick_live_cache, 45),
+    ("GOAT notifications", _tick_goat_notifications, 60),
     ("machine breakdown", _tick_machine_breakdown, 45),
     ("kiosk sync", _tick_timeclock_sync, 60),
     ("Odoo open-attendance", _tick_odoo_attendance, 30),
