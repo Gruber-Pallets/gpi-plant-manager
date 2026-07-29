@@ -3948,6 +3948,7 @@ def test_staffing_context_does_not_treat_exact_default_as_duplicate_lock(monkeyp
     assert captured["current_assignments"] == {
         "Repair 2": ["Default Green"],
     }
+    assert captured["use_current_view_validation"] is True
 
 
 def test_posted_staffing_view_keeps_legacy_preview_validation(monkeypatch):
@@ -3980,6 +3981,37 @@ def test_posted_staffing_view_keeps_legacy_preview_validation(monkeypatch):
         auto_centers={"Repair 1"},
         recycled_context=fake_recycled_context,
         view="posted",
+    )
+
+    assert captured["use_current_view_validation"] is False
+    assert captured["current_assignments"] == {"Repair 1": ["Posted Person"]}
+
+
+def test_published_staffing_view_keeps_legacy_preview_validation(monkeypatch):
+    captured = {}
+    schedule = staffing.Schedule(
+        day=TARGET_DAY,
+        published=True,
+        assignments={"Repair 1": ["Posted Person"]},
+        auto_enabled_work_centers=["Repair 1"],
+    )
+
+    def fake_recycled_context(*_args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "recycled_rotation_mode": "normal",
+            "rotation_reasons": {},
+            "rotation_reason_codes": {},
+            "rotation_warnings": [],
+            "rotation_issues": [],
+            "active_training_blocks": [],
+        }
+
+    _render_staffing_page(
+        monkeypatch,
+        saved_schedule=schedule,
+        auto_centers={"Repair 1"},
+        recycled_context=fake_recycled_context,
     )
 
     assert captured["use_current_view_validation"] is False

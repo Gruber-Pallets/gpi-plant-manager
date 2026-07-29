@@ -492,6 +492,23 @@ def test_live_validation_failure_does_not_keep_old_staffing_issues():
     assert "renderCoverageIssues([], [validationUnavailableIssue()]);" in validation
 
 
+def test_live_validation_is_disabled_for_every_posted_schedule_view():
+    js = _script()
+    validation = js.split("async function validateCurrentView() {", 1)[1].split(
+        "function invalidateCurrentViewValidation()", 1,
+    )[0]
+    scheduler = js.split(
+        "scheduleCurrentViewValidation = function scheduleCurrentViewValidation() {", 1,
+    )[1].split("function setWorkCenterOnState", 1)[0]
+    guard = "if (__viewingPosted || window.SCHEDULE_PUBLISHED) return;"
+
+    assert guard in validation
+    assert validation.index(guard) < validation.index("fetch(")
+    assert guard in scheduler
+    assert scheduler.index(guard) < scheduler.index("setTimeout(")
+    assert "if (!__viewingPosted && !window.SCHEDULE_PUBLISHED) validateCurrentView();" in js
+
+
 def test_live_validation_ignores_an_out_of_order_stale_response():
     js = _script()
     validation = "let validationTimer = null;" + js.split(
@@ -514,7 +531,11 @@ def test_live_validation_ignores_an_out_of_order_stale_response():
           abort() {{ this.aborted = true; }}
         }}
         let scheduleCurrentViewValidation = () => {{}};
-        global.window = {{ AUTO_SCHEDULE_WC_NAMES: ['Repair 1'] }};
+        const __viewingPosted = false;
+        global.window = {{
+          AUTO_SCHEDULE_WC_NAMES: ['Repair 1'],
+          SCHEDULE_PUBLISHED: false,
+        }};
         const day = '2026-07-29';
         global.document = {{
           querySelectorAll(selector) {{
@@ -590,6 +611,7 @@ def test_live_validation_failed_auto_cannot_replace_the_explicit_failure():
         }}
         const window = {{
           AUTO_SCHEDULE_WC_NAMES: ['Repair 1'],
+          SCHEDULE_PUBLISHED: false,
           flushAutosave: async () => {{}},
           showToast: () => {{}},
         }};

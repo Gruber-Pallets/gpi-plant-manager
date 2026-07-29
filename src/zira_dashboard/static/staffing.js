@@ -1712,6 +1712,7 @@
     }
 
     async function validateCurrentView() {
+      if (__viewingPosted || window.SCHEDULE_PUBLISHED) return;
       const requestId = ++validationRequestId;
       validationController?.abort();
       validationController = new AbortController();
@@ -1741,6 +1742,7 @@
     }
 
     scheduleCurrentViewValidation = function scheduleCurrentViewValidation() {
+      if (__viewingPosted || window.SCHEDULE_PUBLISHED) return;
       clearTimeout(validationTimer);
       validationTimer = setTimeout(validateCurrentView, 150);
     };
@@ -1986,7 +1988,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       renderMinimumCrewBalanceFromGrid();
     });
     renderMinimumCrewBalanceFromGrid();
-    if (!__viewingPosted) validateCurrentView();
+    if (!__viewingPosted && !window.SCHEDULE_PUBLISHED) validateCurrentView();
   })();
 
   // ---------- Unified training protocol setup + lifecycle ----------

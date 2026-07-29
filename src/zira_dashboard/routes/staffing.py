@@ -1657,7 +1657,7 @@ def staffing_page(
         assignment_sources=sched.assignment_sources,
         current_assignments=sched.assignments,
         work_weekdays=work_weekdays,
-        use_current_view_validation=not viewing_posted,
+        use_current_view_validation=not (viewing_posted or sched.published),
     )
 
     posted_delivery = (
