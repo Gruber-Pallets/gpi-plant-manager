@@ -18,6 +18,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Fixes
 
+- **GOAT celebrations use the same Slack channel as schedules.** You do not need to set up another channel for them.
 - **Missing TV screens fix themselves after an update.** TVs like Repair 2 now get their saved display setup if it was missing, so they can show their dashboard again.
 
 ## 2026-07-23

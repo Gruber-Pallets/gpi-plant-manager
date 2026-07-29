@@ -52,7 +52,7 @@ def test_message_payload_keeps_previous_record_secondary():
 
 def test_drain_requeues_a_slack_error(monkeypatch):
     delivery = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10), "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9", "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d"}
-    monkeypatch.setenv("GOAT_SLACK_CHANNEL_ID", "C-MGMT")
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: delivery)
     monkeypatch.setattr(goat_notifications.slack_client, "post_message", lambda **kwargs: (_ for _ in ()).throw(goat_notifications.slack_client.SlackError("not_in_channel")))
     seen = []
@@ -130,7 +130,7 @@ def test_drain_marks_each_delivery_sent(monkeypatch):
     first = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10), "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9", "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d"}
     second = {**first, "id": 8, "person": "Ana", "client_msg_id": "80b7b976-b02b-4a31-a211-4c3c649e1bcf", "claim_token": "f3d5e049-37bd-4881-bcfb-43d41c28e5a9"}
     deliveries = iter([first, second, None])
-    monkeypatch.setenv("GOAT_SLACK_CHANNEL_ID", "C-MGMT")
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: next(deliveries))
     posted = []
     monkeypatch.setattr(goat_notifications.slack_client, "post_message", lambda **kwargs: posted.append(kwargs) or {"message_ts": f"ts-{len(posted)}"})
@@ -157,7 +157,7 @@ def test_drain_retries_with_the_same_persisted_client_message_id(monkeypatch):
         "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9",
         "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d",
     }
-    monkeypatch.setenv("GOAT_SLACK_CHANNEL_ID", "C-MGMT")
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
     claims = iter([delivery, {**delivery, "claim_token": "f3d5e049-37bd-4881-bcfb-43d41c28e5a9"}, None])
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: next(claims))
     sent = []
@@ -177,14 +177,14 @@ def test_drain_retries_with_the_same_persisted_client_message_id(monkeypatch):
     assert sent == [delivery["client_msg_id"], delivery["client_msg_id"]]
 
 
-def test_drain_warns_and_leaves_outbox_untouched_without_a_channel(monkeypatch, caplog):
-    monkeypatch.delenv("GOAT_SLACK_CHANNEL_ID", raising=False)
+def test_drain_warns_and_leaves_outbox_untouched_without_the_schedule_channel(monkeypatch, caplog):
+    monkeypatch.delenv("SLACK_CHANNEL_ID", raising=False)
     claimed = []
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: claimed.append(True))
 
     assert goat_notifications.drain_deliveries() == 0
     assert claimed == []
-    assert "GOAT_SLACK_CHANNEL_ID" in caplog.text
+    assert "SLACK_CHANNEL_ID" in caplog.text
 
 
 def test_run_due_recovers_unfinalized_workdays_before_the_current_shift_ends(monkeypatch):

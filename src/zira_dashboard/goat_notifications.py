@@ -114,9 +114,9 @@ def message_payload(alert: dict) -> tuple[str, list[dict]]:
 
 
 def drain_deliveries() -> int:
-    channel_id = os.environ.get("GOAT_SLACK_CHANNEL_ID")
+    channel_id = os.environ.get("SLACK_CHANNEL_ID")
     if not channel_id:
-        logger.warning("GOAT_SLACK_CHANNEL_ID is not configured; GOAT deliveries remain pending")
+        logger.warning("SLACK_CHANNEL_ID is not configured; GOAT deliveries remain pending")
         return 0
     sent = 0
     while delivery := store.claim_delivery():
