@@ -40,6 +40,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Fixes
 
+- **Forklift staffing suggestions use complete history now.** Missing old driver details no longer make the schedule ask for huge crews such as 160 people.
 - **Posted schedules keep their own safety warnings.** You can look at a finished schedule without new draft checks changing what you see.
 - **Draft and posted schedule warnings now stay in their right place.** Drafts show the people on the screen, while posted schedules keep their saved warning details.
 - **Schedule warnings stay clear and current.** The app checks that old warnings do not come back after you change the schedule.
