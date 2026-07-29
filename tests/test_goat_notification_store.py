@@ -79,6 +79,27 @@ def test_schema_defines_durable_goat_notification_tables():
     assert "idx_goat_slack_deliveries_claim" in SCHEMA_DDL
 
 
+def test_schema_backfills_only_delivered_category_alerts_before_the_unique_index():
+    delivery_table_start = SCHEMA_DDL.index("CREATE TABLE IF NOT EXISTS goat_slack_deliveries")
+    backfill_start = SCHEMA_DDL.index("UPDATE goat_alerts alert")
+    unique_index_start = SCHEMA_DDL.index("CREATE UNIQUE INDEX IF NOT EXISTS idx_goat_alerts_category_day")
+    backfill = SCHEMA_DDL[backfill_start:unique_index_start]
+
+    assert delivery_table_start < backfill_start < unique_index_start
+    assert "FROM goat_slack_deliveries delivery" in backfill
+    assert "delivery.goat_alert_id = alert.id" in backfill
+    assert "alert.category_key IS NULL" in backfill
+    assert "alert.group_name IN" in backfill
+    for label, category_key in {
+        "Repairs": "repairs",
+        "Dismantlers": "dismantlers",
+        "Juniors": "juniors",
+        "Woodpecker": "woodpecker",
+        "Hand Build": "hand_build",
+    }.items():
+        assert f"WHEN '{label}' THEN '{category_key}'" in backfill
+
+
 def test_activation_day_is_written_once_without_touching_shared_state(monkeypatch):
     enabled_on = date(2026, 7, 29)
     cursor = _RecordingCursor(fetchone_results=[{"enabled_on": enabled_on}])

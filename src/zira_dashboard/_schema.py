@@ -716,8 +716,6 @@ CREATE TABLE IF NOT EXISTS goat_alerts (
 -- the feature-owned finalizer populate the key for all new category alerts.
 ALTER TABLE goat_alerts ADD COLUMN IF NOT EXISTS category_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_goat_alerts_day ON goat_alerts (achieved_day);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_goat_alerts_category_day
-  ON goat_alerts (achieved_day, category_key) WHERE category_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS goat_notification_state (
   id          SMALLINT PRIMARY KEY CHECK (id = 1),
@@ -747,6 +745,23 @@ CREATE TABLE IF NOT EXISTS goat_slack_deliveries (
 -- already-created databases; legacy rows receive an id when first claimed.
 ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS client_msg_id UUID;
 ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS claim_token UUID;
+-- Only Task 3/4 feature alerts have a durable delivery. Backfill those rows
+-- before adding the category-day uniqueness rule; dashboard-only alerts stay
+-- NULL so their historical behavior is unchanged.
+UPDATE goat_alerts alert
+SET category_key = CASE alert.group_name
+  WHEN 'Repairs' THEN 'repairs'
+  WHEN 'Dismantlers' THEN 'dismantlers'
+  WHEN 'Juniors' THEN 'juniors'
+  WHEN 'Woodpecker' THEN 'woodpecker'
+  WHEN 'Hand Build' THEN 'hand_build'
+END
+FROM goat_slack_deliveries delivery
+WHERE delivery.goat_alert_id = alert.id
+  AND alert.category_key IS NULL
+  AND alert.group_name IN ('Repairs', 'Dismantlers', 'Juniors', 'Woodpecker', 'Hand Build');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goat_alerts_category_day
+  ON goat_alerts (achieved_day, category_key) WHERE category_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_goat_slack_deliveries_claim
   ON goat_slack_deliveries (status, attempted_at, id);
 
