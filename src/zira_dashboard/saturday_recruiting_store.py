@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from typing import Literal
 
 from . import saturday_recruiting as sr
 
@@ -41,6 +42,9 @@ class Recruitment:
     shift_end: time
     response_deadline: datetime
     staffing_prepared_at: datetime | None = None
+    day_kind: str = "saturday"
+    event_name: str | None = None
+    holiday_odoo_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,8 @@ class Offer:
     shift_end: time
     response_deadline: datetime
     eligible_wc_ids: frozenset[int]
+    day_kind: str = "saturday"
+    event_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +91,8 @@ class HomeBanner:
     phase: str
     shift_start: time
     shift_end: time
+    day_kind: str = "saturday"
+    event_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +102,8 @@ class CommitmentStatus:
     availability_end: time
     response_deadline: datetime
     can_employee_cancel: bool
+    day_kind: str = "saturday"
+    event_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -172,7 +182,8 @@ def _json_ids(value) -> frozenset[int]:
 
 def _load_bundle(cur, day: date) -> RecruitmentBundle | None:
     cur.execute(
-        "SELECT day, status, shift_start, shift_end, response_deadline, staffing_prepared_at "
+        "SELECT day, day_kind, event_name, holiday_odoo_id, status, "
+        "shift_start, shift_end, response_deadline, staffing_prepared_at "
         "FROM saturday_recruitments WHERE day = %s",
         (day,),
     )
@@ -186,6 +197,13 @@ def _load_bundle(cur, day: date) -> RecruitmentBundle | None:
         shift_end=row["shift_end"],
         response_deadline=row["response_deadline"],
         staffing_prepared_at=row["staffing_prepared_at"],
+        day_kind=str(row.get("day_kind") or "saturday"),
+        event_name=row.get("event_name"),
+        holiday_odoo_id=(
+            int(row["holiday_odoo_id"])
+            if row.get("holiday_odoo_id") is not None
+            else None
+        ),
     )
     cur.execute(
         "SELECT o.wc_id, wc.name AS wc_name, o.requested_count, "
@@ -269,6 +287,9 @@ def serialize_bundle(bundle: RecruitmentBundle) -> dict:
     return {
         "recruitment": {
             "day": bundle.recruitment.day.isoformat(),
+            "day_kind": bundle.recruitment.day_kind,
+            "event_name": bundle.recruitment.event_name,
+            "holiday_odoo_id": bundle.recruitment.holiday_odoo_id,
             "status": bundle.recruitment.status,
             "shift_start": bundle.recruitment.shift_start.isoformat(timespec="minutes"),
             "shift_end": bundle.recruitment.shift_end.isoformat(timespec="minutes"),
@@ -328,7 +349,8 @@ def available_positions() -> tuple[AvailablePosition, ...]:
 
 def _lock_recruitment(cur, day: date) -> Recruitment:
     cur.execute(
-        "SELECT day, status, shift_start, shift_end, response_deadline, staffing_prepared_at "
+        "SELECT day, day_kind, event_name, holiday_odoo_id, status, "
+        "shift_start, shift_end, response_deadline, staffing_prepared_at "
         "FROM saturday_recruitments WHERE day = %s FOR UPDATE",
         (day,),
     )
@@ -342,6 +364,13 @@ def _lock_recruitment(cur, day: date) -> Recruitment:
         shift_end=row["shift_end"],
         response_deadline=row["response_deadline"],
         staffing_prepared_at=row["staffing_prepared_at"],
+        day_kind=str(row.get("day_kind") or "saturday"),
+        event_name=row.get("event_name"),
+        holiday_odoo_id=(
+            int(row["holiday_odoo_id"])
+            if row.get("holiday_odoo_id") is not None
+            else None
+        ),
     )
 
 
@@ -488,6 +517,8 @@ def offer_for_person(person_id: int, now: datetime) -> Offer | None:
                 bundle.recruitment.shift_end,
                 bundle.recruitment.response_deadline,
                 eligible_wc_ids,
+                bundle.recruitment.day_kind,
+                bundle.recruitment.event_name,
             )
         return None
 
@@ -520,6 +551,8 @@ def home_banner(now: datetime) -> HomeBanner | None:
                     "today",
                     recruitment.shift_start,
                     recruitment.shift_end,
+                    recruitment.day_kind,
+                    recruitment.event_name,
                 )
             if local_now < recruitment.response_deadline and recruitment.status == "recruiting":
                 remaining_count = _remaining_count(bundle)
@@ -531,6 +564,8 @@ def home_banner(now: datetime) -> HomeBanner | None:
                         "available",
                         recruitment.shift_start,
                         recruitment.shift_end,
+                        recruitment.day_kind,
+                        recruitment.event_name,
                     )
                 continue
             if recruitment.day == local_now.date() + timedelta(days=1):
@@ -541,6 +576,8 @@ def home_banner(now: datetime) -> HomeBanner | None:
                     "tomorrow",
                     recruitment.shift_start,
                     recruitment.shift_end,
+                    recruitment.day_kind,
+                    recruitment.event_name,
                 )
         return None
 
@@ -551,7 +588,8 @@ def commitment_for_person(person_id: int, now: datetime) -> CommitmentStatus | N
 
     with db.cursor() as cur:
         cur.execute(
-            "SELECT r.day, r.availability_start, r.availability_end, s.status, s.response_deadline "
+            "SELECT r.day, r.availability_start, r.availability_end, s.status, "
+            "s.response_deadline, s.day_kind, s.event_name "
             "FROM saturday_work_responses r "
             "JOIN saturday_recruitments s ON s.day = r.day "
             "WHERE r.person_id = %s AND r.status = 'committed' AND r.day >= %s "
@@ -567,6 +605,8 @@ def commitment_for_person(person_id: int, now: datetime) -> CommitmentStatus | N
             row["availability_end"],
             row["response_deadline"],
             row["status"] == "recruiting" and row["response_deadline"] > now,
+            str(row.get("day_kind") or "saturday"),
+            row.get("event_name"),
         )
 
 
@@ -712,7 +752,7 @@ def cancel_recruitment(
                 (actor, now, now, day),
             )
             cur.execute(
-                "UPDATE schedules SET published = FALSE, published_snapshot = NULL, "
+                "UPDATE schedules SET published = FALSE, "
                 "assignment_sources = '{}'::jsonb, "
                 "saturday_availability_overrides = '{}'::jsonb, "
                 "updated_at = %s WHERE day = %s",
@@ -734,12 +774,28 @@ def activate(
     requested_counts: Mapping[int, int],
     actor: str | None,
     now: datetime,
+    *,
+    day_kind: Literal["saturday", "holiday"] = "saturday",
+    event_name: str | None = None,
+    holiday_odoo_id: int | None = None,
 ) -> RecruitmentBundle:
     """Create a recruiting round, safely rejecting non-volunteer schedules."""
-    from . import db
+    from . import company_holidays, db, staffing
 
-    if day.weekday() != 5:
+    if day_kind not in {"saturday", "holiday"}:
+        raise LifecycleConflict("Recruiting must be for a Saturday or company holiday")
+    if day_kind == "saturday" and day.weekday() != 5:
         raise SaturdayRecruitingError("Saturday recruiting requires a Saturday")
+    if day_kind == "holiday":
+        holiday = company_holidays.for_day(day)
+        if (
+            holiday is None
+            or holiday.odoo_id != holiday_odoo_id
+            or holiday.name != event_name
+        ):
+            raise LifecycleConflict(
+                "Holiday recruiting must match the current company holiday"
+            )
     _validate_shift(shift_start, shift_end)
     response_deadline = _row_datetime(response_deadline)
     if response_deadline <= now:
@@ -753,45 +809,17 @@ def activate(
         cur.execute("SELECT pg_advisory_xact_lock(%s::bigint)", (day.toordinal(),))
         positions = _validate_positions(cur, requested_counts)
         cur.execute(
-            "SELECT published, assignment_sources FROM schedules WHERE day = %s FOR UPDATE",
+            "SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE",
             (day,),
         )
-        schedule = cur.fetchone()
-        if schedule and schedule["published"]:
-            raise LifecycleConflict("A published Saturday schedule cannot enter recruiting")
-        cur.execute(
-            "SELECT wc.name AS wc_name, pe.name AS person_name "
-            "FROM schedule_assignments sa "
-            "JOIN work_centers wc ON wc.id = sa.wc_id "
-            "JOIN people pe ON pe.id = sa.person_id "
-            "WHERE sa.day = %s",
-            (day,),
-        )
-        assignments = cur.fetchall()
-        if assignments:
-            raw_sources = schedule["assignment_sources"] if schedule else {}
-            if isinstance(raw_sources, str):
-                try:
-                    raw_sources = json.loads(raw_sources)
-                except json.JSONDecodeError:
-                    raw_sources = {}
-            default_only = isinstance(raw_sources, Mapping) and all(
-                raw_sources.get(row["wc_name"], {}).get(row["person_name"]) == "default"
-                for row in assignments
-            )
-            if not default_only:
-                raise LifecycleConflict("Clear existing Saturday assignments before activating recruiting.")
-            cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (day,))
-            cur.execute(
-                "UPDATE schedules SET assignment_sources = '{}'::jsonb, updated_at = %s WHERE day = %s",
-                (now, day),
-            )
-        cur.execute("SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE", (day,))
         if cur.fetchone() is not None:
             existing = _load_bundle(cur, day)
             assert existing is not None
             same_payload = (
                 existing.recruitment.status == "recruiting"
+                and existing.recruitment.day_kind == day_kind
+                and existing.recruitment.event_name == event_name
+                and existing.recruitment.holiday_odoo_id == holiday_odoo_id
                 and existing.recruitment.shift_start == shift_start
                 and existing.recruitment.shift_end == shift_end
                 and existing.recruitment.response_deadline == response_deadline
@@ -805,12 +833,74 @@ def activate(
                     "Saturday recruiting has already been activated with different details"
                 )
         else:
+            schedule = staffing.load_schedule_for_update(day, cur=cur)
+            if day_kind == "holiday" and schedule is not None:
+                draft = staffing.draft_from_posted(schedule)
+                cur.execute(
+                    "UPDATE schedules SET published = %s, "
+                    "published_snapshot = %s::jsonb, "
+                    "published_delivery = %s::jsonb, "
+                    "assignment_sources = '{}'::jsonb, "
+                    "saturday_availability_overrides = '{}'::jsonb, "
+                    "updated_at = %s WHERE day = %s",
+                    (
+                        draft.published,
+                        (
+                            json.dumps(draft.published_snapshot)
+                            if draft.published_snapshot is not None
+                            else None
+                        ),
+                        json.dumps(draft.published_delivery),
+                        now,
+                        day,
+                    ),
+                )
+                cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (day,))
+            elif day_kind == "saturday" and schedule is not None:
+                if schedule.published:
+                    raise LifecycleConflict(
+                        "A published Saturday schedule cannot enter recruiting"
+                    )
+                assignments = tuple(
+                    (wc_name, person_name)
+                    for wc_name, names in schedule.assignments.items()
+                    for person_name in names
+                )
+                if assignments:
+                    default_only = all(
+                        schedule.assignment_sources.get(wc_name, {}).get(person_name)
+                        == "default"
+                        for wc_name, person_name in assignments
+                    )
+                    if not default_only:
+                        raise LifecycleConflict(
+                            "Clear existing Saturday assignments before activating recruiting."
+                        )
+                    cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (day,))
+                    cur.execute(
+                        "UPDATE schedules SET assignment_sources = '{}'::jsonb, "
+                        "updated_at = %s WHERE day = %s",
+                        (now, day),
+                    )
             cur.execute(
                 "INSERT INTO saturday_recruitments "
-                "(day, status, shift_start, shift_end, response_deadline, "
+                "(day, day_kind, event_name, holiday_odoo_id, status, "
+                "shift_start, shift_end, response_deadline, "
                 "activated_by, activated_at, created_at, updated_at) "
-                "VALUES (%s, 'recruiting', %s, %s, %s, %s, %s, %s, %s)",
-                (day, shift_start, shift_end, response_deadline, actor, now, now, now),
+                "VALUES (%s, %s, %s, %s, 'recruiting', %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    day,
+                    day_kind,
+                    event_name,
+                    holiday_odoo_id,
+                    shift_start,
+                    shift_end,
+                    response_deadline,
+                    actor,
+                    now,
+                    now,
+                    now,
+                ),
             )
             for wc_id, requested_count in requested_counts.items():
                 # _validate_positions above proves this local id has requirements.
@@ -823,9 +913,7 @@ def activate(
             bundle = _load_bundle(cur, day)
             assert bundle is not None
 
-    from . import optional_workday
-
-    optional_workday.invalidate(day)
+    staffing.invalidate_schedule_cache(day)
     return bundle
 
 
