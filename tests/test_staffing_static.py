@@ -29,6 +29,13 @@ def test_printed_scheduler_hides_saturday_off_and_time_off_rails():
     assert "display: none !important;" in css
 
 
+def test_printed_staffing_warnings_expand_instead_of_clipping():
+    css = _print_css()
+
+    assert ".day-context .rotation-warning {" in css
+    assert "max-height: none; overflow: visible;" in css
+
+
 def test_scheduler_time_off_rows_expose_editor_data_and_dialog():
     html = _template()
 

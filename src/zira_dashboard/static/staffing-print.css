@@ -159,6 +159,9 @@ aside.day-context {
   grid-area: notes;
   margin: 0;
 }
+.day-context .rotation-warning {
+  max-height: none; overflow: visible;
+}
 .side .section h3 {
   color: black;
   border-left-color: black;

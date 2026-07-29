@@ -2724,6 +2724,8 @@ def test_staffing_keeps_automation_controls_and_warnings_in_the_notes_sidebar():
     assert 'id="reset-schedule-btn"' in sidebar
     assert 'id="clear-schedule-btn"' in sidebar
     assert 'id="rotation-warnings" role="alert"' in sidebar
+    assert html.count('id="rotation-warnings"') == 1
+    assert html.count('id="rotation-warning-list"') == 1
     assert 'class="rotation-controls" data-day="{{ day }}"' not in main
     assert 'id="reset-schedule-btn"' not in main
     assert 'id="clear-schedule-btn"' not in main
