@@ -13,6 +13,7 @@ touches Postgres.
 
 from __future__ import annotations
 
+from datetime import time
 from types import SimpleNamespace
 
 import pytest
@@ -425,3 +426,81 @@ def test_publish_block_reasons_exclude_work_centers_that_are_off(patch_wcs):
     assert model["publish_block_reasons"] == [
         "Hand Build #1 requires 2 operators — currently 1.",
     ]
+
+
+# --------------------------------------------------------------------------
+# (h) optional-workday volunteer availability + Saturday compatibility
+# --------------------------------------------------------------------------
+
+def test_optional_commitments_hide_old_draft_and_put_non_volunteers_off(patch_wcs):
+    patch_wcs([(_loc("Repair 1", required=("Repair",)),
+                {"required": ("Repair",), "min": 1, "max": 2, "defaults": []})])
+    roster = [
+        _person("Volunteer", Repair=3),
+        _person("Old default", Repair=2),
+        _person("Manager", reserve=True, Repair=3),
+        _person("Time Off", Repair=3),
+        _person("Partial", Repair=2),
+    ]
+
+    model = staffing_view.build_staffing_bays(
+        roster=roster,
+        sched=_sched({"Repair 1": ["Old default"]}),
+        time_off_entries=[
+            {"name": "Time Off", "hours": None},
+            {
+                "name": "Partial",
+                "hours": 2.0,
+                "time_range": "1:00 PM–3:00 PM",
+            },
+        ],
+        publish_blocked=0,
+        optional_commitments={
+            "Volunteer": {"start": time(6), "end": time(12)},
+        },
+        saturday_shift=(time(6), time(12)),
+        saturday_availability_overrides={"Partial": "unassigned"},
+    )
+
+    row = model["bays"][0]["rows"][0]
+    assert row["assigned"] == []
+    assert model["unassigned"] == ["Partial", "Volunteer"]
+    assert model["off"] == ["Old default"]
+    assert model["reserves"] == ["Manager"]
+    assert model["time_off_names"] == ["Time Off"]
+    assert model["partial_hours_by_name"] == {"Partial": 2.0}
+    assert model["partial_range_by_name"] == {"Partial": "1:00 PM–3:00 PM"}
+
+
+def test_optional_and_saturday_commitment_inputs_are_mutually_exclusive(patch_wcs):
+    patch_wcs([(_loc("Repair 1", required=("Repair",)),
+                {"required": ("Repair",), "min": 1, "max": 1, "defaults": []})])
+
+    with pytest.raises(ValueError, match="optional_commitments"):
+        staffing_view.build_staffing_bays(
+            roster=[],
+            sched=_sched(),
+            time_off_entries=[],
+            publish_blocked=0,
+            optional_commitments={},
+            saturday_commitments={},
+        )
+
+
+def test_saturday_commitments_remain_a_supported_alias(patch_wcs):
+    patch_wcs([(_loc("Repair 1", required=("Repair",)),
+                {"required": ("Repair",), "min": 1, "max": 1, "defaults": []})])
+
+    model = staffing_view.build_staffing_bays(
+        roster=[_person("Volunteer", Repair=3), _person("Off", Repair=2)],
+        sched=_sched(),
+        time_off_entries=[],
+        publish_blocked=0,
+        saturday_commitments={
+            "Volunteer": {"start": time(6), "end": time(12)},
+        },
+        saturday_shift=(time(6), time(12)),
+    )
+
+    assert model["unassigned"] == ["Volunteer"]
+    assert model["off"] == ["Off"]

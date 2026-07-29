@@ -20,7 +20,7 @@ from __future__ import annotations
 def build_staffing_bays(
     roster, sched, time_off_entries, publish_blocked, enabled_work_centers=None,
     saturday_commitments=None, saturday_shift=None, saturday_availability_overrides=None,
-    publish_errors=None,
+    publish_errors=None, optional_commitments=None,
 ):
     """Build the per-work-center render model from already-fetched inputs.
 
@@ -37,6 +37,10 @@ def build_staffing_bays(
       enabled_work_centers:
                          work centers currently On in the scheduler. Disabled
                          centers do not participate in publish minimum checks.
+      optional_commitments:
+                         people available for an optional Saturday or holiday.
+                         ``saturday_commitments`` remains a temporary alias;
+                         callers must not supply both.
 
     Returns a dict of exactly the bands-A+B context keys the route merges
     into its TemplateResponse: bays, publish_block_reasons, defaults_by_loc,
@@ -130,12 +134,24 @@ def build_staffing_bays(
         _options_cache[required] = rows
         return rows
 
-    # Saturday recruiting deliberately begins with the plant closed.  Only
-    # volunteers are allowed into the staffing grid; stale draft placements
-    # must not make a non-volunteer look scheduled.
-    is_saturday_recruiting = saturday_commitments is not None
+    if optional_commitments is not None and saturday_commitments is not None:
+        raise ValueError(
+            "Pass optional_commitments or saturday_commitments, not both."
+        )
+
+    # Optional-workday recruiting deliberately begins with the plant closed.
+    # Only volunteers are allowed into the staffing grid; stale draft
+    # placements must not make a non-volunteer look scheduled.  The returned
+    # Saturday-named keys remain compatibility contracts for the template and
+    # browser code while callers migrate to the date-neutral input.
+    commitments = (
+        optional_commitments
+        if optional_commitments is not None
+        else saturday_commitments
+    )
+    is_saturday_recruiting = commitments is not None
     effective_saturday_commitments = staffing.effective_saturday_commitments(
-        saturday_commitments,
+        commitments,
         saturday_availability_overrides,
         *(saturday_shift or (None, None)),
     )

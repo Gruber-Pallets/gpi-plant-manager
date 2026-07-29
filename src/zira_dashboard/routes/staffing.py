@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import _http_cache, app_settings, attendance, auto_schedule_capacity, current_schedule_validation, db, late_report, rotation_store, rotation_suggestions, rotation_training, saturday_recruiting as sr, saturday_recruiting_store, schedule_solver, schedule_store, scheduler_time_off, shift_config, staffing, staffing_view, time_format, time_off_sync, work_centers_store
+from .. import _http_cache, app_settings, attendance, auto_schedule_capacity, company_holidays, current_schedule_validation, db, late_report, optional_workday, rotation_store, rotation_suggestions, rotation_training, saturday_recruiting as sr, saturday_recruiting_store, schedule_solver, schedule_store, scheduler_time_off, shift_config, staffing, staffing_view, time_format, time_off_sync, work_centers_store
 from .._http_cache import invalidate_today_cache
 from ..deps import templates
 from ..plant_day import today as plant_today, now as plant_now
@@ -30,6 +30,7 @@ router = APIRouter()
 # cache-missed request reuses warm threads instead of paying thread spin-up
 # for a fresh ThreadPoolExecutor on every render.
 _PAGE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="staffing-page")
+_UNRESOLVED = object()
 
 
 class _Phase:
@@ -62,12 +63,19 @@ def _server_timing_header(phases: dict) -> str:
 def _next_working_day(d: date) -> date:
     """Return the next date after `d` that is a work-day per the shift schedule."""
     wd = schedule_store.current().work_weekdays or frozenset({0, 1, 2, 3, 4})
-    nxt = d + timedelta(days=1)
-    for _ in range(14):
-        if nxt.weekday() in wd:
-            return nxt
-        nxt += timedelta(days=1)
-    return d + timedelta(days=1)
+    try:
+        return optional_workday.next_normal_workday(d, wd)
+    except optional_workday.NoNormalWorkday:
+        return d + timedelta(days=1)
+
+
+def _holiday_mirror_has_synced() -> bool:
+    """Fail closed when the first-sync state cannot be verified."""
+    try:
+        return company_holidays.has_synced()
+    except Exception:
+        log.exception("Could not verify Odoo holiday sync state")
+        return False
 
 
 FORKLIFT_TABLETS_WC = "Tablets"
@@ -1167,20 +1175,30 @@ def _seed_new_future_draft(
     sched: staffing.Schedule,
     roster: Sequence[staffing.Person],
     time_off_entries,
+    *,
+    optional_day=_UNRESOLVED,
+    holidays_synced=_UNRESOLVED,
 ) -> staffing.Schedule:
     if day <= today or time_off_entries is None:
+        return sched
+    if holidays_synced is _UNRESOLVED:
+        holidays_synced = _holiday_mirror_has_synced()
+    if not holidays_synced:
         return sched
     try:
         if staffing.schedule_revision(day) is not None:
             return staffing.load_schedule(day)
         enabled_centers = _default_auto_work_centers(day)
-        if day.weekday() == 5:
+        if optional_day is _UNRESOLVED:
+            optional_day = optional_workday.for_day(day)
+        if optional_day is not None:
             assignments, sources = {}, {}
         else:
             # A brand-new weekday opens with "the defaults loaded": only the
             # people set as a work-center or group default, exactly what Reset
-            # to defaults produces. Saturdays keep assignments blank for
-            # recruiting while still showing the manager's enabled centers.
+            # to defaults produces. Optional Saturdays and holidays keep
+            # assignments blank for recruiting while still showing the
+            # manager's enabled centers.
             assignments, sources = defaults_only_schedule(
                 day, roster, time_off_entries, enabled_centers,
             )
@@ -1242,6 +1260,16 @@ def staffing_page(
     if cached_resp is not None:
         return cached_resp
 
+    holidays_synced = _holiday_mirror_has_synced()
+    try:
+        optional_day = optional_workday.for_day(d)
+    except Exception:
+        # A classifier lookup should be cache-only, but if it cannot be
+        # verified we must not seed a possibly closed future date.
+        log.exception("Could not classify optional workday %s", d)
+        optional_day = None
+        holidays_synced = False
+
     # One pool fans out everything that doesn't depend on the schedule:
     # 3 DB reads (certs, roster, schedule) + Odoo time-off. The
     # attendance fetch is fired AFTER the schedule resolves (it needs
@@ -1279,7 +1307,15 @@ def staffing_page(
         except Exception:
             log.exception("Could not load time off for future-draft initialization on %s", d)
             time_off_entries = None
-    sched = _seed_new_future_draft(d, today, sched, roster, time_off_entries)
+    sched = _seed_new_future_draft(
+        d,
+        today,
+        sched,
+        roster,
+        time_off_entries,
+        optional_day=optional_day,
+        holidays_synced=holidays_synced,
+    )
     # A failed authoritative read must not create a draft, but the display
     # remains best-effort and can render its time-off panel as empty.
     time_off_entries = time_off_entries or []
@@ -1322,11 +1358,11 @@ def staffing_page(
     # every displayed calendar day.
     auto_scheduler_available = True
 
-    # Closing recruiting deliberately does not schedule anyone. Opening the
-    # finished Saturday is the manager's explicit preparation action: defaults
-    # are applied once to willing staff, with every remaining volunteer left
-    # Unassigned for manual or button-triggered Auto scheduling.
-    if d.weekday() == 5:
+    # Closing recruiting deliberately does not schedule anyone. Opening a
+    # finished optional workday is the manager's explicit preparation action:
+    # defaults are applied once to willing staff, with every remaining
+    # volunteer left Unassigned for manual or button-triggered Auto scheduling.
+    if optional_day is not None:
         try:
             initial_saturday_bundle = saturday_recruiting_store.get(d)
             if (
@@ -1473,7 +1509,11 @@ def staffing_page(
         for b in shift_config.configured_breaks_for(d)
     ]
     hours_source = shift_config.scheduler_hours_source(d, sched.custom_hours is not None)
-    nonstandard_schedule = sched.custom_hours is not None or d.weekday() in {5, 6}
+    nonstandard_schedule = (
+        sched.custom_hours is not None
+        or optional_day is not None
+        or d.weekday() == 6
+    )
     eff_hours_label = f"{eff_start.strftime('%H:%M')}–{eff_end.strftime('%H:%M')}"
     eff_custom_hours_label = (
         f"{eff_start.strftime('%I:%M').lstrip('0')}–"
@@ -1489,7 +1529,7 @@ def staffing_page(
     saturday_recruit_enabled_count = 0
     saturday_response_summary = {"yes": [], "no": [], "deciding": []}
     saturday_staffing_prepared = False
-    if d.weekday() == 5:
+    if optional_day is not None:
         try:
             saturday_bundle = saturday_recruiting_store.get(d)
             saturday_staffing_prepared = bool(
@@ -1507,6 +1547,9 @@ def staffing_page(
                     d,
                     schedule_store.current().work_weekdays,
                     shift_config.configured_shift_start_for,
+                    is_holiday=lambda candidate: (
+                        company_holidays.for_day(candidate) is not None
+                    ),
                 )
             )
             saturday_payload = (
@@ -1532,8 +1575,27 @@ def staffing_page(
         except Exception:
             log.exception("Saturday recruiting context failed for %s", d)
 
+    optional_recruiting_label = (
+        "Holiday recruiting"
+        if optional_day and optional_day.kind == "holiday"
+        else "Saturday recruiting"
+    )
     saturday_context = {
         "day_is_saturday": d.weekday() == 5,
+        "is_optional_workday": optional_day is not None,
+        "optional_day_kind": optional_day.kind if optional_day else None,
+        "optional_day_name": optional_day.name if optional_day else None,
+        "optional_day_label": (
+            optional_day.name
+            if optional_day and optional_day.kind == "holiday"
+            else "Saturday"
+        ),
+        "optional_recruiting_label": optional_recruiting_label,
+        "holiday_sync_warning": (
+            ""
+            if holidays_synced
+            else "Odoo holidays have not synced yet. New future drafts are paused."
+        ),
         "saturday_recruiting": saturday_bundle.recruitment if saturday_bundle else None,
         "saturday_staffing_prepared": saturday_staffing_prepared,
         # Once recruiting has closed the Saturday behaves like any other draft:
@@ -1567,7 +1629,7 @@ def staffing_page(
             and plant_now() < saturday_bundle.recruitment.response_deadline
         ),
         "saturday_publish_lock_message": (
-            "Saturday recruiting stays open until "
+            f"{optional_recruiting_label} stays open until "
             f"{sr.format_deadline(saturday_bundle.recruitment.response_deadline)}."
             if saturday_bundle
             and saturday_bundle.recruitment.status != "cancelled"
@@ -1576,17 +1638,17 @@ def staffing_page(
         ),
     }
 
-    # Rebuild the pure roster view once Saturday recruiting is known.  A
-    # recruiting Saturday starts closed: only commitments enter Unassigned or
-    # a work-center picker; everyone else remains visibly Off.
-    if d.weekday() == 5:
+    # Rebuild the pure roster view once optional-workday recruiting is known.
+    # An optional date starts closed: only commitments enter Unassigned or a
+    # work-center picker; everyone else remains visibly Off.
+    if optional_day is not None:
         bay_model = staffing_view.build_staffing_bays(
             roster=roster,
             sched=sched,
             time_off_entries=time_off_entries,
             publish_blocked=publish_blocked,
             enabled_work_centers=enabled_auto_work_centers,
-            saturday_commitments=saturday_staffing_commitments or {},
+            optional_commitments=saturday_staffing_commitments or {},
             saturday_shift=(
                 (saturday_bundle.recruitment.shift_start, saturday_bundle.recruitment.shift_end)
                 if saturday_bundle and saturday_bundle.recruitment.status != "cancelled"

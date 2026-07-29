@@ -3296,6 +3296,7 @@ def _render_staffing_page(
     monkeypatch.setattr(staffing_routes._http_cache, "get_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "set_cache_headers", lambda *a, **k: None)
     monkeypatch.setattr(staffing_routes._http_cache, "store_cached_response", lambda *a, **k: None)
+    monkeypatch.setattr(staffing_routes.company_holidays, "has_synced", lambda: True)
     monkeypatch.setattr(
         staffing_routes.app_settings,
         "get_setting",
