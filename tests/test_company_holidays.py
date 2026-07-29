@@ -233,6 +233,92 @@ def test_refresh_replaces_set_then_reloads_and_invalidates_after_commit(
     assert events[-3:] == ["reload", "staffing invalidate", "http invalidate"]
 
 
+def test_post_commit_reload_failure_does_not_record_a_refresh_failure(monkeypatch):
+    events: list[object] = []
+    monkeypatch.setattr(company_holidays.db, "cursor", _cursor_factory(events))
+
+    def fail_reload():
+        events.append("reload")
+        raise RuntimeError("reload failed")
+
+    monkeypatch.setattr(company_holidays, "reload", fail_reload)
+    monkeypatch.setattr(
+        company_holidays.staffing,
+        "invalidate_all_schedule_caches",
+        lambda: pytest.fail("invalidation must wait for a successful reload"),
+    )
+
+    with pytest.raises(RuntimeError, match="reload failed"):
+        company_holidays.refresh(fetcher=lambda: [_odoo_row()])
+
+    state_statements = [
+        event
+        for event in events
+        if isinstance(event, tuple)
+        and event[0] == "execute"
+        and "company_holiday_sync_state" in event[1]
+    ]
+    assert [event for event in events if isinstance(event, tuple) and event[0] == "begin"] == [
+        ("begin", 1)
+    ]
+    assert len(state_statements) == 1
+    assert "last_success_at" in state_statements[0][1]
+    assert events.index(("commit", 1)) < events.index("reload")
+
+
+@pytest.mark.parametrize("failing_step", ["staffing", "http"])
+def test_post_commit_invalidator_failure_does_not_record_a_refresh_failure(
+    monkeypatch, failing_step
+):
+    events: list[object] = []
+    monkeypatch.setattr(company_holidays.db, "cursor", _cursor_factory(events))
+    monkeypatch.setattr(
+        company_holidays,
+        "reload",
+        lambda: events.append("reload") or {},
+    )
+
+    def invalidate_staffing():
+        events.append("staffing invalidate")
+        if failing_step == "staffing":
+            raise RuntimeError("staffing invalidate failed")
+
+    def invalidate_http():
+        events.append("http invalidate")
+        if failing_step == "http":
+            raise RuntimeError("http invalidate failed")
+
+    monkeypatch.setattr(
+        company_holidays.staffing,
+        "invalidate_all_schedule_caches",
+        invalidate_staffing,
+    )
+    monkeypatch.setattr(
+        company_holidays._http_cache,
+        "invalidate_all_cache",
+        invalidate_http,
+    )
+
+    with pytest.raises(RuntimeError, match=f"{failing_step} invalidate failed"):
+        company_holidays.refresh(fetcher=lambda: [_odoo_row()])
+
+    state_statements = [
+        event
+        for event in events
+        if isinstance(event, tuple)
+        and event[0] == "execute"
+        and "company_holiday_sync_state" in event[1]
+    ]
+    assert [event for event in events if isinstance(event, tuple) and event[0] == "begin"] == [
+        ("begin", 1)
+    ]
+    assert len(state_statements) == 1
+    assert "last_success_at" in state_statements[0][1]
+    assert events.index(("commit", 1)) < events.index("reload")
+    if failing_step == "staffing":
+        assert "http invalidate" not in events
+
+
 def test_valid_empty_refresh_clears_mirror_and_marks_success(monkeypatch):
     events: list[object] = []
     monkeypatch.setattr(company_holidays.db, "cursor", _cursor_factory(events))

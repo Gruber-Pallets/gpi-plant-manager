@@ -266,11 +266,6 @@ def refresh(
                 "last_error = NULL",
                 (attempted_at, attempted_at),
             )
-
-        reload()
-        staffing.invalidate_all_schedule_caches()
-        _http_cache.invalidate_all_cache()
-        return len(holidays)
     except Exception as exc:
         try:
             _record_failure(attempted_at, exc)
@@ -278,6 +273,11 @@ def refresh(
             _log.exception("could not record company holiday refresh failure")
         _log.exception("company holiday refresh failed")
         raise
+
+    reload()
+    staffing.invalidate_all_schedule_caches()
+    _http_cache.invalidate_all_cache()
+    return len(holidays)
 
 
 __all__ = [
