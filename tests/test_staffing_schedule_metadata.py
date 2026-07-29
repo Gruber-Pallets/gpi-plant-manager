@@ -160,17 +160,53 @@ def test_snapshot_includes_hours_and_delivery():
 
 
 def test_invalidate_all_schedule_caches_clears_every_cached_day(monkeypatch):
+    from zira_dashboard import optional_workday
+
     monday = date(2026, 7, 20)
     tuesday = date(2026, 7, 21)
+    optional_invalidations = []
     monkeypatch.setattr(
         staffing,
         "_schedule_cache",
         {monday: _schedule(day=monday), tuesday: _schedule(day=tuesday)},
     )
+    monkeypatch.setattr(
+        optional_workday,
+        "invalidate_all",
+        lambda: optional_invalidations.append(True),
+    )
 
     staffing.invalidate_all_schedule_caches()
 
     assert staffing._schedule_cache == {}
+    assert optional_invalidations == [True]
+
+
+def test_schedule_cache_invalidation_also_invalidates_optional_workday(monkeypatch):
+    from zira_dashboard import optional_workday
+
+    invalidated = []
+    monkeypatch.setattr(optional_workday, "invalidate", invalidated.append)
+
+    staffing.invalidate_schedule_cache(DAY)
+
+    assert invalidated == [DAY]
+
+
+def test_save_schedule_invalidates_optional_workday_state(monkeypatch):
+    from zira_dashboard import optional_workday
+
+    invalidated = []
+    monkeypatch.setattr(optional_workday, "invalidate", invalidated.append)
+    monkeypatch.setattr(
+        staffing,
+        "_save_schedule_with_cursor",
+        lambda *_args: None,
+    )
+
+    staffing.save_schedule(_schedule(day=DAY), cur=object())
+
+    assert invalidated == [DAY]
 
 
 def test_draft_from_posted_preserves_official_version_and_clears_draft_delivery():

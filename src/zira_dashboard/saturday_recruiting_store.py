@@ -44,6 +44,13 @@ class Recruitment:
 
 
 @dataclass(frozen=True)
+class RecruitmentPublicationState:
+    day_kind: str
+    holiday_odoo_id: int | None
+    status: str
+
+
+@dataclass(frozen=True)
 class StoredCommitment:
     person_id: int
     person_odoo_id: int | None
@@ -230,6 +237,25 @@ def get(day: date, *, cur=None) -> RecruitmentBundle | None:
 
     with db.cursor() as cur:
         return _load_bundle(cur, day)
+
+
+def publication_state(day: date) -> RecruitmentPublicationState | None:
+    """Return only the lifecycle fields needed by operational workday checks."""
+    from . import db
+
+    rows = db.query(
+        "SELECT day_kind, holiday_odoo_id, status FROM saturday_recruitments WHERE day = %s",
+        (day,),
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    holiday_odoo_id = row["holiday_odoo_id"]
+    return RecruitmentPublicationState(
+        day_kind=str(row["day_kind"]),
+        holiday_odoo_id=(int(holiday_odoo_id) if holiday_odoo_id is not None else None),
+        status=str(row["status"]),
+    )
 
 
 def serialize_bundle(bundle: RecruitmentBundle) -> dict:
@@ -678,22 +704,26 @@ def cancel_recruitment(
         bundle = _load_bundle(cur, day)
         assert bundle is not None
         committed = tuple(item for item in bundle.commitments if item.status == "committed")
-        if recruitment.status == "cancelled":
-            return committed
-        cur.execute(
-            "UPDATE saturday_recruitments SET status = 'cancelled', "
-            "cancelled_by = %s, cancelled_at = %s, updated_at = %s "
-            "WHERE day = %s AND status <> 'cancelled'",
-            (actor, now, now, day),
-        )
-        cur.execute(
-            "UPDATE schedules SET published = FALSE, published_snapshot = NULL, "
-            "assignment_sources = '{}'::jsonb, saturday_availability_overrides = '{}'::jsonb, "
-            "updated_at = %s WHERE day = %s",
-            (now, day),
-        )
-        cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (day,))
-        return committed
+        if recruitment.status != "cancelled":
+            cur.execute(
+                "UPDATE saturday_recruitments SET status = 'cancelled', "
+                "cancelled_by = %s, cancelled_at = %s, updated_at = %s "
+                "WHERE day = %s AND status <> 'cancelled'",
+                (actor, now, now, day),
+            )
+            cur.execute(
+                "UPDATE schedules SET published = FALSE, published_snapshot = NULL, "
+                "assignment_sources = '{}'::jsonb, "
+                "saturday_availability_overrides = '{}'::jsonb, "
+                "updated_at = %s WHERE day = %s",
+                (now, day),
+            )
+            cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (day,))
+
+    from . import staffing
+
+    staffing.invalidate_schedule_cache(day)
+    return committed
 
 
 def activate(
@@ -769,25 +799,34 @@ def activate(
                 == requested_counts
             )
             if same_payload:
-                return existing
-            raise LifecycleConflict("Saturday recruiting has already been activated with different details")
-        cur.execute(
-            "INSERT INTO saturday_recruitments "
-            "(day, status, shift_start, shift_end, response_deadline, activated_by, activated_at, created_at, updated_at) "
-            "VALUES (%s, 'recruiting', %s, %s, %s, %s, %s, %s, %s)",
-            (day, shift_start, shift_end, response_deadline, actor, now, now, now),
-        )
-        for wc_id, requested_count in requested_counts.items():
-            # _validate_positions above proves this local id has requirements.
-            assert wc_id in positions
+                bundle = existing
+            else:
+                raise LifecycleConflict(
+                    "Saturday recruiting has already been activated with different details"
+                )
+        else:
             cur.execute(
-                "INSERT INTO saturday_recruitment_openings (day, wc_id, requested_count) "
-                "VALUES (%s, %s, %s)",
-                (day, wc_id, requested_count),
+                "INSERT INTO saturday_recruitments "
+                "(day, status, shift_start, shift_end, response_deadline, "
+                "activated_by, activated_at, created_at, updated_at) "
+                "VALUES (%s, 'recruiting', %s, %s, %s, %s, %s, %s, %s)",
+                (day, shift_start, shift_end, response_deadline, actor, now, now, now),
             )
-        bundle = _load_bundle(cur, day)
-        assert bundle is not None
-        return bundle
+            for wc_id, requested_count in requested_counts.items():
+                # _validate_positions above proves this local id has requirements.
+                assert wc_id in positions
+                cur.execute(
+                    "INSERT INTO saturday_recruitment_openings "
+                    "(day, wc_id, requested_count) VALUES (%s, %s, %s)",
+                    (day, wc_id, requested_count),
+                )
+            bundle = _load_bundle(cur, day)
+            assert bundle is not None
+
+    from . import optional_workday
+
+    optional_workday.invalidate(day)
+    return bundle
 
 
 def update_openings(
@@ -925,14 +964,20 @@ def mark_published(day: date, now: datetime) -> RecruitmentBundle:
         bundle = _load_bundle(cur, day)
         assert bundle is not None
         if bundle.recruitment.status == "published":
-            return bundle
-        if bundle.recruitment.status != "closed":
-            raise LifecycleConflict("Saturday recruiting must close before publishing")
-        cur.execute(
-            "UPDATE saturday_recruitments "
-            "SET status = 'published', published_at = %s, updated_at = %s WHERE day = %s",
-            (now, now, day),
-        )
-        published = _load_bundle(cur, day)
-        assert published is not None
-        return published
+            published = bundle
+        else:
+            if bundle.recruitment.status != "closed":
+                raise LifecycleConflict("Saturday recruiting must close before publishing")
+            cur.execute(
+                "UPDATE saturday_recruitments "
+                "SET status = 'published', published_at = %s, updated_at = %s "
+                "WHERE day = %s",
+                (now, now, day),
+            )
+            published = _load_bundle(cur, day)
+            assert published is not None
+
+    from . import optional_workday
+
+    optional_workday.invalidate(day)
+    return published

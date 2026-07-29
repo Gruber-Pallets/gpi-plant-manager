@@ -189,6 +189,17 @@ def test_holiday_precedence_closes_posted_weekday_schedule(monkeypatch):
     assert shift_config.is_workday(HOLIDAY_DAY) is False
 
 
+def test_holiday_publication_lookup_failure_closes_day(monkeypatch):
+    monkeypatch.setattr(optional_workday, "for_day", lambda _day: HOLIDAY)
+    monkeypatch.setattr(
+        optional_workday,
+        "holiday_is_explicitly_published",
+        lambda _day: (_ for _ in ()).throw(RuntimeError("store unavailable")),
+    )
+
+    assert shift_config.is_workday(HOLIDAY_DAY) is False
+
+
 def test_legacy_published_saturday_remains_active(monkeypatch):
     monkeypatch.setattr(optional_workday, "for_day", lambda _day: None)
     monkeypatch.setattr(staffing, "load_schedule", _load(True))

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
+from threading import RLock
 from typing import Literal
 
 from . import company_holidays
@@ -33,6 +34,31 @@ class OptionalWorkdayState:
     operational: bool
 
 
+_publication_state_lock = RLock()
+_publication_state_by_day: dict[date, object | None] = {}
+
+
+def invalidate(day: date) -> None:
+    """Discard the cached recruiting publication projection for one day."""
+    with _publication_state_lock:
+        _publication_state_by_day.pop(day, None)
+
+
+def invalidate_all() -> None:
+    """Discard every cached recruiting publication projection."""
+    with _publication_state_lock:
+        _publication_state_by_day.clear()
+
+
+def _publication_state(day: date):
+    from . import saturday_recruiting_store
+
+    with _publication_state_lock:
+        if day not in _publication_state_by_day:
+            _publication_state_by_day[day] = saturday_recruiting_store.publication_state(day)
+        return _publication_state_by_day[day]
+
+
 def for_day(day: date) -> OptionalWorkday | None:
     """Classify a holiday or Saturday, giving a holiday precedence."""
     holiday = company_holidays.for_day(day)
@@ -51,10 +77,9 @@ def state_for_day(day: date) -> OptionalWorkdayState | None:
 
     # Lazy imports avoid the existing
     # shift_config -> staffing -> schedule_store lifecycle import cycle.
-    from . import saturday_recruiting_store, staffing
+    from . import staffing
 
-    bundle = saturday_recruiting_store.get(day)
-    recruitment = getattr(bundle, "recruitment", None)
+    recruitment = _publication_state(day)
     schedule = staffing.load_schedule(day)
     recruiting_status = getattr(recruitment, "status", None)
     schedule_published = bool(getattr(schedule, "published", False))

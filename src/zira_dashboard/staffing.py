@@ -515,6 +515,9 @@ _schedule_cache_lock = RLock()
 def _invalidate_schedule_cache(day: date) -> None:
     with _schedule_cache_lock:
         _schedule_cache.pop(day, None)
+    from . import optional_workday
+
+    optional_workday.invalidate(day)
 
 
 def invalidate_schedule_cache(day: date) -> None:
@@ -526,6 +529,9 @@ def invalidate_all_schedule_caches() -> None:
     """Discard cached schedules after a roster-wide display-name change."""
     with _schedule_cache_lock:
         _schedule_cache.clear()
+    from . import optional_workday
+
+    optional_workday.invalidate_all()
 
 
 def load_schedule(day: date) -> Schedule:

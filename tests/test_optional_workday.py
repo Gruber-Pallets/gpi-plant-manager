@@ -5,6 +5,7 @@ import pytest
 
 from zira_dashboard import (
     company_holidays,
+    db,
     optional_workday,
     saturday_recruiting_store,
     staffing,
@@ -17,6 +18,16 @@ THANKSGIVING = date(2026, 11, 26)
 WEDNESDAY = date(2026, 11, 25)
 
 
+@pytest.fixture(autouse=True)
+def _clear_optional_workday_cache():
+    clear = getattr(optional_workday, "invalidate_all", None)
+    if clear is not None:
+        clear()
+    yield
+    if clear is not None:
+        clear()
+
+
 def _holiday(day: date, *, odoo_id: int = 42, name: str = "Black Friday"):
     return SimpleNamespace(
         odoo_id=odoo_id,
@@ -26,18 +37,16 @@ def _holiday(day: date, *, odoo_id: int = 42, name: str = "Black Friday"):
     )
 
 
-def _bundle(
+def _publication(
     *,
     status: str = "published",
     day_kind: str = "holiday",
     holiday_odoo_id: int | None = 42,
 ):
-    return SimpleNamespace(
-        recruitment=SimpleNamespace(
-            status=status,
-            day_kind=day_kind,
-            holiday_odoo_id=holiday_odoo_id,
-        )
+    return saturday_recruiting_store.RecruitmentPublicationState(
+        status=status,
+        day_kind=day_kind,
+        holiday_odoo_id=holiday_odoo_id,
     )
 
 
@@ -76,20 +85,24 @@ def test_normal_weekday_is_not_optional(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("bundle", "schedule_published"),
+    ("publication", "schedule_published"),
     [
         (None, True),
-        (_bundle(), False),
-        (_bundle(holiday_odoo_id=99), True),
-        (_bundle(status="recruiting"), True),
-        (_bundle(day_kind="saturday"), True),
+        (_publication(), False),
+        (_publication(holiday_odoo_id=99), True),
+        (_publication(status="recruiting"), True),
+        (_publication(day_kind="saturday"), True),
     ],
 )
 def test_holiday_publication_fails_closed_without_matching_dual_publication(
-    monkeypatch, bundle, schedule_published
+    monkeypatch, publication, schedule_published
 ):
     monkeypatch.setattr(company_holidays, "for_day", lambda day: _holiday(day))
-    monkeypatch.setattr(saturday_recruiting_store, "get", lambda _day: bundle)
+    monkeypatch.setattr(
+        saturday_recruiting_store,
+        "publication_state",
+        lambda _day: publication,
+    )
     monkeypatch.setattr(
         staffing,
         "load_schedule",
@@ -108,7 +121,11 @@ def test_matching_holiday_recruiting_and_schedule_publication_is_operational(
     monkeypatch,
 ):
     monkeypatch.setattr(company_holidays, "for_day", lambda day: _holiday(day))
-    monkeypatch.setattr(saturday_recruiting_store, "get", lambda _day: _bundle())
+    monkeypatch.setattr(
+        saturday_recruiting_store,
+        "publication_state",
+        lambda _day: _publication(),
+    )
     monkeypatch.setattr(
         staffing,
         "load_schedule",
@@ -126,9 +143,96 @@ def test_matching_holiday_recruiting_and_schedule_publication_is_operational(
     assert optional_workday.holiday_is_explicitly_published(BLACK_FRIDAY) is True
 
 
+def test_holiday_publication_uses_cached_projected_state(monkeypatch):
+    calls = []
+    projected = saturday_recruiting_store.RecruitmentPublicationState(
+        day_kind="holiday",
+        holiday_odoo_id=42,
+        status="published",
+    )
+    monkeypatch.setattr(company_holidays, "for_day", lambda day: _holiday(day))
+    monkeypatch.setattr(
+        saturday_recruiting_store,
+        "publication_state",
+        lambda day: calls.append(day) or projected,
+    )
+    monkeypatch.setattr(
+        saturday_recruiting_store,
+        "get",
+        lambda _day: pytest.fail("hot-path publication check loaded a full bundle"),
+    )
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(day=day, published=True),
+    )
+
+    assert optional_workday.holiday_is_explicitly_published(BLACK_FRIDAY) is True
+    assert optional_workday.holiday_is_explicitly_published(BLACK_FRIDAY) is True
+    assert calls == [BLACK_FRIDAY]
+
+    optional_workday.invalidate(BLACK_FRIDAY)
+
+    assert optional_workday.holiday_is_explicitly_published(BLACK_FRIDAY) is True
+    assert calls == [BLACK_FRIDAY, BLACK_FRIDAY]
+
+
+def test_publication_state_reads_only_lifecycle_projection(monkeypatch):
+    calls = []
+
+    def query(sql, params):
+        calls.append((sql, params))
+        return [
+            {
+                "day_kind": "holiday",
+                "holiday_odoo_id": 42,
+                "status": "published",
+            }
+        ]
+
+    monkeypatch.setattr(db, "query", query)
+
+    assert saturday_recruiting_store.publication_state(
+        BLACK_FRIDAY
+    ) == saturday_recruiting_store.RecruitmentPublicationState(
+        day_kind="holiday",
+        holiday_odoo_id=42,
+        status="published",
+    )
+    assert calls == [
+        (
+            "SELECT day_kind, holiday_odoo_id, status FROM saturday_recruitments WHERE day = %s",
+            (BLACK_FRIDAY,),
+        )
+    ]
+
+
+def test_missing_publication_state_is_cached(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        saturday_recruiting_store,
+        "publication_state",
+        lambda day: calls.append(day) or None,
+    )
+    monkeypatch.setattr(company_holidays, "for_day", lambda day: _holiday(day))
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(day=day, published=True),
+    )
+
+    assert optional_workday.holiday_is_explicitly_published(BLACK_FRIDAY) is False
+    assert optional_workday.holiday_is_explicitly_published(BLACK_FRIDAY) is False
+    assert calls == [BLACK_FRIDAY]
+
+
 def test_removed_holiday_history_cannot_reopen_a_normal_weekday(monkeypatch):
     monkeypatch.setattr(company_holidays, "for_day", lambda _day: None)
-    monkeypatch.setattr(saturday_recruiting_store, "get", lambda _day: _bundle())
+    monkeypatch.setattr(
+        saturday_recruiting_store,
+        "publication_state",
+        lambda _day: _publication(),
+    )
     monkeypatch.setattr(
         staffing,
         "load_schedule",
