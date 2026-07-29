@@ -748,6 +748,30 @@ ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS claim_token UUID;
 -- Only Task 3/4 feature alerts have a durable delivery. Backfill those rows
 -- before adding the category-day uniqueness rule; dashboard-only alerts stay
 -- NULL so their historical behavior is unchanged.
+-- A prior bootstrap may already have made a newer keyed alert for the same
+-- category-day. Retire only the older alert's unsent delivery before leaving
+-- that alert NULL, so the existing partial index is never violated.
+UPDATE goat_slack_deliveries delivery
+SET status = 'sent',
+    sent_at = COALESCE(delivery.sent_at, now()),
+    last_error = 'Migration deduplicated duplicate category-day GOAT alert'
+FROM goat_alerts alert
+WHERE delivery.goat_alert_id = alert.id
+  AND delivery.status IN ('pending', 'sending')
+  AND alert.category_key IS NULL
+  AND alert.group_name IN ('Repairs', 'Dismantlers', 'Juniors', 'Woodpecker', 'Hand Build')
+  AND EXISTS (
+    SELECT 1
+    FROM goat_alerts keyed
+    WHERE keyed.achieved_day = alert.achieved_day
+      AND keyed.category_key = CASE alert.group_name
+        WHEN 'Repairs' THEN 'repairs'
+        WHEN 'Dismantlers' THEN 'dismantlers'
+        WHEN 'Juniors' THEN 'juniors'
+        WHEN 'Woodpecker' THEN 'woodpecker'
+        WHEN 'Hand Build' THEN 'hand_build'
+      END
+  );
 UPDATE goat_alerts alert
 SET category_key = CASE alert.group_name
   WHEN 'Repairs' THEN 'repairs'
@@ -759,7 +783,19 @@ END
 FROM goat_slack_deliveries delivery
 WHERE delivery.goat_alert_id = alert.id
   AND alert.category_key IS NULL
-  AND alert.group_name IN ('Repairs', 'Dismantlers', 'Juniors', 'Woodpecker', 'Hand Build');
+  AND alert.group_name IN ('Repairs', 'Dismantlers', 'Juniors', 'Woodpecker', 'Hand Build')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM goat_alerts keyed
+    WHERE keyed.achieved_day = alert.achieved_day
+      AND keyed.category_key = CASE alert.group_name
+        WHEN 'Repairs' THEN 'repairs'
+        WHEN 'Dismantlers' THEN 'dismantlers'
+        WHEN 'Juniors' THEN 'juniors'
+        WHEN 'Woodpecker' THEN 'woodpecker'
+        WHEN 'Hand Build' THEN 'hand_build'
+      END
+  );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_goat_alerts_category_day
   ON goat_alerts (achieved_day, category_key) WHERE category_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_goat_slack_deliveries_claim

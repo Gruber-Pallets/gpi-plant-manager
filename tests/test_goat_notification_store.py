@@ -90,6 +90,9 @@ def test_schema_backfills_only_delivered_category_alerts_before_the_unique_index
     assert "delivery.goat_alert_id = alert.id" in backfill
     assert "alert.category_key IS NULL" in backfill
     assert "alert.group_name IN" in backfill
+    assert "AND NOT EXISTS" in backfill
+    assert "keyed.achieved_day = alert.achieved_day" in backfill
+    assert "keyed.category_key = CASE alert.group_name" in backfill
     for label, category_key in {
         "Repairs": "repairs",
         "Dismantlers": "dismantlers",
@@ -98,6 +101,32 @@ def test_schema_backfills_only_delivered_category_alerts_before_the_unique_index
         "Hand Build": "hand_build",
     }.items():
         assert f"WHEN '{label}' THEN '{category_key}'" in backfill
+
+
+def test_schema_retires_conflicting_pending_deliveries_before_backfill_and_index():
+    retirement_start = SCHEMA_DDL.index("UPDATE goat_slack_deliveries delivery")
+    backfill_start = SCHEMA_DDL.index("UPDATE goat_alerts alert")
+    unique_index_start = SCHEMA_DDL.index("CREATE UNIQUE INDEX IF NOT EXISTS idx_goat_alerts_category_day")
+    retirement = SCHEMA_DDL[retirement_start:backfill_start]
+
+    assert retirement_start < backfill_start < unique_index_start
+    assert "SET status = 'sent'" in retirement
+    assert "sent_at = COALESCE(delivery.sent_at, now())" in retirement
+    assert "delivery.status IN ('pending', 'sending')" in retirement
+    assert "Migration deduplicated duplicate category-day GOAT alert" in retirement
+    assert "FROM goat_alerts alert" in retirement
+    assert "delivery.goat_alert_id = alert.id" in retirement
+    assert "alert.category_key IS NULL" in retirement
+    assert "keyed.achieved_day = alert.achieved_day" in retirement
+    assert "keyed.category_key = CASE alert.group_name" in retirement
+    for label, category_key in {
+        "Repairs": "repairs",
+        "Dismantlers": "dismantlers",
+        "Juniors": "juniors",
+        "Woodpecker": "woodpecker",
+        "Hand Build": "hand_build",
+    }.items():
+        assert f"WHEN '{label}' THEN '{category_key}'" in retirement
 
 
 def test_activation_day_is_written_once_without_touching_shared_state(monkeypatch):
