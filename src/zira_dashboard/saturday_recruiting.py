@@ -52,14 +52,14 @@ def response_deadline(
     """Return the prior configured workday's site-local shift start."""
     from . import optional_workday
 
-    optional = (
-        optional_workday.for_day(day)
-        if classified_optional_day is _UNCLASSIFIED
-        else classified_optional_day
-    )
-    day_is_holiday = is_holiday(day) or bool(
-        optional is not None and optional.kind == "holiday"
-    )
+    if classified_optional_day is _UNCLASSIFIED:
+        optional = optional_workday.for_day(day)
+        day_is_holiday = is_holiday(day) or bool(
+            optional is not None and optional.kind == "holiday"
+        )
+    else:
+        optional = classified_optional_day
+        day_is_holiday = bool(optional is not None and optional.kind == "holiday")
     if day.weekday() != 5 and not day_is_holiday:
         raise SaturdayRecruitingError("Saturday recruiting requires a Saturday")
     try:

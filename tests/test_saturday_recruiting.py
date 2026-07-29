@@ -2,7 +2,7 @@ from datetime import date, datetime, time
 
 import pytest
 
-from zira_dashboard import saturday_recruiting as sr
+from zira_dashboard import optional_workday, saturday_recruiting as sr
 from zira_dashboard.shift_config import SITE_TZ
 
 
@@ -40,6 +40,31 @@ def test_black_friday_deadline_skips_thanksgiving():
         starts.__getitem__,
         is_holiday=lambda day: day in {thanksgiving, black_friday},
     ) == datetime(2026, 11, 25, 7, 0, tzinfo=SITE_TZ)
+
+
+def test_preclassified_deadline_does_not_recheck_displayed_day_holiday():
+    black_friday = date(2026, 11, 27)
+    thanksgiving = date(2026, 11, 26)
+    prior_workday = date(2026, 11, 25)
+    holiday_calls = []
+
+    def is_holiday(candidate):
+        holiday_calls.append(candidate)
+        return candidate == thanksgiving
+
+    assert sr.response_deadline(
+        black_friday,
+        frozenset(range(5)),
+        lambda day: time(7) if day == prior_workday else time(6),
+        is_holiday=is_holiday,
+        classified_optional_day=optional_workday.OptionalWorkday(
+            black_friday,
+            "holiday",
+            "Black Friday",
+            42,
+        ),
+    ) == datetime(2026, 11, 25, 7, 0, tzinfo=SITE_TZ)
+    assert holiday_calls == [thanksgiving, prior_workday]
 
 
 def test_deadline_searches_past_consecutive_holidays():
