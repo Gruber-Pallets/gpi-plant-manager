@@ -77,10 +77,26 @@ def test_staffing_page_leaves_empty_day_unseeded(monkeypatch):
     )
     monkeypatch.setattr(staffing_routes, "_late_emp_ids", lambda d, today, pkg: set())
     monkeypatch.setattr(staffing_routes.attendance, "person_id_to_name", lambda name_to_id: {})
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_shift_start_for", lambda d: time(7, 0))
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_shift_end_for", lambda d: time(15, 30))
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_breaks_for", lambda d: [])
-    monkeypatch.setattr(staffing_routes.shift_config, "scheduler_hours_source", lambda d, custom: "weekday_default")
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "configured_shift_start_for",
+        lambda d, **_kwargs: time(7, 0),
+    )
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "configured_shift_end_for",
+        lambda d, **_kwargs: time(15, 30),
+    )
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "configured_breaks_for",
+        lambda d, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "scheduler_hours_source",
+        lambda d, custom, **_kwargs: "weekday_default",
+    )
     monkeypatch.setattr(
         staffing_routes.work_centers_store,
         "default_people",
@@ -171,10 +187,26 @@ def test_staffing_page_preserves_saved_manual_trim_saw_assignments(monkeypatch):
     )
     monkeypatch.setattr(staffing_routes, "_late_emp_ids", lambda d, today, pkg: set())
     monkeypatch.setattr(staffing_routes.attendance, "person_id_to_name", lambda name_to_id: {})
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_shift_start_for", lambda d: time(7, 0))
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_shift_end_for", lambda d: time(15, 30))
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_breaks_for", lambda d: [])
-    monkeypatch.setattr(staffing_routes.shift_config, "scheduler_hours_source", lambda d, custom: "weekday_default")
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "configured_shift_start_for",
+        lambda d, **_kwargs: time(7, 0),
+    )
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "configured_shift_end_for",
+        lambda d, **_kwargs: time(15, 30),
+    )
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "configured_breaks_for",
+        lambda d, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "scheduler_hours_source",
+        lambda d, custom, **_kwargs: "weekday_default",
+    )
     monkeypatch.setattr(
         staffing_routes.work_centers_store,
         "default_people",

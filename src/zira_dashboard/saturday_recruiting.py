@@ -9,6 +9,9 @@ from datetime import date, datetime, time
 from .shift_config import SITE_TZ
 
 
+_UNCLASSIFIED = object()
+
+
 class SaturdayRecruitingError(ValueError):
     """Base error for invalid Saturday recruiting domain inputs."""
 
@@ -43,11 +46,17 @@ def response_deadline(
     work_weekdays: frozenset[int],
     shift_start_for: Callable[[date], time],
     is_holiday: Callable[[date], bool] = lambda _day: False,
+    *,
+    classified_optional_day=_UNCLASSIFIED,
 ) -> datetime:
     """Return the prior configured workday's site-local shift start."""
     from . import optional_workday
 
-    optional = optional_workday.for_day(day)
+    optional = (
+        optional_workday.for_day(day)
+        if classified_optional_day is _UNCLASSIFIED
+        else classified_optional_day
+    )
     day_is_holiday = is_holiday(day) or bool(
         optional is not None and optional.kind == "holiday"
     )

@@ -644,10 +644,26 @@ def test_posted_view_does_not_overwrite_cached_draft_before_save(monkeypatch):
     )
     monkeypatch.setattr(staffing_routes, "_late_emp_ids", lambda *_args: set())
     monkeypatch.setattr(staffing_routes.attendance, "person_id_to_name", lambda _ids: {})
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_shift_start_for", lambda _d: time(7, 0))
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_shift_end_for", lambda _d: time(15, 30))
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_breaks_for", lambda _d: [])
-    monkeypatch.setattr(staffing_routes.shift_config, "scheduler_hours_source", lambda *_args: "weekday_default")
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "configured_shift_start_for",
+        lambda _d, **_kwargs: time(7, 0),
+    )
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "configured_shift_end_for",
+        lambda _d, **_kwargs: time(15, 30),
+    )
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "configured_breaks_for",
+        lambda _d, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        staffing_routes.shift_config,
+        "scheduler_hours_source",
+        lambda *_args, **_kwargs: "weekday_default",
+    )
     monkeypatch.setattr(
         staffing_routes.schedule_store,
         "current",

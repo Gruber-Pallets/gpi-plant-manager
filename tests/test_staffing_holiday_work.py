@@ -11,8 +11,10 @@ import pytest
 from zira_dashboard import (
     company_holidays,
     optional_workday,
+    saturday_schedule_store,
     saturday_recruiting_store,
     staffing,
+    work_centers_store,
 )
 from zira_dashboard.routes import staffing as staffing_routes
 from zira_dashboard.shift_config import SITE_TZ
@@ -40,6 +42,38 @@ def _person(name: str, *, reserve: bool = False) -> staffing.Person:
         active=True,
         reserve=reserve,
         skills={"Repair": 3},
+    )
+
+
+def _bundle(
+    *,
+    day_kind: str = "holiday",
+    holiday_odoo_id: int | None = 42,
+    status: str = "closed",
+) -> saturday_recruiting_store.RecruitmentBundle:
+    return saturday_recruiting_store.RecruitmentBundle(
+        recruitment=saturday_recruiting_store.Recruitment(
+            day=BLACK_FRIDAY,
+            status=status,
+            shift_start=time(6),
+            shift_end=time(12),
+            response_deadline=datetime(2026, 11, 25, 14, tzinfo=SITE_TZ),
+            day_kind=day_kind,
+            event_name="Black Friday" if day_kind == "holiday" else "Saturday",
+            holiday_odoo_id=holiday_odoo_id,
+        ),
+        openings=(),
+        commitments=(
+            saturday_recruiting_store.StoredCommitment(
+                person_id=1,
+                person_odoo_id=101,
+                person_name="Volunteer",
+                status="committed",
+                availability_start=time(6),
+                availability_end=time(12),
+                eligible_wc_ids=frozenset(),
+            ),
+        ),
     )
 
 
@@ -71,6 +105,10 @@ def _render_staffing(
     bundle: saturday_recruiting_store.RecruitmentBundle | None = None,
     roster: list[staffing.Person] | None = None,
     bay_model: dict | None = None,
+    classifier_calls: list[date] | None = None,
+    patch_shift_config: bool = True,
+    real_bay_model: bool = False,
+    prepare_closed=None,
 ):
     """Render one scheduler page with every external read replaced."""
     from zira_dashboard import cert_lookup, staffing_view
@@ -132,18 +170,33 @@ def _render_staffing(
     )
     monkeypatch.setattr(staffing_routes, "_late_emp_ids", lambda *_args: set())
     monkeypatch.setattr(staffing_routes.attendance, "person_id_to_name", lambda _mapping: {})
-    monkeypatch.setattr(
-        staffing_routes.shift_config, "configured_shift_start_for", lambda _day: time(6)
-    )
-    monkeypatch.setattr(
-        staffing_routes.shift_config, "configured_shift_end_for", lambda _day: time(12)
-    )
-    monkeypatch.setattr(staffing_routes.shift_config, "configured_breaks_for", lambda _day: [])
-    monkeypatch.setattr(
-        staffing_routes.shift_config,
-        "scheduler_hours_source",
-        lambda _day, _custom: "saturday_default",
-    )
+    if patch_shift_config:
+        monkeypatch.setattr(
+            staffing_routes.shift_config,
+            "configured_shift_start_for",
+            lambda _day, **_kwargs: time(6),
+        )
+        monkeypatch.setattr(
+            staffing_routes.shift_config,
+            "configured_shift_end_for",
+            lambda _day, **_kwargs: time(12),
+        )
+        monkeypatch.setattr(
+            staffing_routes.shift_config,
+            "configured_breaks_for",
+            lambda _day, **_kwargs: [],
+        )
+        monkeypatch.setattr(
+            staffing_routes.shift_config,
+            "scheduler_hours_source",
+            lambda _day, _custom, **_kwargs: "saturday_default",
+        )
+    else:
+        monkeypatch.setattr(
+            saturday_schedule_store,
+            "current",
+            lambda: saturday_schedule_store.DEFAULT,
+        )
     monkeypatch.setattr(staffing_routes, "_smart_defaults_for_day", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         staffing_routes,
@@ -192,9 +245,17 @@ def _render_staffing(
     monkeypatch.setattr(
         staffing_routes,
         "_prepare_closed_saturday_schedule",
-        lambda *_args, **_kwargs: None,
+        prepare_closed or (lambda *_args, **_kwargs: None),
     )
-    monkeypatch.setattr(optional_workday, "for_day", lambda _day: optional_day)
+
+    def classify(candidate):
+        if classifier_calls is not None:
+            classifier_calls.append(candidate)
+        if isinstance(optional_day, Exception):
+            raise optional_day
+        return optional_day
+
+    monkeypatch.setattr(optional_workday, "for_day", classify)
 
     def has_synced():
         if isinstance(synced, Exception):
@@ -203,8 +264,32 @@ def _render_staffing(
 
     monkeypatch.setattr(company_holidays, "has_synced", has_synced)
 
-    def build_staffing_bays(*_args, **kwargs):
+    real_builder = staffing_view.build_staffing_bays
+    if real_bay_model:
+        location = staffing.Location(
+            "Repair 1",
+            "Repair",
+            "Bay 1",
+            "Recycled",
+            None,
+            min_ops=1,
+            max_ops=2,
+            required_skills=("Repair",),
+        )
+        monkeypatch.setattr(staffing, "LOCATIONS", (location,))
+        monkeypatch.setattr(work_centers_store, "required_skills", lambda _loc: ["Repair"])
+        monkeypatch.setattr(work_centers_store, "min_ops", lambda _loc: 1)
+        monkeypatch.setattr(work_centers_store, "max_ops", lambda _loc: 2)
+        monkeypatch.setattr(
+            work_centers_store,
+            "default_people",
+            lambda _loc: ["Old default"],
+        )
+
+    def build_staffing_bays(*args, **kwargs):
         bay_calls.append(kwargs)
+        if real_bay_model:
+            return real_builder(*args, **kwargs)
         return dict(bay_model or _empty_bay_model())
 
     monkeypatch.setattr(staffing_view, "build_staffing_bays", build_staffing_bays)
@@ -329,6 +414,7 @@ def test_new_future_holiday_draft_is_blank_even_on_saturday(monkeypatch, day):
 def test_closed_holiday_context_keeps_old_draft_but_renders_volunteer_only(
     monkeypatch,
 ):
+    classifier_calls = []
     old_draft = staffing.Schedule(
         day=BLACK_FRIDAY,
         assignments={"Repair 1": ["Old default"]},
@@ -341,8 +427,11 @@ def test_closed_holiday_context_keeps_old_draft_but_renders_volunteer_only(
         optional_day=_holiday(),
         schedule=old_draft,
         roster=[_person("Old default"), _person("Off worker")],
+        classifier_calls=classifier_calls,
+        patch_shift_config=False,
     )
 
+    assert classifier_calls == [BLACK_FRIDAY]
     assert context["sched"] is old_draft
     assert old_draft.assignments == {"Repair 1": ["Old default"]}
     assert created == []
@@ -454,6 +543,104 @@ def test_holiday_sync_lookup_failure_pauses_seeding_and_warns(monkeypatch):
     assert context["holiday_sync_warning"] == (
         "Odoo holidays have not synced yet. New future drafts are paused."
     )
+
+
+def test_persistent_classifier_failure_renders_fail_closed_without_reclassification(
+    monkeypatch,
+):
+    classifier_calls = []
+    old_draft = staffing.Schedule(
+        day=BLACK_FRIDAY,
+        assignments={"Repair 1": ["Old default"]},
+        assignment_sources={"Repair 1": {"Old default": "default"}},
+        auto_enabled_work_centers=["Repair 1"],
+    )
+
+    context, bay_calls, created = _render_staffing(
+        monkeypatch,
+        optional_day=RuntimeError("holiday lookup unavailable"),
+        schedule=old_draft,
+        roster=[_person("Old default"), _person("Other worker")],
+        classifier_calls=classifier_calls,
+        patch_shift_config=False,
+        real_bay_model=True,
+    )
+
+    assert classifier_calls == [BLACK_FRIDAY]
+    assert created == []
+    assert old_draft.assignments == {"Repair 1": ["Old default"]}
+    assert bay_calls[-1]["optional_commitments"] == {}
+    assert context["is_optional_workday"] is True
+    assert context["optional_day_kind"] is None
+    assert context["optional_day_name"] is None
+    assert context["optional_day_label"] == "Optional workday"
+    assert context["optional_recruiting_label"] == "Optional workday recruiting"
+    assert context["day_is_saturday"] is False
+    assert context["hours_source"] == "saturday_default"
+    assert context["eff_hours_start"] == "06:00"
+    assert context["eff_hours_end"] == "12:00"
+    assert context["holiday_sync_warning"] == (
+        "Odoo holidays have not synced yet. New future drafts are paused."
+    )
+    assert context["saturday_recruiting"] is None
+    assert context["saturday_recruit_enabled_count"] == 0
+    assert context["rotation_auto_summary"]["unscheduled_count"] == 0
+    assert context["unassigned"] == []
+    assert context["off"] == ["Old default", "Other worker"]
+    row = context["bays"][0]["rows"][0]
+    assert row["assigned"] == []
+    assert row["present_assigned"] == []
+    assert row["pool"] == []
+
+
+def test_mismatched_holiday_id_bundle_is_inactive_and_not_prepared(monkeypatch):
+    prepared = []
+
+    context, bay_calls, _created = _render_staffing(
+        monkeypatch,
+        optional_day=_holiday(odoo_id=42),
+        bundle=_bundle(holiday_odoo_id=99),
+        roster=[_person("Volunteer"), _person("Other worker")],
+        real_bay_model=True,
+        prepare_closed=lambda *_args, **_kwargs: prepared.append(True),
+    )
+
+    assert prepared == []
+    assert context["saturday_recruiting"] is None
+    assert context["saturday_recruiting_finished"] is False
+    assert context["saturday_commitments"] == []
+    assert context["saturday_response_summary"] == {
+        "yes": [],
+        "no": [],
+        "deciding": [],
+    }
+    assert bay_calls[-1]["optional_commitments"] == {}
+    assert context["unassigned"] == []
+    assert context["off"] == ["Other worker", "Volunteer"]
+
+
+def test_stale_saturday_bundle_is_inactive_when_holiday_takes_precedence(
+    monkeypatch,
+):
+    prepared = []
+
+    context, bay_calls, _created = _render_staffing(
+        monkeypatch,
+        optional_day=_holiday(),
+        bundle=_bundle(day_kind="saturday", holiday_odoo_id=None),
+        roster=[_person("Volunteer"), _person("Other worker")],
+        real_bay_model=True,
+        prepare_closed=lambda *_args, **_kwargs: prepared.append(True),
+    )
+
+    assert prepared == []
+    assert context["optional_day_kind"] == "holiday"
+    assert context["saturday_recruiting"] is None
+    assert context["saturday_recruiting_finished"] is False
+    assert context["saturday_commitments"] == []
+    assert bay_calls[-1]["optional_commitments"] == {}
+    assert context["unassigned"] == []
+    assert context["off"] == ["Other worker", "Volunteer"]
 
 
 def test_existing_scheduler_dom_controls_are_unchanged():

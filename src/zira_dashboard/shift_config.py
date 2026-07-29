@@ -107,49 +107,79 @@ def is_workday(day: date) -> bool:
         return False
 
 
-def _use_optional_default(day: date, *, published_only: bool) -> bool:
+def _use_optional_default(
+    day: date,
+    *,
+    published_only: bool,
+    is_optional_day: bool | None = None,
+) -> bool:
     """Whether `day` resolves from the Saturday default schedule.
 
     The editor proposes Saturday hours for Saturdays and holidays even while
     closed. Operational callers use them only when the date is a workday.
     """
-    from . import optional_workday
+    if is_optional_day is None:
+        from . import optional_workday
 
-    optional = optional_workday.for_day(day)
-    if day.weekday() != SATURDAY and not (
-        optional is not None and optional.kind == "holiday"
-    ):
+        optional = optional_workday.for_day(day)
+        is_optional_day = day.weekday() == SATURDAY or bool(
+            optional is not None and optional.kind == "holiday"
+        )
+    if not is_optional_day:
         return False
     if not published_only:
         return True
     return is_workday(day)
 
 
-def _resolve_start(day: date, *, published_only: bool) -> time:
+def _resolve_start(
+    day: date,
+    *,
+    published_only: bool,
+    is_optional_day: bool | None = None,
+) -> time:
     ch = _custom_hours(day, published_only=published_only)
     if ch and isinstance(ch.get("start"), str):
         try:
             return time.fromisoformat(ch["start"])
         except ValueError:
             pass
-    if _use_optional_default(day, published_only=published_only):
+    if _use_optional_default(
+        day,
+        published_only=published_only,
+        is_optional_day=is_optional_day,
+    ):
         return _saturday_default().shift_start
     return shift_start()
 
 
-def _resolve_end(day: date, *, published_only: bool) -> time:
+def _resolve_end(
+    day: date,
+    *,
+    published_only: bool,
+    is_optional_day: bool | None = None,
+) -> time:
     ch = _custom_hours(day, published_only=published_only)
     if ch and isinstance(ch.get("end"), str):
         try:
             return time.fromisoformat(ch["end"])
         except ValueError:
             pass
-    if _use_optional_default(day, published_only=published_only):
+    if _use_optional_default(
+        day,
+        published_only=published_only,
+        is_optional_day=is_optional_day,
+    ):
         return _saturday_default().shift_end
     return shift_end()
 
 
-def _resolve_breaks(day: date, *, published_only: bool) -> tuple:
+def _resolve_breaks(
+    day: date,
+    *,
+    published_only: bool,
+    is_optional_day: bool | None = None,
+) -> tuple:
     from .schedule_store import Break
     ch = _custom_hours(day, published_only=published_only)
     if ch and isinstance(ch.get("breaks"), list):
@@ -165,7 +195,11 @@ def _resolve_breaks(day: date, *, published_only: bool) -> tuple:
             name = str(b.get("name") or "Break")
             out.append(Break(bs, be, name))
         return tuple(out)
-    if _use_optional_default(day, published_only=published_only):
+    if _use_optional_default(
+        day,
+        published_only=published_only,
+        is_optional_day=is_optional_day,
+    ):
         return _saturday_default().breaks
     return breaks()
 
@@ -187,32 +221,63 @@ def breaks_for(day: date) -> tuple:
     return _resolve_breaks(day, published_only=True)
 
 
-def configured_shift_start_for(day: date) -> time:
+def configured_shift_start_for(
+    day: date,
+    *,
+    is_optional_day: bool | None = None,
+) -> time:
     """Ungated twin for the scheduler editor: a per-day override applies even
     on a draft; a Saturday with no override shows the Saturday default."""
-    return _resolve_start(day, published_only=False)
+    return _resolve_start(
+        day,
+        published_only=False,
+        is_optional_day=is_optional_day,
+    )
 
 
-def configured_shift_end_for(day: date) -> time:
-    return _resolve_end(day, published_only=False)
+def configured_shift_end_for(
+    day: date,
+    *,
+    is_optional_day: bool | None = None,
+) -> time:
+    return _resolve_end(
+        day,
+        published_only=False,
+        is_optional_day=is_optional_day,
+    )
 
 
-def configured_breaks_for(day: date) -> tuple:
-    return _resolve_breaks(day, published_only=False)
+def configured_breaks_for(
+    day: date,
+    *,
+    is_optional_day: bool | None = None,
+) -> tuple:
+    return _resolve_breaks(
+        day,
+        published_only=False,
+        is_optional_day=is_optional_day,
+    )
 
 
-def scheduler_hours_source(day: date, has_per_day_override: bool) -> str:
+def scheduler_hours_source(
+    day: date,
+    has_per_day_override: bool,
+    *,
+    is_optional_day: bool | None = None,
+) -> str:
     """Which hours the scheduler is showing for `day`: 'custom' (a per-day
     override exists), 'saturday_default' (a Saturday with no override), or
     'weekday_default'. Drives the Hours-pill styling + banner."""
     if has_per_day_override:
         return "custom"
-    from . import optional_workday
+    if is_optional_day is None:
+        from . import optional_workday
 
-    optional = optional_workday.for_day(day)
-    if day.weekday() == SATURDAY or (
-        optional is not None and optional.kind == "holiday"
-    ):
+        optional = optional_workday.for_day(day)
+        is_optional_day = day.weekday() == SATURDAY or bool(
+            optional is not None and optional.kind == "holiday"
+        )
+    if is_optional_day:
         return "saturday_default"
     return "weekday_default"
 

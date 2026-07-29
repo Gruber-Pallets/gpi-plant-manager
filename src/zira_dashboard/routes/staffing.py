@@ -1108,14 +1108,36 @@ def saturday_defaults_only_schedule(
     )
 
 
+def _matching_optional_recruiting_bundle(bundle, optional_day):
+    """Return a bundle only when its saved identity matches today's closure."""
+    if bundle is None or optional_day is None:
+        return None
+    recruitment = bundle.recruitment
+    if recruitment.day != optional_day.day:
+        return None
+    if recruitment.day_kind != optional_day.kind:
+        return None
+    if (
+        optional_day.kind == "holiday"
+        and recruitment.holiday_odoo_id != optional_day.holiday_odoo_id
+    ):
+        return None
+    return bundle
+
+
 def _prepare_closed_saturday_schedule(
     day: date,
     roster: Sequence[staffing.Person],
     time_off_entries,
+    *,
+    optional_day,
 ) -> staffing.Schedule | None:
     """Apply defaults once after recruiting closes; never invoke the Auto solver."""
     with db.cursor() as cur:
-        bundle = saturday_recruiting_store.get(day, cur=cur)
+        bundle = _matching_optional_recruiting_bundle(
+            saturday_recruiting_store.get(day, cur=cur),
+            optional_day,
+        )
         if bundle is None or bundle.recruitment.status != "closed":
             return None
         locked = staffing.load_schedule_for_update(day, cur=cur)
@@ -1261,6 +1283,7 @@ def staffing_page(
         return cached_resp
 
     holidays_synced = _holiday_mirror_has_synced()
+    optional_day_unresolved = False
     try:
         optional_day = optional_workday.for_day(d)
     except Exception:
@@ -1268,7 +1291,9 @@ def staffing_page(
         # verified we must not seed a possibly closed future date.
         log.exception("Could not classify optional workday %s", d)
         optional_day = None
+        optional_day_unresolved = True
         holidays_synced = False
+    render_as_optional_day = optional_day is not None or optional_day_unresolved
 
     # One pool fans out everything that doesn't depend on the schedule:
     # 3 DB reads (certs, roster, schedule) + Odoo time-off. The
@@ -1364,13 +1389,21 @@ def staffing_page(
     # volunteer left Unassigned for manual or button-triggered Auto scheduling.
     if optional_day is not None:
         try:
-            initial_saturday_bundle = saturday_recruiting_store.get(d)
+            initial_saturday_bundle = _matching_optional_recruiting_bundle(
+                saturday_recruiting_store.get(d),
+                optional_day,
+            )
             if (
                 initial_saturday_bundle
                 and initial_saturday_bundle.recruitment.status == "closed"
                 and initial_saturday_bundle.recruitment.staffing_prepared_at is None
             ):
-                prepared = _prepare_closed_saturday_schedule(d, roster, time_off_entries)
+                prepared = _prepare_closed_saturday_schedule(
+                    d,
+                    roster,
+                    time_off_entries,
+                    optional_day=optional_day,
+                )
                 if prepared is not None:
                     sched = prepared
         except Exception:
@@ -1485,7 +1518,11 @@ def staffing_page(
         )
     )
     raw_defaults_by_loc = bay_model.get("defaults_by_loc") or {}
-    if sched.assignments and auto_scheduler_available:
+    if (
+        sched.assignments
+        and auto_scheduler_available
+        and not optional_day_unresolved
+    ):
         # A saved day keeps its stored mode so the empty-slot fill hints agree
         # with the reason badges/warnings (which also use sched.rotation_mode).
         smart_defaults_by_loc = _smart_defaults_for_day(
@@ -1500,18 +1537,31 @@ def staffing_page(
     else:
         smart_defaults_by_loc = {}
 
-    eff_start = shift_config.configured_shift_start_for(d)
-    eff_end   = shift_config.configured_shift_end_for(d)
+    eff_start = shift_config.configured_shift_start_for(
+        d,
+        is_optional_day=render_as_optional_day,
+    )
+    eff_end = shift_config.configured_shift_end_for(
+        d,
+        is_optional_day=render_as_optional_day,
+    )
     eff_breaks = [
         {"start": b.start.strftime("%H:%M"),
          "end":   b.end.strftime("%H:%M"),
          "name":  b.name}
-        for b in shift_config.configured_breaks_for(d)
+        for b in shift_config.configured_breaks_for(
+            d,
+            is_optional_day=render_as_optional_day,
+        )
     ]
-    hours_source = shift_config.scheduler_hours_source(d, sched.custom_hours is not None)
+    hours_source = shift_config.scheduler_hours_source(
+        d,
+        sched.custom_hours is not None,
+        is_optional_day=render_as_optional_day,
+    )
     nonstandard_schedule = (
         sched.custom_hours is not None
-        or optional_day is not None
+        or render_as_optional_day
         or d.weekday() == 6
     )
     eff_hours_label = f"{eff_start.strftime('%H:%M')}–{eff_end.strftime('%H:%M')}"
@@ -1531,7 +1581,10 @@ def staffing_page(
     saturday_staffing_prepared = False
     if optional_day is not None:
         try:
-            saturday_bundle = saturday_recruiting_store.get(d)
+            saturday_bundle = _matching_optional_recruiting_bundle(
+                saturday_recruiting_store.get(d),
+                optional_day,
+            )
             saturday_staffing_prepared = bool(
                 saturday_bundle and saturday_bundle.recruitment.staffing_prepared_at
             )
@@ -1546,10 +1599,14 @@ def staffing_page(
                 if saturday_bundle else sr.response_deadline(
                     d,
                     schedule_store.current().work_weekdays,
-                    shift_config.configured_shift_start_for,
+                    lambda prior: shift_config.configured_shift_start_for(
+                        prior,
+                        is_optional_day=False,
+                    ),
                     is_holiday=lambda candidate: (
                         company_holidays.for_day(candidate) is not None
                     ),
+                    classified_optional_day=optional_day,
                 )
             )
             saturday_payload = (
@@ -1575,21 +1632,26 @@ def staffing_page(
         except Exception:
             log.exception("Saturday recruiting context failed for %s", d)
 
-    optional_recruiting_label = (
-        "Holiday recruiting"
-        if optional_day and optional_day.kind == "holiday"
-        else "Saturday recruiting"
-    )
-    saturday_context = {
-        "day_is_saturday": d.weekday() == 5,
-        "is_optional_workday": optional_day is not None,
-        "optional_day_kind": optional_day.kind if optional_day else None,
-        "optional_day_name": optional_day.name if optional_day else None,
-        "optional_day_label": (
+    if optional_day_unresolved:
+        optional_day_label = "Optional workday"
+        optional_recruiting_label = "Optional workday recruiting"
+    else:
+        optional_day_label = (
             optional_day.name
             if optional_day and optional_day.kind == "holiday"
             else "Saturday"
-        ),
+        )
+        optional_recruiting_label = (
+            "Holiday recruiting"
+            if optional_day and optional_day.kind == "holiday"
+            else "Saturday recruiting"
+        )
+    saturday_context = {
+        "day_is_saturday": d.weekday() == 5,
+        "is_optional_workday": render_as_optional_day,
+        "optional_day_kind": optional_day.kind if optional_day else None,
+        "optional_day_name": optional_day.name if optional_day else None,
+        "optional_day_label": optional_day_label,
         "optional_recruiting_label": optional_recruiting_label,
         "holiday_sync_warning": (
             ""
@@ -1641,7 +1703,7 @@ def staffing_page(
     # Rebuild the pure roster view once optional-workday recruiting is known.
     # An optional date starts closed: only commitments enter Unassigned or a
     # work-center picker; everyone else remains visibly Off.
-    if optional_day is not None:
+    if render_as_optional_day:
         bay_model = staffing_view.build_staffing_bays(
             roster=roster,
             sched=sched,
@@ -1657,6 +1719,12 @@ def staffing_page(
             saturday_availability_overrides=sched.saturday_availability_overrides,
             publish_errors=publish_errors,
         )
+        unscheduled_count = len(bay_model.get("unassigned") or ())
+        rotation_auto_summary = {
+            "unscheduled_count": unscheduled_count,
+            "auto_on_count": auto_on_count,
+            "delta": auto_on_count - unscheduled_count,
+        }
         minimum_crew_balance = _minimum_crew_balance_payload(
             _minimum_crew_balance_for_day(
                 roster=roster,
