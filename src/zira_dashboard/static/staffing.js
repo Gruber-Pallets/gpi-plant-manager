@@ -870,6 +870,7 @@
     });
     refreshPickerVisibility();
     kickAutosave();
+    document.dispatchEvent(new Event('staffing:selection-changed'));
   });
 
   // Click a clearable partial pill (the amber 9-10a badge on a scheduled
@@ -1678,13 +1679,55 @@
       });
     }
 
-    function clearStaleAutoWarnings() {
-      const issues = (window.ROTATION_ISSUES || []).filter(issue =>
-        !['person_unplaced', 'center_minimum_unmet'].includes(issue.code));
-      const warnings = (window.ROTATION_WARNINGS || []).filter(warning =>
-        !warning.includes('could not be placed in an enabled Auto work center')
-        && !warning.includes('below its minimum Auto staffing level'));
-      renderCoverageIssues(warnings, issues);
+    let validationTimer = null;
+    let validationRequestId = 0;
+    let validationController = null;
+
+    function currentViewSnapshot() {
+      const assignments = {};
+      document.querySelectorAll('details.sched-dd[data-loc]').forEach(dropdown => {
+        assignments[dropdown.dataset.loc] = [...dropdown.querySelectorAll(
+          'input[type="checkbox"]:checked',
+        )].map(input => input.value);
+      });
+      return {
+        day,
+        enabled_work_centers: [...(window.AUTO_SCHEDULE_WC_NAMES || [])],
+        assignments,
+      };
+    }
+
+    function validationUnavailableIssue() {
+      return {
+        code: 'current_view_validation_unavailable',
+        message: 'Couldn’t validate the schedule currently shown. Try again.',
+      };
+    }
+
+    async function validateCurrentView() {
+      const requestId = ++validationRequestId;
+      validationController?.abort();
+      validationController = new AbortController();
+      try {
+        const response = await fetch('/api/rotations/validate-current', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          signal: validationController.signal,
+          body: JSON.stringify(currentViewSnapshot()),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (requestId !== validationRequestId) return;
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Validation failed.');
+        renderCoverageIssues([], data.issues || []);
+      } catch (error) {
+        if (error.name === 'AbortError' || requestId !== validationRequestId) return;
+        renderCoverageIssues([], [validationUnavailableIssue()]);
+      }
+    }
+
+    function scheduleCurrentViewValidation() {
+      clearTimeout(validationTimer);
+      validationTimer = setTimeout(validateCurrentView, 150);
     }
 
     function setWorkCenterOnState(name, enabled) {
@@ -1783,8 +1826,8 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
         applyEnabledCenters(data.enabled_work_centers);
         applyAutoCenterAssignments(data.assignments);
         renderSaturdayRecruitingDemand(data.saturday_recruiting, data.enabled_work_centers);
-        clearStaleAutoWarnings();
         renderMinimumCrewBalance(data.minimum_crew_balance);
+        scheduleCurrentViewValidation();
         if (window.showToast) showToast('Auto work centers saved');
       } catch (err) {
         const message = 'Auto toggle failed: ' + (err.message || 'network error');
@@ -1827,6 +1870,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       syncLeftRailWithSchedule();
       renderMinimumCrewBalanceFromGrid();
       refreshPickerVisibility();
+      scheduleCurrentViewValidation();
     }
 
     async function rebuild(mode, options = {}) {
@@ -1922,10 +1966,11 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       toggleWorkCenterRow(toggle.closest('tr[data-loc]'));
     });
     document.addEventListener('staffing:selection-changed', () => {
-      clearStaleAutoWarnings();
+      scheduleCurrentViewValidation();
       renderMinimumCrewBalanceFromGrid();
     });
     renderMinimumCrewBalanceFromGrid();
+    if (!__viewingPosted) validateCurrentView();
   })();
 
   // ---------- Unified training protocol setup + lifecycle ----------

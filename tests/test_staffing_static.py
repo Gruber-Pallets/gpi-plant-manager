@@ -438,7 +438,7 @@ def test_rotation_warning_supports_structured_coverage_issues():
     assert "warnBox.hidden = list.childElementCount === 0;" in renderer
 
 
-def test_rotation_warning_success_replaces_alert_with_authoritative_response():
+def test_rotation_warning_success_schedules_authoritative_live_validation():
     js = _script()
     save_auto = js.split("async function saveAutoCenters(turnOff = []) {", 1)[1].split(
         "// Reconcile every enabled Auto picker's checkboxes", 1
@@ -447,12 +447,16 @@ def test_rotation_warning_success_replaces_alert_with_authoritative_response():
         "async function rebuild(mode, options = {})", 1
     )[0]
 
-    call = "clearStaleAutoWarnings();"
-    assert call in save_auto
+    assert "clearStaleAutoWarnings" not in js
+    assert "scheduleCurrentViewValidation();" in save_auto
+    assert save_auto.index("applyAutoCenterAssignments(data.assignments);") < save_auto.index(
+        "scheduleCurrentViewValidation();"
+    )
     assert """renderCoverageIssues(
         data.warnings,
         [...(data.coverage?.issues || []), ...partialPlacementIssues(data)],
       );""" in apply_rebuild
+    assert "scheduleCurrentViewValidation();" in apply_rebuild
 
 
 def test_auto_toggle_failures_preserve_current_issues_and_append_once():
@@ -468,6 +472,89 @@ def test_auto_toggle_failures_preserve_current_issues_and_append_once():
     assert "if (!warnings.includes(message)) warnings.push(message);" in helper
     assert "renderCoverageIssues(warnings, window.ROTATION_ISSUES);" in helper
     assert "renderCoverageFailure(" in save_auto
+
+
+def test_live_validation_uses_only_the_newest_response_and_replaces_warnings():
+    js = _script()
+    validation = js.split("let validationTimer = null;", 1)[1].split(
+        "function setWorkCenterOnState", 1,
+    )[0]
+    assert "AbortController" in validation
+    assert "if (requestId !== validationRequestId) return;" in validation
+    assert "renderCoverageIssues([], data.issues || []);" in validation
+
+
+def test_live_validation_failure_does_not_keep_old_staffing_issues():
+    js = _script()
+    validation = js.split("async function validateCurrentView() {", 1)[1].split(
+        "function scheduleCurrentViewValidation", 1,
+    )[0]
+    assert "renderCoverageIssues([], [validationUnavailableIssue()]);" in validation
+
+
+def test_live_validation_ignores_an_out_of_order_stale_response():
+    js = _script()
+    validation = "let validationTimer = null;" + js.split(
+        "let validationTimer = null;", 1,
+    )[1].split("function setWorkCenterOnState", 1)[0]
+    harness = textwrap.dedent(
+        f"""
+        const validation = {validation!r};
+        const requests = [];
+        const warningPanel = {{ issues: [] }};
+        const checked = {{ value: 'Alex' }};
+        const dropdown = {{
+          dataset: {{ loc: 'Repair 1' }},
+          querySelectorAll(selector) {{
+            return selector === 'input[type="checkbox"]:checked' ? [checked] : [];
+          }},
+        }};
+        class AbortController {{
+          constructor() {{ this.signal = {{}}; }}
+          abort() {{ this.aborted = true; }}
+        }}
+        global.window = {{ AUTO_SCHEDULE_WC_NAMES: ['Repair 1'] }};
+        const day = '2026-07-29';
+        global.document = {{
+          querySelectorAll(selector) {{
+            return selector === 'details.sched-dd[data-loc]' ? [dropdown] : [];
+          }},
+        }};
+        global.fetch = () => new Promise(resolve => requests.push(resolve));
+        function renderCoverageIssues(warnings, issues) {{
+          warningPanel.issues = issues;
+          window.ROTATION_WARNINGS = warnings;
+          window.ROTATION_ISSUES = issues;
+        }}
+        const {{ validateCurrentView }} = eval(validation + '\\n({{ validateCurrentView }})');
+
+        const first = validateCurrentView();
+        const second = validateCurrentView();
+        if (requests.length !== 2) throw new Error('did not start both validation requests');
+        requests[1]({{ ok: true, json: async () => ({{
+          ok: true,
+          issues: [{{ code: 'newest', message: 'Only the newest issue belongs here.' }}],
+        }}) }});
+        await second;
+        requests[0]({{ ok: true, json: async () => ({{
+          ok: true,
+          issues: [{{ code: 'stale', message: 'This old issue must not return.' }}],
+        }}) }});
+        await first;
+
+        if (warningPanel.issues.length !== 1) throw new Error('warning panel kept old issues');
+        if (warningPanel.issues[0].code !== 'newest') throw new Error('stale response replaced newer issue');
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_reset_to_defaults_confirms_clearing_and_loading_the_default_schedule():
@@ -570,7 +657,7 @@ def test_auto_center_success_requires_server_enabled_centers():
     assert "data.enabled_work_centers || requestedWorkCenters" not in js
     assert "data.enabled_work_centers || workCenters.filter" not in js
     assert save_auto.index("applyEnabledCenters(data.enabled_work_centers);") < save_auto.index(
-        "clearStaleAutoWarnings();"
+        "scheduleCurrentViewValidation();"
     )
 
 
