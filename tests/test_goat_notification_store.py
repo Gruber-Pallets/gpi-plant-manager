@@ -89,20 +89,29 @@ def test_activation_day_is_written_once_without_touching_shared_state(monkeypatc
 
 @needs_postgres
 def test_alert_and_delivery_are_single_transactional_unit():
-    """Use one UUID-marked inert alert and never clean up shared data."""
+    """Use one UUID-marked inert alert and delete only its returned ID."""
     db.bootstrap_schema()
     alert = _alert()
+    alert_id = None
 
-    alert_id = store.insert_alert_and_delivery(alert)
+    try:
+        alert_id = store.insert_alert_and_delivery(alert)
 
-    assert isinstance(alert_id, int)
-    assert store.insert_alert_and_delivery(alert) is None
-    rows = db.query(
-        "SELECT goat_alert_id, status, attempts FROM goat_slack_deliveries "
-        "WHERE goat_alert_id = %s",
-        (alert_id,),
-    )
-    assert rows == [{"goat_alert_id": alert_id, "status": "pending", "attempts": 0}]
+        assert isinstance(alert_id, int)
+        assert store.insert_alert_and_delivery(alert) is None
+        rows = db.query(
+            "SELECT goat_alert_id, status, attempts FROM goat_slack_deliveries "
+            "WHERE goat_alert_id = %s",
+            (alert_id,),
+        )
+        assert rows == [{"goat_alert_id": alert_id, "status": "pending", "attempts": 0}]
+    finally:
+        if alert_id is not None:
+            db.execute("DELETE FROM goat_alerts WHERE id = %s", (alert_id,))
+            assert db.query(
+                "SELECT id FROM goat_slack_deliveries WHERE goat_alert_id = %s",
+                (alert_id,),
+            ) == []
 
 
 def test_claim_retry_and_sent_updates_target_the_same_delivery(monkeypatch):
