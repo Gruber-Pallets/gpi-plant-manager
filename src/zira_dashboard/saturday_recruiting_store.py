@@ -257,6 +257,27 @@ def get(day: date, *, cur=None) -> RecruitmentBundle | None:
         return _load_bundle(cur, day)
 
 
+def lock_for_schedule_mutation(
+    day: date,
+    *,
+    cur,
+) -> RecruitmentBundle | None:
+    """Lock the optional-work lifecycle before locking or saving its schedule.
+
+    Cancellation acquires these two rows in the same order: recruiting first,
+    schedule second. Schedule mutation routes use this public seam so a
+    cancellation that wins the recruiting lock cannot be overwritten by a
+    stale schedule save.
+    """
+    cur.execute(
+        "SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE",
+        (day,),
+    )
+    if cur.fetchone() is None:
+        return None
+    return _load_bundle(cur, day)
+
+
 def publication_state(day: date) -> RecruitmentPublicationState | None:
     """Return only the lifecycle fields needed by operational workday checks."""
     from . import db

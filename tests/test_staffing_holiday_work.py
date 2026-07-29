@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,8 +108,24 @@ def _patch_holiday_save(
         "get",
         lambda _day: bundle,
     )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: bundle,
+        raising=False,
+    )
+    monkeypatch.setattr(staffing_routes.db, "cursor", lambda: nullcontext(object()))
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: current)
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda _day, *, cur: current,
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
     monkeypatch.setattr(
         staffing_routes.staffing,
         "load_roster",
@@ -785,6 +802,95 @@ def test_holiday_classification_failure_blocks_every_schedule_mutation(monkeypat
     assert default_updates == []
 
 
+def test_cancelled_holiday_wins_staffing_save_race_before_defaults_or_schedule(
+    monkeypatch,
+):
+    _current, saved, _marked, default_updates = _patch_holiday_save(
+        monkeypatch,
+        bundle=_bundle(),
+    )
+    events = []
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: events.append("recruiting_lock")
+        or _bundle(status="cancelled"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda _day, *, cur: events.append("schedule_lock")
+        or staffing.Schedule(day=BLACK_FRIDAY),
+    )
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}),
+        BLACK_FRIDAY,
+        0,
+        FormData([
+            ("action", "save"),
+            ("loc__Repair 1", "Volunteer"),
+            ("defaults_dirty__Repair 1", "1"),
+            ("default__Repair 1", "Volunteer"),
+        ]),
+    )
+
+    assert response.status_code == 409
+    assert events == ["recruiting_lock", "schedule_lock"]
+    assert saved == []
+    assert default_updates == []
+
+
+@pytest.mark.parametrize("action", ["save", "publish"])
+def test_holiday_save_locks_recruiting_then_schedule_and_saves_with_same_cursor(
+    monkeypatch,
+    action,
+):
+    _current, _saved, _marked, _default_updates = _patch_holiday_save(
+        monkeypatch,
+        bundle=_bundle(),
+    )
+    transaction = object()
+    events = []
+    monkeypatch.setattr(
+        staffing_routes.db,
+        "cursor",
+        lambda: nullcontext(transaction),
+    )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: events.append(("recruiting_lock", cur))
+        or _bundle(),
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda _day, *, cur: events.append(("schedule_lock", cur))
+        or staffing.Schedule(day=BLACK_FRIDAY),
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, *, cur: events.append(("save", cur)),
+    )
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}),
+        BLACK_FRIDAY,
+        0,
+        FormData([("action", action), ("loc__Repair 1", "Volunteer")]),
+    )
+
+    assert response.status_code == 200
+    assert events == [
+        ("recruiting_lock", transaction),
+        ("schedule_lock", transaction),
+        ("save", transaction),
+    ]
+
+
 def test_open_holiday_recruiting_cannot_schedule_people(monkeypatch):
     _current, saved, _marked, _default_updates = _patch_holiday_save(
         monkeypatch,
@@ -945,4 +1051,38 @@ def test_unrecruited_holiday_rejects_availability_without_mutation(monkeypatch):
             "unassigned",
         )
 
+    assert saved == []
+
+
+def test_cancelled_holiday_wins_availability_correction_race(monkeypatch):
+    _current, saved, _marked, _default_updates = _patch_holiday_save(
+        monkeypatch,
+        bundle=_bundle(),
+    )
+    events = []
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: events.append("recruiting_lock")
+        or _bundle(status="cancelled"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda _day, *, cur: events.append("schedule_lock")
+        or staffing.Schedule(day=BLACK_FRIDAY),
+    )
+
+    with pytest.raises(
+        staffing_routes.HTTPException,
+        match="Holiday recruiting is not active for Black Friday",
+    ):
+        staffing_routes._set_saturday_availability_work(
+            BLACK_FRIDAY,
+            "Corrected",
+            "unassigned",
+        )
+
+    assert events == ["recruiting_lock", "schedule_lock"]
     assert saved == []

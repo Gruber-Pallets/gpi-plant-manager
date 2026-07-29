@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,25 @@ from zira_dashboard.shift_config import SITE_TZ
 
 
 SATURDAY = date(2026, 7, 25)
+
+
+@pytest.fixture(autouse=True)
+def _optional_schedule_transaction(monkeypatch):
+    monkeypatch.setattr(
+        staffing_routes.db,
+        "cursor",
+        lambda: nullcontext(object()),
+    )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda day, *, cur: staffing_routes.saturday_recruiting_store.get(day),
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda day, *, cur: staffing_routes.staffing.load_schedule(day),
+    )
 
 
 def _person(name, *, reserve=False, active=True, **skills):
@@ -266,7 +286,11 @@ def test_manager_cannot_publish_saturday_before_recruiting_closes(monkeypatch):
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair, dismantle))
     monkeypatch.setattr(staffing_routes.work_centers_store, "min_ops", lambda loc: loc.min_ops)
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: staffing.Schedule(day=SATURDAY, assignments={}))
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
     monkeypatch.setattr(staffing_routes.staffing, "schedule_revision", lambda _day: None)
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: bundle)
@@ -294,7 +318,11 @@ def test_recruiting_saturday_stays_blank_before_the_deadline(monkeypatch):
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair, dismantle))
     monkeypatch.setattr(staffing_routes.work_centers_store, "min_ops", lambda loc: loc.min_ops)
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: staffing.Schedule(day=SATURDAY, assignments={}))
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: bundle)
     monkeypatch.setattr(staffing_routes, "plant_now", lambda: datetime(2026, 7, 23, 8, tzinfo=SITE_TZ))
@@ -319,7 +347,11 @@ def test_post_deadline_publish_uses_only_requested_saturday_positions(monkeypatc
     monkeypatch.setattr(staffing_routes.work_centers_store, "min_ops", lambda loc: loc.min_ops)
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: staffing.Schedule(day=SATURDAY, assignments={}))
     monkeypatch.setattr(staffing_routes.staffing, "load_roster", lambda: [_person("Ana", Repair=3)])
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: bundle)
     monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "mark_published", lambda day, now: marked.append((day, now)))
@@ -344,7 +376,11 @@ def test_saturday_save_rejects_noncommitted_assignment_without_persisting(monkey
     repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair,))
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: staffing.Schedule(day=SATURDAY, assignments={"Repair 1": ["Ana"]}))
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: bundle)
 
@@ -361,6 +397,58 @@ def test_saturday_save_rejects_noncommitted_assignment_without_persisting(monkey
     assert saved == []
 
 
+def test_cancelled_saturday_cannot_be_overwritten_by_staffing_save(monkeypatch):
+    saved = []
+    default_updates = []
+    repair = staffing.Location(
+        "Repair 1",
+        "Repair",
+        "Bay 1",
+        "Recycled",
+        None,
+        min_ops=1,
+        max_ops=2,
+    )
+    monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair,))
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule",
+        lambda _day: staffing.Schedule(day=SATURDAY),
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
+    monkeypatch.setattr(
+        staffing_routes.work_centers_store,
+        "save_one",
+        lambda *args: default_updates.append(args),
+    )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "get",
+        lambda _day: _repair_only_bundle(status="cancelled"),
+    )
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}),
+        SATURDAY,
+        0,
+        FormData([
+            ("action", "save"),
+            ("loc__Repair 1", "Ana"),
+            ("defaults_dirty__Repair 1", "1"),
+            ("default__Repair 1", "Ana"),
+        ]),
+    )
+
+    assert response.status_code == 409
+    assert b"Saturday recruiting is not active" in response.body
+    assert saved == []
+    assert default_updates == []
+
+
 def test_saturday_save_accepts_manager_marked_unassigned_person(monkeypatch):
     bundle = _repair_only_bundle(status="closed")
     saved = []
@@ -375,7 +463,11 @@ def test_saturday_save_accepts_manager_marked_unassigned_person(monkeypatch):
             saturday_availability_overrides={"Cara": "unassigned"},
         ),
     )
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
     monkeypatch.setattr(staffing_routes.staffing, "schedule_revision", lambda _day: None)
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: bundle)
@@ -404,7 +496,11 @@ def test_saturday_save_rejects_committed_person_marked_off(monkeypatch):
             saturday_availability_overrides={"Ana": "off"},
         ),
     )
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(staffing_routes.saturday_recruiting_store, "get", lambda _day: bundle)
 
@@ -425,7 +521,11 @@ def test_saturday_availability_endpoint_drafts_posted_schedule_and_persists_over
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: posted)
     monkeypatch.setattr(staffing_routes.staffing, "load_roster", lambda: list(_people().values()))
     monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda _day: [])
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
     monkeypatch.setattr(staffing_routes, "_bust_after_mutation", lambda: None)
 
     result = staffing_routes._set_saturday_availability_work(SATURDAY, "Cara", "unassigned")
@@ -452,7 +552,11 @@ def test_saturday_availability_endpoint_rejects_invalid_changes(
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: staffing.Schedule(day=SATURDAY))
     monkeypatch.setattr(staffing_routes.staffing, "load_roster", lambda: list(_people().values()))
     monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda _day: [])
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
 
     with pytest.raises(HTTPException, match=message):
         staffing_routes._set_saturday_availability_work(day, name, destination)
@@ -467,7 +571,11 @@ def test_saturday_recruiting_lookup_failure_blocks_schedule_writes(monkeypatch, 
     repair = staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, min_ops=1, max_ops=2)
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair,))
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: staffing.Schedule(day=SATURDAY, assignments={}))
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
     monkeypatch.setattr(staffing_routes.work_centers_store, "save_one", lambda *args: default_updates.append(args))
     monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
 
@@ -495,7 +603,11 @@ def test_saturday_recruiting_lookup_failure_blocks_schedule_writes(monkeypatch, 
 def test_unknown_staffing_action_is_rejected_before_schedule_write(monkeypatch):
     saved = []
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", ())
-    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda schedule, **_kwargs: saved.append(schedule),
+    )
 
     response = staffing_routes._staffing_save_work(
         SimpleNamespace(headers={}), SATURDAY, 0,

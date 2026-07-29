@@ -183,6 +183,32 @@ class TestRecruitingStoreWithoutDatabase:
             "response_deadline": HOLIDAY_DEADLINE.isoformat(),
         }
 
+    def test_schedule_mutation_lock_uses_public_recruiting_row_seam(
+        self,
+        monkeypatch,
+    ):
+        bundle = self._bundle()
+
+        class Cursor:
+            def __init__(self):
+                self.sql = ""
+
+            def execute(self, sql, params):
+                self.sql = sql
+                assert params == (HOLIDAY,)
+
+            def fetchone(self):
+                return {"day": HOLIDAY}
+
+        cursor = Cursor()
+        monkeypatch.setattr(store, "_load_bundle", lambda cur, day: bundle)
+
+        locked = store.lock_for_schedule_mutation(HOLIDAY, cur=cursor)
+
+        assert locked is bundle
+        assert "saturday_recruitments" in cursor.sql
+        assert "FOR UPDATE" in cursor.sql
+
     def test_employee_offer_and_banner_copy_holiday_metadata(self, monkeypatch):
         bundle = self._bundle()
 
