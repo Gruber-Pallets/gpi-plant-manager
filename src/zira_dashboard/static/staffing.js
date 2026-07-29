@@ -31,6 +31,8 @@
     __form.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  let scheduleCurrentViewValidation = () => {};
+
   const __clearBtn = document.getElementById('clear-schedule-btn');
   if (__clearBtn) {
     __clearBtn.addEventListener('click', () => {
@@ -48,6 +50,7 @@
       syncLeftRailWithSchedule();
       refreshPickerVisibility();
       kickAutosave();
+      scheduleCurrentViewValidation();
     });
   }
 
@@ -870,7 +873,7 @@
     });
     refreshPickerVisibility();
     kickAutosave();
-    document.dispatchEvent(new Event('staffing:selection-changed'));
+    scheduleCurrentViewValidation();
   });
 
   // Click a clearable partial pill (the amber 9-10a badge on a scheduled
@@ -1725,10 +1728,10 @@
       }
     }
 
-    function scheduleCurrentViewValidation() {
+    scheduleCurrentViewValidation = function scheduleCurrentViewValidation() {
       clearTimeout(validationTimer);
       validationTimer = setTimeout(validateCurrentView, 150);
-    }
+    };
 
     function setWorkCenterOnState(name, enabled) {
       const row = document.querySelector(`tr[data-loc="${CSS.escape(name)}"]`);

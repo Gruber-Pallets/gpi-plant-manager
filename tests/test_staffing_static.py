@@ -513,6 +513,7 @@ def test_live_validation_ignores_an_out_of_order_stale_response():
           constructor() {{ this.signal = {{}}; }}
           abort() {{ this.aborted = true; }}
         }}
+        let scheduleCurrentViewValidation = () => {{}};
         global.window = {{ AUTO_SCHEDULE_WC_NAMES: ['Repair 1'] }};
         const day = '2026-07-29';
         global.document = {{
@@ -928,6 +929,7 @@ def test_clear_schedule_remains_a_distinct_local_autosave_action():
     assert "syncLeftRailWithSchedule();" in js
     assert "refreshPickerVisibility();" in js
     assert "kickAutosave();" in js
+    assert "scheduleCurrentViewValidation();" in clear_handler
     assert ".clear-schedule-btn:hover" in css
     assert "if (__viewingPosted) return;" in clear_handler
     assert clear_handler.index("if (__viewingPosted) return;") < clear_handler.index(
