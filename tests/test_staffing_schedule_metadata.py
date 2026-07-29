@@ -209,6 +209,32 @@ def test_save_schedule_invalidates_optional_workday_state(monkeypatch):
     assert invalidated == [DAY]
 
 
+def test_transactional_save_can_defer_cache_invalidation_until_outer_commit(
+    monkeypatch,
+):
+    invalidated = []
+    writes = []
+    monkeypatch.setattr(
+        staffing,
+        "_invalidate_schedule_cache",
+        invalidated.append,
+    )
+    monkeypatch.setattr(
+        staffing,
+        "_save_schedule_with_cursor",
+        lambda *_args: writes.append("saved"),
+    )
+
+    staffing.save_schedule(
+        _schedule(day=DAY),
+        cur=object(),
+        invalidate_cache=False,
+    )
+
+    assert writes == ["saved"]
+    assert invalidated == []
+
+
 def test_draft_from_posted_preserves_official_version_and_clears_draft_delivery():
     posted = _schedule(
         published=True,

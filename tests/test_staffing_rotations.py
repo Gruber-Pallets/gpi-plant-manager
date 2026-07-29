@@ -88,7 +88,14 @@ def _rotations_client(monkeypatch, *, raise_server_exceptions: bool = True):
     # Route tests replace the persistence boundary with local spies. Keep that
     # contract while the narrow SQL path itself is covered in
     # test_rotation_store.py.
-    def update_auto_enabled_work_centers(day, *, enabled, turn_off, cur):
+    def update_auto_enabled_work_centers(
+        day,
+        *,
+        enabled,
+        turn_off,
+        cur,
+        invalidate_cache=True,
+    ):
         schedule = staffing.draft_from_posted(
             deepcopy(rotations.staffing.load_schedule(day))
         )
@@ -98,7 +105,14 @@ def _rotations_client(monkeypatch, *, raise_server_exceptions: bool = True):
             if wc_name not in turn_off
         }
         schedule.auto_enabled_work_centers = list(enabled)
-        rotations.staffing.save_schedule(schedule, cur=cur)
+        if invalidate_cache:
+            rotations.staffing.save_schedule(schedule, cur=cur)
+        else:
+            rotations.staffing.save_schedule(
+                schedule,
+                cur=cur,
+                invalidate_cache=False,
+            )
         return schedule
 
     monkeypatch.setattr(
@@ -2670,6 +2684,13 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
     client, rotations = _rotations_client(monkeypatch)
     bundle = _holiday_rotation_bundle(status="recruiting", prepared=False)
     updated = []
+    events = []
+
+    class Transaction(_RouteTransaction):
+        def __exit__(self, exc_type, *_args):
+            events.append("rollback" if exc_type else "commit")
+            return False
+
     monkeypatch.setattr(
         optional_workday,
         "for_day",
@@ -2677,10 +2698,15 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
             BLACK_FRIDAY, "holiday", "Black Friday", 42,
         ),
     )
-    monkeypatch.setattr(rotations.db, "cursor", _RouteTransaction)
+    monkeypatch.setattr(rotations.db, "cursor", Transaction)
     monkeypatch.setattr(
         rotations.saturday_recruiting_store, "get",
         lambda _day, *, cur: bundle,
+    )
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: events.append("recruiting_lock") or bundle,
     )
     monkeypatch.setattr(
         rotations.saturday_recruiting_store, "update_openings",
@@ -2705,7 +2731,9 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
     )
     monkeypatch.setattr(
         rotations.staffing, "save_schedule",
-        lambda *_args, **_kwargs: None,
+        lambda _schedule, **kwargs: events.append(
+            ("save", kwargs.get("invalidate_cache"))
+        ),
     )
     monkeypatch.setattr(
         rotations.staffing_route, "_minimum_crew_balance_for_day",
@@ -2715,8 +2743,21 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
         rotations.staffing_route, "_minimum_crew_balance_payload",
         lambda _balance: {},
     )
-    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
-    monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
+    monkeypatch.setattr(
+        rotations.staffing,
+        "invalidate_schedule_cache",
+        lambda _day: events.append("schedule_cache_invalidated"),
+    )
+    monkeypatch.setattr(
+        rotations._http_cache,
+        "invalidate_today_cache",
+        lambda: events.append("today_cache_invalidated"),
+    )
+    monkeypatch.setattr(
+        rotations._http_cache,
+        "invalidate_stable_cache",
+        lambda: events.append("stable_cache_invalidated"),
+    )
 
     response = client.post("/api/rotations/auto-work-centers", json={
         "day": BLACK_FRIDAY.isoformat(),
@@ -2727,6 +2768,14 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
     assert response.status_code == 200
     assert updated[0]["requested_counts"] == {17: 1}
     assert response.json()["saturday_recruiting"] == {"holiday": True}
+    assert events == [
+        "recruiting_lock",
+        ("save", False),
+        "commit",
+        "schedule_cache_invalidated",
+        "today_cache_invalidated",
+        "stable_cache_invalidated",
+    ]
 
 
 def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
@@ -2753,8 +2802,14 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
             "Corrected": "unassigned",
         },
     )
-    transaction = _RouteTransaction()
     events = []
+
+    class Transaction(_RouteTransaction):
+        def __exit__(self, exc_type, *_args):
+            events.append("rollback" if exc_type else "commit")
+            return False
+
+    transaction = Transaction()
     monkeypatch.setattr(
         optional_workday,
         "for_day",
@@ -2790,7 +2845,13 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
         rotations.staffing,
         "save_schedule",
         lambda schedule, **kwargs: (
-            events.append(("save", kwargs.get("cur"))),
+            events.append(
+                (
+                    "save",
+                    kwargs.get("cur"),
+                    kwargs.get("invalidate_cache"),
+                )
+            ),
             saved.append(schedule),
         )[-1],
     )
@@ -2816,7 +2877,16 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
         )
 
     monkeypatch.setattr(staffing_route, "_recycled_suggestion_for_day", suggest)
-    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(
+        rotations.staffing,
+        "invalidate_schedule_cache",
+        lambda _day: events.append("schedule_cache_invalidated"),
+    )
+    monkeypatch.setattr(
+        rotations._http_cache,
+        "invalidate_today_cache",
+        lambda: events.append("http_cache_invalidated"),
+    )
 
     response = client.post("/api/rotations/rebuild", json={
         "day": BLACK_FRIDAY.isoformat(), "mode": "normal",
@@ -2834,7 +2904,10 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
     assert events == [
         "recruiting_lock",
         "schedule_lock",
-        ("save", transaction),
+        ("save", transaction, False),
+        "commit",
+        "schedule_cache_invalidated",
+        "http_cache_invalidated",
     ]
 
 
@@ -2883,8 +2956,14 @@ def test_holiday_reset_uses_optional_volunteer_defaults_not_weekday_defaults(
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     saved = []
     optional_defaults_calls = []
-    transaction = _RouteTransaction()
     events = []
+
+    class Transaction(_RouteTransaction):
+        def __exit__(self, exc_type, *_args):
+            events.append("rollback" if exc_type else "commit")
+            return False
+
+    transaction = Transaction()
     prior = staffing.Schedule(
         day=BLACK_FRIDAY,
         assignments={"Repair 1": ["Old weekday default"]},
@@ -2933,7 +3012,13 @@ def test_holiday_reset_uses_optional_volunteer_defaults_not_weekday_defaults(
         rotations.staffing,
         "save_schedule",
         lambda schedule, **kwargs: (
-            events.append(("save", kwargs.get("cur"))),
+            events.append(
+                (
+                    "save",
+                    kwargs.get("cur"),
+                    kwargs.get("invalidate_cache"),
+                )
+            ),
             saved.append(schedule),
         )[-1],
     )
@@ -2956,7 +3041,16 @@ def test_holiday_reset_uses_optional_volunteer_defaults_not_weekday_defaults(
             )
         ),
     )
-    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(
+        rotations.staffing,
+        "invalidate_schedule_cache",
+        lambda _day: events.append("schedule_cache_invalidated"),
+    )
+    monkeypatch.setattr(
+        rotations._http_cache,
+        "invalidate_today_cache",
+        lambda: events.append("http_cache_invalidated"),
+    )
 
     response = client.post("/api/rotations/rebuild", json={
         "day": BLACK_FRIDAY.isoformat(),
@@ -2974,7 +3068,10 @@ def test_holiday_reset_uses_optional_volunteer_defaults_not_weekday_defaults(
     assert events == [
         "recruiting_lock",
         "schedule_lock",
-        ("save", transaction),
+        ("save", transaction, False),
+        "commit",
+        "schedule_cache_invalidated",
+        "http_cache_invalidated",
     ]
 
 

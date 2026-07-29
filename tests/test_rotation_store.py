@@ -352,6 +352,41 @@ def test_narrow_auto_center_update_uses_locked_latest_assignments(monkeypatch):
     assert not any("INSERT INTO schedules" in sql for sql, _ in executed)
 
 
+def test_narrow_auto_center_update_can_defer_cache_until_outer_commit(monkeypatch):
+    from zira_dashboard import staffing
+
+    current = staffing.Schedule(
+        day=date(2026, 7, 14),
+        auto_enabled_work_centers=["Repair 1"],
+    )
+    invalidated = []
+
+    class Cursor:
+        def execute(self, _sql, _params=None):
+            pass
+
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule_for_update",
+        lambda _day, *, cur: current,
+    )
+    monkeypatch.setattr(
+        staffing,
+        "_invalidate_schedule_cache",
+        invalidated.append,
+    )
+
+    staffing.update_auto_enabled_work_centers(
+        current.day,
+        enabled=["Repair 1"],
+        turn_off=set(),
+        cur=Cursor(),
+        invalidate_cache=False,
+    )
+
+    assert invalidated == []
+
+
 def test_first_day_toggle_reloads_after_losing_schedule_creation_race(monkeypatch):
     """A toggle that loses first-row creation must not replace the new schedule."""
     from zira_dashboard import staffing

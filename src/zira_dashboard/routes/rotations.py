@@ -550,12 +550,18 @@ async def save_auto_work_centers(request: Request):
                         # configuration to change.
                         saturday_recruiting = saturday_recruiting_store.serialize_bundle(bundle)
                 sched = staffing.update_auto_enabled_work_centers(
-                    d, enabled=enabled, turn_off=turn_off_names, cur=cur,
+                    d,
+                    enabled=enabled,
+                    turn_off=turn_off_names,
+                    cur=cur,
+                    invalidate_cache=optional_day is None,
                 )
         except saturday_recruiting_store.SaturdayRecruitingError as exc:
             return _error(str(exc), 409)
         except Exception:
             return _error("Could not save work-center settings.", 503)
+        if optional_day is not None:
+            staffing.invalidate_schedule_cache(d)
         minimum_crew_balance = staffing_route._minimum_crew_balance_payload(
             staffing_route._minimum_crew_balance_for_day(
                 roster=roster,
@@ -782,8 +788,13 @@ async def rebuild_rotation(request: Request):
         if cur is None:
             staffing.save_schedule(replacement)
         else:
-            staffing.save_schedule(replacement, cur=cur)
-        _http_cache.invalidate_today_cache()
+            staffing.save_schedule(
+                replacement,
+                cur=cur,
+                invalidate_cache=False,
+            )
+        if cur is None:
+            _http_cache.invalidate_today_cache()
         return JSONResponse({
             "ok": True,
             "applied": True,
@@ -974,8 +985,13 @@ async def rebuild_rotation(request: Request):
         if cur is None:
             staffing.save_schedule(replacement)
         else:
-            staffing.save_schedule(replacement, cur=cur)
-        _http_cache.invalidate_today_cache()
+            staffing.save_schedule(
+                replacement,
+                cur=cur,
+                invalidate_cache=False,
+            )
+        if cur is None:
+            _http_cache.invalidate_today_cache()
         return JSONResponse({
             "ok": True,
             "applied": True,
@@ -1011,12 +1027,16 @@ async def rebuild_rotation(request: Request):
                 locked_bundle,
                 current_optional_day,
             )
-            return _rebuild_with_state(
+            response = _rebuild_with_state(
                 cur=cur,
                 current_optional_day=current_optional_day,
                 bundle=bundle,
                 locked_schedule=locked_schedule or staffing.Schedule(day=d),
                 schedule_existed=locked_schedule is not None,
             )
+        if response.status_code == 200:
+            staffing.invalidate_schedule_cache(d)
+            _http_cache.invalidate_today_cache()
+        return response
 
     return await asyncio.to_thread(_work)

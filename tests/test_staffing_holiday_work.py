@@ -873,7 +873,9 @@ def test_holiday_save_locks_recruiting_then_schedule_and_saves_with_same_cursor(
     monkeypatch.setattr(
         staffing_routes.staffing,
         "save_schedule",
-        lambda schedule, *, cur: events.append(("save", cur)),
+        lambda schedule, *, cur, invalidate_cache: events.append(
+            ("save", cur, invalidate_cache)
+        ),
     )
 
     response = staffing_routes._staffing_save_work(
@@ -887,7 +889,91 @@ def test_holiday_save_locks_recruiting_then_schedule_and_saves_with_same_cursor(
     assert events == [
         ("recruiting_lock", transaction),
         ("schedule_lock", transaction),
-        ("save", transaction),
+        ("save", transaction, False),
+    ]
+
+
+def test_holiday_save_invalidates_refilled_schedule_cache_only_after_commit(
+    monkeypatch,
+):
+    _current, _saved, _marked, _default_updates = _patch_holiday_save(
+        monkeypatch,
+        bundle=_bundle(),
+    )
+    events = []
+    simulated_cache = {}
+
+    class Transaction:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, *_args):
+            assert simulated_cache[BLACK_FRIDAY] == "old committed schedule"
+            events.append("rollback" if exc_type else "commit")
+            return False
+
+    transaction = Transaction()
+    monkeypatch.setattr(
+        staffing_routes.db,
+        "cursor",
+        lambda: transaction,
+    )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: events.append("recruiting_lock") or _bundle(),
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda _day, *, cur: events.append("schedule_lock")
+        or staffing.Schedule(day=BLACK_FRIDAY),
+    )
+
+    def save_schedule(schedule, *, cur, invalidate_cache=True):
+        events.append(("save", invalidate_cache))
+        # A concurrent reader can repopulate the last committed version while
+        # this transaction is still open.
+        simulated_cache[BLACK_FRIDAY] = "old committed schedule"
+        events.append("old_cache_refilled")
+
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        save_schedule,
+    )
+    def invalidate_schedule_cache(day):
+        simulated_cache.pop(day, None)
+        events.append("schedule_cache_invalidated")
+
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "invalidate_schedule_cache",
+        invalidate_schedule_cache,
+    )
+    monkeypatch.setattr(
+        staffing_routes._http_cache,
+        "invalidate_today_cache",
+        lambda: events.append("http_cache_invalidated"),
+    )
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}),
+        BLACK_FRIDAY,
+        0,
+        FormData([("action", "save"), ("loc__Repair 1", "Volunteer")]),
+    )
+
+    assert response.status_code == 200
+    assert BLACK_FRIDAY not in simulated_cache
+    assert events == [
+        "recruiting_lock",
+        "schedule_lock",
+        ("save", False),
+        "old_cache_refilled",
+        "commit",
+        "schedule_cache_invalidated",
+        "http_cache_invalidated",
     ]
 
 
@@ -1086,3 +1172,73 @@ def test_cancelled_holiday_wins_availability_correction_race(monkeypatch):
 
     assert events == ["recruiting_lock", "schedule_lock"]
     assert saved == []
+
+
+def test_failed_availability_transaction_keeps_committed_cache_state(
+    monkeypatch,
+):
+    _current, _saved, _marked, _default_updates = _patch_holiday_save(
+        monkeypatch,
+        bundle=_bundle(),
+    )
+    events = []
+    simulated_cache = {BLACK_FRIDAY: "old committed schedule"}
+
+    class Transaction:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, *_args):
+            events.append("rollback" if exc_type else "commit")
+            return False
+
+    monkeypatch.setattr(
+        staffing_routes.db,
+        "cursor",
+        Transaction,
+    )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: events.append("recruiting_lock") or _bundle(),
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda _day, *, cur: events.append("schedule_lock")
+        or staffing.Schedule(day=BLACK_FRIDAY),
+    )
+
+    def fail_save(schedule, *, cur, invalidate_cache=True):
+        events.append(("save", invalidate_cache))
+        assert simulated_cache[BLACK_FRIDAY] == "old committed schedule"
+        events.append("old_cache_still_committed")
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", fail_save)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "invalidate_schedule_cache",
+        lambda _day: events.append("schedule_cache_invalidated"),
+    )
+    monkeypatch.setattr(
+        staffing_routes,
+        "_bust_after_mutation",
+        lambda: events.append("http_cache_invalidated"),
+    )
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        staffing_routes._set_saturday_availability_work(
+            BLACK_FRIDAY,
+            "Corrected",
+            "unassigned",
+        )
+
+    assert simulated_cache == {BLACK_FRIDAY: "old committed schedule"}
+    assert events == [
+        "recruiting_lock",
+        "schedule_lock",
+        ("save", False),
+        "old_cache_still_committed",
+        "rollback",
+    ]

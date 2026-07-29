@@ -1184,7 +1184,7 @@ def _prepare_closed_saturday_schedule(
             auto_enabled_work_centers=list(locked.auto_enabled_work_centers),
             saturday_availability_overrides=dict(locked.saturday_availability_overrides),
         )
-        staffing.save_schedule(prepared, cur=cur)
+        staffing.save_schedule(prepared, cur=cur, invalidate_cache=False)
         saturday_recruiting_store.mark_staffing_prepared(day, plant_now(), cur=cur)
     staffing.invalidate_schedule_cache(day)
     _http_cache.invalidate_today_cache()
@@ -2078,7 +2078,7 @@ def _save_staffing_schedule_for_state(
     if cur is None:
         staffing.save_schedule(schedule)
     else:
-        staffing.save_schedule(schedule, cur=cur)
+        staffing.save_schedule(schedule, cur=cur, invalidate_cache=False)
     return {
         "optional_day": optional_day,
         "saturday_bundle": saturday_bundle,
@@ -2140,6 +2140,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             status_code=409,
         )
 
+    deferred_schedule_cache_invalidation = optional_day is not None
     if optional_day is None:
         result = _save_staffing_schedule_for_state(
             d=d,
@@ -2195,6 +2196,11 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
 
     if isinstance(result, JSONResponse):
         return result
+
+    if deferred_schedule_cache_invalidation:
+        # The outer transaction has committed. Drop any old schedule that a
+        # concurrent reader repopulated while the row lock was held.
+        staffing.invalidate_schedule_cache(d)
 
     optional_day = result["optional_day"]
     saturday_bundle = result["saturday_bundle"]
@@ -3027,7 +3033,8 @@ def _set_saturday_availability_work(day: date, name: str, destination: str) -> d
         overrides = dict(schedule.saturday_availability_overrides or {})
         overrides[name] = destination
         schedule.saturday_availability_overrides = overrides
-        staffing.save_schedule(schedule, cur=cur)
+        staffing.save_schedule(schedule, cur=cur, invalidate_cache=False)
+    staffing.invalidate_schedule_cache(day)
     _bust_after_mutation()
 
     recruiting_commitments = {

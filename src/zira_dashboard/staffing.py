@@ -708,6 +708,7 @@ def update_auto_enabled_work_centers(
     enabled,
     turn_off: set[str],
     cur,
+    invalidate_cache: bool = True,
 ) -> Schedule:
     """Persist a daily toggle without replacing assignments saved concurrently."""
     # A schedule may not exist on the first toggle.  Create only a bare row
@@ -761,7 +762,8 @@ def update_auto_enabled_work_centers(
             "SELECT id FROM work_centers WHERE name = ANY(%s))",
             (day, list(normalized_turn_off)),
         )
-    _invalidate_schedule_cache(day)
+    if invalidate_cache:
+        _invalidate_schedule_cache(day)
     return sched
 
 
@@ -929,13 +931,26 @@ def _save_schedule_with_cursor(
         )
 
 
-def save_schedule(schedule: Schedule, *, cur=None) -> None:
-    """Persist one schedule, optionally inside an existing transaction."""
+def save_schedule(
+    schedule: Schedule,
+    *,
+    cur=None,
+    invalidate_cache: bool = True,
+) -> None:
+    """Persist one schedule, optionally inside an existing transaction.
+
+    A caller that owns ``cur`` may defer cache invalidation until its outer
+    transaction commits. Existing callers retain immediate invalidation by
+    default.
+    """
+    if cur is None and not invalidate_cache:
+        raise ValueError("cache invalidation can only be deferred with a cursor")
     assignment_sources = _validate_assignment_sources(schedule.assignment_sources)
     saturday_availability_overrides = _validate_saturday_availability_overrides(
         schedule.saturday_availability_overrides
     )
-    _invalidate_schedule_cache(schedule.day)
+    if invalidate_cache:
+        _invalidate_schedule_cache(schedule.day)
     if cur is not None:
         _save_schedule_with_cursor(
             cur, schedule, assignment_sources, saturday_availability_overrides,
