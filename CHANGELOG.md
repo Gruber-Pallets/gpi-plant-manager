@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-07-29
 
+### Features
+
+- **New GOAT wins get a celebration in #MGMT-Sups.** After the workday ends, Plant Manager shares the winner, where they worked, how many pallets they made, and the old record they beat. This helps supervisors notice great work and congratulate the person.
+
 ### Fixes
 
 - **Missing TV screens fix themselves after an update.** TVs like Repair 2 now get their saved display setup if it was missing, so they can show their dashboard again.
