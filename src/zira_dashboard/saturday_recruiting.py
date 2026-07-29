@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
 
 from .shift_config import SITE_TZ
 
@@ -42,16 +42,26 @@ def response_deadline(
     day: date,
     work_weekdays: frozenset[int],
     shift_start_for: Callable[[date], time],
+    is_holiday: Callable[[date], bool] = lambda _day: False,
 ) -> datetime:
     """Return the prior configured workday's site-local shift start."""
-    if day.weekday() != 5:
+    from . import optional_workday
+
+    optional = optional_workday.for_day(day)
+    day_is_holiday = is_holiday(day) or bool(
+        optional is not None and optional.kind == "holiday"
+    )
+    if day.weekday() != 5 and not day_is_holiday:
         raise SaturdayRecruitingError("Saturday recruiting requires a Saturday")
-    cursor = day - timedelta(days=1)
-    for _ in range(14):
-        if cursor.weekday() in work_weekdays:
-            return datetime.combine(cursor, shift_start_for(cursor), tzinfo=SITE_TZ)
-        cursor -= timedelta(days=1)
-    raise SaturdayRecruitingError("No prior configured plant workday")
+    try:
+        prior = optional_workday.previous_normal_workday(
+            day, work_weekdays, is_holiday=is_holiday
+        )
+    except optional_workday.NoNormalWorkday:
+        raise SaturdayRecruitingError(
+            "No prior configured plant workday"
+        ) from None
+    return datetime.combine(prior, shift_start_for(prior), tzinfo=SITE_TZ)
 
 
 def format_deadline(value: datetime) -> str:

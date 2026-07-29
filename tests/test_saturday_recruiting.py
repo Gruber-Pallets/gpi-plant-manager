@@ -29,6 +29,48 @@ def test_deadline_skips_nonworking_friday():
     ) == datetime(2026, 7, 23, 6, 30, tzinfo=SITE_TZ)
 
 
+def test_black_friday_deadline_skips_thanksgiving():
+    black_friday = date(2026, 11, 27)
+    thanksgiving = date(2026, 11, 26)
+    starts = {date(2026, 11, 25): time(7, 0)}
+
+    assert sr.response_deadline(
+        black_friday,
+        frozenset(range(5)),
+        starts.__getitem__,
+        is_holiday=lambda day: day in {thanksgiving, black_friday},
+    ) == datetime(2026, 11, 25, 7, 0, tzinfo=SITE_TZ)
+
+
+def test_deadline_searches_past_consecutive_holidays():
+    friday = date(2026, 12, 25)
+    holidays = {
+        date(2026, 12, 23),
+        date(2026, 12, 24),
+        friday,
+    }
+    starts = {date(2026, 12, 22): time(6, 30)}
+
+    assert sr.response_deadline(
+        friday,
+        frozenset(range(5)),
+        starts.__getitem__,
+        is_holiday=holidays.__contains__,
+    ) == datetime(2026, 12, 22, 6, 30, tzinfo=SITE_TZ)
+
+
+def test_deadline_search_retains_fourteen_day_bound():
+    holiday = date(2026, 12, 25)
+
+    with pytest.raises(sr.SaturdayRecruitingError):
+        sr.response_deadline(
+            holiday,
+            frozenset(),
+            lambda _day: time(7),
+            is_holiday=lambda day: day == holiday,
+        )
+
+
 @pytest.mark.parametrize(
     ("start", "end"),
     [

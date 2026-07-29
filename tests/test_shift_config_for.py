@@ -3,7 +3,7 @@ from datetime import date, datetime, time
 
 import pytest
 
-from zira_dashboard import shift_config, staffing
+from zira_dashboard import optional_workday, shift_config, staffing
 
 # shift_config.shift_start_for() calls into the schedule_store which
 # does a DB read for the global default. Tests need a live Postgres
@@ -192,6 +192,29 @@ def test_is_workday_false_for_unpublished_saturday(monkeypatch):
     monkeypatch.setattr(shift_config, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
     saturday = date(2026, 5, 23)
     assert shift_config.is_workday(saturday) is False
+
+
+def test_weekday_holiday_is_closed_even_with_posted_weekday_schedule(monkeypatch):
+    day = date(2026, 11, 27)
+    holiday = optional_workday.OptionalWorkday(
+        day, "holiday", "Black Friday", 42
+    )
+    monkeypatch.setattr(optional_workday, "for_day", lambda _day: holiday)
+    monkeypatch.setattr(
+        optional_workday,
+        "holiday_is_explicitly_published",
+        lambda _day: False,
+    )
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda d: staffing.Schedule(day=d, published=True, assignments={}),
+    )
+    monkeypatch.setattr(
+        shift_config, "work_weekdays", lambda: frozenset(range(5))
+    )
+
+    assert shift_config.is_workday(day) is False
 
 
 def test_in_shift_on_honors_published_schedule_on_saturday(monkeypatch):

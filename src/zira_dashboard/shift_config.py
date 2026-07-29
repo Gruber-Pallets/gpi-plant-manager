@@ -79,11 +79,9 @@ def _saturday_default():
 def is_workday(day: date) -> bool:
     """True if `day` should be treated as a workday.
 
-    A day counts as a workday if either:
-      (a) its weekday is in the global `work_weekdays()` set, OR
-      (b) a PUBLISHED schedule exists for that day — the explicit signal
-          that an otherwise non-standard weekday (e.g. Saturday) is being
-          worked.
+    Mirrored holidays are closed unless their matching recruiting lifecycle
+    and schedule are both published. Otherwise, configured weekdays remain
+    active and a published schedule keeps the legacy Saturday escape hatch.
 
     Shared by every "is this in shift?" gate (shift_elapsed_minutes,
     in_shift_on, progress_buckets, admin backfill) so the published-Saturday
@@ -91,6 +89,14 @@ def is_workday(day: date) -> bool:
     caused the recycling VS dashboard to show empty progress reports and
     100% uptime on Saturdays before this helper existed.
     """
+    from . import optional_workday
+
+    optional = optional_workday.for_day(day)
+    if optional is not None and optional.kind == "holiday":
+        try:
+            return optional_workday.holiday_is_explicitly_published(day)
+        except Exception:
+            return False
     if day.weekday() in work_weekdays():
         return True
     try:
@@ -101,18 +107,18 @@ def is_workday(day: date) -> bool:
         return False
 
 
-def _use_saturday_default(day: date, *, published_only: bool) -> bool:
-    """Whether `day` resolves from the Saturday default (vs the weekday
-    global schedule), assuming no per-day override applies.
+def _use_optional_default(day: date, *, published_only: bool) -> bool:
+    """Whether `day` resolves from the Saturday default schedule.
 
-    Gated callers (dashboards, punch path) use it only when the Saturday is
-    actually being worked — is_workday(day), which for a non-work weekday
-    means a published schedule exists. So an unpublished Saturday behaves
-    exactly as today (weekday global), staying inert. The scheduler's
-    configured view always shows the Saturday default on a Saturday, so a
-    fresh Saturday pre-fills 6a-12p before anything is published.
+    The editor proposes Saturday hours for Saturdays and holidays even while
+    closed. Operational callers use them only when the date is a workday.
     """
-    if day.weekday() != SATURDAY:
+    from . import optional_workday
+
+    optional = optional_workday.for_day(day)
+    if day.weekday() != SATURDAY and not (
+        optional is not None and optional.kind == "holiday"
+    ):
         return False
     if not published_only:
         return True
@@ -126,7 +132,7 @@ def _resolve_start(day: date, *, published_only: bool) -> time:
             return time.fromisoformat(ch["start"])
         except ValueError:
             pass
-    if _use_saturday_default(day, published_only=published_only):
+    if _use_optional_default(day, published_only=published_only):
         return _saturday_default().shift_start
     return shift_start()
 
@@ -138,7 +144,7 @@ def _resolve_end(day: date, *, published_only: bool) -> time:
             return time.fromisoformat(ch["end"])
         except ValueError:
             pass
-    if _use_saturday_default(day, published_only=published_only):
+    if _use_optional_default(day, published_only=published_only):
         return _saturday_default().shift_end
     return shift_end()
 
@@ -159,7 +165,7 @@ def _resolve_breaks(day: date, *, published_only: bool) -> tuple:
             name = str(b.get("name") or "Break")
             out.append(Break(bs, be, name))
         return tuple(out)
-    if _use_saturday_default(day, published_only=published_only):
+    if _use_optional_default(day, published_only=published_only):
         return _saturday_default().breaks
     return breaks()
 
@@ -201,7 +207,12 @@ def scheduler_hours_source(day: date, has_per_day_override: bool) -> str:
     'weekday_default'. Drives the Hours-pill styling + banner."""
     if has_per_day_override:
         return "custom"
-    if day.weekday() == SATURDAY:
+    from . import optional_workday
+
+    optional = optional_workday.for_day(day)
+    if day.weekday() == SATURDAY or (
+        optional is not None and optional.kind == "holiday"
+    ):
         return "saturday_default"
     return "weekday_default"
 

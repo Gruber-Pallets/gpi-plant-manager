@@ -1,13 +1,23 @@
 """Saturday-default resolution in shift_config. Fully stubbed — no DB."""
 from datetime import date, datetime, time
 import pytest
-from zira_dashboard import shift_config, staffing, schedule_store, saturday_schedule_store
+from zira_dashboard import (
+    optional_workday,
+    schedule_store,
+    shift_config,
+    staffing,
+    saturday_schedule_store,
+)
 from zira_dashboard.saturday_schedule_store import SaturdaySchedule
 from zira_dashboard.schedule_store import Break
 from zira_dashboard.shift_config import SITE_TZ
 
 SAT = date(2026, 5, 16)   # Saturday (weekday 5)
 TUE = date(2026, 5, 19)   # Tuesday (weekday 1)
+HOLIDAY_DAY = date(2026, 11, 27)  # Friday
+HOLIDAY = optional_workday.OptionalWorkday(
+    HOLIDAY_DAY, "holiday", "Black Friday", 42
+)
 
 SAT_DEFAULT = SaturdaySchedule(
     time(6, 0), time(12, 0),
@@ -105,3 +115,82 @@ def test_scheduler_hours_source():
     assert shift_config.scheduler_hours_source(TUE, False) == "weekday_default"
     assert shift_config.scheduler_hours_source(SAT, True) == "custom"
     assert shift_config.scheduler_hours_source(TUE, True) == "custom"
+
+
+def _holiday(monkeypatch, *, operational):
+    monkeypatch.setattr(
+        optional_workday,
+        "for_day",
+        lambda day: HOLIDAY if day == HOLIDAY_DAY else None,
+    )
+    monkeypatch.setattr(
+        optional_workday,
+        "holiday_is_explicitly_published",
+        lambda day: operational and day == HOLIDAY_DAY,
+    )
+
+
+def test_worked_holiday_uses_saturday_default_hours_and_breaks(monkeypatch):
+    _holiday(monkeypatch, operational=True)
+    monkeypatch.setattr(staffing, "load_schedule", _load(True))
+
+    assert shift_config.is_workday(HOLIDAY_DAY) is True
+    assert shift_config.shift_start_for(HOLIDAY_DAY) == time(6, 0)
+    assert shift_config.shift_end_for(HOLIDAY_DAY) == time(12, 0)
+    assert shift_config.breaks_for(HOLIDAY_DAY) == SAT_DEFAULT.breaks
+
+
+def test_closed_holiday_editor_proposes_saturday_default(monkeypatch):
+    _holiday(monkeypatch, operational=False)
+    monkeypatch.setattr(staffing, "load_schedule", _load(False))
+
+    assert shift_config.is_workday(HOLIDAY_DAY) is False
+    assert shift_config.configured_shift_start_for(HOLIDAY_DAY) == time(6, 0)
+    assert shift_config.configured_shift_end_for(HOLIDAY_DAY) == time(12, 0)
+    assert shift_config.configured_breaks_for(HOLIDAY_DAY) == SAT_DEFAULT.breaks
+    assert (
+        shift_config.scheduler_hours_source(HOLIDAY_DAY, False)
+        == "saturday_default"
+    )
+
+
+def test_holiday_custom_hours_win_over_saturday_default(monkeypatch):
+    _holiday(monkeypatch, operational=True)
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        _load(
+            True,
+            {
+                "start": "08:00",
+                "end": "13:30",
+                "breaks": [
+                    {
+                        "start": "10:00",
+                        "end": "10:30",
+                        "name": "Break",
+                    }
+                ],
+            },
+        ),
+    )
+
+    assert shift_config.shift_start_for(HOLIDAY_DAY) == time(8, 0)
+    assert shift_config.shift_end_for(HOLIDAY_DAY) == time(13, 30)
+    assert shift_config.breaks_for(HOLIDAY_DAY) == (
+        Break(time(10, 0), time(10, 30), "Break"),
+    )
+
+
+def test_holiday_precedence_closes_posted_weekday_schedule(monkeypatch):
+    _holiday(monkeypatch, operational=False)
+    monkeypatch.setattr(staffing, "load_schedule", _load(True))
+
+    assert shift_config.is_workday(HOLIDAY_DAY) is False
+
+
+def test_legacy_published_saturday_remains_active(monkeypatch):
+    monkeypatch.setattr(optional_workday, "for_day", lambda _day: None)
+    monkeypatch.setattr(staffing, "load_schedule", _load(True))
+
+    assert shift_config.is_workday(SAT) is True
