@@ -39,6 +39,7 @@ _NEW_LEADERBOARD_SEED = (
     "vs_new_leaderboard",
     None,
 )
+_DEFAULT_WORK_CENTER_SEED_MARKER = "tv_displays:seed_default_work_center_displays_v1"
 
 
 # (name, kind, wc_name) — order matters for sort_order assignment at seed.
@@ -47,7 +48,7 @@ _SEED_LIST = [
     ("New",       "vs_new",        None),
     _RECYCLING_LEADERBOARD_SEED,
     _NEW_LEADERBOARD_SEED,
-    ("Junior 2",     "wc",            "Junior 2"),
+    ("Junior #2",    "wc",            "Junior #2"),
     ("Repair 1",     "wc",            "Repair 1"),
     ("Repair 2",     "wc",            "Repair 2"),
     ("Repair 3",     "wc",            "Repair 3"),
@@ -56,6 +57,8 @@ _SEED_LIST = [
     ("Dismantler 3", "wc",            "Dismantler 3"),
     ("Dismantler 4", "wc",            "Dismantler 4"),
 ]
+_DEFAULT_WORK_CENTER_SEEDS = tuple(seed for seed in _SEED_LIST if seed[1] == "wc")
+_LEGACY_WORK_CENTER_SEED_RENAMES = (("Junior 2", "Junior #2"),)
 
 
 def _unique_slug(base: str, *, exclude_id: int | None = None) -> str:
@@ -166,10 +169,15 @@ def seed_defaults_if_empty() -> None:
     from . import app_settings, db, staffing
     existing = db.query("SELECT 1 FROM tv_displays LIMIT 1")
     if existing:
+        _backfill_default_work_center_displays()
         _backfill_recycling_leaderboard_seed()
         _backfill_new_leaderboard_seed()
         return
     valid_wc_names = {loc.name for loc in staffing.LOCATIONS}
+    missing_default_work_centers = {
+        wc_name for _name, _kind, wc_name in _DEFAULT_WORK_CENTER_SEEDS
+        if wc_name not in valid_wc_names
+    }
     inserted = 0
     for idx, (name, kind, wc_name) in enumerate(_SEED_LIST):
         if kind == "wc" and wc_name not in valid_wc_names:
@@ -186,7 +194,72 @@ def seed_defaults_if_empty() -> None:
         inserted += 1
     app_settings.set_setting(_RECYCLING_LEADERBOARD_SEED_MARKER, {"done": True})
     app_settings.set_setting(_NEW_LEADERBOARD_SEED_MARKER, {"done": True})
+    if not missing_default_work_centers:
+        app_settings.set_setting(_DEFAULT_WORK_CENTER_SEED_MARKER, {"done": True})
     _log.info("tv_displays seeded %d default rows", inserted)
+
+
+def _backfill_default_work_center_displays() -> None:
+    """Add missing original work-center displays once on existing installs."""
+    from . import app_settings, db, staffing
+
+    if app_settings.get_setting(_DEFAULT_WORK_CENTER_SEED_MARKER):
+        return
+    valid_wc_names = {loc.name for loc in staffing.LOCATIONS}
+    missing_default_work_centers = {
+        wc_name for _name, _kind, wc_name in _DEFAULT_WORK_CENTER_SEEDS
+        if wc_name not in valid_wc_names
+    }
+    if missing_default_work_centers:
+        _log.warning(
+            "tv_displays backfill waiting for missing work centers: %s",
+            ", ".join(sorted(missing_default_work_centers)),
+        )
+        return
+    rows = db.query("SELECT id, name, slug, kind, wc_name FROM tv_displays")
+    for old_name, new_name in _LEGACY_WORK_CENTER_SEED_RENAMES:
+        old_slug = slug_for_wc(old_name)
+        for row in rows:
+            if (
+                row["name"] == old_name
+                and row["slug"] == old_slug
+                and row["kind"] == "wc"
+                and row["wc_name"] == old_name
+            ):
+                db.execute(
+                    "UPDATE tv_displays SET name = %s, wc_name = %s, updated_at = now() "
+                    "WHERE id = %s AND name = %s AND slug = %s AND kind = %s "
+                    "AND wc_name = %s",
+                    (
+                        new_name,
+                        new_name,
+                        row["id"],
+                        old_name,
+                        old_slug,
+                        "wc",
+                        old_name,
+                    ),
+                )
+    existing_slugs = {row["slug"] for row in rows}
+    sort_rows = db.query(
+        "SELECT COALESCE(MAX(sort_order), -1) AS sort_order FROM tv_displays"
+    )
+    sort_order = int(sort_rows[0]["sort_order"]) + 1 if sort_rows else 0
+    inserted = 0
+    for name, _kind, wc_name in _DEFAULT_WORK_CENTER_SEEDS:
+        slug = slug_for_wc(name)
+        if slug in existing_slugs:
+            continue
+        slug = _unique_slug(slug)
+        db.execute(
+            "INSERT INTO tv_displays (name, slug, kind, wc_name, theme, sort_order) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (name, slug, _kind, wc_name, "dark", sort_order),
+        )
+        sort_order += 1
+        inserted += 1
+    app_settings.set_setting(_DEFAULT_WORK_CENTER_SEED_MARKER, {"done": True})
+    _log.info("tv_displays backfilled %d default work-center rows", inserted)
 
 
 def _backfill_dashboard_seed(marker: str, seed: tuple[str, str, str | None]) -> None:

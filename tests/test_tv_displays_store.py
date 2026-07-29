@@ -132,7 +132,7 @@ def test_seed_defaults_if_empty_seeds_when_empty(monkeypatch):
         def __init__(self, name): self.name = name
 
     monkeypatch.setattr(staffing, "LOCATIONS", [
-        _Loc("Junior 2"), _Loc("Repair 1"), _Loc("Repair 2"), _Loc("Repair 3"),
+        _Loc("Junior #2"), _Loc("Repair 1"), _Loc("Repair 2"), _Loc("Repair 3"),
         _Loc("Dismantler 1"), _Loc("Dismantler 2"), _Loc("Dismantler 3"), _Loc("Dismantler 4"),
     ])
     db.execute("DELETE FROM tv_displays")
@@ -179,6 +179,6 @@ def test_seed_defaults_skips_missing_wc(monkeypatch, caplog):
     assert "Recycling-leaderboard" in names
     assert "New-Leaderboard" in names
     assert "Repair 1" in names
-    assert "Junior 2" not in names
+    assert "Junior #2" not in names
     assert "Dismantler 1" not in names
     assert len(rows) == 5
