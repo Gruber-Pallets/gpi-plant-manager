@@ -78,6 +78,106 @@ class _RouteTransaction:
 
 
 # --------------------------------------------------------------------------- #
+# POST /api/rotations/validate-current
+# --------------------------------------------------------------------------- #
+
+
+def test_live_validation_endpoint_uses_the_submitted_current_view_without_saving(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_configured_center_capacities",
+        lambda centers, strict=False: {center: 2 for center in centers},
+    )
+    monkeypatch.setattr(rotations.staffing_route, "current_view_validation_for_day", lambda **kwargs: [
+        {
+            "code": "no_safe_complete_crew",
+            "message": "Trim Saw 1 cannot form a safe complete crew.",
+            "person": None,
+            "centers": ["Trim Saw 1"],
+            "rejections": [],
+        },
+    ])
+    monkeypatch.setattr(
+        rotations.staffing,
+        "save_schedule",
+        lambda *_args, **_kwargs: pytest.fail("validation must not save"),
+    )
+
+    response = client.post("/api/rotations/validate-current", json={
+        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Trim Saw 1"],
+        "assignments": {"Trim Saw 1": ["Level Two", "Level One"]},
+    })
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "issues": [
+        {
+            "code": "no_safe_complete_crew",
+            "message": "Trim Saw 1 cannot form a safe complete crew.",
+            "person": None,
+            "centers": ["Trim Saw 1"],
+            "rejections": [],
+        },
+    ]}
+
+
+def test_live_validation_endpoint_rejects_unknown_center_and_duplicate_names(monkeypatch):
+    client, _rotations = _rotations_client(monkeypatch)
+
+    response = client.post("/api/rotations/validate-current", json={
+        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Missing Center"],
+        "assignments": {"Repair 1": ["Alex", "Alex"]},
+    })
+
+    assert response.status_code == 422
+    assert response.json()["ok"] is False
+
+
+def test_current_view_validation_uses_the_visible_safe_trim_saw_crew(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
+        _person("Green", 3, "Trim Saw"),
+        _person("Level One", 1, "Trim Saw"),
+    ])
+    monkeypatch.setattr(
+        staffing_route.scheduler_time_off,
+        "time_off_entries_for_day",
+        lambda _day: [],
+    )
+    monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({}, {}, {}))
+    monkeypatch.setattr(
+        staffing_route,
+        "_effective_minimum",
+        lambda loc: 2 if loc.name == "Trim Saw 1" else loc.min_ops,
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "_configured_center_capacities",
+        lambda centers, strict=False: {center: 2 for center in centers},
+    )
+    monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda _day: [])
+    monkeypatch.setattr(
+        staffing_route.rotation_suggestions,
+        "suggest_recycled_assignments",
+        lambda **_kwargs: pytest.fail("current-view validation must not use an Auto proposal"),
+    )
+    monkeypatch.setattr(
+        staffing_route.rotation_training,
+        "reconcile_blocks",
+        lambda *_args, **_kwargs: pytest.fail("current-view validation must not reconcile training"),
+    )
+
+    issues = staffing_route.current_view_validation_for_day(
+        day=TARGET_DAY,
+        assignments={"Trim Saw 1": ["Green", "Level One"]},
+        enabled_work_centers=["Trim Saw 1"],
+    )
+
+    assert not any(issue["code"] == "no_safe_complete_crew" for issue in issues)
+
+
+# --------------------------------------------------------------------------- #
 # POST /api/rotations/preferences
 # --------------------------------------------------------------------------- #
 
@@ -478,6 +578,7 @@ def _stub_recommendation_inputs(monkeypatch):
         ),
     )
     monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda as_of: [])
+    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(staffing_route.app_settings, "get_setting", lambda key: ["Repair 1"])
     monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda d: [])
     monkeypatch.setattr(staffing_route, "_safe_time_off_entries", lambda d: [])
@@ -1355,8 +1456,11 @@ def test_recycled_context_reports_invalid_minimum_above_maximum(monkeypatch):
         work_weekdays=frozenset({0, 1, 2, 3, 4}),
     )
 
-    assert context["rotation_issues"][0]["code"] == "invalid_center_configuration"
-    assert "minimum of 2 but a maximum of 1" in context["rotation_issues"][0]["message"]
+    invalid_configuration = next(
+        issue for issue in context["rotation_issues"]
+        if issue["code"] == "invalid_center_configuration"
+    )
+    assert "minimum of 2 but a maximum of 1" in invalid_configuration["message"]
 
 
 def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage(
@@ -1376,6 +1480,9 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
             staffing.required_skills_for(loc)
         ),
     )
+    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
+        _person("Qualified", 3),
+    ])
     monkeypatch.setattr(
         rotation_suggestions,
         "suggest_recycled_assignments",
@@ -1416,7 +1523,7 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
     )
 
     assert context["rotation_issues"] == []
-    assert context["rotation_warnings"] == ["Keep this training warning."]
+    assert context["rotation_warnings"] == []
 
 
 def test_page_placement_issues_hide_only_disabled_defaults_on_off_saturday():
@@ -1459,7 +1566,7 @@ def test_page_placement_issues_keep_disabled_defaults_on_working_days(
     ) == (issue,)
 
 
-def test_recycled_context_defers_current_minimum_shortage_until_an_action(monkeypatch):
+def test_recycled_context_uses_current_validation_when_auto_preview_is_unavailable(monkeypatch):
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     monkeypatch.setattr(
         staffing_route,
@@ -1473,6 +1580,9 @@ def test_recycled_context_defers_current_minimum_shortage_until_an_action(monkey
             staffing.required_skills_for(loc)
         ),
     )
+    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
+        _person("Qualified", 3),
+    ])
 
     def preview_unavailable(**_kwargs):
         raise RuntimeError("preview unavailable")
@@ -1496,7 +1606,9 @@ def test_recycled_context_defers_current_minimum_shortage_until_an_action(monkey
         work_weekdays=frozenset({0, 1, 2, 3, 4}),
     )
 
-    assert context["rotation_issues"] == []
+    assert {issue["code"] for issue in context["rotation_issues"]} == {
+        "center_minimum_unmet", "person_unplaced",
+    }
 
 
 
@@ -2700,6 +2812,9 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
         ),
     )
     monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda as_of: [])
+    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
+        _person("Green", 3),
+    ])
     monkeypatch.setattr(staffing_route.app_settings, "get_setting", lambda key: ["Repair 1"])
     monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
 
@@ -2752,6 +2867,7 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
     ctx = staffing_route._recycled_context_for_day(
         TARGET_DAY, roster=[_person("Green", 3)], mode="training",
         base_assignments={}, locked_assignments={}, time_off_entries=[],
+        current_assignments={"Repair 1": ["Green"]},
         work_weekdays=frozenset({0, 1, 2, 3, 4}),
     )
 
@@ -2774,7 +2890,7 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
             "detail": "Needs Dismantler training before assignment.",
         }],
     }]
-    assert "Trim Saw 1 short" in ctx["rotation_warnings"]
+    assert ctx["rotation_warnings"] == []
     assert len(ctx["active_training_blocks"]) == 1
     tb = ctx["active_training_blocks"][0]
     assert tb["trainee"] == "Learner"

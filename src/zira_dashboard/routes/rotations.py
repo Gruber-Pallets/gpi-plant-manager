@@ -235,6 +235,92 @@ async def _json_body(request: Request):
     return body if isinstance(body, dict) else None
 
 
+def _parse_current_validation_snapshot(
+    body: Mapping[str, object],
+) -> tuple[date, dict[str, list[str]], list[str]]:
+    """Parse a complete, read-only snapshot of the staffing view.
+
+    This deliberately validates the browser's view without normalizing away
+    malformed values. The endpoint can therefore report a bad snapshot before
+    it reaches any schedule or training write path.
+    """
+    day_raw = body.get("day")
+    if not isinstance(day_raw, str):
+        raise ValueError("day must be an ISO date.")
+    try:
+        day = date.fromisoformat(day_raw)
+    except ValueError as exc:
+        raise ValueError("day must be an ISO date.") from exc
+    if day_raw != day.isoformat():
+        raise ValueError("day must be an ISO date.")
+
+    enabled_raw = body.get("enabled_work_centers")
+    assignments_raw = body.get("assignments")
+    if not isinstance(enabled_raw, list):
+        raise ValueError("enabled_work_centers must be a list.")
+    if not isinstance(assignments_raw, Mapping):
+        raise ValueError("assignments must be an object.")
+
+    known = staffing_route._known_work_center_names()
+    enabled: list[str] = []
+    for center in enabled_raw:
+        if not isinstance(center, str) or center not in known:
+            raise ValueError("enabled_work_centers contains an unknown work center.")
+        if center in enabled:
+            raise ValueError("enabled_work_centers must not contain duplicates.")
+        enabled.append(center)
+
+    assignments: dict[str, list[str]] = {}
+    for center, raw_names in assignments_raw.items():
+        if not isinstance(center, str) or center not in known:
+            raise ValueError("assignments contains an unknown work center.")
+        if not isinstance(raw_names, list):
+            raise ValueError(f"assignments for {center} must be a list.")
+        names: list[str] = []
+        for raw_name in raw_names:
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                raise ValueError(f"assignments for {center} must contain non-empty names.")
+            name = raw_name.strip()
+            if name in names:
+                raise ValueError(f"assignments for {center} must not contain duplicate names.")
+            names.append(name)
+        assignments[center] = names
+
+    capacities = staffing_route._configured_center_capacities(
+        assignments.keys(), strict=True,
+    )
+    for center, names in assignments.items():
+        maximum = capacities.get(center)
+        if maximum is not None and len(names) > maximum:
+            raise ValueError(
+                f"assignments for {center} exceed its maximum of {maximum}."
+            )
+    return day, assignments, enabled
+
+
+@router.post("/api/rotations/validate-current")
+async def validate_current_rotation_view(request: Request):
+    body = await _json_body(request)
+    if body is None:
+        return _error("Invalid JSON body.", 400)
+    try:
+        day, assignments, enabled = _parse_current_validation_snapshot(body)
+    except ValueError as exc:
+        return _error(str(exc))
+
+    def _work():
+        return JSONResponse({
+            "ok": True,
+            "issues": staffing_route.current_view_validation_for_day(
+                day=day,
+                assignments=assignments,
+                enabled_work_centers=enabled,
+            ),
+        })
+
+    return await asyncio.to_thread(_work)
+
+
 def _person_id_by_name(name: str) -> int | None:
     # Assumes names are unique among active, non-excluded people — the same
     # name-keyed assumption the whole rotation engine (and roster) rely on. If

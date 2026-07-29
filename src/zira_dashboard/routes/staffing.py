@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import _http_cache, app_settings, attendance, auto_schedule_capacity, db, late_report, rotation_store, rotation_suggestions, rotation_training, saturday_recruiting as sr, saturday_recruiting_store, schedule_solver, schedule_store, scheduler_time_off, shift_config, staffing, staffing_view, time_format, time_off_sync, work_centers_store
+from .. import _http_cache, app_settings, attendance, auto_schedule_capacity, current_schedule_validation, db, late_report, rotation_store, rotation_suggestions, rotation_training, saturday_recruiting as sr, saturday_recruiting_store, schedule_solver, schedule_store, scheduler_time_off, shift_config, staffing, staffing_view, time_format, time_off_sync, work_centers_store
 from .._http_cache import invalidate_today_cache
 from ..deps import templates
 from ..plant_day import today as plant_today, now as plant_now
@@ -625,6 +625,69 @@ def _block_effects_for_day(d: date, time_off_entries, *, assignments=None, assig
     return effects
 
 
+def _current_training_trainees_by_center(day: date, assignments) -> dict[str, tuple[str, ...]]:
+    """Project today's active training blocks without changing their lifecycle.
+
+    The validator needs only the trainees whose active blocks reserve an exact
+    work center today. Existing on-screen assignments are passed to the effect
+    as manual picks, preserving its established conflict behaviour while
+    keeping this read path free of block reconciliation.
+    """
+    manual_assignees = {
+        str(name).strip()
+        for names in (assignments or {}).values()
+        for name in (names or ())
+        if str(name or "").strip()
+    }
+    trainees_by_center: dict[str, set[str]] = {}
+    for block in rotation_store.active_blocks_for_day(day):
+        effect = rotation_training.effect_for_day(
+            block,
+            day,
+            absence_by_day=_absence_by_day_for_block(block, day),
+            manual_assignees=manual_assignees,
+        )
+        for center, names in effect.locked_work_centers.items():
+            trainees_by_center.setdefault(center, set()).update(names)
+    return {
+        center: tuple(sorted(names, key=str.lower))
+        for center, names in trainees_by_center.items()
+    }
+
+
+def current_view_validation_for_day(*, day, assignments, enabled_work_centers) -> list[dict[str, object]]:
+    """Validate the exact staffing assignments currently visible to the user."""
+    enabled = _ordered_work_center_names(enabled_work_centers)
+    roster = staffing.load_roster()
+    time_off_entries = scheduler_time_off.time_off_entries_for_day(day)
+    exact_defaults, group_defaults, user_group_centers = _default_inputs(strict=True)
+    group_locations, group_required_skills = _auto_group_maps(set(enabled))
+    required_skills = {
+        center: group_required_skills[group]
+        for group, centers in group_locations.items()
+        for center in centers
+    }
+    issues = current_schedule_validation.validate_current_assignments(
+        roster=roster,
+        assignments=assignments,
+        enabled_centers=enabled,
+        locations=staffing.LOCATIONS,
+        minimums={
+            loc.name: _effective_minimum(loc)
+            for loc in staffing.LOCATIONS if loc.name in enabled
+        },
+        capacities=_configured_center_capacities(enabled, strict=True),
+        required_skills=required_skills,
+        full_day_off_names=rotation_suggestions._full_day_time_off_names(time_off_entries),
+        trim_saw_centers=set(group_locations.get(rotation_suggestions.TRIM_SAW_SKILL, ())),
+        training_trainees_by_center=_current_training_trainees_by_center(day, assignments),
+        exact_defaults=exact_defaults,
+        group_defaults=group_defaults,
+        user_group_centers=user_group_centers,
+    )
+    return [issue.to_dict() for issue in issues]
+
+
 def _gather_recycled_inputs(
     d: date,
     time_off_entries,
@@ -806,9 +869,10 @@ def _recycled_context_for_day(
 ):
     """Recycled template context: mode, per-assignment reasons, warnings, blocks.
 
-    Passive page context defers minimum coverage warnings until an explicit
-    scheduling or publish action. Recommendation-data failures retain safe
-    empty preview defaults so the staffing page never 500s.
+    Initial warnings validate the schedule currently on screen, independently
+    of the Auto-preview used for assignment reasons. Recommendation-data
+    failures retain safe empty preview defaults so the staffing page never
+    500s, while current-schedule validation can still report its result.
     """
     ctx = {
         "recycled_rotation_mode": mode or "normal",
@@ -876,35 +940,24 @@ def _recycled_context_for_day(
         ctx["rotation_reason_codes"] = {
             wc: dict(values) for wc, values in suggestion.reason_codes.items()
         }
-        action_only_codes = {"person_unplaced", "center_minimum_unmet"}
-        action_only_messages = {
-            issue.message
-            for issue in suggestion.placement_issues
-            if issue.code in action_only_codes
-        }
-        page_placement_issues = tuple(
-            issue
-            for issue in suggestion.placement_issues
-            if issue.code not in action_only_codes
-        )
-        page_placement_issues = _page_placement_issues_for_day(
-            d, work_weekdays, page_placement_issues,
-        )
-        ctx["rotation_warnings"] = [
-            warning
-            for warning in suggestion.warnings
-            if warning not in action_only_messages
-        ]
         ctx["rotation_issues"].extend(
             issue.to_dict()
-            for issue in (
-                *suggestion.issues,
-                *page_placement_issues,
-            )
+            for issue in suggestion.issues
         )
         ctx["active_training_blocks"] = _training_blocks_context(active_blocks, d)
     except Exception:
         log.exception("Recycled context failed for %s; degrading to empty defaults", d)
+
+    try:
+        visible_issues = current_view_validation_for_day(
+            day=d,
+            assignments=current_assignments if current_assignments is not None else {},
+            enabled_work_centers=enabled,
+        )
+        ctx["rotation_warnings"] = [issue["message"] for issue in visible_issues]
+        ctx["rotation_issues"].extend(visible_issues)
+    except Exception:
+        log.exception("Current staffing validation failed for %s; degrading to empty defaults", d)
     return ctx
 
 
