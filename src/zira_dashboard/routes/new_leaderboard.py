@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
-from .. import awards, production_history, production_metrics, shift_config, staffing
+from .. import awards, goat_categories, production_history, production_metrics, shift_config, staffing
 from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
 from ..deps import templates
 from ..plant_day import today as plant_today
@@ -14,10 +14,9 @@ from ..plant_day import today as plant_today
 router = APIRouter()
 _log = logging.getLogger(__name__)
 
-_FAMILY_SKILLS = (
-    ("Juniors", "Junior", "Junior GOAT"),
-    ("Woodpecker", "Woodpecker", "Woodpecker GOAT"),
-    ("Hand Build", "Hand Build", "Hand Build GOAT"),
+_FAMILY_SKILLS = tuple(
+    (category.label, category.skill, category.leaderboard_label)
+    for category in goat_categories.new_categories()
 )
 
 

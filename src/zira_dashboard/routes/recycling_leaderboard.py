@@ -5,15 +5,15 @@ from datetime import date
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
-from .. import awards, production_history, production_metrics, shift_config, staffing
+from .. import awards, goat_categories, production_history, production_metrics, shift_config, staffing
 from ..deps import templates
 from ..plant_day import today as plant_today
 
 router = APIRouter()
 
-_CURRENT_GOAT_GROUPS = (
-    ("Dismantler GOAT", "Dismantlers"),
-    ("Repair GOAT", "Repairs"),
+_CURRENT_GOAT_GROUPS = tuple(
+    (category.leaderboard_label, category.label)
+    for category in goat_categories.recycling_categories()
 )
 
 

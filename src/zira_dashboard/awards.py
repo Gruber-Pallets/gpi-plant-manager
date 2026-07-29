@@ -135,7 +135,7 @@ _GOAT_TTL_SECONDS = 300  # 5 minutes
 _GOAT_CACHE: dict = {}   # {group_name: (value, expires_at)}
 
 
-def _goat_from_rows(rows: list[dict]) -> dict | None:
+def best_person_day(rows: list[dict]) -> dict | None:
     if not rows:
         return None
     top = sorted(rows, key=lambda row: (-row["units"], row["day"], row["name"]))[0]
@@ -163,7 +163,7 @@ def goat(group_name: str) -> dict | None:
     from datetime import datetime
     today = datetime.now(UTC).date()
     rows = person_days_in_group(group_name, AWARDS_DATA_FLOOR, today)
-    result = _goat_from_rows(rows)
+    result = best_person_day(rows)
     _GOAT_CACHE[group_name] = (result, now + _GOAT_TTL_SECONDS)
     return result
 
@@ -182,7 +182,7 @@ def goat_for_wc_names(
         today,
         records=records,
     )
-    live = _goat_from_rows(rows)
+    live = best_person_day(rows)
     return apply_overrides_single(
         live,
         scope="award_goat",
