@@ -13,6 +13,40 @@ def _ok_response(json_body):
     return r
 
 
+def test_post_message_posts_fallback_and_blocks(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    response = _ok_response({"ok": True, "channel": "C-MGMT", "ts": "1722280000.000100"})
+    seen = {}
+
+    def fake_post(url, **kwargs):
+        seen["url"] = url
+        seen.update(kwargs)
+        return response
+
+    monkeypatch.setattr(slack_client.requests, "post", fake_post)
+    result = slack_client.post_message(
+        channel_id="C-MGMT",
+        text="NEW REPAIRS GOAT: Jose O., 898 pallets.",
+        blocks=[{"type": "header", "text": {"type": "plain_text", "text": "🏆 NEW REPAIRS GOAT!"}}],
+    )
+
+    assert seen["url"] == "https://slack.com/api/chat.postMessage"
+    assert seen["headers"]["Authorization"] == "Bearer xoxb-test"
+    assert seen["json"]["channel"] == "C-MGMT"
+    assert seen["json"]["text"].startswith("NEW REPAIRS GOAT")
+    assert seen["json"]["blocks"][0]["type"] == "header"
+    assert seen["json"]["unfurl_links"] is False
+    assert result == {"message_ts": "1722280000.000100"}
+
+
+def test_post_message_wraps_api_error(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(slack_client.requests, "post", lambda *args, **kwargs: _ok_response({"ok": False, "error": "not_in_channel"}))
+
+    with pytest.raises(slack_client.SlackError, match="not_in_channel"):
+        slack_client.post_message(channel_id="C-MGMT", text="x", blocks=[])
+
+
 def test_upload_pdf_missing_token_raises(monkeypatch):
     monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
     with pytest.raises(slack_client.SlackError, match="not configured"):
