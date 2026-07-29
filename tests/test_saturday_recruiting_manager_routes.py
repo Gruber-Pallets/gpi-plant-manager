@@ -184,19 +184,28 @@ pytestmark_db = pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="n
 
 
 @pytestmark_db
-def test_full_cancel_unpublishes_and_clears_assignments_atomically(monkeypatch):
+def test_full_cancel_unpublishes_and_clears_assignments_atomically(monkeypatch, request):
     """A cancellation drops only the live publication/assignments, in one transaction."""
+    work_center_id = 910117
+    person_id = 910117
+
+    def clear_test_data():
+        db.execute("DELETE FROM saturday_recruitments WHERE day = %s", (SATURDAY,))
+        db.execute("DELETE FROM schedule_assignments WHERE day = %s", (SATURDAY,))
+        db.execute("DELETE FROM schedules WHERE day = %s", (SATURDAY,))
+        db.execute("DELETE FROM work_centers WHERE id = %s", (work_center_id,))
+        db.execute("DELETE FROM people WHERE id = %s", (person_id,))
+
     db.bootstrap_schema()
-    db.execute("DELETE FROM saturday_recruitments WHERE day = %s", (SATURDAY,))
-    db.execute("DELETE FROM schedule_assignments WHERE day = %s", (SATURDAY,))
-    db.execute("DELETE FROM schedules WHERE day = %s", (SATURDAY,))
+    clear_test_data()
+    request.addfinalizer(clear_test_data)
     db.execute(
         "INSERT INTO schedules (day, published, notes) VALUES (%s, TRUE, 'keep')",
         (SATURDAY,),
     )
-    db.execute("INSERT INTO work_centers (id, name, category) VALUES (910117, 'Cancel Test', 'Repair') ON CONFLICT (id) DO NOTHING")
-    db.execute("INSERT INTO people (id, name) VALUES (910117, 'Cancel Person') ON CONFLICT (id) DO NOTHING")
-    db.execute("INSERT INTO schedule_assignments (day, wc_id, person_id) VALUES (%s, 910117, 910117)", (SATURDAY,))
+    db.execute("INSERT INTO work_centers (id, name, category) VALUES (%s, 'Cancel Test', 'Repair') ON CONFLICT (id) DO NOTHING", (work_center_id,))
+    db.execute("INSERT INTO people (id, name) VALUES (%s, 'Cancel Person') ON CONFLICT (id) DO NOTHING", (person_id,))
+    db.execute("INSERT INTO schedule_assignments (day, wc_id, person_id) VALUES (%s, %s, %s)", (SATURDAY, work_center_id, person_id))
     db.execute(
         "INSERT INTO saturday_recruitments (day, status, shift_start, shift_end, response_deadline) "
         "VALUES (%s, 'published', '06:00', '12:00', %s)",
