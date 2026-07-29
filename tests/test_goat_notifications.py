@@ -51,15 +51,15 @@ def test_message_payload_keeps_previous_record_secondary():
 
 
 def test_drain_requeues_a_slack_error(monkeypatch):
-    delivery = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10), "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9"}
+    delivery = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10), "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9", "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d"}
     monkeypatch.setenv("GOAT_SLACK_CHANNEL_ID", "C-MGMT")
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: delivery)
     monkeypatch.setattr(goat_notifications.slack_client, "post_message", lambda **kwargs: (_ for _ in ()).throw(goat_notifications.slack_client.SlackError("not_in_channel")))
     seen = []
-    monkeypatch.setattr(goat_notifications.store, "return_delivery_to_pending", lambda delivery_id, error: seen.append((delivery_id, error)))
+    monkeypatch.setattr(goat_notifications.store, "return_delivery_to_pending", lambda delivery_id, claim_token, error: seen.append((delivery_id, claim_token, error)))
 
     assert goat_notifications.drain_deliveries() == 0
-    assert seen == [(7, "not_in_channel")]
+    assert seen == [(7, delivery["claim_token"], "not_in_channel")]
 
 
 def test_finalize_precomputes_then_creates_one_transactional_alert(monkeypatch):
@@ -82,6 +82,7 @@ def test_finalize_precomputes_then_creates_one_transactional_alert(monkeypatch):
 
     expected = {
         "achieved_day": completed_day,
+        "category_key": "repairs",
         "group_name": "Repairs",
         "person": "Jose O.",
         "wc_name": "Repair 3",
@@ -126,20 +127,20 @@ def test_finalize_does_not_announce_an_initial_record_without_a_prior_holder(mon
 
 
 def test_drain_marks_each_delivery_sent(monkeypatch):
-    first = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10), "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9"}
-    second = {**first, "id": 8, "person": "Ana", "client_msg_id": "80b7b976-b02b-4a31-a211-4c3c649e1bcf"}
+    first = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10), "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9", "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d"}
+    second = {**first, "id": 8, "person": "Ana", "client_msg_id": "80b7b976-b02b-4a31-a211-4c3c649e1bcf", "claim_token": "f3d5e049-37bd-4881-bcfb-43d41c28e5a9"}
     deliveries = iter([first, second, None])
     monkeypatch.setenv("GOAT_SLACK_CHANNEL_ID", "C-MGMT")
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: next(deliveries))
     posted = []
     monkeypatch.setattr(goat_notifications.slack_client, "post_message", lambda **kwargs: posted.append(kwargs) or {"message_ts": f"ts-{len(posted)}"})
     marked = []
-    monkeypatch.setattr(goat_notifications.store, "mark_delivery_sent", lambda delivery_id, message_ts: marked.append((delivery_id, message_ts)))
+    monkeypatch.setattr(goat_notifications.store, "mark_delivery_sent", lambda delivery_id, claim_token, message_ts: marked.append((delivery_id, claim_token, message_ts)))
 
     assert goat_notifications.drain_deliveries() == 2
     assert [post["channel_id"] for post in posted] == ["C-MGMT", "C-MGMT"]
     assert [post["client_msg_id"] for post in posted] == [first["client_msg_id"], second["client_msg_id"]]
-    assert marked == [(7, "ts-1"), (8, "ts-2")]
+    assert marked == [(7, first["claim_token"], "ts-1"), (8, second["claim_token"], "ts-2")]
 
 
 def test_drain_retries_with_the_same_persisted_client_message_id(monkeypatch):
@@ -154,9 +155,10 @@ def test_drain_retries_with_the_same_persisted_client_message_id(monkeypatch):
         "prior_record_units": 891,
         "prior_record_day": date(2026, 6, 10),
         "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9",
+        "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d",
     }
     monkeypatch.setenv("GOAT_SLACK_CHANNEL_ID", "C-MGMT")
-    claims = iter([delivery, delivery, None])
+    claims = iter([delivery, {**delivery, "claim_token": "f3d5e049-37bd-4881-bcfb-43d41c28e5a9"}, None])
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: next(claims))
     sent = []
 

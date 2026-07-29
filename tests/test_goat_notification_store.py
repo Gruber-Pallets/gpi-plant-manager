@@ -53,6 +53,7 @@ def _alert():
     marker = uuid4().hex
     return {
         "achieved_day": date(2099, 1, 2),
+        "category_key": f"pytest-goat-{marker}",
         "group_name": f"pytest-goat-{marker}",
         "person": f"pytest-goat-{marker}",
         "wc_name": f"pytest-goat-{marker}",
@@ -64,12 +65,17 @@ def _alert():
 
 
 def test_schema_defines_durable_goat_notification_tables():
+    assert "category_key        TEXT NOT NULL" in SCHEMA_DDL
+    assert "ALTER TABLE goat_alerts ADD COLUMN IF NOT EXISTS category_key TEXT" in SCHEMA_DDL
+    assert "ON goat_alerts (achieved_day, category_key) WHERE category_key IS NOT NULL" in SCHEMA_DDL
     assert "CREATE TABLE IF NOT EXISTS goat_notification_state" in SCHEMA_DDL
     assert "CREATE TABLE IF NOT EXISTS goat_notification_days" in SCHEMA_DDL
     assert "CREATE TABLE IF NOT EXISTS goat_slack_deliveries" in SCHEMA_DDL
     assert "goat_alert_id     INTEGER NOT NULL UNIQUE REFERENCES goat_alerts(id) ON DELETE CASCADE" in SCHEMA_DDL
     assert "client_msg_id     UUID NOT NULL" in SCHEMA_DDL
     assert "ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS client_msg_id UUID" in SCHEMA_DDL
+    assert "claim_token       UUID" in SCHEMA_DDL
+    assert "ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS claim_token UUID" in SCHEMA_DDL
     assert "idx_goat_slack_deliveries_claim" in SCHEMA_DDL
 
 
@@ -116,6 +122,35 @@ def test_alert_and_delivery_are_single_transactional_unit():
             ) == []
 
 
+@needs_postgres
+def test_changed_work_center_retry_creates_one_category_day_alert_and_delivery():
+    """A retry with revised source rows must not publish a second category GOAT."""
+    db.bootstrap_schema()
+    alert = _alert()
+    first_alert_id = None
+    retry_alert_id = None
+
+    try:
+        first_alert_id = store.insert_alert_and_delivery(alert)
+        retry_alert_id = store.insert_alert_and_delivery({**alert, "wc_name": "Repair 9"})
+
+        assert isinstance(first_alert_id, int)
+        assert retry_alert_id is None
+        rows = db.query(
+            "SELECT alert.id, delivery.id AS delivery_id FROM goat_alerts alert "
+            "JOIN goat_slack_deliveries delivery ON delivery.goat_alert_id = alert.id "
+            "WHERE alert.achieved_day = %s AND alert.category_key = %s",
+            (alert["achieved_day"], alert["category_key"]),
+        )
+        assert len(rows) == 1
+        assert rows[0]["id"] == first_alert_id
+        assert isinstance(rows[0]["delivery_id"], int)
+    finally:
+        for alert_id in (retry_alert_id, first_alert_id):
+            if alert_id is not None:
+                db.execute("DELETE FROM goat_alerts WHERE id = %s", (alert_id,))
+
+
 def test_claim_retry_and_sent_updates_target_the_same_delivery(monkeypatch):
     delivery = {
         "id": 41,
@@ -129,6 +164,7 @@ def test_claim_retry_and_sent_updates_target_the_same_delivery(monkeypatch):
         "prior_record_holder": "Jose Ochoa",
         "prior_record_day": date(2026, 6, 10),
         "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9",
+        "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d",
     }
     first_claim = _RecordingCursor(fetchone_results=[delivery])
     return_to_pending = _RecordingCursor()
@@ -139,19 +175,58 @@ def test_claim_retry_and_sent_updates_target_the_same_delivery(monkeypatch):
     )
 
     first = store.claim_delivery()
-    store.return_delivery_to_pending(first["id"], "not_in_channel")
+    store.return_delivery_to_pending(first["id"], first["claim_token"], "not_in_channel")
     second = store.claim_delivery()
-    store.mark_delivery_sent(second["id"], "1722280000.000100")
+    store.mark_delivery_sent(second["id"], second["claim_token"], "1722280000.000100")
 
     assert first == second == delivery
     claim_sql = first_claim.executed[0][0]
     assert "attempts = delivery.attempts + 1" in claim_sql
     assert "client_msg_id = COALESCE(delivery.client_msg_id, %s::uuid)" in claim_sql
+    assert "claim_token = %s::uuid" in claim_sql
+    assert "delivery.claim_token" in claim_sql
     assert "FROM candidate, goat_alerts alert" in claim_sql
     assert "WHERE delivery.id = candidate.id AND alert.id = delivery.goat_alert_id" in claim_sql
     assert "JOIN goat_alerts" not in claim_sql
-    assert return_to_pending.executed[0][1] == ("not_in_channel", delivery["id"])
-    assert mark_sent.executed[0][1] == ("1722280000.000100", delivery["id"])
+    assert return_to_pending.executed[0][1] == ("not_in_channel", delivery["id"], delivery["claim_token"])
+    assert mark_sent.executed[0][1] == ("1722280000.000100", delivery["id"], delivery["claim_token"])
+
+
+def test_changed_work_center_retry_uses_category_day_conflict_and_one_outbox(monkeypatch):
+    alert = _alert()
+    first_insert = _RecordingCursor(fetchone_results=[{"id": 23}])
+    retry_insert = _RecordingCursor(fetchone_results=[None])
+    _patch_cursors(monkeypatch, first_insert, retry_insert)
+
+    assert store.insert_alert_and_delivery(alert) == 23
+    assert store.insert_alert_and_delivery({**alert, "wc_name": "Repair 9"}) is None
+
+    alert_sql = first_insert.executed[0][0]
+    assert "category_key" in alert_sql
+    assert "ON CONFLICT DO NOTHING RETURNING id" in alert_sql
+    delivery_inserts = [
+        sql
+        for cursor in (first_insert, retry_insert)
+        for sql, _ in cursor.executed
+        if "INSERT INTO goat_slack_deliveries" in sql
+    ]
+    assert len(delivery_inserts) == 1
+
+
+def test_old_claim_failure_cannot_revert_a_newer_success(monkeypatch):
+    old_claim_token = "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d"
+    new_claim_token = "f3d5e049-37bd-4881-bcfb-43d41c28e5a9"
+    new_success = _RecordingCursor()
+    late_old_failure = _RecordingCursor()
+    _patch_cursors(monkeypatch, new_success, late_old_failure)
+
+    store.mark_delivery_sent(41, new_claim_token, "1722280000.000100")
+    store.return_delivery_to_pending(41, old_claim_token, "late timeout")
+
+    for cursor in (new_success, late_old_failure):
+        sql = cursor.executed[0][0]
+        assert "WHERE id = %s AND status = 'sending' AND claim_token = %s::uuid" in sql
+    assert late_old_failure.executed[0][1] == ("late timeout", 41, old_claim_token)
 
 
 def test_insert_alert_persists_a_client_message_id(monkeypatch):

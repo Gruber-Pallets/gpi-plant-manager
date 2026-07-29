@@ -700,6 +700,7 @@ DELETE FROM widget_customizations WHERE page LIKE 'wc:%';
 CREATE TABLE IF NOT EXISTS goat_alerts (
   id                  SERIAL PRIMARY KEY,
   achieved_day        DATE NOT NULL,
+  category_key        TEXT NOT NULL,
   group_name          TEXT NOT NULL,
   person              TEXT NOT NULL,
   wc_name             TEXT NOT NULL,
@@ -711,7 +712,12 @@ CREATE TABLE IF NOT EXISTS goat_alerts (
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (achieved_day, group_name, wc_name)
 );
+-- Legacy GOAT Watch alerts predate category keys. Keep them intact and let
+-- the feature-owned finalizer populate the key for all new category alerts.
+ALTER TABLE goat_alerts ADD COLUMN IF NOT EXISTS category_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_goat_alerts_day ON goat_alerts (achieved_day);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goat_alerts_category_day
+  ON goat_alerts (achieved_day, category_key) WHERE category_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS goat_notification_state (
   id          SMALLINT PRIMARY KEY CHECK (id = 1),
@@ -728,6 +734,7 @@ CREATE TABLE IF NOT EXISTS goat_slack_deliveries (
   id                BIGSERIAL PRIMARY KEY,
   goat_alert_id     INTEGER NOT NULL UNIQUE REFERENCES goat_alerts(id) ON DELETE CASCADE,
   client_msg_id     UUID NOT NULL,
+  claim_token       UUID,
   status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sending', 'sent')),
   attempts          INTEGER NOT NULL DEFAULT 0,
   last_error        TEXT,
@@ -739,6 +746,7 @@ CREATE TABLE IF NOT EXISTS goat_slack_deliveries (
 -- The initial GOAT outbox shipped without this id. Keep bootstrap safe for
 -- already-created databases; legacy rows receive an id when first claimed.
 ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS client_msg_id UUID;
+ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS claim_token UUID;
 CREATE INDEX IF NOT EXISTS idx_goat_slack_deliveries_claim
   ON goat_slack_deliveries (status, attempted_at, id);
 

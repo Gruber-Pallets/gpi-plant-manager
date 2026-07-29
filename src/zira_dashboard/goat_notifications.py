@@ -75,6 +75,7 @@ def finalize_day(day: date, client) -> list[dict]:
 
         alert = {
             "achieved_day": day,
+            "category_key": category.key,
             "group_name": category.label,
             "person": winner["person"],
             "wc_name": winner["wc_name"],
@@ -128,9 +129,9 @@ def drain_deliveries() -> int:
                 client_msg_id=str(delivery["client_msg_id"]),
             )
         except slack_client.SlackError as exc:
-            store.return_delivery_to_pending(delivery["id"], str(exc))
+            store.return_delivery_to_pending(delivery["id"], delivery["claim_token"], str(exc))
             break
-        store.mark_delivery_sent(delivery["id"], result["message_ts"])
+        store.mark_delivery_sent(delivery["id"], delivery["claim_token"], result["message_ts"])
         sent += 1
     return sent
 

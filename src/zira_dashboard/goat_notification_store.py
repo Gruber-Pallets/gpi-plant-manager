@@ -61,9 +61,9 @@ def insert_alert_and_delivery(alert: dict) -> int | None:
 
     with db.cursor() as cur:
         cur.execute(
-            "INSERT INTO goat_alerts (achieved_day, group_name, person, wc_name, units, prior_record_units, prior_record_holder, prior_record_day) "
-            "VALUES (%(achieved_day)s, %(group_name)s, %(person)s, %(wc_name)s, %(units)s, %(prior_record_units)s, %(prior_record_holder)s, %(prior_record_day)s) "
-            "ON CONFLICT (achieved_day, group_name, wc_name) DO NOTHING RETURNING id",
+            "INSERT INTO goat_alerts (achieved_day, category_key, group_name, person, wc_name, units, prior_record_units, prior_record_holder, prior_record_day) "
+            "VALUES (%(achieved_day)s, %(category_key)s, %(group_name)s, %(person)s, %(wc_name)s, %(units)s, %(prior_record_units)s, %(prior_record_holder)s, %(prior_record_day)s) "
+            "ON CONFLICT DO NOTHING RETURNING id",
             alert,
         )
         row = cur.fetchone()
@@ -86,31 +86,33 @@ def claim_delivery() -> dict | None:
             "WHERE status = 'pending' OR (status = 'sending' AND attempted_at < now() - interval '5 minutes') "
             "ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) "
             "UPDATE goat_slack_deliveries delivery SET status = 'sending', attempts = delivery.attempts + 1, attempted_at = now(), "
-            "client_msg_id = COALESCE(delivery.client_msg_id, %s::uuid) "
+            "client_msg_id = COALESCE(delivery.client_msg_id, %s::uuid), claim_token = %s::uuid "
             "FROM candidate, goat_alerts alert "
             "WHERE delivery.id = candidate.id AND alert.id = delivery.goat_alert_id "
-            "RETURNING delivery.id, delivery.goat_alert_id, delivery.client_msg_id, alert.achieved_day, alert.group_name, alert.person, alert.wc_name, alert.units, alert.prior_record_units, alert.prior_record_holder, alert.prior_record_day",
-            (str(uuid4()),),
+            "RETURNING delivery.id, delivery.goat_alert_id, delivery.client_msg_id, delivery.claim_token, alert.achieved_day, alert.group_name, alert.person, alert.wc_name, alert.units, alert.prior_record_units, alert.prior_record_holder, alert.prior_record_day",
+            (str(uuid4()), str(uuid4())),
         )
         return cur.fetchone()
 
 
-def mark_delivery_sent(delivery_id: int, message_ts: str) -> None:
+def mark_delivery_sent(delivery_id: int, claim_token: str, message_ts: str) -> None:
     from . import db
 
     with db.cursor() as cur:
         cur.execute(
             "UPDATE goat_slack_deliveries SET status = 'sent', sent_at = now(), "
-            "slack_message_ts = %s, last_error = NULL WHERE id = %s",
-            (message_ts, delivery_id),
+            "slack_message_ts = %s, last_error = NULL "
+            "WHERE id = %s AND status = 'sending' AND claim_token = %s::uuid",
+            (message_ts, delivery_id, str(claim_token)),
         )
 
 
-def return_delivery_to_pending(delivery_id: int, error: str) -> None:
+def return_delivery_to_pending(delivery_id: int, claim_token: str, error: str) -> None:
     from . import db
 
     with db.cursor() as cur:
         cur.execute(
-            "UPDATE goat_slack_deliveries SET status = 'pending', last_error = %s WHERE id = %s",
-            (error, delivery_id),
+            "UPDATE goat_slack_deliveries SET status = 'pending', last_error = %s, claim_token = NULL "
+            "WHERE id = %s AND status = 'sending' AND claim_token = %s::uuid",
+            (error, delivery_id, str(claim_token)),
         )
