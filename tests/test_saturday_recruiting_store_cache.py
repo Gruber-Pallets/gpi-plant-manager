@@ -2,7 +2,10 @@ from contextlib import contextmanager
 from datetime import date, datetime, time
 from types import SimpleNamespace
 
+import pytest
+
 from zira_dashboard import (
+    company_holidays,
     db,
     optional_workday,
     saturday_recruiting_store as store,
@@ -14,6 +17,13 @@ from zira_dashboard.shift_config import SITE_TZ
 DAY = date(2026, 7, 25)
 NOW = datetime(2026, 7, 20, 12, tzinfo=SITE_TZ)
 DEADLINE = datetime(2026, 7, 24, 7, tzinfo=SITE_TZ)
+
+
+@pytest.fixture(autouse=True)
+def _clear_optional_workday_cache():
+    optional_workday.invalidate_all()
+    yield
+    optional_workday.invalidate_all()
 
 
 class _Cursor:
@@ -113,3 +123,54 @@ def test_publication_invalidates_publication_cache_after_commit(monkeypatch):
 
     assert store.mark_published(DAY, NOW) is published
     assert events[-2:] == ["commit", ("invalidate", DAY)]
+
+
+def test_close_due_invalidates_primed_publication_state_after_commit(monkeypatch):
+    events = []
+    current_status = {"value": "recruiting"}
+    publication_calls = []
+
+    class CloseCursor(_Cursor):
+        def execute(self, sql, params=None):
+            super().execute(sql, params)
+            current_status["value"] = "closed"
+
+        def fetchall(self):
+            return [{"day": DAY}]
+
+    cursor = CloseCursor()
+    _cursor_context(monkeypatch, cursor, events)
+    monkeypatch.setattr(
+        company_holidays,
+        "for_day",
+        lambda day: SimpleNamespace(name="Holiday", odoo_id=42) if day == DAY else None,
+    )
+
+    def publication_state(day):
+        publication_calls.append(day)
+        return store.RecruitmentPublicationState(
+            day_kind="holiday",
+            holiday_odoo_id=42,
+            status=current_status["value"],
+        )
+
+    monkeypatch.setattr(store, "publication_state", publication_state)
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(day=day, published=True),
+    )
+    real_invalidate = optional_workday.invalidate
+
+    def invalidate(day):
+        events.append(("invalidate", day))
+        real_invalidate(day)
+
+    monkeypatch.setattr(optional_workday, "invalidate", invalidate)
+
+    assert optional_workday.state_for_day(DAY).recruiting_status == "recruiting"
+    assert store.close_due(DEADLINE) == 1
+    assert optional_workday.state_for_day(DAY).recruiting_status == "closed"
+    assert publication_calls == [DAY, DAY]
+    assert events[-2:] == ["commit", ("invalidate", DAY)]
+    assert "RETURNING day" in cursor.statements[0][0]

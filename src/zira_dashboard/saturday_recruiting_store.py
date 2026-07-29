@@ -913,10 +913,17 @@ def close_due(now: datetime) -> int:
         cur.execute(
             "UPDATE saturday_recruitments "
             "SET status = 'closed', closed_at = %s, updated_at = %s "
-            "WHERE status = 'recruiting' AND response_deadline <= %s",
+            "WHERE status = 'recruiting' AND response_deadline <= %s "
+            "RETURNING day",
             (now, now, now),
         )
-        return cur.rowcount
+        closed_days = tuple(row["day"] for row in cur.fetchall())
+
+    from . import optional_workday
+
+    for day in closed_days:
+        optional_workday.invalidate(day)
+    return len(closed_days)
 
 
 def mark_staffing_prepared(day: date, now: datetime, *, cur) -> RecruitmentBundle:
