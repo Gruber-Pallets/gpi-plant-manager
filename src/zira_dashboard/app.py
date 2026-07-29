@@ -172,6 +172,11 @@ async def _tick_staffing_stable():
     await asyncio.to_thread(page_warmer.warm_skills_once)
 
 
+async def _tick_company_holidays():
+    from . import company_holidays
+    await asyncio.to_thread(company_holidays.refresh)
+
+
 async def _tick_missing_wc():
     """Refresh the cache of Odoo hr.attendance lacking a work-center tag (last
     14 days) for the Missing-Work-Center alert. No-ops (logs once) if the Odoo
@@ -351,6 +356,7 @@ _WARMERS = [
     ("staffing pages", _tick_staffing_pages, 45),
     ("inbox warm", _tick_inbox, 20),
     ("staffing stable", _tick_staffing_stable, 300),
+    ("company holidays", _tick_company_holidays, 600),
     ("missing WC", _tick_missing_wc, 180),
     ("missed punch-out", _tick_missed_punch_out, 60),
     ("forklift snapshot", _tick_forklift, 600),

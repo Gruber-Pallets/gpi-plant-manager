@@ -86,6 +86,25 @@ def test_app_defines_staffing_stable_loop():
     assert any(t is app_module._tick_staffing_stable for _, t, _ in app_module._WARMERS)
 
 
+def test_app_company_holiday_warmer_registered_every_ten_minutes():
+    from zira_dashboard import app as app_module
+
+    assert asyncio.iscoroutinefunction(app_module._tick_company_holidays)
+    entry = next(
+        (
+            warmer
+            for warmer in app_module._WARMERS
+            if warmer[1] is app_module._tick_company_holidays
+        ),
+        None,
+    )
+    assert entry == (
+        "company holidays",
+        app_module._tick_company_holidays,
+        600,
+    )
+
+
 # --- inbox top-nav cache warmer -----------------------------------------
 # build_summary() renders on every page via _topnav.html. Its two expensive
 # sub-sources (assignments-todo + late-report) self-cache for 30s but the TTL
