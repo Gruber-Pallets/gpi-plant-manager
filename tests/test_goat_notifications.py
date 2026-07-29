@@ -1,0 +1,207 @@
+from datetime import UTC, date, datetime, time
+
+import pytest
+
+from zira_dashboard import goat_categories, goat_notifications
+
+
+def test_winner_uses_person_day_total_and_largest_contributing_center(monkeypatch):
+    category = goat_categories.GoatCategory("repairs", "Repairs", "Repair GOAT", group_name="Repairs")
+    monkeypatch.setattr(goat_categories, "work_center_names", lambda _: {"Repair 1", "Repair 3"})
+    records = [
+        {"person": "Jose O.", "day": date(2026, 7, 28), "wc": "Repair 1", "units": 250, "hours": 7},
+        {"person": "Jose O.", "day": date(2026, 7, 28), "wc": "Repair 3", "units": 648, "hours": 7},
+        {"person": "Ana", "day": date(2026, 7, 28), "wc": "Repair 3", "units": 897, "hours": 7},
+    ]
+
+    assert goat_notifications.winner_for_day(category, date(2026, 7, 28), records) == {
+        "person": "Jose O.", "wc_name": "Repair 3", "units": 898,
+    }
+
+
+def test_finalize_requires_a_strict_new_record(monkeypatch):
+    category = goat_categories.GoatCategory("repairs", "Repairs", "Repair GOAT", group_name="Repairs")
+    monkeypatch.setattr(goat_notifications, "_eligible_categories", lambda: (category,))
+    monkeypatch.setattr(goat_categories, "work_center_names", lambda _: {"Repair 3"})
+    monkeypatch.setattr(goat_notifications, "_records_through", lambda _: [
+        {"person": "Old Holder", "day": date(2026, 6, 10), "wc": "Repair 3", "units": 891, "hours": 7},
+        {"person": "Jose O.", "day": date(2026, 7, 28), "wc": "Repair 3", "units": 891, "hours": 7},
+    ])
+    inserted = []
+    monkeypatch.setattr(goat_notifications.store, "insert_alert_and_delivery", inserted.append)
+    monkeypatch.setattr(goat_notifications.precompute, "precompute_day", lambda *_: None)
+
+    assert goat_notifications.finalize_day(date(2026, 7, 28), client=object()) == []
+    assert inserted == []
+
+
+def test_message_payload_keeps_previous_record_secondary():
+    text, blocks = goat_notifications.message_payload({
+        "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898,
+        "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa",
+        "prior_record_units": 891, "prior_record_day": date(2026, 6, 10),
+    })
+
+    assert blocks[0]["type"] == "header"
+    assert blocks[0]["text"]["text"] == "🏆 NEW REPAIRS GOAT!"
+    assert blocks[1]["text"]["text"] == "*Jose O.* — *898 pallets* at Repair 3 on Jul 28, 2026"
+    assert blocks[2] == {"type": "context", "elements": [{"type": "mrkdwn", "text": "_(previous = Jose Ochoa · 891 · Jun 10, 2026)_"}]}
+    assert blocks[3]["text"]["text"] == "Congratulate Jose when you see them! 🎉"
+    assert "previous = Jose Ochoa · 891 · Jun 10, 2026" in text
+
+
+def test_drain_requeues_a_slack_error(monkeypatch):
+    delivery = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10)}
+    monkeypatch.setenv("GOAT_SLACK_CHANNEL_ID", "C-MGMT")
+    monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: delivery)
+    monkeypatch.setattr(goat_notifications.slack_client, "post_message", lambda **kwargs: (_ for _ in ()).throw(goat_notifications.slack_client.SlackError("not_in_channel")))
+    seen = []
+    monkeypatch.setattr(goat_notifications.store, "return_delivery_to_pending", lambda delivery_id, error: seen.append((delivery_id, error)))
+
+    assert goat_notifications.drain_deliveries() == 0
+    assert seen == [(7, "not_in_channel")]
+
+
+def test_finalize_precomputes_then_creates_one_transactional_alert(monkeypatch):
+    category = goat_categories.GoatCategory("repairs", "Repairs", "Repair GOAT", group_name="Repairs")
+    completed_day = date(2026, 7, 28)
+    calls = []
+    records = [
+        {"person": "Old Holder", "day": date(2026, 6, 10), "wc": "Repair 3", "units": 891.4, "hours": 7},
+        {"person": "Jose O.", "day": completed_day, "wc": "Repair 1", "units": 250, "hours": 7},
+        {"person": "Jose O.", "day": completed_day, "wc": "Repair 3", "units": 648.2, "hours": 7},
+    ]
+    monkeypatch.setattr(goat_notifications, "_eligible_categories", lambda: (category,))
+    monkeypatch.setattr(goat_categories, "work_center_names", lambda _: {"Repair 1", "Repair 3"})
+    monkeypatch.setattr(goat_notifications.precompute, "precompute_day", lambda day, client: calls.append(("precompute", day, client)))
+    monkeypatch.setattr(goat_notifications, "_records_through", lambda day: calls.append(("records", day)) or records)
+    inserted = []
+    monkeypatch.setattr(goat_notifications.store, "insert_alert_and_delivery", lambda alert: inserted.append(alert) or 42)
+
+    result = goat_notifications.finalize_day(completed_day, client="client")
+
+    expected = {
+        "achieved_day": completed_day,
+        "group_name": "Repairs",
+        "person": "Jose O.",
+        "wc_name": "Repair 3",
+        "units": 898,
+        "prior_record_units": 891,
+        "prior_record_holder": "Old Holder",
+        "prior_record_day": date(2026, 6, 10),
+    }
+    assert calls == [("precompute", completed_day, "client"), ("records", completed_day)]
+    assert inserted == [expected]
+    assert result == [expected]
+
+
+def test_finalize_ignores_new_record_when_the_outbox_insert_already_exists(monkeypatch):
+    category = goat_categories.GoatCategory("repairs", "Repairs", "Repair GOAT", group_name="Repairs")
+    completed_day = date(2026, 7, 28)
+    monkeypatch.setattr(goat_notifications, "_eligible_categories", lambda: (category,))
+    monkeypatch.setattr(goat_categories, "work_center_names", lambda _: {"Repair 3"})
+    monkeypatch.setattr(goat_notifications.precompute, "precompute_day", lambda *_: None)
+    monkeypatch.setattr(goat_notifications, "_records_through", lambda _: [
+        {"person": "Old Holder", "day": date(2026, 6, 10), "wc": "Repair 3", "units": 891, "hours": 7},
+        {"person": "Jose O.", "day": completed_day, "wc": "Repair 3", "units": 898, "hours": 7},
+    ])
+    monkeypatch.setattr(goat_notifications.store, "insert_alert_and_delivery", lambda _: None)
+
+    assert goat_notifications.finalize_day(completed_day, client=object()) == []
+
+
+def test_finalize_does_not_announce_an_initial_record_without_a_prior_holder(monkeypatch):
+    category = goat_categories.GoatCategory("repairs", "Repairs", "Repair GOAT", group_name="Repairs")
+    monkeypatch.setattr(goat_notifications, "_eligible_categories", lambda: (category,))
+    monkeypatch.setattr(goat_categories, "work_center_names", lambda _: {"Repair 3"})
+    monkeypatch.setattr(goat_notifications.precompute, "precompute_day", lambda *_: None)
+    monkeypatch.setattr(goat_notifications, "_records_through", lambda _: [
+        {"person": "Jose O.", "day": date(2026, 7, 28), "wc": "Repair 3", "units": 898, "hours": 7},
+    ])
+    inserted = []
+    monkeypatch.setattr(goat_notifications.store, "insert_alert_and_delivery", inserted.append)
+
+    assert goat_notifications.finalize_day(date(2026, 7, 28), client=object()) == []
+    assert inserted == []
+
+
+def test_drain_marks_each_delivery_sent(monkeypatch):
+    first = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10)}
+    second = {**first, "id": 8, "person": "Ana"}
+    deliveries = iter([first, second, None])
+    monkeypatch.setenv("GOAT_SLACK_CHANNEL_ID", "C-MGMT")
+    monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: next(deliveries))
+    posted = []
+    monkeypatch.setattr(goat_notifications.slack_client, "post_message", lambda **kwargs: posted.append(kwargs) or {"message_ts": f"ts-{len(posted)}"})
+    marked = []
+    monkeypatch.setattr(goat_notifications.store, "mark_delivery_sent", lambda delivery_id, message_ts: marked.append((delivery_id, message_ts)))
+
+    assert goat_notifications.drain_deliveries() == 2
+    assert [post["channel_id"] for post in posted] == ["C-MGMT", "C-MGMT"]
+    assert marked == [(7, "ts-1"), (8, "ts-2")]
+
+
+def test_drain_warns_and_leaves_outbox_untouched_without_a_channel(monkeypatch, caplog):
+    monkeypatch.delenv("GOAT_SLACK_CHANNEL_ID", raising=False)
+    claimed = []
+    monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: claimed.append(True))
+
+    assert goat_notifications.drain_deliveries() == 0
+    assert claimed == []
+    assert "GOAT_SLACK_CHANNEL_ID" in caplog.text
+
+
+def test_run_due_recovers_unfinalized_workdays_before_the_current_shift_ends(monkeypatch):
+    now_utc = datetime(2026, 7, 29, 19, 0, tzinfo=UTC)
+    finalized = []
+    events = []
+    expected_days = [date(2026, 7, 27), date(2026, 7, 28)]
+    monkeypatch.setattr(goat_notifications.shift_config, "shift_end_for", lambda _: time(15, 30))
+    monkeypatch.setattr(goat_notifications.shift_config, "work_weekdays", lambda: frozenset({0, 1, 2, 3, 4}))
+    monkeypatch.setattr(goat_notifications.store, "ensure_enabled_on", lambda day: events.append(("enabled", day)))
+    monkeypatch.setattr(goat_notifications.store, "unfinalized_workdays", lambda day: events.append(("due", day)) or expected_days)
+    monkeypatch.setattr(goat_notifications, "finalize_day", lambda day, client: events.append(("finalize", day, client)))
+    monkeypatch.setattr(goat_notifications.store, "record_finalized_day", lambda day: finalized.append(day))
+    monkeypatch.setattr(goat_notifications, "drain_deliveries", lambda: events.append(("drain",)))
+
+    goat_notifications.run_due(now_utc, client="client")
+
+    assert events == [
+        ("enabled", date(2026, 7, 29)),
+        ("due", date(2026, 7, 28)),
+        ("finalize", date(2026, 7, 27), "client"),
+        ("finalize", date(2026, 7, 28), "client"),
+        ("drain",),
+    ]
+    assert finalized == expected_days
+
+
+def test_run_due_finalizes_the_current_day_once_its_shift_has_ended(monkeypatch):
+    now_utc = datetime(2026, 7, 29, 21, 0, tzinfo=UTC)
+    selected = []
+    monkeypatch.setattr(goat_notifications.shift_config, "shift_end_for", lambda _: time(15, 30))
+    monkeypatch.setattr(goat_notifications.store, "ensure_enabled_on", lambda _: None)
+    monkeypatch.setattr(goat_notifications.store, "unfinalized_workdays", lambda day: selected.append(day) or [])
+    monkeypatch.setattr(goat_notifications, "drain_deliveries", lambda: None)
+
+    goat_notifications.run_due(now_utc, client="client")
+
+    assert selected == [date(2026, 7, 29)]
+
+
+def test_run_due_does_not_record_a_day_when_finalization_raises(monkeypatch):
+    now_utc = datetime(2026, 7, 29, 21, 0, tzinfo=UTC)
+    monkeypatch.setattr(goat_notifications.shift_config, "shift_end_for", lambda _: time(15, 30))
+    monkeypatch.setattr(goat_notifications.store, "ensure_enabled_on", lambda _: None)
+    monkeypatch.setattr(goat_notifications.store, "unfinalized_workdays", lambda _: [date(2026, 7, 29)])
+    monkeypatch.setattr(goat_notifications, "finalize_day", lambda *_: (_ for _ in ()).throw(RuntimeError("source unavailable")))
+    recorded = []
+    monkeypatch.setattr(goat_notifications.store, "record_finalized_day", recorded.append)
+    drained = []
+    monkeypatch.setattr(goat_notifications, "drain_deliveries", lambda: drained.append(True))
+
+    with pytest.raises(RuntimeError, match="source unavailable"):
+        goat_notifications.run_due(now_utc, client="client")
+
+    assert recorded == []
+    assert drained == []
