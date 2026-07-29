@@ -19,7 +19,7 @@ document.addEventListener('click', async event => {
       body: JSON.stringify({day: button.dataset.day}),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || 'Could not start Saturday recruiting.');
+    if (!response.ok) throw new Error(data.detail || 'Could not start optional workday recruiting.');
     window.location.reload();
   } catch (error) {
     button.disabled = false;

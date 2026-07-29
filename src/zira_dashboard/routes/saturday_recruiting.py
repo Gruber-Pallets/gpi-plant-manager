@@ -1,4 +1,4 @@
-"""Manager API for optional Saturday-work recruiting."""
+"""Manager API for optional-workday recruiting."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .. import (
+    company_holidays,
     employee_notifications,
+    optional_workday,
     saturday_recruiting as sr,
     saturday_recruiting_store as store,
     schedule_store,
@@ -48,7 +50,10 @@ def _values(body: dict) -> tuple[date, time, time, dict[int, int]]:
             raise TypeError("requested_counts")
         counts = {int(key): int(value) for key, value in raw_counts.items()}
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="Invalid Saturday recruiting request") from exc
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid optional workday recruiting request",
+        ) from exc
     return day, shift_start, shift_end, counts
 
 
@@ -56,17 +61,47 @@ def _conflict(exc: Exception) -> HTTPException:
     return HTTPException(status_code=409, detail=str(exc))
 
 
+def _activation_workday(day: date) -> optional_workday.OptionalWorkday:
+    workday = optional_workday.for_day(day)
+    if workday is None:
+        raise HTTPException(
+            status_code=422,
+            detail="This date is not an optional workday.",
+        )
+    return workday
+
+
+def _is_mirrored_holiday(day: date) -> bool:
+    return company_holidays.for_day(day) is not None
+
+
+def _persisted_bundle(day: date) -> store.RecruitmentBundle:
+    bundle = store.get(day)
+    if bundle is None:
+        raise HTTPException(
+            status_code=422,
+            detail="No optional workday recruiting round exists for this date.",
+        )
+    return bundle
+
+
+def _cancellation_label(recruitment: store.Recruitment) -> str:
+    if recruitment.day_kind == "holiday":
+        return recruitment.event_name or "Holiday"
+    return "Saturday"
+
+
 @router.post("/activate")
 async def activate(request: Request):
     body = await _body(request)
     day, shift_start, shift_end, counts = _values(body)
-    if day.weekday() != 5:
-        raise HTTPException(status_code=422, detail="Saturday recruiting requires a Saturday")
+    workday = _activation_workday(day)
     try:
         deadline = sr.response_deadline(
             day,
             schedule_store.current().work_weekdays,
             shift_config.configured_shift_start_for,
+            _is_mirrored_holiday,
         )
         bundle = store.activate(
             day=day,
@@ -76,21 +111,27 @@ async def activate(request: Request):
             requested_counts=counts,
             actor=_actor(request),
             now=plant_now(),
+            day_kind=workday.kind,
+            event_name=workday.name,
+            holiday_odoo_id=workday.holiday_odoo_id,
         )
     except store.SaturdayRecruitingError as exc:
         raise _conflict(exc) from exc
     except HTTPException:
         raise
     except Exception:
-        log.exception("Could not activate Saturday recruiting for %s", day)
-        raise HTTPException(status_code=500, detail="Could not update Saturday recruiting") from None
+        log.exception("Could not activate optional workday recruiting for %s", day)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not update optional workday recruiting",
+        ) from None
     staffing_routes._bust_after_mutation()
     return JSONResponse({"ok": True, "recruitment": store.serialize_bundle(bundle)})
 
 
 @router.post("/activate-from-schedule")
 async def activate_from_schedule(request: Request):
-    """Start Saturday recruiting from the Scheduler's enabled centers.
+    """Start optional-workday recruiting from the Scheduler's enabled centers.
 
     The browser intentionally supplies only the day.  Requested openings are
     the configured minimum crew for each center currently turned on in the
@@ -100,9 +141,11 @@ async def activate_from_schedule(request: Request):
     try:
         day = date.fromisoformat(str(body["day"]))
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="A Saturday date is required") from exc
-    if day.weekday() != 5:
-        raise HTTPException(status_code=422, detail="Saturday recruiting requires a Saturday")
+        raise HTTPException(
+            status_code=422,
+            detail="An optional workday date is required",
+        ) from exc
+    workday = _activation_workday(day)
 
     try:
         enabled = set(staffing.load_schedule(day).auto_enabled_work_centers)
@@ -112,8 +155,7 @@ async def activate_from_schedule(request: Request):
                 detail="Turn on at least one work center before recruiting.",
             )
         positions_by_name = {
-            position.wc_name: position.wc_id
-            for position in store.available_positions()
+            position.wc_name: position.wc_id for position in store.available_positions()
         }
         requested_counts = {}
         for location in staffing.LOCATIONS:
@@ -131,6 +173,7 @@ async def activate_from_schedule(request: Request):
             day,
             schedule_store.current().work_weekdays,
             shift_config.configured_shift_start_for,
+            _is_mirrored_holiday,
         )
         bundle = store.activate(
             day=day,
@@ -140,14 +183,23 @@ async def activate_from_schedule(request: Request):
             requested_counts=requested_counts,
             actor=_actor(request),
             now=plant_now(),
+            day_kind=workday.kind,
+            event_name=workday.name,
+            holiday_odoo_id=workday.holiday_odoo_id,
         )
     except store.SaturdayRecruitingError as exc:
         raise _conflict(exc) from exc
     except HTTPException:
         raise
     except Exception:
-        log.exception("Could not activate Saturday recruiting from schedule for %s", day)
-        raise HTTPException(status_code=500, detail="Could not update Saturday recruiting") from None
+        log.exception(
+            "Could not activate optional workday recruiting from schedule for %s",
+            day,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Could not update optional workday recruiting",
+        ) from None
     staffing_routes._bust_after_mutation()
     return JSONResponse({"ok": True, "recruitment": store.serialize_bundle(bundle)})
 
@@ -156,9 +208,8 @@ async def activate_from_schedule(request: Request):
 async def openings(request: Request):
     body = await _body(request)
     day, shift_start, shift_end, counts = _values(body)
-    if day.weekday() != 5:
-        raise HTTPException(status_code=422, detail="Saturday recruiting requires a Saturday")
     try:
+        _persisted_bundle(day)
         bundle = store.update_openings(
             day=day,
             shift_start=shift_start,
@@ -169,9 +220,17 @@ async def openings(request: Request):
         )
     except store.SaturdayRecruitingError as exc:
         raise _conflict(exc) from exc
+    except HTTPException:
+        raise
     except Exception:
-        log.exception("Could not update Saturday recruiting openings for %s", day)
-        raise HTTPException(status_code=500, detail="Could not update Saturday recruiting") from None
+        log.exception(
+            "Could not update optional workday recruiting openings for %s",
+            day,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Could not update optional workday recruiting",
+        ) from None
     staffing_routes._bust_after_mutation()
     return JSONResponse({"ok": True, "recruitment": store.serialize_bundle(bundle)})
 
@@ -183,16 +242,29 @@ async def cancel_commitment(person_id: int, request: Request):
         day = date.fromisoformat(str(body["day"]))
         reason = str(body["reason"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="A Saturday date and cancellation reason are required") from exc
+        raise HTTPException(
+            status_code=422,
+            detail="An optional workday date and cancellation reason are required",
+        ) from exc
     if not reason.strip():
         raise HTTPException(status_code=422, detail="A cancellation reason is required")
     try:
+        _persisted_bundle(day)
         result = store.cancel_by_manager(day, person_id, _actor(request), reason, plant_now())
     except store.SaturdayRecruitingError as exc:
         raise _conflict(exc) from exc
+    except HTTPException:
+        raise
     except Exception:
-        log.exception("Could not cancel Saturday commitment %s for %s", person_id, day)
-        raise HTTPException(status_code=500, detail="Could not update Saturday recruiting") from None
+        log.exception(
+            "Could not cancel optional workday commitment %s for %s",
+            person_id,
+            day,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Could not update optional workday recruiting",
+        ) from None
     staffing_routes._bust_after_mutation()
     return JSONResponse({"ok": True, "recruitment": store.serialize_bundle(result.bundle)})
 
@@ -203,16 +275,23 @@ async def cancel(request: Request):
     try:
         day = date.fromisoformat(str(body["day"]))
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="A Saturday date is required") from exc
-    if day.weekday() != 5:
-        raise HTTPException(status_code=422, detail="Saturday recruiting requires a Saturday")
+        raise HTTPException(
+            status_code=422,
+            detail="An optional workday date is required",
+        ) from exc
     try:
+        persisted = _persisted_bundle(day)
         targets = store.cancel_recruitment(day, _actor(request), plant_now())
     except store.SaturdayRecruitingError as exc:
         raise _conflict(exc) from exc
+    except HTTPException:
+        raise
     except Exception:
-        log.exception("Could not cancel Saturday recruiting for %s", day)
-        raise HTTPException(status_code=500, detail="Could not update Saturday recruiting") from None
+        log.exception("Could not cancel optional workday recruiting for %s", day)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not update optional workday recruiting",
+        ) from None
     staffing.invalidate_schedule_cache(day)
     staffing_routes._bust_after_mutation()
     failed_notifications: list[str] = []
@@ -221,22 +300,37 @@ async def cancel(request: Request):
             failed_notifications.append(item.person_name)
             continue
         try:
-            employee_notifications.create_saturday_cancelled(item.person_odoo_id, day)
+            if persisted.recruitment.day_kind == "holiday":
+                employee_notifications.create_saturday_cancelled(
+                    item.person_odoo_id,
+                    day,
+                    day_kind=persisted.recruitment.day_kind,
+                    event_name=persisted.recruitment.event_name,
+                )
+            else:
+                employee_notifications.create_saturday_cancelled(
+                    item.person_odoo_id,
+                    day,
+                )
         except Exception:
             # The cancellation itself is already committed. Tell the manager
             # exactly who needs a direct heads-up rather than rolling it back.
-            log.exception("Could not create Saturday cancellation notification for %s", item.person_id)
+            log.exception(
+                "Could not create optional workday cancellation notification for %s",
+                item.person_id,
+            )
             failed_notifications.append(item.person_name)
     response: dict[str, object] = {
         "ok": True,
         "committed_people": [
-            {"person_id": item.person_id, "person_name": item.person_name}
-            for item in targets
+            {"person_id": item.person_id, "person_name": item.person_name} for item in targets
         ],
     }
     if failed_notifications:
+        event_label = _cancellation_label(persisted.recruitment)
         response["warning"] = (
-            "Contact directly: " + ", ".join(failed_notifications)
-            + ". Their Saturday cancellation notice could not be delivered."
+            "Contact directly: "
+            + ", ".join(failed_notifications)
+            + f". Their {event_label} cancellation notice could not be delivered."
         )
     return JSONResponse(response)
