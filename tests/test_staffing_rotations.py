@@ -2705,25 +2705,29 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert ".day-context .rotation-controls { position: static; width: auto; }" in css
 
 
-def test_staffing_keeps_automation_controls_in_the_notes_sidebar():
+def test_staffing_keeps_automation_controls_and_warnings_in_the_notes_sidebar():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
 
     sidebar_start = html.index('<aside class="day-context">')
-    sidebar_end = html.index('</aside>', sidebar_start)
+    sidebar_end = html.index("</aside>", sidebar_start)
     sidebar = html[sidebar_start:sidebar_end]
     main_start = html.index('<main class="panel">')
-    main_end = html.index('</main>', main_start)
+    main_end = html.index("</main>", main_start)
     main = html[main_start:main_end]
 
-    assert 'class="day-notes"' in sidebar
-    assert 'class="rotation-controls" data-day="{{ day }}"' in sidebar
+    notes_at = sidebar.index('class="day-notes"')
+    automater_at = sidebar.index('class="rotation-controls" data-day="{{ day }}"')
+    warnings_at = sidebar.index('id="rotation-warnings"')
+
+    assert notes_at < automater_at < warnings_at
     assert 'id="rotation-auto-summary"' in sidebar
     assert 'id="reset-schedule-btn"' in sidebar
     assert 'id="clear-schedule-btn"' in sidebar
-    assert 'id="rotation-warnings"' in main
+    assert 'id="rotation-warnings" role="alert"' in sidebar
     assert 'class="rotation-controls" data-day="{{ day }}"' not in main
     assert 'id="reset-schedule-btn"' not in main
     assert 'id="clear-schedule-btn"' not in main
+    assert 'id="rotation-warnings"' not in main
 
 
 def test_staffing_notes_sidebar_is_sticky_and_mobile_safe():
@@ -2735,6 +2739,11 @@ def test_staffing_notes_sidebar_is_sticky_and_mobile_safe():
     assert ".sidebar-schedule-actions .clear-btn { flex: 1 1 0; }" in css
     assert "@media (max-width: 1100px)" in css
     assert ".day-context { order: 3; position: static; }" in css
+    assert ".day-context .rotation-warning {" in css
+    assert "margin-top: 0.75rem; width: 100%;" in css
+    assert "max-height: min(32rem, calc(100vh - 18rem));" in css
+    assert "overflow-y: auto; overflow-wrap: anywhere;" in css
+    assert ".day-context .rotation-warning { max-height: min(32rem, 60vh); }" in css
 
 
 def test_skills_matrix_exposes_scheduling_preferences_without_training_controls():
