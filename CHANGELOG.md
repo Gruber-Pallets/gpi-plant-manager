@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-07-29
 
+### 01:45 PM - Correct GOAT totals
+
+#### Fixes
+
+- **GOAT badges now use each worker's real total.** When a workday is counted again, the new count replaces the old one. Old copies can no longer be added twice, so GOATs and rankings stay fair.
+
 ### 01:34 PM - Holiday work build plan
 
 - **The holiday work build steps are ready.** The team now has a full checklist for bringing Odoo holidays into the schedule and using the same volunteer tools as Saturday work. This is still a plan; the app has not changed yet.

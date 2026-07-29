@@ -125,6 +125,54 @@ def test_upsert_overwrites_on_pk_conflict():
     db.execute("DELETE FROM production_daily WHERE day = %s", (date(2099, 1, 2),))
 
 
+@pytestmark_pg
+def test_precompute_day_replaces_stale_fallback_identity(monkeypatch):
+    from zira_dashboard import db, precompute
+
+    test_day = date(2099, 1, 3)
+    db.init_pool(); db.bootstrap_schema()
+    db.execute("DELETE FROM production_daily WHERE day = %s", (test_day,))
+
+    attribution = {
+        "Alice": {
+            "WC1": {
+                "units": 20.0,
+                "downtime": 1.0,
+                "hours": 4.0,
+                "days_worked": 1.0,
+            }
+        }
+    }
+    identity = {}
+    monkeypatch.setattr(
+        "zira_dashboard.production_history.attribution_for",
+        lambda day, client: attribution,
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.attendance.name_to_person_id",
+        lambda: dict(identity),
+    )
+
+    try:
+        precompute.precompute_day(test_day, client=None)
+        identity["Alice"] = "E1"
+        precompute.precompute_day(test_day, client=None)
+
+        got = db.query(
+            "SELECT emp_id, name, wc_name, units FROM production_daily "
+            "WHERE day = %s ORDER BY emp_id",
+            (test_day,),
+        )
+        assert [dict(row) for row in got] == [{
+            "emp_id": "E1",
+            "name": "Alice",
+            "wc_name": "WC1",
+            "units": 20,
+        }]
+    finally:
+        db.execute("DELETE FROM production_daily WHERE day = %s", (test_day,))
+
+
 def test_precompute_day_flattens_and_upserts(monkeypatch):
     from zira_dashboard import precompute
     calls = {"attribution": 0, "upsert": []}
@@ -139,8 +187,9 @@ def test_precompute_day_flattens_and_upserts(monkeypatch):
     def fake_name_map():
         return {"Alice": "E1", "Bob": "E2"}
 
-    def fake_upsert(rows):
+    def fake_upsert(rows, *, replace_days=()):
         calls["upsert"].extend(rows)
+        calls["replace_days"] = tuple(replace_days)
         return len(rows)
 
     monkeypatch.setattr(
@@ -155,6 +204,7 @@ def test_precompute_day_flattens_and_upserts(monkeypatch):
 
     assert result == {"day": "2026-05-01", "rows_written": 2}
     assert calls["attribution"] == 1
+    assert calls["replace_days"] == (date(2026, 5, 1),)
     assert {r["name"] for r in calls["upsert"]} == {"Alice", "Bob"}
 
 

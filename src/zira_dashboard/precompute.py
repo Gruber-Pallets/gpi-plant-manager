@@ -62,11 +62,18 @@ def flatten_attribution(
     return rows
 
 
-def upsert_production_daily(rows: Iterable[dict]) -> int:
+def upsert_production_daily(
+    rows: Iterable[dict],
+    *,
+    replace_days: Iterable[date] = (),
+) -> int:
     """UPSERT a batch of rows into production_daily. Returns count written.
 
     Idempotent: PK conflict triggers an UPDATE of every non-PK column
-    and bumps `computed_at`. Re-running the same day overwrites cleanly.
+    and bumps `computed_at`. When ``replace_days`` is provided, all existing
+    rows for those complete-day snapshots are removed in the same transaction
+    before the new rows are inserted. This prevents stale fallback identities
+    from surviving after a real employee id becomes available.
 
     `excluded_minutes` is read with a default of 0 (rather than a bare
     index) so callers that still build rows without the key -- pre-dating
@@ -74,7 +81,8 @@ def upsert_production_daily(rows: Iterable[dict]) -> int:
     """
     from . import db
     rows = list(rows)
-    if not rows:
+    days_to_replace = sorted(set(replace_days))
+    if not rows and not days_to_replace:
         return 0
     sql = """
         INSERT INTO production_daily (
@@ -91,6 +99,10 @@ def upsert_production_daily(rows: Iterable[dict]) -> int:
             computed_at      = now()
     """
     with db.cursor() as cur:
+        for day in days_to_replace:
+            cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
+        if not rows:
+            return 0
         # execute_values folds every row into one statement — a single
         # round-trip instead of executemany's one per row (this runs
         # every 45s from the live warmer).
@@ -112,7 +124,7 @@ def precompute_day(day: date, client) -> dict:
     attribution = production_history.attribution_for(day, client)
     name_to_emp_id = attendance.name_to_person_id()
     rows = flatten_attribution(day, attribution, name_to_emp_id)
-    written = upsert_production_daily(rows)
+    written = upsert_production_daily(rows, replace_days=(day,))
     return {"day": day.isoformat(), "rows_written": written}
 
 
