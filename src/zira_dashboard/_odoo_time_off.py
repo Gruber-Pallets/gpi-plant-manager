@@ -305,6 +305,15 @@ def post_leave_message(
     execute_fn("hr.leave", "message_post", [leave_id], body=body)
 
 
+def fetch_company_holidays(execute_fn: Callable[..., Any]) -> list[dict]:
+    return execute_fn(
+        "resource.calendar.leaves",
+        "search_read",
+        [("resource_id", "=", False), ("calendar_id", "=", False)],
+        fields=["id", "name", "date_from", "date_to"],
+    )
+
+
 def fetch_public_holidays(
     execute_fn: Callable[..., Any], start_d, end_d
 ) -> list[dict]:

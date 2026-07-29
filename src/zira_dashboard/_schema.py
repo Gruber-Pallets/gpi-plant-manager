@@ -1099,10 +1099,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS employee_notifications_dedupe
 CREATE INDEX IF NOT EXISTS employee_notifications_unack
   ON employee_notifications (person_odoo_id) WHERE acknowledged_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS company_holidays (
+  odoo_id          INTEGER PRIMARY KEY,
+  name             TEXT NOT NULL,
+  date_from        DATE NOT NULL,
+  date_to          DATE NOT NULL,
+  odoo_date_from   TEXT NOT NULL,
+  odoo_date_to     TEXT NOT NULL,
+  last_pulled_at   TIMESTAMPTZ NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (date_to >= date_from)
+);
+
+CREATE TABLE IF NOT EXISTS company_holiday_sync_state (
+  singleton        BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+  last_success_at  TIMESTAMPTZ,
+  last_attempt_at  TIMESTAMPTZ,
+  last_error       TEXT
+);
+
 -- Optional Saturday-work recruiting. A Saturday starts closed for everyone;
 -- only a voluntary commitment can later become an Unassigned schedule entry.
 CREATE TABLE IF NOT EXISTS saturday_recruitments (
-  day DATE PRIMARY KEY CHECK (EXTRACT(ISODOW FROM day) = 6),
+  day DATE PRIMARY KEY,
+  day_kind TEXT NOT NULL DEFAULT 'saturday'
+    CHECK (day_kind IN ('saturday', 'holiday')),
+  event_name TEXT,
+  holiday_odoo_id INTEGER,
   status TEXT NOT NULL CHECK (status IN ('recruiting', 'closed', 'published', 'cancelled')),
   shift_start TIME NOT NULL,
   shift_end TIME NOT NULL,
@@ -1121,6 +1145,26 @@ CREATE TABLE IF NOT EXISTS saturday_recruitments (
 
 ALTER TABLE saturday_recruitments
   ADD COLUMN IF NOT EXISTS staffing_prepared_at TIMESTAMPTZ;
+ALTER TABLE saturday_recruitments
+  DROP CONSTRAINT IF EXISTS saturday_recruitments_day_check;
+ALTER TABLE saturday_recruitments
+  ADD COLUMN IF NOT EXISTS day_kind TEXT NOT NULL DEFAULT 'saturday';
+ALTER TABLE saturday_recruitments
+  ADD COLUMN IF NOT EXISTS event_name TEXT;
+ALTER TABLE saturday_recruitments
+  ADD COLUMN IF NOT EXISTS holiday_odoo_id INTEGER;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'saturday_recruitments_day_kind_check'
+  ) THEN
+    ALTER TABLE saturday_recruitments
+      ADD CONSTRAINT saturday_recruitments_day_kind_check
+      CHECK (day_kind IN ('saturday', 'holiday'));
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS saturday_recruitment_openings (
   day DATE NOT NULL REFERENCES saturday_recruitments(day) ON DELETE CASCADE,

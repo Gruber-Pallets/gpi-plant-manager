@@ -2,7 +2,7 @@ import time
 from datetime import date
 
 
-from zira_dashboard import odoo_client
+from zira_dashboard import _odoo_time_off, odoo_client
 
 
 def _stub_execute(monkeypatch, responses):
@@ -384,11 +384,47 @@ def test_fetch_public_holidays_uses_cache_within_ttl(monkeypatch):
     calls = _stub_execute(monkeypatch, responses)
     first = odoo_client.fetch_public_holidays(date(2026, 7, 1), date(2026, 7, 31))
     assert len(calls) == 1
+    assert "calendar_id" in calls[0][3]["fields"]
     second = odoo_client.fetch_public_holidays(date(2026, 7, 1), date(2026, 7, 31))
     assert len(calls) == 1  # cache hit
     assert second is first
     odoo_client.fetch_public_holidays(date(2026, 8, 1), date(2026, 8, 31))
     assert len(calls) == 2  # different range → fresh fetch
+
+
+def test_fetch_company_holidays_reads_only_unscoped_company_rows():
+    calls = []
+
+    def execute(model, method, domain, **kwargs):
+        calls.append((model, method, domain, kwargs))
+        return []
+
+    assert _odoo_time_off.fetch_company_holidays(execute) == []
+    assert calls == [(
+        "resource.calendar.leaves",
+        "search_read",
+        [("resource_id", "=", False), ("calendar_id", "=", False)],
+        {"fields": ["id", "name", "date_from", "date_to"]},
+    )]
+
+
+def test_fetch_company_holidays_facade_delegates(monkeypatch):
+    expected = [{"id": 1, "name": "4th of July"}]
+    calls = []
+
+    def fetch_company_holidays(execute_fn):
+        calls.append(execute_fn)
+        return expected
+
+    monkeypatch.setattr(
+        _odoo_time_off,
+        "fetch_company_holidays",
+        fetch_company_holidays,
+        raising=False,
+    )
+
+    assert odoo_client.fetch_company_holidays() is expected
+    assert calls == [odoo_client.execute]
 
 
 def test_create_leave_full_day_no_hours(monkeypatch):

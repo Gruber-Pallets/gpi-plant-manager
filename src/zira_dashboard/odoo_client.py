@@ -800,6 +800,11 @@ def post_leave_message(leave_id: int, body: str) -> None:
     _odoo_time_off.post_leave_message(execute, leave_id, body)
 
 
+def fetch_company_holidays() -> list[dict]:
+    """Return the complete whole-company Public Holiday set from Odoo."""
+    return _odoo_time_off.fetch_company_holidays(execute)
+
+
 _PUBLIC_HOLIDAYS_TTL_SECONDS = 10 * 60
 # {(start_d, end_d): (rows, expires_at_epoch)} — same pattern as
 # _leave_types_cache, keyed by range because the Who's-Out calendar asks for
