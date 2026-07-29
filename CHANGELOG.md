@@ -18,6 +18,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Fixes
 
+- **Staffing safety checks are stronger.** Plant Manager can spot when a work group needs a trained helper. This helps supervisors catch a problem sooner.
 - **Inbox numbers now catch up right away.** If a task is already cleared, the Inbox number updates as soon as you open a page, so it does not send you to an empty Inbox.
 - **Temporary practice people are cleaned up automatically.** Fake names will not be left in the staff list after a system check.
 - **GOAT celebrations use the same Slack channel as schedules.** You do not need to set up another channel for them.

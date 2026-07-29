@@ -40,7 +40,7 @@ def validate_current_assignments(
     by_name = {person.name: person for person in roster}
     off = set(full_day_off_names)
     visible = {
-        center: tuple(str(name) for name in names or ())
+        center: tuple(name for name in map(str, names or ()) if name in by_name)
         for center, names in assignments.items()
         if center in locations_by_name
     }
@@ -90,6 +90,7 @@ def validate_current_assignments(
             and person.active
             and not person.reserve
             and name not in off
+            and name not in trainees
             and all(person.level(skill) >= 3 for skill in required)
             for name in names
         )
@@ -106,8 +107,9 @@ def validate_current_assignments(
                     )
                 )
                 continue
-            if name in trainees and green_present:
-                safe_names.add(name)
+            if name in trainees:
+                if green_present:
+                    safe_names.add(name)
                 continue
             if not all(person.level(skill) >= 1 for skill in required):
                 issues.append(

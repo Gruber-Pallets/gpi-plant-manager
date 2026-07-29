@@ -125,3 +125,57 @@ def test_current_validation_reports_unavailable_and_unhonored_defaults():
         "center_minimum_unmet",
         "exact_default_violation",
     }
+
+
+def test_current_validation_ignores_unknown_trim_saw_assignees():
+    locations = (
+        staffing.Location("Trim Saw 1", "Trim Saw", "Bay 4", "Recycled", None, 2, 2),
+    )
+
+    issues = current_schedule_validation.validate_current_assignments(
+        roster=[
+            _person("Green", **{"Trim Saw": 3}),
+            _person("Level One", **{"Trim Saw": 1}),
+        ],
+        assignments={"Trim Saw 1": ["Green", "Not On Roster", "Level One"]},
+        enabled_centers={"Trim Saw 1"},
+        locations=locations,
+        minimums={"Trim Saw 1": 2},
+        capacities={"Trim Saw 1": 2},
+        required_skills={"Trim Saw 1": ("Trim Saw",)},
+        full_day_off_names=set(),
+        trim_saw_centers={"Trim Saw 1"},
+        training_trainees_by_center={},
+        exact_defaults={},
+        group_defaults={},
+        user_group_centers={},
+    )
+
+    assert issues == ()
+
+
+def test_current_validation_requires_a_non_trainee_green_training_partner():
+    locations = (
+        staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, 2, 2),
+    )
+
+    issues = current_schedule_validation.validate_current_assignments(
+        roster=[_person("Trainee A", Repair=3), _person("Trainee B", Repair=3)],
+        assignments={"Repair 1": ["Trainee A", "Trainee B"]},
+        enabled_centers={"Repair 1"},
+        locations=locations,
+        minimums={"Repair 1": 2},
+        capacities={"Repair 1": 2},
+        required_skills={"Repair 1": ("Repair",)},
+        full_day_off_names=set(),
+        trim_saw_centers=set(),
+        training_trainees_by_center={"Repair 1": {"Trainee A", "Trainee B"}},
+        exact_defaults={},
+        group_defaults={},
+        user_group_centers={},
+    )
+
+    assert {issue.code for issue in issues} >= {
+        "training_partner_missing",
+        "center_minimum_unmet",
+    }
