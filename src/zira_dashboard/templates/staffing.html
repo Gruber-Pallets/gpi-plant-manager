@@ -227,33 +227,6 @@
       </div>
     </div>
 
-    <div class="rotation-warning" id="rotation-warnings" role="alert"
-         {% if not rotation_warnings and not rotation_issues %}hidden{% endif %}>
-        <ul id="rotation-warning-list">
-          {% for issue in rotation_issues %}
-            <li class="coverage-issue" data-issue-code="{{ issue.code }}">
-              <span>{{ issue.message }}</span>
-              {% if issue.rejections %}
-                <details class="coverage-why">
-                  <summary>Why?</summary>
-                  <ul>
-                    {% for rejection in issue.rejections %}
-                      <li><strong>{{ rejection.person }}</strong>: {{ rejection.detail }}</li>
-                    {% endfor %}
-                  </ul>
-                </details>
-              {% endif %}
-            </li>
-          {% endfor %}
-          {% set issue_messages = rotation_issues | map(attribute='message') | list %}
-          {% for warning in rotation_warnings %}
-            {% if warning not in issue_messages %}
-              <li>{{ warning }}</li>
-            {% endif %}
-          {% endfor %}
-        </ul>
-    </div>
-
     {% macro scheduled_operator_name(name) %}
       {#- people.name is already the canonical, minimal, collision-free roster
           label (odoo_sync._roster_names): "First L." normally, expanded to
@@ -420,6 +393,32 @@
       </div>
     </div>
     {% endif %}
+    <div class="rotation-warning" id="rotation-warnings" role="alert"
+         {% if not rotation_warnings and not rotation_issues %}hidden{% endif %}>
+      <ul id="rotation-warning-list">
+        {% for issue in rotation_issues %}
+          <li class="coverage-issue" data-issue-code="{{ issue.code }}">
+            <span>{{ issue.message }}</span>
+            {% if issue.rejections %}
+              <details class="coverage-why">
+                <summary>Why?</summary>
+                <ul>
+                  {% for rejection in issue.rejections %}
+                    <li><strong>{{ rejection.person }}</strong>: {{ rejection.detail }}</li>
+                  {% endfor %}
+                </ul>
+              </details>
+            {% endif %}
+          </li>
+        {% endfor %}
+        {% set issue_messages = rotation_issues | map(attribute='message') | list %}
+        {% for warning in rotation_warnings %}
+          {% if warning not in issue_messages %}
+            <li>{{ warning }}</li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </div>
   </aside>
 
 </div>

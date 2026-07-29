@@ -18,6 +18,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **GOAT badges now use each worker's real total.** When a workday is counted again, the new count replaces the old one. Old copies can no longer be added twice, so GOATs and rankings stay fair.
 
+### 01:40 PM - Easier schedule warnings
+
+- **Schedule warnings have their own spot.** Warnings now sit on the right below Notes and the Auto tools. The schedule stays easy to read, and long warning lists can scroll.
+
 ### 01:34 PM - Holiday work build plan
 
 - **The holiday work build steps are ready.** The team now has a full checklist for bringing Odoo holidays into the schedule and using the same volunteer tools as Saturday work. This is still a plan; the app has not changed yet.

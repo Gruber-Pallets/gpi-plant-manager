@@ -775,6 +775,11 @@
   .rotation-warning[hidden] { display: none; }
   .rotation-warning ul { margin: 0; padding-left: 1.1rem; }
   .rotation-warning li { margin: 0.1rem 0; }
+  .day-context .rotation-warning {
+    margin-top: 0.75rem; width: 100%; min-width: 0;
+    max-height: min(32rem, calc(100vh - 18rem));
+    overflow-y: auto; overflow-wrap: anywhere;
+  }
 
   /* ---------- Unified training protocol dialog ---------- */
   .training-protocol-open {
@@ -891,6 +896,7 @@
     .layout { grid-template-columns: 1fr; }
     .day-context { order: 3; position: static; }
     .day-context .rotation-controls { position: static; width: auto; }
+    .day-context .rotation-warning { max-height: min(32rem, 60vh); }
   }
 
   /* Hours pill — shows effective hours for the day, accent-colored when an
