@@ -176,14 +176,14 @@ def test_coverage_breakdowns_for_empty_rows_does_nothing(monkeypatch):
 
 
 def test_holiday_names_fan_out_and_fail_soft(monkeypatch):
-    from zira_dashboard import odoo_client
-    monkeypatch.setattr(odoo_client, "fetch_public_holidays",
+    from zira_dashboard import company_holidays
+    monkeypatch.setattr(company_holidays, "for_range",
                         lambda s, e: [{"name": "July 4", "date_from": "2026-07-03",
                                        "date_to": "2026-07-03"}])
     names = ctx._holiday_names(date(2026, 7, 1), date(2026, 7, 6))
     assert names == {date(2026, 7, 3): "July 4"}
 
     def boom(s, e):
-        raise RuntimeError("odoo down")
-    monkeypatch.setattr(odoo_client, "fetch_public_holidays", boom)
+        raise RuntimeError("mirror unavailable")
+    monkeypatch.setattr(company_holidays, "for_range", boom)
     assert ctx._holiday_names(date(2026, 7, 1), date(2026, 7, 6)) == {}

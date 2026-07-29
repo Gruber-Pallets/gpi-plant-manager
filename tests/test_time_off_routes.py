@@ -9,11 +9,13 @@ seeded-person fixture (Task 16 in the plan promises to wire it).
 from __future__ import annotations
 
 import os
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
 
 # Import after conftest sets AUTH_DISABLED
+from zira_dashboard import company_holidays
 from zira_dashboard.app import app
 from zira_dashboard.routes.timeclock import _mint_token
 from zira_dashboard.routes import timeclock_time_off
@@ -347,6 +349,48 @@ def test_whos_out_public_renders_without_token(monkeypatch):
     # public mode: month nav is tokenless and Back returns to the kiosk home
     assert "/timeclock/whos-out?month=" in r.text
     assert 'href="/timeclock"' in r.text
+
+
+def test_approved_by_day_reads_mirrored_holidays_and_fans_them_out(monkeypatch):
+    seen = []
+    monkeypatch.setattr(timeclock_time_off.db, "query", lambda *args: [])
+    monkeypatch.setattr(
+        company_holidays,
+        "for_range",
+        lambda start, end: seen.append((start, end)) or [{
+            "id": 9,
+            "name": "Independence Day",
+            "date_from": "2026-07-03",
+            "date_to": "2026-07-04",
+            "calendar_id": False,
+        }],
+    )
+
+    start = date(2026, 7, 1)
+    end = date(2026, 7, 6)
+    by_day = timeclock_time_off._approved_by_day(start, end)
+
+    assert seen == [(start, end)]
+    assert sorted(by_day) == [date(2026, 7, 3), date(2026, 7, 4)]
+    for day in by_day:
+        assert by_day[day] == [{
+            "name": "Independence Day",
+            "label": "Plant Closed",
+            "source": "holiday",
+        }]
+
+
+def test_approved_by_day_fails_soft_when_holiday_mirror_lookup_fails(monkeypatch):
+    monkeypatch.setattr(timeclock_time_off.db, "query", lambda *args: [])
+
+    def boom(start, end):
+        raise RuntimeError("mirror unavailable")
+
+    monkeypatch.setattr(company_holidays, "for_range", boom)
+
+    assert timeclock_time_off._approved_by_day(
+        date(2026, 7, 1), date(2026, 7, 6),
+    ) == {}
 
 
 def test_cancel_handler_marks_row_for_cancel_and_queues(monkeypatch):

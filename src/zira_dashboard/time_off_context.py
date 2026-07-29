@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from . import db, time_off_calendar
+from . import company_holidays, db, time_off_calendar
 
 
 def department_for_person(person_odoo_id: int) -> set[str]:
@@ -159,13 +159,11 @@ def _departments_by_person(ids: list[int]) -> dict[int, set[str]]:
 
 
 def _holiday_names(start_d: date, end_d: date) -> dict[date, str]:
-    """Public-holiday closures fanned out to {date: name}. Cached via
-    odoo_client; a failing fetch degrades to {} so coverage still renders."""
-    from . import odoo_client
-
+    """Mirrored public-holiday closures fanned out to {date: name}.
+    A failing local lookup degrades to {} so coverage still renders."""
     try:
-        rows = odoo_client.fetch_public_holidays(start_d, end_d)
-    except Exception:  # noqa: BLE001 — never let the holiday fetch break the inbox
+        rows = company_holidays.for_range(start_d, end_d)
+    except Exception:  # noqa: BLE001 — never let the mirror lookup break the inbox
         return {}
     out: dict[date, str] = {}
     for h in rows:

@@ -40,6 +40,7 @@ from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import (
+    company_holidays,
     db,
     odoo_client,
     schedule_store,
@@ -1023,11 +1024,10 @@ def _approved_by_day(start_d: _date, end_d: _date) -> dict:
     date math. Names come from the local ``people`` table joined on
     ``odoo_id`` so we never need an Odoo round-trip on render.
 
-    Public holidays come from ``resource.calendar.leaves`` (rows with
-    ``resource_id=False``) and are tagged ``source='holiday'`` so the
-    templates can style them distinctly from per-employee leaves. A
-    failing Odoo call swallows to an empty list so the calendar still
-    renders the rest of the day's entries during a transient outage."""
+    Public holidays come from the local company-holiday mirror and are tagged
+    ``source='holiday'`` so the templates can style them distinctly from
+    per-employee leaves. A failing mirror lookup swallows to an empty list so
+    the calendar still renders the rest of the day's entries."""
     leaves = db.query(
         "SELECT r.shape, r.date_from, r.date_to, r.hour_from, r.hour_to, "
         "p.name AS person_name "
@@ -1038,12 +1038,11 @@ def _approved_by_day(start_d: _date, end_d: _date) -> dict:
         "ORDER BY p.name",
         (start_d, end_d),
     )
-    # Failure is non-fatal — a transient Odoo outage on the calendar route
-    # shouldn't break the whole render; the rest of the day's entries (from
-    # the local mirror) still show.
+    # Failure is non-fatal — a local mirror lookup problem shouldn't break
+    # the whole render; the rest of the day's entries still show.
     try:
-        holidays = odoo_client.fetch_public_holidays(start_d, end_d)
-    except Exception:  # noqa: BLE001 — never let the holiday fetch crash render
+        holidays = company_holidays.for_range(start_d, end_d)
+    except Exception:  # noqa: BLE001 — never let the mirror lookup crash render
         holidays = []
     return _tcal.fan_out_approved(leaves, holidays, start_d, end_d)
 

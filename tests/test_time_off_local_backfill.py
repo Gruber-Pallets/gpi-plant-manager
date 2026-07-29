@@ -62,11 +62,14 @@ def _wire_odoo(monkeypatch, *, employees=None, cal_hours=None, holidays=None,
         1: {"0": ["07:00", "15:30"], "1": ["07:00", "15:30"], "2": ["07:00", "15:30"],
             "3": ["07:00", "15:30"], "4": ["07:00", "15:30"]},
     })
-    monkeypatch.setattr(oc, "fetch_public_holidays", lambda s, e: holidays if holidays is not None else [])
+    fetch_holidays = MagicMock(
+        return_value=holidays if holidays is not None else [],
+    )
+    monkeypatch.setattr(oc, "fetch_public_holidays", fetch_holidays)
     monkeypatch.setattr(oc, "fetch_leave_state", lambda lid: leave_state)
     mocks = {
         "reset": MagicMock(), "approve": MagicMock(return_value="validate"),
-        "refuse": MagicMock(),
+        "refuse": MagicMock(), "fetch_holidays": fetch_holidays,
     }
     monkeypatch.setattr(oc, "reset_leave_to_confirm", mocks["reset"])
     monkeypatch.setattr(oc, "approve_leave", mocks["approve"])
@@ -136,6 +139,9 @@ def test_holiday_scoped_to_the_employees_calendar_blocks(monkeypatch, fake_db):
     ])
 
     assert bf.run_once() == 0
+    mocks["fetch_holidays"].assert_called_once_with(
+        date(2026, 7, 3), date(2026, 7, 3),
+    )
     mocks["approve"].assert_not_called()
 
 
