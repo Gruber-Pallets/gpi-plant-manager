@@ -82,9 +82,18 @@ def claim_delivery() -> dict | None:
 
     with db.cursor() as cur:
         cur.execute(
-            "WITH candidate AS (SELECT id FROM goat_slack_deliveries "
-            "WHERE status = 'pending' OR (status = 'sending' AND attempted_at < now() - interval '5 minutes') "
-            "ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) "
+            "WITH candidate AS (SELECT delivery.id FROM goat_slack_deliveries delivery "
+            "JOIN goat_alerts alert ON alert.id = delivery.goat_alert_id "
+            "WHERE (delivery.status = 'pending' OR (delivery.status = 'sending' AND delivery.attempted_at < now() - interval '5 minutes')) "
+            "AND NOT EXISTS (SELECT 1 FROM goat_alerts canonical "
+            "WHERE alert.category_key IS NULL AND alert.dismissed_at IS NOT NULL "
+            "AND alert.group_name IN ('Repairs', 'Dismantlers', 'Juniors', 'Woodpecker', 'Hand Build') "
+            "AND canonical.achieved_day = alert.achieved_day "
+            "AND canonical.category_key = CASE alert.group_name "
+            "WHEN 'Repairs' THEN 'repairs' WHEN 'Dismantlers' THEN 'dismantlers' "
+            "WHEN 'Juniors' THEN 'juniors' WHEN 'Woodpecker' THEN 'woodpecker' "
+            "WHEN 'Hand Build' THEN 'hand_build' END) "
+            "ORDER BY delivery.id LIMIT 1 FOR UPDATE OF delivery SKIP LOCKED) "
             "UPDATE goat_slack_deliveries delivery SET status = 'sending', attempts = delivery.attempts + 1, attempted_at = now(), "
             "client_msg_id = COALESCE(delivery.client_msg_id, %s::uuid), claim_token = %s::uuid "
             "FROM candidate, goat_alerts alert "

@@ -103,20 +103,37 @@ def test_schema_backfills_only_delivered_category_alerts_before_the_unique_index
         assert f"WHEN '{label}' THEN '{category_key}'" in backfill
 
 
-def test_schema_retires_conflicting_pending_deliveries_before_backfill_and_index():
+def test_schema_reconciles_client_id_then_dismisses_and_retires_pending_duplicates():
+    reconciliation_start = SCHEMA_DDL.index("UPDATE goat_slack_deliveries canonical_delivery")
+    dismissal_start = SCHEMA_DDL.index("UPDATE goat_alerts legacy_alert")
     retirement_start = SCHEMA_DDL.index("UPDATE goat_slack_deliveries delivery")
     backfill_start = SCHEMA_DDL.index("UPDATE goat_alerts alert")
     unique_index_start = SCHEMA_DDL.index("CREATE UNIQUE INDEX IF NOT EXISTS idx_goat_alerts_category_day")
+    reconciliation = SCHEMA_DDL[reconciliation_start:dismissal_start]
+    dismissal = SCHEMA_DDL[dismissal_start:retirement_start]
     retirement = SCHEMA_DDL[retirement_start:backfill_start]
 
-    assert retirement_start < backfill_start < unique_index_start
+    assert reconciliation_start < dismissal_start < retirement_start < backfill_start < unique_index_start
+    assert "COALESCE(legacy_delivery.client_msg_id, canonical_delivery.client_msg_id)" in reconciliation
+    assert "legacy_delivery.goat_alert_id = legacy_alert.id" in reconciliation
+    assert "canonical_delivery.goat_alert_id = canonical_alert.id" in reconciliation
+    assert "legacy_alert.achieved_day = canonical_alert.achieved_day" in reconciliation
+    assert "canonical_alert.category_key = CASE legacy_alert.group_name" in reconciliation
+    assert "SET dismissed_at = now()" in dismissal
+    assert "legacy_alert.dismissed_at IS NULL" in dismissal
+    assert "delivery.goat_alert_id = legacy_alert.id" in dismissal
+    assert "legacy_alert.category_key IS NULL" in dismissal
+    assert "keyed.achieved_day = legacy_alert.achieved_day" in dismissal
+    assert "keyed.category_key = CASE legacy_alert.group_name" in dismissal
     assert "SET status = 'sent'" in retirement
     assert "sent_at = COALESCE(delivery.sent_at, now())" in retirement
-    assert "delivery.status IN ('pending', 'sending')" in retirement
+    assert "delivery.status = 'pending'" in retirement
+    assert "sending" not in retirement
     assert "Migration deduplicated duplicate category-day GOAT alert" in retirement
     assert "FROM goat_alerts alert" in retirement
     assert "delivery.goat_alert_id = alert.id" in retirement
     assert "alert.category_key IS NULL" in retirement
+    assert "alert.dismissed_at IS NOT NULL" in retirement
     assert "keyed.achieved_day = alert.achieved_day" in retirement
     assert "keyed.category_key = CASE alert.group_name" in retirement
     for label, category_key in {
@@ -235,11 +252,26 @@ def test_claim_retry_and_sent_updates_target_the_same_delivery(monkeypatch):
     assert "client_msg_id = COALESCE(delivery.client_msg_id, %s::uuid)" in claim_sql
     assert "claim_token = %s::uuid" in claim_sql
     assert "delivery.claim_token" in claim_sql
+    assert "JOIN goat_alerts alert ON alert.id = delivery.goat_alert_id" in claim_sql
+    assert "LIMIT 1 FOR UPDATE OF delivery SKIP LOCKED" in claim_sql
     assert "FROM candidate, goat_alerts alert" in claim_sql
     assert "WHERE delivery.id = candidate.id AND alert.id = delivery.goat_alert_id" in claim_sql
-    assert "JOIN goat_alerts" not in claim_sql
     assert return_to_pending.executed[0][1] == ("not_in_channel", delivery["id"], delivery["claim_token"])
     assert mark_sent.executed[0][1] == ("1722280000.000100", delivery["id"], delivery["claim_token"])
+
+
+def test_claim_excludes_a_dismissed_null_key_duplicate_with_a_keyed_canonical_alert(monkeypatch):
+    claim = _RecordingCursor()
+    _patch_cursors(monkeypatch, claim)
+
+    assert store.claim_delivery() is None
+
+    claim_sql = claim.executed[0][0]
+    assert "alert.category_key IS NULL" in claim_sql
+    assert "alert.dismissed_at IS NOT NULL" in claim_sql
+    assert "canonical.achieved_day = alert.achieved_day" in claim_sql
+    assert "canonical.category_key = CASE alert.group_name" in claim_sql
+    assert "LIMIT 1 FOR UPDATE OF delivery SKIP LOCKED" in claim_sql
 
 
 def test_changed_work_center_retry_uses_category_day_conflict_and_one_outbox(monkeypatch):

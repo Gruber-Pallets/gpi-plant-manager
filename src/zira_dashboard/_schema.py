@@ -749,16 +749,57 @@ ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS claim_token UUID;
 -- before adding the category-day uniqueness rule; dashboard-only alerts stay
 -- NULL so their historical behavior is unchanged.
 -- A prior bootstrap may already have made a newer keyed alert for the same
--- category-day. Retire only the older alert's unsent delivery before leaving
--- that alert NULL, so the existing partial index is never violated.
+-- category-day. Make the keyed delivery use the legacy Slack id first, so an
+-- in-flight legacy request and a later canonical retry share Slack's dedupe.
+UPDATE goat_slack_deliveries canonical_delivery
+SET client_msg_id = COALESCE(legacy_delivery.client_msg_id, canonical_delivery.client_msg_id)
+FROM goat_alerts canonical_alert
+JOIN goat_alerts legacy_alert
+  ON legacy_alert.achieved_day = canonical_alert.achieved_day
+JOIN goat_slack_deliveries legacy_delivery
+  ON legacy_delivery.goat_alert_id = legacy_alert.id
+WHERE canonical_delivery.goat_alert_id = canonical_alert.id
+  AND legacy_alert.category_key IS NULL
+  AND legacy_alert.group_name IN ('Repairs', 'Dismantlers', 'Juniors', 'Woodpecker', 'Hand Build')
+  AND canonical_alert.category_key = CASE legacy_alert.group_name
+    WHEN 'Repairs' THEN 'repairs'
+    WHEN 'Dismantlers' THEN 'dismantlers'
+    WHEN 'Juniors' THEN 'juniors'
+    WHEN 'Woodpecker' THEN 'woodpecker'
+    WHEN 'Hand Build' THEN 'hand_build'
+  END;
+-- Keep the duplicate alert as history, but take it out of the dashboard. The
+-- durable-delivery join deliberately leaves dashboard-only legacy rows alone.
+UPDATE goat_alerts legacy_alert
+SET dismissed_at = now()
+FROM goat_slack_deliveries delivery
+WHERE delivery.goat_alert_id = legacy_alert.id
+  AND legacy_alert.dismissed_at IS NULL
+  AND legacy_alert.category_key IS NULL
+  AND legacy_alert.group_name IN ('Repairs', 'Dismantlers', 'Juniors', 'Woodpecker', 'Hand Build')
+  AND EXISTS (
+    SELECT 1
+    FROM goat_alerts keyed
+    WHERE keyed.achieved_day = legacy_alert.achieved_day
+      AND keyed.category_key = CASE legacy_alert.group_name
+        WHEN 'Repairs' THEN 'repairs'
+        WHEN 'Dismantlers' THEN 'dismantlers'
+        WHEN 'Juniors' THEN 'juniors'
+        WHEN 'Woodpecker' THEN 'woodpecker'
+        WHEN 'Hand Build' THEN 'hand_build'
+      END
+  );
+-- Retire only the dismissed duplicate's pending delivery. A currently sending
+-- row may already be inside Slack and is instead suppressed by the claim guard.
 UPDATE goat_slack_deliveries delivery
 SET status = 'sent',
     sent_at = COALESCE(delivery.sent_at, now()),
     last_error = 'Migration deduplicated duplicate category-day GOAT alert'
 FROM goat_alerts alert
 WHERE delivery.goat_alert_id = alert.id
-  AND delivery.status IN ('pending', 'sending')
+  AND delivery.status = 'pending'
   AND alert.category_key IS NULL
+  AND alert.dismissed_at IS NOT NULL
   AND alert.group_name IN ('Repairs', 'Dismantlers', 'Juniors', 'Woodpecker', 'Hand Build')
   AND EXISTS (
     SELECT 1
