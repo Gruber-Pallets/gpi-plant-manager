@@ -186,15 +186,20 @@ def _cursor_factory(events: list[object], *, fail_first_holiday_write: bool = Fa
     return fake_cursor
 
 
-def test_refresh_replaces_set_then_reloads_and_invalidates_after_commit(
+def test_refresh_replaces_set_then_installs_prebuilt_map_after_commit(
     monkeypatch,
 ):
     events: list[object] = []
     monkeypatch.setattr(company_holidays.db, "cursor", _cursor_factory(events))
+
+    def install(replacement):
+        events.append(("install", replacement))
+
+    monkeypatch.setattr(company_holidays, "_install_date_map", install, raising=False)
     monkeypatch.setattr(
         company_holidays,
         "reload",
-        lambda: events.append("reload") or {},
+        lambda: pytest.fail("refresh must install its prebuilt map, not reload"),
     )
     monkeypatch.setattr(
         company_holidays.staffing,
@@ -229,45 +234,67 @@ def test_refresh_replaces_set_then_reloads_and_invalidates_after_commit(
         "INSERT INTO company_holiday_sync_state" in event[1] and event[2] == (now, now)
         for event in statements
     )
-    assert events.index(("commit", 1)) < events.index("reload")
-    assert events[-3:] == ["reload", "staffing invalidate", "http invalidate"]
+    install_event = next(
+        event for event in events if isinstance(event, tuple) and event[0] == "install"
+    )
+    installed = install_event[1]
+    assert set(installed) == {date(2026, 11, 27), date(2026, 12, 25)}
+    assert events.index(("commit", 1)) < events.index(install_event)
+    assert events[-2:] == ["staffing invalidate", "http invalidate"]
 
 
-def test_post_commit_reload_failure_does_not_record_a_refresh_failure(monkeypatch):
+def test_prebuild_failure_precedes_mirror_mutation_and_preserves_cache(
+    monkeypatch,
+):
     events: list[object] = []
     monkeypatch.setattr(company_holidays.db, "cursor", _cursor_factory(events))
+    old = company_holidays.normalize_odoo_row(_odoo_row(odoo_id=44, name="Old holiday"))
+    old_map = {old.date_from: old}
+    monkeypatch.setattr(company_holidays, "_holidays_by_day", old_map)
 
-    def fail_reload():
-        events.append("reload")
-        raise RuntimeError("reload failed")
+    def fail_prebuild(_holidays):
+        raise RuntimeError("prebuild failed")
 
-    monkeypatch.setattr(company_holidays, "reload", fail_reload)
+    monkeypatch.setattr(company_holidays, "_build_date_map", fail_prebuild, raising=False)
     monkeypatch.setattr(
-        company_holidays.staffing,
-        "invalidate_all_schedule_caches",
-        lambda: pytest.fail("invalidation must wait for a successful reload"),
+        company_holidays,
+        "reload",
+        lambda: pytest.fail("prebuild failure must not reach post-commit work"),
     )
 
-    with pytest.raises(RuntimeError, match="reload failed"):
+    with pytest.raises(RuntimeError, match="prebuild failed"):
         company_holidays.refresh(fetcher=lambda: [_odoo_row()])
 
-    state_statements = [
-        event
-        for event in events
-        if isinstance(event, tuple)
-        and event[0] == "execute"
-        and "company_holiday_sync_state" in event[1]
-    ]
-    assert [event for event in events if isinstance(event, tuple) and event[0] == "begin"] == [
-        ("begin", 1)
-    ]
-    assert len(state_statements) == 1
-    assert "last_success_at" in state_statements[0][1]
-    assert events.index(("commit", 1)) < events.index("reload")
+    statements = [event for event in events if isinstance(event, tuple) and event[0] == "execute"]
+    assert not any("INSERT INTO company_holidays " in event[1] for event in statements)
+    assert not any("DELETE FROM company_holidays" in event[1] for event in statements)
+    assert len(statements) == 1
+    assert "INSERT INTO company_holiday_sync_state" in statements[0][1]
+    assert "last_success_at" not in statements[0][1]
+    assert company_holidays.for_day(old.date_from) == old
+
+
+def test_install_date_map_replaces_the_cache_as_one_snapshot(monkeypatch):
+    old = company_holidays.normalize_odoo_row(
+        _odoo_row(
+            odoo_id=44,
+            name="Old holiday",
+            date_from="2026-07-04 05:00:00",
+            date_to="2026-07-05 04:59:59",
+        )
+    )
+    new = company_holidays.normalize_odoo_row(_odoo_row(odoo_id=81, name="New holiday"))
+    monkeypatch.setattr(company_holidays, "_holidays_by_day", {old.date_from: old})
+
+    installed = company_holidays._install_date_map({new.date_from: new})
+
+    assert installed == {new.date_from: new}
+    assert company_holidays.for_day(old.date_from) is None
+    assert company_holidays.for_day(new.date_from) == new
 
 
 @pytest.mark.parametrize("failing_step", ["staffing", "http"])
-def test_post_commit_invalidator_failure_does_not_record_a_refresh_failure(
+def test_post_commit_invalidator_failure_is_best_effort_and_other_hook_runs(
     monkeypatch, failing_step
 ):
     events: list[object] = []
@@ -275,7 +302,7 @@ def test_post_commit_invalidator_failure_does_not_record_a_refresh_failure(
     monkeypatch.setattr(
         company_holidays,
         "reload",
-        lambda: events.append("reload") or {},
+        lambda: pytest.fail("refresh must not reload after commit"),
     )
 
     def invalidate_staffing():
@@ -299,8 +326,7 @@ def test_post_commit_invalidator_failure_does_not_record_a_refresh_failure(
         invalidate_http,
     )
 
-    with pytest.raises(RuntimeError, match=f"{failing_step} invalidate failed"):
-        company_holidays.refresh(fetcher=lambda: [_odoo_row()])
+    assert company_holidays.refresh(fetcher=lambda: [_odoo_row()]) == 1
 
     state_statements = [
         event
@@ -314,9 +340,8 @@ def test_post_commit_invalidator_failure_does_not_record_a_refresh_failure(
     ]
     assert len(state_statements) == 1
     assert "last_success_at" in state_statements[0][1]
-    assert events.index(("commit", 1)) < events.index("reload")
-    if failing_step == "staffing":
-        assert "http invalidate" not in events
+    assert events.index(("commit", 1)) < events.index("staffing invalidate")
+    assert events.index(("commit", 1)) < events.index("http invalidate")
 
 
 def test_valid_empty_refresh_clears_mirror_and_marks_success(monkeypatch):

@@ -110,6 +110,39 @@ def _from_mirror_row(row: Mapping[str, Any]) -> CompanyHoliday:
     )
 
 
+def _build_date_map(
+    holidays: tuple[CompanyHoliday, ...],
+) -> dict[date, CompanyHoliday]:
+    replacement: dict[date, CompanyHoliday] = {}
+    for holiday in holidays:
+        day = holiday.date_from
+        while day <= holiday.date_to:
+            existing = replacement.get(day)
+            if existing is None:
+                replacement[day] = holiday
+            else:
+                winner = min(existing, holiday, key=lambda item: item.odoo_id)
+                replacement[day] = winner
+                _log.warning(
+                    "company holiday overlap on %s between Odoo ids %s and %s; using %s",
+                    day,
+                    existing.odoo_id,
+                    holiday.odoo_id,
+                    winner.odoo_id,
+                )
+            day += timedelta(days=1)
+    return replacement
+
+
+def _install_date_map(
+    replacement: dict[date, CompanyHoliday],
+) -> dict[date, CompanyHoliday]:
+    global _holidays_by_day
+    with _cache_lock:
+        _holidays_by_day = dict(replacement)
+        return dict(_holidays_by_day)
+
+
 def reload() -> dict[date, CompanyHoliday]:
     """Reload every persisted holiday and atomically replace the date cache."""
     rows = db.query(
@@ -117,30 +150,8 @@ def reload() -> dict[date, CompanyHoliday]:
         "odoo_date_from, odoo_date_to "
         "FROM company_holidays ORDER BY odoo_id"
     )
-    holidays = [_from_mirror_row(row) for row in rows]
-
-    with _cache_lock:
-        replacement: dict[date, CompanyHoliday] = {}
-        for holiday in holidays:
-            day = holiday.date_from
-            while day <= holiday.date_to:
-                existing = replacement.get(day)
-                if existing is None:
-                    replacement[day] = holiday
-                else:
-                    winner = min(existing, holiday, key=lambda item: item.odoo_id)
-                    replacement[day] = winner
-                    _log.warning(
-                        "company holiday overlap on %s between Odoo ids %s and %s; using %s",
-                        day,
-                        existing.odoo_id,
-                        holiday.odoo_id,
-                        winner.odoo_id,
-                    )
-                day += timedelta(days=1)
-        global _holidays_by_day
-        _holidays_by_day = replacement
-        return dict(_holidays_by_day)
+    holidays = tuple(_from_mirror_row(row) for row in rows)
+    return _install_date_map(_build_date_map(holidays))
 
 
 def for_day(day: date) -> CompanyHoliday | None:
@@ -219,10 +230,11 @@ def refresh(
         raw_rows = fetch()
         if not isinstance(raw_rows, list):
             raise InvalidHolidayRow("holiday response must be a list")
-        holidays = [normalize_odoo_row(row) for row in raw_rows]
+        holidays = tuple(normalize_odoo_row(row) for row in raw_rows)
         ids = [holiday.odoo_id for holiday in holidays]
         if len(ids) != len(set(ids)):
             raise InvalidHolidayRow("holiday response contains duplicate ids")
+        replacement = _build_date_map(holidays)
 
         with db.cursor() as cur:
             for holiday in holidays:
@@ -274,9 +286,15 @@ def refresh(
         _log.exception("company holiday refresh failed")
         raise
 
-    reload()
-    staffing.invalidate_all_schedule_caches()
-    _http_cache.invalidate_all_cache()
+    _install_date_map(replacement)
+    try:
+        staffing.invalidate_all_schedule_caches()
+    except Exception:  # noqa: BLE001 - committed refresh remains successful
+        _log.exception("could not invalidate staffing caches after company holiday refresh")
+    try:
+        _http_cache.invalidate_all_cache()
+    except Exception:  # noqa: BLE001 - committed refresh remains successful
+        _log.exception("could not invalidate HTTP caches after company holiday refresh")
     return len(holidays)
 
 
