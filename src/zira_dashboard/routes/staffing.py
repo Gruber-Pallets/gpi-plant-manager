@@ -1930,31 +1930,74 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             wc_notes[loc.name] = v
     testing_day = (form.get("testing_day") or "").strip() in ("1", "on", "true")
 
-    saturday_bundle = None
-    saturday_lookup_failed = False
-    if d.weekday() == 5:
-        try:
-            saturday_bundle = saturday_recruiting_store.get(d)
-        except Exception:
-            saturday_lookup_failed = True
-            log.exception("Saturday recruiting lookup failed for %s", d)
-
-    if saturday_lookup_failed:
+    try:
+        optional_day = optional_workday.for_day(d)
+    except Exception:
+        log.exception("Optional workday classification failed for %s", d)
         return JSONResponse(
             {
                 "ok": False,
-                "error": "Saturday recruiting state could not be verified. No schedule changes were saved.",
+                "error": (
+                    "Optional workday state could not be verified. "
+                    "No schedule changes were saved."
+                ),
             },
             status_code=409,
         )
 
-    active_saturday_recruiting = bool(
+    saturday_bundle = None
+    saturday_lookup_failed = False
+    if optional_day is not None:
+        try:
+            saturday_bundle = _matching_optional_recruiting_bundle(
+                saturday_recruiting_store.get(d),
+                optional_day,
+            )
+        except Exception:
+            saturday_lookup_failed = True
+            log.exception("Optional workday recruiting lookup failed for %s", d)
+
+    if saturday_lookup_failed:
+        error = (
+            "Saturday recruiting state could not be verified. "
+            "No schedule changes were saved."
+            if optional_day is not None and optional_day.kind == "saturday"
+            else (
+                "Optional workday state could not be verified. "
+                "No schedule changes were saved."
+            )
+        )
+        return JSONResponse(
+            {"ok": False, "error": error},
+            status_code=409,
+        )
+
+    if (
+        optional_day is not None
+        and optional_day.kind == "holiday"
+        and (
+            saturday_bundle is None
+            or saturday_bundle.recruitment.status == "cancelled"
+        )
+    ):
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": (
+                    f"Holiday recruiting is not active for {optional_day.name}. "
+                    "No schedule changes were saved."
+                ),
+            },
+            status_code=409,
+        )
+
+    active_optional_recruiting = bool(
         saturday_bundle
         and saturday_bundle.recruitment.status in {"recruiting", "closed", "published"}
     )
     committed_names = set()
     saturday_available_names = set()
-    if active_saturday_recruiting:
+    if active_optional_recruiting:
         recruiting_commitments = {
             item.person_name
             : {"start": item.availability_start, "end": item.availability_end}
@@ -1979,24 +2022,56 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             if name not in committed_names
         })
 
-    if active_saturday_recruiting and action in {"save", "publish"}:
+    if active_optional_recruiting and action in {"save", "publish"}:
+        optional_label = (
+            optional_day.name
+            if optional_day is not None and optional_day.kind == "holiday"
+            else "Saturday"
+        )
+        recruiting_label = (
+            "Holiday recruiting"
+            if optional_day is not None and optional_day.kind == "holiday"
+            else "Saturday recruiting"
+        )
         if saturday_bundle and saturday_bundle.recruitment.status == "recruiting" and assignments:
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": "Saturday recruiting must close before scheduling people.",
+                    "error": f"{recruiting_label} must close before scheduling people.",
+                },
+                status_code=409,
+            )
+        if (
+            action == "publish"
+            and saturday_bundle
+            and saturday_bundle.recruitment.status == "recruiting"
+        ):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"{recruiting_label} must close before publishing.",
                 },
                 status_code=409,
             )
         noncommitted_names = _noncommitted_names(assignments)
         if noncommitted_names:
+            if optional_day is not None and optional_day.kind == "holiday":
+                error = f"Only volunteers available for {optional_label} can be scheduled."
+                validation_errors = [
+                    f"{name} is not available for {optional_label}."
+                    for name in noncommitted_names
+                ]
+            else:
+                error = "Only committed Saturday volunteers can be scheduled."
+                validation_errors = [
+                    f"{name} is not committed to Saturday."
+                    for name in noncommitted_names
+                ]
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": "Only committed Saturday volunteers can be scheduled.",
-                    "validation_errors": [
-                        f"{name} is not committed to Saturday." for name in noncommitted_names
-                    ],
+                    "error": error,
+                    "validation_errors": validation_errors,
                 },
                 status_code=409,
             )
@@ -2005,9 +2080,9 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         work_centers_store.save_one(loc, {"default_people": clean_defaults})
 
     publish_block = []
-    if action == "publish" and not active_saturday_recruiting:
+    if action == "publish" and optional_day is None:
         publish_block = _publish_shortages(assignments, _enabled_auto_work_centers(d))
-    if action == "publish" and active_saturday_recruiting:
+    if action == "publish" and active_optional_recruiting:
         try:
             assert saturday_bundle is not None
             roster = staffing.load_roster()
@@ -2075,17 +2150,35 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         auto_enabled_work_centers=list(existing.auto_enabled_work_centers),
         saturday_availability_overrides=existing.saturday_availability_overrides,
     ))
+    publish_marker_failed = False
     if action == "publish" and published and saturday_bundle is not None:
         try:
             saturday_recruiting_store.mark_published(d, plant_now())
         except Exception:
-            # The schedule itself is already published. Keep that source of
-            # truth visible and let the next manager action retry the marker.
-            log.exception("Could not mark Saturday recruiting as published for %s", d)
+            # Holidays need both markers, so a partial publish remains
+            # operationally closed. The posted schedule is retained and the
+            # next publish action can retry this lifecycle marker.
+            publish_marker_failed = True
+            log.exception("Could not mark optional recruiting as published for %s", d)
     # Bust the today response cache so the next GET sees fresh data.
     _http_cache.invalidate_today_cache()
 
     wants_json = auto or (request.headers.get("accept") or "").startswith("application/json")
+    if (
+        publish_marker_failed
+        and optional_day is not None
+        and optional_day.kind == "holiday"
+    ):
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": (
+                    "Holiday work is still closed because publication could "
+                    "not be completed. Please try again."
+                ),
+            },
+            status_code=503,
+        )
     if publish_block and wants_json:
         return JSONResponse(
             {
@@ -2808,16 +2901,39 @@ async def cancel_scheduler_time_off(
 
 
 def _set_saturday_availability_work(day: date, name: str, destination: str) -> dict:
-    """Persist one manager correction to a live Saturday recruiting roster."""
-    if day.weekday() != 5:
+    """Persist one manager correction to a live optional-workday roster."""
+    try:
+        optional_day = optional_workday.for_day(day)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Optional workday state could not be verified. No changes were saved.",
+        ) from exc
+    if optional_day is None:
         raise HTTPException(status_code=409, detail="Saturday availability can only be changed on Saturday.")
     if destination not in {"unassigned", "off"}:
+        day_label = "Holiday" if optional_day.kind == "holiday" else "Saturday"
         raise HTTPException(
-            status_code=409, detail="Saturday availability destination must be Unassigned or Off."
+            status_code=409,
+            detail=f"{day_label} availability destination must be Unassigned or Off.",
         )
-    bundle = saturday_recruiting_store.get(day)
+    try:
+        bundle = _matching_optional_recruiting_bundle(
+            saturday_recruiting_store.get(day),
+            optional_day,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Optional workday state could not be verified. No changes were saved.",
+        ) from exc
     if bundle is None or bundle.recruitment.status not in {"recruiting", "closed", "published"}:
-        raise HTTPException(status_code=409, detail="Saturday recruiting is not active for this date.")
+        detail = (
+            f"Holiday recruiting is not active for {optional_day.name}."
+            if optional_day.kind == "holiday"
+            else "Saturday recruiting is not active for this date."
+        )
+        raise HTTPException(status_code=409, detail=detail)
 
     people = {person.name: person for person in staffing.load_roster()}
     person = people.get(name)

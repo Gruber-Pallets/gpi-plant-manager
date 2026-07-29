@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from .. import (
     _http_cache,
     db,
+    optional_workday,
     rotation_store,
     saturday_recruiting_store,
     schedule_solver,
@@ -486,6 +487,15 @@ async def save_auto_work_centers(request: Request):
         return _error("Invalid day.")
     if not isinstance(names, list) or not isinstance(turn_off, list):
         return _error("work_centers and turn_off must be lists.")
+    try:
+        optional_day = optional_workday.for_day(d)
+    except Exception:
+        log.exception("Optional workday classification failed for %s", d)
+        return _error(
+            "Optional workday state could not be verified. No changes were saved.",
+            409,
+        )
+
     def _work():
         proposed = staffing_route._ordered_work_center_names(names)
         turn_off_names = set(staffing_route._ordered_work_center_names(turn_off))
@@ -498,8 +508,11 @@ async def save_auto_work_centers(request: Request):
         saturday_recruiting = None
         try:
             with db.cursor() as cur:
-                if d.weekday() == 5:
-                    bundle = saturday_recruiting_store.get(d, cur=cur)
+                if optional_day is not None:
+                    bundle = staffing_route._matching_optional_recruiting_bundle(
+                        saturday_recruiting_store.get(d, cur=cur),
+                        optional_day,
+                    )
                     if bundle is not None and bundle.recruitment.status == "recruiting":
                         updated_bundle = saturday_recruiting_store.update_openings(
                             day=d,
@@ -573,20 +586,38 @@ def _build_assignment_sources(existing_sources, suggestion) -> dict[str, dict[st
     return new_sources
 
 
-def _saturday_auto_roster(
+def _optional_auto_roster(
     day: date,
     roster: Sequence[staffing.Person],
     sched: staffing.Schedule,
+    optional_day,
 ) -> list[staffing.Person]:
-    """Return only prepared, effectively available Saturday volunteers."""
-    bundle = saturday_recruiting_store.get(day)
-    if bundle is None or bundle.recruitment.status != "closed":
+    """Return only prepared, effectively available optional-day volunteers."""
+    bundle = staffing_route._matching_optional_recruiting_bundle(
+        saturday_recruiting_store.get(day),
+        optional_day,
+    )
+    recruiting_label = (
+        "Holiday recruiting"
+        if optional_day.kind == "holiday"
+        else "Saturday recruiting"
+    )
+    if bundle is None:
         raise saturday_recruiting_store.LifecycleConflict(
-            "Saturday recruiting must close before Auto scheduling."
+            f"{recruiting_label} must be active before Auto scheduling."
+        )
+    if bundle.recruitment.status != "closed":
+        raise saturday_recruiting_store.LifecycleConflict(
+            f"{recruiting_label} must close before Auto scheduling."
         )
     if bundle.recruitment.staffing_prepared_at is None:
+        schedule_label = (
+            "holiday work schedule"
+            if optional_day.kind == "holiday"
+            else "closed Saturday schedule"
+        )
         raise saturday_recruiting_store.LifecycleConflict(
-            "Open the closed Saturday schedule before Auto scheduling."
+            f"Open the {schedule_label} before Auto scheduling."
         )
     commitments = {
         item.person_name: {"start": item.availability_start, "end": item.availability_end}
@@ -641,6 +672,15 @@ async def rebuild_rotation(request: Request):
         return _error("Invalid day.")
     if mode not in _VALID_MODES:
         return _error(f"Unknown mode: {mode}")
+    try:
+        optional_day = optional_workday.for_day(d)
+    except Exception:
+        log.exception("Optional workday classification failed for %s", d)
+        return _error(
+            "Optional workday state could not be verified. No changes were saved.",
+            409,
+        )
+
     def _reset_to_defaults():
         """Clear the schedule and load ONLY the configured defaults.
 
@@ -654,8 +694,8 @@ async def rebuild_rotation(request: Request):
         sched = staffing.draft_from_posted(staffing.load_schedule(d))
         roster = staffing.load_roster()
         try:
-            if d.weekday() == 5:
-                roster = _saturday_auto_roster(d, roster, sched)
+            if optional_day is not None:
+                roster = _optional_auto_roster(d, roster, sched, optional_day)
             if staffing.schedule_revision(d) is None:
                 sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
             else:
@@ -668,7 +708,7 @@ async def rebuild_rotation(request: Request):
             time_off = scheduler_time_off.time_off_entries_for_day(d)
             defaults_fn = (
                 staffing_route.saturday_defaults_only_schedule
-                if d.weekday() == 5 else staffing_route.defaults_only_schedule
+                if optional_day is not None else staffing_route.defaults_only_schedule
             )
             assignments, sources = defaults_fn(d, roster, time_off, enabled_centers)
         except saturday_recruiting_store.LifecycleConflict as exc:
@@ -709,9 +749,9 @@ async def rebuild_rotation(request: Request):
             return _reset_to_defaults()
         roster = staffing.load_roster()
         sched = staffing.draft_from_posted(staffing.load_schedule(d))
-        if d.weekday() == 5:
+        if optional_day is not None:
             try:
-                roster = _saturday_auto_roster(d, roster, sched)
+                roster = _optional_auto_roster(d, roster, sched, optional_day)
             except saturday_recruiting_store.LifecycleConflict as exc:
                 return _error(str(exc))
         base_assignments = {k: list(v) for k, v in sched.assignments.items()}
@@ -734,7 +774,7 @@ async def rebuild_rotation(request: Request):
                 enabled_centers,
                 strict=True,
             )
-            if d.weekday() == 5:
+            if optional_day is not None:
                 manual_locks = _saturday_protected_locks(
                     sched, {person.name for person in roster}, enabled_centers,
                 )
@@ -777,9 +817,9 @@ async def rebuild_rotation(request: Request):
             group_defaults=group_defaults,
             user_group_centers=user_group_centers,
             # Weekdays staff to their configured minimum. A manager's explicit
-            # Saturday Auto action instead places remaining volunteers around
-            # the prepared defaults/manual locks.
-            minimum_only=d.weekday() != 5,
+            # optional-day Auto action instead places remaining volunteers
+            # around the prepared defaults/manual locks.
+            minimum_only=optional_day is None,
         )
         if suggestion is None:
             return _error("Could not rebuild the schedule.", 503)
