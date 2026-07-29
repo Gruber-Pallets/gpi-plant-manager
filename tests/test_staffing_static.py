@@ -558,6 +558,123 @@ def test_live_validation_ignores_an_out_of_order_stale_response():
     assert result.returncode == 0, result.stderr
 
 
+def test_live_validation_failed_auto_cannot_replace_the_explicit_failure():
+    js = _script()
+    validation = "let validationTimer = null;" + js.split(
+        "let validationTimer = null;", 1,
+    )[1].split("function setWorkCenterOnState", 1)[0]
+    save_auto = "async function saveAutoCenters(turnOff = []) {" + js.split(
+        "async function saveAutoCenters(turnOff = []) {", 1,
+    )[1].split("// Ordinary rebuilds", 1)[0]
+
+    assert "function invalidateCurrentViewValidation()" in validation
+    failure = save_auto.split("} catch (err) {", 1)[1].split("} finally {", 1)[0]
+    assert failure.index("invalidateCurrentViewValidation();") < failure.index(
+        "renderCoverageFailure(message);"
+    )
+
+    harness = textwrap.dedent(
+        f"""
+        const validation = {validation!r};
+        const saveAuto = {save_auto!r};
+        const controllers = [];
+        const warningPanel = {{ issues: [] }};
+        let validationResponse;
+        let scheduleCurrentViewValidation = () => {{}};
+        let savingAutoCenters = false;
+        const __viewingPosted = false;
+        const day = '2026-07-29';
+        class AbortController {{
+          constructor() {{ this.signal = {{}}; controllers.push(this); }}
+          abort() {{ this.aborted = true; }}
+        }}
+        const window = {{
+          AUTO_SCHEDULE_WC_NAMES: ['Repair 1'],
+          flushAutosave: async () => {{}},
+          showToast: () => {{}},
+        }};
+        const document = {{ querySelectorAll: () => [] }};
+        const fetch = url => {{
+          if (url !== '/api/rotations/validate-current') throw new Error('unexpected request');
+          return new Promise(resolve => {{ validationResponse = resolve; }});
+        }};
+        function renderCoverageIssues(warnings, issues) {{
+          warningPanel.issues = issues;
+          window.ROTATION_WARNINGS = warnings;
+          window.ROTATION_ISSUES = issues;
+        }}
+        function setAutoCentersSaving(saving) {{ savingAutoCenters = saving; }}
+        function selectedAutoCenters() {{ return ['Repair 1']; }}
+        function postAutoCenters() {{
+          return Promise.resolve({{
+            ok: false,
+            status: 503,
+            json: async () => ({{ ok: false, error: 'Auto save unavailable.' }}),
+          }});
+        }}
+        function applyEnabledCenters() {{}}
+        function applyAutoCenterAssignments() {{}}
+        function renderSaturdayRecruitingDemand() {{}}
+        function renderMinimumCrewBalance() {{}}
+        function renderCoverageFailure(message) {{
+          warningPanel.issues = [{{ code: 'auto_toggle_failed', message }}];
+        }}
+        function showToast() {{}}
+        const {{ validateCurrentView, saveAutoCenters }} = eval(
+          validation + '\\n' + saveAuto + '\\n({{ validateCurrentView, saveAutoCenters }})'
+        );
+
+        const oldValidation = validateCurrentView();
+        if (!validationResponse) throw new Error('validation request did not start');
+        await saveAutoCenters();
+        if (!controllers[0].aborted) throw new Error('Auto failure did not abort validation');
+        if (warningPanel.issues[0]?.code !== 'auto_toggle_failed') {{
+          throw new Error('Auto failure did not render first');
+        }}
+        validationResponse({{
+          ok: true,
+          json: async () => ({{
+            ok: true,
+            issues: [{{ code: 'old_validation', message: 'Old validation result.' }}],
+          }}),
+        }});
+        await oldValidation;
+        if (warningPanel.issues.length !== 1 || warningPanel.issues[0].code !== 'auto_toggle_failed') {{
+          throw new Error('old validation result replaced the Auto failure');
+        }}
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_live_validation_schedules_every_programmatic_grid_mutation():
+    js = _script()
+    undo = js.split("function performUndo(snap) {", 1)[1].split(
+        "function performRedo(snap) {", 1,
+    )[0]
+    redo = js.split("function performRedo(snap) {", 1)[1].split(
+        "if (__undoBtn)", 1,
+    )[0]
+    time_off = js.split("// ---------- Time Off \"+ Add\" select", 1)[1].split(
+        "document.addEventListener('click', (e) => {", 1,
+    )[0]
+    override = js.split("onOverride: () => {", 1)[1].split("        });", 1)[0]
+
+    assert "reapplyVisualState();\n    scheduleCurrentViewValidation();" in undo
+    assert "reapplyVisualState();\n    scheduleCurrentViewValidation();" in redo
+    assert "removeFromAllScheduledWcs(name);" in time_off
+    assert "kickAutosave();\n    scheduleCurrentViewValidation();" in time_off
+    assert "kickAutosave();\n            scheduleCurrentViewValidation();" in override
+
+
 def test_reset_to_defaults_confirms_clearing_and_loading_the_default_schedule():
     js = _script()
     rotation = js.split("// ---------- Rotation goal", 1)[1].split(
@@ -872,6 +989,7 @@ def test_work_center_toggle_stops_before_reconciling_when_autosave_drain_fails()
         function clearStaleAutoWarnings() {{}}
         function renderMinimumCrewBalance() {{}}
         function renderCoverageFailure() {{}}
+        function invalidateCurrentViewValidation() {{}}
         function showToast() {{}}
         const saveAutoCenters = eval('(' + saveAuto + ')');
 

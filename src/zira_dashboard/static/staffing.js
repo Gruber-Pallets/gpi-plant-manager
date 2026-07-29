@@ -125,6 +125,7 @@
     const beforeRevert = serializeForm(__form);
     applyState(__form, snap);
     reapplyVisualState();
+    scheduleCurrentViewValidation();
     __saving = true;
     const body = __buildAutosaveBody();
     const url = __form.action + (__form.action.includes('?') ? '&' : '?') + 'auto=1';
@@ -143,6 +144,7 @@
     const beforeRedo = serializeForm(__form);
     applyState(__form, snap);
     reapplyVisualState();
+    scheduleCurrentViewValidation();
     __saving = true;
     const body = __buildAutosaveBody();
     const url = __form.action + (__form.action.includes('?') ? '&' : '?') + 'auto=1';
@@ -757,6 +759,7 @@
     });
     sel.value = '';
     kickAutosave();
+    scheduleCurrentViewValidation();
   });
 
   document.addEventListener('click', (e) => {
@@ -796,6 +799,7 @@
             removeFromReserves(item.dataset.name);
             refreshPickerVisibility();
             kickAutosave();
+            scheduleCurrentViewValidation();
           },
         });
         return;
@@ -1728,6 +1732,14 @@
       }
     }
 
+    function invalidateCurrentViewValidation() {
+      clearTimeout(validationTimer);
+      validationTimer = null;
+      validationRequestId += 1;
+      validationController?.abort();
+      validationController = null;
+    }
+
     scheduleCurrentViewValidation = function scheduleCurrentViewValidation() {
       clearTimeout(validationTimer);
       validationTimer = setTimeout(validateCurrentView, 150);
@@ -1835,6 +1847,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       } catch (err) {
         const message = 'Auto toggle failed: ' + (err.message || 'network error');
         applyEnabledCenters(window.AUTO_SCHEDULE_WC_NAMES || []);
+        invalidateCurrentViewValidation();
         renderCoverageFailure(message);
         if (window.showToast) showToast(message, null, 'error');
       } finally {

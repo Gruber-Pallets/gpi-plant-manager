@@ -18,6 +18,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Fixes
 
+- **Auto save warnings stay put when something goes wrong.** A late schedule check will not hide the red message that says Auto could not save your change.
 - **Schedule warnings update as you work.** When you move people or work centers, the page checks again and shows the newest warning.
 - **Staffing safety checks now run safely in the background.** This helps the schedule page stay quick and reliable while it checks each work center.
 - **Staffing warnings now check the schedule you are looking at.** You see problems in the people and work centers on the screen, not an Auto schedule idea.
