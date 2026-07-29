@@ -1,6 +1,4 @@
-"""GOAT Watch — Recycling-VS banner that surfaces operators on pace
-to beat their group's all-time single-day record, and the persisted
-"NEW GOAT" alert once someone actually does.
+"""GOAT Watch — live contenders plus persisted dashboard GOAT alerts.
 
 Two surfaces:
 
@@ -8,19 +6,15 @@ Two surfaces:
      passed): `contenders_for_now(day, now)` returns every group whose
      leading WC is projecting >= 98 % of that group's GOAT record.
 
-  2. **Finalized NEW GOAT alerts**: at shift end, `finalize_day(day)`
-     writes a `goat_alerts` row for every WC-day that strictly beat
-     its group's record. `active_alerts(today)` returns the visible
-     (un-dismissed, within next_business_day window) rows.
+  2. **Persisted NEW GOAT alerts**: `active_alerts(today)` returns the
+     visible (un-dismissed, within next-business-day window) rows.
+     Finalized records are selected and delivered by `goat_notifications`;
+     the compatibility bridge here can trigger its durable due-day worker
+     while the dashboard is visited.
 
 Detection threshold: live banner triggers at `>= 98 %` of the prior
-GOAT record. The NEW GOAT alert is strict — fires only when actual
-units > prior record (ties keep the existing holder).
-
-The "credited operator" is the schedule's primary assignment for the
-WC that day. The "credited WC" is the work-center itself — group
-GOATs are derived per WC-day, the highest of which represents the
-group's all-time best.
+GOAT record. Finalized GOAT records are durable, and the worker only
+creates them when a result strictly beats the prior record.
 """
 from __future__ import annotations
 
