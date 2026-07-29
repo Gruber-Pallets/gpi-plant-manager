@@ -1100,6 +1100,23 @@ def test_footer_enhances_inbox_nav_with_summary_count():
     assert ".inbox-nav-link.is-degraded .inbox-nav-count" in css
 
 
+def test_footer_refreshes_the_server_bootstrap_before_the_first_poll():
+    """A cached page must not leave an already-cleared Inbox badge visible.
+
+    Dashboard HTML is cached for speed, while Inbox work can clear between
+    renders. The server bootstrap paints instantly, then the client must ask
+    for the live summary right away instead of waiting for the 60-second poll.
+    """
+    js = (STATIC_DIR / "footer.js").read_text(encoding="utf-8")
+
+    start = js.index("function startInboxSummary(link)")
+    bootstrap = js.index("updateInboxSummaryLink(link, initial);", start)
+    first_refresh = js.index("refreshInboxSummary(link);", bootstrap)
+    fallback = js.index("} else {", bootstrap)
+
+    assert bootstrap < first_refresh < fallback
+
+
 def test_time_off_approve_endpoint_updates_to_odoo_state(monkeypatch):
     from zira_dashboard import odoo_client
 

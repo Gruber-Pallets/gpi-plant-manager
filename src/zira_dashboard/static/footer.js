@@ -311,6 +311,11 @@
     var initial = readInboxSummaryBootstrap();
     if (initial) {
       updateInboxSummaryLink(link, initial);
+      // The page body may have come from the short-lived HTML cache while an
+      // Inbox item cleared in the meantime. Keep the instant server-rendered
+      // badge, then reconcile it immediately with the live summary instead
+      // of leaving a stale count visible until the first one-minute poll.
+      refreshInboxSummary(link);
     } else {
       setTimeout(function () { refreshInboxSummary(link); }, 650);
     }
