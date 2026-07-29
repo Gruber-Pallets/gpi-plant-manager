@@ -82,11 +82,13 @@ Add an Odoo client operation that reads all company-wide Public Holidays:
 The read returns the Odoo id, name, start datetime, and end datetime. Plant
 Manager will not expose any create, write, or unlink operation for this model.
 
-The public `fetch_public_holidays(start, end)` facade remains for existing
-calendar callers, but it will read the local mirror. A separate internal
-full-list Odoo reader feeds the synchronizer. No calendar or scheduling render
-performs a live Odoo holiday call, so an outage cannot make known holidays
-disappear from Plant Manager.
+The existing `fetch_public_holidays(start, end)` facade remains a cached live
+Odoo reader because the time-off repair job needs both company-wide and
+Working-Hours-scoped calendar leaves. A separate full-list Odoo reader, limited
+to `calendar_id = false`, feeds the new company-holiday mirror. Calendar and
+scheduling renders switch to that local mirror, so an outage cannot make known
+plant closures disappear without weakening the repair job's scoped-calendar
+checks.
 
 ### 2. Persisted holiday mirror
 
@@ -296,6 +298,11 @@ Schedule and recruiting mutations continue to invalidate their existing
 staffing and shift caches. Workday lookup must never perform an XML-RPC call in
 the punch, progress, or production hot paths.
 
+The time-off local-backfill path keeps its existing cached live Odoo range read
+because it must distinguish a whole-company holiday from one scoped to an
+employee's Working Hours. It does not use the plant-wide mirror for that
+decision.
+
 ## Failure and Race Handling
 
 - Odoo refresh failure keeps the last-known-good mirror.
@@ -325,6 +332,8 @@ the punch, progress, or production hot paths.
 - Converts UTC datetimes to correct plant-local dates.
 - Expands single- and multi-day holidays.
 - Refreshes the in-process lookup after commit.
+- Keeps schedule-scoped holiday rows available to the time-off repair job
+  without classifying them as plant-wide closures.
 
 ### Workday and hours
 

@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-07-29
 
+### 01:34 PM - Holiday work build plan
+
+- **The holiday work build steps are ready.** The team now has a full checklist for bringing Odoo holidays into the schedule and using the same volunteer tools as Saturday work. This is still a plan; the app has not changed yet.
+
 ### 01:28 PM - Sidebar warning build plan
 
 - **The schedule warning steps are ready.** The team now has a clear checklist for moving warnings to the right side without breaking live updates. This is the plan; the app has not changed yet.
