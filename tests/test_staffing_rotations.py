@@ -2567,7 +2567,10 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "setWorkCenterOnState(name, !enabled);\n      renderMinimumCrewBalanceFromGrid();\n      saveAutoCenters(enabled ? [name] : []);" in js
     assert "const waitingEl = document.getElementById('minimum-crew-waiting');" not in js
     assert "const slotsEl = document.getElementById('minimum-crew-slots');" not in js
-    assert "function clearStaleAutoWarnings()" in js
+    assert "clearStaleAutoWarnings" not in js
+    assert "async function validateCurrentView()" in js
+    assert "scheduleCurrentViewValidation = function scheduleCurrentViewValidation()" in js
+    assert "renderCoverageIssues([], data.issues || []);" in js
     assert ".rotation-mode {\n    display: flex; flex-wrap: nowrap;" in css
     assert "width: 100%;" in css
     assert ".minimum-crew-balance { gap: 0.45rem; margin-left: auto; }" in css
