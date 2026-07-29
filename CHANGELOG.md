@@ -18,6 +18,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Fixes
 
+- **Live schedule warnings** — Schedule warnings now update as you move people around. A warning goes away when the schedule is safe again, so you only see problems that are happening now.
 - **Clearing a schedule spot refreshes its warning right away.** When you clear people or work centers, you quickly see the newest schedule warning.
 - **Auto save warnings stay put when something goes wrong.** A late schedule check will not hide the red message that says Auto could not save your change.
 - **Schedule warnings update as you work.** When you move people or work centers, the page checks again and shows the newest warning.
