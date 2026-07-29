@@ -18,6 +18,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Fixes
 
+- **Draft and posted schedule warnings now stay in their right place.** Drafts show the people on the screen, while posted schedules keep their saved warning details.
 - **Schedule warnings stay clear and current.** The app checks that old warnings do not come back after you change the schedule.
 - **Live schedule warnings** — Schedule warnings now update as you move people around. A warning goes away when the schedule is safe again, so you only see problems that are happening now.
 - **Clearing a schedule spot refreshes its warning right away.** When you clear people or work centers, you quickly see the newest schedule warning.

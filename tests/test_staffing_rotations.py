@@ -239,6 +239,63 @@ def test_current_view_validation_uses_the_visible_safe_trim_saw_crew(monkeypatch
     assert not any(issue["code"] == "no_safe_complete_crew" for issue in issues)
 
 
+def test_current_view_validation_requires_green_partner_for_visible_active_trainee(monkeypatch):
+    from zira_dashboard import rotation_store
+    from zira_dashboard.routes import staffing as staffing_route
+
+    block = rotation_store.TrainingBlock(
+        id=1,
+        trainee_name="Learner",
+        trainer_name="Green",
+        skill="Repair",
+        start_day=TARGET_DAY,
+        planned_attended_days=5,
+        status="active",
+        work_center="Repair 1",
+    )
+    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
+        _person("Learner", 2),
+    ])
+    monkeypatch.setattr(
+        staffing_route.scheduler_time_off,
+        "time_off_entries_for_day",
+        lambda _day: [],
+    )
+    monkeypatch.setattr(staffing_route, "_absence_by_day_for_block", lambda *_args: {})
+    monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({}, {}, {}))
+    monkeypatch.setattr(
+        staffing_route,
+        "_effective_minimum",
+        lambda loc: 1 if loc.name == "Repair 1" else loc.min_ops,
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "_configured_center_capacities",
+        lambda centers, strict=False: {center: 2 for center in centers},
+    )
+    monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda _day: [block])
+    monkeypatch.setattr(
+        staffing_route.schedule_store,
+        "current",
+        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
+    )
+    monkeypatch.setattr(
+        staffing_route.rotation_training,
+        "reconcile_blocks",
+        lambda *_args, **_kwargs: pytest.fail("current-view validation must not reconcile training"),
+    )
+
+    issues = staffing_route.current_view_validation_for_day(
+        day=TARGET_DAY,
+        assignments={"Repair 1": ["Learner"]},
+        enabled_work_centers=["Repair 1"],
+    )
+
+    assert {issue["code"] for issue in issues} >= {
+        "training_partner_missing", "center_minimum_unmet",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # POST /api/rotations/preferences
 # --------------------------------------------------------------------------- #
@@ -1554,6 +1611,12 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
             reasons={},
             warnings=(preview_message, "Keep this training warning."),
             group_locations={"Repair": ("Repair 1",)},
+            issues=(schedule_solver.CoverageIssue(
+                center="Repair 1",
+                group="Repair",
+                code="stale_preview_issue",
+                message="Stale Auto proposal issue.",
+            ),),
             placement_issues=(
                 schedule_solver.PlacementIssue(
                     code="center_minimum_unmet",
@@ -1586,6 +1649,50 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
 
     assert context["rotation_issues"] == []
     assert context["rotation_warnings"] == []
+
+
+def test_recycled_context_keeps_legacy_preview_warnings_for_posted_view(monkeypatch):
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    preview_issue = schedule_solver.CoverageIssue(
+        center="Repair 1",
+        group="Repair",
+        code="preview_issue",
+        message="Posted schedule preview issue.",
+    )
+    monkeypatch.setattr(
+        rotation_suggestions,
+        "suggest_recycled_assignments",
+        lambda **_kwargs: rotation_suggestions.RecycledSuggestion(
+            assignments={},
+            sources={},
+            reasons={},
+            warnings=("Posted schedule preview warning.",),
+            group_locations={"Repair": ("Repair 1",)},
+            issues=(preview_issue,),
+        ),
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "current_view_validation_for_day",
+        lambda **_kwargs: pytest.fail("posted views must not run current-view validation"),
+    )
+
+    context = staffing_route._recycled_context_for_day(
+        TARGET_DAY,
+        roster=[],
+        mode="normal",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
+        enabled_work_centers={"Repair 1"},
+        assignment_sources={},
+        current_assignments={"Repair 1": []},
+        use_current_view_validation=False,
+        work_weekdays=frozenset({0, 1, 2, 3, 4}),
+    )
+
+    assert context["rotation_issues"] == [preview_issue.to_dict()]
+    assert context["rotation_warnings"] == ["Posted schedule preview warning."]
 
 
 def test_page_placement_issues_hide_only_disabled_defaults_on_off_saturday():
@@ -2941,20 +3048,7 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
     assert ctx["rotation_reason_codes"] == {
         "Repair 1": {"Green": "minimum_coverage"},
     }
-    assert ctx["rotation_issues"] == [{
-        "center": "Dismantler 1",
-        "group": "Dismantler",
-        "code": "training_required",
-        "message": (
-            "Dismantler 1 could not be staffed. "
-            "Training is required for Dismantler."
-        ),
-        "rejections": [{
-            "person": "Learner",
-            "code": "not_qualified",
-            "detail": "Needs Dismantler training before assignment.",
-        }],
-    }]
+    assert ctx["rotation_issues"] == []
     assert ctx["rotation_warnings"] == []
     assert len(ctx["active_training_blocks"]) == 1
     tb = ctx["active_training_blocks"][0]
@@ -3167,6 +3261,7 @@ def _render_staffing_page(
     default_people=None,
     recycled_context=None,
     bay_model=None,
+    view="draft",
 ):
     """Render the staffing page with all I/O stubbed, returning the captured
     template context. Mirrors the harness in test_staffing_trim_saw_defaults.
@@ -3284,7 +3379,7 @@ def _render_staffing_page(
 
     monkeypatch.setattr(staffing_routes, "templates", FakeTemplates())
 
-    staffing_routes.staffing_page(request=object(), day=the_day.isoformat(), publish_blocked=0, view="draft")
+    staffing_routes.staffing_page(request=object(), day=the_day.isoformat(), publish_blocked=0, view=view)
     return captured["context"]
 
 
@@ -3853,6 +3948,42 @@ def test_staffing_context_does_not_treat_exact_default_as_duplicate_lock(monkeyp
     assert captured["current_assignments"] == {
         "Repair 2": ["Default Green"],
     }
+
+
+def test_posted_staffing_view_keeps_legacy_preview_validation(monkeypatch):
+    captured = {}
+    schedule = staffing.Schedule(
+        day=TARGET_DAY,
+        assignments={"Repair 1": ["Draft Person"]},
+        auto_enabled_work_centers=["Repair 1"],
+        published_snapshot={
+            "assignments": {"Repair 1": ["Posted Person"]},
+            "assignment_sources": {},
+            "rotation_mode": "normal",
+        },
+    )
+
+    def fake_recycled_context(*_args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "recycled_rotation_mode": "normal",
+            "rotation_reasons": {},
+            "rotation_reason_codes": {},
+            "rotation_warnings": [],
+            "rotation_issues": [],
+            "active_training_blocks": [],
+        }
+
+    _render_staffing_page(
+        monkeypatch,
+        saved_schedule=schedule,
+        auto_centers={"Repair 1"},
+        recycled_context=fake_recycled_context,
+        view="posted",
+    )
+
+    assert captured["use_current_view_validation"] is False
+    assert captured["current_assignments"] == {"Repair 1": ["Posted Person"]}
 
 
 def test_saved_day_hints_thread_stored_mode(monkeypatch):

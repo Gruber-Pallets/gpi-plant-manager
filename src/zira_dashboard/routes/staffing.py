@@ -629,9 +629,10 @@ def _current_training_trainees_by_center(day: date, assignments) -> dict[str, tu
     """Project today's active training blocks without changing their lifecycle.
 
     The validator needs only the trainees whose active blocks reserve an exact
-    work center today. Existing on-screen assignments are passed to the effect
-    as manual picks, preserving its established conflict behaviour while
-    keeping this read path free of block reconciliation.
+    work center today. Other on-screen assignments remain manual picks for the
+    effect, while the trainee stays visible to the safety projection even when
+    they are already assigned at their training center. This path never
+    reconciles a block.
     """
     manual_assignees = {
         str(name).strip()
@@ -645,7 +646,7 @@ def _current_training_trainees_by_center(day: date, assignments) -> dict[str, tu
             block,
             day,
             absence_by_day=_absence_by_day_for_block(block, day),
-            manual_assignees=manual_assignees,
+            manual_assignees=manual_assignees - {block.trainee_name},
         )
         for center, names in effect.locked_work_centers.items():
             trainees_by_center.setdefault(center, set()).update(names)
@@ -865,14 +866,14 @@ def _page_placement_issues_for_day(
 def _recycled_context_for_day(
     d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries,
     enabled_work_centers=None, assignment_sources=None, current_assignments=None,
-    *, work_weekdays: frozenset[int],
+    *, work_weekdays: frozenset[int], use_current_view_validation: bool = True,
 ):
     """Recycled template context: mode, per-assignment reasons, warnings, blocks.
 
-    Initial warnings validate the schedule currently on screen, independently
-    of the Auto-preview used for assignment reasons. Recommendation-data
-    failures retain safe empty preview defaults so the staffing page never
-    500s, while current-schedule validation can still report its result.
+    Draft warnings validate the schedule currently on screen, independently of
+    the Auto-preview used for assignment reasons. Posted pages keep their
+    legacy preview warning behavior. Recommendation-data failures retain safe
+    empty preview defaults so the staffing page never 500s.
     """
     ctx = {
         "recycled_rotation_mode": mode or "normal",
@@ -940,24 +941,45 @@ def _recycled_context_for_day(
         ctx["rotation_reason_codes"] = {
             wc: dict(values) for wc, values in suggestion.reason_codes.items()
         }
-        ctx["rotation_issues"].extend(
-            issue.to_dict()
-            for issue in suggestion.issues
-        )
+        if not use_current_view_validation:
+            action_only_codes = {"person_unplaced", "center_minimum_unmet"}
+            action_only_messages = {
+                issue.message
+                for issue in suggestion.placement_issues
+                if issue.code in action_only_codes
+            }
+            page_placement_issues = tuple(
+                issue
+                for issue in suggestion.placement_issues
+                if issue.code not in action_only_codes
+            )
+            page_placement_issues = _page_placement_issues_for_day(
+                d, work_weekdays, page_placement_issues,
+            )
+            ctx["rotation_warnings"] = [
+                warning
+                for warning in suggestion.warnings
+                if warning not in action_only_messages
+            ]
+            ctx["rotation_issues"].extend(
+                issue.to_dict()
+                for issue in (*suggestion.issues, *page_placement_issues)
+            )
         ctx["active_training_blocks"] = _training_blocks_context(active_blocks, d)
     except Exception:
         log.exception("Recycled context failed for %s; degrading to empty defaults", d)
 
-    try:
-        visible_issues = current_view_validation_for_day(
-            day=d,
-            assignments=current_assignments if current_assignments is not None else {},
-            enabled_work_centers=enabled,
-        )
-        ctx["rotation_warnings"] = [issue["message"] for issue in visible_issues]
-        ctx["rotation_issues"].extend(visible_issues)
-    except Exception:
-        log.exception("Current staffing validation failed for %s; degrading to empty defaults", d)
+    if use_current_view_validation:
+        try:
+            visible_issues = current_view_validation_for_day(
+                day=d,
+                assignments=current_assignments if current_assignments is not None else {},
+                enabled_work_centers=enabled,
+            )
+            ctx["rotation_warnings"] = [issue["message"] for issue in visible_issues]
+            ctx["rotation_issues"].extend(visible_issues)
+        except Exception:
+            log.exception("Current staffing validation failed for %s; degrading to empty defaults", d)
     return ctx
 
 
@@ -1635,6 +1657,7 @@ def staffing_page(
         assignment_sources=sched.assignment_sources,
         current_assignments=sched.assignments,
         work_weekdays=work_weekdays,
+        use_current_view_validation=not viewing_posted,
     )
 
     posted_delivery = (
