@@ -4510,7 +4510,10 @@ def test_open_saturday_recruiting_keeps_normal_flow_hidden(monkeypatch):
 def test_staffing_template_renders_auto_controls_from_the_available_context():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
 
-    assert "{% if auto_scheduler_available and (not day_is_saturday or saturday_recruiting_finished) %}" in html
+    assert (
+        "{% if auto_scheduler_available and "
+        "(not is_optional_workday or saturday_recruiting_finished) %}"
+    ) in html
     assert 'class="rotation-controls"' in html
     assert 'data-work-center-toggle' in html
 

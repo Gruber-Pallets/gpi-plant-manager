@@ -11,6 +11,10 @@ def _script():
     return Path("src/zira_dashboard/static/staffing.js").read_text()
 
 
+def _recruiting_script():
+    return Path("src/zira_dashboard/static/saturday-recruiting.js").read_text()
+
+
 def _style():
     return Path("src/zira_dashboard/static/staffing.css").read_text()
 
@@ -141,6 +145,28 @@ def test_staffing_custom_hours_controls_are_named_and_busy():
     assert "save.setAttribute('aria-busy', 'true');" in js
     assert "save.disabled = false;" in js
     assert "save.setAttribute('aria-busy', 'false');" in js
+
+
+def test_optional_workday_reuses_existing_page_modal_navigation_and_api_contracts():
+    html = _template()
+    recruiting_js = _recruiting_script()
+
+    assert html.count('role="dialog"') == 1
+    assert html.count("<dialog") == 2
+    assert "{% include '_staffing_subnav.html' %}" in html
+    assert "/staffing/holiday" not in html
+    assert "holiday-modal" not in html
+    assert "holiday-navigation" not in html
+    assert (
+        "'/api/staffing/saturday-recruiting/activate-from-schedule'"
+        in recruiting_js
+    )
+    assert "JSON.stringify({day: button.dataset.day})" in recruiting_js
+    assert (
+        "Could not save the schedule. Optional workday recruiting was not started."
+        in recruiting_js
+    )
+    assert "/api/staffing/holiday-recruiting" not in recruiting_js
 
 
 def test_staffing_title_uses_date_picker_without_past_shortcut():
@@ -429,7 +455,10 @@ def test_rotation_warning_supports_structured_coverage_issues():
     )[0]
 
     assert 'id="rotation-warnings" role="alert"' in html
-    assert "{% if not rotation_warnings and not rotation_issues %}hidden{% endif %}" in html
+    assert (
+        "{% if not holiday_sync_warning and not rotation_warnings and not rotation_issues %}"
+        "hidden{% endif %}"
+    ) in html
     assert 'class="coverage-why"' in html
     assert "rotation_issues" in html
     assert "renderCoverageIssues" in js

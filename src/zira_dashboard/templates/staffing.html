@@ -18,8 +18,8 @@
    screen; staffing-print.css shows it (and hides the chrome) on paper. #}
 <div class="print-header">
   <div class="title">Plant Scheduler</div>
-  <div class="date">{{ day_pretty }}</div>
-  {% if hours_source != 'weekday_default' %}<div class="hours">{% if hours_source == 'saturday_default' %}Saturday Hours{% else %}Custom Hours{% endif %}: {{ eff_hours_label }}</div>{% endif %}
+  <div class="date">{{ day_pretty }}{% if optional_day_kind == 'holiday' %} · {{ optional_day_label }} · Plant closed by default{% endif %}</div>
+  {% if hours_source != 'weekday_default' %}<div class="hours">{% if hours_source == 'saturday_default' %}{% if optional_day_kind == 'holiday' %}Holiday Work Hours (Saturday default){% else %}Saturday Hours{% endif %}{% else %}Custom Hours{% endif %}: {{ eff_hours_label }}</div>{% endif %}
 </div>
 <header class="app">
   {% set active_nav = 'staffing' %}{% include "_topnav.html" %}
@@ -125,7 +125,7 @@
   <!-- MAIN: Daily Plant Scheduler -->
   <main class="panel">
     <div class="title-bar">
-      <h2>Daily Plant Scheduler</h2>
+      <h2>Daily Plant Scheduler{% if optional_day_kind == 'holiday' %} · {{ optional_day_label }} · Plant closed by default{% endif %}</h2>
       <div class="title-bar-actions">
       <input type="date" id="day-picker" value="{{ day }}" class="date-input" title="Jump to another day">
       <a href="/staffing?day={{ today }}" class="day-hot {% if day == today %}active{% endif %}" title="Jump to today">Today</a>
@@ -133,13 +133,13 @@
       <button type="button" class="hours-pill {% if nonstandard_schedule %}custom{% endif %}" id="hours-pill"
               title="Click to edit shift hours for this day" aria-label="Edit shift hours for {{ day }}"
               aria-controls="hours-editor" aria-expanded="false">
-        {% if nonstandard_schedule %}
+        {% if nonstandard_schedule and not (optional_day_kind == 'holiday' and hours_source == 'saturday_default') %}
           <span class="label">Custom</span>
           <span>{{ eff_custom_hours_label }}</span>
         {% else %}
           <span class="label">Hours</span>
           <span>{{ eff_hours_label }}</span>
-          {% if hours_source != 'weekday_default' %}<span>· {{ eff_breaks|length }} break{{ eff_breaks|length != 1 and 's' or '' }}</span>{% endif %}{% if hours_source == 'saturday_default' %}<span>· Saturday default</span>{% endif %}
+          {% if hours_source != 'weekday_default' %}<span>· {{ eff_breaks|length }} break{{ eff_breaks|length != 1 and 's' or '' }}</span>{% endif %}{% if hours_source == 'saturday_default' %}<span>· {% if optional_day_kind == 'holiday' %}Saturday default hours for holiday work{% else %}Saturday default{% endif %}</span>{% endif %}
         {% endif %}
       </button>
 
@@ -200,14 +200,14 @@
           </button>
         {% else %}
           <span id="autosave-indicator" class="autosave clean" aria-live="polite"></span>
-          {% if day_is_saturday and not saturday_recruiting %}
+          {% if is_optional_workday and not saturday_recruiting %}
             <button type="button" class="publish-btn saturday-recruit-button"
                     data-saturday-action="activate-from-schedule" data-day="{{ day }}"
                     {% if not saturday_recruit_enabled_count %}hidden disabled{% endif %}>
               Recruit <span data-saturday-recruit-demand>{{ saturday_recruit_enabled_count }}</span>
             </button>
-          {% elif day_is_saturday and saturday_recruiting and saturday_recruiting.status != 'cancelled' %}
-            <div class="saturday-response-summary" aria-label="Saturday recruiting responses">
+          {% elif is_optional_workday and saturday_recruiting and saturday_recruiting.status != 'cancelled' %}
+            <div class="saturday-response-summary" aria-label="{{ optional_recruiting_label }} responses">
               <span data-saturday-recruit-demand>{{ [(saturday_coverage.requested - saturday_coverage.total) if saturday_coverage else 0, 0]|max }} needed</span> ·
               {% for key, label in [('yes', 'yes'), ('no', 'no'), ('deciding', 'still deciding')] %}
                 <span class="saturday-response-count" tabindex="0"
@@ -215,7 +215,7 @@
               {% endfor %}
             </div>
           {% endif %}
-          {% if not day_is_saturday or saturday_recruiting_finished %}
+          {% if not is_optional_workday or saturday_recruiting_finished %}
             {% if saturday_publish_locked %}
               <span id="saturday-publish-lock" class="save-block">{{ saturday_publish_lock_message }}</span>
             {% endif %}
@@ -359,7 +359,7 @@
     <div class="day-notes">
       {% if hours_source != 'weekday_default' %}
       <div class="custom-hours-banner">
-        <b>{% if hours_source == 'saturday_default' %}Saturday hours:{% else %}Custom hours today:{% endif %}</b> {{ eff_hours_start }}–{{ eff_hours_end }}
+        <b>{% if hours_source == 'saturday_default' %}{% if optional_day_kind == 'holiday' %}Saturday default hours for holiday work:{% else %}Saturday hours:{% endif %}{% else %}Custom hours today:{% endif %}</b> {{ eff_hours_start }}–{{ eff_hours_end }}
         {% if eff_breaks %}· {{ eff_breaks|length }} break{{ eff_breaks|length != 1 and 's' or '' }}:
         {% for b in eff_breaks %}{{ b.name }} ({{ b.start }}–{{ b.end }}){% if not loop.last %}, {% endif %}{% endfor %}
         {% endif %}
@@ -368,7 +368,7 @@
       <label class="notes-label" for="notes-textarea">Notes for the day <span class="hint">— shown with the published schedule</span></label>
       <textarea id="notes-textarea" name="notes" rows="6" placeholder=""{% if viewing_posted %} readonly{% endif %}>{{ notes }}</textarea>
     </div>
-    {% if auto_scheduler_available and (not day_is_saturday or saturday_recruiting_finished) %}
+    {% if auto_scheduler_available and (not is_optional_workday or saturday_recruiting_finished) %}
     <div class="rotation-controls" data-day="{{ day }}">
       <div class="rotation-mode" role="group" aria-labelledby="rotation-mode-label">
         <span class="rotation-mode-label" id="rotation-mode-label">Schedule goal</span>
@@ -394,8 +394,11 @@
     </div>
     {% endif %}
     <div class="rotation-warning" id="rotation-warnings" role="alert"
-         {% if not rotation_warnings and not rotation_issues %}hidden{% endif %}>
+         {% if not holiday_sync_warning and not rotation_warnings and not rotation_issues %}hidden{% endif %}>
       <ul id="rotation-warning-list">
+        {% if holiday_sync_warning %}
+          <li>{{ holiday_sync_warning }}</li>
+        {% endif %}
         {% for issue in rotation_issues %}
           <li class="coverage-issue" data-issue-code="{{ issue.code }}">
             <span>{{ issue.message }}</span>

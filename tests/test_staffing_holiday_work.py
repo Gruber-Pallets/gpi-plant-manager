@@ -184,6 +184,7 @@ def _render_staffing(
     patch_shift_config: bool = True,
     real_bay_model: bool = False,
     prepare_closed=None,
+    rendered_html: list[str] | None = None,
 ):
     """Render one scheduler page with every external read replaced."""
     from zira_dashboard import cert_lookup, staffing_view
@@ -369,6 +370,18 @@ def _render_staffing(
 
     monkeypatch.setattr(staffing_view, "build_staffing_bays", build_staffing_bays)
 
+    template_env = None
+    if rendered_html is not None:
+        template_env = staffing_routes.templates.env
+        monkeypatch.setitem(template_env.globals, "static_v", lambda _filename: "test")
+        monkeypatch.setitem(template_env.globals, "cert_icon_data", lambda: {})
+        monkeypatch.setitem(template_env.globals, "goat_holders", lambda: {})
+        monkeypatch.setitem(
+            template_env.globals,
+            "nav_inbox_summary",
+            lambda: {"total": 0, "urgent_total": 0, "source_errors": []},
+        )
+
     class FakeResponse:
         def __init__(self, context):
             self.context = context
@@ -377,6 +390,10 @@ def _render_staffing(
     class FakeTemplates:
         def TemplateResponse(self, _request, _template, context):
             captured["context"] = context
+            if template_env is not None:
+                rendered_html.append(
+                    template_env.get_template(_template).render(**context)
+                )
             return FakeResponse(context)
 
     monkeypatch.setattr(staffing_routes, "templates", FakeTemplates())
@@ -729,6 +746,112 @@ def test_existing_scheduler_dom_controls_are_unchanged():
     assert 'id="saturday-publish-lock"' in template
     assert 'class="section saturday-off"' in template
     assert 'class="section unscheduled"' in template
+
+
+def test_closed_holiday_renders_named_closure_in_existing_scheduler(monkeypatch):
+    rendered_html: list[str] = []
+
+    _context, _bay_calls, _created = _render_staffing(
+        monkeypatch,
+        optional_day=_holiday(),
+        roster=[_person("Off worker")],
+        real_bay_model=True,
+        rendered_html=rendered_html,
+    )
+
+    html = rendered_html[0]
+    assert "Black Friday" in html
+    assert "Plant closed by default" in html
+    assert "Saturday default hours for holiday work" in html
+    assert 'id="hours-pill"' in html
+    assert "data-work-center-toggle" in html
+    assert 'class="publish-btn saturday-recruit-button"' in html
+    assert "Recruit <span data-saturday-recruit-demand>" in html
+    assert "<h3>Off " in html
+    assert "<h3>Unassigned " in html
+    assert "Schedule goal" not in html
+    assert 'class="publish-btn publish-submit"' not in html
+
+
+def test_holiday_recruiting_retains_responses_then_goal_publish_controls(
+    monkeypatch,
+):
+    recruiting_html: list[str] = []
+    closed_html: list[str] = []
+
+    with monkeypatch.context() as recruiting_patches:
+        _render_staffing(
+            recruiting_patches,
+            optional_day=_holiday(),
+            bundle=_bundle(status="recruiting"),
+            roster=[_person("Volunteer")],
+            real_bay_model=True,
+            rendered_html=recruiting_html,
+        )
+    with monkeypatch.context() as closed_patches:
+        _render_staffing(
+            closed_patches,
+            optional_day=_holiday(),
+            bundle=_bundle(status="closed"),
+            roster=[_person("Volunteer")],
+            real_bay_model=True,
+            rendered_html=closed_html,
+        )
+
+    recruiting = recruiting_html[0]
+    assert 'aria-label="Holiday recruiting responses"' in recruiting
+    assert "1 yes" in recruiting
+    assert "Schedule goal" not in recruiting
+    assert 'class="publish-btn publish-submit"' not in recruiting
+
+    closed = closed_html[0]
+    assert "Schedule goal" in closed
+    assert 'class="publish-btn publish-submit"' in closed
+    assert 'id="saturday-publish-lock"' in closed
+    assert "Holiday recruiting stays open until" in closed
+
+
+def test_saturday_scheduler_labels_and_controls_remain_unchanged(monkeypatch):
+    rendered_html: list[str] = []
+    saturday = optional_workday.OptionalWorkday(
+        SATURDAY_HOLIDAY,
+        "saturday",
+        "Saturday",
+        None,
+    )
+
+    _render_staffing(
+        monkeypatch,
+        day=SATURDAY_HOLIDAY,
+        optional_day=saturday,
+        roster=[_person("Off worker")],
+        real_bay_model=True,
+        rendered_html=rendered_html,
+    )
+
+    html = rendered_html[0]
+    assert "Saturday Hours" in html
+    assert "Saturday hours:" in html
+    assert "Plant closed by default" not in html
+    assert 'class="publish-btn saturday-recruit-button"' in html
+    assert "<h3>Off " in html
+    assert "<h3>Unassigned " in html
+
+
+def test_holiday_sync_warning_uses_existing_warning_area(monkeypatch):
+    rendered_html: list[str] = []
+
+    _render_staffing(
+        monkeypatch,
+        optional_day=_holiday(),
+        synced=False,
+        rendered_html=rendered_html,
+    )
+
+    html = rendered_html[0]
+    warning = "Odoo holidays have not synced yet. New future drafts are paused."
+    assert 'id="rotation-warnings" role="alert"' in html
+    assert warning in html
 
 
 @pytest.mark.parametrize(

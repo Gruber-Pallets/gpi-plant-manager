@@ -14,7 +14,7 @@ def test_scheduler_uses_recruit_action_not_separate_panel():
 def test_saturday_shows_publish_once_recruiting_finishes():
     template = Path("src/zira_dashboard/templates/staffing.html").read_text()
 
-    assert "{% if not day_is_saturday or saturday_recruiting_finished %}" in template
+    assert "{% if not is_optional_workday or saturday_recruiting_finished %}" in template
 
 
 def test_staffing_template_has_live_saturday_recruiting_demand_target():
@@ -61,7 +61,10 @@ def test_scheduler_recruit_waits_for_autosave_before_activation():
     assert flush_call in js
     assert activation_call in js
     assert js.index(flush_call) < js.index(activation_call)
-    assert "Could not save the schedule. Recruiting was not started." in js
+    assert (
+        "Could not save the schedule. Optional workday recruiting was not started."
+        in js
+    )
 
 
 def test_scheduler_recruit_style_has_blue_button_and_accessible_summary_focus():

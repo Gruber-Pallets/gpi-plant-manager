@@ -2,7 +2,7 @@ document.addEventListener('click', async event => {
   const button = event.target.closest('[data-saturday-action="activate-from-schedule"]');
   if (!button || button.disabled) return;
 
-  const saveErrorMessage = 'Could not save the schedule. Recruiting was not started.';
+  const saveErrorMessage = 'Could not save the schedule. Optional workday recruiting was not started.';
   button.disabled = true;
   try {
     if (typeof window.flushAutosave !== 'function') {
