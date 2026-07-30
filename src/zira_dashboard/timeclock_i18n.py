@@ -157,6 +157,7 @@ TRANSLATIONS: dict[str, str] = {
     "No": "No",
     "Decide later": "Decidir después",
     "I can work only part of the shift": "Solo puedo trabajar parte del turno",
+    "I can work only part of the shift — {name}": "Solo puedo trabajar parte del turno — {name}",
     "Confirm your commitment": "Confirma tu compromiso",
     "By confirming, you commit to work Saturday from {hours}.": "Al confirmar, te comprometes a trabajar el sábado de {hours}.",
     "By confirming, you commit to work this holiday from {hours}.": "Al confirmar, te comprometes a trabajar este día festivo de {hours}.",

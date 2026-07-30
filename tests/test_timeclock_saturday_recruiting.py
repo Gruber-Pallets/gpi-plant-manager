@@ -246,6 +246,14 @@ def test_partial_options_and_tampered_minutes(monkeypatch):
     monkeypatch.setattr(timeclock_saturday.store, "offer_for_person", lambda *_args: OFFER)
     token = timeclock._mint_token(1)
     page = client.get(f"/timeclock/saturday/partial/{token}")
+    assert "<title>Saturday Work</title>" in page.text
+    assert "Solo puedo trabajar parte del turno" in page.text
+    assert "I can work only part of the shift" in page.text
+    assert "I can work only part of the shift —" not in page.text
+    assert f'action="/timeclock/saturday/partial/{token}"' in page.text
+    assert 'select name="availability_start"' in page.text
+    assert 'select name="availability_end"' in page.text
+    assert 'class="k-btn success"' in page.text
     assert "07:00" in page.text and "07:30" in page.text and "07:15" not in page.text
     bad = client.post(
         f"/timeclock/saturday/partial/{token}",
@@ -260,6 +268,50 @@ def test_partial_options_and_tampered_minutes(monkeypatch):
     assert valid.status_code == 200
     assert "Confirm your commitment" in valid.text
     assert "7:30 AM–11:30 AM" in valid.text
+
+
+def test_holiday_partial_page_names_event_in_browser_title_and_heading(monkeypatch):
+    _person(monkeypatch)
+    monkeypatch.setattr(
+        timeclock_saturday.store,
+        "offer_for_person",
+        lambda *_args: HOLIDAY_OFFER,
+    )
+    token = timeclock._mint_token(1)
+
+    page = client.get(f"/timeclock/saturday/partial/{token}")
+
+    assert "<title>Holiday Work — Black Friday</title>" in page.text
+    assert "Solo puedo trabajar parte del turno — Black Friday" in page.text
+    assert "I can work only part of the shift — Black Friday" in page.text
+    assert f'action="/timeclock/saturday/partial/{token}"' in page.text
+    assert 'select name="availability_start"' in page.text
+    assert 'select name="availability_end"' in page.text
+    assert 'class="k-btn success"' in page.text
+
+
+def test_holiday_partial_page_escapes_event_name_in_title_and_heading(monkeypatch):
+    _person(monkeypatch)
+    unsafe_offer = Offer(
+        HOLIDAY_OFFER.day,
+        HOLIDAY_OFFER.shift_start,
+        HOLIDAY_OFFER.shift_end,
+        HOLIDAY_OFFER.response_deadline,
+        HOLIDAY_OFFER.eligible_wc_ids,
+        "holiday",
+        "<Black & Friday>",
+    )
+    monkeypatch.setattr(
+        timeclock_saturday.store,
+        "offer_for_person",
+        lambda *_args: unsafe_offer,
+    )
+
+    page = client.get(f"/timeclock/saturday/partial/{timeclock._mint_token(1)}")
+
+    assert "<title>Holiday Work — &lt;Black &amp; Friday&gt;</title>" in page.text
+    assert "I can work only part of the shift — &lt;Black &amp; Friday&gt;" in page.text
+    assert "<Black & Friday>" not in page.text
 
 
 def test_holiday_offer_partial_error_and_commitment_are_named_and_bilingual(monkeypatch):

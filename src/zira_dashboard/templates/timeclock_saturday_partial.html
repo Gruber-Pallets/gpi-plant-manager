@@ -1,9 +1,9 @@
 {% extends "timeclock_base.html" %}
-{% block title %}Saturday Work{% endblock %}
+{% block title %}{% if offer.is_holiday %}Holiday Work — {{ offer.event_name }}{% else %}Saturday Work{% endif %}{% endblock %}
 {% block content %}
 <div class="k-header"><a href="/timeclock/saturday/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>{% include "_timeclock_brand.html" %}</div>
 <main class="k-main" style="align-items:center; text-align:center; padding-top:3rem;">
-  <h1>{{ t("I can work only part of the shift") }}</h1><h2>{{ td("{date}", es={"date": offer.day_label_es}, en={"date": offer.day_label}) }} · {{ offer.shift_label }}</h2>
+  <h1>{% if offer.is_holiday %}{{ t("I can work only part of the shift — {name}", name=offer.event_name) }}{% else %}{{ t("I can work only part of the shift") }}{% endif %}</h1><h2>{{ td("{date}", es={"date": offer.day_label_es}, en={"date": offer.day_label}) }} · {{ offer.shift_label }}</h2>
   {% if error %}<div class="k-error">{{ t(error) }}</div>{% endif %}
   <form method="post" action="/timeclock/saturday/partial/{{ token }}" style="display:grid; gap:1rem; width:min(100%, 520px);">
     <label>{{ t("Start") }}<select name="availability_start">{% for value in time_options %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select></label>
