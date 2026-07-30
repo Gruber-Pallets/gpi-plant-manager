@@ -562,6 +562,11 @@ async def save_auto_work_centers(request: Request):
             return _error("Could not save work-center settings.", 503)
         if optional_day is not None:
             staffing.invalidate_schedule_cache(d)
+        # The schedule transaction has committed. Invalidate rendered
+        # responses before deriving the JSON payload so a later calculation
+        # failure cannot leave the staffing page on its old bounded-TTL state.
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
         minimum_crew_balance = staffing_route._minimum_crew_balance_payload(
             staffing_route._minimum_crew_balance_for_day(
                 roster=roster,
@@ -570,8 +575,6 @@ async def save_auto_work_centers(request: Request):
                 enabled_centers=enabled,
             )
         )
-        _http_cache.invalidate_today_cache()
-        _http_cache.invalidate_stable_cache()
         return JSONResponse({
             "ok": True,
             "enabled_work_centers": list(sched.auto_enabled_work_centers),

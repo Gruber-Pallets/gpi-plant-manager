@@ -2201,6 +2201,10 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         # The outer transaction has committed. Drop any old schedule that a
         # concurrent reader repopulated while the row lock was held.
         staffing.invalidate_schedule_cache(d)
+    # Keep the rendered page cache in lockstep with the committed schedule.
+    # Later defaults, lifecycle markers, or response shaping may fail, but
+    # those failures must not leave old HTML serving the prior schedule.
+    _http_cache.invalidate_today_cache()
 
     optional_day = result["optional_day"]
     saturday_bundle = result["saturday_bundle"]
@@ -2226,8 +2230,6 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             # next publish action can retry this lifecycle marker.
             publish_marker_failed = True
             log.exception("Could not mark optional recruiting as published for %s", d)
-    # Bust the today response cache so the next GET sees fresh data.
-    _http_cache.invalidate_today_cache()
 
     wants_json = auto or (request.headers.get("accept") or "").startswith("application/json")
     if (

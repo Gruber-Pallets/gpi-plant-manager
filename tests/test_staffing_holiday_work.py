@@ -1100,6 +1100,52 @@ def test_holiday_save_invalidates_refilled_schedule_cache_only_after_commit(
     ]
 
 
+def test_holiday_save_invalidates_http_cache_before_later_default_failure(
+    monkeypatch,
+):
+    _patch_holiday_save(monkeypatch, bundle=_bundle())
+    events = []
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "invalidate_schedule_cache",
+        lambda _day: events.append("schedule_cache_invalidated"),
+    )
+    monkeypatch.setattr(
+        staffing_routes._http_cache,
+        "invalidate_today_cache",
+        lambda: events.append("http_cache_invalidated"),
+    )
+
+    def fail_default_save(_loc, _values):
+        events.append("default_save_failed")
+        raise RuntimeError("default save failed")
+
+    monkeypatch.setattr(
+        staffing_routes.work_centers_store,
+        "save_one",
+        fail_default_save,
+    )
+
+    with pytest.raises(RuntimeError, match="default save failed"):
+        staffing_routes._staffing_save_work(
+            SimpleNamespace(headers={"accept": "application/json"}),
+            BLACK_FRIDAY,
+            0,
+            FormData([
+                ("action", "save"),
+                ("loc__Repair 1", "Volunteer"),
+                ("defaults_dirty__Repair 1", "1"),
+                ("default__Repair 1", "Volunteer"),
+            ]),
+        )
+
+    assert events == [
+        "schedule_cache_invalidated",
+        "http_cache_invalidated",
+        "default_save_failed",
+    ]
+
+
 def test_open_holiday_recruiting_cannot_schedule_people(monkeypatch):
     _current, saved, _marked, _default_updates = _patch_holiday_save(
         monkeypatch,

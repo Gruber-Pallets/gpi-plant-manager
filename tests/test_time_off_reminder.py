@@ -63,6 +63,26 @@ def test_next_working_day_counts_published_optional_holiday(monkeypatch):
     assert tor.next_working_day(friday) == published_holiday
 
 
+def test_next_working_day_uses_weekday_fallback_when_shared_lookup_raises(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda _candidate: (_ for _ in ()).throw(RuntimeError("lookup failed")),
+    )
+
+    assert tor.next_working_day(date(2026, 7, 3)) == date(2026, 7, 6)
+
+
+def test_next_working_day_returns_next_calendar_day_when_search_is_exhausted(
+    monkeypatch,
+):
+    monkeypatch.setattr(shift_config, "is_workday", lambda _candidate: False)
+
+    assert tor.next_working_day(date(2026, 7, 3)) == date(2026, 7, 4)
+
+
 def test_reminder_full_day(fake_db, monkeypatch):
     monkeypatch.delenv("KIOSK_TIME_OFF_NOTIFY_ENABLED", raising=False)
     fake_db["query_result"] = [{

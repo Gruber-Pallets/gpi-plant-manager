@@ -5,6 +5,31 @@ from datetime import date
 from zira_dashboard import db, goat_watch, shift_config
 
 
+def test_next_business_day_uses_configured_fallback_when_shared_lookup_raises(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda _candidate: (_ for _ in ()).throw(RuntimeError("lookup failed")),
+    )
+    monkeypatch.setattr(
+        shift_config,
+        "work_weekdays",
+        lambda: frozenset({1}),
+    )
+
+    assert goat_watch.next_business_day(date(2026, 7, 3)) == date(2026, 7, 7)
+
+
+def test_next_business_day_returns_next_calendar_day_when_search_is_exhausted(
+    monkeypatch,
+):
+    monkeypatch.setattr(shift_config, "is_workday", lambda _candidate: False)
+
+    assert goat_watch.next_business_day(date(2026, 7, 3)) == date(2026, 7, 4)
+
+
 def test_goat_alert_remains_visible_through_closed_holiday(monkeypatch):
     friday = date(2026, 11, 27)
     monday_holiday = date(2026, 11, 30)

@@ -2778,6 +2778,98 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
     ]
 
 
+def test_optional_auto_center_toggle_invalidates_http_before_response_failure(
+    monkeypatch,
+):
+    client, rotations = _rotations_client(monkeypatch)
+    bundle = _holiday_rotation_bundle(status="closed")
+    events = []
+
+    class Transaction(_RouteTransaction):
+        def __exit__(self, exc_type, *_args):
+            events.append("rollback" if exc_type else "commit")
+            return False
+
+    monkeypatch.setattr(
+        optional_workday,
+        "for_day",
+        lambda _day: optional_workday.OptionalWorkday(
+            BLACK_FRIDAY, "holiday", "Black Friday", 42,
+        ),
+    )
+    monkeypatch.setattr(rotations.db, "cursor", Transaction)
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: events.append("recruiting_lock") or bundle,
+    )
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store,
+        "serialize_bundle",
+        lambda _bundle: {"holiday": True},
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(day=day),
+    )
+    monkeypatch.setattr(
+        rotations.scheduler_time_off,
+        "time_off_entries_for_day",
+        lambda _day: [],
+    )
+    monkeypatch.setattr(
+        rotations.staffing,
+        "save_schedule",
+        lambda _schedule, **kwargs: events.append(
+            ("save", kwargs.get("invalidate_cache"))
+        ),
+    )
+    monkeypatch.setattr(
+        rotations.staffing,
+        "invalidate_schedule_cache",
+        lambda _day: events.append("schedule_cache_invalidated"),
+    )
+    monkeypatch.setattr(
+        rotations._http_cache,
+        "invalidate_today_cache",
+        lambda: events.append("today_cache_invalidated"),
+    )
+    monkeypatch.setattr(
+        rotations._http_cache,
+        "invalidate_stable_cache",
+        lambda: events.append("stable_cache_invalidated"),
+    )
+
+    def fail_response_build(**_kwargs):
+        events.append("response_build_failed")
+        raise RuntimeError("response build failed")
+
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_minimum_crew_balance_for_day",
+        fail_response_build,
+    )
+
+    with pytest.raises(RuntimeError, match="response build failed"):
+        client.post("/api/rotations/auto-work-centers", json={
+            "day": BLACK_FRIDAY.isoformat(),
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        })
+
+    assert events == [
+        "recruiting_lock",
+        ("save", False),
+        "commit",
+        "schedule_cache_invalidated",
+        "today_cache_invalidated",
+        "stable_cache_invalidated",
+        "response_build_failed",
+    ]
+
+
 def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
     monkeypatch,
 ):

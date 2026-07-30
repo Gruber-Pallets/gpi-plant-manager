@@ -662,6 +662,31 @@ def test_plant_schedule_reminder_skips_closed_holiday(monkeypatch):
     assert rows[0]["label"] == "Tuesday, Dec 1"
 
 
+def test_next_business_day_uses_configured_fallback_when_shared_lookup_raises(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda _candidate: (_ for _ in ()).throw(RuntimeError("lookup failed")),
+    )
+    monkeypatch.setattr(
+        exception_inbox.schedule_store,
+        "current",
+        lambda: SimpleNamespace(work_weekdays=frozenset({1})),
+    )
+
+    assert exception_inbox._next_business_day(date(2026, 7, 3)) == date(2026, 7, 7)
+
+
+def test_next_business_day_returns_next_calendar_day_when_search_is_exhausted(
+    monkeypatch,
+):
+    monkeypatch.setattr(shift_config, "is_workday", lambda _candidate: False)
+
+    assert exception_inbox._next_business_day(date(2026, 7, 3)) == date(2026, 7, 4)
+
+
 def test_snapshot_includes_unpublished_schedule_section_after_cutoff(monkeypatch):
     _empty_inbox_sources(monkeypatch)
     monkeypatch.setattr(
