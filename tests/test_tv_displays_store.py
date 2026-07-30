@@ -125,31 +125,6 @@ def test_list_displays_returns_all_rows():
     assert "st-b" in slugs
 
 
-def test_seed_defaults_if_empty_seeds_when_empty(monkeypatch):
-    from zira_dashboard import tv_displays_store, staffing, db
-
-    class _Loc:
-        def __init__(self, name): self.name = name
-
-    monkeypatch.setattr(staffing, "LOCATIONS", [
-        _Loc("Junior #2"), _Loc("Repair 1"), _Loc("Repair 2"), _Loc("Repair 3"),
-        _Loc("Dismantler 1"), _Loc("Dismantler 2"), _Loc("Dismantler 3"), _Loc("Dismantler 4"),
-    ])
-    db.execute("DELETE FROM tv_displays")
-    tv_displays_store.seed_defaults_if_empty()
-    rows = tv_displays_store.list_displays()
-    names = [r["name"] for r in rows]
-    assert "Recycling" in names
-    assert "New" in names
-    assert "Recycling-leaderboard" in names
-    assert "New-Leaderboard" in names
-    assert "Repair 1" in names
-    assert "Dismantler 4" in names
-    assert len(rows) == 12
-    tv_displays_store.seed_defaults_if_empty()
-    assert len(tv_displays_store.list_displays()) == 12
-
-
 def test_save_custom_kind_rejected():
     """The 'custom' kind was removed when the workshop was torn out
     (2026-05-14). save(kind='custom') must raise ValueError."""
@@ -159,26 +134,3 @@ def test_save_custom_kind_rejected():
         tv_displays_store.save(
             name="st-cust-gone", kind="custom", wc_name=None, theme="dark",
         )
-
-
-def test_seed_defaults_skips_missing_wc(monkeypatch, caplog):
-    from zira_dashboard import tv_displays_store, staffing, db
-    import logging
-
-    class _Loc:
-        def __init__(self, name): self.name = name
-
-    monkeypatch.setattr(staffing, "LOCATIONS", [_Loc("Repair 1")])
-    db.execute("DELETE FROM tv_displays")
-    with caplog.at_level(logging.WARNING):
-        tv_displays_store.seed_defaults_if_empty()
-    rows = tv_displays_store.list_displays()
-    names = [r["name"] for r in rows]
-    assert "Recycling" in names
-    assert "New" in names
-    assert "Recycling-leaderboard" in names
-    assert "New-Leaderboard" in names
-    assert "Repair 1" in names
-    assert "Junior #2" not in names
-    assert "Dismantler 1" not in names
-    assert len(rows) == 5

@@ -39,7 +39,7 @@ _NEW_LEADERBOARD_SEED = (
     "vs_new_leaderboard",
     None,
 )
-_DEFAULT_WORK_CENTER_SEED_MARKER = "tv_displays:seed_default_work_center_displays_v1"
+_DEFAULT_WORK_CENTER_SEED_MARKER = "tv_displays:seed_default_work_center_displays_v2"
 
 
 # (name, kind, wc_name) — order matters for sort_order assignment at seed.
