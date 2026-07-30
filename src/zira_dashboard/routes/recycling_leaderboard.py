@@ -11,9 +11,13 @@ from ..plant_day import today as plant_today
 
 router = APIRouter()
 
+_CURRENT_GOAT_CATEGORIES = tuple(
+    goat_categories.category_for_key(key)
+    for key in ("dismantlers", "repairs")
+)
 _CURRENT_GOAT_GROUPS = tuple(
     (category.leaderboard_label, category.label)
-    for category in goat_categories.recycling_categories()
+    for category in _CURRENT_GOAT_CATEGORIES
 )
 
 

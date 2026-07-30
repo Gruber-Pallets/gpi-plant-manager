@@ -14,6 +14,8 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Fixes
 
+- **Recycling GOATs are back in their usual order.** Dismantler comes first and Repair comes second, so the leaderboard stays familiar.
+
 - **Operator TV screens open their dashboards again.** Missing Repair, Dismantler, and Junior TV setups come back after the update. App checks can no longer erase the saved TV list.
 
 ### 07:59 AM - Company holidays now close the plant schedule
