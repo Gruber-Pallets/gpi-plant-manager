@@ -65,6 +65,7 @@ _log = logging.getLogger(__name__)
 def _zira_client():
     """Lazy import of the shared Zira client to avoid import cycles."""
     from .deps import client
+
     return client
 
 
@@ -81,20 +82,20 @@ async def _tick_zira_cache():
     cold-cache penalty. Past days are cached on first read, not here."""
     from .leaderboard import cached_leaderboard
     from .stations import recycling_stations
+
     stations = recycling_stations()
     if stations:
         today = plant_today()
         now_utc = datetime.now(UTC)
         # Run the (sync, blocking) leaderboard fetch off the event loop.
-        await asyncio.to_thread(
-            cached_leaderboard, _zira_client(), stations, today, now_utc
-        )
+        await asyncio.to_thread(cached_leaderboard, _zira_client(), stations, today, now_utc)
 
 
 async def _tick_live_cache():
     """Refresh today's attendance into live_cache and UPSERT today's
     production_daily rows (so MTD / today leaderboards see partial-day data)."""
     from . import live_cache
+
     today = plant_today()
     await asyncio.to_thread(live_cache.refresh_attendance, today)
     await asyncio.to_thread(live_cache.refresh_production, today, _zira_client())
@@ -103,12 +104,14 @@ async def _tick_live_cache():
 async def _tick_goat_notifications():
     """Finalize due GOAT records and deliver pending celebrations."""
     from . import goat_notifications
+
     await asyncio.to_thread(goat_notifications.run_due, datetime.now(UTC), _zira_client())
 
 
 async def _tick_timeclock_sync():
     """Retry any timeclock_punches_log rows still flagged unsynced to Odoo."""
     from . import timeclock_sync
+
     await asyncio.to_thread(timeclock_sync.retry_unsynced_punches)
 
 
@@ -116,6 +119,7 @@ async def _tick_odoo_attendance():
     """Mirror Odoo's open hr.attendance into odoo_open_attendance_cache so the
     punch screen reflects out-of-band Odoo edits without an XML-RPC on the tap."""
     from . import live_cache
+
     await asyncio.to_thread(live_cache.refresh_odoo_open_attendance)
 
 
@@ -123,12 +127,14 @@ async def _tick_auto_lunch():
     """Drive the auto-lunch worker. No-ops while the feature is disabled
     (auto_lunch_settings.enabled defaults to FALSE)."""
     from . import auto_lunch
+
     await asyncio.to_thread(auto_lunch.run_tick)
 
 
 async def _tick_time_off_sync():
     """Retry any time_off_requests rows still flagged unsynced to Odoo hr.leave."""
     from . import time_off_sync
+
     await asyncio.to_thread(time_off_sync.retry_unsynced_requests)
 
 
@@ -136,6 +142,7 @@ async def _tick_time_off_poll():
     """Pull hr.leave state changes back from Odoo so the local mirror picks up
     manager approvals/refusals and cascades them into the staffing scheduler."""
     from . import time_off_sync
+
     await asyncio.to_thread(time_off_sync.poll_odoo_leaves)
 
 
@@ -143,6 +150,7 @@ async def _tick_time_off_balance():
     """Refresh stale time_off_balances rows from Odoo (older than 10 min) so
     kiosk balance reads don't each pay a per-employee Odoo round-trip."""
     from . import time_off_balances
+
     await asyncio.to_thread(time_off_balances.refresh_stale, 600)
 
 
@@ -151,6 +159,7 @@ async def _tick_staffing_pages():
     first human load (including the first after a Railway deploy) is a warm hit.
     (Leaderboards were dropped from this tick 2026-07-07 — see warm_once.)"""
     from . import page_warmer
+
     await asyncio.to_thread(page_warmer.warm_once)
 
 
@@ -161,6 +170,7 @@ async def _tick_inbox():
     page after the cache lapses pays the full cold Zira/Odoo cascade. Refresh
     below that TTL (interval 20 s) so the badge is always served warm."""
     from . import page_warmer
+
     await asyncio.to_thread(page_warmer.warm_inbox_once)
 
 
@@ -169,11 +179,13 @@ async def _tick_staffing_stable():
     data rarely changes and writes invalidate the cache directly, so 5 min is
     plenty -- and it avoids triggering odoo_sync.sync(force=False) every 45s."""
     from . import page_warmer
+
     await asyncio.to_thread(page_warmer.warm_skills_once)
 
 
 async def _tick_company_holidays():
     from . import company_holidays
+
     await asyncio.to_thread(company_holidays.refresh)
 
 
@@ -183,6 +195,7 @@ async def _tick_missing_wc():
     kiosk WC field isn't configured."""
     from datetime import timedelta
     from . import missing_wc, odoo_client
+
     since = datetime.now(UTC) - timedelta(days=14)
     rows = await asyncio.to_thread(odoo_client.fetch_attendances_missing_wc, since)
     await asyncio.to_thread(missing_wc.write_cache, rows)
@@ -193,6 +206,7 @@ async def _tick_missed_punch_out():
     and flag it for the Missed-Punch-Out alert. Cadence doesn't affect the close
     time (it's computed from the check-in day, not 'now')."""
     from . import missed_punch_out, shift_config
+
     today = datetime.now(shift_config.SITE_TZ).date()
     await asyncio.to_thread(missed_punch_out.run_close, today)
 
@@ -214,6 +228,7 @@ async def _tick_forklift():
     today. No-ops gracefully (logs+swallows via _run_warmer; degrades to no data
     if FORKLIFT_API_KEY isn't set). Runs off the event loop (blocking HTTP)."""
     from . import forklift_backfill, forklift_snapshot, forklift_store
+
     try:
         days = await asyncio.to_thread(forklift_store.history_day_count)
     except Exception:
@@ -237,6 +252,7 @@ async def _maybe_reconstruct_ontime() -> None:
     source failure won't re-trigger it every tick — it retries next process."""
     global _forklift_ontime_reconstructed
     from . import forklift_backfill, forklift_store
+
     if _forklift_ontime_reconstructed:
         return
     try:
@@ -249,7 +265,8 @@ async def _maybe_reconstruct_ontime() -> None:
         result = await asyncio.to_thread(forklift_backfill.reconstruct_ontime_history)
         _log.warning(
             "forklift warmer: reconstructed on-time history (had %d days) -> %s",
-            days, result,
+            days,
+            result,
         )
     except Exception as exc:  # noqa: BLE001 - best-effort, never fatal
         _log.warning("forklift warmer: on-time reconstruction failed: %s", exc)
@@ -268,13 +285,16 @@ def _capture_forklift_ontime() -> None:
         forklift_snapshot,
         forklift_store,
     )
+
     try:
         today = plant_today()
         start_ms = forklift_snapshot.day_start_ms(today)
         dash = forklift_client.fetch_dashboard(since=start_ms)
-        id_to_name = {str(d.get("id")): d.get("name")
-                      for d in (forklift_client.fetch_drivers() or [])
-                      if d.get("id") is not None}
+        id_to_name = {
+            str(d.get("id")): d.get("name")
+            for d in (forklift_client.fetch_drivers() or [])
+            if d.get("id") is not None
+        }
         metric_rows = forklift_ingest.driver_metrics_from_dashboard(dash, id_to_name)
         for r in metric_rows:
             r["day"] = today
@@ -289,6 +309,7 @@ async def _tick_inbox_reconcile():
     open-items mirror. Skips categories whose source errored this tick, so a
     transient Odoo hiccup never mass-logs false resolutions."""
     from . import inbox_reconcile
+
     await asyncio.to_thread(inbox_reconcile.run_once)
 
 
@@ -298,6 +319,7 @@ async def _tick_machine_breakdown():
     off the same cadence as the production-data warmer since it reads the
     same Zira station data."""
     from . import machine_breakdown
+
     await asyncio.to_thread(machine_breakdown.run_detect_tick)
 
 
@@ -306,6 +328,7 @@ async def _tick_page_usage():
     Keeps per-request cost at a dict increment; this is the only DB work the
     feature does."""
     from . import page_views
+
     await asyncio.to_thread(page_views.flush)
 
 
@@ -313,6 +336,7 @@ async def _tick_calendar_conflicts():
     """Weekly Odoo calendar-conflict check. Interval is short; run_once()
     self-throttles to ~weekly via its persisted last_run_at gate."""
     from . import calendar_conflict_monitor
+
     await asyncio.to_thread(calendar_conflict_monitor.run_once)
 
 
@@ -321,6 +345,7 @@ async def _tick_time_off_backfill():
     Odoo will accept them — e.g. after HR scopes a holiday record or fixes
     a Working Schedule. No-ops (zero RPCs) while no local records exist."""
     from . import time_off_local_backfill
+
     await asyncio.to_thread(time_off_local_backfill.run_once)
 
 
@@ -330,12 +355,14 @@ async def _tick_automated_skills():
     run_daily_if_due self-throttles via a persisted marker, so the short
     interval just gives it a prompt chance to fire soon after shift end."""
     from . import automated_skills
+
     await asyncio.to_thread(automated_skills.run_daily_if_due, datetime.now(UTC))
 
 
 async def _tick_saturday_recruiting():
     """Close Saturday recruiting windows whose persisted deadline has passed."""
     from . import saturday_recruiting_store
+
     await asyncio.to_thread(saturday_recruiting_store.close_due, datetime.now(UTC))
 
 
@@ -396,7 +423,16 @@ async def lifespan(app: FastAPI):
     """
     db.init_pool()
     db.bootstrap_schema()
+    from . import company_holidays
+
+    try:
+        company_holidays.reload()
+    except Exception:
+        _log.exception("could not hydrate the persisted company holiday mirror")
+        db.shutdown_pool()
+        raise
     from . import tv_displays_store
+
     tv_displays_store.seed_defaults_if_empty()
     warmer_tasks = [
         asyncio.create_task(_run_warmer(name, tick, interval, stagger=index * 2))
@@ -448,9 +484,11 @@ templates.env.globals["cert_icon_slug"] = cert_icons.slug_for
 templates.env.globals["cert_icon_data"] = cert_icons.all_data
 
 from . import awards
+
 templates.env.globals["goat_holders"] = awards.goat_holders_map
 
 import calendar as _calendar
+
 templates.env.globals["month_name"] = lambda m: _calendar.month_name[m]
 
 
@@ -517,6 +555,7 @@ async def _robots_txt():
     crawling, and a Disallow rule here stops them before they ever
     request the rest of the site."""
     from fastapi.responses import PlainTextResponse
+
     return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
 
@@ -525,6 +564,7 @@ async def _robots_txt():
 # follow-up task. AUTH_DISABLED=1 env var short-circuits this gate
 # entirely (used in local dev and during the staged production rollout).
 from .auth import RequireAuthMiddleware, auth_disabled
+
 app.add_middleware(RequireAuthMiddleware)
 if auth_disabled():
     logging.getLogger(__name__).error(

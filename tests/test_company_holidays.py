@@ -151,6 +151,32 @@ def test_reload_overlap_chooses_lowest_odoo_id_and_logs(monkeypatch, caplog):
     assert "overlap" in caplog.text.lower()
 
 
+def test_restart_hydration_survives_immediate_odoo_refresh_outage(monkeypatch):
+    persisted = _mirror_row(
+        odoo_id=42,
+        name="Black Friday",
+        date_from=date(2026, 11, 27),
+        date_to=date(2026, 11, 27),
+    )
+    monkeypatch.setattr(
+        company_holidays.db,
+        "query",
+        lambda *args, **kwargs: [persisted],
+    )
+    events: list[object] = []
+    monkeypatch.setattr(company_holidays.db, "cursor", _cursor_factory(events))
+
+    company_holidays.reload()
+    assert company_holidays.for_day(date(2026, 11, 27)).name == "Black Friday"
+
+    with pytest.raises(RuntimeError, match="Odoo unavailable"):
+        company_holidays.refresh(
+            fetcher=lambda: (_ for _ in ()).throw(RuntimeError("Odoo unavailable")),
+        )
+
+    assert company_holidays.for_day(date(2026, 11, 27)).name == "Black Friday"
+
+
 class _RecordingCursor:
     def __init__(self, events: list[object], fail_holiday_write: bool = False):
         self.events = events
