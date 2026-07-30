@@ -1283,10 +1283,18 @@ def _prepare_closed_saturday_schedule(
     optional_day,
 ) -> staffing.Schedule | None:
     """Apply defaults once after recruiting closes; never invoke the Auto solver."""
+    expected_optional_day = optional_day
     with db.cursor() as cur:
+        locked_bundle = saturday_recruiting_store.lock_for_schedule_mutation(
+            day,
+            cur=cur,
+        )
+        current_optional_day = optional_workday.for_day(day)
+        if current_optional_day != expected_optional_day:
+            return None
         bundle = _matching_optional_recruiting_bundle(
-            saturday_recruiting_store.get(day, cur=cur),
-            optional_day,
+            locked_bundle,
+            current_optional_day,
         )
         if bundle is None or bundle.recruitment.status != "closed":
             return None
@@ -1337,7 +1345,12 @@ def _prepare_closed_saturday_schedule(
             saturday_availability_overrides=dict(locked.saturday_availability_overrides),
         )
         staffing.save_schedule(prepared, cur=cur, invalidate_cache=False)
-        saturday_recruiting_store.mark_staffing_prepared(day, plant_now(), cur=cur)
+        saturday_recruiting_store.mark_staffing_prepared(
+            day,
+            plant_now(),
+            cur=cur,
+            locked_bundle=bundle,
+        )
     staffing.invalidate_schedule_cache(day)
     _http_cache.invalidate_today_cache()
     return prepared

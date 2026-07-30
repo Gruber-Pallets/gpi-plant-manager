@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from datetime import date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
@@ -168,6 +169,206 @@ def _empty_bay_model() -> dict:
         "people_meta": {},
         "all_active_people": [],
     }
+
+
+def test_closed_preparation_uses_lifecycle_then_schedule_lock_order(monkeypatch):
+    events = []
+    bundle = _bundle()
+    optional_day = _holiday()
+    schedule = staffing.Schedule(
+        day=BLACK_FRIDAY,
+        assignments={},
+        auto_enabled_work_centers=["Repair 1"],
+    )
+    cursor = object()
+    prepared_at = datetime(2026, 11, 27, 8, tzinfo=SITE_TZ)
+
+    @contextmanager
+    def transaction():
+        events.append("transaction")
+        yield cursor
+        events.append("commit")
+
+    monkeypatch.setattr(staffing_routes.db, "cursor", transaction)
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail("read recruiting without its lifecycle lock"),
+    )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda day, *, cur: events.append("lifecycle lock") or bundle,
+    )
+    monkeypatch.setattr(
+        staffing_routes.optional_workday,
+        "for_day",
+        lambda day: events.append("reclassify") or optional_day,
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda day, *, cur: events.append("schedule lock") or schedule,
+    )
+    monkeypatch.setattr(
+        staffing_routes,
+        "saturday_defaults_only_schedule",
+        lambda *_args, **_kwargs: (
+            events.append("apply defaults")
+            or ({"Repair 1": ["Volunteer"]}, {"Repair 1": {"Volunteer": "default"}})
+        ),
+    )
+
+    def save(prepared, *, cur, invalidate_cache):
+        assert cur is cursor
+        assert invalidate_cache is False
+        events.append("save schedule")
+
+    monkeypatch.setattr(staffing_routes.staffing, "save_schedule", save)
+
+    def mark(day, now, *, cur, locked_bundle):
+        assert cur is cursor
+        assert locked_bundle is bundle
+        events.append("mark prepared")
+        return bundle
+
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "mark_staffing_prepared",
+        mark,
+    )
+    monkeypatch.setattr(staffing_routes, "plant_now", lambda: prepared_at)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "invalidate_schedule_cache",
+        lambda day: events.append("schedule cache"),
+    )
+    monkeypatch.setattr(
+        staffing_routes._http_cache,
+        "invalidate_today_cache",
+        lambda: events.append("page cache"),
+    )
+
+    prepared = staffing_routes._prepare_closed_saturday_schedule(
+        BLACK_FRIDAY,
+        [_person("Volunteer")],
+        [],
+        optional_day=optional_day,
+    )
+
+    assert prepared is not None
+    assert events == [
+        "transaction",
+        "lifecycle lock",
+        "reclassify",
+        "schedule lock",
+        "apply defaults",
+        "save schedule",
+        "mark prepared",
+        "commit",
+        "schedule cache",
+        "page cache",
+    ]
+
+
+def test_whole_cancellation_winner_is_not_prepared_or_schedule_locked(monkeypatch):
+    cancelled = _bundle(status="cancelled")
+
+    monkeypatch.setattr(staffing_routes.db, "cursor", lambda: nullcontext(object()))
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: cancelled,
+    )
+    monkeypatch.setattr(optional_workday, "for_day", lambda _day: _holiday())
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda *_args, **_kwargs: pytest.fail("locked schedule after cancellation won"),
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda *_args, **_kwargs: pytest.fail("saved staffing after cancellation won"),
+    )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "mark_staffing_prepared",
+        lambda *_args, **_kwargs: pytest.fail("marked a cancelled round prepared"),
+    )
+
+    prepared = staffing_routes._prepare_closed_saturday_schedule(
+        BLACK_FRIDAY,
+        [_person("Volunteer")],
+        [],
+        optional_day=_holiday(),
+    )
+
+    assert prepared is None
+
+
+def test_individual_cancellation_winner_is_not_scheduled(monkeypatch):
+    stale = _bundle()
+    cancelled_commitment = replace(stale.commitments[0], status="cancelled")
+    locked_bundle = replace(stale, commitments=(cancelled_commitment,))
+    schedule = staffing.Schedule(
+        day=BLACK_FRIDAY,
+        assignments={},
+        auto_enabled_work_centers=["Repair 1"],
+    )
+    defaults_rosters = []
+    saved = []
+
+    monkeypatch.setattr(staffing_routes.db, "cursor", lambda: nullcontext(object()))
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "get",
+        lambda *_args, **_kwargs: stale,
+    )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "lock_for_schedule_mutation",
+        lambda _day, *, cur: locked_bundle,
+    )
+    monkeypatch.setattr(optional_workday, "for_day", lambda _day: _holiday())
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule_for_update",
+        lambda _day, *, cur: schedule,
+    )
+
+    def defaults(_day, roster, *_args):
+        defaults_rosters.append([person.name for person in roster])
+        return {}, {}
+
+    monkeypatch.setattr(staffing_routes, "saturday_defaults_only_schedule", defaults)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "save_schedule",
+        lambda prepared, **_kwargs: saved.append(prepared),
+    )
+    monkeypatch.setattr(
+        staffing_routes.saturday_recruiting_store,
+        "mark_staffing_prepared",
+        lambda *_args, **_kwargs: locked_bundle,
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "invalidate_schedule_cache",
+        lambda _day: None,
+    )
+    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
+
+    prepared = staffing_routes._prepare_closed_saturday_schedule(
+        BLACK_FRIDAY,
+        [_person("Volunteer")],
+        [],
+        optional_day=_holiday(),
+    )
+
+    assert defaults_rosters == [[]]
+    assert prepared is saved[0]
+    assert prepared.assignments == {}
 
 
 def _render_staffing(

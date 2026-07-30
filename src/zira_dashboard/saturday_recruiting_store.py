@@ -1046,9 +1046,17 @@ def close_due(now: datetime) -> int:
     return len(closed_days)
 
 
-def mark_staffing_prepared(day: date, now: datetime, *, cur) -> RecruitmentBundle:
-    """Record the one-time manager-facing preparation of a closed Saturday."""
-    recruitment = _lock_recruitment(cur, day)
+def mark_staffing_prepared(
+    day: date,
+    now: datetime,
+    *,
+    cur,
+    locked_bundle: RecruitmentBundle,
+) -> RecruitmentBundle:
+    """Mark preparation while reusing the caller's lifecycle row lock."""
+    recruitment = locked_bundle.recruitment
+    if recruitment.day != day:
+        raise LifecycleConflict("Saturday recruiting belongs to a different date")
     if recruitment.status != "closed":
         raise LifecycleConflict("Saturday recruiting must close before scheduling volunteers")
     if recruitment.staffing_prepared_at is None:

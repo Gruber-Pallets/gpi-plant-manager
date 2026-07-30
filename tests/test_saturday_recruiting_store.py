@@ -6,6 +6,7 @@ import json
 import os
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from threading import Barrier
 from types import SimpleNamespace
@@ -257,6 +258,47 @@ class TestRecruitingStoreWithoutDatabase:
                 "FROM saturday_recruitments WHERE day = %s FOR UPDATE",
                 (HOLIDAY,),
             ),
+        ]
+
+    def test_prepared_marker_reuses_already_locked_bundle(self, monkeypatch):
+        locked = self._bundle()
+        locked = replace(
+            locked,
+            recruitment=replace(locked.recruitment, status="closed"),
+        )
+        refreshed = replace(
+            locked,
+            recruitment=replace(locked.recruitment, staffing_prepared_at=NOW),
+        )
+        statements = []
+
+        class Cursor:
+            def execute(self, sql, params):
+                statements.append((" ".join(sql.split()), params))
+
+        monkeypatch.setattr(
+            store,
+            "_lock_recruitment",
+            lambda *_args, **_kwargs: pytest.fail(
+                "reacquired lifecycle lock after schedule row lock"
+            ),
+        )
+        monkeypatch.setattr(store, "_load_bundle", lambda _cur, _day: refreshed)
+
+        prepared = store.mark_staffing_prepared(
+            HOLIDAY,
+            NOW,
+            cur=Cursor(),
+            locked_bundle=locked,
+        )
+
+        assert prepared is refreshed
+        assert statements == [
+            (
+                "UPDATE saturday_recruitments SET staffing_prepared_at = %s, "
+                "updated_at = %s WHERE day = %s",
+                (NOW, NOW, HOLIDAY),
+            )
         ]
 
     def test_employee_offer_and_banner_copy_holiday_metadata(self, monkeypatch):
