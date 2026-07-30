@@ -1569,7 +1569,13 @@
       const list = document.getElementById('rotation-warning-list');
       if (!warnBox || !list) return;
 
+      const persistentWarning = (list.dataset.persistentWarning || '').trim();
       list.replaceChildren();
+      if (persistentWarning) {
+        const persistentItem = document.createElement('li');
+        persistentItem.textContent = persistentWarning;
+        list.appendChild(persistentItem);
+      }
       const issueMessages = new Set();
       window.ROTATION_ISSUES.forEach(issue => {
         issueMessages.add(issue.message);

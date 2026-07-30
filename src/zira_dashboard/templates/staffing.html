@@ -395,7 +395,7 @@
     {% endif %}
     <div class="rotation-warning" id="rotation-warnings" role="alert"
          {% if not holiday_sync_warning and not rotation_warnings and not rotation_issues %}hidden{% endif %}>
-      <ul id="rotation-warning-list">
+      <ul id="rotation-warning-list" data-persistent-warning="{{ holiday_sync_warning }}">
         {% if holiday_sync_warning %}
           <li>{{ holiday_sync_warning }}</li>
         {% endif %}

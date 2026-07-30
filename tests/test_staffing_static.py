@@ -474,6 +474,118 @@ def test_rotation_warning_supports_structured_coverage_issues():
     assert "warnBox.hidden = list.childElementCount === 0;" in renderer
 
 
+def test_holiday_sync_warning_survives_repeated_live_warning_renders():
+    html = _template()
+    js = _script()
+    renderer = (
+        "function renderCoverageIssues(warnings, issues) {"
+        + js.split("function renderCoverageIssues(warnings, issues) {", 1)[1].split(
+            "function renderCoverageFailure", 1
+        )[0]
+    )
+    harness = textwrap.dedent(
+        f"""
+        const renderer = {renderer!r};
+        class Element {{
+          constructor(tagName) {{
+            this.tagName = tagName;
+            this.children = [];
+            this.dataset = {{}};
+            this.hidden = false;
+            this.className = '';
+            this.textContent = '';
+          }}
+          appendChild(child) {{
+            this.children.push(child);
+            return child;
+          }}
+          append(...children) {{
+            this.children.push(...children);
+          }}
+          replaceChildren(...children) {{
+            this.children = [...children];
+          }}
+          get childElementCount() {{
+            return this.children.length;
+          }}
+        }}
+        const persistentWarning =
+          'Odoo holidays have not synced yet. New future drafts are paused.';
+        const list = new Element('ul');
+        list.dataset.persistentWarning = persistentWarning;
+        const serverRenderedWarning = new Element('li');
+        serverRenderedWarning.textContent = persistentWarning;
+        list.appendChild(serverRenderedWarning);
+        const warnBox = new Element('div');
+        const window = {{}};
+        const document = {{
+          getElementById(id) {{
+            if (id === 'rotation-warning-list') return list;
+            if (id === 'rotation-warnings') return warnBox;
+            return null;
+          }},
+          createElement(tagName) {{
+            return new Element(tagName);
+          }},
+        }};
+        const renderCoverageIssues = eval('(' + renderer + ')');
+        function itemText(item) {{
+          return item.textContent || item.children.map(itemText).join('');
+        }}
+        function snapshot() {{
+          return list.children.map(itemText);
+        }}
+
+        renderCoverageIssues(
+          ['First rotation warning'],
+          [{{ code: 'coverage', message: 'Coverage issue', rejections: [] }}],
+        );
+        const first = snapshot();
+        renderCoverageIssues(
+          ['Coverage issue', 'Second rotation warning'],
+          [{{ code: 'coverage', message: 'Coverage issue', rejections: [] }}],
+        );
+        const second = snapshot();
+
+        for (const [index, state] of [first, second].entries()) {{
+          if (state.filter(text => text === persistentWarning).length !== 1) {{
+            throw new Error(`persistent warning count changed after render ${{index + 1}}`);
+          }}
+          if (state.filter(text => text === 'Coverage issue').length !== 1) {{
+            throw new Error(`coverage issue count changed after render ${{index + 1}}`);
+          }}
+        }}
+        if (!first.includes('First rotation warning')) {{
+          throw new Error('first rotation warning was not rendered');
+        }}
+        if (second.includes('First rotation warning')) {{
+          throw new Error('stale rotation warning survived the second render');
+        }}
+        if (!second.includes('Second rotation warning')) {{
+          throw new Error('second rotation warning was not rendered');
+        }}
+        if (warnBox.hidden) throw new Error('warning panel was hidden');
+        if (window.ROTATION_WARNINGS.join('|') !== 'Coverage issue|Second rotation warning') {{
+          throw new Error('rotation warning state changed');
+        }}
+        if (window.ROTATION_ISSUES.length !== 1) {{
+          throw new Error('rotation issue state changed');
+        }}
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert 'data-persistent-warning="{{ holiday_sync_warning }}"' in html
+    assert "persistentItem.textContent = persistentWarning;" in renderer
+
+
 def test_rotation_warning_success_schedules_authoritative_live_validation():
     js = _script()
     save_auto = js.split("async function saveAutoCenters(turnOff = []) {", 1)[1].split(
