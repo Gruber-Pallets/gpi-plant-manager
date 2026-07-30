@@ -65,6 +65,7 @@ from .. import (
     odoo_client,
 )
 from .. import employee_notifications, saturday_work_reminder, time_off_reminder
+
 # Not called directly here, but the state-reconciliation tests patch
 # timeclock.live_cache.read_open_attendance through this module — keep it
 # importable as part of the module surface.
@@ -105,9 +106,7 @@ def _is_time_off_only(p: dict | None) -> bool:
     return _time_off_enabled() and bool(p) and p.get("wage_type") == "monthly"
 
 
-def _time_off_redirect_if_salaried(
-    p: dict | None, person_id: int
-) -> RedirectResponse | None:
+def _time_off_redirect_if_salaried(p: dict | None, person_id: int) -> RedirectResponse | None:
     """Redirect salaried staff into the time-off flow (with a fresh
     token), or None for hourly staff so the caller proceeds normally.
     Applied on every punch screen/action so fixed-wage employees can't
@@ -123,9 +122,7 @@ def _time_off_redirect_if_salaried(
 def _mint_token(person_id: int) -> str:
     issued = int(time.time())
     payload = f"{person_id}:{issued}"
-    sig = hmac.new(
-        _SESSION_SECRET.encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()[:16]
+    sig = hmac.new(_SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
     return f"{payload}:{sig}"
 
 
@@ -149,6 +146,7 @@ def _verify_token(token: str) -> int | None:
 
 
 # ---------- helpers ----------
+
 
 def _person_by_id(person_id: int) -> dict | None:
     rows = db.query(
@@ -276,6 +274,7 @@ def _hours_for_punch(resource_calendar_id, local_date):
     Shift boundaries stay Odoo-sourced — only the rounding *windows* are
     department-driven (see _windows_for_day). We never guess a boundary."""
     from .. import work_schedule_store
+
     if resource_calendar_id is not None:
         ws = work_schedule_store.get(resource_calendar_id)
         if ws is not None:
@@ -284,7 +283,8 @@ def _hours_for_punch(resource_calendar_id, local_date):
                 return hours[0], hours[1]
             _log.warning(
                 "Work schedule %s has no hours for weekday %s; using plant default hours",
-                resource_calendar_id, local_date.weekday(),
+                resource_calendar_id,
+                local_date.weekday(),
             )
     return (
         shift_config.shift_start_for(local_date),
@@ -320,6 +320,7 @@ def _windows_for_day(person_name, local_date, effective_wc, is_flexible=False):
     (a misconfig, which we log)."""
     from .. import rounding_system_store
     from ..rounding import RoundingSettings
+
     if is_flexible:
         return RoundingSettings(0, 0, 0, 0)
     dept = None
@@ -344,9 +345,7 @@ def _windows_for_day(person_name, local_date, effective_wc, is_flexible=False):
     return RoundingSettings(0, 0, 0, 0)
 
 
-def _open_log_row(
-    person_odoo_id: int, action: str, wc_name: str | None
-) -> tuple[int, datetime]:
+def _open_log_row(person_odoo_id: int, action: str, wc_name: str | None) -> tuple[int, datetime]:
     """Insert a timeclock_punches_log row (synced=FALSE), compute the rounded
     timestamp using current rounding settings, write it back to the row,
     and return (id, rounded_at). Both occurred_at (raw) and rounded_at
@@ -359,6 +358,7 @@ def _open_log_row(
     Better to record the raw punch than lose it entirely.
     """
     from .. import rounding
+
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO timeclock_punches_log "
@@ -383,7 +383,11 @@ def _open_log_row(
         effective_wc = _effective_punch_wc(action, wc_name, person_odoo_id)
         windows = _windows_for_day(person_name, local_date, effective_wc, is_flexible)
         rounded = rounding.apply_rounding(
-            action, occurred_at, shift_start, shift_end, windows,
+            action,
+            occurred_at,
+            shift_start,
+            shift_end,
+            windows,
         )
         db.execute(
             "UPDATE timeclock_punches_log SET rounded_at = %s WHERE id = %s",
@@ -451,12 +455,17 @@ def _saturday_banner_context() -> dict | None:
         banner = saturday_recruiting_store.home_banner(plant_now())
         if banner is None:
             return None
+        is_holiday = banner.day_kind == "holiday"
+        event_name = banner.event_name or ("Holiday" if is_holiday else "Saturday")
         if banner.phase == "available":
             return {
                 "phase": banner.phase,
                 "day": banner.day.isoformat(),
                 "deadline_label": sr.format_deadline(banner.response_deadline),
                 "remaining_count": banner.remaining_count,
+                "day_kind": banner.day_kind,
+                "event_name": event_name,
+                "is_holiday": is_holiday,
             }
         published, assignments = _published_schedule_assignments(banner.day)
         return {
@@ -466,6 +475,9 @@ def _saturday_banner_context() -> dict | None:
             "shift_label": sr.format_time_range(banner.shift_start, banner.shift_end),
             "published": published,
             "assignments": assignments,
+            "day_kind": banner.day_kind,
+            "event_name": event_name,
+            "is_holiday": is_holiday,
         }
     except Exception:
         _log.exception("Saturday home banner lookup failed")
@@ -483,6 +495,7 @@ def _saturday_commitment_context(person_id: int) -> dict | None:
         return None
     if status is None:
         return None
+    is_holiday = status.day_kind == "holiday"
     return {
         "day": status.day.isoformat(),
         "day_label": f"{status.day.strftime('%A, %B')} {status.day.day}",
@@ -491,10 +504,14 @@ def _saturday_commitment_context(person_id: int) -> dict | None:
         "deadline_label": sr.format_deadline(status.response_deadline),
         "deadline_label_es": timeclock_i18n.spanish_deadline_label(status.response_deadline),
         "can_employee_cancel": status.can_employee_cancel,
+        "day_kind": status.day_kind,
+        "event_name": status.event_name or ("Holiday" if is_holiday else "Saturday"),
+        "is_holiday": is_holiday,
     }
 
 
 # ---------- routes ----------
+
 
 @router.get("/timeclock", response_class=HTMLResponse)
 def timeclock_home(request: Request, expired: int = Query(default=0)):
@@ -503,14 +520,16 @@ def timeclock_home(request: Request, expired: int = Query(default=0)):
     shows a 'your session timed out' banner so a rejected punch token is
     visible to the employee instead of a silent bounce."""
     rows = db.query(
-        "SELECT id, name FROM people "
-        "WHERE active = TRUE AND NOT excluded "
-        "ORDER BY lower(name)"
+        "SELECT id, name FROM people WHERE active = TRUE AND NOT excluded ORDER BY lower(name)"
     )
     return templates.TemplateResponse(
-        request, "timeclock_home.html",
-        {"people": rows, "session_expired": bool(expired),
-         "saturday_banner": _saturday_banner_context()},
+        request,
+        "timeclock_home.html",
+        {
+            "people": rows,
+            "session_expired": bool(expired),
+            "saturday_banner": _saturday_banner_context(),
+        },
     )
 
 
@@ -525,12 +544,13 @@ def kiosk_start(person_id: int):
     # Resolution popups take priority over everything else, including the
     # salaried time-off bounce — the employee must not be able to tap past
     # an approval/denial/cancellation.
-    if (employee_notifications.notifications_enabled()
-            and p.get("odoo_id")
-            and employee_notifications.has_unacknowledged(p["odoo_id"])):
+    if (
+        employee_notifications.notifications_enabled()
+        and p.get("odoo_id")
+        and employee_notifications.has_unacknowledged(p["odoo_id"])
+    ):
         token = _mint_token(person_id)
-        return RedirectResponse(
-            url=f"/timeclock/notifications/{token}", status_code=303)
+        return RedirectResponse(url=f"/timeclock/notifications/{token}", status_code=303)
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
@@ -546,9 +566,7 @@ def kiosk_start(person_id: int):
             url=f"/timeclock/saturday/{_mint_token(person_id)}", status_code=303
         )
     token = _mint_token(person_id)
-    return RedirectResponse(
-        url=f"/timeclock/dashboard/{token}", status_code=303
-    )
+    return RedirectResponse(url=f"/timeclock/dashboard/{token}", status_code=303)
 
 
 @router.get("/timeclock/dashboard/{token}", response_class=HTMLResponse)
@@ -576,11 +594,15 @@ def timeclock_dashboard(request: Request, token: str):
     if p.get("odoo_id"):
         try:
             from .. import auto_lunch
+
             now_local = datetime.now(UTC).astimezone(shift_config.SITE_TZ)
             lunch_run = auto_lunch.active_lunch_run(p["odoo_id"], now_local)
             if lunch_run is not None:
-                state = {**state, "is_clocked_in": True,
-                         "current_wc": lunch_run.get("wc_name") or state.get("current_wc")}
+                state = {
+                    **state,
+                    "is_clocked_in": True,
+                    "current_wc": lunch_run.get("wc_name") or state.get("current_wc"),
+                }
                 on_lunch = True
         except Exception:  # overlay is non-essential — never break the dashboard
             _log.exception("auto-lunch overlay failed for person %s", p.get("odoo_id"))
@@ -588,10 +610,7 @@ def timeclock_dashboard(request: Request, token: str):
 
     sync_warning = _sync_error_warning(p["odoo_id"]) if p.get("odoo_id") else None
     scheduled_wc = _scheduled_wc_for(p["name"])
-    approved_leave = (
-        _approved_full_day_leave_today(p["odoo_id"])
-        if p.get("odoo_id") else None
-    )
+    approved_leave = _approved_full_day_leave_today(p["odoo_id"]) if p.get("odoo_id") else None
 
     # Refresh the token so a slow user (reading the scheduled WC, picking
     # WCs) doesn't time out mid-action.
@@ -602,9 +621,7 @@ def timeclock_dashboard(request: Request, token: str):
     # for the (currently common) flag-off case.
     time_off_on = _time_off_enabled()
     pending_time_off = (
-        _pending_time_off_count(p["odoo_id"])
-        if time_off_on and p.get("odoo_id")
-        else 0
+        _pending_time_off_count(p["odoo_id"]) if time_off_on and p.get("odoo_id") else 0
     )
 
     return templates.TemplateResponse(
@@ -642,12 +659,13 @@ def timeclock_notifications(request: Request, token: str):
     if not notes:
         # Raced/empty (acked elsewhere) — continue to the dashboard.
         return RedirectResponse(
-            url=f"/timeclock/dashboard/{_mint_token(person_id)}",
-            status_code=303)
+            url=f"/timeclock/dashboard/{_mint_token(person_id)}", status_code=303
+        )
     # The template renders each card's text via t() (keyed on kind) so it
     # localizes for Spanish-primary employees; it needs the formatted date span.
     for n in notes:
         n["span"] = employee_notifications.span_label(n)
+        n["holiday_event_name"] = employee_notifications.holiday_cancellation_event_name(n)
     return templates.TemplateResponse(
         request,
         "timeclock_notifications.html",
@@ -671,8 +689,7 @@ def timeclock_notifications_ack(request: Request, token: str):
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/timeclock", status_code=303)
     employee_notifications.acknowledge_all(p["odoo_id"])
-    return RedirectResponse(
-        url=f"/timeclock/dashboard/{_mint_token(person_id)}", status_code=303)
+    return RedirectResponse(url=f"/timeclock/dashboard/{_mint_token(person_id)}", status_code=303)
 
 
 @router.get("/timeclock/pick-wc/{token}", response_class=HTMLResponse)
@@ -813,7 +830,9 @@ def kiosk_clock_in_confirm_time_off_override(
         ("refuse", leave["id"]),
     )
     unexpected_worker.record(
-        day=plant_today(), person_odoo_id=odoo_id, leave=leave,
+        day=plant_today(),
+        person_odoo_id=odoo_id,
+        leave=leave,
         clock_in_wc=wc_name,
     )
     log_id, rounded_at = _open_log_row(odoo_id, "clock_in", wc_name)
@@ -853,6 +872,7 @@ def kiosk_clock_out(
     # pending auto sign-in. The morning attendance is already closed at lunch
     # start, so the Odoo sync of this clock_out is a safe no-op.
     from .. import auto_lunch
+
     auto_lunch.note_employee_clock_out(odoo_id)
     background_tasks.add_task(timeclock_sync.sync_one_by_id, log_id)
     # Day-before reminder: if today is the last working day before approved
@@ -864,13 +884,13 @@ def kiosk_clock_out(
     saturday_reminder_card = None
     if employee_notifications.notifications_enabled():
         try:
-            time_off_reminder_card = time_off_reminder.reminder_for_person(
-                odoo_id, plant_today())
+            time_off_reminder_card = time_off_reminder.reminder_for_person(odoo_id, plant_today())
         except Exception:
             _log.exception("time-off reminder lookup failed for %s", odoo_id)
     try:
         saturday_reminder_card = saturday_work_reminder.claim_for_person(
-            person_id, plant_today(), plant_now())
+            person_id, plant_today(), plant_now()
+        )
     except Exception:
         # The punch is already saved; this convenience reminder must never
         # turn a successful clock-out into a kiosk error. This is independent

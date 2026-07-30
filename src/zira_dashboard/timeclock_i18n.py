@@ -13,6 +13,7 @@ missing glossary entry degrades gracefully.
 Latin-American / Mexican shop-floor register. Edit a value here to fix any
 wording — one line, one place.
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -41,8 +42,7 @@ TRANSLATIONS: dict[str, str] = {
     "You're not scheduled today": "No estás programado hoy",
     "Pick the work center you're on.": "Elige la estación donde estás trabajando.",
     "Pick Work Center": "Elegir estación",
-    "On lunch — tap Sign Out only if you're leaving for the day.":
-        "En el almuerzo — toque Salir solo si se va por el día.",
+    "On lunch — tap Sign Out only if you're leaving for the day.": "En el almuerzo — toque Salir solo si se va por el día.",
     "Time Off Request": "Solicitar tiempo libre",
     # --- pick work center ---
     "Pick where you're working": "Elige dónde estás trabajando",
@@ -54,39 +54,30 @@ TRANSLATIONS: dict[str, str] = {
     "Time off approved": "Tiempo libre aprobado",
     "Time off denied": "Tiempo libre rechazado",
     "Time off cancelled": "Tiempo libre cancelado",
-    "Your time off for {span} was approved. ✅":
-        "Tu tiempo libre del {span} fue aprobado. ✅",
-    "Your time off request for {span} was denied. ❌ See a supervisor if you have questions.":
-        "Tu solicitud de tiempo libre del {span} fue rechazada. ❌ "
-        "Habla con un supervisor si tienes preguntas.",
-    "Your approved time off for {span} was cancelled. ⚠️ See a supervisor if you have questions.":
-        "Tu tiempo libre aprobado del {span} fue cancelado. ⚠️ "
-        "Habla con un supervisor si tienes preguntas.",
+    "Your time off for {span} was approved. ✅": "Tu tiempo libre del {span} fue aprobado. ✅",
+    "Your time off request for {span} was denied. ❌ See a supervisor if you have questions.": "Tu solicitud de tiempo libre del {span} fue rechazada. ❌ "
+    "Habla con un supervisor si tienes preguntas.",
+    "Your approved time off for {span} was cancelled. ⚠️ See a supervisor if you have questions.": "Tu tiempo libre aprobado del {span} fue cancelado. ⚠️ "
+    "Habla con un supervisor si tienes preguntas.",
     "Saturday work cancelled": "Trabajo del sábado cancelado",
-    "Saturday work was cancelled. Do not report to work.":
-        "El trabajo del sábado fue cancelado. No te presentes a trabajar.",
+    "Saturday work was cancelled. Do not report to work.": "El trabajo del sábado fue cancelado. No te presentes a trabajar.",
+    "Holiday work cancelled": "Trabajo del día festivo cancelado",
+    "{name} work was cancelled. Do not report to work.": "El trabajo de {name} fue cancelado. No te presentes a trabajar.",
     # --- clock-out day-before reminder ---
     "Time off reminder": "Recordatorio de tiempo libre",
-    "Heads up — you have approved time off {day}. Enjoy!":
-        "Atención — tienes tiempo libre aprobado {day}. ¡Que lo disfrutes!",
-    "Heads up — {day}, you're not due in until {ht} (approved).":
-        "Atención — {day}, no entras hasta las {ht} (aprobado).",
-    "Heads up — {day}, you have a late arrival (approved).":
-        "Atención — {day}, tienes una llegada tarde (aprobado).",
-    "Heads up — {day}, you can leave at {hf} (approved).":
-        "Atención — {day}, puedes salir a las {hf} (aprobado).",
-    "Heads up — {day}, you have an early leave (approved).":
-        "Atención — {day}, tienes una salida temprana (aprobado).",
-    "Heads up — {day}, you're off from {hf} to {ht} (approved).":
-        "Atención — {day}, estás libre de {hf} a {ht} (aprobado).",
-    "Heads up — {day}, you have partial time off (approved).":
-        "Atención — {day}, tienes tiempo libre parcial (aprobado).",
+    "Heads up — you have approved time off {day}. Enjoy!": "Atención — tienes tiempo libre aprobado {day}. ¡Que lo disfrutes!",
+    "Heads up — {day}, you're not due in until {ht} (approved).": "Atención — {day}, no entras hasta las {ht} (aprobado).",
+    "Heads up — {day}, you have a late arrival (approved).": "Atención — {day}, tienes una llegada tarde (aprobado).",
+    "Heads up — {day}, you can leave at {hf} (approved).": "Atención — {day}, puedes salir a las {hf} (aprobado).",
+    "Heads up — {day}, you have an early leave (approved).": "Atención — {day}, tienes una salida temprana (aprobado).",
+    "Heads up — {day}, you're off from {hf} to {ht} (approved).": "Atención — {day}, estás libre de {hf} a {ht} (aprobado).",
+    "Heads up — {day}, you have partial time off (approved).": "Atención — {day}, tienes tiempo libre parcial (aprobado).",
     "Saturday work reminder": "Recordatorio de trabajo del sábado",
+    "Holiday work reminder": "Recordatorio de trabajo en día festivo",
     "You are scheduled for {day}.": "Estás programado para {day}.",
     "Scheduled hours: {hours}": "Horario programado: {hours}",
     "Work area: {work_center}": "Área de trabajo: {work_center}",
-    "Work area: check with your supervisor.":
-        "Área de trabajo: consulta con tu supervisor.",
+    "Work area: check with your supervisor.": "Área de trabajo: consulta con tu supervisor.",
     # --- time off: landing ---
     "Time Off — {name}": "Tiempo libre — {name}",
     "Request Time Off": "Solicitar tiempo libre",
@@ -144,42 +135,44 @@ TRANSLATIONS: dict[str, str] = {
     "Note": "Nota",
     "Sync error": "Error de sincronización",
     "Edit Request": "Editar solicitud",
-    "Canceling an approved request will need approval again if you change your mind.":
-        "Cancelar una solicitud aprobada requerirá aprobación nuevamente si cambias de opinión.",
+    "Canceling an approved request will need approval again if you change your mind.": "Cancelar una solicitud aprobada requerirá aprobación nuevamente si cambias de opinión.",
     "Cancel This Request": "Cancelar esta solicitud",
     # --- time off: overlap conflict modal ---
-    "You already have time off for this time so we can't add a second. Either cancel your request via the My Requests button or contact management for help.":
-        "Ya tienes tiempo libre para estas fechas, así que no podemos agregar otro. Cancela tu solicitud con el botón Mis solicitudes o comunícate con la gerencia para obtener ayuda.",
+    "You already have time off for this time so we can't add a second. Either cancel your request via the My Requests button or contact management for help.": "Ya tienes tiempo libre para estas fechas, así que no podemos agregar otro. Cancela tu solicitud con el botón Mis solicitudes o comunícate con la gerencia para obtener ayuda.",
     "Go to My Requests": "Ir a Mis solicitudes",
     "OK": "Aceptar",
     # --- time off: salaried landing ---
-    "You're salaried, so there's nothing to clock — just request time off below.":
-        "Eres asalariado, así que no necesitas marcar entrada ni salida — solo solicita tu tiempo libre aquí abajo.",
+    "You're salaried, so there's nothing to clock — just request time off below.": "Eres asalariado, así que no necesitas marcar entrada ni salida — solo solicita tu tiempo libre aquí abajo.",
     # --- time off: submitted ---
     "Request Submitted": "Solicitud enviada",
-    "Your time-off request from {start} to {end} is pending approval.":
-        "Tu solicitud de tiempo libre del {start} al {end} está pendiente de aprobación.",
+    "Your time-off request from {start} to {end} is pending approval.": "Tu solicitud de tiempo libre del {start} al {end} está pendiente de aprobación.",
     # --- optional Saturday work ---
     "Saturday Work Available": "Trabajo disponible el sábado",
+    "Holiday Work Available — {name}": "Trabajo disponible en el día festivo — {name}",
     "Can you work Saturday, {date}?": "¿Puedes trabajar el sábado {date}?",
+    "Can you work this holiday, {name}, on {date}?": "¿Puedes trabajar este día festivo, {name}, el {date}?",
     "Respond by {deadline}.": "Responde antes de {deadline}.",
     "Openings may fill before the deadline.": "Los lugares pueden llenarse antes de la fecha límite.",
-    "Yes": "Sí", "No": "No", "Decide later": "Decidir después",
+    "Yes": "Sí",
+    "No": "No",
+    "Decide later": "Decidir después",
     "I can work only part of the shift": "Solo puedo trabajar parte del turno",
     "Confirm your commitment": "Confirma tu compromiso",
     "By confirming, you commit to work Saturday from {hours}.": "Al confirmar, te comprometes a trabajar el sábado de {hours}.",
+    "By confirming, you commit to work this holiday from {hours}.": "Al confirmar, te comprometes a trabajar este día festivo de {hours}.",
     "You may cancel until {deadline}.": "Puedes cancelar hasta {deadline}.",
     "After that, contact a manager.": "Después de esa hora, habla con un gerente.",
     "Your Saturday commitment": "Tu compromiso del sábado",
+    "Your holiday work commitment — {name}": "Tu compromiso de trabajo en día festivo — {name}",
     "Cancel Saturday commitment": "Cancelar compromiso del sábado",
+    "Cancel holiday work commitment": "Cancelar compromiso de trabajo en día festivo",
     "Contact a manager to make a change.": "Habla con un gerente para hacer un cambio.",
     "This is a firm commitment.": "Este es un compromiso firme.",
     "Start": "Inicio",
     "End": "Fin",
-    "Availability must use 30-minute increments and stay within the Saturday shift.":
-        "La disponibilidad debe usar incrementos de 30 minutos y mantenerse dentro del turno del sábado.",
-    "That opening was just filled. You have not been scheduled.":
-        "Ese lugar se acaba de llenar. No has sido programado.",
+    "Availability must use 30-minute increments and stay within the Saturday shift.": "La disponibilidad debe usar incrementos de 30 minutos y mantenerse dentro del turno del sábado.",
+    "Availability must use 30-minute increments and stay within the optional shift.": "La disponibilidad debe usar incrementos de 30 minutos y mantenerse dentro del turno opcional.",
+    "That opening was just filled. You have not been scheduled.": "Ese lugar se acaba de llenar. No has sido programado.",
 }
 
 LanguageMode = Literal["en", "es_primary"]
@@ -207,11 +200,26 @@ def _fill(template: str, kwargs: dict) -> Markup:
 
 
 _SPANISH_WEEKDAYS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
-_SPANISH_MONTHS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre")
+_SPANISH_MONTHS = (
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+)
 
 
 def spanish_date_label(value: date | datetime) -> str:
-    return f"{_SPANISH_WEEKDAYS[value.weekday()]}, {value.day} de {_SPANISH_MONTHS[value.month - 1]}"
+    return (
+        f"{_SPANISH_WEEKDAYS[value.weekday()]}, {value.day} de {_SPANISH_MONTHS[value.month - 1]}"
+    )
 
 
 def spanish_deadline_label(value: datetime) -> str:
@@ -256,5 +264,5 @@ def t(ctx, text: str, **kwargs) -> str | Markup:
         '<span class="k-bi k-bi-es-primary">'
         '<span class="k-es k-primary">{}</span>'
         '<span class="k-en k-secondary">{}</span>'
-        '</span>'
+        "</span>"
     ).format(spanish, english)

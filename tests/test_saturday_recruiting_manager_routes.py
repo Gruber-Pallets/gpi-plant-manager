@@ -112,18 +112,12 @@ def test_non_saturday_activation_is_422():
     assert response.json()["detail"] == "This date is not an optional workday."
 
 
-def test_holiday_activation_passes_mirrored_metadata_without_odoo_writes(monkeypatch):
+def test_holiday_activation_passes_local_mirror_metadata_without_odoo_writes(monkeypatch):
     captured = {}
-    holiday = optional_workday.OptionalWorkday(
-        HOLIDAY,
-        "holiday",
-        "Black Friday",
-        481,
-    )
     monkeypatch.setattr(
-        optional_workday,
+        company_holidays,
         "for_day",
-        lambda day: holiday if day == HOLIDAY else None,
+        lambda day: _holiday(481, "Black Friday", HOLIDAY) if day == HOLIDAY else None,
     )
     monkeypatch.setattr(
         routes.store,
@@ -543,6 +537,55 @@ def test_full_holiday_cancel_uses_persisted_notification_metadata_and_warning(
     ]
     assert "Ben" in response.json()["warning"]
     assert "Black Friday cancellation notice" in response.json()["warning"]
+
+
+def test_full_holiday_cancel_dispatches_through_keyword_compatible_notification(
+    monkeypatch,
+):
+    bundle = _bundle(
+        day=HOLIDAY,
+        day_kind="holiday",
+        event_name="Black Friday",
+        holiday_odoo_id=481,
+    )
+    targets = (
+        store.StoredCommitment(
+            1,
+            101,
+            "Ana",
+            "committed",
+            time(6),
+            time(12),
+            frozenset(),
+        ),
+    )
+    executes = []
+    monkeypatch.setattr(routes.store, "get", lambda _day: bundle)
+    monkeypatch.setattr(routes.store, "cancel_recruitment", lambda *_args: targets)
+    monkeypatch.setattr(routes, "plant_now", lambda: NOW)
+    monkeypatch.setattr(routes.staffing, "invalidate_schedule_cache", lambda _day: None)
+    monkeypatch.setattr(routes.staffing_routes, "_bust_after_mutation", lambda: None)
+    monkeypatch.setattr(
+        employee_notifications.db,
+        "execute",
+        lambda sql, params=None: executes.append((sql, params)),
+    )
+
+    response = client.post(
+        "/api/staffing/saturday-recruiting/cancel",
+        json={"day": HOLIDAY.isoformat()},
+    )
+
+    assert response.status_code == 200
+    assert "warning" not in response.json()
+    assert len(executes) == 1
+    assert executes[0][1] == (
+        101,
+        "saturday_work_cancelled",
+        HOLIDAY,
+        "Holiday work cancelled",
+        "Black Friday work was cancelled. Do not report to work.",
+    )
 
 
 def test_browser_fallback_error_uses_optional_workday_copy():

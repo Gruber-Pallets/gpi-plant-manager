@@ -10,15 +10,24 @@
   {% if saturday_banner %}
     {% if saturday_banner.phase == "available" %}
     <div class="saturday-home-banner" role="status">
+      {% if saturday_banner.is_holiday %}
+      <strong>{{ t("Holiday Work Available — {name}", name=saturday_banner.event_name) }}</strong>
+      <span class="k-es">{{ t("Trabajo disponible en el día festivo — {name}", name=saturday_banner.event_name) }}</span>
+      {% else %}
       <strong>Saturday Work Available</strong>
       <span class="k-es">Trabajo disponible el sábado</span>
+      {% endif %}
       <small>Respond by {{ saturday_banner.deadline_label }} · Openings may fill</small>
     </div>
     {% else %}
     <button type="button" id="saturday-schedule-trigger"
             class="saturday-home-banner saturday-home-plan"
             aria-haspopup="dialog" aria-controls="saturday-schedule-modal">
+      {% if saturday_banner.is_holiday %}
+      <strong>{{ t("Holiday work planned for {phase} — {name}", phase=saturday_banner.phase, name=saturday_banner.event_name) }}</strong>
+      {% else %}
       <strong>Saturday planned for {{ saturday_banner.phase }}</strong>
+      {% endif %}
       <small>{{ saturday_banner.day_label }} · {{ saturday_banner.shift_label }}</small>
     </button>
     {% endif %}
@@ -41,7 +50,7 @@
 <div id="saturday-schedule-modal" class="k-modal-overlay" hidden>
   <div class="k-modal-card saturday-schedule-card" role="dialog" aria-modal="true"
        aria-labelledby="saturday-schedule-title">
-    <h2 id="saturday-schedule-title">Saturday schedule</h2>
+    <h2 id="saturday-schedule-title">{% if saturday_banner.is_holiday %}Holiday work schedule{% else %}Saturday schedule{% endif %}</h2>
     <p>{{ saturday_banner.day_label }} · {{ saturday_banner.shift_label }}</p>
     {% if saturday_banner.published %}
       {% for assignment in saturday_banner.assignments %}
@@ -53,7 +62,11 @@
       <p>No work-center assignments are listed.</p>
       {% endfor %}
     {% else %}
+    {% if saturday_banner.is_holiday %}
+    <p>Holiday work schedule has not been published yet.</p>
+    {% else %}
     <p>Saturday schedule has not been published yet.</p>
+    {% endif %}
     {% endif %}
     <button type="button" class="k-btn secondary" id="saturday-schedule-close">Close</button>
   </div>

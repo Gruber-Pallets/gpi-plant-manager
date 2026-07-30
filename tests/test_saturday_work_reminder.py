@@ -46,6 +46,8 @@ def _row(**overrides):
         "availability_end": time(11, 30),
         "response_deadline": datetime(2026, 7, 24, 7, tzinfo=SITE_TZ),
         "wc_name": None,
+        "day_kind": "saturday",
+        "event_name": "Saturday",
     }
     row.update(overrides)
     return row
@@ -59,7 +61,32 @@ def test_claim_returns_partial_hours_and_marks_once(fake_cursor):
     assert card["day_label"] == "Saturday, July 25"
     assert card["hours"] == "7:00 AM–11:30 AM"
     assert card["work_center"] is None
+    assert card["title_key"] == "Saturday work reminder"
+    assert card["event_name"] == "Saturday"
     assert "punch_reminder_shown_at" in fake_cursor.executed_update
+    assert "s.day_kind" in fake_cursor.executed[0][0]
+    assert "s.event_name" in fake_cursor.executed[0][0]
+
+
+def test_claim_returns_persisted_holiday_reminder_metadata(fake_cursor):
+    fake_cursor.rows = [
+        _row(
+            day=date(2026, 11, 27),
+            response_deadline=datetime(2026, 11, 25, 7, tzinfo=SITE_TZ),
+            day_kind="holiday",
+            event_name="Black Friday",
+        )
+    ]
+
+    card = reminder.claim_for_person(
+        12,
+        date(2026, 11, 25),
+        datetime(2026, 11, 25, 15, 30, tzinfo=SITE_TZ),
+    )
+
+    assert card["day_label"] == "Friday, November 27"
+    assert card["title_key"] == "Holiday work reminder"
+    assert card["event_name"] == "Black Friday"
 
 
 def test_cancelled_commitment_returns_none(fake_cursor):

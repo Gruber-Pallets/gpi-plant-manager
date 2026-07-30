@@ -12,8 +12,13 @@
         {% set card_title = t("Time off denied") %}
         {% set card_body = t("Your time off request for {span} was denied. ❌ See a supervisor if you have questions.", span=n.span) %}
       {% elif n.kind == 'saturday_work_cancelled' %}
+        {% if n.holiday_event_name %}
+        {% set card_title = t("Holiday work cancelled") %}
+        {% set card_body = t("{name} work was cancelled. Do not report to work.", name=n.holiday_event_name) %}
+        {% else %}
         {% set card_title = t("Saturday work cancelled") %}
         {% set card_body = t("Saturday work was cancelled. Do not report to work.") %}
+        {% endif %}
       {% else %}
         {% set card_title = t("Time off cancelled") %}
         {% set card_body = t("Your approved time off for {span} was cancelled. ⚠️ See a supervisor if you have questions.", span=n.span) %}

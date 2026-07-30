@@ -28,7 +28,11 @@
                 background: #eff6ff; border-radius: 12px;
                 border-left: 10px solid #2563eb; text-align: left;">
       <div style="font-size: 1.5rem; font-weight: 700; color: #1e3a8a;">
-        📅 {{ t("Saturday work reminder") }}</div>
+        📅 {{ t(saturday_work_reminder.title_key or "Saturday work reminder") }}</div>
+      {% if saturday_work_reminder.title_key == "Holiday work reminder" %}
+      <div style="font-size: 1.25rem; font-weight: 700; color: #334155; margin-top: .35rem;">
+        {{ td("{name}", es={"name": saturday_work_reminder.event_name}, en={"name": saturday_work_reminder.event_name}) }}</div>
+      {% endif %}
       <div style="font-size: 1.25rem; color: #334155; margin-top: .35rem;">
         {{ t("You are scheduled for {day}.", day=saturday_work_reminder.day_label) }}</div>
       <div style="font-size: 1.15rem; color: #334155; margin-top: .35rem;">

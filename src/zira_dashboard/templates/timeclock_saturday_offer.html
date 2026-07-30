@@ -5,7 +5,11 @@
 <main class="k-main" style="align-items:center; text-align:center; padding-top:3rem;">
   {% if error %}<div class="k-error">{{ t(error) }}</div>{% endif %}
   {% if offer %}
+  {% if offer.is_holiday %}
+  <h1>{{ td("Can you work this holiday, {name}, on {date}?", es={"name": offer.event_name, "date": offer.day_label_es}, en={"name": offer.event_name, "date": offer.day_label}) }}</h1>
+  {% else %}
   <h1>{{ td("Can you work Saturday, {date}?", es={"date": offer.day_label_es}, en={"date": offer.day_label}) }}</h1>
+  {% endif %}
   <h2>{{ offer.shift_label }}</h2>
   <div class="k-warning">{{ td("Respond by {deadline}.", es={"deadline": offer.deadline_label_es}, en={"deadline": offer.deadline_label}) }}<br>{{ t("Openings may fill before the deadline.") }}</div>
   <div class="saturday-choice-grid">

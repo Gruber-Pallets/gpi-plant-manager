@@ -4,7 +4,7 @@
 <div class="k-header"><a href="/timeclock/saturday/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>{% include "_timeclock_brand.html" %}</div>
 <main class="k-main" style="align-items:center; text-align:center; padding-top:3rem;">
   <h1>{{ t("Confirm your commitment") }}</h1><h2>{{ td("{date}", es={"date": offer.day_label_es}, en={"date": offer.day_label}) }} · {{ selected_hours }}</h2>
-  <p>{{ t("By confirming, you commit to work Saturday from {hours}.", hours=selected_hours) }}</p><p>{{ t("This is a firm commitment.") }}</p>
+  <p>{% if offer.is_holiday %}{{ t("By confirming, you commit to work this holiday from {hours}.", hours=selected_hours) }}{% else %}{{ t("By confirming, you commit to work Saturday from {hours}.", hours=selected_hours) }}{% endif %}</p><p>{{ t("This is a firm commitment.") }}</p>
   <p>{{ td("You may cancel until {deadline}.", es={"deadline": offer.deadline_label_es}, en={"deadline": offer.deadline_label}) }}</p><p>{{ t("After that, contact a manager.") }}</p>
   <form method="post" action="/timeclock/saturday/commit/{{ token }}"><input type="hidden" name="day" value="{{ offer.day }}"><input type="hidden" name="availability_start" value="{{ availability_start }}"><input type="hidden" name="availability_end" value="{{ availability_end }}"><button class="k-btn success" type="submit">{{ t("Confirm your commitment") }}</button></form>
 </main>

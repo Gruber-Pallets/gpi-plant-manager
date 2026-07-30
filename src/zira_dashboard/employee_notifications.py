@@ -9,6 +9,7 @@ Generation (``maybe_notify_resolution``) rides the time-off poller's
 state-change detection in ``time_off_sync._upsert_one`` — see that module.
 Display is the kiosk sign-in interstitial in ``routes/timeclock.py``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,7 +36,9 @@ def notifications_enabled() -> bool:
     both the resolution popups and the day-before reminder without touching
     the rest of the time-off feature."""
     return os.environ.get(_NOTIFY_ENV, "1").strip().lower() not in (
-        "0", "false", "no",
+        "0",
+        "false",
+        "no",
     )
 
 
@@ -70,19 +73,24 @@ def _render(kind: str, req: dict[str, Any]) -> tuple[str, str]:
     """Return (title, body) for a resolution notification."""
     span = _date_span_label(req["date_from"], req.get("date_to"))
     if kind == "time_off_approved":
-        return ("Time off approved",
-                f"Your time off for {span} was approved. ✅")
+        return ("Time off approved", f"Your time off for {span} was approved. ✅")
     if kind == "time_off_denied":
-        return ("Time off denied",
-                f"Your time off request for {span} was denied. ❌ "
-                "See a supervisor if you have questions.")
-    return ("Time off cancelled",
-            f"Your approved time off for {span} was cancelled. ⚠️ "
-            "See a supervisor if you have questions.")
+        return (
+            "Time off denied",
+            f"Your time off request for {span} was denied. ❌ "
+            "See a supervisor if you have questions.",
+        )
+    return (
+        "Time off cancelled",
+        f"Your approved time off for {span} was cancelled. ⚠️ "
+        "See a supervisor if you have questions.",
+    )
 
 
 def create_time_off_notification(
-    person_odoo_id: int, kind: str, req: dict[str, Any],
+    person_odoo_id: int,
+    kind: str,
+    req: dict[str, Any],
 ) -> None:
     """Insert one notification. The unique (time_off_request_id, kind) index
     + ON CONFLICT DO NOTHING make this idempotent if a poll re-processes the
@@ -94,32 +102,63 @@ def create_time_off_notification(
         " title, body, leave_date_from, leave_date_to) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (time_off_request_id, kind) DO NOTHING",
-        (person_odoo_id, kind, req.get("id"), req.get("odoo_leave_id"),
-         title, body, req.get("date_from"), req.get("date_to")),
+        (
+            person_odoo_id,
+            kind,
+            req.get("id"),
+            req.get("odoo_leave_id"),
+            title,
+            body,
+            req.get("date_from"),
+            req.get("date_to"),
+        ),
     )
 
 
-def create_saturday_cancelled(person_odoo_id: int, day: date) -> None:
-    """Notify a committed volunteer that their whole Saturday was cancelled.
+def create_saturday_cancelled(
+    person_odoo_id: int,
+    day: date,
+    *,
+    day_kind: str = "saturday",
+    event_name: str | None = None,
+) -> None:
+    """Notify a committed volunteer that their optional workday was cancelled.
 
     The partial unique index on ``(person_odoo_id, saturday_day, kind)`` keeps
     a retry of the manager cancellation endpoint from creating another kiosk
-    card for the same person and Saturday.
+    card for the same person and date.
     """
+    if day_kind == "holiday":
+        title = "Holiday work cancelled"
+        body = f"{event_name or 'Holiday'} work was cancelled. Do not report to work."
+    else:
+        title = "Saturday work cancelled"
+        body = "Saturday work was cancelled. Do not report to work."
     db.execute(
         "INSERT INTO employee_notifications "
         "(person_odoo_id, kind, saturday_day, title, body) "
         "VALUES (%s, %s, %s, %s, %s) "
         "ON CONFLICT (person_odoo_id, saturday_day, kind) "
         "WHERE saturday_day IS NOT NULL DO NOTHING",
-        (person_odoo_id, "saturday_work_cancelled", day,
-         "Saturday work cancelled",
-         "Saturday work was cancelled. Do not report to work."),
+        (person_odoo_id, "saturday_work_cancelled", day, title, body),
     )
 
 
+def holiday_cancellation_event_name(row: dict[str, Any]) -> str | None:
+    """Recover the escaped-at-render holiday name from stored cancellation copy."""
+    if row.get("title") != "Holiday work cancelled":
+        return None
+    body = str(row.get("body") or "")
+    suffix = " work was cancelled. Do not report to work."
+    if body.endswith(suffix):
+        return body[: -len(suffix)] or "Holiday"
+    return "Holiday"
+
+
 def suppress_resolution(
-    person_odoo_id: int, req: dict[str, Any], kind: str,
+    person_odoo_id: int,
+    req: dict[str, Any],
+    kind: str,
 ) -> None:
     """Pre-insert an already-acknowledged notification of ``kind`` so the
     unique (time_off_request_id, kind) index swallows any future
@@ -144,8 +183,16 @@ def suppress_resolution(
         "ON CONFLICT (time_off_request_id, kind) DO UPDATE "
         "SET acknowledged_at = "
         "COALESCE(employee_notifications.acknowledged_at, now())",
-        (person_odoo_id, kind, req.get("id"), req.get("odoo_leave_id"),
-         title, body, req.get("date_from"), req.get("date_to")),
+        (
+            person_odoo_id,
+            kind,
+            req.get("id"),
+            req.get("odoo_leave_id"),
+            title,
+            body,
+            req.get("date_from"),
+            req.get("date_to"),
+        ),
     )
 
 
@@ -163,7 +210,9 @@ def unsuppress_resolution(time_off_request_id: int, kind: str) -> None:
 
 
 def maybe_notify_resolution(
-    old: dict[str, Any], new: dict[str, Any], today: date | None = None,
+    old: dict[str, Any],
+    new: dict[str, Any],
+    today: date | None = None,
 ) -> None:
     """Raise a resolution notification when a request transitions into an
     approved/denied/cancelled state. Called from ``time_off_sync._upsert_one``
@@ -193,7 +242,9 @@ def maybe_notify_resolution(
     except Exception:  # best-effort: a notification must never break the poll
         _log.warning(
             "resolution notification failed for leave %s",
-            (new or {}).get("odoo_leave_id"), exc_info=True)
+            (new or {}).get("odoo_leave_id"),
+            exc_info=True,
+        )
 
 
 def has_unacknowledged(person_odoo_id: int) -> bool:
