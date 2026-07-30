@@ -391,9 +391,7 @@ def _render_staffing(
         def TemplateResponse(self, _request, _template, context):
             captured["context"] = context
             if template_env is not None:
-                rendered_html.append(
-                    template_env.get_template(_template).render(**context)
-                )
+                rendered_html.append(template_env.get_template(_template).render(**context))
             return FakeResponse(context)
 
     monkeypatch.setattr(staffing_routes, "templates", FakeTemplates())
@@ -876,18 +874,112 @@ def test_holiday_save_requires_current_matching_recruiting_without_mutation(
         SimpleNamespace(headers={"accept": "application/json"}),
         BLACK_FRIDAY,
         0,
-        FormData([
-            ("action", "save"),
-            ("loc__Repair 1", "Volunteer"),
-            ("defaults_dirty__Repair 1", "1"),
-            ("default__Repair 1", "Volunteer"),
-        ]),
+        FormData(
+            [
+                ("action", "save"),
+                ("loc__Repair 1", "Volunteer"),
+                ("defaults_dirty__Repair 1", "1"),
+                ("default__Repair 1", "Volunteer"),
+            ]
+        ),
     )
 
     assert response.status_code == 409
     assert b"Holiday recruiting is not active for Black Friday" in response.body
     assert saved == []
     assert default_updates == []
+
+
+def test_unrecruited_holiday_allows_only_an_empty_draft_save_before_activation(
+    monkeypatch,
+):
+    old_weekday_draft = staffing.Schedule(
+        day=BLACK_FRIDAY,
+        published=True,
+        assignments={"Repair 1": ["Old weekday assignment"]},
+        assignment_sources={"Repair 1": {"Old weekday assignment": "default"}},
+        custom_hours={"start": "05:30", "end": "13:00", "breaks": []},
+        auto_enabled_work_centers=["Repair 1"],
+        saturday_availability_overrides={"Corrected": "off"},
+        published_delivery={"version": "old-posted-version"},
+    )
+    _current, saved, _marked, default_updates = _patch_holiday_save(
+        monkeypatch,
+        bundle=None,
+        schedule=old_weekday_draft,
+    )
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}),
+        BLACK_FRIDAY,
+        0,
+        FormData([("action", "save"), ("notes", "Recruiting draft")]),
+    )
+
+    assert response.status_code == 200
+    assert len(saved) == 1
+    assert saved[0].assignments == {}
+    assert saved[0].assignment_sources == {}
+    assert saved[0].published is False
+    assert saved[0].published_snapshot["assignments"] == {
+        "Repair 1": ["Old weekday assignment"],
+    }
+    assert saved[0].custom_hours == old_weekday_draft.custom_hours
+    assert saved[0].auto_enabled_work_centers == ["Repair 1"]
+    assert saved[0].saturday_availability_overrides == {"Corrected": "off"}
+    assert default_updates == []
+
+
+def test_unrecruited_holiday_still_rejects_people_and_publication(monkeypatch):
+    _current, saved, _marked, _default_updates = _patch_holiday_save(
+        monkeypatch,
+        bundle=None,
+    )
+
+    assigned = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}),
+        BLACK_FRIDAY,
+        0,
+        FormData([("action", "save"), ("loc__Repair 1", "Volunteer")]),
+    )
+    published = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}),
+        BLACK_FRIDAY,
+        0,
+        FormData([("action", "publish")]),
+    )
+
+    assert assigned.status_code == 409
+    assert published.status_code == 409
+    assert saved == []
+
+
+@pytest.mark.parametrize(
+    "stale_bundle",
+    [
+        _bundle(status="cancelled"),
+        _bundle(day_kind="saturday", holiday_odoo_id=None),
+        _bundle(holiday_odoo_id=99),
+    ],
+)
+def test_empty_holiday_draft_cannot_bypass_stale_or_cancelled_lifecycle(
+    monkeypatch,
+    stale_bundle,
+):
+    _current, saved, _marked, _default_updates = _patch_holiday_save(
+        monkeypatch,
+        bundle=stale_bundle,
+    )
+
+    response = staffing_routes._staffing_save_work(
+        SimpleNamespace(headers={"accept": "application/json"}),
+        BLACK_FRIDAY,
+        0,
+        FormData([("action", "save")]),
+    )
+
+    assert response.status_code == 409
+    assert saved == []
 
 
 def test_holiday_classification_failure_blocks_every_schedule_mutation(monkeypatch):
@@ -905,21 +997,20 @@ def test_holiday_classification_failure_blocks_every_schedule_mutation(monkeypat
         SimpleNamespace(headers={"accept": "application/json"}),
         BLACK_FRIDAY,
         0,
-        FormData([
-            ("action", "save"),
-            ("loc__Repair 1", "Volunteer"),
-            ("defaults_dirty__Repair 1", "1"),
-            ("default__Repair 1", "Volunteer"),
-        ]),
+        FormData(
+            [
+                ("action", "save"),
+                ("loc__Repair 1", "Volunteer"),
+                ("defaults_dirty__Repair 1", "1"),
+                ("default__Repair 1", "Volunteer"),
+            ]
+        ),
     )
 
     assert response.status_code == 409
     assert json.loads(response.body) == {
         "ok": False,
-        "error": (
-            "Optional workday state could not be verified. "
-            "No schedule changes were saved."
-        ),
+        "error": ("Optional workday state could not be verified. No schedule changes were saved."),
     }
     assert saved == []
     assert default_updates == []
@@ -936,27 +1027,27 @@ def test_cancelled_holiday_wins_staffing_save_race_before_defaults_or_schedule(
     monkeypatch.setattr(
         staffing_routes.saturday_recruiting_store,
         "lock_for_schedule_mutation",
-        lambda _day, *, cur: events.append("recruiting_lock")
-        or _bundle(status="cancelled"),
+        lambda _day, *, cur: events.append("recruiting_lock") or _bundle(status="cancelled"),
         raising=False,
     )
     monkeypatch.setattr(
         staffing_routes.staffing,
         "load_schedule_for_update",
-        lambda _day, *, cur: events.append("schedule_lock")
-        or staffing.Schedule(day=BLACK_FRIDAY),
+        lambda _day, *, cur: events.append("schedule_lock") or staffing.Schedule(day=BLACK_FRIDAY),
     )
 
     response = staffing_routes._staffing_save_work(
         SimpleNamespace(headers={"accept": "application/json"}),
         BLACK_FRIDAY,
         0,
-        FormData([
-            ("action", "save"),
-            ("loc__Repair 1", "Volunteer"),
-            ("defaults_dirty__Repair 1", "1"),
-            ("default__Repair 1", "Volunteer"),
-        ]),
+        FormData(
+            [
+                ("action", "save"),
+                ("loc__Repair 1", "Volunteer"),
+                ("defaults_dirty__Repair 1", "1"),
+                ("default__Repair 1", "Volunteer"),
+            ]
+        ),
     )
 
     assert response.status_code == 409
@@ -984,21 +1075,19 @@ def test_holiday_save_locks_recruiting_then_schedule_and_saves_with_same_cursor(
     monkeypatch.setattr(
         staffing_routes.saturday_recruiting_store,
         "lock_for_schedule_mutation",
-        lambda _day, *, cur: events.append(("recruiting_lock", cur))
-        or _bundle(),
+        lambda _day, *, cur: events.append(("recruiting_lock", cur)) or _bundle(),
     )
     monkeypatch.setattr(
         staffing_routes.staffing,
         "load_schedule_for_update",
-        lambda _day, *, cur: events.append(("schedule_lock", cur))
-        or staffing.Schedule(day=BLACK_FRIDAY),
+        lambda _day, *, cur: (
+            events.append(("schedule_lock", cur)) or staffing.Schedule(day=BLACK_FRIDAY)
+        ),
     )
     monkeypatch.setattr(
         staffing_routes.staffing,
         "save_schedule",
-        lambda schedule, *, cur, invalidate_cache: events.append(
-            ("save", cur, invalidate_cache)
-        ),
+        lambda schedule, *, cur, invalidate_cache: events.append(("save", cur, invalidate_cache)),
     )
 
     response = staffing_routes._staffing_save_work(
@@ -1049,8 +1138,7 @@ def test_holiday_save_invalidates_refilled_schedule_cache_only_after_commit(
     monkeypatch.setattr(
         staffing_routes.staffing,
         "load_schedule_for_update",
-        lambda _day, *, cur: events.append("schedule_lock")
-        or staffing.Schedule(day=BLACK_FRIDAY),
+        lambda _day, *, cur: events.append("schedule_lock") or staffing.Schedule(day=BLACK_FRIDAY),
     )
 
     def save_schedule(schedule, *, cur, invalidate_cache=True):
@@ -1065,6 +1153,7 @@ def test_holiday_save_invalidates_refilled_schedule_cache_only_after_commit(
         "save_schedule",
         save_schedule,
     )
+
     def invalidate_schedule_cache(day):
         simulated_cache.pop(day, None)
         events.append("schedule_cache_invalidated")
@@ -1131,12 +1220,14 @@ def test_holiday_save_invalidates_http_cache_before_later_default_failure(
             SimpleNamespace(headers={"accept": "application/json"}),
             BLACK_FRIDAY,
             0,
-            FormData([
-                ("action", "save"),
-                ("loc__Repair 1", "Volunteer"),
-                ("defaults_dirty__Repair 1", "1"),
-                ("default__Repair 1", "Volunteer"),
-            ]),
+            FormData(
+                [
+                    ("action", "save"),
+                    ("loc__Repair 1", "Volunteer"),
+                    ("defaults_dirty__Repair 1", "1"),
+                    ("default__Repair 1", "Volunteer"),
+                ]
+            ),
         )
 
     assert events == [
@@ -1258,11 +1349,15 @@ def test_holiday_publish_marker_failure_reports_closed_partial_state(monkeypatch
         FormData([("action", "publish"), ("loc__Repair 1", "Volunteer")]),
     )
 
-    monkeypatch.setattr(optional_workday, "_publication_state", lambda _day: SimpleNamespace(
-        day_kind="holiday",
-        holiday_odoo_id=42,
-        status="closed",
-    ))
+    monkeypatch.setattr(
+        optional_workday,
+        "_publication_state",
+        lambda _day: SimpleNamespace(
+            day_kind="holiday",
+            holiday_odoo_id=42,
+            status="closed",
+        ),
+    )
     monkeypatch.setattr(staffing, "load_schedule", lambda _day: saved[-1])
 
     assert response.status_code == 503
@@ -1318,15 +1413,13 @@ def test_cancelled_holiday_wins_availability_correction_race(monkeypatch):
     monkeypatch.setattr(
         staffing_routes.saturday_recruiting_store,
         "lock_for_schedule_mutation",
-        lambda _day, *, cur: events.append("recruiting_lock")
-        or _bundle(status="cancelled"),
+        lambda _day, *, cur: events.append("recruiting_lock") or _bundle(status="cancelled"),
         raising=False,
     )
     monkeypatch.setattr(
         staffing_routes.staffing,
         "load_schedule_for_update",
-        lambda _day, *, cur: events.append("schedule_lock")
-        or staffing.Schedule(day=BLACK_FRIDAY),
+        lambda _day, *, cur: events.append("schedule_lock") or staffing.Schedule(day=BLACK_FRIDAY),
     )
 
     with pytest.raises(
@@ -1374,8 +1467,7 @@ def test_failed_availability_transaction_keeps_committed_cache_state(
     monkeypatch.setattr(
         staffing_routes.staffing,
         "load_schedule_for_update",
-        lambda _day, *, cur: events.append("schedule_lock")
-        or staffing.Schedule(day=BLACK_FRIDAY),
+        lambda _day, *, cur: events.append("schedule_lock") or staffing.Schedule(day=BLACK_FRIDAY),
     )
 
     def fail_save(schedule, *, cur, invalidate_cache=True):

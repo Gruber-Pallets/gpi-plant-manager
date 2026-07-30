@@ -44,12 +44,14 @@ _VALID_MODES = ("optimized", "normal", "training")
 
 # Validation failures that must never be persisted, whichever path produced
 # the proposal (goal-button rebuild, reset, or new-day seeding).
-_HARD_ISSUE_CODES = frozenset({
-    "person_assigned_multiple_centers",
-    "center_capacity_exceeded",
-    "generated_assignment_unqualified",
-    "generated_assignment_center_disabled",
-})
+_HARD_ISSUE_CODES = frozenset(
+    {
+        "person_assigned_multiple_centers",
+        "center_capacity_exceeded",
+        "generated_assignment_unqualified",
+        "generated_assignment_center_disabled",
+    }
+)
 
 
 def _error(message: str, status_code: int = 422) -> JSONResponse:
@@ -93,11 +95,7 @@ def _validate_complete_rebuild(
     enabled = frozenset(enabled_centers)
     available = tuple(dict.fromkeys(str(name) for name in available_people))
     available_set = frozenset(available)
-    protected = frozenset(
-        str(name)
-        for names in protected_assignments.values()
-        for name in names
-    )
+    protected = frozenset(str(name) for names in protected_assignments.values() for name in names)
     by_name = {person.name: person for person in roster}
     locations: dict[str, list[str]] = {name: [] for name in available}
     for center, names in proposed_assignments.items():
@@ -110,21 +108,24 @@ def _validate_complete_rebuild(
     for name in available:
         centers = tuple(sorted(locations[name], key=str.lower))
         if not centers:
-            issues.append(schedule_solver.PlacementIssue(
-                code="person_missing_from_complete_schedule",
-                person=name,
-                message=f"{name} is not assigned. Previous schedule kept.",
-            ))
+            issues.append(
+                schedule_solver.PlacementIssue(
+                    code="person_missing_from_complete_schedule",
+                    person=name,
+                    message=f"{name} is not assigned. Previous schedule kept.",
+                )
+            )
         elif len(centers) > 1:
-            issues.append(schedule_solver.PlacementIssue(
-                code="person_assigned_multiple_centers",
-                person=name,
-                centers=centers,
-                message=(
-                    f"{name} is assigned to multiple work centers. "
-                    "Previous schedule kept."
-                ),
-            ))
+            issues.append(
+                schedule_solver.PlacementIssue(
+                    code="person_assigned_multiple_centers",
+                    person=name,
+                    centers=centers,
+                    message=(
+                        f"{name} is assigned to multiple work centers. Previous schedule kept."
+                    ),
+                )
+            )
 
     def _qualified(name: str, center: str) -> bool:
         person = by_name.get(name)
@@ -135,11 +136,13 @@ def _validate_complete_rebuild(
         names = tuple(str(name) for name in proposed_assignments.get(center, ()))
         capacity = center_capacities.get(center)
         if capacity is not None and len(names) > int(capacity):
-            issues.append(schedule_solver.PlacementIssue(
-                code="center_capacity_exceeded",
-                centers=(center,),
-                message=f"{center} exceeds its maximum capacity. Previous schedule kept.",
-            ))
+            issues.append(
+                schedule_solver.PlacementIssue(
+                    code="center_capacity_exceeded",
+                    centers=(center,),
+                    message=f"{center} exceeds its maximum capacity. Previous schedule kept.",
+                )
+            )
         qualified_names = {name for name in names if _qualified(name, center)}
         # A level-zero training-block person is safe only with a fully trained
         # co-worker at the same center.
@@ -150,25 +153,26 @@ def _validate_complete_rebuild(
         )
         safe_names = qualified_names | ({*names} if has_green else set())
         if len(safe_names) < int(center_minimums.get(center, 0)):
-            issues.append(schedule_solver.PlacementIssue(
-                code="center_minimum_unmet",
-                centers=(center,),
-                message=f"{center} is below its safe minimum. Previous schedule kept.",
-            ))
-        for name in names:
-            if (
-                proposed_sources.get(center, {}).get(name) == "generated"
-                and name not in safe_names
-            ):
-                issues.append(schedule_solver.PlacementIssue(
-                    code="generated_assignment_unqualified",
-                    person=name,
+            issues.append(
+                schedule_solver.PlacementIssue(
+                    code="center_minimum_unmet",
                     centers=(center,),
-                    message=(
-                        f"{name} is not qualified for generated assignment at {center}. "
-                        "Previous schedule kept."
-                    ),
-                ))
+                    message=f"{center} is below its safe minimum. Previous schedule kept.",
+                )
+            )
+        for name in names:
+            if proposed_sources.get(center, {}).get(name) == "generated" and name not in safe_names:
+                issues.append(
+                    schedule_solver.PlacementIssue(
+                        code="generated_assignment_unqualified",
+                        person=name,
+                        centers=(center,),
+                        message=(
+                            f"{name} is not qualified for generated assignment at {center}. "
+                            "Previous schedule kept."
+                        ),
+                    )
+                )
 
     for center, sources in proposed_sources.items():
         if center in enabled:
@@ -179,14 +183,16 @@ def _validate_complete_rebuild(
             if source == "generated" and name in available_set
         )
         if generated:
-            issues.append(schedule_solver.PlacementIssue(
-                code="generated_assignment_center_disabled",
-                centers=(center,),
-                message=(
-                    f"Generated assignments target disabled work center {center}. "
-                    "Previous schedule kept."
-                ),
-            ))
+            issues.append(
+                schedule_solver.PlacementIssue(
+                    code="generated_assignment_center_disabled",
+                    centers=(center,),
+                    message=(
+                        f"Generated assignments target disabled work center {center}. "
+                        "Previous schedule kept."
+                    ),
+                )
+            )
 
     default_targets: dict[str, list[tuple[str, str]]] = {}
     for center, names in exact_defaults.items():
@@ -200,31 +206,37 @@ def _validate_complete_rebuild(
             continue
         unique = tuple(sorted(set(targets), key=lambda item: (item[0], item[1].lower())))
         if len(unique) != 1:
-            issues.append(schedule_solver.PlacementIssue(
-                code="default_target_conflict",
-                person=name,
-                centers=tuple(target for _kind, target in unique),
-                message=f"{name} has conflicting default targets. Previous schedule kept.",
-            ))
+            issues.append(
+                schedule_solver.PlacementIssue(
+                    code="default_target_conflict",
+                    person=name,
+                    centers=tuple(target for _kind, target in unique),
+                    message=f"{name} has conflicting default targets. Previous schedule kept.",
+                )
+            )
             continue
         kind, target = unique[0]
         actual = locations.get(name, [])
         if kind == "exact" and actual != [target]:
-            issues.append(schedule_solver.PlacementIssue(
-                code="exact_default_violation",
-                person=name,
-                centers=(target,),
-                message=f"{name} is not at default center {target}. Previous schedule kept.",
-            ))
+            issues.append(
+                schedule_solver.PlacementIssue(
+                    code="exact_default_violation",
+                    person=name,
+                    centers=(target,),
+                    message=f"{name} is not at default center {target}. Previous schedule kept.",
+                )
+            )
         if kind == "group":
             allowed = frozenset(user_group_centers.get(target, ())) & enabled
             if len(actual) != 1 or actual[0] not in allowed:
-                issues.append(schedule_solver.PlacementIssue(
-                    code="group_default_violation",
-                    person=name,
-                    centers=tuple(sorted(allowed, key=str.lower)),
-                    message=f"{name} is outside default group {target}. Previous schedule kept.",
-                ))
+                issues.append(
+                    schedule_solver.PlacementIssue(
+                        code="group_default_violation",
+                        person=name,
+                        centers=tuple(sorted(allowed, key=str.lower)),
+                        message=f"{name} is outside default group {target}. Previous schedule kept.",
+                    )
+                )
     return tuple(issues)
 
 
@@ -293,14 +305,13 @@ def _parse_current_validation_snapshot(
 def _validate_current_validation_capacities(assignments: Mapping[str, Sequence[str]]) -> None:
     """Check snapshot capacities in the endpoint's blocking worker."""
     capacities = staffing_route._configured_center_capacities(
-        assignments.keys(), strict=True,
+        assignments.keys(),
+        strict=True,
     )
     for center, names in assignments.items():
         maximum = capacities.get(center)
         if maximum is not None and len(names) > maximum:
-            raise ValueError(
-                f"assignments for {center} exceed its maximum of {maximum}."
-            )
+            raise ValueError(f"assignments for {center} exceed its maximum of {maximum}.")
 
 
 @router.post("/api/rotations/validate-current")
@@ -367,16 +378,22 @@ async def save_rotation_preference(request: Request):
         if person_id is None:
             return _error(f"Unknown person: {person}")
         roster_person = next(
-            (roster_person for roster_person in staffing.load_roster() if roster_person.name == person),
+            (
+                roster_person
+                for roster_person in staffing.load_roster()
+                if roster_person.name == person
+            ),
             None,
         )
-        target_keys = {
-            target.key for target in staffing.scheduling_preference_targets()
-        }
-        eligible_target_keys = {
-            target.key
-            for target in staffing.eligible_scheduling_preference_targets(roster_person)
-        } if roster_person is not None else set()
+        target_keys = {target.key for target in staffing.scheduling_preference_targets()}
+        eligible_target_keys = (
+            {
+                target.key
+                for target in staffing.eligible_scheduling_preference_targets(roster_person)
+            }
+            if roster_person is not None
+            else set()
+        )
         if group in target_keys and group not in eligible_target_keys:
             return _error(f"{person} is not qualified for {group}.")
         try:
@@ -385,12 +402,14 @@ async def save_rotation_preference(request: Request):
             return _error(str(exc))
         _http_cache.invalidate_today_cache()
         _http_cache.invalidate_stable_cache()
-        return JSONResponse({
-            "ok": True,
-            "person": person,
-            "group": saved.rotation_group,
-            "preference": saved.preference,
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "person": person,
+                "group": saved.rotation_group,
+                "preference": saved.preference,
+            }
+        )
 
     return await asyncio.to_thread(_work)
 
@@ -509,41 +528,43 @@ async def save_auto_work_centers(request: Request):
         try:
             with db.cursor() as cur:
                 if optional_day is not None:
-                    locked_bundle = (
-                        saturday_recruiting_store.lock_for_schedule_mutation(
-                            d,
-                            cur=cur,
-                        )
+                    expected_optional_day = optional_day
+                    locked_bundle = saturday_recruiting_store.lock_for_schedule_mutation(
+                        d,
+                        cur=cur,
                     )
                     current_optional_day = optional_workday.for_day(d)
+                    if current_optional_day != expected_optional_day:
+                        return _error(
+                            "Optional workday state changed while saving. No changes were saved.",
+                            409,
+                        )
                     bundle = staffing_route._matching_optional_recruiting_bundle(
                         locked_bundle,
                         current_optional_day,
                     )
-                    if (
-                        bundle is not None
-                        and bundle.recruitment.status == "cancelled"
-                    ) or (
-                        current_optional_day is not None
-                        and current_optional_day.kind == "holiday"
-                        and bundle is None
+                    if locked_bundle is not None and (
+                        bundle is None or bundle.recruitment.status == "cancelled"
                     ):
                         return _error(
-                            "Optional workday recruiting is not active. "
-                            "No changes were saved.",
+                            "Optional workday recruiting is not active. No changes were saved.",
                             409,
                         )
                     if bundle is not None and bundle.recruitment.status == "recruiting":
                         updated_bundle = saturday_recruiting_store.update_openings(
                             day=d,
-                            requested_counts=staffing_route._saturday_recruit_requested_counts(enabled),
+                            requested_counts=staffing_route._saturday_recruit_requested_counts(
+                                enabled
+                            ),
                             shift_start=bundle.recruitment.shift_start,
                             shift_end=bundle.recruitment.shift_end,
                             actor=None,
                             now=plant_now(),
                             cur=cur,
                         )
-                        saturday_recruiting = saturday_recruiting_store.serialize_bundle(updated_bundle)
+                        saturday_recruiting = saturday_recruiting_store.serialize_bundle(
+                            updated_bundle
+                        )
                     elif bundle is not None and bundle.recruitment.status == "closed":
                         # The volunteer round is a snapshot after its deadline.
                         # Keep it intact while allowing the internal schedule
@@ -575,26 +596,30 @@ async def save_auto_work_centers(request: Request):
                 enabled_centers=enabled,
             )
         )
-        return JSONResponse({
-            "ok": True,
-            "enabled_work_centers": list(sched.auto_enabled_work_centers),
-            "assignments": {wc_name: list(people) for wc_name, people in sched.assignments.items()},
-            "saturday_recruiting": saturday_recruiting,
-            "minimum_crew_balance": minimum_crew_balance,
-            "warnings": [],
-            "coverage": {
-                "staffed_centers": [],
-                "unresolved_centers": [],
-                "issues": [],
-            },
-            "placement": {
-                "available_people": [],
-                "placed_people": [],
-                "unplaced_people": [],
-                "defaults": {},
-                "issues": [],
-            },
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "enabled_work_centers": list(sched.auto_enabled_work_centers),
+                "assignments": {
+                    wc_name: list(people) for wc_name, people in sched.assignments.items()
+                },
+                "saturday_recruiting": saturday_recruiting,
+                "minimum_crew_balance": minimum_crew_balance,
+                "warnings": [],
+                "coverage": {
+                    "staffed_centers": [],
+                    "unresolved_centers": [],
+                    "issues": [],
+                },
+                "placement": {
+                    "available_people": [],
+                    "placed_people": [],
+                    "unplaced_people": [],
+                    "defaults": {},
+                    "issues": [],
+                },
+            }
+        )
 
     return await asyncio.to_thread(_work)
 
@@ -623,9 +648,7 @@ def _optional_auto_roster(
 ) -> list[staffing.Person]:
     """Return only prepared, effectively available optional-day volunteers."""
     recruiting_label = (
-        "Holiday recruiting"
-        if optional_day.kind == "holiday"
-        else "Saturday recruiting"
+        "Holiday recruiting" if optional_day.kind == "holiday" else "Saturday recruiting"
     )
     if bundle is None:
         raise saturday_recruiting_store.LifecycleConflict(
@@ -651,12 +674,14 @@ def _optional_auto_roster(
         and item.availability_start is not None
         and item.availability_end is not None
     }
-    available_names = set(staffing.effective_saturday_commitments(
-        commitments,
-        sched.saturday_availability_overrides,
-        bundle.recruitment.shift_start,
-        bundle.recruitment.shift_end,
-    ))
+    available_names = set(
+        staffing.effective_saturday_commitments(
+            commitments,
+            sched.saturday_availability_overrides,
+            bundle.recruitment.shift_start,
+            bundle.recruitment.shift_end,
+        )
+    )
     return [person for person in roster if person.name in available_names]
 
 
@@ -672,7 +697,8 @@ def _saturday_protected_locks(
         if center not in enabled:
             continue
         kept = [
-            name for name in names
+            name
+            for name in names
             if name in available_names
             and schedule.assignment_sources.get(center, {}).get(name) in {"manual", "default"}
         ]
@@ -724,9 +750,7 @@ async def rebuild_rotation(request: Request):
         never 422s. Metadata not owned by rotation is preserved.
         """
         sched = staffing.draft_from_posted(
-            locked_schedule
-            if locked_schedule is not None
-            else staffing.load_schedule(d)
+            locked_schedule if locked_schedule is not None else staffing.load_schedule(d)
         )
         roster = staffing.load_roster()
         try:
@@ -739,19 +763,13 @@ async def rebuild_rotation(request: Request):
                 )
             if schedule_existed is None:
                 if staffing.schedule_revision(d) is None:
-                    sched.auto_enabled_work_centers = (
-                        staffing_route._default_auto_work_centers(d)
-                    )
+                    sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
                 else:
-                    sched.auto_enabled_work_centers = (
-                        staffing_route._ordered_work_center_names(
-                            staffing_route._enabled_auto_work_centers(d)
-                        )
+                    sched.auto_enabled_work_centers = staffing_route._ordered_work_center_names(
+                        staffing_route._enabled_auto_work_centers(d)
                     )
             elif not schedule_existed:
-                sched.auto_enabled_work_centers = (
-                    staffing_route._default_auto_work_centers(d)
-                )
+                sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
             else:
                 sched.auto_enabled_work_centers = staffing_route._ordered_work_center_names(
                     sched.auto_enabled_work_centers
@@ -784,9 +802,7 @@ async def rebuild_rotation(request: Request):
             rotation_mode=mode,
             assignment_sources=sources,
             auto_enabled_work_centers=list(sched.auto_enabled_work_centers),
-            saturday_availability_overrides=dict(
-                sched.saturday_availability_overrides
-            ),
+            saturday_availability_overrides=dict(sched.saturday_availability_overrides),
         )
         if cur is None:
             staffing.save_schedule(replacement)
@@ -798,18 +814,20 @@ async def rebuild_rotation(request: Request):
             )
         if cur is None:
             _http_cache.invalidate_today_cache()
-        return JSONResponse({
-            "ok": True,
-            "applied": True,
-            "assignments": assignments,
-            "sources": sources,
-            "reasons": {},
-            "warnings": [],
-            "unplaced": [],
-            "coverage": {"issues": []},
-            "enabled_work_centers": enabled_centers,
-            "placement": {"issues": []},
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "applied": True,
+                "assignments": assignments,
+                "sources": sources,
+                "reasons": {},
+                "warnings": [],
+                "unplaced": [],
+                "coverage": {"issues": []},
+                "enabled_work_centers": enabled_centers,
+                "placement": {"issues": []},
+            }
+        )
 
     def _rebuild_with_state(
         *,
@@ -829,9 +847,7 @@ async def rebuild_rotation(request: Request):
             )
         roster = staffing.load_roster()
         sched = staffing.draft_from_posted(
-            locked_schedule
-            if locked_schedule is not None
-            else staffing.load_schedule(d)
+            locked_schedule if locked_schedule is not None else staffing.load_schedule(d)
         )
         if current_optional_day is not None:
             try:
@@ -848,26 +864,20 @@ async def rebuild_rotation(request: Request):
         try:
             if schedule_existed is None:
                 if staffing.schedule_revision(d) is None:
-                    sched.auto_enabled_work_centers = (
-                        staffing_route._default_auto_work_centers(d)
-                    )
+                    sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
                 else:
-                    sched.auto_enabled_work_centers = (
-                        staffing_route._ordered_work_center_names(
-                            staffing_route._enabled_auto_work_centers(d)
-                        )
+                    sched.auto_enabled_work_centers = staffing_route._ordered_work_center_names(
+                        staffing_route._enabled_auto_work_centers(d)
                     )
             elif not schedule_existed:
-                sched.auto_enabled_work_centers = (
-                    staffing_route._default_auto_work_centers(d)
-                )
+                sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
             else:
                 sched.auto_enabled_work_centers = staffing_route._ordered_work_center_names(
                     sched.auto_enabled_work_centers
                 )
             time_off = scheduler_time_off.time_off_entries_for_day(d)
-            exact_defaults, group_defaults, user_group_centers = (
-                staffing_route._default_inputs(strict=True)
+            exact_defaults, group_defaults, user_group_centers = staffing_route._default_inputs(
+                strict=True
             )
             enabled_centers = staffing_route._ordered_work_center_names(
                 sched.auto_enabled_work_centers
@@ -878,7 +888,9 @@ async def rebuild_rotation(request: Request):
             )
             if current_optional_day is not None:
                 manual_locks = _saturday_protected_locks(
-                    sched, {person.name for person in roster}, enabled_centers,
+                    sched,
+                    {person.name for person in roster},
+                    enabled_centers,
                 )
             else:
                 manual_locks = staffing_route._protected_locks(
@@ -890,7 +902,8 @@ async def rebuild_rotation(request: Request):
                 )
             center_minimums = {
                 loc.name: staffing_route._effective_minimum(loc)
-                for loc in staffing.LOCATIONS if loc.name in enabled_centers
+                for loc in staffing.LOCATIONS
+                if loc.name in enabled_centers
             }
             group_locations, group_required_skills = staffing_route._auto_group_maps(
                 enabled_centers
@@ -943,9 +956,7 @@ async def rebuild_rotation(request: Request):
             proposed_assignments=new_assignments,
             proposed_sources=new_sources,
         )
-        hard_issues = tuple(
-            issue for issue in validation_issues if issue.code in _HARD_ISSUE_CODES
-        )
+        hard_issues = tuple(issue for issue in validation_issues if issue.code in _HARD_ISSUE_CODES)
         if hard_issues:
             return JSONResponse(
                 {
@@ -981,9 +992,7 @@ async def rebuild_rotation(request: Request):
             rotation_mode=mode,
             assignment_sources=new_sources,
             auto_enabled_work_centers=list(sched.auto_enabled_work_centers),
-            saturday_availability_overrides=dict(
-                sched.saturday_availability_overrides
-            ),
+            saturday_availability_overrides=dict(sched.saturday_availability_overrides),
         )
         if cur is None:
             staffing.save_schedule(replacement)
@@ -995,18 +1004,20 @@ async def rebuild_rotation(request: Request):
             )
         if cur is None:
             _http_cache.invalidate_today_cache()
-        return JSONResponse({
-            "ok": True,
-            "applied": True,
-            "assignments": new_assignments,
-            "sources": new_sources,
-            "reasons": {wc: dict(r) for wc, r in suggestion.reasons.items()},
-            "warnings": warning_messages,
-            "unplaced": list(suggestion.unused_people),
-            "coverage": _coverage_payload(suggestion),
-            "enabled_work_centers": enabled_centers,
-            "placement": _placement_payload(suggestion, reporting_issues),
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "applied": True,
+                "assignments": new_assignments,
+                "sources": new_sources,
+                "reasons": {wc: dict(r) for wc, r in suggestion.reasons.items()},
+                "warnings": warning_messages,
+                "unplaced": list(suggestion.unused_people),
+                "coverage": _coverage_payload(suggestion),
+                "enabled_work_centers": enabled_centers,
+                "placement": _placement_payload(suggestion, reporting_issues),
+            }
+        )
 
     def _work():
         if optional_day is None:

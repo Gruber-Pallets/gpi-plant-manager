@@ -122,15 +122,18 @@ class TestRecruitingStoreWithoutDatabase:
             None,
             None,
         )
-        assert store.Offer(
-            SATURDAY, time(6), time(12), DEADLINE, frozenset({17})
-        ).day_kind == "saturday"
-        assert store.HomeBanner(
-            SATURDAY, DEADLINE, 1, "available", time(6), time(12)
-        ).day_kind == "saturday"
-        assert store.CommitmentStatus(
-            SATURDAY, time(6), time(12), DEADLINE, True
-        ).day_kind == "saturday"
+        assert (
+            store.Offer(SATURDAY, time(6), time(12), DEADLINE, frozenset({17})).day_kind
+            == "saturday"
+        )
+        assert (
+            store.HomeBanner(SATURDAY, DEADLINE, 1, "available", time(6), time(12)).day_kind
+            == "saturday"
+        )
+        assert (
+            store.CommitmentStatus(SATURDAY, time(6), time(12), DEADLINE, True).day_kind
+            == "saturday"
+        )
 
     def test_load_and_serialize_round_trip_holiday_metadata(self):
         class Cursor:
@@ -156,12 +159,14 @@ class TestRecruitingStoreWithoutDatabase:
 
             def fetchall(self):
                 if self.query_number == 2:
-                    return [{
-                        "wc_id": 17,
-                        "wc_name": "Repair 1",
-                        "requested_count": 1,
-                        "required_skills": ["Repair"],
-                    }]
+                    return [
+                        {
+                            "wc_id": 17,
+                            "wc_name": "Repair 1",
+                            "requested_count": 1,
+                            "required_skills": ["Repair"],
+                        }
+                    ]
                 if self.query_number == 3:
                     return []
                 raise AssertionError(f"unexpected query {self.query_number}")
@@ -191,11 +196,10 @@ class TestRecruitingStoreWithoutDatabase:
 
         class Cursor:
             def __init__(self):
-                self.sql = ""
+                self.statements = []
 
             def execute(self, sql, params):
-                self.sql = sql
-                assert params == (HOLIDAY,)
+                self.statements.append((" ".join(sql.split()), params))
 
             def fetchone(self):
                 return {"day": HOLIDAY}
@@ -206,8 +210,54 @@ class TestRecruitingStoreWithoutDatabase:
         locked = store.lock_for_schedule_mutation(HOLIDAY, cur=cursor)
 
         assert locked is bundle
-        assert "saturday_recruitments" in cursor.sql
-        assert "FOR UPDATE" in cursor.sql
+        assert cursor.statements == [
+            (
+                "SELECT pg_advisory_xact_lock(%s::bigint)",
+                (HOLIDAY.toordinal(),),
+            ),
+            (
+                "SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE",
+                (HOLIDAY,),
+            ),
+        ]
+
+    def test_recruitment_mutations_take_day_lock_before_recruitment_row_lock(self):
+        class Cursor:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, sql, params):
+                self.statements.append((" ".join(sql.split()), params))
+
+            def fetchone(self):
+                return {
+                    "day": HOLIDAY,
+                    "day_kind": "holiday",
+                    "event_name": "Founders Day",
+                    "holiday_odoo_id": 42,
+                    "status": "recruiting",
+                    "shift_start": time(6),
+                    "shift_end": time(12),
+                    "response_deadline": HOLIDAY_DEADLINE,
+                    "staffing_prepared_at": None,
+                }
+
+        cursor = Cursor()
+
+        store._lock_recruitment(cursor, HOLIDAY)
+
+        assert cursor.statements[:2] == [
+            (
+                "SELECT pg_advisory_xact_lock(%s::bigint)",
+                (HOLIDAY.toordinal(),),
+            ),
+            (
+                "SELECT day, day_kind, event_name, holiday_odoo_id, status, "
+                "shift_start, shift_end, response_deadline, staffing_prepared_at "
+                "FROM saturday_recruitments WHERE day = %s FOR UPDATE",
+                (HOLIDAY,),
+            ),
+        ]
 
     def test_employee_offer_and_banner_copy_holiday_metadata(self, monkeypatch):
         bundle = self._bundle()
@@ -257,9 +307,7 @@ class TestRecruitingStoreWithoutDatabase:
         monkeypatch.setattr(db, "cursor", cursor_context)
         monkeypatch.setattr(store, "_load_bundle", lambda _cur, _day: bundle)
 
-        banner = store.home_banner(
-            datetime(2026, 7, 24, 8, 0, tzinfo=SITE_TZ)
-        )
+        banner = store.home_banner(datetime(2026, 7, 24, 8, 0, tzinfo=SITE_TZ))
 
         assert banner is not None
         assert (banner.phase, banner.day_kind, banner.event_name) == (
@@ -320,9 +368,7 @@ class TestRecruitingStoreWithoutDatabase:
                 holiday_odoo_id=42,
             )
 
-    def test_holiday_activation_safely_drafts_posted_schedule_and_stores_audit(
-        self, monkeypatch
-    ):
+    def test_holiday_activation_safely_drafts_posted_schedule_and_stores_audit(self, monkeypatch):
         events = []
         statements = []
         posted = staffing.Schedule(
@@ -351,12 +397,8 @@ class TestRecruitingStoreWithoutDatabase:
             events.append("commit")
 
         monkeypatch.setattr(db, "cursor", cursor_context)
-        monkeypatch.setattr(
-            store, "_validate_positions", lambda _cur, _counts: {17: object()}
-        )
-        monkeypatch.setattr(
-            staffing, "load_schedule_for_update", lambda _day, cur: posted
-        )
+        monkeypatch.setattr(store, "_validate_positions", lambda _cur, _counts: {17: object()})
+        monkeypatch.setattr(staffing, "load_schedule_for_update", lambda _day, cur: posted)
         monkeypatch.setattr(store, "_load_bundle", lambda _cur, _day: bundle)
         monkeypatch.setattr(
             company_holidays,
@@ -400,9 +442,7 @@ class TestRecruitingStoreWithoutDatabase:
             if sql.startswith("INSERT INTO saturday_recruitments")
         )
         assert "(day, day_kind, event_name, holiday_odoo_id, status" in recruitment_insert[0]
-        assert recruitment_insert[1][:4] == (
-            HOLIDAY, "holiday", "Founders Day", 42
-        )
+        assert recruitment_insert[1][:4] == (HOLIDAY, "holiday", "Founders Day", 42)
         assert events[-2:] == ["commit", ("invalidate", HOLIDAY)]
 
     def test_identical_holiday_activation_is_a_schedule_noop(self, monkeypatch):
@@ -421,9 +461,7 @@ class TestRecruitingStoreWithoutDatabase:
             yield Cursor()
 
         monkeypatch.setattr(db, "cursor", cursor_context)
-        monkeypatch.setattr(
-            store, "_validate_positions", lambda _cur, _counts: {17: object()}
-        )
+        monkeypatch.setattr(store, "_validate_positions", lambda _cur, _counts: {17: object()})
         monkeypatch.setattr(store, "_load_bundle", lambda _cur, _day: bundle)
         monkeypatch.setattr(
             staffing,
@@ -455,9 +493,7 @@ class TestRecruitingStoreWithoutDatabase:
             for sql, _ in statements
         )
 
-    def test_saturday_activation_still_clears_default_only_assignments(
-        self, monkeypatch
-    ):
+    def test_saturday_activation_still_clears_default_only_assignments(self, monkeypatch):
         statements = []
         schedule = staffing.Schedule(
             day=SATURDAY,
@@ -465,9 +501,7 @@ class TestRecruitingStoreWithoutDatabase:
             assignment_sources={"Repair 1": {"Jordan": "default"}},
         )
         bundle = store.RecruitmentBundle(
-            store.Recruitment(
-                SATURDAY, "recruiting", time(6), time(12), DEADLINE
-            ),
+            store.Recruitment(SATURDAY, "recruiting", time(6), time(12), DEADLINE),
             (store.sr.Opening(17, "Repair 1", 1, ("Repair",)),),
             (),
         )
@@ -484,12 +518,8 @@ class TestRecruitingStoreWithoutDatabase:
             yield Cursor()
 
         monkeypatch.setattr(db, "cursor", cursor_context)
-        monkeypatch.setattr(
-            store, "_validate_positions", lambda _cur, _counts: {17: object()}
-        )
-        monkeypatch.setattr(
-            staffing, "load_schedule_for_update", lambda _day, cur: schedule
-        )
+        monkeypatch.setattr(store, "_validate_positions", lambda _cur, _counts: {17: object()})
+        monkeypatch.setattr(staffing, "load_schedule_for_update", lambda _day, cur: schedule)
         monkeypatch.setattr(store, "_load_bundle", lambda _cur, _day: bundle)
 
         assert (
@@ -507,8 +537,7 @@ class TestRecruitingStoreWithoutDatabase:
 
         assert any(sql.startswith("DELETE FROM schedule_assignments") for sql, _ in statements)
         assert any(
-            sql.startswith("UPDATE schedules SET assignment_sources")
-            for sql, _ in statements
+            sql.startswith("UPDATE schedules SET assignment_sources") for sql, _ in statements
         )
         recruitment_insert = next(
             params
@@ -528,9 +557,7 @@ class TestRecruitingStoreWithoutDatabase:
             ),
         ],
     )
-    def test_saturday_activation_still_rejects_unsafe_schedules(
-        self, monkeypatch, schedule
-    ):
+    def test_saturday_activation_still_rejects_unsafe_schedules(self, monkeypatch, schedule):
         statements = []
 
         class Cursor:
@@ -545,12 +572,8 @@ class TestRecruitingStoreWithoutDatabase:
             yield Cursor()
 
         monkeypatch.setattr(db, "cursor", cursor_context)
-        monkeypatch.setattr(
-            store, "_validate_positions", lambda _cur, _counts: {17: object()}
-        )
-        monkeypatch.setattr(
-            staffing, "load_schedule_for_update", lambda _day, cur: schedule
-        )
+        monkeypatch.setattr(store, "_validate_positions", lambda _cur, _counts: {17: object()})
+        monkeypatch.setattr(staffing, "load_schedule_for_update", lambda _day, cur: schedule)
 
         with pytest.raises(store.LifecycleConflict):
             store.activate(
@@ -563,14 +586,9 @@ class TestRecruitingStoreWithoutDatabase:
                 now=NOW,
             )
 
-        assert not any(
-            sql.startswith("INSERT INTO saturday_recruitments")
-            for sql, _ in statements
-        )
+        assert not any(sql.startswith("INSERT INTO saturday_recruitments") for sql, _ in statements)
 
-    def test_failed_holiday_activation_rolls_back_and_does_not_open_date(
-        self, monkeypatch
-    ):
+    def test_failed_holiday_activation_rolls_back_and_does_not_open_date(self, monkeypatch):
         events = []
         state = {"schedule_published": True, "recruitment_status": None}
         posted = staffing.Schedule(day=HOLIDAY, published=True)
@@ -602,12 +620,8 @@ class TestRecruitingStoreWithoutDatabase:
                 events.append("commit")
 
         monkeypatch.setattr(db, "cursor", cursor_context)
-        monkeypatch.setattr(
-            store, "_validate_positions", lambda _cur, _counts: {17: object()}
-        )
-        monkeypatch.setattr(
-            staffing, "load_schedule_for_update", lambda _day, cur: posted
-        )
+        monkeypatch.setattr(store, "_validate_positions", lambda _cur, _counts: {17: object()})
+        monkeypatch.setattr(staffing, "load_schedule_for_update", lambda _day, cur: posted)
         monkeypatch.setattr(
             company_holidays,
             "for_day",
@@ -633,16 +647,11 @@ class TestRecruitingStoreWithoutDatabase:
                 holiday_odoo_id=42,
             )
 
-        operational = (
-            state["schedule_published"]
-            and state["recruitment_status"] == "published"
-        )
+        operational = state["schedule_published"] and state["recruitment_status"] == "published"
         assert operational is False
         assert events == ["begin", "rollback"]
 
-    def test_cancellation_preserves_posted_snapshot_while_clearing_live_schedule(
-        self, monkeypatch
-    ):
+    def test_cancellation_preserves_posted_snapshot_while_clearing_live_schedule(self, monkeypatch):
         statements = []
 
         class Cursor:
@@ -667,14 +676,67 @@ class TestRecruitingStoreWithoutDatabase:
 
         assert store.cancel_recruitment(HOLIDAY, "manager@example.com", NOW) == ()
 
-        schedule_update = next(
-            sql for sql, _ in statements if sql.startswith("UPDATE schedules")
-        )
+        schedule_update = next(sql for sql, _ in statements if sql.startswith("UPDATE schedules"))
         assert "published = FALSE" in schedule_update
         assert "published_snapshot" not in schedule_update
         assert "assignment_sources = '{}'::jsonb" in schedule_update
         assert "saturday_availability_overrides = '{}'::jsonb" in schedule_update
         assert any(sql.startswith("DELETE FROM schedule_assignments") for sql, _ in statements)
+
+    def test_whole_cancellation_locks_day_then_recruitment_before_schedule_write(
+        self,
+        monkeypatch,
+    ):
+        statements = []
+
+        class Cursor:
+            def execute(self, sql, params=None):
+                statements.append((" ".join(sql.split()), params))
+
+            def fetchone(self):
+                return {
+                    "day": HOLIDAY,
+                    "day_kind": "holiday",
+                    "event_name": "Founders Day",
+                    "holiday_odoo_id": 42,
+                    "status": "published",
+                    "shift_start": time(6),
+                    "shift_end": time(12),
+                    "response_deadline": HOLIDAY_DEADLINE,
+                    "staffing_prepared_at": NOW,
+                }
+
+        @contextmanager
+        def cursor_context():
+            yield Cursor()
+
+        monkeypatch.setattr(db, "cursor", cursor_context)
+        monkeypatch.setattr(
+            store,
+            "_load_bundle",
+            lambda _cur, _day: SimpleNamespace(commitments=()),
+        )
+        monkeypatch.setattr(staffing, "invalidate_schedule_cache", lambda _day: None)
+
+        store.cancel_recruitment(HOLIDAY, "manager@example.com", NOW)
+
+        sql = [statement for statement, _params in statements]
+        assert sql[0] == "SELECT pg_advisory_xact_lock(%s::bigint)"
+        assert "FROM saturday_recruitments WHERE day = %s FOR UPDATE" in sql[1]
+        recruitment_update = next(
+            index
+            for index, statement in enumerate(sql)
+            if statement.startswith("UPDATE saturday_recruitments")
+        )
+        schedule_update = next(
+            index for index, statement in enumerate(sql) if statement.startswith("UPDATE schedules")
+        )
+        schedule_delete = next(
+            index
+            for index, statement in enumerate(sql)
+            if statement.startswith("DELETE FROM schedule_assignments")
+        )
+        assert recruitment_update < schedule_update < schedule_delete
 
 
 def _activate(**changes):
@@ -707,12 +769,16 @@ def _response(person_id):
 
 def test_available_positions_includes_qualified_rows_and_excludes_unqualified_rows():
     positions = set(store.available_positions())
-    assert store.AvailablePosition(
-        910101, "Saturday Test Repair", ("Saturday Test Repair skill",)
-    ) in positions
-    assert store.AvailablePosition(
-        910102, "Saturday Test Dismantle", ("Saturday Test Dismantle skill",)
-    ) in positions
+    assert (
+        store.AvailablePosition(910101, "Saturday Test Repair", ("Saturday Test Repair skill",))
+        in positions
+    )
+    assert (
+        store.AvailablePosition(
+            910102, "Saturday Test Dismantle", ("Saturday Test Dismantle skill",)
+        )
+        in positions
+    )
     assert all(position.wc_id != 910103 for position in positions)
 
 
@@ -774,9 +840,12 @@ def test_repeated_identical_activation_is_idempotent():
     )[0]["activated_at"]
     second = _activate(now=NOW + timedelta(hours=1))
     assert second == first
-    assert db.query(
-        "SELECT activated_at FROM saturday_recruitments WHERE day = %s", (SATURDAY,)
-    )[0]["activated_at"] == activated_at
+    assert (
+        db.query("SELECT activated_at FROM saturday_recruitments WHERE day = %s", (SATURDAY,))[0][
+            "activated_at"
+        ]
+        == activated_at
+    )
 
 
 def test_concurrent_identical_activation_is_idempotent():
@@ -787,15 +856,21 @@ def test_concurrent_identical_activation_is_idempotent():
         return _activate()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        first, second = [future.result() for future in (
-            executor.submit(activate_together),
-            executor.submit(activate_together),
-        )]
+        first, second = [
+            future.result()
+            for future in (
+                executor.submit(activate_together),
+                executor.submit(activate_together),
+            )
+        ]
 
     assert first == second
-    assert db.query(
-        "SELECT count(*) AS count FROM saturday_recruitments WHERE day = %s", (SATURDAY,)
-    )[0]["count"] == 1
+    assert (
+        db.query("SELECT count(*) AS count FROM saturday_recruitments WHERE day = %s", (SATURDAY,))[
+            0
+        ]["count"]
+        == 1
+    )
 
 
 def test_reactivation_with_different_payload_is_rejected():
@@ -842,9 +917,7 @@ def test_closed_recruitment_can_only_reduce_unfilled_count():
 def test_closed_recruitment_allows_shift_change_before_first_commitment():
     _activate(requested_counts={910101: 3})
     assert store.close_due(DEADLINE) == 1
-    updated = store.update_openings(
-        SATURDAY, {910101: 3}, time(6, 30), time(12, 0), None, NOW
-    )
+    updated = store.update_openings(SATURDAY, {910101: 3}, time(6, 30), time(12, 0), None, NOW)
     assert updated.recruitment.shift_start == time(6, 30)
 
 
@@ -890,9 +963,7 @@ def test_decline_suppresses_future_offer_for_same_saturday():
         ("cancelled", SATURDAY),
     ],
 )
-def test_earlier_saturday_response_does_not_suppress_later_offer(
-    earlier_response, expected_day
-):
+def test_earlier_saturday_response_does_not_suppress_later_offer(earlier_response, expected_day):
     _qualify(PERSON_ID, 910101)
     _activate(requested_counts={910101: 1})
     _activate(
@@ -973,9 +1044,9 @@ def test_home_banner_becomes_tomorrow_plan_at_the_response_deadline():
 def test_home_banner_becomes_today_plan_until_the_snapshotted_shift_ends():
     _activate(requested_counts={910101: 1})
 
-    assert store.home_banner(
-        datetime(2026, 7, 25, 11, 59, tzinfo=SITE_TZ)
-    ) == store.HomeBanner(SATURDAY, DEADLINE, 0, "today", time(6), time(12))
+    assert store.home_banner(datetime(2026, 7, 25, 11, 59, tzinfo=SITE_TZ)) == store.HomeBanner(
+        SATURDAY, DEADLINE, 0, "today", time(6), time(12)
+    )
     assert store.home_banner(datetime(2026, 7, 25, 12, 0, tzinfo=SITE_TZ)) is None
 
 
@@ -997,7 +1068,9 @@ def test_cancelled_employee_can_recommit_partial_availability_before_deadline():
     )
 
     assert recommitted.status == "committed"
-    commitment = next(item for item in recommitted.bundle.commitments if item.person_id == PERSON_ID)
+    commitment = next(
+        item for item in recommitted.bundle.commitments if item.person_id == PERSON_ID
+    )
     assert (commitment.availability_start, commitment.availability_end) == (
         time(6, 30),
         time(11, 0),
@@ -1027,9 +1100,7 @@ def test_commitment_status_keeps_partial_hours_after_cutoff():
 
     status = store.commitment_for_person(PERSON_ID, DEADLINE)
 
-    assert status == store.CommitmentStatus(
-        SATURDAY, time(7, 0), time(11, 30), DEADLINE, False
-    )
+    assert status == store.CommitmentStatus(SATURDAY, time(7, 0), time(11, 30), DEADLINE, False)
 
 
 def test_manager_cancel_after_cutoff_records_actor_and_reason():
@@ -1057,10 +1128,13 @@ def test_repeated_identical_commit_is_idempotent():
     second = store.commit(SATURDAY, PERSON_ID, time(6, 0), time(12, 0), NOW + timedelta(hours=1))
 
     assert first.status == second.status == "committed"
-    assert db.query(
-        "SELECT count(*) AS count FROM saturday_work_responses WHERE day = %s AND person_id = %s",
-        (SATURDAY, PERSON_ID),
-    )[0]["count"] == 1
+    assert (
+        db.query(
+            "SELECT count(*) AS count FROM saturday_work_responses WHERE day = %s AND person_id = %s",
+            (SATURDAY, PERSON_ID),
+        )[0]["count"]
+        == 1
+    )
     assert _response(PERSON_ID)["committed_at"] == committed_at
 
 
@@ -1116,8 +1190,11 @@ def test_concurrent_final_slot_allows_exactly_one_commitment():
         results = list(executor.map(commit_together, (910101, 910102)))
 
     assert sum(result is not None for result in results) == 1
-    assert db.query(
-        "SELECT count(*) AS count FROM saturday_work_responses "
-        "WHERE day = %s AND status = 'committed'",
-        (SATURDAY,),
-    )[0]["count"] == 1
+    assert (
+        db.query(
+            "SELECT count(*) AS count FROM saturday_work_responses "
+            "WHERE day = %s AND status = 'committed'",
+            (SATURDAY,),
+        )[0]["count"]
+        == 1
+    )

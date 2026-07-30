@@ -7,6 +7,7 @@ report.
 `late_people_for_day` is the only function that reasons about thresholds.
 Everything else is straightforward CRUD.
 """
+
 from __future__ import annotations
 
 import time
@@ -209,25 +210,35 @@ def cleanup_expired_expected_arrivals(today) -> None:
     )
 
 
-def clear_time_off_request(day, request_id) -> None:
+def _execute(sql: str, params, *, cur=None) -> None:
+    """Execute through a caller-owned transaction when one is supplied."""
+    if cur is None:
+        db.execute(sql, params)
+        return
+    cur.execute(sql, params)
+
+
+def clear_time_off_request(day, request_id, *, cur=None) -> None:
     """Mark a StratusTime time-off request as cleared for `day`. Filters
     out the entry from time_off_entries_for_day, hiding the partial pill
     on the scheduler and removing the person from the Time Off list.
     Doesn't touch StratusTime — purely a local override."""
-    db.execute(
+    _execute(
         """
         INSERT INTO cleared_time_off (day, request_id) VALUES (%s, %s)
         ON CONFLICT (day, request_id) DO NOTHING
         """,
         (day, int(request_id)),
+        cur=cur,
     )
 
 
-def restore_time_off_request(day, request_id) -> None:
+def restore_time_off_request(day, request_id, *, cur=None) -> None:
     """Undo clear_time_off_request — partial reappears on next render."""
-    db.execute(
+    _execute(
         "DELETE FROM cleared_time_off WHERE day = %s AND request_id = %s",
         (day, int(request_id)),
+        cur=cur,
     )
 
 
@@ -239,23 +250,25 @@ def cleared_request_ids_for_day(day) -> set[int]:
     return {int(r["request_id"]) for r in rows}
 
 
-def clear_non_work_shift(day, emp_id: str) -> None:
+def clear_non_work_shift(day, emp_id: str, *, cur=None) -> None:
     """Hide a StratusTime non-work-shift entry (manager-entered Unpaid
     Time, etc.) for `day` + `emp_id`. The V1 punch endpoint doesn't
     expose a stable per-entry id, so we key on (day, emp_id)."""
-    db.execute(
+    _execute(
         """
         INSERT INTO cleared_non_work_shifts (day, emp_id) VALUES (%s, %s)
         ON CONFLICT (day, emp_id) DO NOTHING
         """,
         (day, str(emp_id)),
+        cur=cur,
     )
 
 
-def restore_non_work_shift(day, emp_id: str) -> None:
-    db.execute(
+def restore_non_work_shift(day, emp_id: str, *, cur=None) -> None:
+    _execute(
         "DELETE FROM cleared_non_work_shifts WHERE day = %s AND emp_id = %s",
         (day, str(emp_id)),
+        cur=cur,
     )
 
 
@@ -267,23 +280,25 @@ def cleared_non_work_emp_ids_for_day(day) -> set[str]:
     return {str(r["emp_id"]) for r in rows}
 
 
-def clear_partial_by_name(day, name: str) -> None:
+def clear_partial_by_name(day, name: str, *, cur=None) -> None:
     """Catch-all clear: hide a partial entry on `day` for `name`. Works
     regardless of whether the underlying entry has a request_id, emp_id,
     or neither. Uses the scheduler's roster name as the key."""
-    db.execute(
+    _execute(
         """
         INSERT INTO cleared_partials_by_name (day, name) VALUES (%s, %s)
         ON CONFLICT (day, name) DO NOTHING
         """,
         (day, name),
+        cur=cur,
     )
 
 
-def restore_partial_by_name(day, name: str) -> None:
-    db.execute(
+def restore_partial_by_name(day, name: str, *, cur=None) -> None:
+    _execute(
         "DELETE FROM cleared_partials_by_name WHERE day = %s AND name = %s",
         (day, name),
+        cur=cur,
     )
 
 
@@ -354,10 +369,12 @@ def late_people_for_day(
             continue
         if emp_id in absent_ids or emp_id in snoozed_ids:
             continue
-        out.append({
-            "emp_id": emp_id,
-            "minutes_late": minutes_past_start,
-        })
+        out.append(
+            {
+                "emp_id": emp_id,
+                "minutes_late": minutes_past_start,
+            }
+        )
     return out
 
 
@@ -384,9 +401,7 @@ def report_eligible_emp_ids(roster, name_to_id: dict) -> set[str]:
     return {
         name_to_id[p.name]
         for p in roster
-        if p.wage_type == "hourly"
-        and not getattr(p, "is_flexible", False)
-        and p.name in name_to_id
+        if p.wage_type == "hourly" and not getattr(p, "is_flexible", False) and p.name in name_to_id
     }
 
 
@@ -437,20 +452,24 @@ def late_people_for_day_v2(
         status = info.get("status")
         if status == "no_punch":
             if emp_id in scheduled:
-                scheduled_late.append({
-                    "emp_id": emp_id,
-                    "minutes_late": minutes_past_start,
-                })
+                scheduled_late.append(
+                    {
+                        "emp_id": emp_id,
+                        "minutes_late": minutes_past_start,
+                    }
+                )
             elif emp_id in unscheduled:
                 unscheduled_late.append({"emp_id": emp_id})
         elif status == "late":
             if emp_id in already_recorded_late_ids:
                 continue
             if emp_id in scheduled or emp_id in unscheduled:
-                needs_reason.append({
-                    "emp_id": emp_id,
-                    "minutes_late": int(info.get("minutes_late") or 0),
-                })
+                needs_reason.append(
+                    {
+                        "emp_id": emp_id,
+                        "minutes_late": int(info.get("minutes_late") or 0),
+                    }
+                )
 
     return {
         "scheduled_late": scheduled_late,

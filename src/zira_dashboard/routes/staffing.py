@@ -15,11 +15,40 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import _http_cache, app_settings, attendance, auto_schedule_capacity, company_holidays, current_schedule_validation, db, late_report, optional_workday, rotation_store, rotation_suggestions, rotation_training, saturday_recruiting as sr, saturday_recruiting_store, schedule_solver, schedule_store, scheduler_time_off, shift_config, staffing, staffing_view, time_format, time_off_sync, work_centers_store
+from .. import (
+    _http_cache,
+    app_settings,
+    attendance,
+    auto_schedule_capacity,
+    company_holidays,
+    current_schedule_validation,
+    db,
+    late_report,
+    optional_workday,
+    rotation_store,
+    rotation_suggestions,
+    rotation_training,
+    saturday_recruiting as sr,
+    saturday_recruiting_store,
+    schedule_solver,
+    schedule_store,
+    scheduler_time_off,
+    shift_config,
+    staffing,
+    staffing_view,
+    time_format,
+    time_off_sync,
+    work_centers_store,
+)
 from .._http_cache import invalidate_today_cache
 from ..deps import templates
 from ..plant_day import today as plant_today, now as plant_now
-from ..staffing_attendance import _late_emp_ids, _safe_attendance, _safe_time_off_entries, _time_off_entries_cached
+from ..staffing_attendance import (
+    _late_emp_ids,
+    _safe_attendance,
+    _safe_time_off_entries,
+    _time_off_entries_cached,
+)
 from ..time_off_wizard import shape_to_hour_bounds
 
 log = logging.getLogger(__name__)
@@ -31,6 +60,11 @@ router = APIRouter()
 # for a fresh ThreadPoolExecutor on every render.
 _PAGE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="staffing-page")
 _UNRESOLVED = object()
+_METADATA_UNSET = object()
+
+
+class _ScheduleMetadataConflict(RuntimeError):
+    """A metadata write could not prove a stable optional-workday identity."""
 
 
 class _Phase:
@@ -92,7 +126,7 @@ def _forklift_scheduled_counts(assignments, overload_responders, wc_names):
     """
     drivers = set()
     for wc in wc_names:
-        for n in (assignments.get(wc, []) or []):
+        for n in assignments.get(wc, []) or []:
             drivers.add(n)
     scheduled = {n for names in assignments.values() for n in (names or [])}
     backups = {n for n in scheduled if n in overload_responders}
@@ -147,8 +181,10 @@ def _saturday_response_summary(bundle) -> dict[str, list[str]]:
         if item.status == "cancelled":
             continue
         key = (
-            "yes" if item.status == "committed"
-            else "no" if item.status == "declined"
+            "yes"
+            if item.status == "committed"
+            else "no"
+            if item.status == "declined"
             else "deciding"
         )
         summary[key].append(item.person_name)
@@ -163,7 +199,11 @@ def _effective_minimum(loc) -> int:
 
 
 def _current_minimum_coverage_issues(
-    *, roster, assignments, time_off_entries, enabled_centers,
+    *,
+    roster,
+    assignments,
+    time_off_entries,
+    enabled_centers,
 ) -> tuple[schedule_solver.PlacementIssue, ...]:
     """Report minimum shortages in the saved schedule currently on screen."""
     enabled = set(_ordered_work_center_names(enabled_centers))
@@ -193,19 +233,25 @@ def _current_minimum_coverage_issues(
             )
         }
         if len(safe_names) < minimum:
-            issues.append(schedule_solver.PlacementIssue(
-                code="center_minimum_unmet",
-                centers=(loc.name,),
-                message=(
-                    f"{loc.name} is below its minimum staffing level: "
-                    f"{len(safe_names)} qualified and present, minimum {minimum}."
-                ),
-            ))
+            issues.append(
+                schedule_solver.PlacementIssue(
+                    code="center_minimum_unmet",
+                    centers=(loc.name,),
+                    message=(
+                        f"{loc.name} is below its minimum staffing level: "
+                        f"{len(safe_names)} qualified and present, minimum {minimum}."
+                    ),
+                )
+            )
     return tuple(issues)
 
 
 def _minimum_crew_balance_for_day(
-    *, roster, schedule, time_off_entries, enabled_centers,
+    *,
+    roster,
+    schedule,
+    time_off_entries,
+    enabled_centers,
     available_names: Collection[str] | None = None,
 ):
     """Compare people waiting with enabled work centers' open minimum slots."""
@@ -214,12 +260,16 @@ def _minimum_crew_balance_for_day(
     absent = rotation_suggestions._full_day_time_off_names(time_off_entries or [])
     by_name = {person.name: person for person in roster}
     assigned = {
-        name for center, names in (schedule.assignments or {}).items()
-        if center != staffing.TIME_OFF_KEY for name in (names or [])
+        name
+        for center, names in (schedule.assignments or {}).items()
+        if center != staffing.TIME_OFF_KEY
+        for name in (names or [])
     }
     available = set(available_names) if available_names is not None else None
     waiting = sum(
-        person.active and not person.reserve and person.name not in absent
+        person.active
+        and not person.reserve
+        and person.name not in absent
         and person.name not in assigned
         and (available is None or person.name in available)
         for person in roster
@@ -248,15 +298,14 @@ def _minimum_crew_balance_for_day(
             capacity = loc.max_ops
         assigned_here = set((schedule.assignments or {}).get(loc.name, ()))
         defaults_present = sum(
-            person is not None and person.active and not person.reserve
+            person is not None
+            and person.active
+            and not person.reserve
             and person.name not in absent
             and all(person.level(skill) >= 1 for skill in staffing.required_skills_for(loc))
             and (
                 person.name in assigned_here
-                or (
-                    person.name not in assigned
-                    and (available is None or person.name in available)
-                )
+                or (person.name not in assigned and (available is None or person.name in available))
             )
             for name in (exact_defaults.get(loc.name) or ())
             for person in (by_name.get(str(name).strip()),)
@@ -268,7 +317,9 @@ def _minimum_crew_balance_for_day(
             slots[loc.name] = effective_minimum
             continue
         qualified = sum(
-            person is not None and person.active and not person.reserve
+            person is not None
+            and person.active
+            and not person.reserve
             and person.name not in absent
             and all(person.level(skill) >= 1 for skill in staffing.required_skills_for(loc))
             for name in (schedule.assignments or {}).get(loc.name, ())
@@ -296,7 +347,8 @@ def _minimum_crew_balance_payload(balance) -> dict[str, object]:
 
 
 def _publish_shortages(
-    assignments: dict[str, list[str]], enabled_work_centers,
+    assignments: dict[str, list[str]],
+    enabled_work_centers,
 ) -> list[str]:
     """Return each enabled work center whose submitted crew is below minimum."""
     enabled = set(enabled_work_centers)
@@ -307,14 +359,14 @@ def _publish_shortages(
         minimum = _effective_minimum(loc)
         count = len(assignments.get(loc.name, []))
         if count < minimum:
-            shortages.append(
-                f"{loc.name} requires {minimum} operators — currently {count}."
-            )
+            shortages.append(f"{loc.name} requires {minimum} operators — currently {count}.")
     return shortages
 
 
 def _configured_center_capacities(
-    centers, *, strict: bool = False,
+    centers,
+    *,
+    strict: bool = False,
 ) -> dict[str, int | None]:
     """Read configured maxima for engine input, retaining its static fallback.
 
@@ -332,7 +384,9 @@ def _configured_center_capacities(
         except Exception:
             if strict:
                 raise
-            log.exception("Could not load configured maximum for %s; using static fallback", loc.name)
+            log.exception(
+                "Could not load configured maximum for %s; using static fallback", loc.name
+            )
             capacities[loc.name] = loc.max_ops
     return capacities
 
@@ -389,9 +443,7 @@ def _enabled_auto_work_centers(d: date) -> set[str]:
 def _posted_auto_enabled_work_centers(snapshot, daily_centers) -> list[str]:
     """Use the row value when an older posted snapshot has no toggle field."""
     if isinstance(snapshot, dict) and "auto_enabled_work_centers" in snapshot:
-        return staffing._normalize_auto_enabled_work_centers(
-            snapshot["auto_enabled_work_centers"]
-        )
+        return staffing._normalize_auto_enabled_work_centers(snapshot["auto_enabled_work_centers"])
     return staffing._normalize_auto_enabled_work_centers(daily_centers)
 
 
@@ -426,10 +478,7 @@ def _auto_group_maps(
 
 def _auto_history_group_locations() -> dict[str, tuple[str, ...]]:
     """Return all canonical Auto groups, including currently disabled centers."""
-    return {
-        target.key: target.centers
-        for target in staffing.scheduling_preference_targets()
-    }
+    return {target.key: target.centers for target in staffing.scheduling_preference_targets()}
 
 
 def _roster_minus_full_day_off(roster, time_off_entries):
@@ -504,17 +553,13 @@ def _default_inputs(strict: bool = False):
     """Load exact defaults, group defaults, and user-group membership once."""
     try:
         exact = {
-            loc.name: tuple(work_centers_store.default_people(loc))
-            for loc in staffing.LOCATIONS
+            loc.name: tuple(work_centers_store.default_people(loc)) for loc in staffing.LOCATIONS
         }
         groups = {
-            name: tuple(people)
-            for name, people in work_centers_store.group_defaults_map().items()
+            name: tuple(people) for name, people in work_centers_store.group_defaults_map().items()
         }
         members = {
-            name: tuple(
-                loc.name for loc in work_centers_store.members("group", name)
-            )
+            name: tuple(loc.name for loc in work_centers_store.members("group", name))
             for name in groups
         }
         return exact, groups, members
@@ -526,11 +571,19 @@ def _default_inputs(strict: bool = False):
 
 
 def _defaults_only_assignments(
-    *, roster, full_day_off_names, exact_defaults, group_defaults,
-    user_group_centers, enabled_centers, center_capacities, history,
+    *,
+    roster,
+    full_day_off_names,
+    exact_defaults,
+    group_defaults,
+    user_group_centers,
+    enabled_centers,
+    center_capacities,
+    history,
 ) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
     available = {
-        person.name for person in roster
+        person.name
+        for person in roster
         if person.active and not person.reserve and person.name not in full_day_off_names
     }
     assignments: dict[str, list[str]] = {}
@@ -556,7 +609,8 @@ def _defaults_only_assignments(
         for raw_name in names:
             name = str(raw_name).strip()
             available_centers = tuple(
-                center for center in group_centers
+                center
+                for center in group_centers
                 if center_capacities.get(center) is None
                 or len(assignments.get(center, ())) < center_capacities[center]
             )
@@ -564,7 +618,8 @@ def _defaults_only_assignments(
                 continue
             least_load = min(len(assignments.get(center, ())) for center in available_centers)
             tied_centers = tuple(
-                center for center in available_centers
+                center
+                for center in available_centers
                 if len(assignments.get(center, ())) == least_load
             )
             place(rotation_suggestions.choose_center(name, str(group), tied_centers, history), name)
@@ -659,12 +714,13 @@ def _current_training_trainees_by_center(day: date, assignments) -> dict[str, tu
         for center, names in effect.locked_work_centers.items():
             trainees_by_center.setdefault(center, set()).update(names)
     return {
-        center: tuple(sorted(names, key=str.lower))
-        for center, names in trainees_by_center.items()
+        center: tuple(sorted(names, key=str.lower)) for center, names in trainees_by_center.items()
     }
 
 
-def current_view_validation_for_day(*, day, assignments, enabled_work_centers) -> list[dict[str, object]]:
+def current_view_validation_for_day(
+    *, day, assignments, enabled_work_centers
+) -> list[dict[str, object]]:
     """Validate the exact staffing assignments currently visible to the user."""
     enabled = _ordered_work_center_names(enabled_work_centers)
     roster = staffing.load_roster()
@@ -682,8 +738,7 @@ def current_view_validation_for_day(*, day, assignments, enabled_work_centers) -
         enabled_centers=enabled,
         locations=staffing.LOCATIONS,
         minimums={
-            loc.name: _effective_minimum(loc)
-            for loc in staffing.LOCATIONS if loc.name in enabled
+            loc.name: _effective_minimum(loc) for loc in staffing.LOCATIONS if loc.name in enabled
         },
         capacities=_configured_center_capacities(enabled, strict=True),
         required_skills=required_skills,
@@ -745,10 +800,19 @@ def _gather_recycled_inputs(
 
 
 def _recycled_suggestion_for_day(
-    d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries,
-    enabled_work_centers=None, assignment_sources=None,
-    center_minimums=None, center_capacities=None,
-    exact_defaults=None, group_defaults=None, user_group_centers=None,
+    d: date,
+    roster,
+    mode: str,
+    base_assignments,
+    locked_assignments,
+    time_off_entries,
+    enabled_work_centers=None,
+    assignment_sources=None,
+    center_minimums=None,
+    center_capacities=None,
+    exact_defaults=None,
+    group_defaults=None,
+    user_group_centers=None,
     minimum_only: bool = False,
 ):
     """Compute the pure Recycled suggestion for ``d``, or ``None`` on any failure.
@@ -776,10 +840,15 @@ def _recycled_suggestion_for_day(
             )
         )
         group_locations, group_required_skills = _auto_group_maps(enabled)
-        resolved_minimums = center_minimums if center_minimums is not None else {
-            loc.name: _effective_minimum(loc)
-            for loc in staffing.LOCATIONS if loc.name in enabled
-        }
+        resolved_minimums = (
+            center_minimums
+            if center_minimums is not None
+            else {
+                loc.name: _effective_minimum(loc)
+                for loc in staffing.LOCATIONS
+                if loc.name in enabled
+            }
+        )
         resolved_capacities = (
             center_capacities
             if center_capacities is not None
@@ -842,18 +911,20 @@ def _training_blocks_context(active_blocks, d: date):
             )
         except Exception:
             attended = 0
-        out.append({
-            "id": block.id,
-            "trainee": block.trainee_name,
-            "trainer": block.trainer_name,
-            "work_center": block.work_center,
-            "group": staffing.scheduling_group_for_skill(block.skill),
-            "skill": block.skill,
-            "start_day": block.start_day.isoformat(),
-            "planned_attended_days": block.planned_attended_days,
-            "remaining_attended_days": max(0, block.planned_attended_days - attended),
-            "status": block.status,
-        })
+        out.append(
+            {
+                "id": block.id,
+                "trainee": block.trainee_name,
+                "trainer": block.trainer_name,
+                "work_center": block.work_center,
+                "group": staffing.scheduling_group_for_skill(block.skill),
+                "skill": block.skill,
+                "start_day": block.start_day.isoformat(),
+                "planned_attended_days": block.planned_attended_days,
+                "remaining_attended_days": max(0, block.planned_attended_days - attended),
+                "status": block.status,
+            }
+        )
     return out
 
 
@@ -865,16 +936,22 @@ def _page_placement_issues_for_day(
     """Return page-visible placement issues for the selected Staffing day."""
     if d.weekday() != 5 or 5 in work_weekdays:
         return tuple(issues)
-    return tuple(
-        issue for issue in issues
-        if issue.code != "exact_default_center_disabled"
-    )
+    return tuple(issue for issue in issues if issue.code != "exact_default_center_disabled")
 
 
 def _recycled_context_for_day(
-    d: date, roster, mode: str, base_assignments, locked_assignments, time_off_entries,
-    enabled_work_centers=None, assignment_sources=None, current_assignments=None,
-    *, work_weekdays: frozenset[int], use_current_view_validation: bool = True,
+    d: date,
+    roster,
+    mode: str,
+    base_assignments,
+    locked_assignments,
+    time_off_entries,
+    enabled_work_centers=None,
+    assignment_sources=None,
+    current_assignments=None,
+    *,
+    work_weekdays: frozenset[int],
+    use_current_view_validation: bool = True,
 ):
     """Recycled template context: mode, per-assignment reasons, warnings, blocks.
 
@@ -901,7 +978,8 @@ def _recycled_context_for_day(
         )
     except Exception:
         log.exception(
-            "Current staffing coverage failed for %s; degrading to empty defaults", d,
+            "Current staffing coverage failed for %s; degrading to empty defaults",
+            d,
         )
         return ctx
 
@@ -917,8 +995,7 @@ def _recycled_context_for_day(
         available = _roster_minus_full_day_off(roster, time_off_entries)
         group_locations, group_required_skills = _auto_group_maps(enabled)
         center_minimums = {
-            loc.name: _effective_minimum(loc)
-            for loc in staffing.LOCATIONS if loc.name in enabled
+            loc.name: _effective_minimum(loc) for loc in staffing.LOCATIONS if loc.name in enabled
         }
         center_capacities = _configured_center_capacities(enabled)
         scoped_locks = {
@@ -962,16 +1039,15 @@ def _recycled_context_for_day(
                 if issue.code not in action_only_codes
             )
             page_placement_issues = _page_placement_issues_for_day(
-                d, work_weekdays, page_placement_issues,
+                d,
+                work_weekdays,
+                page_placement_issues,
             )
             ctx["rotation_warnings"] = [
-                warning
-                for warning in suggestion.warnings
-                if warning not in action_only_messages
+                warning for warning in suggestion.warnings if warning not in action_only_messages
             ]
             ctx["rotation_issues"].extend(
-                issue.to_dict()
-                for issue in (*suggestion.issues, *page_placement_issues)
+                issue.to_dict() for issue in (*suggestion.issues, *page_placement_issues)
             )
         ctx["active_training_blocks"] = _training_blocks_context(active_blocks, d)
     except Exception:
@@ -987,7 +1063,9 @@ def _recycled_context_for_day(
             ctx["rotation_warnings"] = [issue["message"] for issue in visible_issues]
             ctx["rotation_issues"].extend(visible_issues)
         except Exception:
-            log.exception("Current staffing validation failed for %s; degrading to empty defaults", d)
+            log.exception(
+                "Current staffing validation failed for %s; degrading to empty defaults", d
+            )
     return ctx
 
 
@@ -1007,12 +1085,10 @@ def _smart_defaults_for_day(
     raw stored defaults — the same safe fallback the Trim Saw seeding had.
     """
     try:
-        enabled = (
-            _ordered_work_center_names(
-                enabled_work_centers
-                if enabled_work_centers is not None
-                else _enabled_auto_work_centers(d)
-            )
+        enabled = _ordered_work_center_names(
+            enabled_work_centers
+            if enabled_work_centers is not None
+            else _enabled_auto_work_centers(d)
         )
         locks = _protected_locks(assignment_sources, defaults, allowed_centers=enabled)
     except Exception:
@@ -1125,6 +1201,80 @@ def _matching_optional_recruiting_bundle(bundle, optional_day):
     return bundle
 
 
+def _update_schedule_metadata_work(
+    day: date,
+    *,
+    custom_hours=_METADATA_UNSET,
+    testing_day=_METADATA_UNSET,
+    initial_auto_enabled_work_centers=(),
+    related_mutation=None,
+) -> staffing.Schedule:
+    """Apply a narrow schedule-metadata change under lifecycle/row locks."""
+    try:
+        expected_optional_day = optional_workday.for_day(day)
+    except Exception as exc:
+        raise _ScheduleMetadataConflict(
+            "Optional workday state could not be verified. No changes were saved."
+        ) from exc
+
+    with db.cursor() as cur:
+        locked_bundle = None
+        if expected_optional_day is not None:
+            try:
+                locked_bundle = saturday_recruiting_store.lock_for_schedule_mutation(
+                    day,
+                    cur=cur,
+                )
+            except Exception as exc:
+                raise _ScheduleMetadataConflict(
+                    "Optional workday state could not be locked. No changes were saved."
+                ) from exc
+        try:
+            current_optional_day = optional_workday.for_day(day)
+        except Exception as exc:
+            raise _ScheduleMetadataConflict(
+                "Optional workday state could not be verified. No changes were saved."
+            ) from exc
+        if current_optional_day != expected_optional_day:
+            raise _ScheduleMetadataConflict(
+                "Optional workday state changed. No changes were saved."
+            )
+        if (
+            locked_bundle is not None
+            and _matching_optional_recruiting_bundle(
+                locked_bundle,
+                current_optional_day,
+            )
+            is None
+        ):
+            raise _ScheduleMetadataConflict(
+                "Optional workday recruiting belongs to an older closure. No changes were saved."
+            )
+
+        schedule = staffing.ensure_schedule_for_update(
+            day,
+            cur=cur,
+            initial_auto_enabled_work_centers=initial_auto_enabled_work_centers,
+        )
+        if related_mutation is not None:
+            related_mutation(cur)
+        update_kwargs = {}
+        if custom_hours is not _METADATA_UNSET:
+            update_kwargs["custom_hours"] = custom_hours
+        if testing_day is not _METADATA_UNSET:
+            update_kwargs["testing_day"] = testing_day
+        updated = staffing.update_locked_schedule_metadata(
+            schedule,
+            cur=cur,
+            **update_kwargs,
+        )
+
+    # The transaction has committed. Evict any cached schedule that a reader
+    # populated while the locks were held.
+    staffing.invalidate_schedule_cache(day)
+    return updated
+
+
 def _prepare_closed_saturday_schedule(
     day: date,
     roster: Sequence[staffing.Person],
@@ -1156,12 +1306,14 @@ def _prepare_closed_saturday_schedule(
             and item.availability_start is not None
             and item.availability_end is not None
         }
-        committed_names = set(staffing.effective_saturday_commitments(
-            commitments,
-            locked.saturday_availability_overrides,
-            bundle.recruitment.shift_start,
-            bundle.recruitment.shift_end,
-        ))
+        committed_names = set(
+            staffing.effective_saturday_commitments(
+                commitments,
+                locked.saturday_availability_overrides,
+                bundle.recruitment.shift_start,
+                bundle.recruitment.shift_end,
+            )
+        )
         committed_roster = [person for person in roster if person.name in committed_names]
         assignments, sources = saturday_defaults_only_schedule(
             day,
@@ -1222,7 +1374,10 @@ def _seed_new_future_draft(
             # assignments blank for recruiting while still showing the
             # manager's enabled centers.
             assignments, sources = defaults_only_schedule(
-                day, roster, time_off_entries, enabled_centers,
+                day,
+                roster,
+                time_off_entries,
+                enabled_centers,
             )
     except Exception:
         log.exception("Could not seed default staffing draft for %s", day)
@@ -1254,6 +1409,7 @@ def staffing_page(
     view: str = Query(default="draft"),
 ):
     from .. import cert_lookup
+
     phases: dict[str, float] = {}
     _total_t0 = time.perf_counter()
     today = plant_today()
@@ -1271,11 +1427,16 @@ def staffing_page(
     # show up on the next reload regardless of TTL.
     is_today = d >= today
     view_mode_normalized = view if view in ("draft", "posted") else "draft"
-    publish_errors = tuple(
-        str(error) for error in publish_error
-    ) if isinstance(publish_error, (list, tuple)) else ()
+    publish_errors = (
+        tuple(str(error) for error in publish_error)
+        if isinstance(publish_error, (list, tuple))
+        else ()
+    )
     response_cache_key = (
-        "staffing", d.isoformat(), view_mode_normalized, int(publish_blocked or 0),
+        "staffing",
+        d.isoformat(),
+        view_mode_normalized,
+        int(publish_blocked or 0),
         publish_errors,
     )
     cached_resp = _http_cache.get_cached_response(response_cache_key, includes_today=is_today)
@@ -1304,6 +1465,7 @@ def staffing_page(
         try:
             from .. import wc_attributions
             from ..deps import client as zira_client
+
             return wc_attributions.unattributed_for_day(d, zira_client)
         except Exception:
             return []
@@ -1311,6 +1473,7 @@ def staffing_page(
     def _safe_assignments_done():
         try:
             from .. import wc_attributions
+
             return wc_attributions.for_day(d)
         except Exception:
             return []
@@ -1364,7 +1527,8 @@ def staffing_page(
             for wc_name, sources in (snap.get("assignment_sources") or {}).items()
         }
         sched.auto_enabled_work_centers = _posted_auto_enabled_work_centers(
-            snap, sched.auto_enabled_work_centers,
+            snap,
+            sched.auto_enabled_work_centers,
         )
         sched.saturday_availability_overrides = dict(
             snap.get("saturday_availability_overrides") or {}
@@ -1427,24 +1591,26 @@ def staffing_page(
     site_tz = shift_config.SITE_TZ
     assignments_todo: list[dict] = []
     try:
-        for item in (f_assignments_todo.result() or []):
+        for item in f_assignments_todo.result() or []:
             first = item["first_sample_utc"].astimezone(site_tz)
             last = item["last_sample_utc"].astimezone(site_tz)
-            assignments_todo.append({
-                "wc_name": item["wc_name"],
-                "units": item["units"],
-                "first_label": first.strftime("%I:%M %p").lstrip("0"),
-                "last_label": last.strftime("%I:%M %p").lstrip("0"),
-                "first_iso": item["first_sample_utc"].isoformat(),
-                "last_iso": item["last_sample_utc"].isoformat(),
-            })
+            assignments_todo.append(
+                {
+                    "wc_name": item["wc_name"],
+                    "units": item["units"],
+                    "first_label": first.strftime("%I:%M %p").lstrip("0"),
+                    "last_label": last.strftime("%I:%M %p").lstrip("0"),
+                    "first_iso": item["first_sample_utc"].isoformat(),
+                    "last_iso": item["last_sample_utc"].isoformat(),
+                }
+            )
     except Exception:
         assignments_todo = []
 
     assignments_done: list[dict] = []
     attributions_by_wc: dict[str, list[dict]] = {}
     try:
-        for r in (f_assignments_done.result() or []):
+        for r in f_assignments_done.result() or []:
             s_local = r["start_utc"].astimezone(site_tz)
             e_raw = r["end_utc"]
             e_local = e_raw.astimezone(site_tz) if e_raw is not None else None
@@ -1453,8 +1619,9 @@ def staffing_page(
                 "wc_name": r["wc_name"],
                 "person_name": r["person_name"],
                 "first_label": s_local.strftime("%I:%M %p").lstrip("0"),
-                "last_label": (e_local.strftime("%I:%M %p").lstrip("0")
-                               if e_local is not None else "open"),
+                "last_label": (
+                    e_local.strftime("%I:%M %p").lstrip("0") if e_local is not None else "open"
+                ),
                 "time_range": (
                     time_format.fmt_time_range(s_local.isoformat(), e_local.isoformat())
                     if e_local is not None
@@ -1472,6 +1639,7 @@ def staffing_page(
     cleared_partials_today: list[dict] = []
     try:
         from .. import late_report as _lr
+
         if d == today:
             # By-name is the only clear path now. The legacy StratusTime
             # request-id / non-work-shift clears are retired (StratusTime is
@@ -1518,11 +1686,7 @@ def staffing_page(
         )
     )
     raw_defaults_by_loc = bay_model.get("defaults_by_loc") or {}
-    if (
-        sched.assignments
-        and auto_scheduler_available
-        and not optional_day_unresolved
-    ):
+    if sched.assignments and auto_scheduler_available and not optional_day_unresolved:
         # A saved day keeps its stored mode so the empty-slot fill hints agree
         # with the reason badges/warnings (which also use sched.rotation_mode).
         smart_defaults_by_loc = _smart_defaults_for_day(
@@ -1546,9 +1710,7 @@ def staffing_page(
         is_optional_day=render_as_optional_day,
     )
     eff_breaks = [
-        {"start": b.start.strftime("%H:%M"),
-         "end":   b.end.strftime("%H:%M"),
-         "name":  b.name}
+        {"start": b.start.strftime("%H:%M"), "end": b.end.strftime("%H:%M"), "name": b.name}
         for b in shift_config.configured_breaks_for(
             d,
             is_optional_day=render_as_optional_day,
@@ -1560,9 +1722,7 @@ def staffing_page(
         is_optional_day=render_as_optional_day,
     )
     nonstandard_schedule = (
-        sched.custom_hours is not None
-        or render_as_optional_day
-        or d.weekday() == 6
+        sched.custom_hours is not None or render_as_optional_day or d.weekday() == 6
     )
     eff_hours_label = f"{eff_start.strftime('%H:%M')}–{eff_end.strftime('%H:%M')}"
     eff_custom_hours_label = (
@@ -1591,27 +1751,26 @@ def staffing_page(
             saturday_positions = saturday_recruiting_store.available_positions()
             enabled_saturday_centers = set(enabled_auto_work_centers)
             saturday_recruit_enabled_count = sum(
-                location.name in enabled_saturday_centers
-                for location in staffing.LOCATIONS
+                location.name in enabled_saturday_centers for location in staffing.LOCATIONS
             )
             saturday_deadline = (
                 saturday_bundle.recruitment.response_deadline
-                if saturday_bundle else sr.response_deadline(
+                if saturday_bundle
+                else sr.response_deadline(
                     d,
                     schedule_store.current().work_weekdays,
                     lambda prior: shift_config.configured_shift_start_for(
                         prior,
                         is_optional_day=False,
                     ),
-                    is_holiday=lambda candidate: (
-                        company_holidays.for_day(candidate) is not None
-                    ),
+                    is_holiday=lambda candidate: company_holidays.for_day(candidate) is not None,
                     classified_optional_day=optional_day,
                 )
             )
             saturday_payload = (
                 saturday_recruiting_store.serialize_bundle(saturday_bundle)
-                if saturday_bundle else None
+                if saturday_bundle
+                else None
             )
             saturday_coverage = saturday_payload["coverage"] if saturday_payload else None
             saturday_commitments = saturday_payload["commitments"] if saturday_payload else []
@@ -1637,9 +1796,7 @@ def staffing_page(
         optional_recruiting_label = "Optional workday recruiting"
     else:
         optional_day_label = (
-            optional_day.name
-            if optional_day and optional_day.kind == "holiday"
-            else "Saturday"
+            optional_day.name if optional_day and optional_day.kind == "holiday" else "Saturday"
         )
         optional_recruiting_label = (
             "Holiday recruiting"
@@ -1666,8 +1823,7 @@ def staffing_page(
         # so a Saturday is never left unpublishable when the one-shot prepare
         # step could not persist its marker.
         "saturday_recruiting_finished": bool(
-            saturday_bundle
-            and saturday_bundle.recruitment.status in {"closed", "published"}
+            saturday_bundle and saturday_bundle.recruitment.status in {"closed", "published"}
         ),
         "saturday_recruit_enabled_count": saturday_recruit_enabled_count,
         "saturday_response_summary": saturday_response_summary,
@@ -1676,11 +1832,13 @@ def staffing_page(
         "saturday_commitments": saturday_commitments,
         "saturday_shift_start": (
             saturday_bundle.recruitment.shift_start.strftime("%H:%M")
-            if saturday_bundle else eff_start.strftime("%H:%M")
+            if saturday_bundle
+            else eff_start.strftime("%H:%M")
         ),
         "saturday_shift_end": (
             saturday_bundle.recruitment.shift_end.strftime("%H:%M")
-            if saturday_bundle else eff_end.strftime("%H:%M")
+            if saturday_bundle
+            else eff_end.strftime("%H:%M")
         ),
         "saturday_deadline_label": (
             sr.format_deadline(saturday_deadline) if saturday_deadline else ""
@@ -1738,6 +1896,7 @@ def staffing_page(
     # Forklift demand advisor (read-only; never blocks scheduling).
     try:
         from .. import app_settings, forklift_advisor, forklift_settings
+
         _overload = set(app_settings.get_setting("forklift_overload_responders") or [])
         try:
             _fcfg = forklift_settings.current()
@@ -1747,15 +1906,16 @@ def staffing_page(
             _fcfg = forklift_settings.DEFAULT
         _wc_names = (
             (FORKLIFT_TABLETS_WC, FORKLIFT_LOADING_WC)
-            if _fcfg.include_loading_jockeying else (FORKLIFT_TABLETS_WC,)
+            if _fcfg.include_loading_jockeying
+            else (FORKLIFT_TABLETS_WC,)
         )
         _counts = _forklift_scheduled_counts(sched.assignments, _overload, _wc_names)
         forklift_advisor_model = forklift_advisor.build_advisor(
-            target_day=d, scheduled=_counts["tablets"], backups=_counts["backups"],
+            target_day=d,
+            scheduled=_counts["tablets"],
+            backups=_counts["backups"],
         )
-        forklift_live_model = dict(
-            forklift_advisor_model.get("live_model") or {"available": False}
-        )
+        forklift_live_model = dict(forklift_advisor_model.get("live_model") or {"available": False})
         if forklift_live_model.get("available"):
             forklift_live_model["driver_wc_names"] = list(_wc_names)
     except Exception:
@@ -1766,15 +1926,14 @@ def staffing_page(
     # warnings, and active training blocks. Current staffing issues are computed
     # independently so they survive recommendation-preview failures; preview-only
     # context degrades to safe empty defaults so the page never 500s.
-    work_weekdays = (
-        schedule_store.current().work_weekdays or frozenset({0, 1, 2, 3, 4})
-    )
+    work_weekdays = schedule_store.current().work_weekdays or frozenset({0, 1, 2, 3, 4})
     recycled_ctx = _recycled_context_for_day(
         d,
         roster,
         sched.rotation_mode or "normal",
         base_assignments=_auto_solver_base_assignments(
-            sched.assignments, enabled_auto_work_centers,
+            sched.assignments,
+            enabled_auto_work_centers,
         ),
         locked_assignments=_protected_locks(
             sched.assignment_sources,
@@ -1808,9 +1967,7 @@ def staffing_page(
                 "active": "plant",
                 **saturday_context,
                 **recycled_ctx,
-                "rotation_mode_help": _rotation_mode_help(
-                    recycled_ctx["recycled_rotation_mode"]
-                ),
+                "rotation_mode_help": _rotation_mode_help(recycled_ctx["recycled_rotation_mode"]),
                 "sched": sched,
                 "auto_scheduler_available": auto_scheduler_available,
                 "auto_schedule_enabled_wc_names": enabled_auto_work_centers,
@@ -1905,6 +2062,7 @@ def _save_staffing_schedule_for_state(
     optional_day,
     saturday_bundle,
     existing: staffing.Schedule,
+    allow_empty_pre_recruit_holiday: bool = False,
     cur=None,
 ):
     """Validate and persist one schedule against a single lifecycle snapshot."""
@@ -1917,6 +2075,7 @@ def _save_staffing_schedule_for_state(
         optional_day is not None
         and optional_day.kind == "holiday"
         and saturday_bundle is None
+        and not allow_empty_pre_recruit_holiday
     )
     if cancelled_optional_day or missing_holiday_recruiting:
         error = (
@@ -1924,14 +2083,25 @@ def _save_staffing_schedule_for_state(
             "No schedule changes were saved."
             if optional_day is not None and optional_day.kind == "holiday"
             else (
-                "Saturday recruiting is not active for this date. "
-                "No schedule changes were saved."
+                "Saturday recruiting is not active for this date. No schedule changes were saved."
             )
         )
         return JSONResponse(
             {
                 "ok": False,
                 "error": error,
+            },
+            status_code=409,
+        )
+
+    if allow_empty_pre_recruit_holiday and (action != "save" or any(assignments.values())):
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": (
+                    f"Holiday recruiting is not active for {optional_day.name}. "
+                    "No schedule changes were saved."
+                ),
             },
             status_code=409,
         )
@@ -1985,24 +2155,24 @@ def _save_staffing_schedule_for_state(
                 },
                 status_code=409,
             )
-        noncommitted_names = sorted({
-            name
-            for names in assignments.values()
-            for name in names
-            if name not in saturday_available_names
-        })
+        noncommitted_names = sorted(
+            {
+                name
+                for names in assignments.values()
+                for name in names
+                if name not in saturday_available_names
+            }
+        )
         if noncommitted_names:
             if optional_day is not None and optional_day.kind == "holiday":
                 error = f"Only volunteers available for {optional_label} can be scheduled."
                 validation_errors = [
-                    f"{name} is not available for {optional_label}."
-                    for name in noncommitted_names
+                    f"{name} is not available for {optional_label}." for name in noncommitted_names
                 ]
             else:
                 error = "Only committed Saturday volunteers can be scheduled."
                 validation_errors = [
-                    f"{name} is not committed to Saturday."
-                    for name in noncommitted_names
+                    f"{name} is not committed to Saturday." for name in noncommitted_names
                 ]
             return JSONResponse(
                 {
@@ -2021,9 +2191,7 @@ def _save_staffing_schedule_for_state(
             roster = staffing.load_roster()
             people_by_name = {person.name: person for person in roster}
             full_day_off_names = {
-                entry["name"]
-                for entry in _safe_time_off_entries(d)
-                if entry.get("hours") is None
+                entry["name"] for entry in _safe_time_off_entries(d) if entry.get("hours") is None
             }
             publish_block = sr.validate_publish(
                 saturday_bundle,
@@ -2053,9 +2221,7 @@ def _save_staffing_schedule_for_state(
     for wc_name, sources in existing.assignment_sources.items():
         assigned_names = set(assignments.get(wc_name, []))
         remaining_sources = {
-            name: source
-            for name, source in (sources or {}).items()
-            if name in assigned_names
+            name: source for name, source in (sources or {}).items() if name in assigned_names
         }
         if remaining_sources:
             assignment_sources[wc_name] = remaining_sources
@@ -2133,8 +2299,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             {
                 "ok": False,
                 "error": (
-                    "Optional workday state could not be verified. "
-                    "No schedule changes were saved."
+                    "Optional workday state could not be verified. No schedule changes were saved."
                 ),
             },
             status_code=409,
@@ -2154,6 +2319,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             existing=staffing.load_schedule(d),
         )
     else:
+        expected_optional_day = optional_day
         with db.cursor() as cur:
             try:
                 locked_bundle = saturday_recruiting_store.lock_for_schedule_mutation(
@@ -2177,9 +2343,26 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
                     )
                 )
                 return JSONResponse({"ok": False, "error": error}, status_code=409)
+            if optional_day != expected_optional_day:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Optional workday state changed while saving. "
+                            "No schedule changes were saved."
+                        ),
+                    },
+                    status_code=409,
+                )
             saturday_bundle = _matching_optional_recruiting_bundle(
                 locked_bundle,
                 optional_day,
+            )
+            allow_empty_pre_recruit_holiday = bool(
+                optional_day is not None
+                and optional_day.kind == "holiday"
+                and locked_bundle is None
+                and not default_updates
             )
             result = _save_staffing_schedule_for_state(
                 d=d,
@@ -2191,6 +2374,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
                 optional_day=optional_day,
                 saturday_bundle=saturday_bundle,
                 existing=existing or staffing.Schedule(day=d),
+                allow_empty_pre_recruit_holiday=allow_empty_pre_recruit_holiday,
                 cur=cur,
             )
 
@@ -2232,11 +2416,7 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
             log.exception("Could not mark optional recruiting as published for %s", d)
 
     wants_json = auto or (request.headers.get("accept") or "").startswith("application/json")
-    if (
-        publish_marker_failed
-        and optional_day is not None
-        and optional_day.kind == "holiday"
-    ):
+    if publish_marker_failed and optional_day is not None and optional_day.kind == "holiday":
         return JSONResponse(
             {
                 "ok": False,
@@ -2258,17 +2438,20 @@ def _staffing_save_work(request: Request, d: date, auto: int, form):
         )
     if wants_json:
         delivery = (
-            published_delivery if published
+            published_delivery
+            if published
             else (published_snapshot or {}).get("published_delivery") or {}
         )
-        return JSONResponse({
-            "ok": True,
-            "revision": staffing.schedule_revision(d),
-            "published": published,
-            "has_snapshot": bool(published_snapshot) and not published,
-            "posted_version": delivery.get("version"),
-            "testing_day": testing_day,
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "revision": staffing.schedule_revision(d),
+                "published": published,
+                "has_snapshot": bool(published_snapshot) and not published,
+                "posted_version": delivery.get("version"),
+                "testing_day": testing_day,
+            }
+        )
 
     # If publish was blocked, bounce back to the same day with a flag so the UI can show the alert.
     if publish_block:
@@ -2294,16 +2477,19 @@ def staffing_live(day: str = Query(...)):
         return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
     sched = staffing.load_schedule(target_day)
     delivery = (
-        sched.published_delivery if sched.published
+        sched.published_delivery
+        if sched.published
         else (sched.published_snapshot or {}).get("published_delivery") or {}
     )
-    response = JSONResponse({
-        "ok": True,
-        "revision": staffing.schedule_revision(target_day),
-        "published": sched.published,
-        "has_snapshot": bool(sched.published_snapshot) and not sched.published,
-        "posted_version": delivery.get("version"),
-    })
+    response = JSONResponse(
+        {
+            "ok": True,
+            "revision": staffing.schedule_revision(target_day),
+            "published": sched.published,
+            "has_snapshot": bool(sched.published_snapshot) and not sched.published,
+            "posted_version": delivery.get("version"),
+        }
+    )
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -2320,7 +2506,9 @@ def staffing_mark_printed(day: str = Query(...), version: str = Query(...)):
             status_code=409,
         )
     delivery = staffing.record_delivery(
-        target_day, version, {"printed_at": plant_now().isoformat()},
+        target_day,
+        version,
+        {"printed_at": plant_now().isoformat()},
     )
     if not delivery:
         return JSONResponse(
@@ -2350,36 +2538,66 @@ async def staffing_hours_save(request: Request):
         except ValueError:
             return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
 
-        new_day = staffing.schedule_revision(d) is None
-        sched = staffing.draft_from_posted(staffing.load_schedule(d))
-        if new_day:
-            sched.auto_enabled_work_centers = _default_auto_work_centers(d)
+        initial_auto_work_centers = (
+            _default_auto_work_centers(d) if staffing.schedule_revision(d) is None else ()
+        )
 
         if form.get("reset") == "1":
-            sched.custom_hours = None
-            staffing.save_schedule(sched)
+            try:
+                _update_schedule_metadata_work(
+                    d,
+                    custom_hours=None,
+                    initial_auto_enabled_work_centers=initial_auto_work_centers,
+                )
+            except _ScheduleMetadataConflict as exc:
+                return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+            except Exception:
+                log.exception("Could not reset custom hours for %s", d)
+                return JSONResponse(
+                    {"ok": False, "error": "Could not save shift hours."},
+                    status_code=500,
+                )
             _http_cache.invalidate_today_cache()
             return JSONResponse({"ok": True, "reset": True})
 
         start_s = (form.get("start") or "").strip()
         end_s = (form.get("end") or "").strip()
         if not start_s or not end_s or start_s >= end_s:
-            return JSONResponse({"ok": False, "error": "shift start must be before end"}, status_code=400)
+            return JSONResponse(
+                {"ok": False, "error": "shift start must be before end"}, status_code=400
+            )
 
         starts = form.getlist("break_start")
-        ends   = form.getlist("break_end")
-        names  = form.getlist("break_name")
+        ends = form.getlist("break_end")
+        names = form.getlist("break_name")
         breaks_out: list[dict] = []
         for bs, be, bn in zip(starts, ends, names, strict=False):
             bs, be = bs.strip(), be.strip()
             if not bs or not be or bs >= be:
-                return JSONResponse({"ok": False, "error": f"bad break: {bs}-{be}"}, status_code=400)
+                return JSONResponse(
+                    {"ok": False, "error": f"bad break: {bs}-{be}"}, status_code=400
+                )
             if bs < start_s or be > end_s:
-                return JSONResponse({"ok": False, "error": f"break {bs}-{be} outside shift"}, status_code=400)
+                return JSONResponse(
+                    {"ok": False, "error": f"break {bs}-{be} outside shift"}, status_code=400
+                )
             breaks_out.append({"start": bs, "end": be, "name": (bn or "Break").strip()[:40]})
 
-        sched.custom_hours = {"start": start_s, "end": end_s, "breaks": breaks_out}
-        staffing.save_schedule(sched)
+        custom_hours = {"start": start_s, "end": end_s, "breaks": breaks_out}
+        try:
+            _update_schedule_metadata_work(
+                d,
+                custom_hours=custom_hours,
+                initial_auto_enabled_work_centers=initial_auto_work_centers,
+            )
+        except _ScheduleMetadataConflict as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        except Exception:
+            log.exception("Could not save custom hours for %s", d)
+            return JSONResponse(
+                {"ok": False, "error": "Could not save shift hours."},
+                status_code=500,
+            )
         _http_cache.invalidate_today_cache()
         return JSONResponse({"ok": True})
 
@@ -2399,6 +2617,7 @@ async def staffing_attribute(request: Request):
     """
     from datetime import date as _date, datetime as _dt
     from .. import wc_attributions
+
     body = await request.json()
     try:
         day = _date.fromisoformat(body["day"])
@@ -2415,6 +2634,7 @@ async def staffing_attribute(request: Request):
         return JSONResponse({"ok": False, "error": "end must be after start"}, status_code=400)
 
     from .. import inbox_keys, inbox_log
+
     actor_upn, actor_name = inbox_log.actor_from(request)
     source = body.get("source")
 
@@ -2424,6 +2644,7 @@ async def staffing_attribute(request: Request):
         # WC's department, reflect it in Odoo. Never let an Odoo hiccup fail the
         # attribution write — the credit is the source of truth.
         from .. import staffing_transfer
+
         try:
             transfer = staffing_transfer.decide_and_apply(person, wc, start_utc)
         except Exception as e:  # noqa: BLE001
@@ -2453,6 +2674,7 @@ async def staffing_attribute(request: Request):
 def staffing_attribute_delete(attribution_id: int):
     """Remove one retro WC attribution row by id."""
     from .. import wc_attributions
+
     try:
         wc_attributions.delete(attribution_id)
     except Exception as e:
@@ -2474,6 +2696,7 @@ async def staffing_attribute_with_testing(request: Request):
     """
     from datetime import date as _date, datetime as _dt
     from .. import wc_attributions, staffing_transfer
+
     body = await request.json()
     try:
         day = _date.fromisoformat(body["day"])
@@ -2487,9 +2710,16 @@ async def staffing_attribute_with_testing(request: Request):
 
     def _work():
         ids: list[int] = []
-        ids.append(wc_attributions.add(
-            day, wc, wc_attributions.TESTING_PERSON, t_start, t_end,
-            source=wc_attributions.TESTING_SOURCE))
+        ids.append(
+            wc_attributions.add(
+                day,
+                wc,
+                wc_attributions.TESTING_PERSON,
+                t_start,
+                t_end,
+                source=wc_attributions.TESTING_SOURCE,
+            )
+        )
 
         transfer = {"transfer": "none"}
         remainder = str(body.get("remainder_person") or "").strip()
@@ -2517,6 +2747,7 @@ async def staffing_transfer_undo(request: Request):
     """Reverse an Odoo department transfer created by an assignment.
     Body (JSON): {closed_id: int|null, new_id: int}."""
     from .. import odoo_client
+
     body = await request.json()
     try:
         new_id = int(body["new_id"])
@@ -2558,6 +2789,7 @@ def assignments_todo_payload(force: bool = False) -> dict:
     """
     from .. import staffing as _staffing, wc_attributions
     from ..deps import client as _client
+
     now_ts = time.time()
     cached = _ASSIGNMENTS_TODO_CACHE.get("value")
     if not force and cached is not None and now_ts < _ASSIGNMENTS_TODO_CACHE.get("expires_at", 0):
@@ -2570,26 +2802,31 @@ def assignments_todo_payload(force: bool = False) -> dict:
         for item in wc_attributions.unattributed_for_day(today, _client):
             first = item["first_sample_utc"].astimezone(site_tz)
             last = item["last_sample_utc"].astimezone(site_tz)
-            out["items"].append({
-                "wc_name": item["wc_name"],
-                "units": item["units"],
-                "first_label": first.strftime("%I:%M %p").lstrip("0"),
-                "last_label": last.strftime("%I:%M %p").lstrip("0"),
-                "first_iso": item["first_sample_utc"].isoformat(),
-                "last_iso": item["last_sample_utc"].isoformat(),
-            })
+            out["items"].append(
+                {
+                    "wc_name": item["wc_name"],
+                    "units": item["units"],
+                    "first_label": first.strftime("%I:%M %p").lstrip("0"),
+                    "last_label": last.strftime("%I:%M %p").lstrip("0"),
+                    "first_iso": item["first_sample_utc"].isoformat(),
+                    "last_iso": item["last_sample_utc"].isoformat(),
+                }
+            )
         for r in wc_attributions.for_day(today):
             s_local = r["start_utc"].astimezone(site_tz)
             e_raw = r["end_utc"]
             e_local = e_raw.astimezone(site_tz) if e_raw is not None else None
-            out["saved"].append({
-                "id": r["id"],
-                "wc_name": r["wc_name"],
-                "person_name": r["person_name"],
-                "first_label": s_local.strftime("%I:%M %p").lstrip("0"),
-                "last_label": (e_local.strftime("%I:%M %p").lstrip("0")
-                               if e_local is not None else "open"),
-            })
+            out["saved"].append(
+                {
+                    "id": r["id"],
+                    "wc_name": r["wc_name"],
+                    "person_name": r["person_name"],
+                    "first_label": s_local.strftime("%I:%M %p").lstrip("0"),
+                    "last_label": (
+                        e_local.strftime("%I:%M %p").lstrip("0") if e_local is not None else "open"
+                    ),
+                }
+            )
         roster = _staffing.load_roster()
         out["people"] = sorted((p.name for p in roster if p.active), key=str.lower)
         out["count"] = len(out["items"])
@@ -2665,7 +2902,8 @@ def late_report_payload(force: bool = False) -> dict:
                 if (by_id.get(emp_id) or {}).get("status") != "no_punch":
                     late_report.clear_expected_arrival(today, emp_id)
             expected_arrivals = [
-                row for row in late_report.active_expected_arrivals(today)
+                row
+                for row in late_report.active_expected_arrivals(today)
                 if (by_id.get(str(row["emp_id"])) or {}).get("status") == "no_punch"
             ]
             expected_ids = {str(row["emp_id"]) for row in expected_arrivals}
@@ -2683,7 +2921,9 @@ def late_report_payload(force: bool = False) -> dict:
             eligible_emp_ids = late_report.report_eligible_emp_ids(
                 staffing.load_roster(), name_to_id
             )
-            scheduled_ids = [e for e in (attendance_pkg.get("scheduled_ids") or []) if e in eligible_emp_ids]
+            scheduled_ids = [
+                e for e in (attendance_pkg.get("scheduled_ids") or []) if e in eligible_emp_ids
+            ]
             # The report covers people who were on today's schedule only.
             # "Unscheduled" people (active non-reserve roster members who simply
             # weren't assigned today) are NOT flagged for a missing punch — they
@@ -2716,24 +2956,30 @@ def late_report_payload(force: bool = False) -> dict:
 
             for r in sections["scheduled_late"]:
                 name = _resolve(r["emp_id"])
-                out["scheduled_late"].append({
-                    "emp_id": r["emp_id"],
-                    "name": name,
-                    "minutes_late": r["minutes_late"],
-                    "scheduled_wc": scheduled_wc_by_name.get(name),
-                    "scheduled_start_time": shift_start_local.strftime("%H:%M"),
-                })
+                out["scheduled_late"].append(
+                    {
+                        "emp_id": r["emp_id"],
+                        "name": name,
+                        "minutes_late": r["minutes_late"],
+                        "scheduled_wc": scheduled_wc_by_name.get(name),
+                        "scheduled_start_time": shift_start_local.strftime("%H:%M"),
+                    }
+                )
             for r in sections["unscheduled_late"]:
-                out["unscheduled_late"].append({
-                    "emp_id": r["emp_id"],
-                    "name": _resolve(r["emp_id"]),
-                })
+                out["unscheduled_late"].append(
+                    {
+                        "emp_id": r["emp_id"],
+                        "name": _resolve(r["emp_id"]),
+                    }
+                )
             for r in sections["needs_reason"]:
-                out["needs_reason"].append({
-                    "emp_id": r["emp_id"],
-                    "name": _resolve(r["emp_id"]),
-                    "minutes_late": r["minutes_late"],
-                })
+                out["needs_reason"].append(
+                    {
+                        "emp_id": r["emp_id"],
+                        "name": _resolve(r["emp_id"]),
+                        "minutes_late": r["minutes_late"],
+                    }
+                )
             out["late"] = list(out["scheduled_late"])  # legacy alias
 
             now_utc = datetime.now(UTC)
@@ -2741,31 +2987,33 @@ def late_report_payload(force: bool = False) -> dict:
                 emp_id = str(row["emp_id"])
                 expected_local = row["expected_at_utc"].astimezone(shift_config.SITE_TZ)
                 fmt = "%#I:%M %p" if os.name == "nt" else "%-I:%M %p"
-                out["running_late"].append({
-                    "emp_id": emp_id,
-                    "name": row["name"],
-                    "until_iso": row["expected_at_utc"].isoformat(),
-                    "expected_label": expected_local.strftime(fmt),
-                    "mins_remaining": max(
-                        0, int((row["expected_at_utc"] - now_utc).total_seconds() // 60)
-                    ),
-                })
+                out["running_late"].append(
+                    {
+                        "emp_id": emp_id,
+                        "name": row["name"],
+                        "until_iso": row["expected_at_utc"].isoformat(),
+                        "expected_label": expected_local.strftime(fmt),
+                        "mins_remaining": max(
+                            0, int((row["expected_at_utc"] - now_utc).total_seconds() // 60)
+                        ),
+                    }
+                )
 
         # Snoozed list (independent of attendance).
         now_utc = datetime.now(UTC)
         for s in late_report.active_snoozes(today):
             until = s["until_utc"]
             mins_remaining = max(0, int((until - now_utc).total_seconds() // 60))
-            out["snoozed"].append({
-                "emp_id": s["emp_id"],
-                "name": s["name"],
-                "until_iso": until.isoformat(),
-                "mins_remaining": mins_remaining,
-            })
+            out["snoozed"].append(
+                {
+                    "emp_id": s["emp_id"],
+                    "name": s["name"],
+                    "until_iso": until.isoformat(),
+                    "mins_remaining": mins_remaining,
+                }
+            )
         out["count"] = (
-            len(out["scheduled_late"])
-            + len(out["unscheduled_late"])
-            + len(out["needs_reason"])
+            len(out["scheduled_late"]) + len(out["unscheduled_late"]) + len(out["needs_reason"])
         )
     except Exception:
         out["degraded"] = True
@@ -2835,8 +3083,16 @@ def _stage_supervisor_time_off_edit(
         "AND state = ANY(%s) AND date_from <= %s AND date_to >= %s "
         "RETURNING id",
         (
-            shape, date_from, date_to, hour_from, hour_to, request_id,
-            holiday_status_id, list(scheduler_time_off._VISIBLE_STATES), day, day,
+            shape,
+            date_from,
+            date_to,
+            hour_from,
+            hour_to,
+            request_id,
+            holiday_status_id,
+            list(scheduler_time_off._VISIBLE_STATES),
+            day,
+            day,
         ),
     )
     return bool(rows)
@@ -2892,11 +3148,14 @@ def _edit_scheduler_time_off(
     # Whole-day leaves have no hour window; only partials need the configured
     # schedule bounds and therefore the schedule-store read.
     shift_from, shift_to = (
-        _scheduler_shift_bounds(date_from)
-        if row["shape"] != "full_day" else (0.0, 0.0)
+        _scheduler_shift_bounds(date_from) if row["shape"] != "full_day" else (0.0, 0.0)
     )
     hour_from, hour_to, error = shape_to_hour_bounds(
-        row["shape"], time_from, time_to, shift_from, shift_to,
+        row["shape"],
+        time_from,
+        time_to,
+        shift_from,
+        shift_to,
     )
     if error:
         return JSONResponse({"ok": False, "error": error}, status_code=422)
@@ -2978,7 +3237,9 @@ def _set_saturday_availability_work(day: date, name: str, destination: str) -> d
             detail="Optional workday state could not be verified. No changes were saved.",
         ) from exc
     if optional_day is None:
-        raise HTTPException(status_code=409, detail="Saturday availability can only be changed on Saturday.")
+        raise HTTPException(
+            status_code=409, detail="Saturday availability can only be changed on Saturday."
+        )
     if destination not in {"unassigned", "off"}:
         day_label = "Holiday" if optional_day.kind == "holiday" else "Saturday"
         raise HTTPException(
@@ -3019,9 +3280,7 @@ def _set_saturday_availability_work(day: date, name: str, destination: str) -> d
                 detail=f"{name} is not an active non-reserve employee.",
             )
         full_day_off_names = {
-            entry["name"]
-            for entry in _safe_time_off_entries(day)
-            if entry.get("hours") is None
+            entry["name"] for entry in _safe_time_off_entries(day) if entry.get("hours") is None
         }
         if name in full_day_off_names:
             raise HTTPException(
@@ -3029,9 +3288,7 @@ def _set_saturday_availability_work(day: date, name: str, destination: str) -> d
                 detail=f"{name} has approved full-day time off.",
             )
 
-        schedule = staffing.draft_from_posted(
-            locked_schedule or staffing.Schedule(day=day)
-        )
+        schedule = staffing.draft_from_posted(locked_schedule or staffing.Schedule(day=day))
         overrides = dict(schedule.saturday_availability_overrides or {})
         overrides[name] = destination
         schedule.saturday_availability_overrides = overrides
@@ -3046,16 +3303,16 @@ def _set_saturday_availability_work(day: date, name: str, destination: str) -> d
         and item.availability_start is not None
         and item.availability_end is not None
     }
-    available_names = set(staffing.effective_saturday_commitments(
-        recruiting_commitments,
-        overrides,
-        bundle.recruitment.shift_start,
-        bundle.recruitment.shift_end,
-    ))
+    available_names = set(
+        staffing.effective_saturday_commitments(
+            recruiting_commitments,
+            overrides,
+            bundle.recruitment.shift_start,
+            bundle.recruitment.shift_end,
+        )
+    )
     assigned_names = {
-        person_name
-        for names in (schedule.assignments or {}).values()
-        for person_name in names
+        person_name for names in (schedule.assignments or {}).values() for person_name in names
     }
     eligible_people = [person for person in people.values() if person.active and not person.reserve]
     unassigned_count = sum(
@@ -3093,7 +3350,8 @@ async def set_saturday_availability(request: Request):
         )
     if not name:
         return JSONResponse(
-            {"ok": False, "error": "A person is required."}, status_code=422,
+            {"ok": False, "error": "A person is required."},
+            status_code=422,
         )
     try:
         result = await asyncio.to_thread(_set_saturday_availability_work, day, name, destination)
@@ -3102,7 +3360,8 @@ async def set_saturday_availability(request: Request):
     except Exception:
         log.exception("Could not update Saturday availability for %s on %s", name, day)
         return JSONResponse(
-            {"ok": False, "error": "Could not update Saturday availability."}, status_code=500,
+            {"ok": False, "error": "Could not update Saturday availability."},
+            status_code=500,
         )
     return JSONResponse(result)
 
@@ -3124,6 +3383,7 @@ async def staffing_clear_partial(request: Request):
     """
     from datetime import date as _date
     from .. import late_report
+
     body = await request.json()
     try:
         day = _date.fromisoformat(body["day"])
@@ -3139,17 +3399,20 @@ async def staffing_clear_partial(request: Request):
         )
 
     def _work():
-        sched = staffing.draft_from_posted(staffing.load_schedule(day))
-        try:
+        def _clear(cur):
             if name:
-                late_report.clear_partial_by_name(day, name)
+                late_report.clear_partial_by_name(day, name, cur=cur)
             elif request_id:
-                late_report.clear_time_off_request(day, int(request_id))
+                late_report.clear_time_off_request(day, int(request_id), cur=cur)
             else:
-                late_report.clear_non_work_shift(day, str(emp_id))
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-        staffing.save_schedule(sched)
+                late_report.clear_non_work_shift(day, str(emp_id), cur=cur)
+
+        try:
+            _update_schedule_metadata_work(day, related_mutation=_clear)
+        except _ScheduleMetadataConflict as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
         _bust_after_mutation()
         return JSONResponse({"ok": True})
 
@@ -3169,32 +3432,24 @@ async def staffing_clear_testing_day(request: Request):
     Body: {day: ISO date}
     """
     from datetime import date as _date
+
     body = await request.json()
     try:
         d = _date.fromisoformat(body["day"])
     except (KeyError, TypeError, ValueError) as e:
         return JSONResponse({"ok": False, "error": f"bad day: {e}"}, status_code=400)
+
     def _work():
-        existing = staffing.draft_from_posted(staffing.load_schedule(d))
-        if not existing.testing_day:
-            return JSONResponse({"ok": True, "no_op": True})
-        staffing.save_schedule(staffing.Schedule(
-            day=d,
-            published=existing.published,
-            assignments={k: list(v) for k, v in existing.assignments.items()},
-            notes=existing.notes,
-            wc_notes=dict(existing.wc_notes),
-            testing_day=False,
-            published_snapshot=existing.published_snapshot,
-            custom_hours=existing.custom_hours,
-            published_delivery=existing.published_delivery,
-            rotation_mode=existing.rotation_mode,
-            assignment_sources={
-                wc_name: dict(sources or {})
-                for wc_name, sources in existing.assignment_sources.items()
-            },
-            auto_enabled_work_centers=list(existing.auto_enabled_work_centers),
-        ))
+        try:
+            _update_schedule_metadata_work(d, testing_day=False)
+        except _ScheduleMetadataConflict as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        except Exception:
+            log.exception("Could not clear testing-day state for %s", d)
+            return JSONResponse(
+                {"ok": False, "error": "Could not clear Testing Day."},
+                status_code=500,
+            )
         _bust_after_mutation()
         return JSONResponse({"ok": True})
 
@@ -3206,6 +3461,7 @@ async def staffing_restore_partial(request: Request):
     """Undo clear-partial. Same body shape as clear-partial."""
     from datetime import date as _date
     from .. import late_report
+
     body = await request.json()
     try:
         day = _date.fromisoformat(body["day"])
@@ -3221,17 +3477,20 @@ async def staffing_restore_partial(request: Request):
         )
 
     def _work():
-        sched = staffing.draft_from_posted(staffing.load_schedule(day))
-        try:
+        def _restore(cur):
             if name:
-                late_report.restore_partial_by_name(day, name)
+                late_report.restore_partial_by_name(day, name, cur=cur)
             elif request_id:
-                late_report.restore_time_off_request(day, int(request_id))
+                late_report.restore_time_off_request(day, int(request_id), cur=cur)
             else:
-                late_report.restore_non_work_shift(day, str(emp_id))
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-        staffing.save_schedule(sched)
+                late_report.restore_non_work_shift(day, str(emp_id), cur=cur)
+
+        try:
+            _update_schedule_metadata_work(day, related_mutation=_restore)
+        except _ScheduleMetadataConflict as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
         _bust_after_mutation()
         return JSONResponse({"ok": True})
 

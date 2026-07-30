@@ -165,7 +165,9 @@ def _validate_positions(cur, requested_counts: Mapping[int, int]) -> dict[int, A
     positions = _required_positions(cur, tuple(requested_counts))
     missing = sorted(set(requested_counts).difference(positions))
     if missing:
-        raise LifecycleConflict("Every requested Saturday work center needs at least one required skill")
+        raise LifecycleConflict(
+            "Every requested Saturday work center needs at least one required skill"
+        )
     return positions
 
 
@@ -200,9 +202,7 @@ def _load_bundle(cur, day: date) -> RecruitmentBundle | None:
         day_kind=str(row.get("day_kind") or "saturday"),
         event_name=row.get("event_name"),
         holiday_odoo_id=(
-            int(row["holiday_odoo_id"])
-            if row.get("holiday_odoo_id") is not None
-            else None
+            int(row["holiday_odoo_id"]) if row.get("holiday_odoo_id") is not None else None
         ),
     )
     cur.execute(
@@ -257,6 +257,11 @@ def get(day: date, *, cur=None) -> RecruitmentBundle | None:
         return _load_bundle(cur, day)
 
 
+def _lock_day(cur, day: date) -> None:
+    """Serialize lifecycle and schedule mutations even before a row exists."""
+    cur.execute("SELECT pg_advisory_xact_lock(%s::bigint)", (day.toordinal(),))
+
+
 def lock_for_schedule_mutation(
     day: date,
     *,
@@ -269,6 +274,7 @@ def lock_for_schedule_mutation(
     cancellation that wins the recruiting lock cannot be overwritten by a
     stale schedule save.
     """
+    _lock_day(cur, day)
     cur.execute(
         "SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE",
         (day,),
@@ -335,11 +341,13 @@ def serialize_bundle(bundle: RecruitmentBundle) -> dict:
                 "person_name": item.person_name,
                 "availability_start": (
                     item.availability_start.isoformat(timespec="minutes")
-                    if item.availability_start else None
+                    if item.availability_start
+                    else None
                 ),
                 "availability_end": (
                     item.availability_end.isoformat(timespec="minutes")
-                    if item.availability_end else None
+                    if item.availability_end
+                    else None
                 ),
             }
             for item in active
@@ -369,6 +377,7 @@ def available_positions() -> tuple[AvailablePosition, ...]:
 
 
 def _lock_recruitment(cur, day: date) -> Recruitment:
+    _lock_day(cur, day)
     cur.execute(
         "SELECT day, day_kind, event_name, holiday_odoo_id, status, "
         "shift_start, shift_end, response_deadline, staffing_prepared_at "
@@ -388,16 +397,16 @@ def _lock_recruitment(cur, day: date) -> Recruitment:
         day_kind=str(row.get("day_kind") or "saturday"),
         event_name=row.get("event_name"),
         holiday_odoo_id=(
-            int(row["holiday_odoo_id"])
-            if row.get("holiday_odoo_id") is not None
-            else None
+            int(row["holiday_odoo_id"]) if row.get("holiday_odoo_id") is not None else None
         ),
     )
 
 
 def _require_open(recruitment: Recruitment, now: datetime) -> None:
     if recruitment.status != "recruiting" or recruitment.response_deadline <= now:
-        raise RecruitingClosed("Saturday work sign-up is closed. Contact a manager to make a change.")
+        raise RecruitingClosed(
+            "Saturday work sign-up is closed. Contact a manager to make a change."
+        )
 
 
 def _existing_response(cur, day: date, person_id: int) -> dict | None:
@@ -524,13 +533,18 @@ def offer_for_person(person_id: int, now: datetime) -> Offer | None:
         for row in cur.fetchall():
             bundle = _load_bundle(cur, row["day"])
             assert bundle is not None
-            existing = next((item for item in bundle.commitments if item.person_id == person_id), None)
+            existing = next(
+                (item for item in bundle.commitments if item.person_id == person_id), None
+            )
             if existing is not None and existing.status in {"declined", "committed"}:
                 continue
             eligible_wc_ids = _eligible_wc_ids_for_person(
                 cur, person_id, bundle.openings, bundle.recruitment.day
             )
-            if not eligible_wc_ids or _coverage_with_candidate(bundle, person_id, eligible_wc_ids) is None:
+            if (
+                not eligible_wc_ids
+                or _coverage_with_candidate(bundle, person_id, eligible_wc_ids) is None
+            ):
                 continue
             return Offer(
                 bundle.recruitment.day,
@@ -559,9 +573,7 @@ def home_banner(now: datetime) -> HomeBanner | None:
             bundle = _load_bundle(cur, row["day"])
             assert bundle is not None
             recruitment = bundle.recruitment
-            shift_end = datetime.combine(
-                recruitment.day, recruitment.shift_end, tzinfo=sr.SITE_TZ
-            )
+            shift_end = datetime.combine(recruitment.day, recruitment.shift_end, tzinfo=sr.SITE_TZ)
             if recruitment.day == local_now.date():
                 if local_now >= shift_end:
                     continue
@@ -646,7 +658,10 @@ def record_later(day: date, person_id: int, now: datetime) -> DecisionResult:
         bundle = _load_bundle(cur, day)
         assert bundle is not None
         eligible_wc_ids = _eligible_wc_ids_for_person(cur, person_id, bundle.openings, day)
-        if not eligible_wc_ids or _coverage_with_candidate(bundle, person_id, eligible_wc_ids) is None:
+        if (
+            not eligible_wc_ids
+            or _coverage_with_candidate(bundle, person_id, eligible_wc_ids) is None
+        ):
             raise NoCompatibleOpening("That opening was just filled. You have not been scheduled.")
         _insert_response(cur, day, person_id, "later", now)
         return _result(cur, day, "later")
@@ -669,9 +684,7 @@ def decline(day: date, person_id: int, now: datetime) -> DecisionResult:
         return _result(cur, day, "declined")
 
 
-def commit(
-    day: date, person_id: int, start: time, end: time, now: datetime
-) -> DecisionResult:
+def commit(day: date, person_id: int, start: time, end: time, now: datetime) -> DecisionResult:
     """Atomically claim one compatible Saturday opening for an employee."""
     from . import db
 
@@ -692,7 +705,10 @@ def commit(
         bundle = _load_bundle(cur, day)
         assert bundle is not None
         eligible_wc_ids = _eligible_wc_ids_for_person(cur, person_id, bundle.openings, day)
-        if not eligible_wc_ids or _coverage_with_candidate(bundle, person_id, eligible_wc_ids) is None:
+        if (
+            not eligible_wc_ids
+            or _coverage_with_candidate(bundle, person_id, eligible_wc_ids) is None
+        ):
             raise NoCompatibleOpening("That opening was just filled. You have not been scheduled.")
         _insert_response(
             cur,
@@ -749,9 +765,7 @@ def cancel_by_manager(
         return _cancel(cur, day, person_id, now, actor, reason.strip())
 
 
-def cancel_recruitment(
-    day: date, actor: str | None, now: datetime
-) -> tuple[StoredCommitment, ...]:
+def cancel_recruitment(day: date, actor: str | None, now: datetime) -> tuple[StoredCommitment, ...]:
     """Cancel a whole Saturday and clear its live schedule atomically.
 
     The committed people are retained as notification targets.  Repeating the
@@ -809,14 +823,8 @@ def activate(
         raise SaturdayRecruitingError("Saturday recruiting requires a Saturday")
     if day_kind == "holiday":
         holiday = company_holidays.for_day(day)
-        if (
-            holiday is None
-            or holiday.odoo_id != holiday_odoo_id
-            or holiday.name != event_name
-        ):
-            raise LifecycleConflict(
-                "Holiday recruiting must match the current company holiday"
-            )
+        if holiday is None or holiday.odoo_id != holiday_odoo_id or holiday.name != event_name:
+            raise LifecycleConflict("Holiday recruiting must match the current company holiday")
     _validate_shift(shift_start, shift_end)
     response_deadline = _row_datetime(response_deadline)
     if response_deadline <= now:
@@ -827,7 +835,7 @@ def activate(
         # activation attempts for this one calendar day before checking it so
         # concurrent identical requests see the first inserted round and take
         # the idempotent branch rather than racing its primary-key insert.
-        cur.execute("SELECT pg_advisory_xact_lock(%s::bigint)", (day.toordinal(),))
+        _lock_day(cur, day)
         positions = _validate_positions(cur, requested_counts)
         cur.execute(
             "SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE",
@@ -879,9 +887,7 @@ def activate(
                 cur.execute("DELETE FROM schedule_assignments WHERE day = %s", (day,))
             elif day_kind == "saturday" and schedule is not None:
                 if schedule.published:
-                    raise LifecycleConflict(
-                        "A published Saturday schedule cannot enter recruiting"
-                    )
+                    raise LifecycleConflict("A published Saturday schedule cannot enter recruiting")
                 assignments = tuple(
                     (wc_name, person_name)
                     for wc_name, names in schedule.assignments.items()
@@ -889,8 +895,7 @@ def activate(
                 )
                 if assignments:
                     default_only = all(
-                        schedule.assignment_sources.get(wc_name, {}).get(person_name)
-                        == "default"
+                        schedule.assignment_sources.get(wc_name, {}).get(person_name) == "default"
                         for wc_name, person_name in assignments
                     )
                     if not default_only:
@@ -957,8 +962,15 @@ def update_openings(
     if cur is None:
         with db.cursor() as cur:
             return update_openings(
-                day, requested_counts, shift_start, shift_end, None, now, cur=cur,
+                day,
+                requested_counts,
+                shift_start,
+                shift_end,
+                None,
+                now,
+                cur=cur,
             )
+    _lock_day(cur, day)
     cur.execute("SELECT day FROM saturday_recruitments WHERE day = %s FOR UPDATE", (day,))
     if cur.fetchone() is None:
         raise LifecycleConflict("No Saturday recruiting round exists for this date")
@@ -967,9 +979,8 @@ def update_openings(
     if bundle.recruitment.status not in {"recruiting", "closed"}:
         raise LifecycleConflict("Saturday recruiting openings can no longer be changed")
     if (
-        (shift_start != bundle.recruitment.shift_start or shift_end != bundle.recruitment.shift_end)
-        and any(item.status == "committed" for item in bundle.commitments)
-    ):
+        shift_start != bundle.recruitment.shift_start or shift_end != bundle.recruitment.shift_end
+    ) and any(item.status == "committed" for item in bundle.commitments):
         raise LifecycleConflict("Saturday shift hours lock after the first commitment")
     positions = _validate_positions(cur, requested_counts)
     old_counts = {opening.wc_id: opening.requested_count for opening in bundle.openings}

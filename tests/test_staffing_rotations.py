@@ -41,7 +41,9 @@ def test_readme_describes_exact_work_center_training_protocol():
     assert "level 3" in readme
 
 
-def _person(name: str, level: int, group: str = "Repair", *, active: bool = True, reserve: bool = False):
+def _person(
+    name: str, level: int, group: str = "Repair", *, active: bool = True, reserve: bool = False
+):
     return staffing.Person(name=name, active=active, reserve=reserve, skills={group: level})
 
 
@@ -59,9 +61,7 @@ def _holiday_rotation_bundle(
             shift_end=time(12),
             response_deadline=datetime(2026, 11, 25, 14, tzinfo=timezone.utc),
             staffing_prepared_at=(
-                datetime(2026, 11, 26, 8, tzinfo=timezone.utc)
-                if prepared
-                else None
+                datetime(2026, 11, 26, 8, tzinfo=timezone.utc) if prepared else None
             ),
             day_kind="holiday",
             event_name="Black Friday",
@@ -96,9 +96,7 @@ def _rotations_client(monkeypatch, *, raise_server_exceptions: bool = True):
         cur,
         invalidate_cache=True,
     ):
-        schedule = staffing.draft_from_posted(
-            deepcopy(rotations.staffing.load_schedule(day))
-        )
+        schedule = staffing.draft_from_posted(deepcopy(rotations.staffing.load_schedule(day)))
         schedule.assignments = {
             wc_name: list(people)
             for wc_name, people in schedule.assignments.items()
@@ -158,45 +156,60 @@ def test_live_validation_endpoint_uses_the_submitted_current_view_without_saving
         "_configured_center_capacities",
         lambda centers, strict=False: {center: 2 for center in centers},
     )
-    monkeypatch.setattr(rotations.staffing_route, "current_view_validation_for_day", lambda **kwargs: [
-        {
-            "code": "no_safe_complete_crew",
-            "message": "Trim Saw 1 cannot form a safe complete crew.",
-            "person": None,
-            "centers": ["Trim Saw 1"],
-            "rejections": [],
-        },
-    ])
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "current_view_validation_for_day",
+        lambda **kwargs: [
+            {
+                "code": "no_safe_complete_crew",
+                "message": "Trim Saw 1 cannot form a safe complete crew.",
+                "person": None,
+                "centers": ["Trim Saw 1"],
+                "rejections": [],
+            },
+        ],
+    )
     monkeypatch.setattr(
         rotations.staffing,
         "save_schedule",
         lambda *_args, **_kwargs: pytest.fail("validation must not save"),
     )
 
-    response = client.post("/api/rotations/validate-current", json={
-        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Trim Saw 1"],
-        "assignments": {"Trim Saw 1": ["Level Two", "Level One"]},
-    })
+    response = client.post(
+        "/api/rotations/validate-current",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "enabled_work_centers": ["Trim Saw 1"],
+            "assignments": {"Trim Saw 1": ["Level Two", "Level One"]},
+        },
+    )
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "issues": [
-        {
-            "code": "no_safe_complete_crew",
-            "message": "Trim Saw 1 cannot form a safe complete crew.",
-            "person": None,
-            "centers": ["Trim Saw 1"],
-            "rejections": [],
-        },
-    ]}
+    assert response.json() == {
+        "ok": True,
+        "issues": [
+            {
+                "code": "no_safe_complete_crew",
+                "message": "Trim Saw 1 cannot form a safe complete crew.",
+                "person": None,
+                "centers": ["Trim Saw 1"],
+                "rejections": [],
+            },
+        ],
+    }
 
 
 def test_live_validation_endpoint_rejects_unknown_center_and_duplicate_names(monkeypatch):
     client, _rotations = _rotations_client(monkeypatch)
 
-    response = client.post("/api/rotations/validate-current", json={
-        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Missing Center"],
-        "assignments": {"Repair 1": ["Alex", "Alex"]},
-    })
+    response = client.post(
+        "/api/rotations/validate-current",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "enabled_work_centers": ["Missing Center"],
+            "assignments": {"Repair 1": ["Alex", "Alex"]},
+        },
+    )
 
     assert response.status_code == 422
     assert response.json()["ok"] is False
@@ -205,10 +218,14 @@ def test_live_validation_endpoint_rejects_unknown_center_and_duplicate_names(mon
 def test_live_validation_endpoint_rejects_duplicate_names_in_known_center(monkeypatch):
     client, _rotations = _rotations_client(monkeypatch)
 
-    response = client.post("/api/rotations/validate-current", json={
-        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Repair 1"],
-        "assignments": {"Repair 1": ["Alex", "Alex"]},
-    })
+    response = client.post(
+        "/api/rotations/validate-current",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "enabled_work_centers": ["Repair 1"],
+            "assignments": {"Repair 1": ["Alex", "Alex"]},
+        },
+    )
 
     assert response.status_code == 422
     assert response.json()["ok"] is False
@@ -228,8 +245,7 @@ def test_live_validation_endpoint_runs_capacity_validation_in_the_worker(monkeyp
         rotations.staffing_route,
         "_configured_center_capacities",
         lambda centers, strict=False: (
-            events.append("capacity_read")
-            or {center: 2 for center in centers}
+            events.append("capacity_read") or {center: 2 for center in centers}
         ),
     )
     monkeypatch.setattr(
@@ -238,10 +254,14 @@ def test_live_validation_endpoint_runs_capacity_validation_in_the_worker(monkeyp
         lambda **_kwargs: events.append("view_validated") or [],
     )
 
-    response = client.post("/api/rotations/validate-current", json={
-        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Repair 1"],
-        "assignments": {"Repair 1": ["Alex"]},
-    })
+    response = client.post(
+        "/api/rotations/validate-current",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "enabled_work_centers": ["Repair 1"],
+            "assignments": {"Repair 1": ["Alex"]},
+        },
+    )
 
     assert response.status_code == 200
     assert events == ["worker_dispatched", "capacity_read", "view_validated"]
@@ -255,10 +275,14 @@ def test_live_validation_endpoint_returns_422_for_worker_capacity_errors(monkeyp
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad capacity")),
     )
 
-    response = client.post("/api/rotations/validate-current", json={
-        "day": TARGET_DAY.isoformat(), "enabled_work_centers": ["Repair 1"],
-        "assignments": {"Repair 1": ["Alex"]},
-    })
+    response = client.post(
+        "/api/rotations/validate-current",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "enabled_work_centers": ["Repair 1"],
+            "assignments": {"Repair 1": ["Alex"]},
+        },
+    )
 
     assert response.status_code == 422
     assert response.json() == {"ok": False, "error": "bad capacity"}
@@ -267,10 +291,14 @@ def test_live_validation_endpoint_returns_422_for_worker_capacity_errors(monkeyp
 def test_current_view_validation_uses_the_visible_safe_trim_saw_crew(monkeypatch):
     from zira_dashboard.routes import staffing as staffing_route
 
-    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
-        _person("Green", 3, "Trim Saw"),
-        _person("Level One", 1, "Trim Saw"),
-    ])
+    monkeypatch.setattr(
+        staffing_route.staffing,
+        "load_roster",
+        lambda: [
+            _person("Green", 3, "Trim Saw"),
+            _person("Level One", 1, "Trim Saw"),
+        ],
+    )
     monkeypatch.setattr(
         staffing_route.scheduler_time_off,
         "time_off_entries_for_day",
@@ -296,7 +324,9 @@ def test_current_view_validation_uses_the_visible_safe_trim_saw_crew(monkeypatch
     monkeypatch.setattr(
         staffing_route.rotation_training,
         "reconcile_blocks",
-        lambda *_args, **_kwargs: pytest.fail("current-view validation must not reconcile training"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "current-view validation must not reconcile training"
+        ),
     )
 
     issues = staffing_route.current_view_validation_for_day(
@@ -322,9 +352,13 @@ def test_current_view_validation_requires_green_partner_for_visible_active_train
         status="active",
         work_center="Repair 1",
     )
-    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
-        _person("Learner", 2),
-    ])
+    monkeypatch.setattr(
+        staffing_route.staffing,
+        "load_roster",
+        lambda: [
+            _person("Learner", 2),
+        ],
+    )
     monkeypatch.setattr(
         staffing_route.scheduler_time_off,
         "time_off_entries_for_day",
@@ -342,7 +376,9 @@ def test_current_view_validation_requires_green_partner_for_visible_active_train
         "_configured_center_capacities",
         lambda centers, strict=False: {center: 2 for center in centers},
     )
-    monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda _day: [block])
+    monkeypatch.setattr(
+        staffing_route.rotation_store, "active_blocks_for_day", lambda _day: [block]
+    )
     monkeypatch.setattr(
         staffing_route.schedule_store,
         "current",
@@ -351,7 +387,9 @@ def test_current_view_validation_requires_green_partner_for_visible_active_train
     monkeypatch.setattr(
         staffing_route.rotation_training,
         "reconcile_blocks",
-        lambda *_args, **_kwargs: pytest.fail("current-view validation must not reconcile training"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "current-view validation must not reconcile training"
+        ),
     )
 
     issues = staffing_route.current_view_validation_for_day(
@@ -361,7 +399,8 @@ def test_current_view_validation_requires_green_partner_for_visible_active_train
     )
 
     assert {issue["code"] for issue in issues} >= {
-        "training_partner_missing", "center_minimum_unmet",
+        "training_partner_missing",
+        "center_minimum_unmet",
     }
 
 
@@ -377,11 +416,13 @@ def test_preference_endpoint_saves_valid(monkeypatch):
     saved: dict = {}
 
     monkeypatch.setattr(
-        rotations.db, "query",
+        rotations.db,
+        "query",
         lambda sql, params=None: [{"id": 7}] if "FROM people" in sql else [],
     )
     monkeypatch.setattr(
-        rotations.staffing, "load_roster",
+        rotations.staffing,
+        "load_roster",
         lambda: [staffing.Person("Alex", skills={"Repair": 1})],
     )
 
@@ -412,7 +453,8 @@ def test_preference_endpoint_rejects_unqualified_target(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     monkeypatch.setattr(rotations.db, "query", lambda sql, params=None: [{"id": 7}])
     monkeypatch.setattr(
-        rotations.staffing, "load_roster",
+        rotations.staffing,
+        "load_roster",
         lambda: [staffing.Person("Alex", skills={"Repair": 0})],
     )
     monkeypatch.setattr(
@@ -437,18 +479,18 @@ def test_preference_endpoint_preserves_invalid_target_validation(monkeypatch):
 
     client, rotations = _rotations_client(monkeypatch)
     monkeypatch.setattr(
-        rotations.db, "query",
+        rotations.db,
+        "query",
         lambda sql, params=None: [{"id": 7}] if "FROM people" in sql else [],
     )
     monkeypatch.setattr(
-        rotations.staffing, "load_roster",
+        rotations.staffing,
+        "load_roster",
         lambda: [staffing.Person("Alex", skills={"Repair": 1})],
     )
 
     def boom(person_id, group, preference):
-        raise rotation_store.InvalidRotationPreference(
-            f"Unknown rotation group: {group!r}"
-        )
+        raise rotation_store.InvalidRotationPreference(f"Unknown rotation group: {group!r}")
 
     monkeypatch.setattr(rotations.rotation_store, "save_preference", boom)
 
@@ -480,11 +522,13 @@ def test_preference_endpoint_invalid_preference_422(monkeypatch):
 
     client, rotations = _rotations_client(monkeypatch)
     monkeypatch.setattr(
-        rotations.db, "query",
+        rotations.db,
+        "query",
         lambda sql, params=None: [{"id": 7}] if "FROM people" in sql else [],
     )
     monkeypatch.setattr(
-        rotations.staffing, "load_roster",
+        rotations.staffing,
+        "load_roster",
         lambda: [staffing.Person("Alex", skills={"Repair": 1})],
     )
 
@@ -563,10 +607,16 @@ def test_training_protocol_endpoint_creates_exact_center_block(monkeypatch):
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
 
-    resp = client.post("/api/rotations/training-blocks", json={
-        "trainee": "Alex", "trainer": "Green", "work_center": "Repair 2",
-        "start_day": "2026-07-14", "workdays": 5,
-    })
+    resp = client.post(
+        "/api/rotations/training-blocks",
+        json={
+            "trainee": "Alex",
+            "trainer": "Green",
+            "work_center": "Repair 2",
+            "start_day": "2026-07-14",
+            "workdays": 5,
+        },
+    )
 
     assert resp.status_code == 200
     assert resp.json()["block"]["work_center"] == "Repair 2"
@@ -581,10 +631,16 @@ def test_training_protocol_endpoint_rejects_unknown_work_center(monkeypatch):
         lambda sql, params=None: [{"id": 1}] if "FROM people" in sql else [],
     )
 
-    resp = client.post("/api/rotations/training-blocks", json={
-        "trainee": "Alex", "trainer": "Green", "work_center": "Nope",
-        "start_day": "2026-07-14", "workdays": 5,
-    })
+    resp = client.post(
+        "/api/rotations/training-blocks",
+        json={
+            "trainee": "Alex",
+            "trainer": "Green",
+            "work_center": "Nope",
+            "start_day": "2026-07-14",
+            "workdays": 5,
+        },
+    )
 
     assert resp.status_code == 422
     assert "work center" in resp.json()["error"].lower()
@@ -618,10 +674,9 @@ def test_training_block_endpoint_rejects_invalid_trainer(monkeypatch):
 def test_training_block_endpoint_success(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     monkeypatch.setattr(
-        rotations.db, "query",
-        lambda sql, params=None: (
-            [{"id": 1}] if "FROM people" in sql else []
-        ),
+        rotations.db,
+        "query",
+        lambda sql, params=None: [{"id": 1}] if "FROM people" in sql else [],
     )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
@@ -635,8 +690,11 @@ def test_training_block_endpoint_success(monkeypatch):
     resp = client.post(
         "/api/rotations/training-blocks",
         json={
-            "trainee": "Alex", "trainer": "Green", "work_center": "Repair 1",
-            "start_day": "2026-07-14", "workdays": 5,
+            "trainee": "Alex",
+            "trainer": "Green",
+            "work_center": "Repair 1",
+            "start_day": "2026-07-14",
+            "workdays": 5,
         },
     )
 
@@ -656,8 +714,11 @@ def test_training_block_endpoint_unknown_person_422(monkeypatch):
     resp = client.post(
         "/api/rotations/training-blocks",
         json={
-            "trainee": "Ghost", "trainer": "Green", "work_center": "Repair 1",
-            "start_day": "2026-07-14", "workdays": 5,
+            "trainee": "Ghost",
+            "trainer": "Green",
+            "work_center": "Repair 1",
+            "start_day": "2026-07-14",
+            "workdays": 5,
         },
     )
     assert resp.status_code == 422
@@ -669,8 +730,11 @@ def test_training_block_endpoint_bad_date_422(monkeypatch):
     resp = client.post(
         "/api/rotations/training-blocks",
         json={
-            "trainee": "Alex", "trainer": "Green", "work_center": "Repair 1",
-            "start_day": "not-a-date", "workdays": 5,
+            "trainee": "Alex",
+            "trainer": "Green",
+            "work_center": "Repair 1",
+            "start_day": "not-a-date",
+            "workdays": 5,
         },
     )
     assert resp.status_code == 422
@@ -683,8 +747,11 @@ def test_training_block_endpoint_bad_workdays_422(monkeypatch, workdays):
     resp = client.post(
         "/api/rotations/training-blocks",
         json={
-            "trainee": "Alex", "trainer": "Green", "work_center": "Repair 1",
-            "start_day": "2026-07-14", "workdays": workdays,
+            "trainee": "Alex",
+            "trainer": "Green",
+            "work_center": "Repair 1",
+            "start_day": "2026-07-14",
+            "workdays": workdays,
         },
     )
     assert resp.status_code == 422
@@ -708,16 +775,19 @@ def test_block_lifecycle_endpoint_success(monkeypatch, action, store_fn, expecte
     client, rotations = _rotations_client(monkeypatch)
     calls: dict = {}
     monkeypatch.setattr(
-        rotations.rotation_store, store_fn,
+        rotations.rotation_store,
+        store_fn,
         lambda block_id: calls.__setitem__("block_id", block_id),
     )
     invalidated: list[str] = []
     monkeypatch.setattr(
-        rotations._http_cache, "invalidate_today_cache",
+        rotations._http_cache,
+        "invalidate_today_cache",
         lambda: invalidated.append("today"),
     )
     monkeypatch.setattr(
-        rotations._http_cache, "invalidate_stable_cache",
+        rotations._http_cache,
+        "invalidate_stable_cache",
         lambda: invalidated.append("stable"),
     )
 
@@ -760,7 +830,8 @@ def _stub_recommendation_inputs(monkeypatch):
 
     monkeypatch.setattr(staffing_route.rotation_store, "load_preferences_by_name", lambda: {})
     monkeypatch.setattr(
-        rotation_suggestions, "_load_recycled_history",
+        rotation_suggestions,
+        "_load_recycled_history",
         lambda d, group_locations=None, user_group_centers=None: (
             rotation_suggestions.RecycledHistory()
         ),
@@ -886,8 +957,8 @@ def test_current_minimum_coverage_excludes_people_who_cannot_cover(monkeypatch):
     monkeypatch.setattr(
         staffing_route.work_centers_store,
         "required_skills",
-        lambda loc: ["Repair"] if loc.name == "Repair 1" else list(
-            staffing.required_skills_for(loc)
+        lambda loc: (
+            ["Repair"] if loc.name == "Repair 1" else list(staffing.required_skills_for(loc))
         ),
     )
     roster = [
@@ -902,7 +973,12 @@ def test_current_minimum_coverage_excludes_people_who_cannot_cover(monkeypatch):
         roster=roster,
         assignments={
             "Repair 1": [
-                "Qualified", "Inactive", "Reserve", "Unqualified", "Absent", "Unknown",
+                "Qualified",
+                "Inactive",
+                "Reserve",
+                "Unqualified",
+                "Absent",
+                "Unknown",
             ],
         },
         time_off_entries=[{"name": "Absent", "hours": None}],
@@ -913,8 +989,7 @@ def test_current_minimum_coverage_excludes_people_who_cannot_cover(monkeypatch):
     assert issues[0].code == "center_minimum_unmet"
     assert issues[0].centers == ("Repair 1",)
     assert issues[0].message == (
-        "Repair 1 is below its minimum staffing level: "
-        "1 qualified and present, minimum 5."
+        "Repair 1 is below its minimum staffing level: 1 qualified and present, minimum 5."
     )
 
 
@@ -945,15 +1020,17 @@ def test_rebuild_infeasible_applies_empty_partial_schedule_and_reports_unplaced(
             available_people=("Gerardo Garcia",),
             placed_people=(),
             unused_people=("Gerardo Garcia",),
-            placement_issues=(schedule_solver.PlacementIssue(
-                code="person_no_enabled_qualified_center",
-                person="Gerardo Garcia",
-                centers=(),
-                message=(
-                    "Gerardo Garcia has no qualified enabled work center. "
-                    "Previous schedule kept."
+            placement_issues=(
+                schedule_solver.PlacementIssue(
+                    code="person_no_enabled_qualified_center",
+                    person="Gerardo Garcia",
+                    centers=(),
+                    message=(
+                        "Gerardo Garcia has no qualified enabled work center. "
+                        "Previous schedule kept."
+                    ),
                 ),
-            ),),
+            ),
         ),
     )
 
@@ -1003,14 +1080,8 @@ def test_rebuild_complete_result_saves_once_and_preserves_metadata(monkeypatch):
         "_recycled_suggestion_for_day",
         lambda *args, **kwargs: rotation_suggestions.RecycledSuggestion(
             assignments={"Repair 1": ["A", "B", "C"]},
-            sources={
-                "Repair 1": {name: "generated" for name in ("A", "B", "C")}
-            },
-            reasons={
-                "Repair 1": {
-                    name: "complete assignment" for name in ("A", "B", "C")
-                }
-            },
+            sources={"Repair 1": {name: "generated" for name in ("A", "B", "C")}},
+            reasons={"Repair 1": {name: "complete assignment" for name in ("A", "B", "C")}},
             warnings=(),
             complete=True,
             available_people=("A", "B", "C"),
@@ -1075,7 +1146,8 @@ def test_normal_rebuild_uses_enabled_auto_centers_to_distribute_defaults(
                     "Repair 2": {"First Repair": "generated"},
                     "Repair 3": {"Second Repair": "generated"},
                 },
-                reasons={}, warnings=(),
+                reasons={},
+                warnings=(),
                 group_locations={"Repair": ("Repair 1", "Repair 2", "Repair 3")},
                 complete=True,
                 available_people=("First Repair", "Second Repair"),
@@ -1199,22 +1271,41 @@ def test_reset_to_defaults_clears_schedule_and_loads_only_defaults(monkeypatch):
     prior = staffing.Schedule(
         day=TARGET_DAY,
         assignments={"Repair 3": ["Old Auto"], "Truck Driver": ["Manual Driver"]},
-        assignment_sources={"Repair 3": {"Old Auto": "generated"}, "Truck Driver": {"Manual Driver": "manual"}},
-        notes="keep", wc_notes={"Repair 1": "keep"}, testing_day=True,
+        assignment_sources={
+            "Repair 3": {"Old Auto": "generated"},
+            "Truck Driver": {"Manual Driver": "manual"},
+        },
+        notes="keep",
+        wc_notes={"Repair 1": "keep"},
+        testing_day=True,
         published_snapshot={"assignments": {"Repair 3": ["Old Auto"]}},
-        custom_hours={"start": "06:00", "end": "14:30", "breaks": []}, rotation_mode="training",
+        custom_hours={"start": "06:00", "end": "14:30", "breaks": []},
+        rotation_mode="training",
     )
     saved = []
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: prior)
     monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
-    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Pinned", 1), _person("Bench", 1)])
+    monkeypatch.setattr(
+        rotations.staffing, "load_roster", lambda: [_person("Pinned", 1), _person("Bench", 1)]
+    )
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
-    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _day: {"Repair 1", "Repair 2"})
-    monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({"Repair 1": ("Pinned",)}, {}, {}))
-    monkeypatch.setattr(staffing_route, "_configured_center_capacities", lambda centers, strict=False: {center: 3 for center in centers})
+    monkeypatch.setattr(
+        staffing_route, "_enabled_auto_work_centers", lambda _day: {"Repair 1", "Repair 2"}
+    )
+    monkeypatch.setattr(
+        staffing_route, "_default_inputs", lambda strict=False: ({"Repair 1": ("Pinned",)}, {}, {})
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "_configured_center_capacities",
+        lambda centers, strict=False: {center: 3 for center in centers},
+    )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
-    response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True},
+    )
 
     assert response.status_code == 200
     assert len(saved) == 1
@@ -1239,13 +1330,25 @@ def test_reset_to_defaults_does_not_run_the_auto_solver(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     saved = []
-    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=TARGET_DAY))
+    monkeypatch.setattr(
+        rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=TARGET_DAY)
+    )
     monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
-    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Pinned", 3), _person("Extra", 3)])
+    monkeypatch.setattr(
+        rotations.staffing, "load_roster", lambda: [_person("Pinned", 3), _person("Extra", 3)]
+    )
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
-    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _day: {"Repair 1", "Repair 2"})
-    monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({"Repair 1": ("Pinned",)}, {}, {}))
-    monkeypatch.setattr(staffing_route, "_configured_center_capacities", lambda centers, strict=False: {center: 3 for center in centers})
+    monkeypatch.setattr(
+        staffing_route, "_enabled_auto_work_centers", lambda _day: {"Repair 1", "Repair 2"}
+    )
+    monkeypatch.setattr(
+        staffing_route, "_default_inputs", lambda strict=False: ({"Repair 1": ("Pinned",)}, {}, {})
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "_configured_center_capacities",
+        lambda centers, strict=False: {center: 3 for center in centers},
+    )
 
     def _boom(*_args, **_kwargs):
         raise AssertionError("reset must not call the auto solver")
@@ -1253,7 +1356,10 @@ def test_reset_to_defaults_does_not_run_the_auto_solver(monkeypatch):
     monkeypatch.setattr(staffing_route, "_recycled_suggestion_for_day", _boom)
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
-    response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True},
+    )
 
     assert response.status_code == 200
     # "Extra" is qualified but not a default, so it stays unscheduled.
@@ -1280,7 +1386,10 @@ def test_reset_to_defaults_with_no_defaults_clears_to_empty(monkeypatch):
     monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({}, {}, {}))
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
-    response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True},
+    )
 
     assert response.status_code == 200
     assert len(saved) == 1
@@ -1295,7 +1404,9 @@ def test_goal_button_rebuild_still_staffs_to_minimum_crew(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     captured = {}
-    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=TARGET_DAY))
+    monkeypatch.setattr(
+        rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=TARGET_DAY)
+    )
     monkeypatch.setattr(rotations.staffing, "save_schedule", lambda _sched: None)
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Rotate", 3)])
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
@@ -1314,7 +1425,9 @@ def test_goal_button_rebuild_still_staffs_to_minimum_crew(monkeypatch):
     )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
-    response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal"})
+    response = client.post(
+        "/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal"}
+    )
 
     assert response.status_code == 200
     assert captured["minimum_only"] is True
@@ -1324,18 +1437,47 @@ def test_reset_to_defaults_spreads_group_people_across_enabled_auto_centers(monk
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     saved = []
-    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=TARGET_DAY))
+    monkeypatch.setattr(
+        rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=TARGET_DAY)
+    )
     monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
-    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Ana", 1), _person("Bob", 1), _person("Cara", 1)])
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_roster",
+        lambda: [_person("Ana", 1), _person("Bob", 1), _person("Cara", 1)],
+    )
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
-    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda _day: {"Repair 1", "Repair 2", "Repair 3"})
-    monkeypatch.setattr(staffing_route, "_default_inputs", lambda strict=False: ({}, {"Repair": ("Ana", "Bob", "Cara")}, {"Repair": ("Repair 1", "Repair 2", "Repair 3")}))
+    monkeypatch.setattr(
+        staffing_route,
+        "_enabled_auto_work_centers",
+        lambda _day: {"Repair 1", "Repair 2", "Repair 3"},
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "_default_inputs",
+        lambda strict=False: (
+            {},
+            {"Repair": ("Ana", "Bob", "Cara")},
+            {"Repair": ("Repair 1", "Repair 2", "Repair 3")},
+        ),
+    )
     # Capacities must not force this distribution: least-load selection should.
-    monkeypatch.setattr(staffing_route, "_configured_center_capacities", lambda centers, strict=False: {center: 3 for center in centers})
-    monkeypatch.setattr(rotation_suggestions, "_load_recycled_history", lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory())
+    monkeypatch.setattr(
+        staffing_route,
+        "_configured_center_capacities",
+        lambda centers, strict=False: {center: 3 for center in centers},
+    )
+    monkeypatch.setattr(
+        rotation_suggestions,
+        "_load_recycled_history",
+        lambda *_args, **_kwargs: rotation_suggestions.RecycledHistory(),
+    )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
-    response = client.post("/api/rotations/rebuild", json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True})
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True},
+    )
 
     assert response.status_code == 200
     placed = saved[0].assignments
@@ -1374,7 +1516,8 @@ def test_rebuild_rejects_non_boolean_reset_flag(monkeypatch):
 
 @pytest.mark.parametrize("failed_read", ["time_off", "defaults", "minimum", "maximum"])
 def test_rebuild_fails_closed_before_solving_when_authoritative_input_read_fails(
-    monkeypatch, failed_read,
+    monkeypatch,
+    failed_read,
 ):
     client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
@@ -1487,7 +1630,8 @@ def test_rebuild_generates_and_reports_reasons(monkeypatch):
     saved: list = []
     sched = staffing.Schedule(day=TARGET_DAY, assignments={})
     monkeypatch.setattr(
-        rotations.staffing, "load_roster",
+        rotations.staffing,
+        "load_roster",
         lambda: [_person("Green One", 3), _person("Green Two", 3)],
     )
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: sched)
@@ -1541,11 +1685,13 @@ def test_rebuild_applies_safe_partial_assignments_and_reports_unplaced(monkeypat
         available_people=("Qualified", "Missing"),
         placed_people=("Qualified",),
         unused_people=("Missing",),
-        placement_issues=(schedule_solver.PlacementIssue(
-            code="person_no_enabled_qualified_center",
-            person="Missing",
-            message="Missing cannot be safely assigned. Previous schedule kept.",
-        ),),
+        placement_issues=(
+            schedule_solver.PlacementIssue(
+                code="person_no_enabled_qualified_center",
+                person="Missing",
+                message="Missing cannot be safely assigned. Previous schedule kept.",
+            ),
+        ),
     )
     sched = staffing.Schedule(
         day=TARGET_DAY,
@@ -1564,7 +1710,9 @@ def test_rebuild_applies_safe_partial_assignments_and_reports_unplaced(monkeypat
         "_enabled_auto_work_centers",
         lambda _d: {"Repair 1", "Dismantler 1"},
     )
-    monkeypatch.setattr(rotations.staffing_route.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store, "default_people", lambda _loc: []
+    )
     monkeypatch.setattr(
         rotations.staffing_route.work_centers_store, "group_defaults_map", lambda: {}
     )
@@ -1600,26 +1748,8 @@ def test_rebuild_applies_safe_partial_assignments_and_reports_unplaced(monkeypat
     assert body["applied"] is True
     assert body["assignments"]["Repair 1"] == ["Qualified"]
     assert body["unplaced"] == ["Missing"]
-    assert body["placement"]["issues"][0]["code"] == (
-        "person_no_enabled_qualified_center"
-    )
+    assert body["placement"]["issues"][0]["code"] == ("person_no_enabled_qualified_center")
     assert saved[0].assignments["Repair 1"] == ["Qualified"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_recycled_context_reports_invalid_minimum_above_maximum(monkeypatch):
@@ -1645,7 +1775,8 @@ def test_recycled_context_reports_invalid_minimum_above_maximum(monkeypatch):
     )
 
     invalid_configuration = next(
-        issue for issue in context["rotation_issues"]
+        issue
+        for issue in context["rotation_issues"]
         if issue["code"] == "invalid_center_configuration"
     )
     assert "minimum of 2 but a maximum of 1" in invalid_configuration["message"]
@@ -1664,13 +1795,17 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
     monkeypatch.setattr(
         staffing_route.work_centers_store,
         "required_skills",
-        lambda loc: ["Repair"] if loc.name == "Repair 1" else list(
-            staffing.required_skills_for(loc)
+        lambda loc: (
+            ["Repair"] if loc.name == "Repair 1" else list(staffing.required_skills_for(loc))
         ),
     )
-    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
-        _person("Qualified", 3),
-    ])
+    monkeypatch.setattr(
+        staffing_route.staffing,
+        "load_roster",
+        lambda: [
+            _person("Qualified", 3),
+        ],
+    )
     monkeypatch.setattr(
         rotation_suggestions,
         "suggest_recycled_assignments",
@@ -1680,12 +1815,14 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
             reasons={},
             warnings=(preview_message, "Keep this training warning."),
             group_locations={"Repair": ("Repair 1",)},
-            issues=(schedule_solver.CoverageIssue(
-                center="Repair 1",
-                group="Repair",
-                code="stale_preview_issue",
-                message="Stale Auto proposal issue.",
-            ),),
+            issues=(
+                schedule_solver.CoverageIssue(
+                    center="Repair 1",
+                    group="Repair",
+                    code="stale_preview_issue",
+                    message="Stale Auto proposal issue.",
+                ),
+            ),
             placement_issues=(
                 schedule_solver.PlacementIssue(
                     code="center_minimum_unmet",
@@ -1695,9 +1832,7 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
                 schedule_solver.PlacementIssue(
                     code="person_unplaced",
                     person="Preview Person",
-                    message=(
-                        "Preview Person could not be placed in an enabled Auto work center."
-                    ),
+                    message=("Preview Person could not be placed in an enabled Auto work center."),
                 ),
             ),
         ),
@@ -1768,16 +1903,21 @@ def test_page_placement_issues_hide_only_disabled_defaults_on_off_saturday():
     from zira_dashboard.routes import staffing as staffing_route
 
     disabled_default = schedule_solver.PlacementIssue(
-        code="exact_default_center_disabled", person="Ana", centers=("Repair 1",),
+        code="exact_default_center_disabled",
+        person="Ana",
+        centers=("Repair 1",),
         message="Ana's default work center Repair 1 is not enabled.",
     )
     unrelated = schedule_solver.PlacementIssue(
-        code="exact_default_unqualified", person="Ben", centers=("Repair 2",),
+        code="exact_default_unqualified",
+        person="Ben",
+        centers=("Repair 2",),
         message="Ben is not qualified for default work center Repair 2.",
     )
 
     assert staffing_route._page_placement_issues_for_day(
-        date(2026, 7, 18), frozenset({0, 1, 2, 3, 4}),
+        date(2026, 7, 18),
+        frozenset({0, 1, 2, 3, 4}),
         (disabled_default, unrelated),
     ) == (unrelated,)
 
@@ -1790,17 +1930,22 @@ def test_page_placement_issues_hide_only_disabled_defaults_on_off_saturday():
     ],
 )
 def test_page_placement_issues_keep_disabled_defaults_on_working_days(
-    day, work_weekdays,
+    day,
+    work_weekdays,
 ):
     from zira_dashboard.routes import staffing as staffing_route
 
     issue = schedule_solver.PlacementIssue(
-        code="exact_default_center_disabled", person="Ana", centers=("Repair 1",),
+        code="exact_default_center_disabled",
+        person="Ana",
+        centers=("Repair 1",),
         message="Ana's default work center Repair 1 is not enabled.",
     )
 
     assert staffing_route._page_placement_issues_for_day(
-        day, work_weekdays, (issue,),
+        day,
+        work_weekdays,
+        (issue,),
     ) == (issue,)
 
 
@@ -1814,13 +1959,17 @@ def test_recycled_context_uses_current_validation_when_auto_preview_is_unavailab
     monkeypatch.setattr(
         staffing_route.work_centers_store,
         "required_skills",
-        lambda loc: ["Repair"] if loc.name == "Repair 1" else list(
-            staffing.required_skills_for(loc)
+        lambda loc: (
+            ["Repair"] if loc.name == "Repair 1" else list(staffing.required_skills_for(loc))
         ),
     )
-    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
-        _person("Qualified", 3),
-    ])
+    monkeypatch.setattr(
+        staffing_route.staffing,
+        "load_roster",
+        lambda: [
+            _person("Qualified", 3),
+        ],
+    )
 
     def preview_unavailable(**_kwargs):
         raise RuntimeError("preview unavailable")
@@ -1845,10 +1994,9 @@ def test_recycled_context_uses_current_validation_when_auto_preview_is_unavailab
     )
 
     assert {issue["code"] for issue in context["rotation_issues"]} == {
-        "center_minimum_unmet", "person_unplaced",
+        "center_minimum_unmet",
+        "person_unplaced",
     }
-
-
 
 
 def test_rebuild_uses_enabled_new_work_center_and_leaves_disabled_recycled(monkeypatch):
@@ -1893,7 +2041,9 @@ def test_rebuild_treats_default_people_as_exact_generated_anchors(monkeypatch):
         staffing.Person(name="Default Green", skills={"Repair": 3}),
         staffing.Person(name="Other Green", skills={"Repair": 3}),
     ]
-    monkeypatch.setattr(staffing_route, "_enabled_auto_work_centers", lambda d: {"Repair 1", "Repair 2"})
+    monkeypatch.setattr(
+        staffing_route, "_enabled_auto_work_centers", lambda d: {"Repair 1", "Repair 2"}
+    )
     monkeypatch.setattr(
         staffing_route.work_centers_store,
         "default_people",
@@ -1946,10 +2096,16 @@ def test_auto_work_centers_endpoint_saves_daily_schedule(monkeypatch):
         "_recycled_suggestion_for_day",
         lambda *args, **kwargs: rotation_suggestions.RecycledSuggestion({}, {}, {}, ()),
     )
-    monkeypatch.setattr(rotations.staffing_route.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store, "default_people", lambda _loc: []
+    )
     monkeypatch.setattr(rotations.db, "cursor", lambda: nullcontext(object()))
-    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: invalidated.append("today"))
-    monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: invalidated.append("stable"))
+    monkeypatch.setattr(
+        rotations._http_cache, "invalidate_today_cache", lambda: invalidated.append("today")
+    )
+    monkeypatch.setattr(
+        rotations._http_cache, "invalidate_stable_cache", lambda: invalidated.append("stable")
+    )
 
     resp = client.post(
         "/api/rotations/auto-work-centers",
@@ -1972,10 +2128,12 @@ def test_auto_work_center_save_isolated_to_requested_day(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     first = staffing.Schedule(
-        day=date(2026, 7, 14), auto_enabled_work_centers=["Repair 1"],
+        day=date(2026, 7, 14),
+        auto_enabled_work_centers=["Repair 1"],
     )
     second = staffing.Schedule(
-        day=date(2026, 7, 15), auto_enabled_work_centers=["Repair 2"],
+        day=date(2026, 7, 15),
+        auto_enabled_work_centers=["Repair 2"],
     )
     saved = []
 
@@ -1999,9 +2157,14 @@ def test_auto_work_center_save_isolated_to_requested_day(monkeypatch):
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": first.day.isoformat(), "work_centers": ["Repair 3"], "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": first.day.isoformat(),
+            "work_centers": ["Repair 3"],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 200
     assert saved[-1].day == first.day
@@ -2023,9 +2186,13 @@ def test_auto_work_centers_endpoint_removes_non_empty_turn_off_selection(monkeyp
         lambda d: staffing.Schedule(day=d),
     )
     monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda d: [])
-    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule))
+    monkeypatch.setattr(
+        rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule)
+    )
     monkeypatch.setattr(rotations.db, "cursor", lambda: nullcontext(object()))
-    monkeypatch.setattr(rotations.staffing_route.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store, "default_people", lambda _loc: []
+    )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
 
@@ -2063,11 +2230,14 @@ def test_auto_work_centers_turning_off_a_populated_center_clears_its_draft_assig
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": TARGET_DAY.isoformat(),
-        "work_centers": ["Repair 1"],
-        "turn_off": ["Work Orders"],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "work_centers": ["Repair 1"],
+            "turn_off": ["Work Orders"],
+        },
+    )
 
     assert response.status_code == 200
     assert response.json()["assignments"] == {"Repair 1": ["Jordan"]}
@@ -2088,7 +2258,9 @@ def test_auto_center_selection_saves_quietly_without_solver_preview(monkeypatch)
         "_recycled_suggestion_for_day",
         lambda *args, **kwargs: pytest.fail("toggle must not build a solver preview"),
     )
-    monkeypatch.setattr(rotations.staffing_route.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store, "default_people", lambda _loc: []
+    )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Qualified", 3)])
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: staffing.Schedule(day=d))
     monkeypatch.setattr(
@@ -2099,11 +2271,14 @@ def test_auto_center_selection_saves_quietly_without_solver_preview(monkeypatch)
     monkeypatch.setattr(rotations.db, "cursor", lambda: nullcontext(object()))
     monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda d: [])
 
-    resp = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-14",
-        "work_centers": ["Repair 1", "Dismantler 1"],
-        "turn_off": [],
-    })
+    resp = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-14",
+            "work_centers": ["Repair 1", "Dismantler 1"],
+            "turn_off": [],
+        },
+    )
 
     assert resp.status_code == 200
     assert saved[-1].auto_enabled_work_centers == ["Repair 1", "Dismantler 1"]
@@ -2141,15 +2316,20 @@ def test_auto_center_selection_persists_posted_schedule_as_draft_first(monkeypat
     )
     monkeypatch.setattr(scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
     monkeypatch.setattr(rotations.db, "cursor", lambda: nullcontext(object()))
-    monkeypatch.setattr(rotations.staffing_route.work_centers_store, "default_people", lambda _loc: [])
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store, "default_people", lambda _loc: []
+    )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-14",
-        "work_centers": ["Repair 1"],
-        "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-14",
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 200
     assert events == ["schedule"]
@@ -2166,7 +2346,9 @@ def test_auto_center_endpoint_saves_when_minimum_lookup_fails(monkeypatch):
     client, rotations = _rotations_client(monkeypatch, raise_server_exceptions=False)
     _stub_recommendation_inputs(monkeypatch)
     saved = []
-    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green", 3, "Hand Build")])
+    monkeypatch.setattr(
+        rotations.staffing, "load_roster", lambda: [_person("Green", 3, "Hand Build")]
+    )
     monkeypatch.setattr(
         rotations.staffing,
         "load_schedule",
@@ -2178,14 +2360,19 @@ def test_auto_center_endpoint_saves_when_minimum_lookup_fails(monkeypatch):
         "min_ops",
         lambda loc: (_ for _ in ()).throw(RuntimeError("settings unavailable")),
     )
-    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule))
+    monkeypatch.setattr(
+        rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule)
+    )
     monkeypatch.setattr(rotations.db, "cursor", lambda: nullcontext(object()))
 
-    resp = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-14",
-        "work_centers": ["Hand Build #2"],
-        "turn_off": [],
-    })
+    resp = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-14",
+            "work_centers": ["Hand Build #2"],
+            "turn_off": [],
+        },
+    )
 
     assert resp.status_code == 200
     assert saved[-1].auto_enabled_work_centers == ["Hand Build #2"]
@@ -2210,8 +2397,12 @@ def test_auto_center_endpoint_saves_when_training_effect_read_fails(monkeypatch)
         "active_blocks_for_day",
         lambda _d: (_ for _ in ()).throw(RuntimeError("blocks unavailable")),
     )
-    monkeypatch.setattr(rotations.staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
-    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule))
+    monkeypatch.setattr(
+        rotations.staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops
+    )
+    monkeypatch.setattr(
+        rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule)
+    )
     monkeypatch.setattr(rotations.db, "cursor", lambda: nullcontext(object()))
     monkeypatch.setattr(
         rotations._http_cache,
@@ -2224,11 +2415,14 @@ def test_auto_center_endpoint_saves_when_training_effect_read_fails(monkeypatch)
         lambda: invalidated.append("stable"),
     )
 
-    resp = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-14",
-        "work_centers": ["Repair 1"],
-        "turn_off": [],
-    })
+    resp = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-14",
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
 
     assert resp.status_code == 200
     assert saved[-1].auto_enabled_work_centers == ["Repair 1"]
@@ -2251,14 +2445,19 @@ def test_auto_center_endpoint_fails_closed_when_time_off_read_fails(monkeypatch)
         "time_off_entries_for_day",
         lambda d: (_ for _ in ()).throw(RuntimeError("time off unavailable")),
     )
-    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule))
+    monkeypatch.setattr(
+        rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule)
+    )
     monkeypatch.setattr(rotations.db, "cursor", lambda: nullcontext(object()))
 
-    resp = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-14",
-        "work_centers": ["Repair 1"],
-        "turn_off": [],
-    })
+    resp = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-14",
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
 
     assert resp.status_code == 503
     assert saved == []
@@ -2281,14 +2480,19 @@ def test_auto_center_endpoint_saves_when_default_read_fails(monkeypatch):
         "default_people",
         lambda loc: (_ for _ in ()).throw(RuntimeError("defaults unavailable")),
     )
-    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule))
+    monkeypatch.setattr(
+        rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule)
+    )
     monkeypatch.setattr(rotations.db, "cursor", lambda: nullcontext(object()))
 
-    resp = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-14",
-        "work_centers": ["Repair 1"],
-        "turn_off": [],
-    })
+    resp = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-14",
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
 
     assert resp.status_code == 200
     assert saved[-1].auto_enabled_work_centers == ["Repair 1"]
@@ -2316,17 +2520,22 @@ def test_auto_work_centers_persists_selection_on_saturday(monkeypatch):
         "_recycled_suggestion_for_day",
         lambda *args, **kwargs: rotation_suggestions.RecycledSuggestion({}, {}, {}, ()),
     )
-    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule))
+    monkeypatch.setattr(
+        rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule)
+    )
     monkeypatch.setattr(rotations.db, "cursor", _RouteTransaction)
     monkeypatch.setattr(rotations.saturday_recruiting_store, "get", lambda day, *, cur: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-18",
-        "work_centers": ["Repair 1"],
-        "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-18",
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 200
     assert response.json()["enabled_work_centers"] == ["Repair 1"]
@@ -2338,28 +2547,51 @@ def test_auto_work_centers_updates_open_saturday_recruiting_demand(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     bundle = SimpleNamespace(
         recruitment=SimpleNamespace(
-            day=date(2026, 7, 18), day_kind="saturday", holiday_odoo_id=None,
-            status="recruiting", shift_start=time(6), shift_end=time(12),
+            day=date(2026, 7, 18),
+            day_kind="saturday",
+            holiday_odoo_id=None,
+            status="recruiting",
+            shift_start=time(6),
+            shift_end=time(12),
         ),
     )
     updated = []
     monkeypatch.setattr(rotations.db, "cursor", _RouteTransaction)
     monkeypatch.setattr(rotations.saturday_recruiting_store, "get", lambda day, *, cur: bundle)
-    monkeypatch.setattr(rotations.staffing_route, "_saturday_recruit_requested_counts", lambda enabled: {17: 2, 18: 1})
-    monkeypatch.setattr(rotations.saturday_recruiting_store, "update_openings", lambda **kwargs: updated.append(kwargs) or bundle)
-    monkeypatch.setattr(rotations.saturday_recruiting_store, "serialize_bundle", lambda bundle: {"updated": True})
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_saturday_recruit_requested_counts",
+        lambda enabled: {17: 2, 18: 1},
+    )
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store,
+        "update_openings",
+        lambda **kwargs: updated.append(kwargs) or bundle,
+    )
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store, "serialize_bundle", lambda bundle: {"updated": True}
+    )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: staffing.Schedule(day=d))
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda d: [])
     monkeypatch.setattr(rotations.staffing, "save_schedule", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_for_day", lambda **kwargs: ())
-    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_payload", lambda balance: {})
+    monkeypatch.setattr(
+        rotations.staffing_route, "_minimum_crew_balance_for_day", lambda **kwargs: ()
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route, "_minimum_crew_balance_payload", lambda balance: {}
+    )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-18", "work_centers": ["Repair 1", "Repair 2"], "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-18",
+            "work_centers": ["Repair 1", "Repair 2"],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 200
     assert updated[0]["requested_counts"] == {17: 2, 18: 1}
@@ -2372,8 +2604,12 @@ def test_auto_work_centers_allows_toggling_after_saturday_recruiting_closes(monk
     client, rotations = _rotations_client(monkeypatch)
     bundle = SimpleNamespace(
         recruitment=SimpleNamespace(
-            day=date(2026, 7, 18), day_kind="saturday", holiday_odoo_id=None,
-            status="closed", shift_start=time(6), shift_end=time(12),
+            day=date(2026, 7, 18),
+            day_kind="saturday",
+            holiday_odoo_id=None,
+            status="closed",
+            shift_start=time(6),
+            shift_end=time(12),
         ),
     )
     saved: list[staffing.Schedule] = []
@@ -2384,19 +2620,32 @@ def test_auto_work_centers_allows_toggling_after_saturday_recruiting_closes(monk
         "update_openings",
         lambda **kwargs: pytest.fail("closed recruiting must not be expanded by a center toggle"),
     )
-    monkeypatch.setattr(rotations.saturday_recruiting_store, "serialize_bundle", lambda _: {"closed": True})
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store, "serialize_bundle", lambda _: {"closed": True}
+    )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: staffing.Schedule(day=d))
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda d: [])
-    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule))
-    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_for_day", lambda **kwargs: ())
-    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_payload", lambda balance: {})
+    monkeypatch.setattr(
+        rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule)
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route, "_minimum_crew_balance_for_day", lambda **kwargs: ()
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route, "_minimum_crew_balance_payload", lambda balance: {}
+    )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-18", "work_centers": ["Junior #3"], "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-18",
+            "work_centers": ["Junior #3"],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 200
     assert saved[-1].auto_enabled_work_centers == ["Junior #3"]
@@ -2408,24 +2657,39 @@ def test_auto_work_centers_rejects_saturday_toggle_that_breaks_commitments(monke
     saved = []
     bundle = SimpleNamespace(
         recruitment=SimpleNamespace(
-            day=date(2026, 7, 18), day_kind="saturday", holiday_odoo_id=None,
-            status="recruiting", shift_start=time(6), shift_end=time(12),
+            day=date(2026, 7, 18),
+            day_kind="saturday",
+            holiday_odoo_id=None,
+            status="recruiting",
+            shift_start=time(6),
+            shift_end=time(12),
         ),
     )
     monkeypatch.setattr(rotations.db, "cursor", _RouteTransaction)
     monkeypatch.setattr(rotations.saturday_recruiting_store, "get", lambda day, *, cur: bundle)
-    monkeypatch.setattr(rotations.saturday_recruiting_store, "serialize_bundle", lambda bundle: {"updated": True})
-    monkeypatch.setattr(rotations.staffing_route, "_saturday_recruit_requested_counts", lambda enabled: {})
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store, "serialize_bundle", lambda bundle: {"updated": True}
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route, "_saturday_recruit_requested_counts", lambda enabled: {}
+    )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: staffing.Schedule(day=d))
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda d: [])
-    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule))
-    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_for_day", lambda **kwargs: ())
-    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_payload", lambda balance: {})
+    monkeypatch.setattr(
+        rotations.staffing, "save_schedule", lambda schedule, **_kwargs: saved.append(schedule)
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route, "_minimum_crew_balance_for_day", lambda **kwargs: ()
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route, "_minimum_crew_balance_payload", lambda balance: {}
+    )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
     monkeypatch.setattr(
-        rotations.saturday_recruiting_store, "update_openings",
+        rotations.saturday_recruiting_store,
+        "update_openings",
         lambda **kwargs: (_ for _ in ()).throw(
             rotations.saturday_recruiting_store.LifecycleConflict(
                 "Requested openings cannot drop below committed Saturday coverage"
@@ -2433,9 +2697,14 @@ def test_auto_work_centers_rejects_saturday_toggle_that_breaks_commitments(monke
         ),
     )
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-18", "work_centers": [], "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-18",
+            "work_centers": [],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 409
     assert "committed Saturday coverage" in response.json()["error"]
@@ -2461,8 +2730,12 @@ def test_auto_work_centers_rolls_back_recruiting_when_schedule_persist_fails(mon
     transaction = Transaction()
     bundle = SimpleNamespace(
         recruitment=SimpleNamespace(
-            day=date(2026, 7, 18), day_kind="saturday", holiday_odoo_id=None,
-            status="recruiting", shift_start=time(6), shift_end=time(12),
+            day=date(2026, 7, 18),
+            day_kind="saturday",
+            holiday_odoo_id=None,
+            status="recruiting",
+            shift_start=time(6),
+            shift_end=time(12),
         ),
     )
     monkeypatch.setattr(rotations.db, "cursor", lambda: transaction)
@@ -2472,7 +2745,9 @@ def test_auto_work_centers_rolls_back_recruiting_when_schedule_persist_fails(mon
         "update_openings",
         lambda **kwargs: persisted.update(recruiting=kwargs["requested_counts"]) or bundle,
     )
-    monkeypatch.setattr(rotations.staffing_route, "_saturday_recruit_requested_counts", lambda enabled: {17: 3})
+    monkeypatch.setattr(
+        rotations.staffing_route, "_saturday_recruit_requested_counts", lambda enabled: {17: 3}
+    )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: staffing.Schedule(day=d))
     monkeypatch.setattr(
@@ -2482,9 +2757,14 @@ def test_auto_work_centers_rolls_back_recruiting_when_schedule_persist_fails(mon
     )
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda d: [])
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-18", "work_centers": ["Repair 1"], "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-18",
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 503
     assert persisted == {"recruiting": {17: 1}, "enabled": ["Repair 1"]}
@@ -2522,11 +2802,14 @@ def test_auto_work_centers_rolls_back_assignment_clear_when_schedule_persist_fai
         )[-1],
     )
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": TARGET_DAY.isoformat(),
-        "work_centers": ["Repair 1"],
-        "turn_off": ["Work Orders"],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "work_centers": ["Repair 1"],
+            "turn_off": ["Work Orders"],
+        },
+    )
 
     assert response.status_code == 503
     assert persisted == {
@@ -2542,18 +2825,30 @@ def test_auto_work_centers_uses_real_saturday_demand_derivation(monkeypatch):
     transaction = _RouteTransaction()
     bundle = SimpleNamespace(
         recruitment=SimpleNamespace(
-            day=date(2026, 7, 18), day_kind="saturday", holiday_odoo_id=None,
-            status="recruiting", shift_start=time(6), shift_end=time(12),
+            day=date(2026, 7, 18),
+            day_kind="saturday",
+            holiday_odoo_id=None,
+            status="recruiting",
+            shift_start=time(6),
+            shift_end=time(12),
         ),
     )
-    repair_1 = staffing.Location("Repair 1", "Repair", "Bay", "Recycled", None, min_ops=1, max_ops=4)
-    repair_2 = staffing.Location("Repair 2", "Repair", "Bay", "Recycled", None, min_ops=1, max_ops=4)
-    repair_3 = staffing.Location("Repair 3", "Repair", "Bay", "Recycled", None, min_ops=1, max_ops=4)
+    repair_1 = staffing.Location(
+        "Repair 1", "Repair", "Bay", "Recycled", None, min_ops=1, max_ops=4
+    )
+    repair_2 = staffing.Location(
+        "Repair 2", "Repair", "Bay", "Recycled", None, min_ops=1, max_ops=4
+    )
+    repair_3 = staffing.Location(
+        "Repair 3", "Repair", "Bay", "Recycled", None, min_ops=1, max_ops=4
+    )
     captured = {}
     monkeypatch.setattr(rotations.db, "cursor", lambda: transaction)
     monkeypatch.setattr(rotations.saturday_recruiting_store, "get", lambda day, *, cur: bundle)
     monkeypatch.setattr(
-        rotations.saturday_recruiting_store, "available_positions", lambda: (
+        rotations.saturday_recruiting_store,
+        "available_positions",
+        lambda: (
             store.AvailablePosition(17, "Repair 1", ("Repair",)),
             store.AvailablePosition(18, "Repair 2", ("Repair",)),
             store.AvailablePosition(19, "Repair 3", ("Repair",)),
@@ -2561,26 +2856,39 @@ def test_auto_work_centers_uses_real_saturday_demand_derivation(monkeypatch):
     )
     monkeypatch.setattr(rotations.staffing, "LOCATIONS", (repair_1, repair_2, repair_3))
     monkeypatch.setattr(
-        rotations.staffing_route.work_centers_store, "min_ops",
+        rotations.staffing_route.work_centers_store,
+        "min_ops",
         lambda loc: {"Repair 1": 3, "Repair 2": 0, "Repair 3": 5}[loc.name],
     )
     monkeypatch.setattr(
-        rotations.saturday_recruiting_store, "update_openings",
+        rotations.saturday_recruiting_store,
+        "update_openings",
         lambda **kwargs: captured.update(kwargs) or bundle,
     )
-    monkeypatch.setattr(rotations.saturday_recruiting_store, "serialize_bundle", lambda _: {"updated": True})
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store, "serialize_bundle", lambda _: {"updated": True}
+    )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: staffing.Schedule(day=d))
     monkeypatch.setattr(rotations.staffing, "save_schedule", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda d: [])
-    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_for_day", lambda **kwargs: ())
-    monkeypatch.setattr(rotations.staffing_route, "_minimum_crew_balance_payload", lambda balance: {})
+    monkeypatch.setattr(
+        rotations.staffing_route, "_minimum_crew_balance_for_day", lambda **kwargs: ()
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route, "_minimum_crew_balance_payload", lambda balance: {}
+    )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
     monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": "2026-07-18", "work_centers": ["Repair 1", "Repair 2"], "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": "2026-07-18",
+            "work_centers": ["Repair 1", "Repair 2"],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 200
     assert captured["requested_counts"] == {17: 3}
@@ -2598,12 +2906,23 @@ def test_rebuild_persists_schedule_on_saturday(monkeypatch):
     )
     saturday_bundle = saturday_recruiting_store.RecruitmentBundle(
         recruitment=saturday_recruiting_store.Recruitment(
-            saturday, "closed", time(6), time(12), datetime.now(), datetime.now(),
+            saturday,
+            "closed",
+            time(6),
+            time(12),
+            datetime.now(),
+            datetime.now(),
         ),
         openings=(),
         commitments=(
             saturday_recruiting_store.StoredCommitment(
-                1, 1, "Green", "committed", time(6), time(12), frozenset(),
+                1,
+                1,
+                "Green",
+                "committed",
+                time(6),
+                time(12),
+                frozenset(),
             ),
         ),
     )
@@ -2641,10 +2960,13 @@ def test_rebuild_persists_schedule_on_saturday(monkeypatch):
     )
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
 
-    response = client.post("/api/rotations/rebuild", json={
-        "day": saturday.isoformat(),
-        "mode": "normal",
-    })
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={
+            "day": saturday.isoformat(),
+            "mode": "normal",
+        },
+    )
 
     assert response.status_code == 200
     assert response.json()["applied"] is True
@@ -2657,7 +2979,11 @@ def test_saturday_auto_rejects_before_recruiting_has_closed(monkeypatch):
     saturday = date(2026, 7, 18)
     bundle = saturday_recruiting_store.RecruitmentBundle(
         recruitment=saturday_recruiting_store.Recruitment(
-            saturday, "recruiting", time(6), time(12), datetime.now(),
+            saturday,
+            "recruiting",
+            time(6),
+            time(12),
+            datetime.now(),
         ),
         openings=(),
         commitments=(),
@@ -2667,12 +2993,18 @@ def test_saturday_auto_rejects_before_recruiting_has_closed(monkeypatch):
         "get",
         lambda _day, **_kwargs: bundle,
     )
-    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=saturday))
+    monkeypatch.setattr(
+        rotations.staffing, "load_schedule", lambda _day: staffing.Schedule(day=saturday)
+    )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green", 3)])
 
-    response = client.post("/api/rotations/rebuild", json={
-        "day": saturday.isoformat(), "mode": "normal",
-    })
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={
+            "day": saturday.isoformat(),
+            "mode": "normal",
+        },
+    )
 
     assert response.status_code == 422
     assert response.json()["error"] == "Saturday recruiting must close before Auto scheduling."
@@ -2695,12 +3027,16 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
         optional_workday,
         "for_day",
         lambda _day: optional_workday.OptionalWorkday(
-            BLACK_FRIDAY, "holiday", "Black Friday", 42,
+            BLACK_FRIDAY,
+            "holiday",
+            "Black Friday",
+            42,
         ),
     )
     monkeypatch.setattr(rotations.db, "cursor", Transaction)
     monkeypatch.setattr(
-        rotations.saturday_recruiting_store, "get",
+        rotations.saturday_recruiting_store,
+        "get",
         lambda _day, *, cur: bundle,
     )
     monkeypatch.setattr(
@@ -2709,38 +3045,44 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
         lambda _day, *, cur: events.append("recruiting_lock") or bundle,
     )
     monkeypatch.setattr(
-        rotations.saturday_recruiting_store, "update_openings",
+        rotations.saturday_recruiting_store,
+        "update_openings",
         lambda **kwargs: updated.append(kwargs) or bundle,
     )
     monkeypatch.setattr(
-        rotations.saturday_recruiting_store, "serialize_bundle",
+        rotations.saturday_recruiting_store,
+        "serialize_bundle",
         lambda _bundle: {"holiday": True},
     )
     monkeypatch.setattr(
-        rotations.staffing_route, "_saturday_recruit_requested_counts",
+        rotations.staffing_route,
+        "_saturday_recruit_requested_counts",
         lambda _enabled: {17: 1},
     )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(
-        rotations.staffing, "load_schedule",
+        rotations.staffing,
+        "load_schedule",
         lambda day: staffing.Schedule(day=day),
     )
     monkeypatch.setattr(
-        rotations.scheduler_time_off, "time_off_entries_for_day",
+        rotations.scheduler_time_off,
+        "time_off_entries_for_day",
         lambda _day: [],
     )
     monkeypatch.setattr(
-        rotations.staffing, "save_schedule",
-        lambda _schedule, **kwargs: events.append(
-            ("save", kwargs.get("invalidate_cache"))
-        ),
+        rotations.staffing,
+        "save_schedule",
+        lambda _schedule, **kwargs: events.append(("save", kwargs.get("invalidate_cache"))),
     )
     monkeypatch.setattr(
-        rotations.staffing_route, "_minimum_crew_balance_for_day",
+        rotations.staffing_route,
+        "_minimum_crew_balance_for_day",
         lambda **_kwargs: (),
     )
     monkeypatch.setattr(
-        rotations.staffing_route, "_minimum_crew_balance_payload",
+        rotations.staffing_route,
+        "_minimum_crew_balance_payload",
         lambda _balance: {},
     )
     monkeypatch.setattr(
@@ -2759,11 +3101,14 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
         lambda: events.append("stable_cache_invalidated"),
     )
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": BLACK_FRIDAY.isoformat(),
-        "work_centers": ["Repair 1"],
-        "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": BLACK_FRIDAY.isoformat(),
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 200
     assert updated[0]["requested_counts"] == {17: 1}
@@ -2776,6 +3121,200 @@ def test_open_holiday_auto_center_toggle_updates_recruiting_and_keeps_json_key(
         "today_cache_invalidated",
         "stable_cache_invalidated",
     ]
+
+
+def test_closed_holiday_pre_recruit_toggle_persists_centers_used_by_activation(
+    monkeypatch,
+):
+    from zira_dashboard.routes import saturday_recruiting as recruiting_routes
+
+    client, rotations = _rotations_client(monkeypatch)
+    client.app.include_router(recruiting_routes.router)
+    selected = []
+    activation = {}
+    repair = staffing.Location(
+        "Repair 1",
+        "Repair",
+        "Bay",
+        "Recycled",
+        None,
+        min_ops=2,
+        max_ops=4,
+    )
+    holiday = optional_workday.OptionalWorkday(
+        BLACK_FRIDAY,
+        "holiday",
+        "Black Friday",
+        42,
+    )
+    monkeypatch.setattr(optional_workday, "for_day", lambda _day: holiday)
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store,
+        "get",
+        lambda _day, *, cur: None,
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
+    monkeypatch.setattr(
+        rotations.scheduler_time_off,
+        "time_off_entries_for_day",
+        lambda _day: [],
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_minimum_crew_balance_for_day",
+        lambda **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_minimum_crew_balance_payload",
+        lambda _balance: {},
+    )
+
+    def update_centers(day, *, enabled, turn_off, cur, invalidate_cache=True):
+        del turn_off, cur, invalidate_cache
+        selected[:] = enabled
+        return staffing.Schedule(
+            day=day,
+            assignments={},
+            auto_enabled_work_centers=list(enabled),
+        )
+
+    monkeypatch.setattr(
+        rotations.staffing,
+        "update_auto_enabled_work_centers",
+        update_centers,
+    )
+    monkeypatch.setattr(
+        recruiting_routes.staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(
+            day=day,
+            assignments={},
+            auto_enabled_work_centers=list(selected),
+        ),
+    )
+    monkeypatch.setattr(recruiting_routes.staffing, "LOCATIONS", (repair,))
+    monkeypatch.setattr(
+        recruiting_routes.store,
+        "available_positions",
+        lambda: (
+            saturday_recruiting_store.AvailablePosition(
+                17,
+                "Repair 1",
+                ("Repair",),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        recruiting_routes.store,
+        "activate",
+        lambda **kwargs: (
+            activation.update(kwargs)
+            or _holiday_rotation_bundle(status="recruiting", prepared=False)
+        ),
+    )
+    monkeypatch.setattr(
+        recruiting_routes.staffing_routes,
+        "_effective_minimum",
+        lambda _location: 3,
+    )
+    monkeypatch.setattr(
+        recruiting_routes.sr,
+        "response_deadline",
+        lambda *_args: datetime(2026, 11, 25, 7, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        recruiting_routes.schedule_store,
+        "current",
+        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
+    )
+    monkeypatch.setattr(
+        recruiting_routes.shift_config,
+        "configured_shift_start_for",
+        lambda _day: time(6),
+    )
+    monkeypatch.setattr(
+        recruiting_routes.shift_config,
+        "configured_shift_end_for",
+        lambda _day: time(12),
+    )
+    monkeypatch.setattr(
+        recruiting_routes.staffing_routes,
+        "_bust_after_mutation",
+        lambda: None,
+    )
+
+    toggle = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": BLACK_FRIDAY.isoformat(),
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
+    recruit = client.post(
+        "/api/staffing/saturday-recruiting/activate-from-schedule",
+        json={"day": BLACK_FRIDAY.isoformat()},
+    )
+
+    assert toggle.status_code == 200
+    assert toggle.json()["enabled_work_centers"] == ["Repair 1"]
+    assert recruit.status_code == 200
+    assert activation["requested_counts"] == {17: 3}
+    assert activation["day_kind"] == "holiday"
+
+
+@pytest.mark.parametrize(
+    "bundle",
+    [
+        _holiday_rotation_bundle(status="cancelled"),
+        _holiday_rotation_bundle(holiday_odoo_id=99),
+    ],
+)
+def test_pre_recruit_holiday_toggle_rejects_cancelled_or_replaced_lifecycle(
+    monkeypatch,
+    bundle,
+):
+    client, rotations = _rotations_client(monkeypatch)
+    changed = []
+    monkeypatch.setattr(
+        optional_workday,
+        "for_day",
+        lambda _day: optional_workday.OptionalWorkday(
+            BLACK_FRIDAY,
+            "holiday",
+            "Black Friday",
+            42,
+        ),
+    )
+    monkeypatch.setattr(
+        rotations.saturday_recruiting_store,
+        "get",
+        lambda _day, *, cur: bundle,
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
+    monkeypatch.setattr(
+        rotations.scheduler_time_off,
+        "time_off_entries_for_day",
+        lambda _day: [],
+    )
+    monkeypatch.setattr(
+        rotations.staffing,
+        "update_auto_enabled_work_centers",
+        lambda *_args, **_kwargs: changed.append(True),
+    )
+
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": BLACK_FRIDAY.isoformat(),
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
+
+    assert response.status_code == 409
+    assert changed == []
 
 
 def test_optional_auto_center_toggle_invalidates_http_before_response_failure(
@@ -2794,7 +3333,10 @@ def test_optional_auto_center_toggle_invalidates_http_before_response_failure(
         optional_workday,
         "for_day",
         lambda _day: optional_workday.OptionalWorkday(
-            BLACK_FRIDAY, "holiday", "Black Friday", 42,
+            BLACK_FRIDAY,
+            "holiday",
+            "Black Friday",
+            42,
         ),
     )
     monkeypatch.setattr(rotations.db, "cursor", Transaction)
@@ -2822,9 +3364,7 @@ def test_optional_auto_center_toggle_invalidates_http_before_response_failure(
     monkeypatch.setattr(
         rotations.staffing,
         "save_schedule",
-        lambda _schedule, **kwargs: events.append(
-            ("save", kwargs.get("invalidate_cache"))
-        ),
+        lambda _schedule, **kwargs: events.append(("save", kwargs.get("invalidate_cache"))),
     )
     monkeypatch.setattr(
         rotations.staffing,
@@ -2853,11 +3393,14 @@ def test_optional_auto_center_toggle_invalidates_http_before_response_failure(
     )
 
     with pytest.raises(RuntimeError, match="response build failed"):
-        client.post("/api/rotations/auto-work-centers", json={
-            "day": BLACK_FRIDAY.isoformat(),
-            "work_centers": ["Repair 1"],
-            "turn_off": [],
-        })
+        client.post(
+            "/api/rotations/auto-work-centers",
+            json={
+                "day": BLACK_FRIDAY.isoformat(),
+                "work_centers": ["Repair 1"],
+                "turn_off": [],
+            },
+        )
 
     assert events == [
         "recruiting_lock",
@@ -2906,11 +3449,15 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
         optional_workday,
         "for_day",
         lambda _day: optional_workday.OptionalWorkday(
-            BLACK_FRIDAY, "holiday", "Black Friday", 42,
+            BLACK_FRIDAY,
+            "holiday",
+            "Black Friday",
+            42,
         ),
     )
     monkeypatch.setattr(
-        rotations.saturday_recruiting_store, "get",
+        rotations.saturday_recruiting_store,
+        "get",
         lambda _day, **_kwargs: bundle,
     )
     monkeypatch.setattr(
@@ -2920,7 +3467,8 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
         raising=False,
     )
     monkeypatch.setattr(
-        rotations.staffing, "load_roster",
+        rotations.staffing,
+        "load_roster",
         lambda: [
             _person("Volunteer", 3),
             _person("Corrected", 3),
@@ -2950,7 +3498,8 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
     monkeypatch.setattr(rotations.db, "cursor", lambda: transaction)
     monkeypatch.setattr(staffing_route, "_effective_minimum", lambda _loc: 0)
     monkeypatch.setattr(
-        staffing_route, "_configured_center_capacities",
+        staffing_route,
+        "_configured_center_capacities",
         lambda centers, strict=False: {center: 3 for center in centers},
     )
 
@@ -2980,9 +3529,13 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
         lambda: events.append("http_cache_invalidated"),
     )
 
-    response = client.post("/api/rotations/rebuild", json={
-        "day": BLACK_FRIDAY.isoformat(), "mode": "normal",
-    })
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={
+            "day": BLACK_FRIDAY.isoformat(),
+            "mode": "normal",
+        },
+    )
 
     assert response.status_code == 200
     assert captured["roster"] == ["Corrected"]
@@ -3018,23 +3571,32 @@ def test_unrecruited_or_open_holiday_cannot_auto(monkeypatch, bundle):
         optional_workday,
         "for_day",
         lambda _day: optional_workday.OptionalWorkday(
-            BLACK_FRIDAY, "holiday", "Black Friday", 42,
+            BLACK_FRIDAY,
+            "holiday",
+            "Black Friday",
+            42,
         ),
     )
     monkeypatch.setattr(
-        rotations.saturday_recruiting_store, "get",
+        rotations.saturday_recruiting_store,
+        "get",
         lambda _day, **_kwargs: bundle,
     )
     monkeypatch.setattr(
-        rotations.staffing, "load_schedule",
+        rotations.staffing,
+        "load_schedule",
         lambda day: staffing.Schedule(day=day),
     )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
 
-    response = client.post("/api/rotations/rebuild", json={
-        "day": BLACK_FRIDAY.isoformat(), "mode": "normal",
-    })
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={
+            "day": BLACK_FRIDAY.isoformat(),
+            "mode": "normal",
+        },
+    )
 
     assert response.status_code == 422
     assert "Holiday recruiting" in response.json()["error"]
@@ -3069,22 +3631,26 @@ def test_holiday_reset_uses_optional_volunteer_defaults_not_weekday_defaults(
         optional_workday,
         "for_day",
         lambda _day: optional_workday.OptionalWorkday(
-            BLACK_FRIDAY, "holiday", "Black Friday", 42,
+            BLACK_FRIDAY,
+            "holiday",
+            "Black Friday",
+            42,
         ),
     )
     monkeypatch.setattr(
-        rotations.saturday_recruiting_store, "get",
+        rotations.saturday_recruiting_store,
+        "get",
         lambda _day, **_kwargs: _holiday_rotation_bundle(),
     )
     monkeypatch.setattr(
         rotations.saturday_recruiting_store,
         "lock_for_schedule_mutation",
-        lambda _day, *, cur: events.append("recruiting_lock")
-        or _holiday_rotation_bundle(),
+        lambda _day, *, cur: events.append("recruiting_lock") or _holiday_rotation_bundle(),
         raising=False,
     )
     monkeypatch.setattr(
-        rotations.staffing, "load_schedule",
+        rotations.staffing,
+        "load_schedule",
         lambda _day: prior,
     )
     monkeypatch.setattr(
@@ -3093,7 +3659,8 @@ def test_holiday_reset_uses_optional_volunteer_defaults_not_weekday_defaults(
         lambda _day, *, cur: events.append("schedule_lock") or prior,
     )
     monkeypatch.setattr(
-        rotations.staffing, "load_roster",
+        rotations.staffing,
+        "load_roster",
         lambda: [
             _person("Volunteer", 3),
             _person("Corrected", 3),
@@ -3116,15 +3683,18 @@ def test_holiday_reset_uses_optional_volunteer_defaults_not_weekday_defaults(
     )
     monkeypatch.setattr(rotations.db, "cursor", lambda: transaction)
     monkeypatch.setattr(
-        rotations.scheduler_time_off, "time_off_entries_for_day",
+        rotations.scheduler_time_off,
+        "time_off_entries_for_day",
         lambda _day: [],
     )
     monkeypatch.setattr(
-        staffing_route, "defaults_only_schedule",
+        staffing_route,
+        "defaults_only_schedule",
         lambda *_args: pytest.fail("a holiday reset must not restore weekday defaults"),
     )
     monkeypatch.setattr(
-        staffing_route, "saturday_defaults_only_schedule",
+        staffing_route,
+        "saturday_defaults_only_schedule",
         lambda _day, roster, _time_off, _enabled: (
             optional_defaults_calls.append([person.name for person in roster])
             or (
@@ -3144,11 +3714,14 @@ def test_holiday_reset_uses_optional_volunteer_defaults_not_weekday_defaults(
         lambda: events.append("http_cache_invalidated"),
     )
 
-    response = client.post("/api/rotations/rebuild", json={
-        "day": BLACK_FRIDAY.isoformat(),
-        "mode": "normal",
-        "reset_to_defaults": True,
-    })
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={
+            "day": BLACK_FRIDAY.isoformat(),
+            "mode": "normal",
+            "reset_to_defaults": True,
+        },
+    )
 
     assert response.status_code == 200
     assert optional_defaults_calls == [["Corrected"]]
@@ -3175,7 +3748,10 @@ def test_cancelled_holiday_wins_rebuild_race(monkeypatch, reset_to_defaults):
         optional_workday,
         "for_day",
         lambda _day: optional_workday.OptionalWorkday(
-            BLACK_FRIDAY, "holiday", "Black Friday", 42,
+            BLACK_FRIDAY,
+            "holiday",
+            "Black Friday",
+            42,
         ),
     )
     monkeypatch.setattr(
@@ -3207,11 +3783,14 @@ def test_cancelled_holiday_wins_rebuild_race(monkeypatch, reset_to_defaults):
     )
     monkeypatch.setattr(rotations.db, "cursor", _RouteTransaction)
 
-    response = client.post("/api/rotations/rebuild", json={
-        "day": BLACK_FRIDAY.isoformat(),
-        "mode": "normal",
-        "reset_to_defaults": reset_to_defaults,
-    })
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={
+            "day": BLACK_FRIDAY.isoformat(),
+            "mode": "normal",
+            "reset_to_defaults": reset_to_defaults,
+        },
+    )
 
     assert response.status_code == 422
     assert "Holiday recruiting" in response.json()["error"]
@@ -3228,29 +3807,33 @@ def test_optional_classification_failure_blocks_auto_center_mutation(monkeypatch
     )
     monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [])
     monkeypatch.setattr(
-        rotations.staffing, "load_schedule",
+        rotations.staffing,
+        "load_schedule",
         lambda day: staffing.Schedule(day=day),
     )
     monkeypatch.setattr(
-        rotations.scheduler_time_off, "time_off_entries_for_day",
+        rotations.scheduler_time_off,
+        "time_off_entries_for_day",
         lambda _day: [],
     )
     monkeypatch.setattr(
-        rotations.staffing, "save_schedule",
+        rotations.staffing,
+        "save_schedule",
         lambda sched, **_kwargs: saved.append(sched),
     )
     monkeypatch.setattr(rotations.db, "cursor", _RouteTransaction)
 
-    response = client.post("/api/rotations/auto-work-centers", json={
-        "day": BLACK_FRIDAY.isoformat(),
-        "work_centers": ["Repair 1"],
-        "turn_off": [],
-    })
+    response = client.post(
+        "/api/rotations/auto-work-centers",
+        json={
+            "day": BLACK_FRIDAY.isoformat(),
+            "work_centers": ["Repair 1"],
+            "turn_off": [],
+        },
+    )
 
     assert response.status_code == 409
-    assert response.json()["error"].startswith(
-        "Optional workday state could not be verified"
-    )
+    assert response.json()["error"].startswith("Optional workday state could not be verified")
     assert saved == []
 
 
@@ -3306,10 +3889,10 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert 'title="Normal: balanced coverage and fair rotation"' in html
     assert 'title="Training: develop operator skills"' in html
     assert 'title="Optimized: strongest coverage">⚡</button>' in html
-    assert '⚡⚡⚡' not in html
-    assert '⚖' in html
-    assert '🎓' in html
-    assert 'data-work-center-toggle' in html
+    assert "⚡⚡⚡" not in html
+    assert "⚖" in html
+    assert "🎓" in html
+    assert "data-work-center-toggle" in html
     assert 'role="switch"' in html
     assert 'aria-checked="{{ _center_on|tojson }}"' in html
     assert 'class="wc-auto-cb"' not in html
@@ -3328,8 +3911,8 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "/api/rotations/auto-work-centers" in js
     assert "function postAutoCenters(workCenters, turnOff)" in js
     assert "JSON.stringify({ day, work_centers: workCenters, turn_off: turnOff })" in js
-    assert 'rotation-reset-btn' not in html
-    assert 'Reset auto assignments' not in html
+    assert "rotation-reset-btn" not in html
+    assert "Reset auto assignments" not in html
     assert "const resetBtn" not in js
     assert "modeBtns.forEach(btn => {" in js
     assert "btn.addEventListener('click', () => rebuild(btn.dataset.rotationMode));" in js
@@ -3346,7 +3929,10 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "function renderMinimumCrewBalanceFromGrid()" in js
     assert "summary.classList.toggle('is-balanced', balance?.direction === 'ready');" in js
     assert "summary.classList.toggle('is-unbalanced', balance?.direction !== 'ready');" in js
-    assert "setWorkCenterOnState(name, !enabled);\n      renderMinimumCrewBalanceFromGrid();\n      saveAutoCenters(enabled ? [name] : []);" in js
+    assert (
+        "setWorkCenterOnState(name, !enabled);\n      renderMinimumCrewBalanceFromGrid();\n      saveAutoCenters(enabled ? [name] : []);"
+        in js
+    )
     assert "const waitingEl = document.getElementById('minimum-crew-waiting');" not in js
     assert "const slotsEl = document.getElementById('minimum-crew-slots');" not in js
     assert "clearStaleAutoWarnings" not in js
@@ -3359,11 +3945,11 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert ".minimum-crew-balance.is-balanced #minimum-crew-action { color: var(--accent); }" in css
     assert ".minimum-crew-balance.is-unbalanced #minimum-crew-action { color: var(--bad); }" in css
     assert ".work-center-off" in css
-    assert '.ops-range-min { display: none; }' in css
-    assert 'tr.work-center-off .ops-range-full { display: none; }' in css
-    assert 'tr.work-center-off .ops-range-min { display: inline; }' in css
+    assert ".ops-range-min { display: none; }" in css
+    assert "tr.work-center-off .ops-range-full { display: none; }" in css
+    assert "tr.work-center-off .ops-range-min { display: inline; }" in css
     assert 'tr[data-loc][data-on="true"] td { background: var(--accent-dim); }' in css
-    assert '.wc-auto-toggle' not in css
+    assert ".wc-auto-toggle" not in css
     assert "tr.work-center-off td { background: var(--panel-2); }" in css
     assert "tr.work-center-off .sched-cell > *," in css
     assert "tr.work-center-off .wc-note-cell > * { display: none; }" in css
@@ -3371,9 +3957,18 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert ".day-context .rotation-controls {" in css
     assert "position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 20;" in css
     assert "box-shadow: 0 16px 36px rgba(31, 41, 55, 0.18);" in css
-    assert "background: linear-gradient(135deg, var(--panel), color-mix(in srgb, var(--accent-dim) 32%, var(--panel)));" in css
-    assert ".day-context .rotation-mode { flex-wrap: wrap; width: auto; padding: 0; border: 0; background: transparent; }" in css
-    assert ".day-context .minimum-crew-balance { display: block; flex: 0 0 100%; margin: 0.55rem 0 0; white-space: normal; }" in css
+    assert (
+        "background: linear-gradient(135deg, var(--panel), color-mix(in srgb, var(--accent-dim) 32%, var(--panel)));"
+        in css
+    )
+    assert (
+        ".day-context .rotation-mode { flex-wrap: wrap; width: auto; padding: 0; border: 0; background: transparent; }"
+        in css
+    )
+    assert (
+        ".day-context .minimum-crew-balance { display: block; flex: 0 0 100%; margin: 0.55rem 0 0; white-space: normal; }"
+        in css
+    )
     assert ".day-context .rotation-mode-label::before" in css
     assert "content: '•';" in css
     assert "@media (max-width: 1100px)" in css
@@ -3429,7 +4024,10 @@ def test_skills_matrix_exposes_scheduling_preferences_without_training_controls(
     assert "Scheduling Preferences" in html
     assert 'class="rotation-open-btn"' in html
     assert 'aria-label="Scheduling preferences for {{ p.name }}"' in html
-    assert '<circle cx="12" cy="12" r="9" stroke-dasharray="50 6" transform="rotate(-14 12 12)"/>' in html
+    assert (
+        '<circle cx="12" cy="12" r="9" stroke-dasharray="50 6" transform="rotate(-14 12 12)"/>'
+        in html
+    )
     assert '<polygon points="20 8.7 16 7 18.3 4.7" fill="currentColor" stroke="none"/>' in html
     assert '<circle cx="9" cy="5.6" r="1"' in html
     assert '<circle cx="18.9" cy="12.9" r="1"' in html
@@ -3664,26 +4262,41 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
 
     monkeypatch.setattr(staffing_route.rotation_store, "load_preferences_by_name", lambda: {})
     monkeypatch.setattr(
-        rotation_suggestions, "_load_recycled_history",
+        rotation_suggestions,
+        "_load_recycled_history",
         lambda d, group_locations=None, user_group_centers=None: (
             rotation_suggestions.RecycledHistory()
         ),
     )
     monkeypatch.setattr(staffing_route.rotation_training, "reconcile_blocks", lambda as_of: [])
-    monkeypatch.setattr(staffing_route.staffing, "load_roster", lambda: [
-        _person("Green", 3),
-    ])
+    monkeypatch.setattr(
+        staffing_route.staffing,
+        "load_roster",
+        lambda: [
+            _person("Green", 3),
+        ],
+    )
     monkeypatch.setattr(staffing_route.app_settings, "get_setting", lambda key: ["Repair 1"])
     monkeypatch.setattr(staffing_route.work_centers_store, "min_ops", lambda loc: loc.min_ops)
 
     block = rotation_store.TrainingBlock(
-        id=1, trainee_name="Learner", trainer_name="Green", skill="Repair",
-        start_day=TARGET_DAY, planned_attended_days=5, status="active",
+        id=1,
+        trainee_name="Learner",
+        trainer_name="Green",
+        skill="Repair",
+        start_day=TARGET_DAY,
+        planned_attended_days=5,
+        status="active",
     )
     monkeypatch.setattr(staffing_route.rotation_store, "active_blocks_for_day", lambda d: [block])
-    monkeypatch.setattr(staffing_route.rotation_training, "effect_for_day", lambda *a, **k: staffing_route.rotation_training.BlockEffect())
     monkeypatch.setattr(
-        staffing_route.rotation_store, "resolved_days",
+        staffing_route.rotation_training,
+        "effect_for_day",
+        lambda *a, **k: staffing_route.rotation_training.BlockEffect(),
+    )
+    monkeypatch.setattr(
+        staffing_route.rotation_store,
+        "resolved_days",
         lambda block_id: [
             rotation_store.TrainingBlockDay(day=TARGET_DAY, status="attended"),
             rotation_store.TrainingBlockDay(day=date(2026, 7, 15), status="attended"),
@@ -3696,10 +4309,7 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
             center="Dismantler 1",
             group="Dismantler",
             code="training_required",
-            message=(
-                "Dismantler 1 could not be staffed. "
-                "Training is required for Dismantler."
-            ),
+            message=("Dismantler 1 could not be staffed. Training is required for Dismantler."),
             rejections=(
                 schedule_solver.CandidateRejection(
                     person="Learner",
@@ -3723,8 +4333,12 @@ def test_recycled_context_surfaces_reasons_warnings_blocks(monkeypatch):
     monkeypatch.setattr(rotation_suggestions, "suggest_recycled_assignments", fake_engine)
 
     ctx = staffing_route._recycled_context_for_day(
-        TARGET_DAY, roster=[_person("Green", 3)], mode="training",
-        base_assignments={}, locked_assignments={}, time_off_entries=[],
+        TARGET_DAY,
+        roster=[_person("Green", 3)],
+        mode="training",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
         current_assignments={"Repair 1": ["Green"]},
         work_weekdays=frozenset({0, 1, 2, 3, 4}),
     )
@@ -3780,15 +4394,18 @@ def test_recycled_suggestion_uses_regular_preferences_when_preference_read_fails
 
     monkeypatch.setattr(rotation_suggestions, "suggest_recycled_assignments", fake_engine)
 
-    assert staffing_route._recycled_suggestion_for_day(
-        TARGET_DAY,
-        roster=[_person("Green", 3)],
-        mode="normal",
-        base_assignments={},
-        locked_assignments={},
-        time_off_entries=[],
-        enabled_work_centers={"Repair 1"},
-    ) is sentinel
+    assert (
+        staffing_route._recycled_suggestion_for_day(
+            TARGET_DAY,
+            roster=[_person("Green", 3)],
+            mode="normal",
+            base_assignments={},
+            locked_assignments={},
+            time_off_entries=[],
+            enabled_work_centers={"Repair 1"},
+        )
+        is sentinel
+    )
     assert captured["preferences"] == {}
 
 
@@ -3915,7 +4532,8 @@ def test_enabled_auto_work_centers_does_not_read_settings(monkeypatch):
         staffing_route.staffing,
         "load_schedule",
         lambda _day: staffing.Schedule(
-            day=TARGET_DAY, auto_enabled_work_centers=["Junior #1", "Repair 2"],
+            day=TARGET_DAY,
+            auto_enabled_work_centers=["Junior #1", "Repair 2"],
         ),
     )
 
@@ -3980,21 +4598,31 @@ def _render_staffing_page(
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
     monkeypatch.setattr(staffing_mod, "load_roster", lambda: list(roster or []))
     monkeypatch.setattr(
-        staffing_mod, "load_schedule",
-        schedule_loader or (lambda d: saved_schedule or staffing_mod.Schedule(day=d, published=False, assignments={})),
+        staffing_mod,
+        "load_schedule",
+        schedule_loader
+        or (
+            lambda d: (
+                saved_schedule or staffing_mod.Schedule(day=d, published=False, assignments={})
+            )
+        ),
     )
     monkeypatch.setattr(
         staffing_mod,
         "schedule_revision",
         lambda d: schedule_revision(d) if callable(schedule_revision) else schedule_revision,
     )
-    monkeypatch.setattr(staffing_routes, "_safe_time_off_entries", lambda _day: list(time_off_entries or []))
+    monkeypatch.setattr(
+        staffing_routes, "_safe_time_off_entries", lambda _day: list(time_off_entries or [])
+    )
     monkeypatch.setattr(
         staffing_routes,
         "_time_off_entries_cached",
         strict_time_off_entries or (lambda _day: list(time_off_entries or [])),
     )
-    monkeypatch.setattr(staffing_routes, "_default_inputs", default_inputs or (lambda strict=False: ({}, {}, {})))
+    monkeypatch.setattr(
+        staffing_routes, "_default_inputs", default_inputs or (lambda strict=False: ({}, {}, {}))
+    )
     monkeypatch.setattr(
         staffing_routes,
         "_configured_center_capacities",
@@ -4010,6 +4638,7 @@ def _render_staffing_page(
         "save_schedule",
         lambda schedule: saved_schedules.append(schedule) if saved_schedules is not None else None,
     )
+
     def create_schedule_if_absent(schedule):
         if conditional_create is not None:
             return conditional_create(schedule)
@@ -4019,7 +4648,8 @@ def _render_staffing_page(
 
     monkeypatch.setattr(staffing_mod, "create_schedule_if_absent", create_schedule_if_absent)
     monkeypatch.setattr(
-        staffing_routes, "_safe_attendance",
+        staffing_routes,
+        "_safe_attendance",
         lambda d, sched, today: {"by_name": {}, "name_to_id": {}},
     )
     monkeypatch.setattr(staffing_routes, "_late_emp_ids", lambda d, today, pkg: set())
@@ -4050,21 +4680,38 @@ def _render_staffing_page(
         default_people or (lambda loc: []),
     )
     monkeypatch.setattr(
-        staffing_routes, "_smart_defaults_for_day",
+        staffing_routes,
+        "_smart_defaults_for_day",
         smart_defaults
-        or (lambda d, roster, defaults, time_off, mode="normal", **kwargs: {k: list(v) for k, v in defaults.items()}),
+        or (
+            lambda d, roster, defaults, time_off, mode="normal", **kwargs: {
+                k: list(v) for k, v in defaults.items()
+            }
+        ),
     )
     if recycled_context is not None:
         monkeypatch.setattr(staffing_routes, "_recycled_context_for_day", recycled_context)
 
     def fake_build_staffing_bays(
-        roster, sched, time_off_entries, publish_blocked, **_kwargs,
+        roster,
+        sched,
+        time_off_entries,
+        publish_blocked,
+        **_kwargs,
     ):
         default_model = {
-            "bays": [], "publish_block_reasons": [], "defaults_by_loc": {},
-            "unassigned": [], "reserves": [], "time_off_names": [], "time_off_entries": [],
-            "partial_hours_by_name": {}, "partial_range_by_name": {},
-            "partial_clear_by_name": {}, "people_meta": {}, "all_active_people": [],
+            "bays": [],
+            "publish_block_reasons": [],
+            "defaults_by_loc": {},
+            "unassigned": [],
+            "reserves": [],
+            "time_off_names": [],
+            "time_off_entries": [],
+            "partial_hours_by_name": {},
+            "partial_range_by_name": {},
+            "partial_clear_by_name": {},
+            "people_meta": {},
+            "all_active_people": [],
         }
         return bay_model or default_model
 
@@ -4082,7 +4729,9 @@ def _render_staffing_page(
 
     monkeypatch.setattr(staffing_routes, "templates", FakeTemplates())
 
-    staffing_routes.staffing_page(request=object(), day=the_day.isoformat(), publish_blocked=0, view=view)
+    staffing_routes.staffing_page(
+        request=object(), day=the_day.isoformat(), publish_blocked=0, view=view
+    )
     return captured["context"]
 
 
@@ -4103,11 +4752,18 @@ def test_staffing_context_exposes_auto_summary_counts(monkeypatch):
         ),
         auto_centers={"Repair 1", "Dismantler 1"},
         bay_model={
-            "bays": [], "publish_block_reasons": [], "defaults_by_loc": {},
-            "unassigned": ["A", "B", "C"], "reserves": [],
-            "time_off_names": [], "time_off_entries": [],
-            "partial_hours_by_name": {}, "partial_range_by_name": {},
-            "partial_clear_by_name": {}, "people_meta": {}, "all_active_people": [],
+            "bays": [],
+            "publish_block_reasons": [],
+            "defaults_by_loc": {},
+            "unassigned": ["A", "B", "C"],
+            "reserves": [],
+            "time_off_names": [],
+            "time_off_entries": [],
+            "partial_hours_by_name": {},
+            "partial_range_by_name": {},
+            "partial_clear_by_name": {},
+            "people_meta": {},
+            "all_active_people": [],
         },
     )
 
@@ -4122,8 +4778,14 @@ def test_minimum_crew_balance_uses_explicit_saturday_available_names(monkeypatch
     from zira_dashboard.routes import staffing as staffing_routes
 
     location = staffing.Location(
-        "Repair 1", "Repair", "Bay 1", "Recycled", None,
-        min_ops=1, max_ops=2, required_skills=("Repair",),
+        "Repair 1",
+        "Repair",
+        "Bay 1",
+        "Recycled",
+        None,
+        min_ops=1,
+        max_ops=2,
+        required_skills=("Repair",),
     )
     monkeypatch.setattr(staffing, "LOCATIONS", (location,))
     monkeypatch.setattr(staffing_routes, "_effective_minimum", lambda _loc: 1)
@@ -4149,14 +4811,21 @@ def test_minimum_crew_balance_counts_exact_defaults_past_center_minimum(monkeypa
     from zira_dashboard.routes import staffing as staffing_routes
 
     location = staffing.Location(
-        "Repair 1", "Repair", "Bay 1", "Recycled", None,
-        min_ops=1, max_ops=3, required_skills=("Repair",),
+        "Repair 1",
+        "Repair",
+        "Bay 1",
+        "Recycled",
+        None,
+        min_ops=1,
+        max_ops=3,
+        required_skills=("Repair",),
     )
     monkeypatch.setattr(staffing, "LOCATIONS", (location,))
     monkeypatch.setattr(staffing_routes, "_effective_minimum", lambda _loc: 1)
     monkeypatch.setattr(staffing_routes.work_centers_store, "max_ops", lambda _loc: 3)
     monkeypatch.setattr(
-        staffing_routes, "_default_inputs",
+        staffing_routes,
+        "_default_inputs",
         lambda strict=False: ({"Repair 1": ("Ana", "Ben", "Cai")}, {}, {}),
     )
 
@@ -4176,14 +4845,21 @@ def test_minimum_crew_balance_bounds_exact_default_slots_by_capacity(monkeypatch
     from zira_dashboard.routes import staffing as staffing_routes
 
     location = staffing.Location(
-        "Repair 1", "Repair", "Bay 1", "Recycled", None,
-        min_ops=1, max_ops=2, required_skills=("Repair",),
+        "Repair 1",
+        "Repair",
+        "Bay 1",
+        "Recycled",
+        None,
+        min_ops=1,
+        max_ops=2,
+        required_skills=("Repair",),
     )
     monkeypatch.setattr(staffing, "LOCATIONS", (location,))
     monkeypatch.setattr(staffing_routes, "_effective_minimum", lambda _loc: 1)
     monkeypatch.setattr(staffing_routes.work_centers_store, "max_ops", lambda _loc: 2)
     monkeypatch.setattr(
-        staffing_routes, "_default_inputs",
+        staffing_routes,
+        "_default_inputs",
         lambda strict=False: ({"Repair 1": ("Ana", "Ben", "Cai")}, {}, {}),
     )
 
@@ -4204,21 +4880,29 @@ def test_minimum_crew_balance_counts_assigned_default_toward_center_need(monkeyp
     from zira_dashboard.routes import staffing as staffing_routes
 
     location = staffing.Location(
-        "Repair 1", "Repair", "Bay 1", "Recycled", None,
-        min_ops=1, max_ops=3, required_skills=("Repair",),
+        "Repair 1",
+        "Repair",
+        "Bay 1",
+        "Recycled",
+        None,
+        min_ops=1,
+        max_ops=3,
+        required_skills=("Repair",),
     )
     monkeypatch.setattr(staffing, "LOCATIONS", (location,))
     monkeypatch.setattr(staffing_routes, "_effective_minimum", lambda _loc: 1)
     monkeypatch.setattr(staffing_routes.work_centers_store, "max_ops", lambda _loc: 3)
     monkeypatch.setattr(
-        staffing_routes, "_default_inputs",
+        staffing_routes,
+        "_default_inputs",
         lambda strict=False: ({"Repair 1": ("Ana", "Ben", "Cai")}, {}, {}),
     )
 
     result = staffing_routes._minimum_crew_balance_for_day(
         roster=[_person("Ana", 3), _person("Ben", 3), _person("Cai", 3)],
         schedule=staffing.Schedule(
-            day=date(2026, 7, 20), assignments={"Repair 1": ["Ana"]},
+            day=date(2026, 7, 20),
+            assignments={"Repair 1": ["Ana"]},
         ),
         time_off_entries=[],
         enabled_centers=("Repair 1",),
@@ -4235,11 +4919,19 @@ def test_saturday_context_uses_final_unassigned_names_for_schedule_goal(monkeypa
         day=date(2026, 7, 18),
         roster=[_person("Off Person", 3)],
         bay_model={
-            "bays": [], "publish_block_reasons": [], "defaults_by_loc": {},
-            "unassigned": [], "off": ["Off Person"], "reserves": [],
-            "time_off_names": [], "time_off_entries": [],
-            "partial_hours_by_name": {}, "partial_range_by_name": {},
-            "partial_clear_by_name": {}, "people_meta": {}, "all_active_people": [],
+            "bays": [],
+            "publish_block_reasons": [],
+            "defaults_by_loc": {},
+            "unassigned": [],
+            "off": ["Off Person"],
+            "reserves": [],
+            "time_off_names": [],
+            "time_off_entries": [],
+            "partial_hours_by_name": {},
+            "partial_range_by_name": {},
+            "partial_clear_by_name": {},
+            "people_meta": {},
+            "all_active_people": [],
         },
     )
 
@@ -4348,6 +5040,7 @@ def test_first_future_staffing_view_does_not_run_the_auto_solver(monkeypatch):
         raise AssertionError("seeding must not call the auto solver")
 
     from zira_dashboard.routes import staffing as staffing_routes
+
     monkeypatch.setattr(staffing_routes, "_recycled_suggestion_for_day", _boom)
 
     ctx = _render_staffing_page(
@@ -4379,7 +5072,8 @@ def test_first_future_staffing_view_copies_default_auto_work_centers(monkeypatch
 
 def test_saved_day_uses_its_auto_work_centers_not_current_defaults(monkeypatch):
     schedule = staffing.Schedule(
-        day=TARGET_DAY, auto_enabled_work_centers=["Repair 3"],
+        day=TARGET_DAY,
+        auto_enabled_work_centers=["Repair 3"],
     )
 
     ctx = _render_staffing_page(
@@ -4434,13 +5128,16 @@ def test_future_draft_is_not_overwritten_when_revision_lookup_fails(monkeypatch)
         lambda _day: (_ for _ in ()).throw(RuntimeError("database unavailable")),
     )
 
-    assert staffing_route._seed_new_future_draft(
-        TARGET_DAY,
-        date(2026, 7, 13),
-        blank,
-        [],
-        [],
-    ) is blank
+    assert (
+        staffing_route._seed_new_future_draft(
+            TARGET_DAY,
+            date(2026, 7, 13),
+            blank,
+            [],
+            [],
+        )
+        is blank
+    )
 
 
 def test_first_future_staffing_view_does_not_seed_when_time_off_read_fails(monkeypatch):
@@ -4452,7 +5149,9 @@ def test_first_future_staffing_view_does_not_seed_when_time_off_read_fails(monke
         roster=[_person("Pinned", 1)],
         auto_centers={"Repair 1"},
         default_inputs=lambda strict=False: ({"Repair 1": ("Pinned",)}, {}, {}),
-        strict_time_off_entries=lambda _day: (_ for _ in ()).throw(RuntimeError("time off unavailable")),
+        strict_time_off_entries=lambda _day: (_ for _ in ()).throw(
+            RuntimeError("time off unavailable")
+        ),
         saved_schedules=saved,
     )
 
@@ -4539,11 +5238,14 @@ def test_staffing_page_renders_blank_draft_when_display_revision_read_fails(monk
     assert ctx["sched"].assignments == {}
 
 
-@pytest.mark.parametrize("day", [
-    date(2026, 7, 13),  # Monday
-    date(2026, 7, 18),  # Saturday
-    date(2026, 7, 19),  # Sunday
-])
+@pytest.mark.parametrize(
+    "day",
+    [
+        date(2026, 7, 13),  # Monday
+        date(2026, 7, 18),  # Saturday
+        date(2026, 7, 19),  # Sunday
+    ],
+)
 def test_staffing_context_enables_auto_scheduler_every_day(monkeypatch, day):
     ctx = _render_staffing_page(monkeypatch, day=day)
 
@@ -4558,28 +5260,35 @@ def _render_saturday_with_bundle(monkeypatch, *, status):
     saturday = date(2026, 7, 25)
     bundle = saturday_recruiting_store.RecruitmentBundle(
         saturday_recruiting_store.Recruitment(
-            saturday, status, time(6), time(12),
+            saturday,
+            status,
+            time(6),
+            time(12),
             datetime(2026, 7, 24, 12, tzinfo=timezone.utc),
         ),
         (),
         (),
     )
     monkeypatch.setattr(
-        staffing_routes.saturday_recruiting_store, "get",
+        staffing_routes.saturday_recruiting_store,
+        "get",
         lambda _day, **_kw: bundle,
     )
     monkeypatch.setattr(
-        staffing_routes.saturday_recruiting_store, "available_positions",
+        staffing_routes.saturday_recruiting_store,
+        "available_positions",
         lambda: [],
     )
     monkeypatch.setattr(
-        staffing_routes.saturday_recruiting_store, "serialize_bundle",
+        staffing_routes.saturday_recruiting_store,
+        "serialize_bundle",
         lambda _bundle: {"coverage": {"requested": 0, "total": 0}, "commitments": []},
     )
     # The prepare step already failed to persist a marker in production; model
     # that so the fix cannot lean on staffing_prepared_at being set.
     monkeypatch.setattr(
-        staffing_routes, "_prepare_closed_saturday_schedule",
+        staffing_routes,
+        "_prepare_closed_saturday_schedule",
         lambda *_a, **_kw: None,
     )
     return _render_staffing_page(monkeypatch, day=saturday)
@@ -4607,12 +5316,13 @@ def test_staffing_template_renders_auto_controls_from_the_available_context():
         "(not is_optional_workday or saturday_recruiting_finished) %}"
     ) in html
     assert 'class="rotation-controls"' in html
-    assert 'data-work-center-toggle' in html
+    assert "data-work-center-toggle" in html
 
 
 def test_saved_staffing_day_context_hydrates_stored_mode(monkeypatch):
     sched = staffing.Schedule(
-        day=TARGET_DAY, published=False,
+        day=TARGET_DAY,
+        published=False,
         assignments={"Repair 1": ["Someone"]},
         rotation_mode="optimized",
         assignment_sources={"Repair 1": {"Someone": "manual"}},
@@ -4734,7 +5444,8 @@ def test_saved_day_hints_thread_stored_mode(monkeypatch):
         return {k: list(v) for k, v in defaults.items()}
 
     sched = staffing.Schedule(
-        day=TARGET_DAY, published=False,
+        day=TARGET_DAY,
+        published=False,
         assignments={"Repair 1": ["Someone"]},  # saved → the else/hints branch runs
         rotation_mode="optimized",
     )
@@ -4803,14 +5514,19 @@ def test_rebuild_does_not_restore_person_after_clear_removes_manual_source(monke
     locations = staffing.LOCATIONS
     monkeypatch.setattr(staffing_route.staffing, "LOCATIONS", ())
     monkeypatch.setattr(
-        staffing_route.staffing, "load_schedule", lambda _day: schedule_before_clear,
+        staffing_route.staffing,
+        "load_schedule",
+        lambda _day: schedule_before_clear,
     )
     monkeypatch.setattr(staffing_route.staffing, "save_schedule", cleared.append)
     monkeypatch.setattr(staffing_route.staffing, "schedule_revision", lambda _day: "test")
     monkeypatch.setattr(staffing_route._http_cache, "invalidate_today_cache", lambda: None)
 
     staffing_route._staffing_save_work(
-        SimpleNamespace(headers={}), TARGET_DAY, 1, FormData({"action": "save"}),
+        SimpleNamespace(headers={}),
+        TARGET_DAY,
+        1,
+        FormData({"action": "save"}),
     )
 
     cleared_schedule = cleared[-1]
@@ -4822,7 +5538,9 @@ def test_rebuild_does_not_restore_person_after_clear_removes_manual_source(monke
 
     rebuilt: list = []
     monkeypatch.setattr(
-        rotations.staffing, "load_roster", lambda: [_person("Manual Person", 3, active=False)],
+        rotations.staffing,
+        "load_roster",
+        lambda: [_person("Manual Person", 3, active=False)],
     )
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: cleared_schedule)
     monkeypatch.setattr(rotations.staffing, "save_schedule", rebuilt.append)
@@ -4874,15 +5592,21 @@ def test_absence_by_day_window_is_bounded(monkeypatch):
 
     queried: list[date] = []
     monkeypatch.setattr(
-        scheduler_time_off, "full_day_off_names",
-        lambda day: (queried.append(day) or set()),
+        scheduler_time_off,
+        "full_day_off_names",
+        lambda day: queried.append(day) or set(),
     )
 
     start = date(2025, 1, 1)
     d = start + timedelta(days=400)  # far past the block's horizon
     block = rotation_store.TrainingBlock(
-        id=1, trainee_name="T", trainer_name="G", skill="Repair",
-        start_day=start, planned_attended_days=5, status="active",
+        id=1,
+        trainee_name="T",
+        trainer_name="G",
+        skill="Repair",
+        start_day=start,
+        planned_attended_days=5,
+        status="active",
     )
 
     staffing_route._absence_by_day_for_block(block, d)
@@ -4909,24 +5633,29 @@ def test_staffing_skills_context_includes_scheduling_preferences_only(monkeypatc
     monkeypatch.setattr(skills_routes._http_cache, "store_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
     monkeypatch.setattr(
-        odoo_sync, "sync",
+        odoo_sync,
+        "sync",
         lambda force=False: SimpleNamespace(ok=True, last_sync_at=None, error=None),
     )
     monkeypatch.setattr(
-        skills_routes.staffing, "load_roster",
+        skills_routes.staffing,
+        "load_roster",
         lambda: [_person("Alex", 0, "Repair"), _person("Green", 3, "Repair")],
     )
     monkeypatch.setattr(skills_routes.db, "query", lambda *a, **k: [])
     monkeypatch.setattr(views_store, "list_views", lambda: [])
     monkeypatch.setattr(views_store, "get_default_view", lambda: None)
     monkeypatch.setattr(
-        skills_routes.rotation_store, "load_preferences_by_name",
+        skills_routes.rotation_store,
+        "load_preferences_by_name",
         lambda: {"Alex": {"Repair": "primary"}},
     )
     monkeypatch.setattr(
         skills_routes.rotation_store,
         "active_blocks",
-        lambda: (_ for _ in ()).throw(AssertionError("People Matrix must not load training blocks")),
+        lambda: (_ for _ in ()).throw(
+            AssertionError("People Matrix must not load training blocks")
+        ),
     )
 
     captured: dict = {}
@@ -4957,7 +5686,9 @@ def test_skills_context_only_exposes_qualified_preference_targets(monkeypatch):
     """The matrix only offers scheduling preferences a person can use."""
     from types import SimpleNamespace
     from zira_dashboard import (
-        odoo_sync, cert_lookup, skill_matrix_views_store as views_store,
+        odoo_sync,
+        cert_lookup,
+        skill_matrix_views_store as views_store,
     )
     from zira_dashboard.routes import skills as skills_routes
 
@@ -4966,11 +5697,13 @@ def test_skills_context_only_exposes_qualified_preference_targets(monkeypatch):
     monkeypatch.setattr(skills_routes._http_cache, "store_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
     monkeypatch.setattr(
-        odoo_sync, "sync",
+        odoo_sync,
+        "sync",
         lambda force=False: SimpleNamespace(ok=True, last_sync_at=None, error=None),
     )
     monkeypatch.setattr(
-        skills_routes.staffing, "load_roster",
+        skills_routes.staffing,
+        "load_roster",
         lambda: [staffing.Person("Alex", skills={"Repair": 1, "Woodpecker": 0})],
     )
     monkeypatch.setattr(skills_routes.db, "query", lambda *a, **k: [])
@@ -5009,7 +5742,9 @@ def test_staffing_skills_context_degrades_when_preference_load_fails(monkeypatch
     """A preferences outage leaves the People Matrix renderable rather than 500ing."""
     from types import SimpleNamespace
     from zira_dashboard import (
-        odoo_sync, cert_lookup, skill_matrix_views_store as views_store,
+        odoo_sync,
+        cert_lookup,
+        skill_matrix_views_store as views_store,
     )
     from zira_dashboard.routes import skills as skills_routes
 
@@ -5018,7 +5753,8 @@ def test_staffing_skills_context_degrades_when_preference_load_fails(monkeypatch
     monkeypatch.setattr(skills_routes._http_cache, "store_cached_response", lambda *a, **k: None)
     monkeypatch.setattr(cert_lookup, "load_person_certs", lambda: {})
     monkeypatch.setattr(
-        odoo_sync, "sync",
+        odoo_sync,
+        "sync",
         lambda force=False: SimpleNamespace(ok=True, last_sync_at=None, error=None),
     )
     monkeypatch.setattr(skills_routes.staffing, "load_roster", lambda: [_person("Alex", 0)])

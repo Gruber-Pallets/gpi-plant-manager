@@ -60,15 +60,15 @@ def scheduling_group_for_skill(skill: str) -> str:
 
 @dataclass(frozen=True)
 class Location:
-    name: str                               # unique display name
-    skill: str                              # default required skill (legacy; required_skills is the source of truth)
-    bay: str                                # grouping for display
-    department: str                         # Recycled / New / Supervisor / Maintenance
-    meter_id: str | None                    # Zira station ID if mapped, else None
-    min_ops: int = 1                        # minimum operators required to run
-    max_ops: int | None = 1                 # max operators; None = unlimited
-    required_skills: tuple[str, ...] = ()   # if empty, defaults to (skill,)
-    note: str | None = None                 # user-editable free-form note shown under name
+    name: str  # unique display name
+    skill: str  # default required skill (legacy; required_skills is the source of truth)
+    bay: str  # grouping for display
+    department: str  # Recycled / New / Supervisor / Maintenance
+    meter_id: str | None  # Zira station ID if mapped, else None
+    min_ops: int = 1  # minimum operators required to run
+    max_ops: int | None = 1  # max operators; None = unlimited
+    required_skills: tuple[str, ...] = ()  # if empty, defaults to (skill,)
+    note: str | None = None  # user-editable free-form note shown under name
 
 
 # 22 work centers, in Plant-Scheduler-sheet order.
@@ -114,7 +114,15 @@ LOCATIONS: tuple[Location, ...] = (
     # Maint.
     Location("Work Orders", "Mechanic", "Maint.", "Maintenance", None, min_ops=1, max_ops=None),
     # Transportation
-    Location("Truck Driver", "CDL (Automatics) Certified", "Transportation", "Transportation", None, min_ops=1, max_ops=None),
+    Location(
+        "Truck Driver",
+        "CDL (Automatics) Certified",
+        "Transportation",
+        "Transportation",
+        None,
+        min_ops=1,
+        max_ops=None,
+    ),
 )
 
 
@@ -143,9 +151,7 @@ def scheduling_preference_targets() -> tuple[SchedulingPreferenceTarget, ...]:
         required = required_skills_for(loc)
         if len(required) == 1:
             single_skill_centers.setdefault(required[0], []).append(loc.name)
-    grouped_skills = {
-        skill for skill, centers in single_skill_centers.items() if len(centers) > 1
-    }
+    grouped_skills = {skill for skill, centers in single_skill_centers.items() if len(centers) > 1}
     # Trim Saw is a Recycled rotation group even though it currently has one
     # center. Its group key drives the scheduler's pairing and training rules.
     grouped_skills.add("Trim Saw")
@@ -157,14 +163,14 @@ def scheduling_preference_targets() -> tuple[SchedulingPreferenceTarget, ...]:
         if len(required) == 1 and required[0] in grouped_skills:
             skill = required[0]
             if skill not in emitted_groups:
-                targets.append(SchedulingPreferenceTarget(
-                    skill, skill, tuple(single_skill_centers[skill]), (skill,)
-                ))
+                targets.append(
+                    SchedulingPreferenceTarget(
+                        skill, skill, tuple(single_skill_centers[skill]), (skill,)
+                    )
+                )
                 emitted_groups.add(skill)
         else:
-            targets.append(SchedulingPreferenceTarget(
-                loc.name, loc.name, (loc.name,), required
-            ))
+            targets.append(SchedulingPreferenceTarget(loc.name, loc.name, (loc.name,), required))
     return tuple(targets)
 
 
@@ -172,7 +178,8 @@ def eligible_scheduling_preference_targets(
     person: Person,
 ) -> tuple[SchedulingPreferenceTarget, ...]:
     return tuple(
-        target for target in scheduling_preference_targets()
+        target
+        for target in scheduling_preference_targets()
         if all(person.level(skill) >= 1 for skill in target.required_skills)
     )
 
@@ -207,8 +214,8 @@ class Person:
     reserve: bool = False
     skills: dict[str, int] = field(default_factory=dict)
     employee_id: int | None = None  # Odoo hr.employee.id; None for legacy
-    wage_type: str | None = None    # Odoo hr.employee.wage_type: 'hourly' | 'monthly' | None
-    is_flexible: bool = False       # Odoo "Schedule Type" flexible; excluded from late report
+    wage_type: str | None = None  # Odoo hr.employee.wage_type: 'hourly' | 'monthly' | None
+    is_flexible: bool = False  # Odoo "Schedule Type" flexible; excluded from late report
 
     def level(self, skill: str) -> int:
         return int(self.skills.get(skill_name_for_scheduling_group(skill), 0))
@@ -218,6 +225,7 @@ PLANT_SCHEDULER_CSV = Path("Plant Scheduler(Plant Scheduler).csv")
 
 
 # ---------- CSV bootstrap helper ----------
+
 
 def _default_assignments_from_plant_scheduler() -> dict[str, list[str]]:
     """Parse 'Defaults for New Day' column to get default person per position."""
@@ -264,6 +272,7 @@ def load_roster() -> list[Person]:
     Settings → Roster Filter UI. Cached in-process for 1 hour
     (_ROSTER_CACHE_TTL_SECONDS); invalidated on save_roster()."""
     import time as _time
+
     global _ROSTER_CACHE
     with _ROSTER_CACHE_LOCK:
         if _ROSTER_CACHE is not None:
@@ -271,6 +280,7 @@ def load_roster() -> list[Person]:
             if _time.time() < expires_at:
                 return cached
     from . import db
+
     rows = db.query(
         "SELECT p.id, p.name, p.active, p.reserve, p.odoo_id, p.wage_type, p.is_flexible, "
         "  COALESCE(json_object_agg(s.name, ps.level) "
@@ -284,15 +294,17 @@ def load_roster() -> list[Person]:
     )
     out: list[Person] = []
     for r in rows:
-        out.append(Person(
-            name=r["name"],
-            active=r["active"],
-            reserve=r["reserve"],
-            skills={k: int(v) for k, v in (json.loads(r["skills_json"]) or {}).items()},
-            employee_id=r["odoo_id"],
-            wage_type=r["wage_type"],
-            is_flexible=bool(r["is_flexible"]),
-        ))
+        out.append(
+            Person(
+                name=r["name"],
+                active=r["active"],
+                reserve=r["reserve"],
+                skills={k: int(v) for k, v in (json.loads(r["skills_json"]) or {}).items()},
+                employee_id=r["odoo_id"],
+                wage_type=r["wage_type"],
+                is_flexible=bool(r["is_flexible"]),
+            )
+        )
     with _ROSTER_CACHE_LOCK:
         _ROSTER_CACHE = (out, _time.time() + _ROSTER_CACHE_TTL_SECONDS)
     return out
@@ -303,6 +315,7 @@ def save_roster(people: list[Person]) -> None:
     left untouched (sync owns server-mastered fields); levels at 0 are
     deleted from person_skills."""
     from . import db
+
     with db.cursor() as cur:
         for p in people:
             cur.execute(
@@ -336,13 +349,14 @@ def save_roster(people: list[Person]) -> None:
 
 # ---------- daily schedule ----------
 
+
 @dataclass
 class Schedule:
     day: date
     published: bool = False
     # location name → list of person names (ordered as the user chose)
     assignments: dict[str, list[str]] = field(default_factory=dict)
-    notes: str = ""                                     # day-wide note
+    notes: str = ""  # day-wide note
     wc_notes: dict[str, str] = field(default_factory=dict)  # per-work-center notes
     testing_day: bool = False  # flag: training/override day; output not counted toward people
     # When the user edits a previously-posted day, we snapshot the posted version here
@@ -396,9 +410,7 @@ def _validate_saturday_availability_overrides(value) -> dict[str, str]:
     normalized: dict[str, str] = {}
     for person_name, destination in value.items():
         if not isinstance(person_name, str) or destination not in _SATURDAY_AVAILABILITY_STATES:
-            raise ValueError(
-                "saturday_availability_overrides values must be 'unassigned' or 'off'"
-            )
+            raise ValueError("saturday_availability_overrides values must be 'unassigned' or 'off'")
         normalized[person_name] = destination
     return normalized
 
@@ -476,7 +488,8 @@ def draft_from_posted(schedule: Schedule) -> Schedule:
     draft = deepcopy(schedule)
     draft.published_snapshot = (
         deepcopy(schedule.published_snapshot)
-        if schedule.published_snapshot else snapshot_of(schedule)
+        if schedule.published_snapshot
+        else snapshot_of(schedule)
     )
     draft.published = False
     draft.published_delivery = {}
@@ -510,6 +523,7 @@ def snapshot_of(sched: Schedule) -> dict:
 # cache by day; save_schedule() invalidates the matching entry.
 _schedule_cache: dict[date, Schedule] = {}
 _schedule_cache_lock = RLock()
+_METADATA_UNSET = object()
 
 
 def _invalidate_schedule_cache(day: date) -> None:
@@ -554,6 +568,7 @@ def iter_saved_schedules():
     newest first. Past schedules used to live as local JSON files; that
     storage was retired when the app moved to Railway/Postgres."""
     from . import db
+
     rows = db.query("SELECT day FROM schedules ORDER BY day DESC")
     for r in rows:
         day_val = r["day"]
@@ -567,6 +582,7 @@ def iter_saved_schedules():
 
 def _load_schedule_from_db(day: date) -> Schedule:
     from . import db
+
     rows = db.query(
         "SELECT day, published, testing_day, notes, custom_hours, published_snapshot, published_delivery, "
         "recycled_rotation_mode, assignment_sources, auto_enabled_work_centers, saturday_availability_overrides "
@@ -672,6 +688,82 @@ def load_schedule_for_update(day: date, *, cur) -> Schedule | None:
     )
 
 
+def ensure_schedule_for_update(
+    day: date,
+    *,
+    cur,
+    initial_auto_enabled_work_centers=(),
+) -> Schedule:
+    """Return a persisted schedule while holding its row lock.
+
+    A metadata-only request may be the first write for a day.  Insert a bare
+    row without replacing a concurrent creator, then reload the winning row
+    through the transaction cursor.
+    """
+    normalized_initial = _normalize_auto_enabled_work_centers(initial_auto_enabled_work_centers)
+    while True:
+        existing = load_schedule_for_update(day, cur=cur)
+        if existing is not None:
+            return existing
+        cur.execute(
+            "INSERT INTO schedules (day, auto_enabled_work_centers) "
+            "VALUES (%s, %s::jsonb) "
+            "ON CONFLICT (day) DO NOTHING RETURNING day",
+            (day, json.dumps(normalized_initial)),
+        )
+        cur.fetchone()
+
+
+def update_locked_schedule_metadata(
+    schedule: Schedule,
+    *,
+    cur,
+    custom_hours=_METADATA_UNSET,
+    testing_day=_METADATA_UNSET,
+) -> Schedule:
+    """Update only caller-owned schedule metadata on an already locked row.
+
+    Assignment rows and unrelated schedule columns deliberately never appear
+    in this write.  If the row is posted, the same transaction first preserves
+    its official snapshot and converts it to a draft.
+    """
+    if (
+        custom_hours is _METADATA_UNSET
+        and testing_day is not _METADATA_UNSET
+        and bool(testing_day) == bool(schedule.testing_day)
+    ):
+        return schedule
+    updated = draft_from_posted(schedule)
+    assignments: list[str] = []
+    params: list[object] = []
+    if schedule.published:
+        assignments.extend(
+            [
+                "published = FALSE",
+                "published_snapshot = %s::jsonb",
+                "published_delivery = '{}'::jsonb",
+            ]
+        )
+        params.append(json.dumps(updated.published_snapshot))
+    if custom_hours is not _METADATA_UNSET:
+        assignments.append("custom_hours = %s::jsonb")
+        params.append(json.dumps(custom_hours) if custom_hours is not None else None)
+        updated = replace(updated, custom_hours=deepcopy(custom_hours))
+    if testing_day is not _METADATA_UNSET:
+        assignments.append("testing_day = %s")
+        params.append(bool(testing_day))
+        updated = replace(updated, testing_day=bool(testing_day))
+    if not assignments:
+        return updated
+    assignments.append("updated_at = now()")
+    params.append(schedule.day)
+    cur.execute(
+        f"UPDATE schedules SET {', '.join(assignments)} WHERE day = %s",
+        tuple(params),
+    )
+    return updated
+
+
 def _schedule_without_person(schedule: Schedule, person_name: str) -> tuple[Schedule, bool]:
     """Return ``schedule`` with one person's assignments and sources removed."""
     assignments = {
@@ -715,17 +807,7 @@ def update_auto_enabled_work_centers(
     # conditionally, then reload it under a row lock.  If another request
     # creates the full schedule first, its row wins and we update only this
     # field rather than upserting our stale empty Schedule over it.
-    while True:
-        existing = load_schedule_for_update(day, cur=cur)
-        if existing is not None:
-            break
-        cur.execute(
-            "INSERT INTO schedules (day, auto_enabled_work_centers) "
-            "VALUES (%s, '[]'::jsonb) "
-            "ON CONFLICT (day) DO NOTHING RETURNING day",
-            (day,),
-        )
-        cur.fetchone()
+    existing = ensure_schedule_for_update(day, cur=cur)
     normalized_enabled = _normalize_auto_enabled_work_centers(enabled)
     normalized_turn_off = set(_normalize_auto_enabled_work_centers(list(turn_off)))
     sched = draft_from_posted(existing)
@@ -780,6 +862,7 @@ def load_schedules_bulk(
     run 3 queries per day AND pin every day into the per-day cache forever,
     so this deliberately does NOT touch _schedule_cache."""
     from . import db
+
     conds: list[str] = []
     params: list = []
     if start is not None:
@@ -825,8 +908,9 @@ def load_schedules_bulk(
     )
     assignments_by_day: dict[date, dict[str, list[str]]] = {}
     for a in asg_rows:
-        assignments_by_day.setdefault(a["day"], {}).setdefault(
-            a["wc_name"], []).append(a["person_name"])
+        assignments_by_day.setdefault(a["day"], {}).setdefault(a["wc_name"], []).append(
+            a["person_name"]
+        )
     wc_notes_by_day: dict[date, dict[str, str]] = {}
     for n in notes_rows:
         wc_notes_by_day.setdefault(n["day"], {})[n["wc_name"]] = n["note"]
@@ -835,25 +919,30 @@ def load_schedules_bulk(
         if not isinstance(r["day"], date):
             continue
         d = r["day"]
-        out.append((d, Schedule(
-            day=d,
-            published=r["published"],
-            assignments=assignments_by_day.get(d, {}),
-            notes=r["notes"] or "",
-            wc_notes=wc_notes_by_day.get(d, {}),
-            testing_day=r["testing_day"],
-            custom_hours=r["custom_hours"],
-            published_snapshot=r["published_snapshot"],
-            published_delivery=_delivery_mapping(r.get("published_delivery")),
-            rotation_mode=r.get("recycled_rotation_mode") or "normal",
-            assignment_sources=_json_mapping(r.get("assignment_sources")),
-            auto_enabled_work_centers=_normalize_auto_enabled_work_centers(
-                r.get("auto_enabled_work_centers")
-            ),
-            saturday_availability_overrides=_json_saturday_availability_overrides(
-                r.get("saturday_availability_overrides")
-            ),
-        )))
+        out.append(
+            (
+                d,
+                Schedule(
+                    day=d,
+                    published=r["published"],
+                    assignments=assignments_by_day.get(d, {}),
+                    notes=r["notes"] or "",
+                    wc_notes=wc_notes_by_day.get(d, {}),
+                    testing_day=r["testing_day"],
+                    custom_hours=r["custom_hours"],
+                    published_snapshot=r["published_snapshot"],
+                    published_delivery=_delivery_mapping(r.get("published_delivery")),
+                    rotation_mode=r.get("recycled_rotation_mode") or "normal",
+                    assignment_sources=_json_mapping(r.get("assignment_sources")),
+                    auto_enabled_work_centers=_normalize_auto_enabled_work_centers(
+                        r.get("auto_enabled_work_centers")
+                    ),
+                    saturday_availability_overrides=_json_saturday_availability_overrides(
+                        r.get("saturday_availability_overrides")
+                    ),
+                ),
+            )
+        )
     return out
 
 
@@ -953,13 +1042,20 @@ def save_schedule(
         _invalidate_schedule_cache(schedule.day)
     if cur is not None:
         _save_schedule_with_cursor(
-            cur, schedule, assignment_sources, saturday_availability_overrides,
+            cur,
+            schedule,
+            assignment_sources,
+            saturday_availability_overrides,
         )
         return
     from . import db
+
     with db.cursor() as own_cur:
         _save_schedule_with_cursor(
-            own_cur, schedule, assignment_sources, saturday_availability_overrides,
+            own_cur,
+            schedule,
+            assignment_sources,
+            saturday_availability_overrides,
         )
 
 
@@ -994,7 +1090,9 @@ def create_schedule_if_absent(schedule: Schedule) -> bool:
                 json.dumps(_delivery_mapping(schedule.published_delivery)),
                 schedule.rotation_mode or "normal",
                 json.dumps(saturday_availability_overrides),
-                json.dumps(_normalize_auto_enabled_work_centers(schedule.auto_enabled_work_centers)),
+                json.dumps(
+                    _normalize_auto_enabled_work_centers(schedule.auto_enabled_work_centers)
+                ),
                 json.dumps(assignment_sources),
             ),
         )
@@ -1026,9 +1124,8 @@ def create_schedule_if_absent(schedule: Schedule) -> bool:
 
 def schedule_revision(day: date) -> str | None:
     from . import db
-    rows = db.query(
-        "SELECT updated_at::text AS revision FROM schedules WHERE day = %s", (day,)
-    )
+
+    rows = db.query("SELECT updated_at::text AS revision FROM schedules WHERE day = %s", (day,))
     return rows[0]["revision"] if rows else None
 
 
@@ -1042,13 +1139,18 @@ def delivery_for_version(day: date, version: str) -> dict[str, str] | None:
 
 
 def record_delivery(
-    day: date, version: str, fields: Mapping[str, str],
+    day: date,
+    version: str,
+    fields: Mapping[str, str],
 ) -> dict[str, str] | None:
     from . import db
+
     patch = {
-        key: value for key, value in fields.items()
+        key: value
+        for key, value in fields.items()
         if key in {"printed_at", "slack_posted_at", "slack_permalink"}
-        and isinstance(value, str) and value
+        and isinstance(value, str)
+        and value
     }
     if not version or not patch:
         return None
@@ -1086,10 +1188,10 @@ def default_assignments() -> dict[str, list[str]]:
 # ---------- color / level helpers ----------
 
 SKILL_COLORS = {
-    3: "#4ade80",   # green — trained & proficient
-    2: "#e6edf3",   # foreground — trained & competent
-    1: "#fb923c",   # orange — practicing
-    0: "#ef4444",   # red — not trained
+    3: "#4ade80",  # green — trained & proficient
+    2: "#e6edf3",  # foreground — trained & competent
+    1: "#fb923c",  # orange — practicing
+    0: "#ef4444",  # red — not trained
 }
 
 SKILL_LABELS = {
@@ -1117,8 +1219,9 @@ def present_operators(assigned: list[dict], off_names) -> list[dict]:
     return [a for a in assigned if a["name"] not in off]
 
 
-def effective_minutes_worked(name: str, day, window_start_utc, window_end_utc,
-                             partials: dict | None = None) -> int:
+def effective_minutes_worked(
+    name: str, day, window_start_utc, window_end_utc, partials: dict | None = None
+) -> int:
     """Minutes the person `name` was actually working in [window_start_utc, window_end_utc]
     on `day`. Subtracts:
 
@@ -1138,6 +1241,7 @@ def effective_minutes_worked(name: str, day, window_start_utc, window_end_utc,
     """
     from datetime import datetime
     from . import shift_config, attendance
+
     if window_end_utc <= window_start_utc:
         return 0
     base = int((window_end_utc - window_start_utc).total_seconds() // 60)

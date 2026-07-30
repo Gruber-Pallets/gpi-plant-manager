@@ -74,10 +74,10 @@ def test_staffing_bay_cells_keep_panel_background_across_work_center_states():
     css = _style()
 
     active = 'tr[data-loc][data-on="true"] td { background: var(--accent-dim); }'
-    inactive = 'tr.work-center-off td { background: var(--panel-2); }'
+    inactive = "tr.work-center-off td { background: var(--panel-2); }"
     bay_override = (
         'tr[data-loc][data-on="true"] td.bay,\n'
-        '  tr.work-center-off td.bay { background: var(--panel-3); }'
+        "  tr.work-center-off td.bay { background: var(--panel-3); }"
     )
 
     assert bay_override in css
@@ -88,10 +88,10 @@ def test_staffing_bay_cells_keep_panel_background_across_work_center_states():
 def test_staffing_disabled_rows_dim_non_bay_cells_only():
     css = _style()
 
-    dimmed_non_bay_cells = 'tr.work-center-off td:not(.bay) { opacity: 0.58; }'
+    dimmed_non_bay_cells = "tr.work-center-off td:not(.bay) { opacity: 0.58; }"
 
     assert dimmed_non_bay_cells in css
-    assert 'tr.work-center-off { opacity: 0.58; }' not in css
+    assert "tr.work-center-off { opacity: 0.58; }" not in css
 
 
 def test_staffing_partial_time_off_controls_name_the_person():
@@ -113,12 +113,18 @@ def test_saturday_availability_swap_is_left_rail_only_and_saves_immediately():
     assert 'class="saturday-availability-swap"' in html
     assert 'aria-label="Move {{ n }} to Off"' in html
     assert 'aria-label="Move {{ n }} to Unassigned"' in html
-    assert 'saturday-availability-confirm' not in html
+    assert "saturday-availability-confirm" not in html
     assert "/api/staffing/saturday-availability" in js
     assert "_saveSaturdayAvailability(button)" in js
     assert "button.disabled = true;" in js
-    assert "showToast(error.message || 'Could not update Saturday availability.', null, 'error');" in js
-    assert "showModal()" not in js[js.index("const __saturdayRecruiting"):js.index("// Partial-day off labels")]
+    assert (
+        "showToast(error.message || 'Could not update Saturday availability.', null, 'error');"
+        in js
+    )
+    assert (
+        "showModal()"
+        not in js[js.index("const __saturdayRecruiting") : js.index("// Partial-day off labels")]
+    )
     assert ".saturday-availability-swap { opacity: 0;" in css
     assert ".saturday-person-row:hover .saturday-availability-swap" in css
     assert ".saturday-availability-confirm" not in css
@@ -130,8 +136,14 @@ def test_staffing_custom_hours_controls_are_named_and_busy():
 
     assert 'id="hours-pill"' in html
     assert 'aria-label="Edit shift hours for {{ day }}"' in html
-    assert 'id="hours-start" value="{{ eff_hours_start }}" step="300" aria-label="Shift start time"' in html
-    assert 'id="hours-end"   value="{{ eff_hours_end }}"   step="300" aria-label="Shift end time"' in html
+    assert (
+        'id="hours-start" value="{{ eff_hours_start }}" step="300" aria-label="Shift start time"'
+        in html
+    )
+    assert (
+        'id="hours-end"   value="{{ eff_hours_end }}"   step="300" aria-label="Shift end time"'
+        in html
+    )
     assert 'class="b-start" value="{{ b.start }}" step="60" aria-label="Break start time"' in html
     assert 'class="b-end"   value="{{ b.end }}"   step="60" aria-label="Break end time"' in html
     assert 'class="b-name"  value="{{ b.name }}" maxlength="40" aria-label="Break name"' in html
@@ -157,16 +169,87 @@ def test_optional_workday_reuses_existing_page_modal_navigation_and_api_contract
     assert "/staffing/holiday" not in html
     assert "holiday-modal" not in html
     assert "holiday-navigation" not in html
-    assert (
-        "'/api/staffing/saturday-recruiting/activate-from-schedule'"
-        in recruiting_js
-    )
+    assert "'/api/staffing/saturday-recruiting/activate-from-schedule'" in recruiting_js
     assert "JSON.stringify({day: button.dataset.day})" in recruiting_js
     assert (
-        "Could not save the schedule. Optional workday recruiting was not started."
-        in recruiting_js
+        "Could not save the schedule. Optional workday recruiting was not started." in recruiting_js
     )
     assert "/api/staffing/holiday-recruiting" not in recruiting_js
+
+
+def test_recruit_click_forces_real_autosave_before_activation():
+    controller = (
+        _script()
+        .split(
+            "  // ---------- Autosave controller ----------",
+            1,
+        )[1]
+        .split(
+            "  // ---------- Publish submit busy state ----------",
+            1,
+        )[0]
+    )
+    recruiting = _recruiting_script()
+    harness = textwrap.dedent(
+        f"""
+        const controller = {controller!r};
+        const recruiting = {recruiting!r};
+        const documentListeners = {{}};
+        const formListeners = {{}};
+        const calls = [];
+        let reloaded = false;
+        const form = {{
+          addEventListener(type, listener) {{ formListeners[type] = listener; }},
+          getAttribute(name) {{
+            return name === 'action' ? '/staffing?day=2026-11-27' : null;
+          }},
+        }};
+        const button = {{
+          disabled: false,
+          dataset: {{day: '2026-11-27'}},
+        }};
+        global.window = {{
+          location: {{reload() {{ reloaded = true; }}}},
+          alert(message) {{ throw new Error('unexpected alert: ' + message); }},
+        }};
+        global.document = {{
+          getElementById(id) {{ return id === 'staffing-form' ? form : null; }},
+          addEventListener(type, listener) {{ documentListeners[type] = listener; }},
+        }};
+        global.FormData = class FormData {{ set() {{}} }};
+        global.fetch = async (url, options) => {{
+          calls.push([url, options.method]);
+          if (url.startsWith('/staffing?day=')) {{
+            return {{ok: true, status: 200, json: async () => ({{ok: true, published: false}})}};
+          }}
+          if (url === '/api/staffing/saturday-recruiting/activate-from-schedule') {{
+            return {{ok: true, status: 200, json: async () => ({{ok: true}})}};
+          }}
+          throw new Error('unexpected URL ' + url);
+        }};
+        const __viewingPosted = false;
+        eval(controller);
+        eval(recruiting);
+        await documentListeners.click({{
+          target: {{closest() {{ return button; }}}},
+        }});
+        if (calls.length !== 2) throw new Error('expected autosave then activation');
+        if (!calls[0][0].startsWith('/staffing?day=')) throw new Error('autosave was not first');
+        if (calls[1][0] !== '/api/staffing/saturday-recruiting/activate-from-schedule') {{
+          throw new Error('activation was not second');
+        }}
+        if (!reloaded) throw new Error('successful activation did not reload');
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_staffing_title_uses_date_picker_without_past_shortcut():
@@ -180,7 +263,7 @@ def test_staffing_custom_hours_badge_uses_compact_copy_and_toggles_editor():
     js = _script()
 
     assert '<span class="label">Custom</span>' in html
-    assert '<span>{{ eff_custom_hours_label }}</span>' in html
+    assert "<span>{{ eff_custom_hours_label }}</span>" in html
     assert "pill.addEventListener('click', () => editor.hidden ? open() : close());" in js
 
 
@@ -189,15 +272,14 @@ def test_nonstandard_hours_badge_uses_compact_custom_copy():
 
     assert 'class="hours-pill {% if nonstandard_schedule %}custom' in html
     assert '<span class="label">Custom</span>' in html
-    assert '<span>{{ eff_custom_hours_label }}</span>' in html
+    assert "<span>{{ eff_custom_hours_label }}</span>" in html
 
 
 def test_nonstandard_hours_badge_uses_blue_treatment():
     css = _style()
 
     assert (
-        ".hours-pill.custom { color: #2563eb; border-color: #2563eb; "
-        "background: #dbeafe; }"
+        ".hours-pill.custom { color: #2563eb; border-color: #2563eb; background: #dbeafe; }"
     ) in css
 
 
@@ -215,7 +297,10 @@ def test_staffing_custom_hours_panel_manages_focus_and_escape():
 
     assert 'aria-controls="hours-editor"' in html
     assert 'aria-expanded="false"' in html
-    assert 'id="hours-editor" class="hours-editor" role="dialog" aria-modal="false" aria-labelledby="hours-editor-title" hidden' in html
+    assert (
+        'id="hours-editor" class="hours-editor" role="dialog" aria-modal="false" aria-labelledby="hours-editor-title" hidden'
+        in html
+    )
     assert '<h4 id="hours-editor-title">Custom hours for {{ day }}</h4>' in html
     assert "pill.setAttribute('aria-expanded', 'true');" in js
     assert "pill.setAttribute('aria-expanded', 'false');" in js
@@ -250,7 +335,8 @@ def test_staffing_publish_banner_has_no_override_or_implicit_slack_publish():
     html = _template()
     js = _script()
     slack_post = js.split("async function postToSlack(btn) {", 1)[1].split(
-        "// ---------- Rotation goal", 1,
+        "// ---------- Rotation goal",
+        1,
     )[0]
 
     assert "Override &amp; Publish" not in html
@@ -267,8 +353,8 @@ def test_header_uses_only_orange_draft_and_green_posted_toggle():
 
     assert 'class="draft-label"' not in html
     assert 'id="edit-schedule-btn"' not in html
-    assert 'view-toggle-btn draft' in html
-    assert 'view-toggle-btn posted' in html
+    assert "view-toggle-btn draft" in html
+    assert "view-toggle-btn posted" in html
     assert ".view-toggle-btn.active.draft {" in css
     assert ".view-toggle-btn.active.posted {" in css
 
@@ -306,9 +392,7 @@ def test_posted_save_transitions_to_draft_and_delivery_refreshes_live_revision()
         "if (!data.published && window.SCHEDULE_PUBLISHED) {"
     )
     assert "if (window.SCHEDULE_PUBLISHED) {" in rebuild
-    assert rebuild.index("if (window.SCHEDULE_PUBLISHED) {") < rebuild.index(
-        "setActiveMode(mode);"
-    )
+    assert rebuild.index("if (window.SCHEDULE_PUBLISHED) {") < rebuild.index("setActiveMode(mode);")
     assert "async function refreshScheduleRevision()" in js
     assert js.count("await refreshScheduleRevision();") == 2
 
@@ -316,16 +400,20 @@ def test_posted_save_transitions_to_draft_and_delivery_refreshes_live_revision()
 def test_posted_auto_toggle_reloads_draft_and_delivery_owns_revision_window():
     js = _script()
     save_auto = js.split("async function saveAutoCenters(turnOff = []) {", 1)[1].split(
-        "// Ordinary rebuilds", 1,
+        "// Ordinary rebuilds",
+        1,
     )[0]
     delivery = js.split("let localDeliveryInFlight = 0;", 1)[1].split(
-        "// ---------- Rotation goal", 1,
+        "// ---------- Rotation goal",
+        1,
     )[0]
     live_poll = js.split("async function checkLiveRevision() {", 1)[1].split(
-        "// ---------- Rotation goal", 1,
+        "// ---------- Rotation goal",
+        1,
     )[0]
     slack_delivery = js.split("async function postToSlack(btn) {", 1)[1].split(
-        "async function refreshScheduleRevision()", 1,
+        "async function refreshScheduleRevision()",
+        1,
     )[0]
 
     assert "if (window.SCHEDULE_PUBLISHED) {" in save_auto
@@ -352,7 +440,10 @@ def test_staffing_slack_post_button_exposes_busy_state():
     html = _template()
     js = _script()
 
-    assert 'class="publish-btn icon-btn share-btn{% if posted_delivery.slack_posted_at %} complete{% endif %}"' in html
+    assert (
+        'class="publish-btn icon-btn share-btn{% if posted_delivery.slack_posted_at %} complete{% endif %}"'
+        in html
+    )
     assert 'onclick="postToSlack(this)"' in html
     assert "btn.setAttribute('aria-busy', 'true');" in js
     assert "btn.setAttribute('aria-busy', 'false');" in js
@@ -382,7 +473,10 @@ def test_work_center_toggles_initialize_without_saturday_goal_controls():
     )[1].split("// ---------- Unified training", 1)[0]
 
     assert "if (!controls) return;" not in controller
-    assert "const modeBtns = controls ? [...controls.querySelectorAll('.rotation-mode-btn')] : [];" in controller
+    assert (
+        "const modeBtns = controls ? [...controls.querySelectorAll('.rotation-mode-btn')] : [];"
+        in controller
+    )
     assert "if (!controls && !workCenterRows.length) return;" in controller
     assert "const day = controls?.dataset.day || window.SCHEDULE_DAY;" in controller
 
@@ -397,7 +491,10 @@ def test_staffing_print_balances_schedule_columns_and_keeps_fitting_name_pairs_i
     assert "table.sched thead th.sched-col { width: 41%; }" in css
     assert "table.sched thead th.wc-note-col { width: 20.5%; }" in css
     assert "table.sched th.wc-col,\ntable.sched td.station { padding-right: 2pt; }" in css
-    assert "table.sched th.dept,\ntable.sched td.dept { padding-left: 2pt; padding-right: 2pt; }" in css
+    assert (
+        "table.sched th.dept,\ntable.sched td.dept { padding-left: 2pt; padding-right: 2pt; }"
+        in css
+    )
     assert "display: inline;" in css
     assert "margin-right: 0.45em;" in css
     assert "tr:has(.wc-note-print:empty) .multi-dd .dd-summary-text" in css
@@ -409,8 +506,14 @@ def test_staffing_print_scopes_driving_label_to_transportation_bay_only():
     screen_css = _style()
     print_css = _print_css()
 
-    assert 'class="bay-screen-label{% if bay.name == \'Transportation\' %} transportation-bay-label{% endif %}"' in html
-    assert "{% if bay.name == 'Transportation' %}<div class=\"bay-print-label\">Driving</div>{% endif %}" in html
+    assert (
+        "class=\"bay-screen-label{% if bay.name == 'Transportation' %} transportation-bay-label{% endif %}\""
+        in html
+    )
+    assert (
+        "{% if bay.name == 'Transportation' %}<div class=\"bay-print-label\">Driving</div>{% endif %}"
+        in html
+    )
     assert ".bay-print-label { display: none; }" in screen_css
     assert ".bay-screen-label { display: block !important; }" in print_css
     assert ".transportation-bay-label { display: none !important; }" in print_css
@@ -423,7 +526,7 @@ def test_forklift_live_recalc_hooks_assignment_changes():
     assert "function recalcForkliftBaySummary()" in js
     assert "function countScheduledForkliftDrivers(model)" in js
     assert "window.FORKLIFT_LIVE_MODEL" in js
-    assert "details.sched-dd[data-loc=\"" in js
+    assert 'details.sched-dd[data-loc="' in js
     assert "recalcForkliftBaySummary();" in js
     # capacity-coverage badge: live gap-based severity + suggested count,
     # no client-side Erlang-C / SLA prediction.
@@ -600,10 +703,13 @@ def test_rotation_warning_success_schedules_authoritative_live_validation():
     assert save_auto.index("applyAutoCenterAssignments(data.assignments);") < save_auto.index(
         "scheduleCurrentViewValidation();"
     )
-    assert """renderCoverageIssues(
+    assert (
+        """renderCoverageIssues(
         data.warnings,
         [...(data.coverage?.issues || []), ...partialPlacementIssues(data)],
-      );""" in apply_rebuild
+      );"""
+        in apply_rebuild
+    )
     assert "scheduleCurrentViewValidation();" in apply_rebuild
 
 
@@ -625,7 +731,8 @@ def test_auto_toggle_failures_preserve_current_issues_and_append_once():
 def test_live_validation_uses_only_the_newest_response_and_replaces_warnings():
     js = _script()
     validation = js.split("let validationTimer = null;", 1)[1].split(
-        "function setWorkCenterOnState", 1,
+        "function setWorkCenterOnState",
+        1,
     )[0]
     assert "AbortController" in validation
     assert "if (requestId !== validationRequestId) return;" in validation
@@ -635,7 +742,8 @@ def test_live_validation_uses_only_the_newest_response_and_replaces_warnings():
 def test_live_validation_failure_does_not_keep_old_staffing_issues():
     js = _script()
     validation = js.split("async function validateCurrentView() {", 1)[1].split(
-        "function scheduleCurrentViewValidation", 1,
+        "function scheduleCurrentViewValidation",
+        1,
     )[0]
     assert "renderCoverageIssues([], [validationUnavailableIssue()]);" in validation
 
@@ -643,10 +751,12 @@ def test_live_validation_failure_does_not_keep_old_staffing_issues():
 def test_live_validation_is_disabled_for_every_posted_schedule_view():
     js = _script()
     validation = js.split("async function validateCurrentView() {", 1)[1].split(
-        "function invalidateCurrentViewValidation()", 1,
+        "function invalidateCurrentViewValidation()",
+        1,
     )[0]
     scheduler = js.split(
-        "scheduleCurrentViewValidation = function scheduleCurrentViewValidation() {", 1,
+        "scheduleCurrentViewValidation = function scheduleCurrentViewValidation() {",
+        1,
     )[1].split("function setWorkCenterOnState", 1)[0]
     guard = "if (__viewingPosted || window.SCHEDULE_PUBLISHED) return;"
 
@@ -659,9 +769,13 @@ def test_live_validation_is_disabled_for_every_posted_schedule_view():
 
 def test_live_validation_ignores_an_out_of_order_stale_response():
     js = _script()
-    validation = "let validationTimer = null;" + js.split(
-        "let validationTimer = null;", 1,
-    )[1].split("function setWorkCenterOnState", 1)[0]
+    validation = (
+        "let validationTimer = null;"
+        + js.split(
+            "let validationTimer = null;",
+            1,
+        )[1].split("function setWorkCenterOnState", 1)[0]
+    )
     harness = textwrap.dedent(
         f"""
         const validation = {validation!r};
@@ -729,12 +843,20 @@ def test_live_validation_ignores_an_out_of_order_stale_response():
 
 def test_live_validation_failed_auto_cannot_replace_the_explicit_failure():
     js = _script()
-    validation = "let validationTimer = null;" + js.split(
-        "let validationTimer = null;", 1,
-    )[1].split("function setWorkCenterOnState", 1)[0]
-    save_auto = "async function saveAutoCenters(turnOff = []) {" + js.split(
-        "async function saveAutoCenters(turnOff = []) {", 1,
-    )[1].split("// Ordinary rebuilds", 1)[0]
+    validation = (
+        "let validationTimer = null;"
+        + js.split(
+            "let validationTimer = null;",
+            1,
+        )[1].split("function setWorkCenterOnState", 1)[0]
+    )
+    save_auto = (
+        "async function saveAutoCenters(turnOff = []) {"
+        + js.split(
+            "async function saveAutoCenters(turnOff = []) {",
+            1,
+        )[1].split("// Ordinary rebuilds", 1)[0]
+    )
 
     assert "function invalidateCurrentViewValidation()" in validation
     failure = save_auto.split("} catch (err) {", 1)[1].split("} finally {", 1)[0]
@@ -828,13 +950,16 @@ def test_live_validation_failed_auto_cannot_replace_the_explicit_failure():
 def test_live_validation_schedules_every_programmatic_grid_mutation():
     js = _script()
     undo = js.split("function performUndo(snap) {", 1)[1].split(
-        "function performRedo(snap) {", 1,
+        "function performRedo(snap) {",
+        1,
     )[0]
     redo = js.split("function performRedo(snap) {", 1)[1].split(
-        "if (__undoBtn)", 1,
+        "if (__undoBtn)",
+        1,
     )[0]
-    time_off = js.split("// ---------- Time Off \"+ Add\" select", 1)[1].split(
-        "document.addEventListener('click', (e) => {", 1,
+    time_off = js.split('// ---------- Time Off "+ Add" select', 1)[1].split(
+        "document.addEventListener('click', (e) => {",
+        1,
     )[0]
     override = js.split("onOverride: () => {", 1)[1].split("        });", 1)[0]
 
@@ -847,12 +972,10 @@ def test_live_validation_schedules_every_programmatic_grid_mutation():
 
 def test_reset_to_defaults_confirms_clearing_and_loading_the_default_schedule():
     js = _script()
-    rotation = js.split("// ---------- Rotation goal", 1)[1].split(
-        "// Assignments to Do modal", 1
-    )[0]
-    reset = rotation.split("const resetScheduleBtn", 1)[1].split(
-        "modeBtns.forEach", 1
-    )[0]
+    rotation = js.split("// ---------- Rotation goal", 1)[1].split("// Assignments to Do modal", 1)[
+        0
+    ]
+    reset = rotation.split("const resetScheduleBtn", 1)[1].split("modeBtns.forEach", 1)[0]
     assert "await rebuild(currentMode(), { resetToDefaults: true })" in reset
     assert "Clear this schedule and load the default people?" in reset
     assert "loads only the people set as a default on a work center or group" in reset
@@ -862,12 +985,10 @@ def test_reset_to_defaults_confirms_clearing_and_loading_the_default_schedule():
 
 def test_reset_to_defaults_clears_the_selected_schedule_goal_after_success():
     js = _script()
-    rotation = js.split("// ---------- Rotation goal", 1)[1].split(
-        "// Assignments to Do modal", 1
-    )[0]
-    reset = rotation.split("const resetScheduleBtn", 1)[1].split(
-        "modeBtns.forEach", 1
-    )[0]
+    rotation = js.split("// ---------- Rotation goal", 1)[1].split("// Assignments to Do modal", 1)[
+        0
+    ]
+    reset = rotation.split("const resetScheduleBtn", 1)[1].split("modeBtns.forEach", 1)[0]
     assert "function clearActiveMode()" in rotation
     assert "b.classList.remove('active');" in rotation
     assert "b.setAttribute('aria-pressed', 'false');" in rotation
@@ -879,30 +1000,29 @@ def test_reset_to_defaults_clears_the_selected_schedule_goal_after_success():
 
 def test_reset_to_defaults_reconciles_every_picker_from_the_server_map():
     js = _script()
-    apply_rebuild = js.split("function applyRebuild(data, { resetToDefaults = false } = {})", 1)[1].split(
-        "async function rebuild(mode, options = {})", 1
-    )[0]
+    apply_rebuild = js.split("function applyRebuild(data, { resetToDefaults = false } = {})", 1)[
+        1
+    ].split("async function rebuild(mode, options = {})", 1)[0]
     rebuild = js.split("async function rebuild(mode, options = {})", 1)[1].split(
         "const resetScheduleBtn", 1
     )[0]
 
     assert "function applyRebuild(data, { resetToDefaults = false } = {})" in js
     assert "const pickerLocations = resetToDefaults" in apply_rebuild
-    assert "? [...document.querySelectorAll('details.sched-dd[data-loc]')].map(dd => dd.dataset.loc)" in apply_rebuild
+    assert (
+        "? [...document.querySelectorAll('details.sched-dd[data-loc]')].map(dd => dd.dataset.loc)"
+        in apply_rebuild
+    )
     assert ": enabled;" in apply_rebuild
     assert "applyRebuild(data, options);" in rebuild
 
 
 def test_failed_rebuild_keeps_grid_and_renders_person_issues():
     js = _script()
-    rebuild = js.split("async function rebuild", 1)[1].split(
-        "const resetScheduleBtn", 1
-    )[0]
+    rebuild = js.split("async function rebuild", 1)[1].split("const resetScheduleBtn", 1)[0]
     assert "if (!resp.ok || !data.ok)" in rebuild
     assert "renderPlacementFailure(data)" in rebuild
-    failure_branch = rebuild.split("if (!resp.ok || !data.ok)", 1)[1].split(
-        "applyRebuild", 1
-    )[0]
+    failure_branch = rebuild.split("if (!resp.ok || !data.ok)", 1)[1].split("applyRebuild", 1)[0]
     assert "applyRebuild" not in failure_branch
     assert "kickAutosave" not in failure_branch
 
@@ -965,7 +1085,10 @@ def test_work_center_row_toggle_excludes_controls_and_rolls_back_failures():
     js = _script()
 
     assert ".sched-cell, .wc-note-cell" in js
-    assert "target.closest('a, button, input, select, textarea, label, summary, [contenteditable=\"true\"], .sched-cell, .wc-note-cell, .sub')" in js
+    assert (
+        "target.closest('a, button, input, select, textarea, label, summary, [contenteditable=\"true\"], .sched-cell, .wc-note-cell, .sub')"
+        in js
+    )
     assert "applyEnabledCenters(window.AUTO_SCHEDULE_WC_NAMES || []);" in js
 
 
@@ -1138,7 +1261,7 @@ def test_work_center_toggle_stops_before_reconciling_when_autosave_drain_fails()
     )[0]
     harness = textwrap.dedent(
         f"""
-        const saveAuto = {('async function saveAutoCenters(turnOff = [])' + save_auto)!r};
+        const saveAuto = {("async function saveAutoCenters(turnOff = [])" + save_auto)!r};
         const picker = {{ checked: true }};
         const locks = [];
         let savingAutoCenters = false;
@@ -1200,15 +1323,18 @@ def test_clear_schedule_remains_a_distinct_local_autosave_action():
     html = _template()
     js = _script()
     css = Path("src/zira_dashboard/static/staffing.css").read_text()
-    clear_handler = js.split("const __clearBtn = document.getElementById('clear-schedule-btn');", 1)[1].split(
-        "// ---------- Undo / Redo helpers ----------", 1
-    )[0]
+    clear_handler = js.split(
+        "const __clearBtn = document.getElementById('clear-schedule-btn');", 1
+    )[1].split("// ---------- Undo / Redo helpers ----------", 1)[0]
 
     assert 'id="reset-schedule-btn" class="clear-btn">Reset to defaults</button>' in html
-    assert 'id="clear-schedule-btn" class="clear-btn clear-schedule-btn">Clear schedule</button>' in html
-    controls = html.split('<div class="rotation-controls"', 1)[1].split('</aside>', 1)[0]
+    assert (
+        'id="clear-schedule-btn" class="clear-btn clear-schedule-btn">Clear schedule</button>'
+        in html
+    )
+    controls = html.split('<div class="rotation-controls"', 1)[1].split("</aside>", 1)[0]
     assert controls.index('id="reset-schedule-btn"') < controls.index('id="clear-schedule-btn"')
-    assert controls.index('id="clear-schedule-btn"') < controls.rindex('</div>')
+    assert controls.index('id="clear-schedule-btn"') < controls.rindex("</div>")
     assert "Clear every Scheduled cell for this day?" in js
     assert "const resetScheduleBtn = document.getElementById('reset-schedule-btn');" in js
     assert "const __clearBtn = document.getElementById('clear-schedule-btn');" in js
