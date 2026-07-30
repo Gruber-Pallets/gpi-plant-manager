@@ -6,8 +6,15 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from zira_dashboard import (
-    db, exception_inbox, machine_breakdown, missing_wc, missed_punch_out,
-    saturday_recruiting_store, staffing, unexpected_worker,
+    db,
+    exception_inbox,
+    machine_breakdown,
+    missing_wc,
+    missed_punch_out,
+    saturday_recruiting_store,
+    shift_config,
+    staffing,
+    unexpected_worker,
 )
 from zira_dashboard.app import app
 from zira_dashboard.routes import exceptions as exceptions_route
@@ -604,6 +611,11 @@ def test_plant_schedule_reminder_friday_after_cutoff_targets_monday(monkeypatch)
         "current",
         lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
     )
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda candidate: candidate.weekday() < 5,
+    )
 
     def fake_load_schedule(day):
         loaded_days.append(day)
@@ -616,6 +628,38 @@ def test_plant_schedule_reminder_friday_after_cutoff_targets_monday(monkeypatch)
     assert loaded_days == [date(2026, 6, 29)]
     assert count == 1
     assert rows[0]["label"] == "Monday, Jun 29"
+
+
+def test_plant_schedule_reminder_skips_closed_holiday(monkeypatch):
+    loaded_days = []
+    monday_holiday = date(2026, 11, 30)
+    monkeypatch.setattr(
+        exception_inbox.plant_day,
+        "now",
+        lambda: datetime(2026, 11, 27, 14, 0),
+    )
+    monkeypatch.setattr(
+        exception_inbox.schedule_store,
+        "current",
+        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
+    )
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda candidate: candidate.weekday() < 5 and candidate != monday_holiday,
+    )
+
+    def fake_load_schedule(day):
+        loaded_days.append(day)
+        return staffing.Schedule(day=day, published=False)
+
+    monkeypatch.setattr(exception_inbox.staffing, "load_schedule", fake_load_schedule)
+
+    count, rows = exception_inbox._plant_schedule_reminder()
+
+    assert loaded_days == [date(2026, 12, 1)]
+    assert count == 1
+    assert rows[0]["label"] == "Tuesday, Dec 1"
 
 
 def test_snapshot_includes_unpublished_schedule_section_after_cutoff(monkeypatch):

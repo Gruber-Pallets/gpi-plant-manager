@@ -14,9 +14,9 @@ def _default_work_week(monkeypatch):
     from zira_dashboard import rotation_training
 
     monkeypatch.setattr(
-        rotation_training.schedule_store,
-        "current",
-        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
+        rotation_training.shift_config,
+        "is_workday",
+        lambda day: day.weekday() in frozenset({0, 1, 2, 3, 4}),
     )
     # Unit tests below exercise reconciliation behavior independently of the
     # database-backed completion claim. Dedicated concurrency tests replace
@@ -96,15 +96,55 @@ def test_planned_block_days_honor_a_six_day_work_week(monkeypatch):
     from zira_dashboard import rotation_training
 
     monkeypatch.setattr(
-        rotation_training.schedule_store,
-        "current",
-        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4, 5})),
+        rotation_training.shift_config,
+        "is_workday",
+        lambda day: day.weekday() in frozenset({0, 1, 2, 3, 4, 5}),
     )
     days = rotation_training.planned_block_days(
         _block(start_day=date(2026, 7, 16), planned_attended_days=3), {}
     )
     # With Saturday working, Thu 16, Fri 17, Sat 18 all count.
     assert days == [date(2026, 7, 16), date(2026, 7, 17), date(2026, 7, 18)]
+
+
+@pytest.mark.parametrize(
+    ("start_day", "planned_attended_days", "operational_days", "expected"),
+    [
+        (
+            date(2026, 11, 27),
+            2,
+            {date(2026, 11, 27), date(2026, 12, 1)},
+            [date(2026, 11, 27), date(2026, 12, 1)],
+        ),
+        (
+            date(2026, 11, 28),
+            1,
+            {date(2026, 11, 28)},
+            [date(2026, 11, 28)],
+        ),
+    ],
+    ids=("closed-weekday-holiday", "published-optional-holiday"),
+)
+def test_planned_block_days_use_operational_calendar(
+    monkeypatch, start_day, planned_attended_days, operational_days, expected
+):
+    from zira_dashboard import rotation_training, shift_config
+
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda candidate: candidate in operational_days,
+    )
+
+    days = rotation_training.planned_block_days(
+        _block(
+            start_day=start_day,
+            planned_attended_days=planned_attended_days,
+        ),
+        {},
+    )
+
+    assert days == expected
 
 
 # ---------- effect_for_day (pure) ----------
@@ -496,10 +536,74 @@ def test_reconcile_counts_a_generated_protocol_reservation(monkeypatch):
         ),
     )
     monkeypatch.setattr(rotation_training.rotation_store, "mark_completed", completed.append)
-    monkeypatch.setattr(rotation_training.skill_levels, "set_person_skill_level", lambda *a: promoted.append(a))
+    monkeypatch.setattr(
+        rotation_training.skill_levels, "set_person_skill_level", lambda *a: promoted.append(a)
+    )
 
     assert rotation_training.reconcile_blocks(date(2026, 7, 15)) == [42]
     assert [(row.day, row.status) for row in rows] == [(date(2026, 7, 14), "attended")]
+    assert promoted == [(17, 9, 1)]
+    assert completed == [42]
+
+
+@pytest.mark.parametrize(
+    ("start_day", "as_of", "operational_days", "expected_day"),
+    [
+        (
+            date(2026, 11, 30),
+            date(2026, 12, 2),
+            {date(2026, 12, 1)},
+            date(2026, 12, 1),
+        ),
+        (
+            date(2026, 11, 28),
+            date(2026, 11, 29),
+            {date(2026, 11, 28)},
+            date(2026, 11, 28),
+        ),
+    ],
+    ids=("closed-weekday-holiday", "published-optional-holiday"),
+)
+def test_reconcile_uses_operational_calendar(
+    monkeypatch, start_day, as_of, operational_days, expected_day
+):
+    from zira_dashboard import rotation_training, shift_config
+
+    block = SimpleNamespace(
+        id=42,
+        trainee_id=17,
+        trainee_name="Learner",
+        skill_id=9,
+        planned_attended_days=1,
+        start_day=start_day,
+        status="active",
+    )
+    rows, promoted, completed = [], [], []
+
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda candidate: candidate in operational_days,
+    )
+    monkeypatch.setattr(rotation_training.rotation_store, "active_blocks", lambda: [block])
+    monkeypatch.setattr(rotation_training.rotation_store, "resolved_days", lambda _id: list(rows))
+    monkeypatch.setattr(
+        rotation_training.rotation_store,
+        "record_attended_day",
+        lambda _id, day, status: rows.append(SimpleNamespace(day=day, status=status)),
+    )
+    monkeypatch.setattr(
+        rotation_training.scheduler_time_off, "full_day_off_names", lambda _day: set()
+    )
+    monkeypatch.setattr(rotation_training.rotation_store, "mark_completed", completed.append)
+    monkeypatch.setattr(
+        rotation_training.skill_levels,
+        "set_person_skill_level",
+        lambda *args: promoted.append(args),
+    )
+
+    assert rotation_training.reconcile_blocks(as_of) == [42]
+    assert [(row.day, row.status) for row in rows] == [(expected_day, "attended")]
     assert promoted == [(17, 9, 1)]
     assert completed == [42]
 

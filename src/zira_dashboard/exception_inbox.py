@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import date, time, timedelta
 
-from . import plant_day, saturday_recruiting_store, schedule_store, staffing
+from . import plant_day, saturday_recruiting_store, schedule_store, shift_config, staffing
 from . import inbox_keys
 from . import time_off_context
 
@@ -95,11 +95,19 @@ _SCHEDULE_REMINDER_CUTOFF = time(13, 30)
 
 
 def _next_business_day(day: date) -> date:
-    work_weekdays = schedule_store.current().work_weekdays or frozenset({0, 1, 2, 3, 4})
     nxt = day + timedelta(days=1)
     for _ in range(14):
-        if nxt.weekday() in work_weekdays:
-            return nxt
+        try:
+            if shift_config.is_workday(nxt):
+                return nxt
+        except Exception:
+            try:
+                work_weekdays = schedule_store.current().work_weekdays
+            except Exception:
+                work_weekdays = frozenset()
+            work_weekdays = work_weekdays or frozenset({0, 1, 2, 3, 4})
+            if nxt.weekday() in work_weekdays:
+                return nxt
         nxt += timedelta(days=1)
     return day + timedelta(days=1)
 

@@ -4,7 +4,17 @@ from datetime import date
 
 import pytest
 
+from zira_dashboard import shift_config
 from zira_dashboard import time_off_reminder as tor
+
+
+@pytest.fixture(autouse=True)
+def _default_operational_week(monkeypatch):
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda candidate: candidate.weekday() < 5,
+    )
 
 
 @pytest.fixture
@@ -27,6 +37,30 @@ def test_next_working_day_skips_weekend():
 def test_next_working_day_midweek():
     # Mon 2026-06-29 -> Tue 2026-06-30.
     assert tor.next_working_day(date(2026, 6, 29)) == date(2026, 6, 30)
+
+
+def test_next_working_day_skips_closed_weekday_holiday(monkeypatch):
+    friday = date(2026, 11, 27)
+    monday_holiday = date(2026, 11, 30)
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda candidate: candidate.weekday() < 5 and candidate != monday_holiday,
+    )
+
+    assert tor.next_working_day(friday) == date(2026, 12, 1)
+
+
+def test_next_working_day_counts_published_optional_holiday(monkeypatch):
+    friday = date(2026, 11, 27)
+    published_holiday = date(2026, 11, 28)
+    monkeypatch.setattr(
+        shift_config,
+        "is_workday",
+        lambda candidate: candidate == published_holiday or candidate.weekday() < 5,
+    )
+
+    assert tor.next_working_day(friday) == published_holiday
 
 
 def test_reminder_full_day(fake_db, monkeypatch):

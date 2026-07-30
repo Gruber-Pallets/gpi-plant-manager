@@ -26,29 +26,39 @@ CONTENDER_THRESHOLD = 0.98  # 98 % of GOAT → show in live banner
 
 # ---------- next-business-day helper ----------
 
+
 def next_business_day(d: date) -> date:
     """Return the next date on which the plant operates.
 
-    Skips weekends (and any non-working weekdays per
-    `shift_config.work_weekdays()`). Used to decide how long a NEW
+    Uses the shared operational-day decision. Used to decide how long a NEW
     GOAT alert remains visible after the record was set.
     """
     from . import shift_config
-    try:
-        work_days = shift_config.work_weekdays()
-    except Exception:
-        # Defensive fallback: Mon–Fri
-        work_days = frozenset({0, 1, 2, 3, 4})
-    nxt = d + timedelta(days=1)
-    # Guard against an empty work_weekdays set so we don't loop forever.
-    if not work_days:
-        return nxt
-    while nxt.weekday() not in work_days:
+
+    nxt = d
+    fallback_work_days: frozenset[int] | None = None
+    for _ in range(14):
         nxt += timedelta(days=1)
-    return nxt
+        try:
+            if shift_config.is_workday(nxt):
+                return nxt
+        except Exception:
+            if fallback_work_days is None:
+                try:
+                    fallback_work_days = shift_config.work_weekdays()
+                except Exception:
+                    # Defensive fallback: Mon–Fri
+                    fallback_work_days = frozenset({0, 1, 2, 3, 4})
+                # Preserve the old empty-calendar escape hatch.
+                if not fallback_work_days:
+                    return d + timedelta(days=1)
+            if nxt.weekday() in fallback_work_days:
+                return nxt
+    return d + timedelta(days=1)
 
 
 # ---------- live contenders ----------
+
 
 @dataclass(frozen=True)
 class Contender:

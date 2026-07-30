@@ -3,9 +3,8 @@
 Two responsibilities:
 
 - Pure per-day effects (:func:`planned_block_days`, :func:`effect_for_day`,
-  :class:`BlockEffect`). These take every input explicitly; the only external
-  read is ``schedule_store.current().work_weekdays`` for the working calendar,
-  exactly as the plan specifies. They never touch the database or the clock.
+  :class:`BlockEffect`). These take every input explicitly apart from the
+  shared operational-day decision. They never touch the clock.
 - :func:`reconcile_blocks`, which promotes a trainee to level 1 once the block's
   requested attended days are all recorded. It reaches the database *only*
   through :mod:`rotation_store` and the shared writer in :mod:`skill_levels`, so
@@ -25,7 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from . import rotation_store, schedule_store, scheduler_time_off, skill_levels, staffing
+from . import rotation_store, scheduler_time_off, shift_config, skill_levels, staffing
 
 log = logging.getLogger(__name__)
 
@@ -61,12 +60,10 @@ def planned_block_days(
     """
     out: list[date] = []
     cursor = block.start_day
-    work_weekdays = schedule_store.current().work_weekdays
     limit = block.start_day + timedelta(days=block.planned_attended_days + _MAX_SCAN_DAYS)
     while len(out) < block.planned_attended_days and cursor <= limit:
-        if (
-            cursor.weekday() in work_weekdays
-            and block.trainee_name not in absence_by_day.get(cursor, set())
+        if shift_config.is_workday(cursor) and block.trainee_name not in absence_by_day.get(
+            cursor, set()
         ):
             out.append(cursor)
         cursor += timedelta(days=1)
@@ -186,10 +183,9 @@ def _record_elapsed_day_outcomes(block, as_of: date) -> None:
     existing = {record.day: record for record in rotation_store.resolved_days(block.id)}
     attended = sum(1 for record in existing.values() if _is_attended(record))
     cursor = start_day
-    work_weekdays = schedule_store.current().work_weekdays
     first_day: date | None = None
     while cursor < as_of and attended < block.planned_attended_days:
-        if cursor.weekday() in work_weekdays:
+        if shift_config.is_workday(cursor):
             record = existing.get(cursor)
             if record is not None:
                 attended += int(_is_attended(record))

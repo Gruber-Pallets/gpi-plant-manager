@@ -6,27 +6,36 @@ is stored — this is recomputed on each clock-out. Only the real clock-out
 endpoint calls this; transfers and auto-lunch sign-outs use other code
 paths, so they never trigger it.
 
-"Next working day" uses a simple weekend-skip rule (this is a Mon–Fri
-plant). Per-person Odoo working calendars aren't cleanly available without
-extra Odoo calls; this covers the plant's schedule and keeps the clock-out
-hot path DB/Odoo-cheap.
+"Next working day" uses the plant's shared operational-day decision. Per-person
+Odoo working calendars aren't cleanly available without extra Odoo calls; this
+covers the plant's schedule and keeps the clock-out hot path Odoo-cheap.
 """
+
 from __future__ import annotations
 
 import os
 from datetime import date, time as _time, timedelta
 from typing import Any
 
-from . import db
+from . import db, shift_config
 from .employee_notifications import notifications_enabled
 
 
 def next_working_day(d: date) -> date:
-    """The next Mon–Fri after ``d`` (skips Sat=5 / Sun=6)."""
-    nxt = d + timedelta(days=1)
-    while nxt.weekday() >= 5:
-        nxt += timedelta(days=1)
-    return nxt
+    """The next operational plant day after ``d``."""
+    candidate = d
+    try:
+        for _ in range(14):
+            candidate += timedelta(days=1)
+            if shift_config.is_workday(candidate):
+                return candidate
+    except Exception:
+        # Preserve the old Mon–Fri answer if shared schedule data is unavailable.
+        candidate = d + timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate += timedelta(days=1)
+        return candidate
+    return d + timedelta(days=1)
 
 
 def _fmt_hour(h: float | None) -> str:
