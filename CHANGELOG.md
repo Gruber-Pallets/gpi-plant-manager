@@ -16,6 +16,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Operator TV screens open their dashboards again.** Missing Repair, Dismantler, and Junior TV setups come back after the update. App checks can no longer erase the saved TV list.
 
+### 07:59 AM - Company holidays now close the plant schedule
+
+- **Odoo holidays now show up here on their own.** The plant starts closed on those days. A manager can still ask for volunteers and post a work plan with the same screen used for Saturday work. This does not change holiday pay in Odoo.
+
 ## 2026-07-29
 
 ### 01:45 PM - Correct GOAT totals
