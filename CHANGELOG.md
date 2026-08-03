@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-03
 
+### 04:34 PM - Exact payroll mistake check
+
+- **Plant Manager can now tell the known extra-lunch mistake from other payroll differences.** It still does not change payroll on its own yet.
+
 ### 04:26 PM - Safer payroll detail checks
 
 - **Plant Manager now blocks broken payroll hour numbers before they can be sent to Odoo.** It also checks dates and times more carefully. The automatic payroll check is still not turned on.
