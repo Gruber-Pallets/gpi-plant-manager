@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-03
 
+### 04:26 PM - Safer payroll detail checks
+
+- **Plant Manager now blocks broken payroll hour numbers before they can be sent to Odoo.** It also checks dates and times more carefully. The automatic payroll check is still not turned on.
+
 ### 04:13 PM - Payroll safety reader
 
 - **Plant Manager can now read the Odoo payroll details needed for the new safety check.** The automatic check is not turned on yet.

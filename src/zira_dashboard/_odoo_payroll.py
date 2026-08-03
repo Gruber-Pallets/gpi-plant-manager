@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable
 
@@ -173,10 +174,11 @@ def read_work_entry(execute_fn: Callable[..., Any], entry_id: int) -> dict | Non
 def write_duration(
     execute_fn: Callable[..., Any], entry_id: int, duration: float
 ) -> None:
-    if duration <= 0:
+    duration_value = float(duration)
+    if not math.isfinite(duration_value) or duration_value <= 0:
         raise ValueError("Odoo Work Entry duration must be positive")
     execute_fn(
-        "hr.work.entry", "write", [int(entry_id)], {"duration": float(duration)}
+        "hr.work.entry", "write", [int(entry_id)], {"duration": duration_value}
     )
 
 

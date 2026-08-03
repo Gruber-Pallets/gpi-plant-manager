@@ -1,9 +1,33 @@
 from datetime import UTC, date, datetime
+from math import inf, nan
 from unittest.mock import MagicMock
 
 import pytest
 
 from zira_dashboard import _odoo_payroll as payroll
+
+WORK_FIELDS = [
+    "id",
+    "employee_id",
+    "date",
+    "duration",
+    "state",
+    "conflict",
+    "active",
+    "work_entry_type_id",
+    "attendance_id",
+    "write_date",
+]
+ATTENDANCE_FIELDS = [
+    "id",
+    "employee_id",
+    "check_in",
+    "worked_hours",
+    "overtime_hours",
+    "validated_overtime_hours",
+    "overtime_status",
+    "expected_hours",
+]
 
 
 def fake_execute(responses, calls):
@@ -58,12 +82,27 @@ def test_recent_candidates_use_write_date_date_and_linked_work100():
         "attendance_id": 3804,
         "write_date": "2026-07-30 18:14:48",
     }
-    domain = calls[1][2][0]
-    assert ("active", "=", True) in domain
-    assert ("attendance_id", "!=", False) in domain
-    assert ("work_entry_type_id", "=", 1) in domain
-    assert any(term[0] == "write_date" for term in domain)
-    assert all(term[0] not in {"date_start", "date_stop"} for term in domain)
+    assert calls == [
+        (
+            "hr.work.entry.type",
+            "search_read",
+            ([("code", "in", ["WORK100", "OVERTIME"])],),
+            {"fields": ["id", "code"]},
+        ),
+        (
+            "hr.work.entry",
+            "search_read",
+            (
+                [
+                    ("active", "=", True),
+                    ("attendance_id", "!=", False),
+                    ("work_entry_type_id", "=", 1),
+                    ("write_date", ">=", "2026-05-05 00:00:00"),
+                ],
+            ),
+            {"fields": WORK_FIELDS, "order": "employee_id,date,id"},
+        ),
+    ]
 
 
 def test_fetch_inputs_maps_utc_attendance_to_central_work_date():
@@ -79,7 +118,7 @@ def test_fetch_inputs_maps_utc_attendance_to_central_work_date():
                 {
                     "id": 3996,
                     "employee_id": [9, "Darren Donahue"],
-                    "check_in": "2026-07-31 10:45:00",
+                    "check_in": "2026-08-01 02:30:00",
                     "worked_hours": 10.548333333,
                     "overtime_hours": 10.5483,
                     "validated_overtime_hours": 10.5483,
@@ -99,13 +138,50 @@ def test_fetch_inputs_maps_utc_attendance_to_central_work_date():
     assert attendance[0]["date"] == date(2026, 7, 31)
     assert attendance[0]["employee_id"] == 9
     assert attendance[0]["overtime_status"] == "approved"
+    assert calls == [
+        (
+            "hr.work.entry.type",
+            "search_read",
+            ([("code", "in", ["WORK100", "OVERTIME"])],),
+            {"fields": ["id", "code"]},
+        ),
+        (
+            "hr.work.entry",
+            "search_read",
+            (
+                [
+                    ("active", "=", True),
+                    ("employee_id", "in", [9]),
+                    ("date", ">=", "2026-07-31"),
+                    ("date", "<=", "2026-07-31"),
+                ],
+            ),
+            {"fields": WORK_FIELDS, "order": "employee_id,date,id"},
+        ),
+        (
+            "hr.attendance",
+            "search_read",
+            (
+                [
+                    ("employee_id", "in", [9]),
+                    ("check_in", ">=", "2026-07-31 05:00:00"),
+                    ("check_in", "<", "2026-08-01 05:00:00"),
+                ],
+            ),
+            {
+                "fields": ATTENDANCE_FIELDS,
+                "order": "employee_id,check_in,id",
+            },
+        ),
+    ]
 
 
-def test_write_duration_rejects_zero_before_xmlrpc():
+@pytest.mark.parametrize("duration", [0.0, -0.01, nan, inf, -inf])
+def test_write_duration_rejects_invalid_value_before_xmlrpc(duration):
     calls = []
     execute = fake_execute({}, calls)
     with pytest.raises(ValueError, match="positive"):
-        payroll.write_duration(execute, 8508, 0.0)
+        payroll.write_duration(execute, 8508, duration)
     assert calls == []
 
 
@@ -171,3 +247,37 @@ def test_public_odoo_client_wrappers_delegate(monkeypatch):
     since = datetime(2026, 5, 5, tzinfo=UTC)
     assert odoo_client.fetch_recent_payroll_candidates(since) == [{"id": 1}]
     recent.assert_called_once_with(odoo_client.execute, since)
+
+
+def test_remaining_public_odoo_client_wrappers_delegate(monkeypatch):
+    from zira_dashboard import odoo_client
+
+    start_day = date(2026, 7, 31)
+    end_day = date(2026, 8, 1)
+    inputs = MagicMock(return_value=([{"id": 2}], [{"id": 3}]))
+    read = MagicMock(return_value={"id": 8502})
+    write = MagicMock()
+    delete = MagicMock()
+    exists = MagicMock(return_value=True)
+    monkeypatch.setattr(odoo_client._odoo_payroll, "fetch_inputs", inputs)
+    monkeypatch.setattr(odoo_client._odoo_payroll, "read_work_entry", read)
+    monkeypatch.setattr(odoo_client._odoo_payroll, "write_duration", write)
+    monkeypatch.setattr(odoo_client._odoo_payroll, "delete_entry", delete)
+    monkeypatch.setattr(odoo_client._odoo_payroll, "entry_exists", exists)
+
+    assert odoo_client.fetch_payroll_inputs([9, 4], start_day, end_day) == (
+        [{"id": 2}],
+        [{"id": 3}],
+    )
+    assert odoo_client.fetch_payroll_work_entry(8502) == {"id": 8502}
+    assert odoo_client.set_payroll_work_entry_duration(8502, 3.5) is None
+    assert odoo_client.delete_payroll_work_entry(8508) is None
+    assert odoo_client.payroll_work_entry_exists(8508) is True
+
+    inputs.assert_called_once_with(
+        odoo_client.execute, [9, 4], start_day, end_day
+    )
+    read.assert_called_once_with(odoo_client.execute, 8502)
+    write.assert_called_once_with(odoo_client.execute, 8502, 3.5)
+    delete.assert_called_once_with(odoo_client.execute, 8508)
+    exists.assert_called_once_with(odoo_client.execute, 8508)
