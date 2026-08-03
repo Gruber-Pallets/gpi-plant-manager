@@ -82,10 +82,11 @@
     var first = focusable[0];
     var last = focusable[focusable.length - 1];
     var current = document.activeElement;
-    if (event.shiftKey && (current === first || !activeModal.contains(current))) {
+    var currentIndex = focusable.indexOf(current);
+    if (event.shiftKey && (current === first || currentIndex === -1)) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && current === last) {
+    } else if (!event.shiftKey && (current === last || currentIndex === -1)) {
       event.preventDefault();
       first.focus();
     }

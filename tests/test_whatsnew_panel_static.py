@@ -109,6 +109,8 @@ def test_shared_feedback_assets_keep_submit_and_screenshot_support():
     assert "activeOpener" in js
     assert "function trapFocus" in js
     assert "event.key !== 'Tab'" in js
+    assert "focusable.indexOf(current)" in js
+    assert "currentIndex === -1" in js
     assert "opener.focus()" in js
     assert "gpi:feedback-opened" in js
     assert "gpi:feedback-closed" in js
