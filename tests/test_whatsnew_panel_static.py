@@ -6,6 +6,9 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "src" / "zira_dashboard" / "templates" / "_footer.html"
 CSS = ROOT / "src" / "zira_dashboard" / "static" / "footer.css"
 JS = ROOT / "src" / "zira_dashboard" / "static" / "footer.js"
+FEEDBACK_TEMPLATE = ROOT / "src" / "zira_dashboard" / "templates" / "_feedback.html"
+FEEDBACK_CSS = ROOT / "src" / "zira_dashboard" / "static" / "feedback.css"
+FEEDBACK_JS = ROOT / "src" / "zira_dashboard" / "static" / "feedback.js"
 
 
 def _rule_zindex(css, selector):
@@ -17,9 +20,10 @@ def _rule_zindex(css, selector):
 def test_feedback_modal_stacks_above_whatsnew_panel():
     # The Send/View feedback modals open from inside the What's New panel, so
     # their z-index must sit ABOVE the panel's or they render behind it.
-    css = CSS.read_text(encoding="utf-8")
-    fb = _rule_zindex(css, ".fb-modal")
-    panel = _rule_zindex(css, ".changelog-modal")
+    feedback_css = FEEDBACK_CSS.read_text(encoding="utf-8")
+    footer_css = CSS.read_text(encoding="utf-8")
+    fb = _rule_zindex(feedback_css, ".fb-modal")
+    panel = _rule_zindex(footer_css, ".changelog-modal")
     assert fb is not None, ".fb-modal z-index not found"
     assert panel is not None, ".changelog-modal z-index not found"
     assert fb >= panel, (
@@ -34,16 +38,31 @@ def test_footer_template_uses_panel_without_old_text_link():
     assert "app-footer" not in html
     assert "changelog-open" not in html
     assert "changelog-markall" in html
-    # Old inline feedback form is gone; new modals + buttons present.
+    # Old inline feedback form is gone; shared feedback buttons remain.
     assert "changelog-feedback-toggle" not in html
     assert 'id="fb-open"' in html
     assert 'id="fb-view-open"' in html
+
+
+def test_footer_includes_shared_feedback_component():
+    html = TEMPLATE.read_text(encoding="utf-8")
+
+    assert "{% include '_feedback.html' %}" in html
+    assert 'id="fb-open"' in html
+    assert 'id="fb-view-open"' in html
+
+
+def test_shared_feedback_component_keeps_modal_contract():
+    html = FEEDBACK_TEMPLATE.read_text(encoding="utf-8")
+
     assert 'id="fb-modal"' in html
     assert 'id="fb-view-modal"' in html
     assert 'id="fb-desc"' in html
     assert 'data-type="bug"' in html
     assert 'data-type="feature"' in html
     assert 'id="fb-file-input"' in html
+    assert "/static/feedback.css" in html
+    assert "/static/feedback.js" in html
 
 
 def test_footer_css_has_whatsnew_trigger_and_card_styles():
@@ -55,13 +74,6 @@ def test_footer_css_has_whatsnew_trigger_and_card_styles():
     assert ".whatsnew-dot" in css
     assert ".cl-entry" in css
     assert ".cl-badge" in css
-    # New feedback modal styles.
-    assert ".fb-modal" in css
-    assert ".fb-card" in css
-    assert ".fb-type-btn" in css
-    assert ".fb-submit" in css
-    assert ".fb-attachment-chip" in css
-    assert ".fb-status-pill" in css
 
 
 def test_footer_js_injects_trigger_read_state_and_feedback_submit():
@@ -73,13 +85,26 @@ def test_footer_js_injects_trigger_read_state_and_feedback_submit():
     assert "changelog_read" in js
     assert "function markAllRead()" in js
     assert "function makeBadgeModal" in js
-    # New feedback modal wiring.
+
+
+def test_shared_feedback_assets_keep_submit_and_screenshot_support():
+    css = FEEDBACK_CSS.read_text(encoding="utf-8")
+    js = FEEDBACK_JS.read_text(encoding="utf-8")
+
+    assert ".fb-modal" in css
+    assert ".fb-card" in css
+    assert ".fb-type-btn" in css
+    assert ".fb-submit" in css
+    assert ".fb-attachment-chip" in css
+    assert ".fb-status-pill" in css
     assert "function submitFeedback" in js
     assert "FormData" in js
     assert "window.gpiFetch('/feedback'" in js
     assert "/api/feedback/mine" in js
     assert "function renderMyFeedback" in js
     assert "'paste'" in js
+    assert "window.location.href" in js
+    assert "[data-feedback-open]" in js
 
 
 def test_footer_js_skips_tv_mode_documents():

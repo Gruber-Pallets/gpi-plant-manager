@@ -1,0 +1,41 @@
+<div id="fb-modal" class="fb-modal" hidden>
+  <div class="fb-backdrop" id="fb-backdrop"></div>
+  <div class="fb-card" role="dialog" aria-modal="true" aria-label="Send feedback">
+    <div class="fb-head">
+      <h3>Send feedback</h3>
+      <button type="button" id="fb-close" class="fb-close" aria-label="Close">Close</button>
+    </div>
+    <div class="fb-type" role="group" aria-label="Feedback type">
+      <button type="button" class="fb-type-btn is-active" data-type="bug" aria-pressed="true">Bug</button>
+      <button type="button" class="fb-type-btn" data-type="feature" aria-pressed="false">Feature request</button>
+    </div>
+    <label class="fb-label" for="fb-desc">Description</label>
+    <textarea id="fb-desc" class="fb-desc" rows="5"
+              placeholder="What broke, and what did you expect?"></textarea>
+    <div class="fb-attachments" id="fb-attachments"></div>
+    <div class="fb-actions-row">
+      <button type="button" id="fb-upload-btn" class="fb-upload">Upload files</button>
+      <input type="file" id="fb-file-input" class="fb-file-input" multiple
+             accept="image/*,application/pdf" hidden>
+      <span class="fb-hint">or paste a screenshot</span>
+    </div>
+    <div class="fb-footer">
+      <span id="fb-status" class="fb-status" hidden></span>
+      <button type="button" id="fb-cancel" class="fb-cancel">Cancel</button>
+      <button type="button" id="fb-submit" class="fb-submit">Send feedback</button>
+    </div>
+  </div>
+</div>
+
+<div id="fb-view-modal" class="fb-modal" hidden>
+  <div class="fb-backdrop" id="fb-view-backdrop"></div>
+  <div class="fb-card" role="dialog" aria-modal="true" aria-label="Your feedback">
+    <div class="fb-head">
+      <h3>Your feedback</h3>
+      <button type="button" id="fb-view-close" class="fb-close" aria-label="Close">Close</button>
+    </div>
+    <div id="fb-view-body" class="fb-view-body">Loading…</div>
+  </div>
+</div>
+<link rel="stylesheet" href="/static/feedback.css?v={{ static_v('feedback.css') }}">
+<script src="/static/feedback.js?v={{ static_v('feedback.js') }}"></script>
