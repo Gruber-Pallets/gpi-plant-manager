@@ -214,6 +214,39 @@
      gray Spanish is low-contrast on them. Use light text so it stays
      legible. Secondary (white) buttons keep the gray, which reads fine. */
   .k-btn:not(.secondary) .k-secondary { color: rgba(255, 255, 255, 0.9); opacity: 1; }
+
+  /* Persistent feedback lives outside #timeclock-screen so htmx navigation
+     cannot remove it. This bar takes up its own space instead of covering the
+     kiosk's clock and time-off controls. */
+  .k-feedback-bar {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.45rem max(1rem, env(safe-area-inset-right))
+             max(0.45rem, env(safe-area-inset-bottom));
+    background: #ffffff;
+    border-top: 1px solid #e2e8f0;
+  }
+  .k-feedback-trigger {
+    min-height: 48px;
+    padding: 0.65rem 1rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.6rem;
+    background: #ffffff;
+    color: #0f172a;
+    font: inherit;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .k-feedback-trigger:active { background: #f1f5f9; }
+  .k-feedback-trigger:focus-visible {
+    outline: 3px solid #2563eb;
+    outline-offset: 2px;
+  }
 </style>
 <script src="/static/htmx-1.9.12.min.js?v={{ static_v('htmx-1.9.12.min.js') }}"
         integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2"
@@ -228,6 +261,18 @@
 {% block content %}{% endblock %}
 {% block scripts %}{% endblock %}
 </div>
+<div class="k-feedback-bar">
+  <button type="button" id="timeclock-feedback-open" class="k-feedback-trigger"
+          data-feedback-open aria-haspopup="dialog" aria-controls="fb-modal">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+         stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
+    </svg>
+    Feedback
+  </button>
+</div>
+{% include '_feedback.html' %}
 <script>
   // hx-boost is on the <body>, so every kiosk form (including the time-off
   // request/edit form) submits via htmx. By default htmx does NOT swap
