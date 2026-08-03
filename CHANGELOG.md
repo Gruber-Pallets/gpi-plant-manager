@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-03
 
+### 03:53 PM - Permanent payroll safety build steps
+
+- **The full build checklist for the payroll safety check is ready.** The wrong weeks were fixed in Odoo today. The automatic check still needs to be built and turned on.
+
 ### 02:46 PM - Payroll lunch safety plan
 
 - **A payroll safety plan is ready.** Plant Manager will check Odoo after overtime is approved. It will remove only the known extra 30-minute lunch from draft regular hours, keep a record of every fix, and ask for help instead of changing anything unclear. This is still a plan; payroll has not changed yet.

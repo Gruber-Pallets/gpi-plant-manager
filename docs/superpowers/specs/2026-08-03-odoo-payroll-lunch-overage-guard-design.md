@@ -55,8 +55,13 @@ Create a private `_odoo_payroll.py` module and expose narrow wrappers from
   attendance;
 - fetch all Work Entries and Attendances for the candidate employee/date
   window;
-- write one draft Work Entry's duration; and
+- write one draft Work Entry's duration, or delete that one draft regular row
+  when its correct regular duration is zero; and
 - reread that Work Entry after the write.
+
+The domains use Odoo 19's verified Work Entry `date` field. Older-version
+field names such as `date_start` and `date_stop` are not present in this
+database and must not be used.
 
 The guard will not call the generic XML-RPC executor directly. Keeping model
 names, domains, fields, and normalization in the facade makes the decision
@@ -85,11 +90,16 @@ A group is eligible for `correct` only when every condition below is true:
 6. Every Work Entry involved is still `draft`.
 7. Exactly one regular Work Entry exists for the employee/day, so the target
    is unambiguous.
-8. Removing the measured excess cannot make the duration negative.
+8. Removing the measured excess cannot make the duration negative by more
+   than the one-minute float tolerance. A result within one minute of zero is
+   normalized to zero.
 
 The correction uses the measured excess, rather than blindly subtracting
 `0.5`, so sub-minute Odoo float noise is removed and the corrected payroll
-total exactly matches Attendance Regular Hours. A second pass is therefore a
+total matches Attendance Regular Hours within the one-minute tolerance. Odoo
+19 requires Work Entry durations to be positive, so a normalized zero target
+is corrected by deleting the single erroneous draft `WORK100` row instead of
+writing `0`. This is the only deletion path. A second pass is therefore a
 `noop`.
 
 Any positive or negative regular-time mismatch over one minute on a day with
@@ -107,8 +117,8 @@ orchestrator. Each pass will:
 3. batch-fetch the matching Work Entry and Attendance rows;
 4. classify every employee/day before performing any write;
 5. write corrections sequentially so one failure cannot hide another;
-6. reread each corrected Work Entry and require its duration to match the
-   planned value within one minute; and
+6. reread each duration update, or confirm a zero-target row is absent, and
+   require the result to match the planned correction; and
 7. append an audit row only after verification succeeds.
 
 The 90-day `write_date` window catches the initial recent backlog and delayed
@@ -125,6 +135,7 @@ review issue; no follow-up write is attempted in that pass.
 Add an append-only `payroll_work_entry_corrections` table containing:
 
 - Odoo Work Entry id;
+- correction action (`duration_update` or `delete_zero_regular`);
 - employee Odoo id and display name;
 - work date;
 - before and after duration;
@@ -159,6 +170,8 @@ issues for a payroll manager.
 - Never change `hr.attendance`, check-in/out timestamps, employee schedules,
   overtime rules, Overtime Work Entries, validated Work Entries, or payslips.
 - Never call Odoo's Regenerate Work Entries action.
+- Never delete any Work Entry except the single exact-defect draft `WORK100`
+  row whose normalized correct duration is zero.
 - Never correct an ambiguous multi-row regular group.
 - Never correct a discrepancy other than the exact verified 30-minute lunch
   pattern.
@@ -186,8 +199,9 @@ rollback if anything unexpected appears.
 - Prove no overtime, unapproved overtime, overtime-total disagreement,
   non-0.5 mismatches, validated rows, multiple regular rows, and negative
   results all refuse automatic correction.
-- Prove `run_once()` writes one eligible draft duration, rereads it, and appends
-  one audit event.
+- Prove `run_once()` writes one eligible positive draft duration and rereads
+  it; prove a zero target deletes the single draft regular row and verifies it
+  is absent; and prove both append one audit event.
 - Prove failed writes and failed verification do not append a successful audit
   and do create review issues.
 - Prove one group failure does not block another eligible group.
