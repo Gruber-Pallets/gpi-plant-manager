@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-03
 
+### 02:46 PM - Payroll lunch safety plan
+
+- **A payroll safety plan is ready.** Plant Manager will check Odoo after overtime is approved. It will remove only the known extra 30-minute lunch from draft regular hours, keep a record of every fix, and ask for help instead of changing anything unclear. This is still a plan; payroll has not changed yet.
+
 ### Features
 
 - **New feedback clearly says it came from Plant Manager.** Sales Manager can show a green PLANT label and copy the request into the right app folder, which helps Dale avoid fixing it in the wrong app.
