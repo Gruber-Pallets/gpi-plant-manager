@@ -29,6 +29,7 @@ from . import (
     _odoo_attendance,
     _odoo_calendars,
     _odoo_feedback,
+    _odoo_payroll,
     _odoo_skills,
     _odoo_time_off,
 )
@@ -917,3 +918,27 @@ def fetch_task_stage_names(task_ids) -> dict[int, str | None]:
 
 def feedback_status_bucket(stage_name: str | None) -> str:
     return _odoo_feedback.feedback_status_bucket(stage_name)
+
+
+def fetch_recent_payroll_candidates(written_since: datetime) -> list[dict]:
+    return _odoo_payroll.fetch_recent_candidates(execute, written_since)
+
+
+def fetch_payroll_inputs(employee_ids, start_day, end_day):
+    return _odoo_payroll.fetch_inputs(execute, employee_ids, start_day, end_day)
+
+
+def fetch_payroll_work_entry(entry_id: int) -> dict | None:
+    return _odoo_payroll.read_work_entry(execute, entry_id)
+
+
+def set_payroll_work_entry_duration(entry_id: int, duration: float) -> None:
+    _odoo_payroll.write_duration(execute, entry_id, duration)
+
+
+def delete_payroll_work_entry(entry_id: int) -> None:
+    _odoo_payroll.delete_entry(execute, entry_id)
+
+
+def payroll_work_entry_exists(entry_id: int) -> bool:
+    return _odoo_payroll.entry_exists(execute, entry_id)
