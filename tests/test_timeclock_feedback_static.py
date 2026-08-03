@@ -29,3 +29,15 @@ def test_timeclock_feedback_bar_reserves_space_instead_of_covering_controls():
     assert "position: fixed" not in rule
     assert ".k-feedback-trigger" in html
     assert "min-height: 48px" in html
+
+
+def test_timeclock_idle_redirect_pauses_while_feedback_is_open():
+    html = _html()
+
+    assert "var feedbackPaused = false;" in html
+    assert "if (feedbackPaused) return;" in html
+    assert "gpi:feedback-opened" in html
+    assert "feedbackPaused = true;" in html
+    assert "clearTimeout(timer);" in html
+    assert "gpi:feedback-closed" in html
+    assert "feedbackPaused = false;" in html

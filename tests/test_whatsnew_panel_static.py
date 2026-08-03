@@ -61,6 +61,7 @@ def test_shared_feedback_component_keeps_modal_contract():
     assert 'data-type="bug"' in html
     assert 'data-type="feature"' in html
     assert 'id="fb-file-input"' in html
+    assert 'id="fb-status" class="fb-status" role="status" aria-live="polite"' in html
     assert "/static/feedback.css" in html
     assert "/static/feedback.js" in html
 
@@ -105,6 +106,12 @@ def test_shared_feedback_assets_keep_submit_and_screenshot_support():
     assert "'paste'" in js
     assert "window.location.href" in js
     assert "[data-feedback-open]" in js
+    assert "activeOpener" in js
+    assert "function trapFocus" in js
+    assert "event.key !== 'Tab'" in js
+    assert "opener.focus()" in js
+    assert "gpi:feedback-opened" in js
+    assert "gpi:feedback-closed" in js
 
 
 def test_footer_js_skips_tv_mode_documents():

@@ -36,18 +36,59 @@
   };
   var attachments = [];   // {file, name, url}
   var currentType = 'bug';
+  var activeModal = null;
+  var activeOpener = null;
 
   function $(id) { return document.getElementById(id); }
 
-  function openModal(el) {
+  function focusableElements(el) {
+    return Array.prototype.slice.call(el.querySelectorAll(
+      'button:not([disabled]):not([hidden]), [href], input:not([disabled]):not([hidden]), '
+      + 'textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ));
+  }
+
+  function openModal(el, opener, preferredFocus) {
     if (!el) return;
+    activeModal = el;
+    activeOpener = opener || document.activeElement;
     el.hidden = false;
     document.documentElement.style.overflow = 'hidden';
+    document.dispatchEvent(new CustomEvent('gpi:feedback-opened'));
+    var target = preferredFocus || focusableElements(el)[0];
+    if (target) target.focus();
   }
+
   function closeModal(el) {
     if (!el) return;
     el.hidden = true;
     document.documentElement.style.overflow = '';
+    if (activeModal === el) {
+      var opener = activeOpener;
+      activeModal = null;
+      activeOpener = null;
+      document.dispatchEvent(new CustomEvent('gpi:feedback-closed'));
+      if (opener && typeof opener.focus === 'function') opener.focus();
+    }
+  }
+
+  function trapFocus(event) {
+    if (event.key !== 'Tab' || !activeModal || activeModal.hidden) return;
+    var focusable = focusableElements(activeModal);
+    if (!focusable.length) {
+      event.preventDefault();
+      return;
+    }
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+    var current = document.activeElement;
+    if (event.shiftKey && (current === first || !activeModal.contains(current))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && current === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   function resetSendForm() {
@@ -195,10 +236,14 @@
     }
   }
 
-  function openView() {
+  function openView(event) {
     var body = $('fb-view-body');
     if (body) body.textContent = 'Loading…';
-    openModal($('fb-view-modal'));
+    openModal(
+      $('fb-view-modal'),
+      event ? event.currentTarget : null,
+      $('fb-view-close')
+    );
     window.gpiFetch('/api/feedback/mine')
       .then(function (r) { return r.json(); })
       .then(renderMyFeedback)
@@ -214,9 +259,8 @@
     Array.prototype.forEach.call(openButtons, function (openBtn) {
       openBtn.addEventListener('click', function () {
         resetSendForm();
-        openModal($('fb-modal'));
         var d = $('fb-desc');
-        if (d) d.focus();
+        openModal($('fb-modal'), openBtn, d);
       });
     });
     if (viewBtn) viewBtn.addEventListener('click', openView);
@@ -259,6 +303,7 @@
     if (submit) submit.addEventListener('click', submitFeedback);
 
     document.addEventListener('keydown', function (event) {
+      trapFocus(event);
       if (event.key !== 'Escape') return;
       var m = $('fb-modal'), v = $('fb-view-modal');
       if (m && !m.hidden) closeModal(m);

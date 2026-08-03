@@ -301,6 +301,7 @@
   // Sits OUTSIDE #timeclock-screen so htmx swaps don't tear down/rebind it.
   (function() {
     var timer;
+    var feedbackPaused = false;
     function idleMs() {
       var p = location.pathname;
       if (p === '/timeclock' || p === '/timeclock/') return 0;
@@ -309,12 +310,21 @@
     }
     function reset() {
       clearTimeout(timer);
+      if (feedbackPaused) return;
       var ms = idleMs();
       if (!ms) return;
       timer = setTimeout(function() { location.href = '/timeclock'; }, ms);
     }
     ['touchstart','mousedown','keydown','pointerdown'].forEach(function(evt) {
       document.addEventListener(evt, reset, { passive: true });
+    });
+    document.addEventListener('gpi:feedback-opened', function() {
+      feedbackPaused = true;
+      clearTimeout(timer);
+    });
+    document.addEventListener('gpi:feedback-closed', function() {
+      feedbackPaused = false;
+      reset();
     });
     reset();
     // Re-arm the timer on every htmx-driven screen change too.
