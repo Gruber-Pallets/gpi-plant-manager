@@ -79,6 +79,26 @@ def test_post_feedback_feature_uses_feature_tag(monkeypatch):
     assert calls["task"]["name"].startswith("[Feature] Add dark mode")
 
 
+def test_post_feedback_marks_task_as_plant_manager_source(monkeypatch):
+    calls = _patch_odoo(monkeypatch)
+    monkeypatch.setattr(feedback_store, "insert", lambda **kw: 1)
+
+    resp = client.post(
+        "/feedback",
+        data={
+            "type": "feature",
+            "description": "Add a feedback button",
+            "page_url": "https://www.gpiplantmanager.com/staffing",
+        },
+    )
+
+    assert resp.status_code == 200
+    body_html = calls["task"]["description_html"]
+    assert "Source app: GPI Plant Manager (plant)" in body_html
+    assert body_html.index("Source app:") < body_html.index("Submitted by")
+    assert "https://www.gpiplantmanager.com/staffing" in body_html
+
+
 def test_post_feedback_uploads_attachments(monkeypatch):
     calls = _patch_odoo(monkeypatch)
     monkeypatch.setattr(feedback_store, "insert", lambda **kw: 1)

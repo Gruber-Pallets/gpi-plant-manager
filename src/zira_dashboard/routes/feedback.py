@@ -21,6 +21,7 @@ _TITLE_MAX = 70
 _MAX_FILE_BYTES = 10 * 1024 * 1024
 _ALLOWED_PREFIXES = ("image/",)
 _ALLOWED_TYPES = ("application/pdf",)
+_SOURCE_APP = "GPI Plant Manager (plant)"
 
 
 def _optional_text(value: str | None) -> str | None:
@@ -62,7 +63,10 @@ def _description_html(description: str, submitter: str | None,
     # routes/changelog.py; keeps descriptions with <, &, or " rendering as typed.
     body = html.escape(description.strip()).replace("\n", "<br>")
     parts = [f"<p>{body}</p>"]
-    meta = [f"Submitted by {html.escape(who)}"]
+    meta = [
+        f"Source app: {_SOURCE_APP}",
+        f"Submitted by {html.escape(who)}",
+    ]
     if page_url:
         safe_url = html.escape(page_url, quote=True)
         meta.append(f'Page: <a href="{safe_url}">{safe_url}</a>')

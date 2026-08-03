@@ -15,3 +15,12 @@
   and implementation steps. If an unfamiliar word is needed, explain it
   right away.
 - Keep historical patch notes unchanged; apply this rule only to new entries.
+
+# Coding request repository safety
+
+This repository's canonical identity is `gpi-plant-manager`.
+
+When a pasted coding request contains `TARGET REPOSITORY`, compare it with this
+repository before editing files or running mutating commands. If it is not
+`gpi-plant-manager`, stop and tell Dale which repository the request requires.
+Never use the task's Odoo Project to override `TARGET REPOSITORY`.
