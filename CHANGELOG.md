@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-03
+
+### Features
+
+- **The time clock now has a Feedback button on every screen.** You can report a bug or ask for a new feature without leaving the time clock. You can also paste or upload a screenshot to show what you saw.
+
 ## 2026-07-30
 
 ### Fixes
