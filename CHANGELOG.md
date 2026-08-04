@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 11:15 AM - Payroll fix counts are clearer
+
+- **Plant Manager now counts only the payroll fixes it made during that check.** If it finds that a saved fix already happened, it records what it saw without taking credit or making the change again. The automatic check is not running on its own yet.
+
 ### 11:03 AM - Payroll fixes can recover safely
 
 - **Plant Manager now saves a safety note before it tries a payroll fix.** If Odoo or Plant Manager loses a reply, the next check can finish the record without making the same change twice. The automatic check is not running on its own yet.

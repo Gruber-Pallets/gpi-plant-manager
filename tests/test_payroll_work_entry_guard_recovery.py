@@ -245,13 +245,16 @@ def test_duration_commit_then_rpc_error_is_recovered_without_second_write(monkey
     fake_odoo.write_mode = "commit_raise"
     alerts = wire(monkeypatch, fake_store, fake_odoo)
 
-    guard.run_once(NOW)
-    guard.run_once(NOW)
+    first_result = guard.run_once(NOW)
+    second_result = guard.run_once(NOW)
 
     assert fake_odoo.write_calls == [(item.work_entry_id, item.after_duration)]
     assert len(fake_store.audit) == 1
+    assert fake_store.audit[attempt.attempt_id][1] == "duration reread matched"
     assert fake_store.pending == {}
     assert alerts[-1] == []
+    assert first_result == {"corrected": 1, "review": 0, "noop": 0}
+    assert second_result == {"corrected": 0, "review": 0, "noop": 0}
 
 
 def test_delete_commit_then_rpc_error_is_recovered_without_second_delete(monkeypatch):
@@ -262,12 +265,17 @@ def test_delete_commit_then_rpc_error_is_recovered_without_second_delete(monkeyp
     fake_odoo.delete_mode = "commit_raise"
     wire(monkeypatch, fake_store, fake_odoo)
 
-    guard.run_once(NOW)
-    guard.run_once(NOW)
+    first_result = guard.run_once(NOW)
+    second_result = guard.run_once(NOW)
 
     assert fake_odoo.delete_calls == [item.work_entry_id]
     assert len(fake_store.audit) == 1
+    assert fake_store.audit[attempt.attempt_id][1] == (
+        "zero-target draft regular row absent"
+    )
     assert fake_store.pending == {}
+    assert first_result == {"corrected": 1, "review": 0, "noop": 0}
+    assert second_result == {"corrected": 0, "review": 0, "noop": 0}
 
 
 def test_verification_read_outage_keeps_review_then_recovers_next_run(monkeypatch):
@@ -278,7 +286,7 @@ def test_verification_read_outage_keeps_review_then_recovers_next_run(monkeypatc
     fake_odoo.write_mode = "verify_read_fails"
     alerts = wire(monkeypatch, fake_store, fake_odoo)
 
-    guard.run_once(NOW)
+    first_result = guard.run_once(NOW)
 
     assert attempt.attempt_id in fake_store.pending
     assert fake_store.audit == {}
@@ -286,11 +294,16 @@ def test_verification_read_outage_keeps_review_then_recovers_next_run(monkeypatc
     assert "pending_correction" in alerts[-1][0].reason_codes
     assert "verification_failed" in alerts[-1][0].reason_codes
 
-    guard.run_once(NOW)
+    second_result = guard.run_once(NOW)
 
     assert fake_odoo.write_calls == [(item.work_entry_id, item.after_duration)]
     assert len(fake_store.audit) == 1
+    assert fake_store.audit[attempt.attempt_id][1] == (
+        "target observed during recovery; actor unknown"
+    )
     assert fake_store.pending == {}
+    assert first_result == {"corrected": 0, "review": 1, "noop": 0}
+    assert second_result == {"corrected": 0, "review": 0, "noop": 0}
 
 
 def test_audit_failure_before_commit_keeps_pending_then_finalizes_once(monkeypatch):
@@ -298,20 +311,25 @@ def test_audit_failure_before_commit_keeps_pending_then_finalizes_once(monkeypat
     attempt = saved_attempt(item)
     fake_store = FakeAttemptStore([attempt])
     fake_store.finalize_failures[attempt.attempt_id] = "before"
-    fake_odoo = FakeOdoo([work_row(item, duration=item.after_duration)])
+    fake_odoo = FakeOdoo([work_row(item)])
     alerts = wire(monkeypatch, fake_store, fake_odoo)
 
-    guard.run_once(NOW)
+    first_result = guard.run_once(NOW)
 
     assert attempt.attempt_id in fake_store.pending
     assert fake_store.audit == {}
     assert "audit_failed" in alerts[-1][0].reason_codes
 
-    guard.run_once(NOW)
+    second_result = guard.run_once(NOW)
 
-    assert fake_odoo.write_calls == []
+    assert fake_odoo.write_calls == [(item.work_entry_id, item.after_duration)]
     assert len(fake_store.audit) == 1
+    assert fake_store.audit[attempt.attempt_id][1] == (
+        "target observed during recovery; actor unknown"
+    )
     assert fake_store.pending == {}
+    assert first_result == {"corrected": 1, "review": 1, "noop": 0}
+    assert second_result == {"corrected": 0, "review": 0, "noop": 0}
 
 
 def test_audit_commit_response_loss_does_not_duplicate_audit(monkeypatch):
@@ -322,15 +340,20 @@ def test_audit_commit_response_loss_does_not_duplicate_audit(monkeypatch):
     fake_odoo = FakeOdoo([work_row(item, duration=item.after_duration)])
     wire(monkeypatch, fake_store, fake_odoo)
 
-    guard.run_once(NOW)
-    guard.run_once(NOW)
+    first_result = guard.run_once(NOW)
+    second_result = guard.run_once(NOW)
 
     assert fake_odoo.write_calls == []
     assert len(fake_store.audit) == 1
+    assert fake_store.audit[attempt.attempt_id][1] == (
+        "target observed during recovery; actor unknown"
+    )
     assert fake_store.pending == {}
+    assert first_result == {"corrected": 0, "review": 1, "noop": 0}
+    assert second_result == {"corrected": 0, "review": 0, "noop": 0}
 
 
-def test_pending_deleted_entry_is_finalized_before_empty_candidate_fetch(monkeypatch):
+def test_crash_after_intent_then_external_delete_finalizes_without_mutation(monkeypatch):
     item = correction(action="delete_zero_regular", before=0.5, after=0.0)
     attempt = saved_attempt(item)
     events = []
@@ -338,12 +361,36 @@ def test_pending_deleted_entry_is_finalized_before_empty_candidate_fetch(monkeyp
     fake_odoo = FakeOdoo([], events)
     wire(monkeypatch, fake_store, fake_odoo)
 
-    guard.run_once(NOW)
+    result = guard.run_once(NOW)
 
     assert events.index("finalize") < events.index("fetch-candidates")
     assert fake_store.pending == {}
     assert len(fake_store.audit) == 1
+    assert fake_store.audit[attempt.attempt_id][1] == (
+        "row absent during recovery; actor unknown"
+    )
     assert fake_odoo.delete_calls == []
+    assert result == {"corrected": 0, "review": 0, "noop": 0}
+
+
+def test_crash_after_intent_then_external_target_finalizes_without_mutation(
+    monkeypatch,
+):
+    item = correction()
+    attempt = saved_attempt(item)
+    fake_store = FakeAttemptStore([attempt])
+    fake_odoo = FakeOdoo([work_row(item, duration=item.after_duration)])
+    wire(monkeypatch, fake_store, fake_odoo)
+
+    result = guard.run_once(NOW)
+
+    assert fake_odoo.write_calls == []
+    assert fake_store.pending == {}
+    assert len(fake_store.audit) == 1
+    assert fake_store.audit[attempt.attempt_id][1] == (
+        "target observed during recovery; actor unknown"
+    )
+    assert result == {"corrected": 0, "review": 0, "noop": 0}
 
 
 def test_one_pending_failure_does_not_block_other_attempt_recovery(monkeypatch):

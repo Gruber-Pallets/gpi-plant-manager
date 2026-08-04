@@ -138,6 +138,8 @@ def _finalize_verified(
     attempt: store.CorrectionAttempt,
     detail: str,
     now: datetime,
+    *,
+    mutated_this_run: bool,
 ) -> tuple[int, Decision | None]:
     try:
         store.finalize_attempt(attempt.attempt_id, detail, now)
@@ -147,13 +149,13 @@ def _finalize_verified(
             attempt.attempt_id,
             exc_info=True,
         )
-        return 1, _mark_pending(
+        return int(mutated_this_run), _mark_pending(
             attempt,
             "audit_failed",
             "verified Odoo change is waiting for permanent audit history",
             now,
         )
-    return 1, None
+    return int(mutated_this_run), None
 
 
 def _read_after_mutation(
@@ -179,12 +181,20 @@ def _read_after_mutation(
 
     if decision.action == "duration_update":
         if _duration_matches(verified, decision, decision.after_duration):
-            return _finalize_verified(attempt, "duration reread matched", now)
+            return _finalize_verified(
+                attempt,
+                "duration reread matched",
+                now,
+                mutated_this_run=True,
+            )
         unchanged = _duration_matches(verified, decision, decision.before_duration)
     else:
         if verified is None:
             return _finalize_verified(
-                attempt, "zero-target draft regular row absent", now
+                attempt,
+                "zero-target draft regular row absent",
+                now,
+                mutated_this_run=True,
             )
         unchanged = _duration_matches(verified, decision, decision.before_duration)
 
@@ -226,10 +236,18 @@ def _reconcile_attempt(
     if decision.action == "duration_update" and _duration_matches(
         fresh, decision, decision.after_duration
     ):
-        return _finalize_verified(attempt, "duration reread matched", now)
+        return _finalize_verified(
+            attempt,
+            "target observed during recovery; actor unknown",
+            now,
+            mutated_this_run=False,
+        )
     if decision.action == "delete_zero_regular" and fresh is None:
         return _finalize_verified(
-            attempt, "zero-target draft regular row absent", now
+            attempt,
+            "row absent during recovery; actor unknown",
+            now,
+            mutated_this_run=False,
         )
     if not _duration_matches(fresh, decision, decision.before_duration):
         return 0, _mark_pending(
