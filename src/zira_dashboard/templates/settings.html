@@ -173,9 +173,11 @@
                   </summary>
                   <div class="skills-list">
                     {% for o in r.default_pool if not o.reserve %}
-                      <label class="dd-item lvl-{{ o.level }} {% if o.level < 1 %}untrained{% endif %}" data-level="{{ o.level }}" data-name="{{ o.name }}">
+                      <label class="dd-item lvl-{{ o.level }} {% if o.level < 1 %}untrained{% endif %} {% if o.preserved %}preserved-default{% endif %}"
+                             data-level="{{ o.level }}" data-name="{{ o.name }}"
+                             {% if o.preserved %}title="Not on the active roster — kept because they're saved as a default here. Uncheck to remove."{% endif %}>
                         <input type="checkbox" name="{{ p }}default_people" value="{{ o.name }}" {% if o.name in r.default_people %}checked{% endif %}>
-                        <span class="dd-item-text">{{ o.name }}</span>
+                        <span class="dd-item-text">{{ o.name }}{% if o.preserved %} · off roster{% endif %}</span>
                       </label>
                     {% endfor %}
                     {% set reserve_pool = r.default_pool | selectattr('reserve') | list %}
@@ -183,9 +185,11 @@
                       <details class="dp-reserves">
                         <summary>Reserves <span class="dp-reserves-count">({{ reserve_pool|length }})</span></summary>
                         {% for o in reserve_pool %}
-                          <label class="dd-item lvl-{{ o.level }} {% if o.level < 1 %}untrained{% endif %}">
+                          <label class="dd-item lvl-{{ o.level }} {% if o.level < 1 %}untrained{% endif %} {% if o.preserved %}preserved-default{% endif %}"
+                                 data-name="{{ o.name }}"
+                                 {% if o.preserved %}title="Not on the active roster — kept because they're saved as a default here. Uncheck to remove."{% endif %}>
                             <input type="checkbox" name="{{ p }}default_people" value="{{ o.name }}" {% if o.name in r.default_people %}checked{% endif %}>
-                            <span class="dd-item-text">{{ o.name }}</span>
+                            <span class="dd-item-text">{{ o.name }}{% if o.preserved %} · off roster{% endif %}</span>
                           </label>
                         {% endfor %}
                       </details>
@@ -247,9 +251,11 @@
                     </summary>
                     <div class="skills-list">
                       {% for o in g.default_pool %}
-                        <label class="dd-item {% if o.name in g.default_conflicts %}default-conflict{% endif %}" data-name="{{ o.name }}">
+                        <label class="dd-item {% if o.name in g.default_conflicts %}default-conflict{% endif %} {% if o.preserved %}preserved-default{% endif %}"
+                               data-name="{{ o.name }}"
+                               {% if o.preserved %}title="No longer qualifies for this group (reserve, untrained, or off the roster) — kept because they're saved as a default. Uncheck to remove."{% endif %}>
                           <input type="checkbox" name="group_default_people__{{ g.name }}" value="{{ o.name }}" {% if o.name in g.default_people %}checked{% endif %}>
-                          <span class="dd-item-text">{{ o.name }}</span>
+                          <span class="dd-item-text">{{ o.name }}{% if o.preserved %} · not qualified{% endif %}</span>
                         </label>
                       {% endfor %}
                     </div>

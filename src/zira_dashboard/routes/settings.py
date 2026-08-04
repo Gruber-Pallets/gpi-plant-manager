@@ -306,8 +306,11 @@ def settings_page(
     active_people_objs = [p for p in roster if p.active]
     active_people = sorted((p.name for p in active_people_objs), key=str.lower)
 
+    # The whole roster, not just the active half: work_center_rows offers only
+    # active people as choices, but keeps an already-saved default in the pool
+    # after they go inactive so the next save can't silently drop them.
     wc_rows = settings_context.work_center_rows(
-        staffing.LOCATIONS, active_people_objs, work_centers_store.effective
+        staffing.LOCATIONS, roster, work_centers_store.effective
     )
     default_auto_work_centers = _settings_default_auto_work_centers()
     group_rows = settings_context.group_summary(
