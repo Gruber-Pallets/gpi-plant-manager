@@ -9,6 +9,7 @@ need to migrate. All functions are pure pass-throughs to SQL.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 
 from .shift_config import TARGET_PER_DAY, productive_minutes_per_day
@@ -18,6 +19,8 @@ from .staffing import (
     Location,
     required_skills_for,
 )
+
+log = logging.getLogger(__name__)
 
 GROUP_KINDS = ("group", "department")
 
@@ -307,13 +310,23 @@ def replace_default_targets(
     exact_by_center: Mapping[str, Sequence[str]],
     group_by_name: Mapping[str, Sequence[str]],
 ) -> None:
-    """Atomically replace all exact and group defaults after validation."""
+    """Atomically replace all exact and group defaults after validation.
+
+    A FULL replacement: anything the caller leaves out is deleted. Callers that
+    build their input from a form must include every default they mean to keep —
+    see ``settings_context.work_center_rows``, which keeps already-saved people
+    in the rendered picker for exactly that reason.
+    """
     exact, groups_by_name = _normalize_default_targets(
         exact_by_center=exact_by_center,
         group_by_name=group_by_name,
     )
     from . import db
 
+    # An INSERT ... SELECT whose WHERE matches no work-center/person row writes
+    # nothing and raises nothing, so an unresolvable name drops that default
+    # silently. Collect them and say so.
+    unresolved: list[str] = []
     with db.cursor() as cur:
         cur.execute("DELETE FROM work_center_default_people")
         cur.execute("DELETE FROM group_default_people")
@@ -326,6 +339,8 @@ def replace_default_targets(
                     "WHERE wc.name = %s AND pe.name = %s",
                     (sort_order, center, person),
                 )
+                if not cur.rowcount:
+                    unresolved.append(f"work_center:{center}/{person}")
         for group, names in groups_by_name.items():
             for sort_order, person in enumerate(names):
                 cur.execute(
@@ -334,6 +349,14 @@ def replace_default_targets(
                     "SELECT %s, pe.id, %s FROM people pe WHERE pe.name = %s",
                     (group, sort_order, person),
                 )
+                if not cur.rowcount:
+                    unresolved.append(f"group:{group}/{person}")
+    if unresolved:
+        log.warning(
+            "Dropped %d default target(s) with no matching work center/person: %s",
+            len(unresolved),
+            ", ".join(sorted(unresolved)),
+        )
     _invalidate_caches()
 
 

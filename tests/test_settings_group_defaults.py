@@ -13,7 +13,11 @@ def test_settings_group_table_has_default_people_picker():
 def test_settings_group_default_picker_rows_show_names_without_eligible_centers():
     html = Path("src/zira_dashboard/templates/settings.html").read_text()
 
-    assert '<span class="dd-item-text">{{ o.name }}</span>' in html
+    # The name itself, optionally followed by the "no longer qualifies" marker
+    # that keeps a saved default in the form (see
+    # tests/test_settings_default_people_preservation.py) — never the list of
+    # centers the person is eligible for.
+    assert '<span class="dd-item-text">{{ o.name }}' in html
     assert "o.eligible_centers" not in html
     assert "eligible-centers" not in html
 

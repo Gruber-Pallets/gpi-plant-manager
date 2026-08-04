@@ -95,11 +95,11 @@ def test_work_center_rows_keep_skill_default_people_and_identity_rules():
         "department": "Recycled",
         "default_people": default_people,
         "default_pool": [
-            {"name": "alpha", "level": 3, "reserve": False},
-            {"name": "Ana", "level": 3, "reserve": False},
-            {"name": "Zebra", "level": 3, "reserve": False},
-            {"name": "Zoe", "level": 2, "reserve": False},
-            {"name": "Luis", "level": 4, "reserve": True},
+            {"name": "alpha", "level": 3, "reserve": False, "preserved": False},
+            {"name": "Ana", "level": 3, "reserve": False, "preserved": False},
+            {"name": "Zebra", "level": 3, "reserve": False, "preserved": False},
+            {"name": "Zoe", "level": 2, "reserve": False, "preserved": False},
+            {"name": "Luis", "level": 4, "reserve": True, "preserved": False},
         ],
     }
     assert rows[0]["required_skills"] is required_skills

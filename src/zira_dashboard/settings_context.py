@@ -20,19 +20,51 @@ def schedule_context(schedule, weekday_names: list[str]) -> dict:
     }
 
 
-def work_center_rows(locations, active_people, effective_for) -> list[dict]:
+def work_center_rows(locations, people, effective_for) -> list[dict]:
+    """Rows for the work-center table, including each row's default-people pool.
+
+    The pool is the set of people the picker renders a checkbox for, and the
+    Work Centers form rewrites the stored defaults from exactly those
+    checkboxes (see ``work_centers_store.replace_default_targets``). So every
+    already-saved default MUST appear in the pool — an inactive or off-roster
+    default with no checkbox would be deleted by the next save of an unrelated
+    field, while the picker summary still showed the name. Such entries are
+    flagged ``preserved`` so the template can mark them as no longer normally
+    selectable.
+    """
     rows = []
     for location in locations:
         effective = effective_for(location)
         max_ops = effective["max_ops"]
         required_skills = effective["required_skills"]
+        selected = set(effective["default_people"])
         pool = []
-        for person in active_people:
+        listed = set()
+        for person in people:
+            active = bool(getattr(person, "active", True))
+            if not active and person.name not in selected:
+                continue
             if required_skills:
                 level = min((person.level(skill) for skill in required_skills), default=0)
             else:
                 level = 2
-            pool.append({"name": person.name, "level": level, "reserve": person.reserve})
+            pool.append(
+                {
+                    "name": person.name,
+                    "level": level,
+                    "reserve": person.reserve,
+                    "preserved": not active,
+                }
+            )
+            listed.add(person.name)
+        for name in effective["default_people"]:
+            # Saved defaults who aren't on the roster at all: hidden by the
+            # Roster Filter, or renamed/removed in Odoo.
+            if name not in listed:
+                pool.append(
+                    {"name": name, "level": 0, "reserve": False, "preserved": True}
+                )
+                listed.add(name)
         pool.sort(key=lambda row: (row["reserve"], -row["level"], row["name"].lower()))
         rows.append(
             {
@@ -82,7 +114,14 @@ def with_group_default_context(
     defaults_for,
     conflicts,
 ) -> list[dict]:
-    """Add eligible default-person choices to user-managed group rows."""
+    """Add eligible default-person choices to user-managed group rows.
+
+    Already-selected people are always in the pool, even when they've stopped
+    qualifying (gone reserve, dropped to level 0, gone inactive, left the
+    roster) — the group form rewrites the stored defaults from the rendered
+    checkboxes, so a selected person without one is silently deleted by the
+    next save. Those entries carry ``preserved`` and no eligible centers.
+    """
     result: list[dict] = []
     for row in rows:
         members = members_for("group", row["name"])
@@ -102,17 +141,25 @@ def with_group_default_context(
             if eligible_centers:
                 eligible_people.append((person, eligible_centers))
         eligible_people.sort(key=lambda item: item[0].name.lower())
+        pool = [
+            {
+                "name": person.name,
+                "eligible_centers": tuple(eligible_centers),
+            }
+            for person, eligible_centers in eligible_people
+        ]
+        listed = {entry["name"] for entry in pool}
+        for name in selected:
+            if name not in listed:
+                pool.append(
+                    {"name": name, "eligible_centers": (), "preserved": True}
+                )
+                listed.add(name)
         result.append(
             {
                 **row,
                 "default_people": selected,
-                "default_pool": [
-                    {
-                        "name": person.name,
-                        "eligible_centers": tuple(eligible_centers),
-                    }
-                    for person, eligible_centers in eligible_people
-                ],
+                "default_pool": pool,
                 "default_conflicts": {
                     name: conflicts[name]
                     for name in selected

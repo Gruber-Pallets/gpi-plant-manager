@@ -192,6 +192,17 @@ header .page-actions .redo-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .default-people-picker .dp-reserves > summary:hover { color: #581c87; }
 .default-people-picker .dp-reserves-count { color: var(--muted); font-weight: 500; margin-left: 0.15rem; font-size: 0.75rem; }
 .default-people-picker .dp-reserves .dd-item.untrained { display: flex; }
+/* Saved defaults who no longer qualify: listed ONLY while still checked, so the
+   form keeps posting them (an unposted default is deleted on save) without
+   offering them as new choices. */
+.default-people-picker .dd-item.preserved-default { display: none; }
+.default-people-picker .dd-item.preserved-default:has(input:checked) {
+  display: flex;
+  font-style: italic;
+}
+.default-people-picker .dd-item.preserved-default:has(input:checked) .dd-item-text {
+  opacity: 0.85;
+}
 
 /* Save toast (top-center) — shared with skills + staffing. */
 .save-toast-bd {
