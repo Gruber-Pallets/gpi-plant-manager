@@ -26,10 +26,16 @@ _REASON_TEXT = {
     "non_draft_work_entry": "one or more Work Entries are no longer draft",
     "conflicting_work_entry": "Odoo marks a Work Entry as conflicting",
     "negative_target": "the safe correction would be negative",
-    "fresh_state_changed": "the Work Entry changed before correction",
-    "write_failed": "Odoo refused the correction",
-    "verification_failed": "Odoo did not retain the correction",
-    "audit_failed": "the correction succeeded but its local audit failed",
+    "fresh_state_changed": (
+        "the Work Entry no longer matches the saved original or target details"
+    ),
+    "write_failed": "Odoo's response was unclear; the Work Entry may have changed",
+    "verification_failed": "Plant Manager could not confirm whether Odoo kept the correction",
+    "audit_failed": (
+        "the Odoo change was verified, but its permanent history is still pending"
+    ),
+    "pending_correction": "a saved correction is still being checked or recorded",
+    "intent_failed": "the safety record could not be saved, so Odoo was not changed",
     "missing_candidate_group": "the recent candidate was absent from the batch reread",
     "fresh_read_failed": "Plant Manager could not reread the Work Entry",
     "invalid_numeric_data": "some hour details are missing or are not real numbers",
@@ -76,8 +82,9 @@ def _build_task_body(issues: list[Decision]) -> str:
             "</li>"
         )
     return (
-        "<p>Plant Manager found payroll Work Entries that need a person to review "
-        "them. No automatic change was made.</p><ul>"
+        "<p>Plant Manager found payroll Work Entries that need a person to review. "
+        "Some items may already have changed in Odoo; each reason below says what "
+        "needs checking.</p><ul>"
         + "".join(items)
         + "</ul>"
     )

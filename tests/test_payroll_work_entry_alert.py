@@ -265,6 +265,43 @@ def test_task_body_explains_known_and_invalid_numeric_reasons():
     assert "some hour details are missing or are not real numbers" in invalid
 
 
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("write_failed", "may have changed"),
+        ("verification_failed", "could not confirm whether Odoo kept"),
+        ("audit_failed", "permanent history is still pending"),
+        ("pending_correction", "saved correction is still being checked"),
+        ("intent_failed", "safety record could not be saved"),
+    ],
+)
+def test_task_body_accurately_explains_uncertain_and_pending_changes(
+    reason, expected
+):
+    body = alert._build_task_body([issue(reason=reason)])
+
+    assert expected in body
+    assert "No automatic change was made" not in body
+
+
+def test_task_body_never_claims_no_change_for_mixed_review_statuses():
+    body = alert._build_task_body(
+        [
+            issue(reason="write_failed"),
+            Decision(
+                **{
+                    **issue().__dict__,
+                    "employee_id": 10,
+                    "reason_codes": ("audit_failed",),
+                }
+            ),
+        ]
+    )
+
+    assert "No automatic change was made" not in body
+    assert "Some items may already have changed in Odoo" in body
+
+
 def test_task_body_sorts_rows_without_changing_input():
     later_name = issue(employee_name="Zoe")
     earlier_name = Decision(

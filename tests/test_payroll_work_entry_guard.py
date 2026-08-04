@@ -90,6 +90,40 @@ def wire_batch(monkeypatch, decisions, *, events=None, candidates=None):
     events = events if events is not None else []
     monkeypatch.setenv("PAYROLL_WORK_ENTRY_GUARD_ENABLED", "1")
     monkeypatch.setattr(guard.store, "guard_lock", recording_lock(events))
+    attempts = {}
+
+    def load_pending():
+        events.append("pending")
+        return list(attempts.values())
+
+    def create_attempt(attempt_id, item, now):
+        events.append("intent")
+        current = guard.store.CorrectionAttempt(
+            attempt_id=attempt_id,
+            decision=item,
+            last_reason="pending_correction",
+            last_detail="correction intent saved",
+            created_at=now,
+            updated_at=now,
+        )
+        attempts[attempt_id] = current
+        return current
+
+    def finalize_attempt(attempt_id, _detail, _now):
+        events.append("audit")
+        attempts.pop(attempt_id, None)
+        return True
+
+    monkeypatch.setattr(
+        guard.store, "load_pending_attempts", MagicMock(side_effect=load_pending)
+    )
+    monkeypatch.setattr(
+        guard.store, "create_attempt", MagicMock(side_effect=create_attempt)
+    )
+    monkeypatch.setattr(
+        guard.store, "finalize_attempt", MagicMock(side_effect=finalize_attempt)
+    )
+    monkeypatch.setattr(guard.store, "mark_attempt_issue", MagicMock())
     candidate_rows = (
         [candidate(item) for item in decisions] if candidates is None else candidates
     )
@@ -148,10 +182,12 @@ def test_kill_switch_makes_zero_lock_odoo_db_or_alert_calls(monkeypatch, value):
     fetch = MagicMock()
     sync = MagicMock()
     audit = MagicMock()
+    pending = MagicMock()
     monkeypatch.setattr(guard.store, "guard_lock", lock)
     monkeypatch.setattr(guard.odoo_client, "fetch_recent_payroll_candidates", fetch)
     monkeypatch.setattr(guard.alert, "sync_review_task", sync)
     monkeypatch.setattr(guard.store, "append_correction", audit)
+    monkeypatch.setattr(guard.store, "load_pending_attempts", pending)
 
     assert guard.run_once(datetime(2026, 8, 3, 20, 0)) == {"skipped": "disabled"}
 
@@ -159,6 +195,7 @@ def test_kill_switch_makes_zero_lock_odoo_db_or_alert_calls(monkeypatch, value):
     fetch.assert_not_called()
     sync.assert_not_called()
     audit.assert_not_called()
+    pending.assert_not_called()
 
 
 def test_default_is_enabled_and_empty_run_is_locked(monkeypatch):
@@ -177,9 +214,20 @@ def test_default_is_enabled_and_empty_run_is_locked(monkeypatch):
         lambda _issues, _now: events.append("alert"),
     )
     monkeypatch.setattr(guard.odoo_client, "fetch_payroll_inputs", fetch_inputs)
+    monkeypatch.setattr(
+        guard.store,
+        "load_pending_attempts",
+        lambda: events.append("pending") or [],
+    )
 
     assert guard.run_once(NOW) == {"corrected": 0, "review": 0, "noop": 0}
-    assert events == ["guard-enter", "candidates", "alert", "guard-exit"]
+    assert events == [
+        "guard-enter",
+        "pending",
+        "candidates",
+        "alert",
+        "guard-exit",
+    ]
     fetch_inputs.assert_not_called()
 
 
@@ -205,6 +253,7 @@ def test_aware_now_drives_exact_90_day_write_date_lookback(monkeypatch):
         lambda since: seen.append(since) or [],
     )
     monkeypatch.setattr(guard.alert, "sync_review_task", MagicMock())
+    monkeypatch.setattr(guard.store, "load_pending_attempts", lambda: [])
 
     guard.run_once(local_now)
 
@@ -230,19 +279,15 @@ def test_all_enabled_external_work_occurs_inside_guard_lock(monkeypatch):
         "set_payroll_work_entry_duration",
         lambda *_args: events.append("write"),
     )
-    monkeypatch.setattr(
-        guard.store,
-        "append_correction",
-        lambda *_args: events.append("audit"),
-    )
-
     guard.run_once(NOW)
 
     assert events == [
         "guard-enter",
+        "pending",
         "candidates",
         "inputs",
         "classify 19 2026-07-24",
+        "intent",
         "fresh-read",
         "write",
         "verify-read",
@@ -256,6 +301,7 @@ def test_guard_lock_releases_when_batch_fetch_raises(monkeypatch):
     events = []
     monkeypatch.setenv("PAYROLL_WORK_ENTRY_GUARD_ENABLED", "1")
     monkeypatch.setattr(guard.store, "guard_lock", recording_lock(events))
+    monkeypatch.setattr(guard.store, "load_pending_attempts", lambda: [])
 
     def fail(_since):
         events.append("candidates")
@@ -280,12 +326,6 @@ def test_positive_target_writes_rereads_then_audits(monkeypatch):
     )
     write = MagicMock(side_effect=lambda *_args: events.append("write"))
     monkeypatch.setattr(guard.odoo_client, "set_payroll_work_entry_duration", write)
-    monkeypatch.setattr(
-        guard.store,
-        "append_correction",
-        lambda _decision, _detail, _now: events.append("audit"),
-    )
-
     result = guard.run_once(NOW)
 
     lifecycle = [event for event in events if event in {"read", "write", "audit"}]
@@ -298,8 +338,9 @@ def test_positive_target_writes_rereads_then_audits(monkeypatch):
 def test_zero_target_deletes_only_regular_row_then_audits(monkeypatch):
     item = decision(action="delete_zero_regular", before=0.5, after=0.0)
     wire_batch(monkeypatch, [item])
+    reads = iter([fresh(item), None])
     monkeypatch.setattr(
-        guard.odoo_client, "fetch_payroll_work_entry", lambda _id: fresh(item)
+        guard.odoo_client, "fetch_payroll_work_entry", lambda _id: next(reads)
     )
     delete = MagicMock()
     write = MagicMock()
@@ -310,11 +351,11 @@ def test_zero_target_deletes_only_regular_row_then_audits(monkeypatch):
 
     delete.assert_called_once_with(item.work_entry_id)
     write.assert_not_called()
-    guard.odoo_client.payroll_work_entry_exists.assert_called_once_with(
-        item.work_entry_id
-    )
-    guard.store.append_correction.assert_called_once_with(
-        item, "zero-target draft regular row absent", NOW
+    guard.odoo_client.payroll_work_entry_exists.assert_not_called()
+    guard.store.finalize_attempt.assert_called_once()
+    assert guard.store.finalize_attempt.call_args.args[1:] == (
+        "zero-target draft regular row absent",
+        NOW,
     )
     assert result == {"corrected": 1, "review": 0, "noop": 0}
 
@@ -361,7 +402,10 @@ def test_changed_fresh_snapshot_refuses_write_and_creates_review(
     guard.odoo_client.set_payroll_work_entry_duration.assert_not_called()
     guard.store.append_correction.assert_not_called()
     issues = guard.alert.sync_review_task.call_args.args[0]
-    assert issues[0].reason_codes == ("fresh_state_changed",)
+    assert issues[0].reason_codes == (
+        "pending_correction",
+        "fresh_state_changed",
+    )
     assert result == {"corrected": 0, "review": 1, "noop": 0}
 
 
@@ -384,6 +428,7 @@ def test_fresh_read_exception_is_review_and_other_group_still_corrects(monkeypat
 
     assert result == {"corrected": 1, "review": 1, "noop": 0}
     assert guard.alert.sync_review_task.call_args.args[0][0].reason_codes == (
+        "pending_correction",
         "fresh_read_failed",
     )
 
@@ -412,6 +457,7 @@ def test_mutation_failure_does_not_audit(monkeypatch, action):
     mutation.assert_called_once()
     guard.store.append_correction.assert_not_called()
     assert guard.alert.sync_review_task.call_args.args[0][0].reason_codes == (
+        "pending_correction",
         "write_failed",
     )
     assert result == {"corrected": 0, "review": 1, "noop": 0}
@@ -426,7 +472,11 @@ def test_write_failure_isolated_from_other_candidate_group(monkeypatch):
     def read(entry_id):
         read_counts[entry_id] += 1
         item = first if entry_id == first.work_entry_id else second
-        duration = item.before_duration if read_counts[entry_id] == 1 else item.after_duration
+        duration = (
+            item.before_duration
+            if entry_id == first.work_entry_id or read_counts[entry_id] == 1
+            else item.after_duration
+        )
         return fresh(item, duration=duration)
 
     def write(entry_id, _duration):
@@ -439,9 +489,13 @@ def test_write_failure_isolated_from_other_candidate_group(monkeypatch):
     result = guard.run_once(NOW)
 
     assert result == {"corrected": 1, "review": 1, "noop": 0}
-    audited = guard.store.append_correction.call_args.args[0]
-    assert audited.work_entry_id == second.work_entry_id
+    audited_attempt_id = guard.store.finalize_attempt.call_args.args[0]
+    created = {
+        call.args[0]: call.args[1] for call in guard.store.create_attempt.call_args_list
+    }
+    assert created[audited_attempt_id].work_entry_id == second.work_entry_id
     assert guard.alert.sync_review_task.call_args.args[0][0].reason_codes == (
+        "pending_correction",
         "write_failed",
     )
 
@@ -472,7 +526,8 @@ def test_failed_duration_verification_does_not_audit(monkeypatch, verified):
     guard.odoo_client.set_payroll_work_entry_duration.assert_called_once()
     guard.store.append_correction.assert_not_called()
     assert guard.alert.sync_review_task.call_args.args[0][0].reason_codes == (
-        "verification_failed",
+        "pending_correction",
+        "fresh_state_changed",
     )
     assert result == {"corrected": 0, "review": 1, "noop": 0}
 
@@ -494,6 +549,7 @@ def test_duration_verification_exception_does_not_audit(monkeypatch):
 
     guard.store.append_correction.assert_not_called()
     assert guard.alert.sync_review_task.call_args.args[0][0].reason_codes == (
+        "pending_correction",
         "verification_failed",
     )
     assert result["review"] == 1
@@ -521,19 +577,21 @@ def test_ambiguous_write_response_never_skips_fresh_verification(monkeypatch):
 def test_delete_verification_failure_does_not_audit(monkeypatch, exists):
     item = decision(action="delete_zero_regular", before=0.5, after=0.0)
     wire_batch(monkeypatch, [item])
-    monkeypatch.setattr(
-        guard.odoo_client, "fetch_payroll_work_entry", lambda _id: fresh(item)
-    )
-    check = MagicMock(
-        side_effect=exists if isinstance(exists, Exception) else None,
-        return_value=exists if not isinstance(exists, Exception) else None,
-    )
-    monkeypatch.setattr(guard.odoo_client, "payroll_work_entry_exists", check)
+    reads = iter([fresh(item), exists])
+
+    def read(_id):
+        value = next(reads)
+        if isinstance(value, Exception):
+            raise value
+        return fresh(item) if value is True else value
+
+    monkeypatch.setattr(guard.odoo_client, "fetch_payroll_work_entry", read)
 
     result = guard.run_once(NOW)
 
     guard.store.append_correction.assert_not_called()
     assert guard.alert.sync_review_task.call_args.args[0][0].reason_codes == (
+        "pending_correction",
         "verification_failed",
     )
     assert result == {"corrected": 0, "review": 1, "noop": 0}
@@ -546,16 +604,13 @@ def test_audit_failure_becomes_review_without_second_odoo_write(monkeypatch):
     monkeypatch.setattr(
         guard.odoo_client, "fetch_payroll_work_entry", lambda _id: next(reads)
     )
-    monkeypatch.setattr(
-        guard.store,
-        "append_correction",
-        MagicMock(side_effect=RuntimeError("db down")),
-    )
+    guard.store.finalize_attempt.side_effect = RuntimeError("db down")
 
     result = guard.run_once(NOW)
 
     guard.odoo_client.set_payroll_work_entry_duration.assert_called_once()
     assert guard.alert.sync_review_task.call_args.args[0][0].reason_codes == (
+        "pending_correction",
         "audit_failed",
     )
     assert result == {"corrected": 1, "review": 1, "noop": 0}
@@ -702,6 +757,7 @@ def test_unsupported_correction_action_fails_closed(monkeypatch):
     monkeypatch.setattr(
         guard.odoo_client, "fetch_payroll_work_entry", lambda _id: fresh(item)
     )
+    guard.store.create_attempt.side_effect = ValueError("unsupported correction action")
 
     result = guard.run_once(NOW)
 
@@ -709,6 +765,6 @@ def test_unsupported_correction_action_fails_closed(monkeypatch):
     guard.odoo_client.delete_payroll_work_entry.assert_not_called()
     guard.store.append_correction.assert_not_called()
     assert guard.alert.sync_review_task.call_args.args[0][0].reason_codes == (
-        "write_failed",
+        "intent_failed",
     )
     assert result == {"corrected": 0, "review": 1, "noop": 0}

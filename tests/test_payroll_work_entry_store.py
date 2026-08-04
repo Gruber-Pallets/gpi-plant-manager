@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from unittest.mock import MagicMock
+from uuid import UUID, uuid4
 
 import psycopg2
 import pytest
@@ -74,13 +75,54 @@ def correction_decision() -> Decision:
     )
 
 
-def test_schema_defines_append_only_audit_and_singleton_monitor():
+def attempt_row(attempt_id=None, **changes):
+    current_id = attempt_id or uuid4()
+    row = {
+        "attempt_id": str(current_id),
+        "odoo_work_entry_id": 8502,
+        "action": "duration_update",
+        "employee_odoo_id": 19,
+        "employee_name": "Isidro Moctezuma Aviles",
+        "work_date": date(2026, 7, 24),
+        "attendance_id": 3811,
+        "before_duration": 3.621388889,
+        "after_duration": 3.121355556,
+        "attendance_regular": 3.121355556,
+        "attendance_overtime": 5.3092,
+        "work_regular_before": 3.621388889,
+        "work_overtime": 5.309166667,
+        "last_reason": "pending_correction",
+        "last_detail": "correction intent saved",
+        "created_at": datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+        "updated_at": datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+    }
+    row.update(changes)
+    return row
+
+
+def test_schema_defines_attempt_outbox_append_only_audit_and_singleton_monitor():
+    normalized_schema = " ".join(SCHEMA_DDL.split())
     assert "CREATE TABLE IF NOT EXISTS payroll_work_entry_corrections" in SCHEMA_DDL
     assert (
         "action TEXT NOT NULL CHECK (action IN ('duration_update', "
         "'delete_zero_regular'))" in SCHEMA_DDL
     )
     assert "CREATE INDEX IF NOT EXISTS payroll_work_entry_corrections_entry_idx" in SCHEMA_DDL
+    assert "CREATE TABLE IF NOT EXISTS payroll_work_entry_correction_attempts" in SCHEMA_DDL
+    assert "attempt_id UUID PRIMARY KEY" in normalized_schema
+    assert "odoo_work_entry_id INTEGER NOT NULL" in normalized_schema
+    assert "UNIQUE (odoo_work_entry_id)" in normalized_schema
+    assert "attendance_id INTEGER NOT NULL" in normalized_schema
+    assert "last_reason TEXT NOT NULL" in normalized_schema
+    assert "last_detail TEXT NOT NULL" in normalized_schema
+    assert "created_at TIMESTAMPTZ NOT NULL" in normalized_schema
+    assert "updated_at TIMESTAMPTZ NOT NULL" in normalized_schema
+    assert "ADD COLUMN IF NOT EXISTS attempt_id UUID" in normalized_schema
+    assert (
+        "CREATE UNIQUE INDEX IF NOT EXISTS payroll_work_entry_corrections_attempt_idx"
+        in SCHEMA_DDL
+    )
+    assert "WHERE attempt_id IS NOT NULL" in SCHEMA_DDL
     assert "CREATE TABLE IF NOT EXISTS payroll_work_entry_guard_monitor" in SCHEMA_DDL
     assert "DEFAULT 1 CHECK (id = 1)" in SCHEMA_DDL
     assert "reported_issue_keys   TEXT[] NOT NULL DEFAULT '{}'" in SCHEMA_DDL
@@ -97,6 +139,8 @@ def test_schema_enforces_correction_values_and_append_only_history():
     assert "CREATE TRIGGER payroll_work_entry_corrections_reject_truncate" in SCHEMA_DDL
     assert "BEFORE TRUNCATE ON payroll_work_entry_corrections" in SCHEMA_DDL
     assert "FOR EACH STATEMENT EXECUTE FUNCTION reject_payroll_correction_mutation()" in SCHEMA_DDL
+    assert "payroll_work_entry_correction_attempts_action_duration_check" in SCHEMA_DDL
+    assert "payroll_work_entry_correction_attempts_finite_totals_check" in SCHEMA_DDL
 
 
 def test_append_correction_inserts_every_audit_value_in_column_order(monkeypatch):
@@ -262,6 +306,234 @@ def test_append_correction_rejects_naive_corrected_at(monkeypatch):
         )
 
     execute.assert_not_called()
+
+
+def test_create_attempt_persists_complete_snapshot_before_returning(monkeypatch):
+    attempt_id = UUID("1403d207-3a1d-4e50-a17e-d7fe87362fe8")
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    cursor = MagicMock()
+    cursor.fetchone.return_value = attempt_row(attempt_id)
+
+    @contextmanager
+    def transaction():
+        yield cursor
+
+    monkeypatch.setattr(store.db, "cursor", transaction)
+
+    created = store.create_attempt(attempt_id, correction_decision(), now)
+
+    assert created.attempt_id == attempt_id
+    assert created.decision == correction_decision()
+    insert_sql, insert_params = cursor.execute.call_args_list[0].args
+    assert "INSERT INTO payroll_work_entry_correction_attempts" in insert_sql
+    assert "ON CONFLICT (attempt_id) DO NOTHING" in insert_sql
+    assert insert_params == (
+        str(attempt_id),
+        8502,
+        "duration_update",
+        19,
+        "Isidro Moctezuma Aviles",
+        date(2026, 7, 24),
+        3811,
+        3.621388889,
+        3.121355556,
+        3.121355556,
+        5.3092,
+        3.621388889,
+        5.309166667,
+        "pending_correction",
+        "correction intent saved",
+        now,
+        now,
+    )
+    select_sql, select_params = cursor.execute.call_args_list[1].args
+    assert "WHERE attempt_id = %s" in select_sql
+    assert select_params == (str(attempt_id),)
+
+
+def test_create_attempt_is_idempotent_only_for_exact_same_snapshot(monkeypatch):
+    attempt_id = uuid4()
+    cursor = MagicMock()
+    cursor.fetchone.return_value = attempt_row(attempt_id)
+
+    @contextmanager
+    def transaction():
+        yield cursor
+
+    monkeypatch.setattr(store.db, "cursor", transaction)
+
+    assert store.create_attempt(
+        attempt_id,
+        correction_decision(),
+        datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+    ).decision == correction_decision()
+
+    cursor.fetchone.return_value = attempt_row(attempt_id, after_duration=2.5)
+    with pytest.raises(RuntimeError, match="snapshot mismatch"):
+        store.create_attempt(
+            attempt_id,
+            correction_decision(),
+            datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+        )
+
+
+@pytest.mark.parametrize(
+    ("decision_changes", "now", "message"),
+    [
+        ({"kind": "review"}, datetime(2026, 8, 4, 12, 0, tzinfo=UTC), "correction"),
+        ({"attendance_id": None}, datetime(2026, 8, 4, 12, 0, tzinfo=UTC), "Attendance"),
+        (
+            {"action": "delete_zero_regular", "after_duration": 0.1},
+            datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+            "after duration",
+        ),
+        (
+            {"after_duration": float("nan")},
+            datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+            "finite",
+        ),
+        ({}, datetime(2026, 8, 4, 12, 0), "timezone-aware"),
+    ],
+)
+def test_create_attempt_rejects_malformed_snapshot_before_db(
+    monkeypatch, decision_changes, now, message
+):
+    cursor = MagicMock()
+    monkeypatch.setattr(store.db, "cursor", cursor)
+
+    with pytest.raises(ValueError, match=message):
+        store.create_attempt(
+            uuid4(), replace(correction_decision(), **decision_changes), now
+        )
+
+    cursor.assert_not_called()
+
+
+def test_load_pending_attempts_returns_decisions_and_status(monkeypatch):
+    attempt_id = uuid4()
+    query = MagicMock(return_value=[attempt_row(attempt_id)])
+    monkeypatch.setattr(store.db, "query", query)
+
+    attempts = store.load_pending_attempts()
+
+    assert len(attempts) == 1
+    assert attempts[0].attempt_id == attempt_id
+    assert attempts[0].decision == correction_decision()
+    assert attempts[0].last_reason == "pending_correction"
+    assert attempts[0].last_detail == "correction intent saved"
+    assert "ORDER BY created_at, attempt_id" in query.call_args.args[0]
+
+
+def test_load_pending_attempts_fails_closed_on_malformed_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        store.db,
+        "query",
+        MagicMock(return_value=[attempt_row(after_duration=float("nan"))]),
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        store.load_pending_attempts()
+
+
+def test_mark_attempt_issue_updates_only_pending_status(monkeypatch):
+    attempt_id = uuid4()
+    now = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
+    execute = MagicMock()
+    monkeypatch.setattr(store.db, "execute", execute)
+
+    store.mark_attempt_issue(
+        attempt_id,
+        "verification_failed",
+        "fresh read failed after write",
+        now,
+    )
+
+    sql, params = execute.call_args.args
+    assert "UPDATE payroll_work_entry_correction_attempts" in sql
+    assert "last_reason = %s, last_detail = %s, updated_at = %s" in sql
+    assert "WHERE attempt_id = %s" in sql
+    assert params == (
+        "verification_failed",
+        "fresh read failed after write",
+        now,
+        str(attempt_id),
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "detail", "now", "message"),
+    [
+        ("", "detail", datetime(2026, 8, 4, 12, 0, tzinfo=UTC), "reason"),
+        ("write_failed", "", datetime(2026, 8, 4, 12, 0, tzinfo=UTC), "detail"),
+        ("write_failed", "detail", datetime(2026, 8, 4, 12, 0), "timezone-aware"),
+    ],
+)
+def test_mark_attempt_issue_rejects_invalid_status(
+    monkeypatch, reason, detail, now, message
+):
+    execute = MagicMock()
+    monkeypatch.setattr(store.db, "execute", execute)
+
+    with pytest.raises(ValueError, match=message):
+        store.mark_attempt_issue(uuid4(), reason, detail, now)
+
+    execute.assert_not_called()
+
+
+def test_finalize_attempt_locks_inserts_once_and_deletes_in_one_transaction(
+    monkeypatch,
+):
+    attempt_id = uuid4()
+    now = datetime(2026, 8, 4, 12, 10, tzinfo=UTC)
+    cursor = MagicMock()
+    cursor.fetchone.return_value = attempt_row(attempt_id)
+    events = []
+
+    @contextmanager
+    def transaction():
+        events.append("transaction-enter")
+        try:
+            yield cursor
+        finally:
+            events.append("transaction-exit")
+
+    monkeypatch.setattr(store.db, "cursor", transaction)
+
+    assert store.finalize_attempt(attempt_id, "duration reread matched", now) is True
+
+    assert events == ["transaction-enter", "transaction-exit"]
+    assert len(cursor.execute.call_args_list) == 3
+    select_sql, select_params = cursor.execute.call_args_list[0].args
+    assert "FROM payroll_work_entry_correction_attempts" in select_sql
+    assert "WHERE attempt_id = %s FOR UPDATE" in select_sql
+    assert select_params == (str(attempt_id),)
+    insert_sql, insert_params = cursor.execute.call_args_list[1].args
+    assert "INSERT INTO payroll_work_entry_corrections" in insert_sql
+    assert "attempt_id" in insert_sql
+    assert "ON CONFLICT (attempt_id) WHERE attempt_id IS NOT NULL DO NOTHING" in insert_sql
+    assert insert_params[0] == str(attempt_id)
+    assert insert_params[-2:] == ("duration reread matched", now)
+    delete_sql, delete_params = cursor.execute.call_args_list[2].args
+    assert "DELETE FROM payroll_work_entry_correction_attempts" in delete_sql
+    assert delete_params == (str(attempt_id),)
+
+
+def test_finalize_attempt_missing_pending_row_is_idempotent(monkeypatch):
+    cursor = MagicMock()
+    cursor.fetchone.return_value = None
+
+    @contextmanager
+    def transaction():
+        yield cursor
+
+    monkeypatch.setattr(store.db, "cursor", transaction)
+
+    assert store.finalize_attempt(
+        uuid4(),
+        "already committed",
+        datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+    ) is False
+    assert len(cursor.execute.call_args_list) == 1
 
 
 def test_load_monitor_state_uses_singleton_and_defaults_when_absent(monkeypatch):
@@ -572,6 +844,7 @@ def test_local_postgres_schema_and_store_guarantees(monkeypatch):
                     "SELECT conname FROM pg_constraint "
                     "WHERE conrelid IN ("
                     "'payroll_work_entry_corrections'::regclass, "
+                    "'payroll_work_entry_correction_attempts'::regclass, "
                     "'payroll_work_entry_guard_monitor'::regclass)"
                 )
                 constraint_names = {row["conname"] for row in cur.fetchall()}
@@ -579,6 +852,11 @@ def test_local_postgres_schema_and_store_guarantees(monkeypatch):
                     "payroll_work_entry_corrections_action_duration_check",
                     "payroll_work_entry_corrections_finite_totals_check",
                     "payroll_work_entry_corrections_verification_detail_check",
+                    "payroll_work_entry_correction_attempts_entry_unique",
+                    "payroll_work_entry_correction_attempts_action_duration_check",
+                    "payroll_work_entry_correction_attempts_finite_totals_check",
+                    "payroll_work_entry_correction_attempts_reason_check",
+                    "payroll_work_entry_correction_attempts_detail_check",
                     "payroll_work_entry_guard_monitor_id_check",
                 }.issubset(constraint_names)
 
@@ -589,6 +867,7 @@ def test_local_postgres_schema_and_store_guarantees(monkeypatch):
                 )
                 index_names = {row["indexname"] for row in cur.fetchall()}
                 assert "payroll_work_entry_corrections_entry_idx" in index_names
+                assert "payroll_work_entry_corrections_attempt_idx" in index_names
 
                 cur.execute(
                     "SELECT tgname FROM pg_trigger "
@@ -607,9 +886,14 @@ def test_local_postgres_schema_and_store_guarantees(monkeypatch):
                     cur.execute(sql, params)
                     return list(cur.fetchall())
 
+                @contextmanager
+                def cursor_in_transaction():
+                    yield cur
+
                 with monkeypatch.context() as transaction_patch:
                     transaction_patch.setattr(store.db, "execute", execute_in_transaction)
                     transaction_patch.setattr(store.db, "query", query_in_transaction)
+                    transaction_patch.setattr(store.db, "cursor", cursor_in_transaction)
                     now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
                     store.append_correction(
                         correction_decision(), "local integration round trip", now
@@ -632,6 +916,38 @@ def test_local_postgres_schema_and_store_guarantees(monkeypatch):
                         "odoo_task_id": 45,
                         "reported_issue_keys": ["b"],
                     }
+
+                    attempt_id = UUID("73d06909-e287-4ff7-84d8-c92a6398640a")
+                    created = store.create_attempt(
+                        attempt_id, correction_decision(), now
+                    )
+                    assert created.attempt_id == attempt_id
+                    cur.execute("SAVEPOINT unique_pending_attempt")
+                    with pytest.raises(psycopg2.errors.UniqueViolation):
+                        store.create_attempt(
+                            uuid4(), correction_decision(), now
+                        )
+                    cur.execute("ROLLBACK TO SAVEPOINT unique_pending_attempt")
+                    cur.execute("RELEASE SAVEPOINT unique_pending_attempt")
+                    assert store.finalize_attempt(
+                        attempt_id, "attempt integration verified", now
+                    )
+                    assert not store.finalize_attempt(
+                        attempt_id, "already finalized", now
+                    )
+                    cur.execute(
+                        "SELECT count(*) AS count FROM payroll_work_entry_corrections "
+                        "WHERE attempt_id = %s",
+                        (str(attempt_id),),
+                    )
+                    assert cur.fetchone()["count"] == 1
+                    cur.execute(
+                        "SELECT count(*) AS count "
+                        "FROM payroll_work_entry_correction_attempts "
+                        "WHERE attempt_id = %s",
+                        (str(attempt_id),),
+                    )
+                    assert cur.fetchone()["count"] == 0
 
                 correction_insert = (
                     "INSERT INTO payroll_work_entry_corrections "

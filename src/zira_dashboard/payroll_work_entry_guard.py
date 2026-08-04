@@ -7,6 +7,7 @@ import os
 from collections import defaultdict
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from . import odoo_client
 from . import payroll_work_entry_alert as alert
@@ -27,6 +28,13 @@ def enabled() -> bool:
 
 def _as_review(decision: Decision, reason: str) -> Decision:
     return replace(decision, kind="review", reason_codes=(reason,), action=None)
+
+
+def _pending_review(decision: Decision, reason: str) -> Decision:
+    reasons = ("pending_correction",)
+    if reason != "pending_correction":
+        reasons += (reason,)
+    return replace(decision, kind="review", reason_codes=reasons, action=None)
 
 
 def _same_identity(row: dict | None, decision: Decision) -> bool:
@@ -108,103 +116,225 @@ def _classify_candidates(candidates: list[dict]) -> list[Decision]:
     return decisions
 
 
-def _correct_decisions(
-    decisions: list[Decision], now: datetime
-) -> tuple[int, list[Decision]]:
-    review_issues = [item for item in decisions if item.kind == "review"]
+def _mark_pending(
+    attempt: store.CorrectionAttempt,
+    reason: str,
+    detail: str,
+    now: datetime,
+) -> Decision:
+    try:
+        store.mark_attempt_issue(attempt.attempt_id, reason, detail, now)
+    except Exception:
+        _log.warning(
+            "payroll guard: could not persist %s for attempt %s",
+            reason,
+            attempt.attempt_id,
+            exc_info=True,
+        )
+    return _pending_review(attempt.decision, reason)
+
+
+def _finalize_verified(
+    attempt: store.CorrectionAttempt,
+    detail: str,
+    now: datetime,
+) -> tuple[int, Decision | None]:
+    try:
+        store.finalize_attempt(attempt.attempt_id, detail, now)
+    except Exception:
+        _log.warning(
+            "payroll guard: audit finalization failed for attempt %s",
+            attempt.attempt_id,
+            exc_info=True,
+        )
+        return 1, _mark_pending(
+            attempt,
+            "audit_failed",
+            "verified Odoo change is waiting for permanent audit history",
+            now,
+        )
+    return 1, None
+
+
+def _read_after_mutation(
+    attempt: store.CorrectionAttempt,
+    mutation_error: Exception | None,
+    now: datetime,
+) -> tuple[int, Decision | None]:
+    decision = attempt.decision
+    try:
+        verified = odoo_client.fetch_payroll_work_entry(decision.work_entry_id)
+    except Exception:
+        _log.warning(
+            "payroll guard: verification read failed for attempt %s",
+            attempt.attempt_id,
+            exc_info=True,
+        )
+        return 0, _mark_pending(
+            attempt,
+            "verification_failed",
+            "could not reread Odoo after the mutation request",
+            now,
+        )
+
+    if decision.action == "duration_update":
+        if _duration_matches(verified, decision, decision.after_duration):
+            return _finalize_verified(attempt, "duration reread matched", now)
+        unchanged = _duration_matches(verified, decision, decision.before_duration)
+    else:
+        if verified is None:
+            return _finalize_verified(
+                attempt, "zero-target draft regular row absent", now
+            )
+        unchanged = _duration_matches(verified, decision, decision.before_duration)
+
+    if unchanged:
+        reason = "write_failed" if mutation_error is not None else "verification_failed"
+        detail = (
+            "Odoo still has the saved original after an unclear mutation response"
+            if mutation_error is not None
+            else "Odoo still has the saved original after the mutation request"
+        )
+        return 0, _mark_pending(attempt, reason, detail, now)
+    return 0, _mark_pending(
+        attempt,
+        "fresh_state_changed",
+        "Odoo matches neither the saved original nor the correction target",
+        now,
+    )
+
+
+def _reconcile_attempt(
+    attempt: store.CorrectionAttempt, now: datetime
+) -> tuple[int, Decision | None]:
+    decision = attempt.decision
+    try:
+        fresh = odoo_client.fetch_payroll_work_entry(decision.work_entry_id)
+    except Exception:
+        _log.warning(
+            "payroll guard: fresh read failed for attempt %s",
+            attempt.attempt_id,
+            exc_info=True,
+        )
+        return 0, _mark_pending(
+            attempt,
+            "fresh_read_failed",
+            "could not read the pending Work Entry from Odoo",
+            now,
+        )
+
+    if decision.action == "duration_update" and _duration_matches(
+        fresh, decision, decision.after_duration
+    ):
+        return _finalize_verified(attempt, "duration reread matched", now)
+    if decision.action == "delete_zero_regular" and fresh is None:
+        return _finalize_verified(
+            attempt, "zero-target draft regular row absent", now
+        )
+    if not _duration_matches(fresh, decision, decision.before_duration):
+        return 0, _mark_pending(
+            attempt,
+            "fresh_state_changed",
+            "Odoo matches neither the saved original nor the correction target",
+            now,
+        )
+
+    mutation_error = None
+    try:
+        if decision.action == "duration_update":
+            odoo_client.set_payroll_work_entry_duration(
+                decision.work_entry_id, decision.after_duration
+            )
+        elif decision.action == "delete_zero_regular":
+            odoo_client.delete_payroll_work_entry(decision.work_entry_id)
+        else:
+            raise RuntimeError(f"unsupported correction action {decision.action!r}")
+    except Exception as error:
+        mutation_error = error
+        _log.warning(
+            "payroll guard: mutation response failed for attempt %s",
+            attempt.attempt_id,
+            exc_info=True,
+        )
+    return _read_after_mutation(attempt, mutation_error, now)
+
+
+def _reconcile_attempts(
+    attempts: list[store.CorrectionAttempt], now: datetime
+) -> tuple[int, list[Decision], set[int]]:
     corrected_count = 0
-
-    for decision in [item for item in decisions if item.kind == "correct"]:
+    review_issues = []
+    still_pending_entry_ids = set()
+    for attempt in attempts:
         try:
-            fresh = odoo_client.fetch_payroll_work_entry(decision.work_entry_id)
+            corrected, review = _reconcile_attempt(attempt, now)
         except Exception:
             _log.warning(
-                "payroll guard: fresh read failed for entry %s",
-                decision.work_entry_id,
+                "payroll guard: unexpected attempt failure for %s",
+                attempt.attempt_id,
                 exc_info=True,
             )
-            review_issues.append(_as_review(decision, "fresh_read_failed"))
-            continue
-        if not _duration_matches(fresh, decision, decision.before_duration):
-            review_issues.append(_as_review(decision, "fresh_state_changed"))
-            continue
-
-        try:
-            if decision.action == "duration_update":
-                odoo_client.set_payroll_work_entry_duration(
-                    decision.work_entry_id, decision.after_duration
-                )
-            elif decision.action == "delete_zero_regular":
-                odoo_client.delete_payroll_work_entry(decision.work_entry_id)
-            else:
-                raise RuntimeError(
-                    f"unsupported correction action {decision.action!r}"
-                )
-        except Exception:
-            _log.warning(
-                "payroll guard: mutation failed for entry %s",
-                decision.work_entry_id,
-                exc_info=True,
+            corrected = 0
+            review = _mark_pending(
+                attempt,
+                "verification_failed",
+                "unexpected error while checking the saved correction",
+                now,
             )
-            review_issues.append(_as_review(decision, "write_failed"))
-            continue
-
-        try:
-            if decision.action == "duration_update":
-                verified = odoo_client.fetch_payroll_work_entry(
-                    decision.work_entry_id
-                )
-                verification_ok = _duration_matches(
-                    verified, decision, decision.after_duration
-                )
-                detail = "duration reread matched"
-            else:
-                verification_ok = not odoo_client.payroll_work_entry_exists(
-                    decision.work_entry_id
-                )
-                detail = "zero-target draft regular row absent"
-        except Exception:
-            verification_ok = False
-            _log.warning(
-                "payroll guard: verification read failed for entry %s",
-                decision.work_entry_id,
-                exc_info=True,
-            )
-        if not verification_ok:
-            review_issues.append(_as_review(decision, "verification_failed"))
-            continue
-
-        corrected_count += 1
-        try:
-            store.append_correction(decision, detail, now)
-        except Exception:
-            _log.warning(
-                "payroll guard: audit failed for corrected entry %s",
-                decision.work_entry_id,
-                exc_info=True,
-            )
-            review_issues.append(_as_review(decision, "audit_failed"))
-
-    return corrected_count, review_issues
+        corrected_count += corrected
+        if review is not None:
+            review_issues.append(review)
+            still_pending_entry_ids.add(attempt.decision.work_entry_id)
+    return corrected_count, review_issues, still_pending_entry_ids
 
 
 def _run_enabled(now: datetime) -> dict[str, int]:
+    pending_attempts = store.load_pending_attempts()
+    corrected_count, pending_reviews, pending_entry_ids = _reconcile_attempts(
+        pending_attempts, now
+    )
     candidates = odoo_client.fetch_recent_payroll_candidates(now - LOOKBACK)
     if not candidates:
         try:
-            alert.sync_review_task([], now)
+            alert.sync_review_task(pending_reviews, now)
         except Exception:
             _log.warning(
                 "payroll guard: could not clear review task", exc_info=True
             )
         _log.warning(
-            "payroll guard: corrected=0 review=0 noop=0 candidates=0"
+            "payroll guard: corrected=%d review=%d noop=0 candidates=0",
+            corrected_count,
+            len(pending_reviews),
         )
-        return {"corrected": 0, "review": 0, "noop": 0}
+        return {
+            "corrected": corrected_count,
+            "review": len(pending_reviews),
+            "noop": 0,
+        }
 
     decisions = _classify_candidates(candidates)
-    corrected_count, review_issues = _correct_decisions(decisions, now)
+    review_issues = pending_reviews + [
+        item for item in decisions if item.kind == "review"
+    ]
     noop_count = sum(item.kind == "noop" for item in decisions)
+    for decision in [item for item in decisions if item.kind == "correct"]:
+        if decision.work_entry_id in pending_entry_ids:
+            continue
+        try:
+            attempt = store.create_attempt(uuid4(), decision, now)
+        except Exception:
+            _log.warning(
+                "payroll guard: could not persist correction intent for entry %s",
+                decision.work_entry_id,
+                exc_info=True,
+            )
+            review_issues.append(_as_review(decision, "intent_failed"))
+            continue
+        corrected, review = _reconcile_attempt(attempt, now)
+        corrected_count += corrected
+        if review is not None:
+            review_issues.append(review)
+            pending_entry_ids.add(decision.work_entry_id)
 
     try:
         alert.sync_review_task(review_issues, now)

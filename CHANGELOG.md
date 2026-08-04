@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 11:03 AM - Payroll fixes can recover safely
+
+- **Plant Manager now saves a safety note before it tries a payroll fix.** If Odoo or Plant Manager loses a reply, the next check can finish the record without making the same change twice. The automatic check is not running on its own yet.
+
 ### 10:46 AM - Payroll safety check built
 
 - **The payroll safety check is built and tested.** It checks fresh Odoo details before any change and keeps unclear items for a person. It is not running on its own yet.

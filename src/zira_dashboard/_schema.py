@@ -1668,6 +1668,63 @@ $payroll_correction_truncate_trigger$;
 CREATE INDEX IF NOT EXISTS payroll_work_entry_corrections_entry_idx
   ON payroll_work_entry_corrections (odoo_work_entry_id, corrected_at DESC);
 
+-- Existing deployments created the append-only audit before correction
+-- attempts existed. Add the nullable recovery identity without rewriting old
+-- history, then enforce exactly one audit row for each finalized attempt.
+ALTER TABLE payroll_work_entry_corrections
+  ADD COLUMN IF NOT EXISTS attempt_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_work_entry_corrections_attempt_idx
+  ON payroll_work_entry_corrections (attempt_id)
+  WHERE attempt_id IS NOT NULL;
+
+-- Durable intent written before Odoo. One pending row per Work Entry lets a
+-- later process determine whether a lost RPC response committed the change.
+CREATE TABLE IF NOT EXISTS payroll_work_entry_correction_attempts (
+  attempt_id              UUID PRIMARY KEY,
+  odoo_work_entry_id      INTEGER NOT NULL,
+  action                  TEXT NOT NULL CHECK (
+    action IN ('duration_update', 'delete_zero_regular')
+  ),
+  employee_odoo_id        INTEGER NOT NULL,
+  employee_name           TEXT NOT NULL,
+  work_date               DATE NOT NULL,
+  attendance_id           INTEGER NOT NULL,
+  before_duration         DOUBLE PRECISION NOT NULL,
+  after_duration          DOUBLE PRECISION NOT NULL,
+  attendance_regular      DOUBLE PRECISION NOT NULL,
+  attendance_overtime     DOUBLE PRECISION NOT NULL,
+  work_regular_before     DOUBLE PRECISION NOT NULL,
+  work_overtime           DOUBLE PRECISION NOT NULL,
+  last_reason             TEXT NOT NULL DEFAULT 'pending_correction',
+  last_detail             TEXT NOT NULL DEFAULT 'correction intent saved',
+  created_at              TIMESTAMPTZ NOT NULL,
+  updated_at              TIMESTAMPTZ NOT NULL,
+  CONSTRAINT payroll_work_entry_correction_attempts_entry_unique
+    UNIQUE (odoo_work_entry_id),
+  CONSTRAINT payroll_work_entry_correction_attempts_action_duration_check CHECK (
+    (action = 'delete_zero_regular' AND after_duration = 0.0)
+    OR (action = 'duration_update' AND after_duration > 0.0)
+  ),
+  CONSTRAINT payroll_work_entry_correction_attempts_finite_totals_check CHECK (
+    before_duration > '-Infinity'::DOUBLE PRECISION
+    AND before_duration < 'Infinity'::DOUBLE PRECISION
+    AND after_duration > '-Infinity'::DOUBLE PRECISION
+    AND after_duration < 'Infinity'::DOUBLE PRECISION
+    AND attendance_regular > '-Infinity'::DOUBLE PRECISION
+    AND attendance_regular < 'Infinity'::DOUBLE PRECISION
+    AND attendance_overtime > '-Infinity'::DOUBLE PRECISION
+    AND attendance_overtime < 'Infinity'::DOUBLE PRECISION
+    AND work_regular_before > '-Infinity'::DOUBLE PRECISION
+    AND work_regular_before < 'Infinity'::DOUBLE PRECISION
+    AND work_overtime > '-Infinity'::DOUBLE PRECISION
+    AND work_overtime < 'Infinity'::DOUBLE PRECISION
+  ),
+  CONSTRAINT payroll_work_entry_correction_attempts_reason_check
+    CHECK (btrim(last_reason) <> ''),
+  CONSTRAINT payroll_work_entry_correction_attempts_detail_check
+    CHECK (btrim(last_detail) <> '')
+);
+
 CREATE TABLE IF NOT EXISTS payroll_work_entry_guard_monitor (
   id                    INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   odoo_task_id          INTEGER,
