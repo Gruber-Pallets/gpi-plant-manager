@@ -1551,8 +1551,105 @@ CREATE TABLE IF NOT EXISTS payroll_work_entry_corrections (
   work_regular_before      DOUBLE PRECISION NOT NULL,
   work_overtime            DOUBLE PRECISION NOT NULL,
   verification_detail      TEXT NOT NULL,
-  corrected_at             TIMESTAMPTZ NOT NULL
+  corrected_at             TIMESTAMPTZ NOT NULL,
+  CONSTRAINT payroll_work_entry_corrections_action_duration_check CHECK (
+    (action = 'delete_zero_regular' AND after_duration = 0.0)
+    OR (action = 'duration_update' AND after_duration > 0.0)
+  ),
+  CONSTRAINT payroll_work_entry_corrections_finite_totals_check CHECK (
+    before_duration > '-Infinity'::DOUBLE PRECISION
+    AND before_duration < 'Infinity'::DOUBLE PRECISION
+    AND after_duration > '-Infinity'::DOUBLE PRECISION
+    AND after_duration < 'Infinity'::DOUBLE PRECISION
+    AND attendance_regular > '-Infinity'::DOUBLE PRECISION
+    AND attendance_regular < 'Infinity'::DOUBLE PRECISION
+    AND attendance_overtime > '-Infinity'::DOUBLE PRECISION
+    AND attendance_overtime < 'Infinity'::DOUBLE PRECISION
+    AND work_regular_before > '-Infinity'::DOUBLE PRECISION
+    AND work_regular_before < 'Infinity'::DOUBLE PRECISION
+    AND work_overtime > '-Infinity'::DOUBLE PRECISION
+    AND work_overtime < 'Infinity'::DOUBLE PRECISION
+  ),
+  CONSTRAINT payroll_work_entry_corrections_verification_detail_check
+    CHECK (btrim(verification_detail) <> '')
 );
+
+-- CREATE TABLE IF NOT EXISTS does not add constraints to the table created by
+-- an earlier release. Add each named backstop exactly once during bootstrap.
+DO $payroll_correction_constraints$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'payroll_work_entry_corrections'::regclass
+      AND conname = 'payroll_work_entry_corrections_action_duration_check'
+  ) THEN
+    ALTER TABLE payroll_work_entry_corrections
+      ADD CONSTRAINT payroll_work_entry_corrections_action_duration_check CHECK (
+        (action = 'delete_zero_regular' AND after_duration = 0.0)
+        OR (action = 'duration_update' AND after_duration > 0.0)
+      );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'payroll_work_entry_corrections'::regclass
+      AND conname = 'payroll_work_entry_corrections_finite_totals_check'
+  ) THEN
+    ALTER TABLE payroll_work_entry_corrections
+      ADD CONSTRAINT payroll_work_entry_corrections_finite_totals_check CHECK (
+        before_duration > '-Infinity'::DOUBLE PRECISION
+        AND before_duration < 'Infinity'::DOUBLE PRECISION
+        AND after_duration > '-Infinity'::DOUBLE PRECISION
+        AND after_duration < 'Infinity'::DOUBLE PRECISION
+        AND attendance_regular > '-Infinity'::DOUBLE PRECISION
+        AND attendance_regular < 'Infinity'::DOUBLE PRECISION
+        AND attendance_overtime > '-Infinity'::DOUBLE PRECISION
+        AND attendance_overtime < 'Infinity'::DOUBLE PRECISION
+        AND work_regular_before > '-Infinity'::DOUBLE PRECISION
+        AND work_regular_before < 'Infinity'::DOUBLE PRECISION
+        AND work_overtime > '-Infinity'::DOUBLE PRECISION
+        AND work_overtime < 'Infinity'::DOUBLE PRECISION
+      );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'payroll_work_entry_corrections'::regclass
+      AND conname = 'payroll_work_entry_corrections_verification_detail_check'
+  ) THEN
+    ALTER TABLE payroll_work_entry_corrections
+      ADD CONSTRAINT payroll_work_entry_corrections_verification_detail_check
+      CHECK (btrim(verification_detail) <> '');
+  END IF;
+END
+$payroll_correction_constraints$;
+
+CREATE OR REPLACE FUNCTION reject_payroll_correction_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $payroll_correction_function$
+BEGIN
+  RAISE EXCEPTION 'payroll_work_entry_corrections is append-only; % is not allowed', TG_OP
+    USING ERRCODE = '55000';
+  RETURN NULL;
+END
+$payroll_correction_function$;
+
+DO $payroll_correction_trigger$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = 'payroll_work_entry_corrections'::regclass
+      AND tgname = 'payroll_work_entry_corrections_append_only'
+      AND NOT tgisinternal
+  ) THEN
+    CREATE TRIGGER payroll_work_entry_corrections_append_only
+      BEFORE UPDATE OR DELETE ON payroll_work_entry_corrections
+      FOR EACH ROW EXECUTE FUNCTION reject_payroll_correction_mutation();
+  END IF;
+END
+$payroll_correction_trigger$;
+
 CREATE INDEX IF NOT EXISTS payroll_work_entry_corrections_entry_idx
   ON payroll_work_entry_corrections (odoo_work_entry_id, corrected_at DESC);
 

@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 10:12 AM - Safer payroll fix history
+
+- **Plant Manager now keeps saved payroll fixes from being changed or erased.** It also stops broken hour details from being saved. The automatic check is not turned on yet.
+
 ### 06:40 AM - Payroll fix history
 
 - **Plant Manager is ready to keep a permanent record of every safe payroll correction.** The automatic check is not turned on yet.

@@ -2,11 +2,34 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import math
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 
 from . import db
 from .payroll_work_entry_rules import Decision
+
+
+# Stable signed 64-bit namespace key for the singleton monitor lifecycle.
+MONITOR_LOCK_KEY = 5_138_693_322_114_445_361
+
+
+@contextmanager
+def monitor_lock() -> Iterator[None]:
+    """Serialize one complete payroll-monitor lifecycle.
+
+    Task 4 callers must keep this context open around the complete
+    load-state/Odoo-act/save-state sequence. The transaction-scoped advisory
+    lock is acquired before the caller runs and is released only when the
+    caller leaves this context (including exceptional exits).
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(%s::bigint)",
+            (MONITOR_LOCK_KEY,),
+        )
+        yield
 
 
 def append_correction(
@@ -21,6 +44,31 @@ def append_correction(
         raise ValueError("Work Entry id is required")
     if decision.after_duration is None:
         raise ValueError("after duration is required")
+
+    numeric_totals = (
+        decision.before_duration,
+        decision.after_duration,
+        decision.attendance_regular,
+        decision.attendance_overtime,
+        decision.work_regular,
+        decision.work_overtime,
+    )
+    if not all(math.isfinite(value) for value in numeric_totals):
+        raise ValueError("all correction totals must be finite")
+
+    if decision.action == "delete_zero_regular":
+        if decision.after_duration != 0.0:
+            raise ValueError("delete correction after duration must be exactly 0.0")
+    elif decision.action == "duration_update":
+        if decision.after_duration <= 0.0:
+            raise ValueError("duration update after duration must be greater than 0.0")
+    else:
+        raise ValueError("unsupported correction action")
+
+    if not isinstance(verification_detail, str) or not verification_detail.strip():
+        raise ValueError("verification detail must not be blank")
+    if corrected_at.tzinfo is None or corrected_at.utcoffset() is None:
+        raise ValueError("corrected_at must be timezone-aware")
 
     db.execute(
         "INSERT INTO payroll_work_entry_corrections "

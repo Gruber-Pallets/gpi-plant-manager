@@ -826,7 +826,7 @@ Expected: schema bootstraps idempotently on Railway; no audit rows are written b
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**
-- Consumes: review `Decision` objects, `payroll_work_entry_store.load_monitor_state/save_monitor_state`, and existing Odoo task helpers.
+- Consumes: review `Decision` objects, `payroll_work_entry_store.monitor_lock/load_monitor_state/save_monitor_state`, and existing Odoo task helpers.
 - Produces: `sync_review_task(issues: list[Decision], now: datetime | None = None) -> dict`.
 
 - [ ] **Step 1: Write failing alert lifecycle tests**
@@ -1014,6 +1014,10 @@ _REASON_TEXT = {
 ```
 
 Build escaped HTML sorted by `(employee_name.lower(), work_date, issue_key)`.
+Wrap the complete synchronization lifecycle in `with store.monitor_lock():` so
+the advisory lock covers state load, every Odoo read/write, and the matching
+state save. Do not acquire the lock separately around individual database
+operations; leaving the context is what releases it.
 Follow the calendar-conflict monitor lifecycle: update the existing task,
 recreate it if update fails, post one change summary, archive and clear the
 stored task when issues become empty. When the issue keys are unchanged and a
