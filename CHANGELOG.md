@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 10:39 AM - Payroll questions stay together
+
+- **Plant Manager now reuses the same Odoo task if saving is interrupted.** This stops extra copies of the same payroll question. The automatic payroll check is not turned on yet.
+
 ### 10:31 AM - One place for payroll questions
 
 - **Plant Manager is ready to make one Odoo task when a payroll item needs a person to review it.** The automatic payroll check is not turned on yet.

@@ -83,15 +83,35 @@ def _build_task_body(issues: list[Decision]) -> str:
     )
 
 
-def _create_task(issues: list[Decision], now: datetime) -> int:
-    return odoo_client.create_feedback_task(
-        project_id=odoo_client.ensure_feedback_project(),
-        name=_TASK_NAME,
-        description_html=_build_task_body(issues),
-        assignee_uid=odoo_client.authenticate(),
-        tag_id=None,
-        deadline=(now.date() + timedelta(days=7)).isoformat(),
-    )
+def _adopt_task(task_id: int, body: str) -> int:
+    odoo_client.update_task(task_id, description=body, active=True)
+    return task_id
+
+
+def _create_or_adopt_task(issues: list[Decision], now: datetime) -> int:
+    body = _build_task_body(issues)
+    project_id = odoo_client.ensure_feedback_project()
+    existing_task_id = odoo_client.find_feedback_task(project_id, _TASK_NAME)
+    if existing_task_id is not None:
+        return _adopt_task(existing_task_id, body)
+
+    try:
+        return odoo_client.create_feedback_task(
+            project_id=project_id,
+            name=_TASK_NAME,
+            description_html=body,
+            assignee_uid=odoo_client.authenticate(),
+            tag_id=None,
+            deadline=(now.date() + timedelta(days=7)).isoformat(),
+        )
+    except Exception as create_error:
+        try:
+            existing_task_id = odoo_client.find_feedback_task(project_id, _TASK_NAME)
+        except Exception:
+            raise create_error
+        if existing_task_id is None:
+            raise
+        return _adopt_task(existing_task_id, body)
 
 
 def _validate_issues(issues: list[Decision]) -> None:
@@ -118,10 +138,11 @@ def sync_review_task(
             if task_id is None and not issue_set_changed:
                 return {"changed": False, "task_id": None, "count": 0}
             if task_id is not None:
-                odoo_client.post_task_message(
-                    task_id, "✅ All payroll Work Entry review items resolved."
-                )
-                odoo_client.update_task(task_id, active=False)
+                if task_id in odoo_client.fetch_task_stage_names([task_id]):
+                    odoo_client.post_task_message(
+                        task_id, "✅ All payroll Work Entry review items resolved."
+                    )
+                    odoo_client.update_task(task_id, active=False)
             store.save_monitor_state(None, [], current_time)
             return {"changed": True, "task_id": None, "count": 0}
 
@@ -139,16 +160,23 @@ def sync_review_task(
                 odoo_client.update_task(
                     task_id, description=_build_task_body(current_issues)
                 )
-            except Exception:  # noqa: BLE001 -- the stored Odoo task may be gone
+            except Exception as update_error:
+                try:
+                    task_exists = task_id in odoo_client.fetch_task_stage_names(
+                        [task_id]
+                    )
+                except Exception:
+                    raise update_error
+                if task_exists:
+                    raise
                 _log.warning(
-                    "payroll review task %s update failed; creating a fresh task",
+                    "payroll review task %s is missing; creating a fresh task",
                     task_id,
-                    exc_info=True,
                 )
                 task_id = None
 
         if task_id is None:
-            task_id = _create_task(current_issues, current_time)
+            task_id = _create_or_adopt_task(current_issues, current_time)
 
         odoo_client.post_task_message(
             task_id,

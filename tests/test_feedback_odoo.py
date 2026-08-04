@@ -26,6 +26,7 @@ def test_feedback_operations_live_in_private_module():
     assert odoo_client.FEEDBACK_DONE_STAGE == _odoo_feedback.FEEDBACK_DONE_STAGE
     assert odoo_client.FEEDBACK_REJECTED_STAGE == _odoo_feedback.FEEDBACK_REJECTED_STAGE
     assert callable(_odoo_feedback.find_or_create_feedback_project)
+    assert callable(_odoo_feedback.find_feedback_task)
     assert callable(_odoo_feedback.ensure_feedback_stages)
 
 
@@ -114,6 +115,33 @@ def test_ensure_feedback_tag_finds_then_creates(monkeypatch):
     assert calls[0][0:2] == ("project.tags", "search_read")
     assert calls[1][0:2] == ("project.tags", "create")
     assert calls[1][2][0]["name"] == "Bug"
+
+
+def test_find_feedback_task_uses_exact_active_domain_and_newest_id(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append([{"id": 902}])
+
+    task_id = odoo_client.find_feedback_task(7, "Payroll work entries need review")
+
+    assert task_id == 902
+    model, method, args, kwargs = calls[0]
+    assert (model, method) == ("project.task", "search_read")
+    assert args == (
+        [
+            ("project_id", "=", 7),
+            ("name", "=", "Payroll work entries need review"),
+            ("active", "=", True),
+        ],
+    )
+    assert kwargs == {"fields": ["id"], "order": "id desc", "limit": 1}
+
+
+def test_find_feedback_task_returns_none_when_exact_active_task_is_absent(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append([])
+
+    assert odoo_client.find_feedback_task(7, "Payroll work entries need review") is None
+    assert len(calls) == 1
 
 
 def test_create_feedback_task_uses_user_ids_and_tag_and_deadline(monkeypatch):

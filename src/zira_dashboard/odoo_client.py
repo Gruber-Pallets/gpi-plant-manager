@@ -877,6 +877,10 @@ def ensure_feedback_tag(name: str) -> int:
     return _odoo_feedback.ensure_feedback_tag(execute, name)
 
 
+def find_feedback_task(project_id: int, name: str) -> int | None:
+    return _odoo_feedback.find_feedback_task(execute, project_id, name)
+
+
 def create_feedback_task(
     project_id: int,
     name: str,

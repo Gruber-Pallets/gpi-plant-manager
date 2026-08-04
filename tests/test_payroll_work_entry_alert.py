@@ -68,6 +68,7 @@ def patch_odoo(
     created_id=222,
     update_error=None,
     task_stages=None,
+    found_id=None,
     events=None,
 ):
     def record(name, result=None, error=None):
@@ -95,6 +96,11 @@ def patch_odoo(
         alert.odoo_client,
         "fetch_task_stage_names",
         record("fetch", stages),
+    )
+    monkeypatch.setattr(
+        alert.odoo_client,
+        "find_feedback_task",
+        record("find", found_id),
     )
     return create, update, comment
 
@@ -157,7 +163,10 @@ def test_deleted_stored_task_is_recreated(monkeypatch):
     patch_lock(monkeypatch)
     save = patch_state(monkeypatch, task_id=111, keys=[issue().issue_key])
     create, update, comment = patch_odoo(
-        monkeypatch, created_id=333, update_error=RuntimeError("task deleted")
+        monkeypatch,
+        created_id=333,
+        update_error=RuntimeError("task deleted"),
+        task_stages={},
     )
 
     alert.sync_review_task([current], NOW)
@@ -193,10 +202,27 @@ def test_empty_issue_set_archives_existing_task(monkeypatch):
     result = alert.sync_review_task([], NOW)
 
     create.assert_not_called()
+    alert.odoo_client.fetch_task_stage_names.assert_called_once_with([111])
     comment.assert_called_once_with(
         111, "✅ All payroll Work Entry review items resolved."
     )
     update.assert_called_once_with(111, active=False)
+    save.assert_called_once_with(None, [], NOW)
+    assert result == {"changed": True, "task_id": None, "count": 0}
+
+
+def test_empty_issue_set_clears_missing_stored_task_without_odoo_writes(monkeypatch):
+    previous = issue()
+    patch_lock(monkeypatch)
+    save = patch_state(monkeypatch, task_id=111, keys=[previous.issue_key])
+    create, update, comment = patch_odoo(monkeypatch, task_stages={})
+
+    result = alert.sync_review_task([], NOW)
+
+    alert.odoo_client.fetch_task_stage_names.assert_called_once_with([111])
+    create.assert_not_called()
+    update.assert_not_called()
+    comment.assert_not_called()
     save.assert_called_once_with(None, [], NOW)
     assert result == {"changed": True, "task_id": None, "count": 0}
 
@@ -274,6 +300,161 @@ def test_sync_deduplicates_and_sorts_issue_keys(monkeypatch):
     assert result["count"] == 2
 
 
+def test_first_issue_adopts_exact_open_task_instead_of_creating(monkeypatch):
+    current = issue()
+    patch_lock(monkeypatch)
+    save = patch_state(monkeypatch)
+    create, update, comment = patch_odoo(monkeypatch, found_id=515)
+
+    result = alert.sync_review_task([current], NOW)
+
+    alert.odoo_client.find_feedback_task.assert_called_once_with(
+        3, "Payroll work entries need review"
+    )
+    create.assert_not_called()
+    update.assert_called_once_with(
+        515, description=alert._build_task_body([current]), active=True
+    )
+    comment.assert_called_once()
+    save.assert_called_once_with(515, [current.issue_key], NOW)
+    assert result == {"changed": True, "task_id": 515, "count": 1}
+
+
+def test_create_error_adopts_task_found_after_possible_server_success(monkeypatch):
+    current = issue()
+    patch_lock(monkeypatch)
+    save = patch_state(monkeypatch)
+    create, update, comment = patch_odoo(monkeypatch)
+    alert.odoo_client.find_feedback_task.side_effect = [None, 616]
+    create_error = TimeoutError("response lost")
+    create.side_effect = create_error
+
+    result = alert.sync_review_task([current], NOW)
+
+    assert alert.odoo_client.find_feedback_task.call_count == 2
+    update.assert_called_once_with(
+        616, description=alert._build_task_body([current]), active=True
+    )
+    comment.assert_called_once()
+    save.assert_called_once_with(616, [current.issue_key], NOW)
+    assert result == {"changed": True, "task_id": 616, "count": 1}
+
+
+def test_create_error_reraises_when_no_task_appears(monkeypatch):
+    current = issue()
+    patch_lock(monkeypatch)
+    save = patch_state(monkeypatch)
+    create, update, comment = patch_odoo(monkeypatch)
+    alert.odoo_client.find_feedback_task.side_effect = [None, None]
+    create_error = TimeoutError("response lost")
+    create.side_effect = create_error
+
+    with pytest.raises(TimeoutError) as raised:
+        alert.sync_review_task([current], NOW)
+
+    assert raised.value is create_error
+    update.assert_not_called()
+    comment.assert_not_called()
+    save.assert_not_called()
+
+
+def test_retry_after_comment_failure_reuses_created_task(monkeypatch):
+    current = issue()
+    patch_lock(monkeypatch)
+    state = {"odoo_task_id": None, "reported_issue_keys": []}
+    monkeypatch.setattr(alert.store, "load_monitor_state", lambda: dict(state))
+
+    def save_state(task_id, keys, _now):
+        state["odoo_task_id"] = task_id
+        state["reported_issue_keys"] = list(keys)
+
+    save = MagicMock(side_effect=save_state)
+    monkeypatch.setattr(alert.store, "save_monitor_state", save)
+    create, update, comment = patch_odoo(monkeypatch, created_id=717)
+    alert.odoo_client.find_feedback_task.side_effect = [None, 717]
+    comment.side_effect = [RuntimeError("comment failed"), None]
+
+    with pytest.raises(RuntimeError, match="comment failed"):
+        alert.sync_review_task([current], NOW)
+    result = alert.sync_review_task([current], NOW)
+
+    create.assert_called_once()
+    update.assert_called_once_with(
+        717, description=alert._build_task_body([current]), active=True
+    )
+    save.assert_called_once_with(717, [current.issue_key], NOW)
+    assert result == {"changed": True, "task_id": 717, "count": 1}
+
+
+def test_retry_after_state_save_failure_reuses_created_task(monkeypatch):
+    current = issue()
+    patch_lock(monkeypatch)
+    state = {"odoo_task_id": None, "reported_issue_keys": []}
+    monkeypatch.setattr(alert.store, "load_monitor_state", lambda: dict(state))
+    save_attempts = 0
+
+    def save_state(task_id, keys, _now):
+        nonlocal save_attempts
+        save_attempts += 1
+        if save_attempts == 1:
+            raise RuntimeError("state save failed")
+        state["odoo_task_id"] = task_id
+        state["reported_issue_keys"] = list(keys)
+
+    save = MagicMock(side_effect=save_state)
+    monkeypatch.setattr(alert.store, "save_monitor_state", save)
+    create, update, comment = patch_odoo(monkeypatch, created_id=818)
+    alert.odoo_client.find_feedback_task.side_effect = [None, 818]
+
+    with pytest.raises(RuntimeError, match="state save failed"):
+        alert.sync_review_task([current], NOW)
+    result = alert.sync_review_task([current], NOW)
+
+    create.assert_called_once()
+    update.assert_called_once_with(
+        818, description=alert._build_task_body([current]), active=True
+    )
+    assert comment.call_count == 2
+    assert save.call_count == 2
+    assert result == {"changed": True, "task_id": 818, "count": 1}
+
+
+def test_update_error_does_not_recreate_when_stored_task_still_exists(monkeypatch):
+    current = issue(reason="non_draft_work_entry")
+    patch_lock(monkeypatch)
+    save = patch_state(monkeypatch, task_id=111, keys=[issue().issue_key])
+    update_error = RuntimeError("temporary update failure")
+    create, _update, comment = patch_odoo(monkeypatch, update_error=update_error)
+
+    with pytest.raises(RuntimeError) as raised:
+        alert.sync_review_task([current], NOW)
+
+    assert raised.value is update_error
+    alert.odoo_client.fetch_task_stage_names.assert_called_once_with([111])
+    create.assert_not_called()
+    comment.assert_not_called()
+    save.assert_not_called()
+
+
+def test_update_error_does_not_recreate_when_existence_check_fails(monkeypatch):
+    current = issue(reason="non_draft_work_entry")
+    patch_lock(monkeypatch)
+    save = patch_state(monkeypatch, task_id=111, keys=[issue().issue_key])
+    update_error = RuntimeError("temporary update failure")
+    create, _update, comment = patch_odoo(monkeypatch, update_error=update_error)
+    alert.odoo_client.fetch_task_stage_names.side_effect = RuntimeError(
+        "existence check failed"
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        alert.sync_review_task([current], NOW)
+
+    assert raised.value is update_error
+    create.assert_not_called()
+    comment.assert_not_called()
+    save.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "bad_issue",
     [
@@ -308,6 +489,7 @@ def test_one_lock_contains_state_load_all_odoo_work_and_state_save(monkeypatch):
         "lock-enter",
         "state-load",
         "project",
+        "find",
         "authenticate",
         "create",
         "comment",

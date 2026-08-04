@@ -67,6 +67,25 @@ def ensure_feedback_tag(execute_fn: Callable[..., Any], name: str) -> int:
     return execute_fn("project.tags", "create", {"name": name})
 
 
+def find_feedback_task(
+    execute_fn: Callable[..., Any], project_id: int, name: str
+) -> int | None:
+    """Return the newest active exact-name task in a feedback project."""
+    rows = execute_fn(
+        "project.task",
+        "search_read",
+        [
+            ("project_id", "=", project_id),
+            ("name", "=", name),
+            ("active", "=", True),
+        ],
+        fields=["id"],
+        order="id desc",
+        limit=1,
+    ) or []
+    return int(rows[0]["id"]) if rows else None
+
+
 def create_feedback_task(
     execute_fn: Callable[..., Any],
     project_id: int,
