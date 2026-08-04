@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 11:31 AM - Payroll protection checked live
+
+#### Fixes
+
+- **The automatic payroll check is on and working.** The nine repaired weeks still show no more than 40 regular hours, and a second check made no extra changes. Three older unclear days were left alone for a person to review.
+
 ### 11:19 AM - Automatic payroll lunch protection
 
 #### Fixes

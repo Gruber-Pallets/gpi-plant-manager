@@ -54,7 +54,7 @@
 - Produces: `fetch_recent_candidates(execute_fn, written_since) -> list[dict]`, `fetch_inputs(execute_fn, employee_ids, start_day, end_day) -> tuple[list[dict], list[dict]]`, `read_work_entry(execute_fn, entry_id) -> dict | None`, `write_duration(execute_fn, entry_id, duration) -> None`, `delete_entry(execute_fn, entry_id) -> None`, and `entry_exists(execute_fn, entry_id) -> bool`.
 - Facade wrappers: `odoo_client.fetch_recent_payroll_candidates`, `fetch_payroll_inputs`, `fetch_payroll_work_entry`, `set_payroll_work_entry_duration`, `delete_payroll_work_entry`, and `payroll_work_entry_exists`.
 
-- [ ] **Step 1: Write failing facade tests**
+- [x] **Step 1: Write failing facade tests**
 
 Create `tests/test_odoo_payroll.py` with deterministic fake-executor tests. The important assertions are the verified Odoo 19 field names, local-day normalization, and the narrow write surface:
 
@@ -188,7 +188,7 @@ def test_public_odoo_client_wrappers_delegate(monkeypatch):
     recent.assert_called_once_with(odoo_client.execute, since)
 ```
 
-- [ ] **Step 2: Run the tests and confirm the red state**
+- [x] **Step 2: Run the tests and confirm the red state**
 
 Run:
 
@@ -198,7 +198,7 @@ Run:
 
 Expected: collection fails because `zira_dashboard._odoo_payroll` does not exist.
 
-- [ ] **Step 3: Implement the private facade**
+- [x] **Step 3: Implement the private facade**
 
 Create `src/zira_dashboard/_odoo_payroll.py`. Use these constants and normalization rules exactly:
 
@@ -346,7 +346,7 @@ def entry_exists(execute_fn, entry_id: int) -> bool:
     return bool(execute_fn("hr.work.entry", "search_count", [("id", "=", int(entry_id))]))
 ```
 
-- [ ] **Step 4: Add narrow wrappers to `odoo_client.py`**
+- [x] **Step 4: Add narrow wrappers to `odoo_client.py`**
 
 Import `_odoo_payroll` beside the other private facade modules, then append:
 
@@ -375,7 +375,7 @@ def payroll_work_entry_exists(entry_id: int) -> bool:
     return _odoo_payroll.entry_exists(execute, entry_id)
 ```
 
-- [ ] **Step 5: Run focused tests and lint**
+- [x] **Step 5: Run focused tests and lint**
 
 Run:
 
@@ -386,7 +386,7 @@ Run:
 
 Expected: all tests pass and Ruff reports `All checks passed!`.
 
-- [ ] **Step 6: Add the Task 1 changelog entry, commit, and push**
+- [x] **Step 6: Add the Task 1 changelog entry, commit, and push**
 
 Run `date '+%I:%M %p'` immediately before editing. Add a new subsection at
 the top of `## 2026-08-03` whose heading is that exact printed time followed
@@ -419,7 +419,7 @@ Expected: commit and push succeed; the new module is unused, so production behav
 - Consumes: normalized work-entry and attendance dictionaries from Task 1.
 - Produces: `Decision`, `classify_day(employee_id, employee_name, work_date, work_entries, attendances) -> Decision`, `TOLERANCE_HOURS = 1 / 60`, and `EXPECTED_EXCESS_HOURS = 0.5`.
 
-- [ ] **Step 1: Write the failing classifier tests**
+- [x] **Step 1: Write the failing classifier tests**
 
 Create `tests/test_payroll_work_entry_rules.py`. Define compact row factories and cover every branch with exact assertions:
 
@@ -556,7 +556,7 @@ def test_regular_excess_more_than_one_minute_from_half_hour_is_review():
     assert "regular_excess_not_half_hour" in result.reason_codes
 ```
 
-- [ ] **Step 2: Run the classifier tests and confirm the red state**
+- [x] **Step 2: Run the classifier tests and confirm the red state**
 
 Run:
 
@@ -566,7 +566,7 @@ Run:
 
 Expected: collection fails because `payroll_work_entry_rules` does not exist.
 
-- [ ] **Step 3: Implement the immutable decision and classifier**
+- [x] **Step 3: Implement the immutable decision and classifier**
 
 Create `src/zira_dashboard/payroll_work_entry_rules.py` with this public shape:
 
@@ -615,7 +615,7 @@ Implement `classify_day` as a pure function with this order:
 
 The result must carry all numeric totals for the audit and review task. It must never mutate either input list.
 
-- [ ] **Step 4: Run focused tests and lint**
+- [x] **Step 4: Run focused tests and lint**
 
 Run:
 
@@ -626,7 +626,7 @@ Run:
 
 Expected: all classifier tests pass and Ruff reports no errors.
 
-- [ ] **Step 5: Add the Task 2 changelog entry, commit, and push**
+- [x] **Step 5: Add the Task 2 changelog entry, commit, and push**
 
 Run `date '+%I:%M %p'` and add a heading using that exact time followed by
 ` - Exact payroll mistake check`, then add:
@@ -661,7 +661,7 @@ Expected: commit and push succeed; the classifier remains unused in production.
 - Consumes: `Decision` from Task 2 and `zira_dashboard.db`.
 - Produces: `append_correction(decision, verification_detail, corrected_at) -> None`, `load_monitor_state() -> dict`, and `save_monitor_state(odoo_task_id, reported_issue_keys, updated_at) -> None`.
 
-- [ ] **Step 1: Write failing schema and store tests**
+- [x] **Step 1: Write failing schema and store tests**
 
 Create `tests/test_payroll_work_entry_store.py`:
 
@@ -715,7 +715,7 @@ def test_monitor_state_defaults_and_round_trips(monkeypatch):
     assert execute.call_args.args[1] == (44, ["9:2026-07-24:a", "9:2026-07-24:z"], now)
 ```
 
-- [ ] **Step 2: Run the tests and confirm the red state**
+- [x] **Step 2: Run the tests and confirm the red state**
 
 Run:
 
@@ -725,7 +725,7 @@ Run:
 
 Expected: collection fails because the store module and schema tables do not exist.
 
-- [ ] **Step 3: Add the idempotent schema**
+- [x] **Step 3: Add the idempotent schema**
 
 Insert after `calendar_conflict_monitor` in `src/zira_dashboard/_schema.py`:
 
@@ -758,7 +758,7 @@ CREATE TABLE IF NOT EXISTS payroll_work_entry_guard_monitor (
 );
 ```
 
-- [ ] **Step 4: Implement the store**
+- [x] **Step 4: Implement the store**
 
 Create `src/zira_dashboard/payroll_work_entry_store.py`. `append_correction` must
 reject any decision that is not `kind == "correct"`, lacks an action, lacks a
@@ -782,7 +782,7 @@ db.execute(
 )
 ```
 
-- [ ] **Step 5: Run focused tests, the safely gated CI schema test, and lint**
+- [x] **Step 5: Run focused tests, the safely gated CI schema test, and lint**
 
 Run:
 
@@ -803,7 +803,7 @@ the integration test bootstraps twice and proves correction insert/state round
 trips plus database rejection of invalid rows, `UPDATE`, `DELETE`, and
 `TRUNCATE`.
 
-- [ ] **Step 6: Add the Task 3 changelog entry, commit, and push**
+- [x] **Step 6: Add the Task 3 changelog entry, commit, and push**
 
 Run `date '+%I:%M %p'` and add a heading using that exact time followed by
 ` - Payroll fix history`, then add:
@@ -838,7 +838,7 @@ Expected: schema bootstraps idempotently on Railway; no audit rows are written b
 - Consumes: review `Decision` objects, `payroll_work_entry_store.monitor_lock/load_monitor_state/save_monitor_state`, and existing Odoo task helpers.
 - Produces: `sync_review_task(issues: list[Decision], now: datetime | None = None) -> dict`.
 
-- [ ] **Step 1: Write failing alert lifecycle tests**
+- [x] **Step 1: Write failing alert lifecycle tests**
 
 Create `tests/test_payroll_work_entry_alert.py` with these lifecycle tests:
 
@@ -986,7 +986,7 @@ def test_task_body_escapes_employee_and_lists_totals():
 
 Use a review `Decision` with `reason_codes=("payroll_overtime_mismatch",)` and verify the description includes employee, date, regular totals, overtime totals, and a plain-language explanation for the reason code.
 
-- [ ] **Step 2: Run the tests and confirm the red state**
+- [x] **Step 2: Run the tests and confirm the red state**
 
 Run:
 
@@ -996,7 +996,7 @@ Run:
 
 Expected: collection fails because `payroll_work_entry_alert` does not exist.
 
-- [ ] **Step 3: Implement alert synchronization**
+- [x] **Step 3: Implement alert synchronization**
 
 Create `src/zira_dashboard/payroll_work_entry_alert.py` with:
 
@@ -1035,7 +1035,7 @@ the id exists, or recreate the task if Odoo returns no record. Use a seven-day
 deadline for a new task. Save state only after the matching Odoo action
 succeeds.
 
-- [ ] **Step 4: Run alert tests and lint**
+- [x] **Step 4: Run alert tests and lint**
 
 Run:
 
@@ -1046,7 +1046,7 @@ Run:
 
 Expected: all tests pass and Ruff reports no errors.
 
-- [ ] **Step 5: Add the Task 4 changelog entry, commit, and push**
+- [x] **Step 5: Add the Task 4 changelog entry, commit, and push**
 
 Run `date '+%I:%M %p'` and add a heading using that exact time followed by
 ` - One place for payroll questions`, then add:
@@ -1078,7 +1078,7 @@ Expected: commit and push succeed; no task is created because the guard is not w
 - Consumes: every interface from Tasks 1-4.
 - Produces: `enabled() -> bool` and `run_once(now: datetime | None = None) -> dict`.
 
-- [ ] **Step 1: Write failing orchestrator tests**
+- [x] **Step 1: Write failing orchestrator tests**
 
 Create `tests/test_payroll_work_entry_guard.py`. Monkeypatch the facade, store,
 alert, and classifier so the file never makes a real Odoo or database call:
@@ -1377,7 +1377,7 @@ def test_alert_failure_is_logged_without_changing_counts(monkeypatch, caplog):
     assert "could not sync review task" in caplog.text
 ```
 
-- [ ] **Step 2: Run orchestrator tests and confirm the red state**
+- [x] **Step 2: Run orchestrator tests and confirm the red state**
 
 Run:
 
@@ -1387,7 +1387,7 @@ Run:
 
 Expected: collection fails because `payroll_work_entry_guard` does not exist.
 
-- [ ] **Step 3: Implement the guard skeleton and kill switch**
+- [x] **Step 3: Implement the guard skeleton and kill switch**
 
 Create `src/zira_dashboard/payroll_work_entry_guard.py` with:
 
@@ -1414,7 +1414,7 @@ def enabled() -> bool:
     return os.environ.get("PAYROLL_WORK_ENTRY_GUARD_ENABLED", "1").strip().lower() not in _DISABLED_VALUES
 ```
 
-- [ ] **Step 4: Implement batch classification before all mutations**
+- [x] **Step 4: Implement batch classification before all mutations**
 
 In `run_once`, perform this sequence exactly:
 
@@ -1466,7 +1466,7 @@ def run_once(now: datetime | None = None) -> dict:
 
 Do not place a mutation inside this classification loop.
 
-- [ ] **Step 5: Add fresh-state validation, mutation, verification, and audit**
+- [x] **Step 5: Add fresh-state validation, mutation, verification, and audit**
 
 For every `correct` Decision, reread its Work Entry and require all of these snapshot facts before mutating: same id, `active is True`, `state == "draft"`, `conflict is False`, `type_code == "WORK100"`, same `attendance_id`, and duration within one minute of `before_duration`. Convert failure to a review Decision with `reason_codes=("fresh_state_changed",)`.
 
@@ -1587,7 +1587,7 @@ isolation. Never attempt a compensating write:
 An audit failure returns `corrected == 1` and `review == 1`, because the Odoo
 correction was verified even though its local audit needs review.
 
-- [ ] **Step 6: Run all guard-layer tests and lint**
+- [x] **Step 6: Run all guard-layer tests and lint**
 
 Run:
 
@@ -1608,7 +1608,7 @@ Run:
 
 Expected: all focused tests pass; Ruff reports no errors.
 
-- [ ] **Step 7: Add the Task 5 changelog entry, commit, and push**
+- [x] **Step 7: Add the Task 5 changelog entry, commit, and push**
 
 Run `date '+%I:%M %p'` and add a heading using that exact time followed by
 ` - Payroll safety check built`, then add:
@@ -1642,7 +1642,7 @@ Expected: commit and push succeed; the guard is callable but not scheduled.
 - Consumes: `payroll_work_entry_guard.run_once()`.
 - Produces: `_tick_payroll_work_entry_guard()` and `_WARMERS` entry `("payroll work-entry guard", _tick_payroll_work_entry_guard, 300)`.
 
-- [ ] **Step 1: Write the failing warmer tests**
+- [x] **Step 1: Write the failing warmer tests**
 
 Append to `tests/test_page_warmer.py`:
 
@@ -1676,7 +1676,7 @@ def test_payroll_guard_tick_runs_blocking_work_off_event_loop(monkeypatch):
     assert calls == [(payroll_work_entry_guard.run_once, ())]
 ```
 
-- [ ] **Step 2: Run the warmer tests and confirm the red state**
+- [x] **Step 2: Run the warmer tests and confirm the red state**
 
 Run:
 
@@ -1686,7 +1686,7 @@ Run:
 
 Expected: fail because the tick is not defined or registered.
 
-- [ ] **Step 3: Wire the five-minute tick**
+- [x] **Step 3: Wire the five-minute tick**
 
 Add near `_tick_calendar_conflicts` in `app.py`:
 
@@ -1706,7 +1706,7 @@ Add this exact registry row:
 
 The existing `_run_warmer` exception boundary remains the outer safety net.
 
-- [ ] **Step 4: Document the kill switch**
+- [x] **Step 4: Document the kill switch**
 
 Add under the Odoo block in `.env.example`:
 
@@ -1714,7 +1714,7 @@ Add under the Odoo block in `.env.example`:
 PAYROLL_WORK_ENTRY_GUARD_ENABLED=1  # set to 0 for an immediate no-write stop
 ```
 
-- [ ] **Step 5: Run focused, full-suite, compile, and lint verification**
+- [x] **Step 5: Run focused, full-suite, compile, and lint verification**
 
 Run:
 
@@ -1734,7 +1734,7 @@ git diff --check
 
 Expected: focused tests pass; the full suite passes with only documented skips; compileall and Ruff succeed; `git diff --check` prints nothing.
 
-- [ ] **Step 6: Update design status and add the final user-facing changelog entry**
+- [x] **Step 6: Update design status and add the final user-facing changelog entry**
 
 Add an implementation status below the design date:
 
@@ -1751,7 +1751,7 @@ time followed by ` - Automatic payroll lunch protection`, then add:
 - **Plant Manager now checks Odoo payroll every five minutes after overtime is approved.** It removes only the known extra 30-minute lunch from draft regular hours, keeps a record, and asks for help instead of changing anything unclear.
 ```
 
-- [ ] **Step 7: Commit and push the activation**
+- [x] **Step 7: Commit and push the activation**
 
 Run:
 
@@ -1763,7 +1763,7 @@ git push origin main
 
 Expected: Railway starts a deployment from `main`.
 
-- [ ] **Step 8: Verify Railway and Odoo production behavior**
+- [x] **Step 8: Verify Railway and Odoo production behavior**
 
 Run:
 

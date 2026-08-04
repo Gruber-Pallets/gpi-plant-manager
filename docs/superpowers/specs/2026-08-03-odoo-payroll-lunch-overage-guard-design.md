@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-03
 
-**Status:** Implemented; production verification pending.
+**Status:** Implemented and production-verified.
 
 ## Goal
 
@@ -186,7 +186,8 @@ issues for a payroll manager.
 - Never correct an ambiguous multi-row regular group.
 - Never correct a discrepancy other than the exact verified 30-minute lunch
   pattern.
-- Keep a runtime kill switch that requires no deployment.
+- Keep a runtime kill switch that requires no code change. Changing it in
+  Railway requires an application restart or redeploy.
 - Treat Odoo as the source of truth for current payroll state and Postgres as
   the durable correction-attempt outbox, immutable correction audit, and
   singleton review-monitor state.
@@ -201,7 +202,26 @@ instead of changed.
 Production logs will report the number of corrected, review, and no-op groups
 on each non-empty pass. The first pass must be checked against the known
 affected people and dates. `PAYROLL_WORK_ENTRY_GUARD_ENABLED=0` is the immediate
-rollback if anything unexpected appears.
+rollback setting if anything unexpected appears; restart or redeploy the
+application after changing it.
+
+### Production verification
+
+Production verification completed on 2026-08-04:
+
+- Railway reached Online and bootstrapped the payroll guard schema without an
+  error.
+- The registered five-minute warmer ran successfully after application startup
+  and reported `corrected=0 review=3 noop=1260 candidates=1263`.
+- The nine previously repaired W27, W30, and W31 employee-weeks still showed
+  `40:00` regular time, with their overtime unchanged.
+- A second manual pass reported `corrected=0 review=3 noop=1260`, proving it did
+  not repeat a correction.
+- A read-only inspection of singleton Odoo task 3197 confirmed that it contained
+  exactly three older ambiguous cases: employee 5 on June 4 and employee 39 on
+  June 4 and June 10. Their stored reasons showed non-positive Attendance
+  overtime plus overtime disagreement and/or a regular difference other than
+  the known 30-minute defect, so the guard correctly left them unchanged.
 
 ## Testing
 
