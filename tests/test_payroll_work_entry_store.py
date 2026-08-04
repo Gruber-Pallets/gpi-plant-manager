@@ -362,6 +362,56 @@ def test_monitor_lock_releases_transaction_when_caller_raises(monkeypatch):
     assert events == ["transaction acquired", "transaction released"]
 
 
+def test_guard_lock_uses_a_distinct_stable_signed_bigint(monkeypatch):
+    events = []
+    cursor = MagicMock()
+
+    @contextmanager
+    def transaction():
+        events.append("guard transaction acquired")
+        try:
+            yield cursor
+        finally:
+            events.append("guard transaction released")
+
+    monkeypatch.setattr(store.db, "cursor", transaction)
+
+    with store.guard_lock():
+        events.append("caller lifecycle")
+
+    cursor.execute.assert_called_once_with(
+        "SELECT pg_advisory_xact_lock(%s::bigint)",
+        (store.GUARD_LOCK_KEY,),
+    )
+    assert store.GUARD_LOCK_KEY != store.MONITOR_LOCK_KEY
+    assert -(2**63) <= store.GUARD_LOCK_KEY < 2**63
+    assert events == [
+        "guard transaction acquired",
+        "caller lifecycle",
+        "guard transaction released",
+    ]
+
+
+def test_guard_lock_releases_transaction_when_caller_raises(monkeypatch):
+    events = []
+
+    @contextmanager
+    def transaction():
+        events.append("guard transaction acquired")
+        try:
+            yield MagicMock()
+        finally:
+            events.append("guard transaction released")
+
+    monkeypatch.setattr(store.db, "cursor", transaction)
+
+    with pytest.raises(RuntimeError, match="guard failed"):
+        with store.guard_lock():
+            raise RuntimeError("guard failed")
+
+    assert events == ["guard transaction acquired", "guard transaction released"]
+
+
 @pytest.mark.parametrize(
     ("database_url", "expected"),
     [

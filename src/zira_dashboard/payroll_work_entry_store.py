@@ -13,6 +13,8 @@ from .payroll_work_entry_rules import Decision
 
 # Stable signed 64-bit namespace key for the singleton monitor lifecycle.
 MONITOR_LOCK_KEY = 5_138_693_322_114_445_361
+# Separate stable namespace key for the complete payroll correction run.
+GUARD_LOCK_KEY = 2_274_731_015_993_244_807
 
 
 @contextmanager
@@ -28,6 +30,17 @@ def monitor_lock() -> Iterator[None]:
         cur.execute(
             "SELECT pg_advisory_xact_lock(%s::bigint)",
             (MONITOR_LOCK_KEY,),
+        )
+        yield
+
+
+@contextmanager
+def guard_lock() -> Iterator[None]:
+    """Serialize one complete enabled payroll correction run."""
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(%s::bigint)",
+            (GUARD_LOCK_KEY,),
         )
         yield
 

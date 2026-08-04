@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 10:46 AM - Payroll safety check built
+
+- **The payroll safety check is built and tested.** It checks fresh Odoo details before any change and keeps unclear items for a person. It is not running on its own yet.
+
 ### 10:39 AM - Payroll questions stay together
 
 - **Plant Manager now reuses the same Odoo task if saving is interrupted.** This stops extra copies of the same payroll question. The automatic payroll check is not turned on yet.
