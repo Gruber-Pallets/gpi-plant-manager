@@ -266,3 +266,39 @@ def test_late_report_payload_force_bypasses_a_fresh_cache(monkeypatch):
     out = staffing.late_report_payload(force=True)
     assert out.get("sentinel") is None
     assert "today" in out
+
+
+def test_payroll_work_entry_guard_registered_every_five_minutes():
+    from zira_dashboard import app as app_module
+
+    assert asyncio.iscoroutinefunction(app_module._tick_payroll_work_entry_guard)
+    entry = next(
+        (
+            item
+            for item in app_module._WARMERS
+            if item[1] is app_module._tick_payroll_work_entry_guard
+        ),
+        None,
+    )
+    assert entry == (
+        "payroll work-entry guard",
+        app_module._tick_payroll_work_entry_guard,
+        300,
+    )
+
+
+def test_payroll_guard_tick_runs_blocking_work_off_event_loop(monkeypatch):
+    from zira_dashboard import app as app_module, payroll_work_entry_guard
+
+    calls = []
+
+    async def fake_to_thread(fn, *args):
+        calls.append((fn, args))
+        return fn(*args)
+
+    monkeypatch.setattr(app_module.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(
+        payroll_work_entry_guard, "run_once", lambda: {"corrected": 0}
+    )
+    asyncio.run(app_module._tick_payroll_work_entry_guard())
+    assert calls == [(payroll_work_entry_guard.run_once, ())]

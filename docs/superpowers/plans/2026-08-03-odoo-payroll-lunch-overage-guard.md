@@ -4,7 +4,7 @@
 
 **Goal:** Add a five-minute Plant Manager guard that fixes only Odoo's verified extra 30-minute draft regular-hours defect, records every correction, and creates one Odoo review task for anything unsafe.
 
-**Architecture:** A private Odoo payroll facade owns all `hr.work.entry` and payroll-related `hr.attendance` calls. A pure classifier returns `noop`, `correct`, or `review`; the orchestrator performs fresh-state checks, one narrow write or zero-target deletion, verification, audit persistence, and alert synchronization. The existing app warmer runs the guard every 300 seconds.
+**Architecture:** A private Odoo payroll facade owns all `hr.work.entry` and payroll-related `hr.attendance` calls. A pure classifier returns `noop`, `correct`, or `review`; the orchestrator performs fresh-state checks, saves every exact correction intent in a durable Postgres outbox before one narrow write or zero-target deletion, recovers interrupted attempts, verifies the Odoo result, and atomically finalizes the immutable audit. Separate transaction-scoped advisory locks serialize the complete guard run and the singleton review-monitor lifecycle across app instances. The existing app warmer runs the guard every 300 seconds.
 
 **Tech Stack:** Python 3.11+, Odoo 19 XML-RPC through `odoo_client.execute`, PostgreSQL through `zira_dashboard.db`, FastAPI's existing asyncio warmer registry, pytest, Ruff.
 

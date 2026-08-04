@@ -340,6 +340,13 @@ async def _tick_calendar_conflicts():
     await asyncio.to_thread(calendar_conflict_monitor.run_once)
 
 
+async def _tick_payroll_work_entry_guard():
+    """Repair only the verified Odoo draft payroll lunch-overage defect."""
+    from . import payroll_work_entry_guard
+
+    await asyncio.to_thread(payroll_work_entry_guard.run_once)
+
+
 async def _tick_time_off_backfill():
     """Replay locally-recorded absences (local_record rows) into Odoo once
     Odoo will accept them — e.g. after HR scopes a holiday record or fixes
@@ -389,6 +396,7 @@ _WARMERS = [
     ("forklift snapshot", _tick_forklift, 600),
     ("Inbox reconcile", _tick_inbox_reconcile, 60),
     ("calendar conflicts", _tick_calendar_conflicts, 21600),
+    ("payroll work-entry guard", _tick_payroll_work_entry_guard, 300),
     ("time-off local backfill", _tick_time_off_backfill, 3600),
     ("page-usage flush", _tick_page_usage, 60),
     ("automated skills", _tick_automated_skills, 300),

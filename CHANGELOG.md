@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 11:19 AM - Automatic payroll lunch protection
+
+#### Fixes
+
+- **Plant Manager now checks Odoo payroll every five minutes after overtime is approved.** It removes only the known extra 30-minute lunch from draft regular hours, keeps a record, and asks for help instead of changing anything unclear.
+
 ### 11:15 AM - Payroll fix counts are clearer
 
 - **Plant Manager now counts only the payroll fixes it made during that check.** If it finds that a saved fix already happened, it records what it saw without taking credit or making the change again. The automatic check is not running on its own yet.

@@ -2,6 +2,8 @@
 
 **Date:** 2026-08-03
 
+**Status:** Implemented; production verification pending.
+
 ## Goal
 
 Prevent Odoo's payroll Work Entries from leaving a 30-minute unpaid lunch in
@@ -116,10 +118,14 @@ orchestrator. Each pass will:
 2. fetch active, attendance-linked Work Entries written in the last 90 days;
 3. batch-fetch the matching Work Entry and Attendance rows;
 4. classify every employee/day before performing any write;
-5. write corrections sequentially so one failure cannot hide another;
-6. reread each duration update, or confirm a zero-target row is absent, and
+5. save each exact correction intent in a durable correction-attempt outbox
+   before making the Odoo change;
+6. write corrections sequentially so one failure cannot hide another;
+7. reread each duration update, or confirm a zero-target row is absent, and
    require the result to match the planned correction; and
-7. append an audit row only after verification succeeds.
+8. atomically append an audit row and clear its attempt only after verification
+   succeeds. A later pass recovers any attempt left pending by an interrupted
+   response, verification, or audit finalization.
 
 The 90-day `write_date` window catches the initial recent backlog and delayed
 approval of an older attendance, because approval creates or rewrites its Work
@@ -128,7 +134,9 @@ including shortly after application startup.
 
 Fetch, write, verification, or audit failures are isolated per group and
 logged at warning level. A failed write or failed verification becomes a
-review issue; no follow-up write is attempted in that pass.
+review issue; no follow-up write is attempted in that pass. One transaction-
+scoped PostgreSQL advisory lock serializes the complete enabled guard run so
+overlapping app instances cannot race the durable attempts or Odoo writes.
 
 ### Audit trail
 
@@ -144,17 +152,20 @@ Add an append-only `payroll_work_entry_corrections` table containing:
 - verification status and detail; and
 - correction timestamp.
 
-The current values, not the audit table, determine idempotency. If Odoo later
-regenerates the same record incorrectly, the guard may correct it again and
-append another audit event. That preserves the complete history rather than
-hiding recurrence behind a uniqueness constraint.
+The current values plus the durable correction-attempt outbox determine safe
+recovery and idempotency. If Odoo later regenerates the same record incorrectly,
+the guard may correct it again and append another audit event. That preserves
+the complete history rather than hiding recurrence behind a uniqueness
+constraint.
 
 ### Review alert
 
 Keep one Odoo task named **Payroll work entries need review** in the existing
 Plant Manager project. Persist its task id and the currently reported issue
 keys in a singleton `payroll_work_entry_guard_monitor` row, following the
-calendar-conflict monitor pattern.
+calendar-conflict monitor pattern. A separate transaction-scoped PostgreSQL
+advisory lock covers each complete monitor load/Odoo action/save lifecycle so
+multiple app instances cannot create or update the singleton task at once.
 
 The task body lists employee, date, mismatch, and the safety rule that blocked
 automatic correction. When the set changes, update the task and add a concise
@@ -177,7 +188,8 @@ issues for a payroll manager.
   pattern.
 - Keep a runtime kill switch that requires no deployment.
 - Treat Odoo as the source of truth for current payroll state and Postgres as
-  the immutable correction audit only.
+  the durable correction-attempt outbox, immutable correction audit, and
+  singleton review-monitor state.
 
 ## Rollout
 
