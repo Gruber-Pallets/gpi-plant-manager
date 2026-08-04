@@ -1650,6 +1650,21 @@ BEGIN
 END
 $payroll_correction_trigger$;
 
+DO $payroll_correction_truncate_trigger$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = 'payroll_work_entry_corrections'::regclass
+      AND tgname = 'payroll_work_entry_corrections_reject_truncate'
+      AND NOT tgisinternal
+  ) THEN
+    CREATE TRIGGER payroll_work_entry_corrections_reject_truncate
+      BEFORE TRUNCATE ON payroll_work_entry_corrections
+      FOR EACH STATEMENT EXECUTE FUNCTION reject_payroll_correction_mutation();
+  END IF;
+END
+$payroll_correction_truncate_trigger$;
+
 CREATE INDEX IF NOT EXISTS payroll_work_entry_corrections_entry_idx
   ON payroll_work_entry_corrections (odoo_work_entry_id, corrected_at DESC);
 

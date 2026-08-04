@@ -23,7 +23,23 @@ def _database_url_is_loopback(database_url: str | None) -> bool:
     return hostname in {"localhost", "127.0.0.1", "::1"}
 
 
-LOCAL_DATABASE_URL = _database_url_is_loopback(os.environ.get("DATABASE_URL"))
+def _database_integration_is_safe(
+    database_url: str | None,
+    explicit_opt_in: str | None,
+) -> bool:
+    if explicit_opt_in != "1" or not _database_url_is_loopback(database_url):
+        return False
+    try:
+        database_name = urlparse(database_url).path.removeprefix("/")
+    except (AttributeError, ValueError):
+        return False
+    return bool(database_name) and "/" not in database_name and database_name.endswith("_test")
+
+
+SAFE_TEST_DATABASE = _database_integration_is_safe(
+    os.environ.get("DATABASE_URL"),
+    os.environ.get("PAYROLL_GUARD_TEST_DATABASE"),
+)
 
 
 def correction_decision() -> Decision:
@@ -65,6 +81,9 @@ def test_schema_enforces_correction_values_and_append_only_history():
     assert "CREATE OR REPLACE FUNCTION reject_payroll_correction_mutation()" in SCHEMA_DDL
     assert "CREATE TRIGGER payroll_work_entry_corrections_append_only" in SCHEMA_DDL
     assert "BEFORE UPDATE OR DELETE ON payroll_work_entry_corrections" in SCHEMA_DDL
+    assert "CREATE TRIGGER payroll_work_entry_corrections_reject_truncate" in SCHEMA_DDL
+    assert "BEFORE TRUNCATE ON payroll_work_entry_corrections" in SCHEMA_DDL
+    assert "FOR EACH STATEMENT EXECUTE FUNCTION reject_payroll_correction_mutation()" in SCHEMA_DDL
 
 
 def test_append_correction_inserts_every_audit_value_in_column_order(monkeypatch):
@@ -348,6 +367,55 @@ def test_database_integration_guard_requires_explicit_loopback_hostname(
     assert _database_url_is_loopback(database_url) is expected
 
 
+@pytest.mark.parametrize("opt_in", [None, "", "0", "true", "yes", " 1 "])
+def test_database_integration_guard_requires_exact_opt_in(opt_in):
+    assert (
+        _database_integration_is_safe(
+            "postgresql" + "://" + "localhost/gpi_test",
+            opt_in,
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        None,
+        "",
+        "postgresql" + ":///" + "gpi_test",
+        "postgresql" + "://" + "localhost.example.com/gpi_test",
+        "postgresql" + "://" + "containers-us-west.railway.app/gpi_test",
+    ],
+)
+def test_database_integration_guard_rejects_missing_or_nonloopback_host(database_url):
+    assert _database_integration_is_safe(database_url, "1") is False
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql" + "://" + "localhost/postgres",
+        "postgresql" + "://" + "127.0.0.1/gpi_test_copy",
+        "postgresql" + "://" + "[::1]/gpi_test/extra",
+    ],
+)
+def test_database_integration_guard_requires_test_database_suffix(database_url):
+    assert _database_integration_is_safe(database_url, "1") is False
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql" + "://" + "localhost/gpi_test",
+        "postgresql" + "://" + "127.0.0.1:5432/payroll_guard_test",
+        "postgresql" + "://" + "[::1]:5432/gpi_test",
+    ],
+)
+def test_database_integration_guard_accepts_opted_in_loopback_test_database(database_url):
+    assert _database_integration_is_safe(database_url, "1") is True
+
+
 def _assert_postgres_rejects(cur, sql, params, expected_message):
     cur.execute("SAVEPOINT expected_rejection")
     with pytest.raises(psycopg2.Error, match=expected_message):
@@ -357,11 +425,14 @@ def _assert_postgres_rejects(cur, sql, params, expected_message):
 
 
 @pytest.mark.skipif(
-    not LOCAL_DATABASE_URL,
-    reason="requires DATABASE_URL with an explicit localhost/127.0.0.1/::1 hostname",
+    not SAFE_TEST_DATABASE,
+    reason=(
+        "requires PAYROLL_GUARD_TEST_DATABASE=1 and a loopback DATABASE_URL "
+        "whose database name ends in _test"
+    ),
 )
 def test_local_postgres_schema_and_store_guarantees(monkeypatch):
-    """Exercise only an explicit loopback CI database; all data is rolled back."""
+    """Exercise only an explicitly opted-in loopback test DB; all data is rolled back."""
     from zira_dashboard import db
 
     class RollBackIntegrationData(Exception):
@@ -403,7 +474,8 @@ def test_local_postgres_schema_and_store_guarantees(monkeypatch):
                     "AND NOT tgisinternal"
                 )
                 assert {row["tgname"] for row in cur.fetchall()} == {
-                    "payroll_work_entry_corrections_append_only"
+                    "payroll_work_entry_corrections_append_only",
+                    "payroll_work_entry_corrections_reject_truncate",
                 }
 
                 def execute_in_transaction(sql, params=None):
@@ -496,6 +568,12 @@ def test_local_postgres_schema_and_store_guarantees(monkeypatch):
                     "DELETE FROM payroll_work_entry_corrections "
                     "WHERE verification_detail = %s",
                     ("local integration round trip",),
+                    "append-only",
+                )
+                _assert_postgres_rejects(
+                    cur,
+                    "TRUNCATE payroll_work_entry_corrections",
+                    None,
                     "append-only",
                 )
 

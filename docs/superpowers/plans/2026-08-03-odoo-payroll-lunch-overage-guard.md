@@ -653,6 +653,8 @@ Expected: commit and push succeed; the classifier remains unused in production.
 - Modify: `src/zira_dashboard/_schema.py:1529`
 - Create: `src/zira_dashboard/payroll_work_entry_store.py`
 - Create: `tests/test_payroll_work_entry_store.py`
+- Modify: `tests/test_ci_workflow.py`
+- Modify: `.github/workflows/tests.yml`
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**
@@ -780,22 +782,26 @@ db.execute(
 )
 ```
 
-- [ ] **Step 5: Run focused tests, a real-schema test when available, and lint**
+- [ ] **Step 5: Run focused tests, the safely gated CI schema test, and lint**
 
 Run:
 
 ```bash
-.venv/bin/python -m pytest tests/test_payroll_work_entry_store.py -q
-.venv/bin/ruff check src/zira_dashboard/_schema.py src/zira_dashboard/payroll_work_entry_store.py tests/test_payroll_work_entry_store.py
+DATABASE_URL= .venv/bin/python -m pytest \
+  tests/test_payroll_work_entry_store.py tests/test_ci_workflow.py -q
+.venv/bin/ruff check src/zira_dashboard/_schema.py src/zira_dashboard/payroll_work_entry_store.py tests/test_payroll_work_entry_store.py tests/test_ci_workflow.py
 ```
 
-If `DATABASE_URL` is available, also run:
+The PostgreSQL integration test must skip unless all three safety gates pass:
+`PAYROLL_GUARD_TEST_DATABASE` is exactly `1`, the parsed database hostname is
+`localhost`, `127.0.0.1`, or `::1`, and the parsed database name ends in
+`_test`. CI opts in against its ephemeral `gpi_test` service. Do not run this
+integration test locally against the configured database for this task.
 
-```bash
-.venv/bin/python -m pytest tests/test_db.py::test_bootstrap_schema_idempotent -q
-```
-
-Expected: focused tests pass; the DB test passes or is skipped by the environment.
+Expected: focused tests pass and the integration test skips locally. In CI,
+the integration test bootstraps twice and proves correction insert/state round
+trips plus database rejection of invalid rows, `UPDATE`, `DELETE`, and
+`TRUNCATE`.
 
 - [ ] **Step 6: Add the Task 3 changelog entry, commit, and push**
 
@@ -809,7 +815,10 @@ Run `date '+%I:%M %p'` and add a heading using that exact time followed by
 Then run:
 
 ```bash
-git add CHANGELOG.md src/zira_dashboard/_schema.py src/zira_dashboard/payroll_work_entry_store.py tests/test_payroll_work_entry_store.py
+git add CHANGELOG.md .github/workflows/tests.yml \
+  docs/superpowers/plans/2026-08-03-odoo-payroll-lunch-overage-guard.md \
+  src/zira_dashboard/_schema.py src/zira_dashboard/payroll_work_entry_store.py \
+  tests/test_ci_workflow.py tests/test_payroll_work_entry_store.py
 git commit -m "feat: store payroll guard audit history"
 git push origin main
 ```
