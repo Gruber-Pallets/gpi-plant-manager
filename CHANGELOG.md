@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### Employee list restored
+
+#### Fixes
+
+- **The employee list stays safe if a data update looks wrong.** Everyone who is active in the main system shows up again, and a bad update cannot hide the whole team.
+
 ### Training plans fill in automatically
 
 #### Fixes

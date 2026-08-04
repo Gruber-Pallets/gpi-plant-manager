@@ -14,6 +14,33 @@ def test_authenticate_raises_when_env_vars_missing(monkeypatch):
         odoo_client.authenticate()
 
 
+def test_sync_rejects_inactive_employee_payload_before_any_write(monkeypatch):
+    """The employee lookup explicitly requests active people only.
+
+    An upstream response marking every returned person inactive is therefore
+    contradictory and must not be allowed to hide the entire local roster.
+    """
+    from zira_dashboard import odoo_sync
+
+    monkeypatch.setattr(odoo_sync, "_read_last_sync", lambda: None)
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employees",
+        lambda: [{"id": 1, "name": "Unexpectedly Inactive", "active": False}],
+    )
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_skills_for",
+        lambda _ids: pytest.fail("unsafe employee payload must stop before any further sync"),
+    )
+
+    result = odoo_sync.sync(force=True)
+
+    assert result.ok is False
+    assert result.refreshed is False
+    assert "inactive" in (result.error or "").lower()
+
+
 def test_authenticate_returns_uid_on_success(monkeypatch):
     monkeypatch.setenv("ODOO_URL", "https://example.odoo.com")
     monkeypatch.setenv("ODOO_DB", "Production")

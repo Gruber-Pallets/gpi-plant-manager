@@ -218,6 +218,24 @@ def sync(force: bool = False) -> SyncResult:
 
     try:
         employees = odoo_client.fetch_employees()
+        # ``fetch_employees`` explicitly asks Odoo for ``active = True``.
+        # Treat a contradictory inactive record as an unsafe upstream payload,
+        # not an instruction to archive the local workforce. In particular,
+        # this prevents a malformed all-inactive response from blanking every
+        # Staffing picker before the next successful sync can repair it.
+        inactive_count = sum(employee.get("active") is False for employee in employees)
+        if inactive_count:
+            return SyncResult(
+                ok=False,
+                refreshed=False,
+                employee_count=0,
+                skill_column_count=0,
+                last_sync_at=last,
+                error=(
+                    "Odoo employee payload contained "
+                    f"{inactive_count} inactive record(s) despite the active-only query; sync skipped."
+                ),
+            )
         emp_ids = [e["id"] for e in employees]
         emp_skills = odoo_client.fetch_skills_for(emp_ids)
         spanish_level_ids = odoo_client.fetch_spanish_skill_level_ids()
