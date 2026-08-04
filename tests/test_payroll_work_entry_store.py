@@ -3,7 +3,6 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from unittest.mock import MagicMock
-from urllib.parse import urlparse
 
 import psycopg2
 import pytest
@@ -13,27 +12,41 @@ from zira_dashboard.payroll_work_entry_rules import Decision
 import zira_dashboard.payroll_work_entry_store as store
 
 
-def _database_url_is_loopback(database_url: str | None) -> bool:
+_LOOPBACK_DATABASE_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_UNSAFE_DATABASE_DSN_OPTIONS = {"hostaddr", "service", "servicefile"}
+
+
+def _parse_database_dsn(database_url: str | None) -> dict[str, str] | None:
     if not database_url:
-        return False
+        return None
     try:
-        hostname = urlparse(database_url).hostname
-    except ValueError:
-        return False
-    return hostname in {"localhost", "127.0.0.1", "::1"}
+        return psycopg2.extensions.parse_dsn(database_url)
+    except (TypeError, psycopg2.Error):
+        return None
+
+
+def _database_url_is_loopback(database_url: str | None) -> bool:
+    params = _parse_database_dsn(database_url)
+    return bool(
+        params
+        and not _UNSAFE_DATABASE_DSN_OPTIONS.intersection(params)
+        and params.get("host") in _LOOPBACK_DATABASE_HOSTS
+    )
 
 
 def _database_integration_is_safe(
     database_url: str | None,
     explicit_opt_in: str | None,
 ) -> bool:
-    if explicit_opt_in != "1" or not _database_url_is_loopback(database_url):
+    if explicit_opt_in != "1":
         return False
-    try:
-        database_name = urlparse(database_url).path.removeprefix("/")
-    except (AttributeError, ValueError):
+    params = _parse_database_dsn(database_url)
+    if not params or _UNSAFE_DATABASE_DSN_OPTIONS.intersection(params):
         return False
-    return bool(database_name) and "/" not in database_name and database_name.endswith("_test")
+    return (
+        params.get("host") in _LOOPBACK_DATABASE_HOSTS
+        and params.get("dbname", "").endswith("_test")
+    )
 
 
 SAFE_TEST_DATABASE = _database_integration_is_safe(
@@ -389,6 +402,65 @@ def test_database_integration_guard_requires_exact_opt_in(opt_in):
     ],
 )
 def test_database_integration_guard_rejects_missing_or_nonloopback_host(database_url):
+    assert _database_integration_is_safe(database_url, "1") is False
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql" + "://" + "localhost/gpi_test?host=railway.example.com",
+        "postgresql" + "://" + "localhost/gpi_test?host=localhost,railway.example.com",
+        "postgresql" + "://" + "localhost,railway.example.com/gpi_test",
+    ],
+)
+def test_database_integration_guard_rejects_effective_remote_or_multi_host(
+    database_url,
+):
+    assert _database_integration_is_safe(database_url, "1") is False
+
+
+def test_database_integration_guard_rejects_effective_database_name_override():
+    database_url = "postgresql" + "://" + "localhost/gpi_test?dbname=postgres"
+
+    assert _database_integration_is_safe(database_url, "1") is False
+
+
+@pytest.mark.parametrize(
+    "hostaddr",
+    ["203.0.113.9", "127.0.0.1"],
+)
+def test_database_integration_guard_rejects_any_hostaddr(hostaddr):
+    database_url = (
+        "postgresql" + "://" + f"localhost/gpi_test?hostaddr={hostaddr}"
+    )
+
+    assert _database_integration_is_safe(database_url, "1") is False
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "service=production",
+        "postgresql" + "://" + "localhost/gpi_test?service=production",
+        "servicefile=/tmp/pg_service.conf host=localhost dbname=gpi_test",
+        "postgresql"
+        + "://"
+        + "localhost/gpi_test?servicefile=/tmp/pg_service.conf",
+    ],
+)
+def test_database_integration_guard_rejects_service_configuration(database_url):
+    assert _database_integration_is_safe(database_url, "1") is False
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "not a postgres dsn",
+        "postgresql" + "://" + "[::1/gpi_test",
+        "postgresql" + "://" + "localhost/%ZZ_test",
+    ],
+)
+def test_database_integration_guard_rejects_malformed_dsn(database_url):
     assert _database_integration_is_safe(database_url, "1") is False
 
 

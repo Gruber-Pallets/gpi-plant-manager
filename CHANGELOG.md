@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 10:25 AM - Safer payroll test data
+
+- **More checks now keep real payroll records safe while the new payroll tool is tested.** The automatic check is not turned on yet.
+
 ### 10:19 AM - Payroll fix history stays safe
 
 - **Plant Manager now stops the whole payroll fix list from being cleared.** Extra safety checks also keep app tests away from real data. The automatic check is not turned on yet.
