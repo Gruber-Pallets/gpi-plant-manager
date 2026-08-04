@@ -14,9 +14,9 @@ Starting a Recycled training protocol should immediately and safely place the tr
 
 ## Design
 
-The existing Recycled suggestion engine remains the authority for training-block placement. It will expose the exact day-one trainer names that are allowed to occupy a temporary extra slot. Rebuild validation will accept only that engine-produced extra capacity; all ordinary capacity violations remain hard failures.
+The existing Recycled suggestion engine remains the authority for Recycled rebuilds. It exposes the exact day-one trainer names that are allowed to occupy a temporary extra slot, and rebuild validation accepts only that engine-produced extra capacity; all ordinary capacity violations remain hard failures.
 
-For fresh future drafts, Staffing will calculate a Recycled suggestion solely to identify applied training-block reservations. It overlays only those generated trainee/trainer assignments on top of the normal default-only draft, leaving all non-training default behavior unchanged. If a training block cannot safely reserve its target, the seed remains unchanged and the engine's existing warning path remains available on rebuild.
+For fresh future drafts, Staffing reads the active protocol's exact `BlockEffect` reservation and overlays only its generated trainee/trainer assignments on top of the normal default-only draft. This deliberately does not run the Auto solver, leaving all non-training default behavior unchanged. Disabled targets, unavailable trainee/trainer pairs, a full normal trainee slot, and conflicting concurrent exact reservations remain out of the seed; the engine's existing warning path remains available on rebuild. Reset to defaults applies the same guarded overlay.
 
 The view model receives a per-work-center set of current training trainees. The template marks only those picker rows as training reservations, and CSS makes those otherwise-hidden level-0 rows visible. The JavaScript protocol submission invokes the same authoritative rebuild already used by the Auto controls, rather than constructing client-side assignments.
 

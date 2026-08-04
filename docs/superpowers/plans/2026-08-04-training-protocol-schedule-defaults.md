@@ -4,7 +4,7 @@
 
 **Goal:** Make a Recycled training protocol schedule its trainee automatically, show the trainee in the selected work-center picker, and keep day-one pairing safe at a one-person normal maximum.
 
-**Architecture:** Keep `rotation_suggestions` authoritative for safe training reservations. Pass the engine's temporary trainer capacity exception to rebuild validation, reuse its applied training assignments when seeding a fresh future draft, and pass active trainee names to the pure Staffing view model for picker visibility.
+**Architecture:** Keep `rotation_suggestions` authoritative for Recycled rebuilds. Pass the engine's temporary trainer capacity exception to rebuild validation, overlay exact `BlockEffect` reservations without running the Auto solver when seeding a fresh future draft, and pass active trainee names to the pure Staffing view model for picker visibility.
 
 **Tech Stack:** Python 3, FastAPI, pytest, Jinja templates, vanilla JavaScript, CSS.
 
@@ -88,7 +88,7 @@ Expected: PASS.
 
 **Interfaces:**
 
-- Consumes: `_recycled_suggestion_for_day(...)` and `RecycledSuggestion.reason_codes`.
+- Consumes: `_block_effects_for_day(...)` exact work-center effects.
 - Produces: `_apply_training_reservations_to_defaults(day, roster, assignments, sources, time_off_entries) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]`.
 
 - [ ] **Step 1: Write the failing overlay test**
@@ -112,7 +112,7 @@ Expected: FAIL with an attribute error for `_apply_training_reservations_to_defa
 
 - [ ] **Step 3: Implement the default-draft overlay and call it from `_seed_new_future_draft`**
 
-The helper retains only engine assignments whose reason code is `training_block`, removes only default-source occupants from those exact target centers, removes each training person from their prior default center, and writes `generated` sources. Call it after `defaults_only_schedule` for new non-optional working-day drafts. If the suggestion is unavailable or carries no applied reservation, return the original defaults unchanged.
+The helper reads only exact trainee/trainer reservations, removes only default-source occupants from those target centers, removes each training person from their prior default center, and writes `generated` sources. Call it after `defaults_only_schedule` for new non-optional working-day drafts and weekday Reset to defaults. Do not invoke the Auto solver. Apply it only when the trainee/trainer are available and the trainee fits in normal capacity; if active reservations cannot be read or no exact reservation applies, return the original defaults unchanged.
 
 - [ ] **Step 4: Run the focused test to verify it passes**
 

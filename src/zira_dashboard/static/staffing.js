@@ -1900,6 +1900,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
     async function rebuild(mode, options = {}) {
       if (__viewingPosted) return false;
       if (rebuilding || !mode) return false;
+      const targetDay = options.day || day;
       rebuilding = true;
       controls.classList.add('rebuilding');
       modeBtns.forEach(b => { b.disabled = true; });
@@ -1908,7 +1909,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
           body: JSON.stringify({
-            day,
+            day: targetDay,
             mode,
             reset_to_defaults: options.resetToDefaults === true,
           }),
@@ -1922,6 +1923,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
           window.location.reload();
           return true;
         }
+        if (targetDay !== day) return true;
         setActiveMode(mode);
         applyRebuild(data, options);
         return true;
@@ -1937,6 +1939,8 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
         modeBtns.forEach(b => { b.disabled = false; });
       }
     }
+
+    window.rebuildRotationForTraining = targetDay => rebuild(currentMode(), { day: targetDay });
 
     const resetScheduleBtn = document.getElementById('reset-schedule-btn');
     if (resetScheduleBtn) {
@@ -2125,6 +2129,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       if (!form.reportValidity()) return;
       submitBtn.disabled = true;
       try {
+        const protocolDay = startInput.value;
         const { resp, data } = await postJSON('/api/rotations/training-blocks', {
           trainee: traineeSelect.value,
           trainer: trainerSelect.value,
@@ -2133,11 +2138,18 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
           workdays: Number(workdaysInput.value),
         });
         if (!resp.ok || !data.ok) throw new Error(data.error || 'Could not start training.');
+        const scheduled = await window.rebuildRotationForTraining(startInput.value);
+        if (!scheduled) {
+          throw new Error('Training was saved, but the schedule could not be updated.');
+        }
         protocols.push(data.block);
         renderTrainingProtocols();
-        form.reset();
-        startInput.value = window.SCHEDULE_DAY || '';
-        workdaysInput.value = '5';
+        closeModal();
+        if (protocolDay && protocolDay !== window.SCHEDULE_DAY) {
+          window.location.href = '/staffing?day=' + encodeURIComponent(protocolDay);
+          return;
+        }
+        window.location.reload();
       } catch (error) {
         errorEl.textContent = error.message || 'Could not start training.';
       } finally {

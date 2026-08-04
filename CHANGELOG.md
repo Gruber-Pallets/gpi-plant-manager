@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### Training plans fill in automatically
+
+#### Fixes
+
+- **Training plans now put learners in the right work area right away.** The learner is easy to choose there, and their trainer joins them on the first day. After training, the learner moves up to practicing level and can be scheduled normally.
+
 ### 11:31 AM - Payroll protection checked live
 
 #### Fixes

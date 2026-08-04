@@ -152,6 +152,31 @@ def test_required_skill_colors_assigned_and_pool_by_level(patch_wcs):
     assert pool["Practicer"]["trained"] is True
 
 
+def test_training_reservation_marks_only_the_target_level_zero_picker_row(patch_wcs):
+    patch_wcs([
+        (_loc("Master Recycler", required=("Repair",)),
+         {"required": ("Repair",), "min": 1, "max": 1, "defaults": []}),
+        (_loc("Repair 1", required=("Repair",)),
+         {"required": ("Repair",), "min": 1, "max": 1, "defaults": []}),
+    ])
+    model = staffing_view.build_staffing_bays(
+        roster=[_person("Adrian", Repair=0)],
+        sched=_sched(),
+        time_off_entries=[],
+        publish_blocked=0,
+        training_reservations_by_center={"Master Recycler": {"Adrian"}},
+    )
+
+    master_pool = {
+        person["name"]: person for person in model["bays"][0]["rows"][0]["pool"]
+    }
+    repair_pool = {
+        person["name"]: person for person in model["bays"][0]["rows"][1]["pool"]
+    }
+    assert master_pool["Adrian"]["training_reserved"] is True
+    assert repair_pool["Adrian"]["training_reserved"] is False
+
+
 def test_blank_required_renders_neutral_level_2_for_assigned_and_pool(patch_wcs):
     """No required skills → level 2, color 'neutral', trained=True everywhere."""
     patch_wcs([(_loc("Trim Saw 1", bay="Bay 4", skill="Trim Saw",

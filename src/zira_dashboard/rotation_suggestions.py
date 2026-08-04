@@ -82,6 +82,7 @@ class RecycledSuggestion:
     placed_people: tuple[str, ...] = ()
     placement_issues: tuple[schedule_solver.PlacementIssue, ...] = ()
     default_assignments: dict[str, str] = field(default_factory=dict)
+    temporary_training_extras: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def assigned_people(self) -> set[str]:
@@ -1107,6 +1108,7 @@ def suggest_recycled_assignments(
     protected_block_people: set[str] = set()
     exact_block_people: set[str] = set()
     block_centers: set[tuple[str, str]] = set()
+    temporary_training_extras: dict[str, tuple[str, ...]] = {}
     for effect in block_effects or ():
         warnings.extend(str(w) for w in (getattr(effect, "warnings", None) or ()))
 
@@ -1161,6 +1163,16 @@ def suggest_recycled_assignments(
                     if str(raw_name).strip()
                 ]
                 direct_names = tuple(dict.fromkeys((*locked_names, *extra_names)))
+                unavailable_name = next(
+                    (name for name in direct_names if name not in available_set),
+                    None,
+                )
+                if unavailable_name:
+                    _warn_exact_center(
+                        center,
+                        f"did not reserve {unavailable_name}; they are unavailable today.",
+                    )
+                    continue
                 existing_name = next((name for name in direct_names if name in assigned), None)
                 if existing_name:
                     _warn_exact_center(
@@ -1168,10 +1180,13 @@ def suggest_recycled_assignments(
                         f"did not reserve {existing_name}; an existing assignment owns them.",
                     )
                     continue
-                if len(assignments.get(center, ())) + len(direct_names) > _effective_capacity(center):
+                if (
+                    len(assignments.get(center, ())) + len(locked_names)
+                    > _effective_capacity(center)
+                ):
                     _warn_exact_center(
                         center,
-                        "could not reserve enough open work center slots for the complete training pair.",
+                        "could not reserve an open work center slot for the trainee.",
                     )
                     continue
 
@@ -1182,6 +1197,8 @@ def suggest_recycled_assignments(
                 for name in extra_names:
                     if name not in assigned:
                         _place(center, name, GENERATED_SOURCE, "training pair", "training_block")
+                if extra_names:
+                    temporary_training_extras[center] = tuple(extra_names)
 
         block_center_by_group: dict[str, str] = {}
         warned_groups: set[str] = set()
@@ -1423,6 +1440,7 @@ def suggest_recycled_assignments(
             available_people=available_names,
             placed_people=placed,
             placement_issues=combined,
+            temporary_training_extras=temporary_training_extras,
         )
 
     candidate_edges: list[schedule_solver.CandidateEdge] = []
@@ -1821,4 +1839,5 @@ def suggest_recycled_assignments(
         placed_people=placed_people,
         placement_issues=tuple(placement_issues),
         default_assignments=default_assignments,
+        temporary_training_extras=temporary_training_extras,
     )

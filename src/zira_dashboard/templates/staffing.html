@@ -320,7 +320,7 @@
                 </summary>
                 <div class="dd-list">
                   {% for p in row.pool if not p.reserve %}
-                    <label class="dd-item lvl-{{ p.level }} {% if p.level < 1 %}untrained{% endif %} {% if p.name in row.assigned_set %}selected{% endif %}" data-level="{{ p.level }}" data-name="{{ p.name }}">
+                    <label class="dd-item lvl-{{ p.level }} {% if p.level < 1 %}untrained{% endif %} {% if p.training_reserved %}training-reserved{% endif %} {% if p.name in row.assigned_set %}selected{% endif %}" data-level="{{ p.level }}" data-name="{{ p.name }}">
                       <input type="checkbox" name="loc__{{ row.loc.name }}" value="{{ p.name }}"
                              {% if p.name in row.assigned_set %}checked{% endif %}>
                       <span class="dd-item-text">{{ p.name }}{{ cert_badges(p.name, person_certs) }}{{ goat_badges(p.name, goat_holders()) }}</span>
@@ -331,7 +331,7 @@
                     <details class="dd-reserves" {% if row.has_selected_reserve %}open{% endif %}>
                       <summary>Reserves <span class="dd-reserves-count">({{ reserve_pool|length }})</span></summary>
                       {% for p in reserve_pool %}
-                        <label class="dd-item lvl-{{ p.level }} {% if p.level < 1 %}untrained{% endif %} {% if p.name in row.assigned_set %}selected{% endif %}" data-level="{{ p.level }}" data-name="{{ p.name }}">
+                        <label class="dd-item lvl-{{ p.level }} {% if p.level < 1 %}untrained{% endif %} {% if p.training_reserved %}training-reserved{% endif %} {% if p.name in row.assigned_set %}selected{% endif %}" data-level="{{ p.level }}" data-name="{{ p.name }}">
                           <input type="checkbox" name="loc__{{ row.loc.name }}" value="{{ p.name }}"
                                  {% if p.name in row.assigned_set %}checked{% endif %}>
                           <span class="dd-item-text">{{ p.name }}{{ cert_badges(p.name, person_certs) }}{{ goat_badges(p.name, goat_holders()) }}</span>

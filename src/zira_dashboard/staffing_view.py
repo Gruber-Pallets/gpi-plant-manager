@@ -20,7 +20,7 @@ from __future__ import annotations
 def build_staffing_bays(
     roster, sched, time_off_entries, publish_blocked, enabled_work_centers=None,
     saturday_commitments=None, saturday_shift=None, saturday_availability_overrides=None,
-    publish_errors=None, optional_commitments=None,
+    publish_errors=None, optional_commitments=None, training_reservations_by_center=None,
 ):
     """Build the per-work-center render model from already-fetched inputs.
 
@@ -41,6 +41,10 @@ def build_staffing_bays(
                          people available for an optional Saturday or holiday.
                          ``saturday_commitments`` remains a temporary alias;
                          callers must not supply both.
+      training_reservations_by_center:
+                         active level-zero trainee names keyed by their exact
+                         protocol work center. These names stay visible in
+                         that center's picker while training is active.
 
     Returns a dict of exactly the bands-A+B context keys the route merges
     into its TemplateResponse: bays, publish_block_reasons, defaults_by_loc,
@@ -61,6 +65,7 @@ def build_staffing_bays(
 
     active_people = [p for p in roster if p.active]
     all_by_name = {p.name: p for p in roster}
+    training_reservations_by_center = training_reservations_by_center or {}
 
     all_active_people = sorted(p.name for p in active_people)
 
@@ -197,7 +202,12 @@ def build_staffing_bays(
         # picker. The "currently-assigned safety net" below re-adds anyone
         # already historically assigned to this WC, so dirty data won't be
         # silently dropped.
-        pool = [r for r in options_for(required) if r["name"] not in time_off_set]
+        reserved_names = set(training_reservations_by_center.get(loc.name, ()))
+        pool = [
+            {**r, "training_reserved": r["name"] in reserved_names}
+            for r in options_for(required)
+            if r["name"] not in time_off_set
+        ]
         if is_saturday_recruiting:
             assigned_safety_net = set(assigned_names)
             pool = [r for r in pool if r["name"] in committed_names or r["name"] in assigned_safety_net]
@@ -208,7 +218,7 @@ def build_staffing_bays(
         pool_names = {r["name"] for r in pool}
         for a in assigned:
             if a["name"] not in pool_names:
-                pool.append({"name": a["name"], "level": a["level"], "color": a["color"], "trained": a["level"] >= 1, "reserve": False})
+                pool.append({"name": a["name"], "level": a["level"], "color": a["color"], "trained": a["level"] >= 1, "reserve": False, "training_reserved": a["name"] in reserved_names})
                 pool_names.add(a["name"])
         # Reserves go last so the template can split them into the bottom group.
         pool.sort(key=lambda r: (r["reserve"], -r["level"], r["name"].lower()))

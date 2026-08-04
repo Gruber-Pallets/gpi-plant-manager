@@ -1324,6 +1324,64 @@ def test_reset_to_defaults_clears_schedule_and_loads_only_defaults(monkeypatch):
     assert response.json()["enabled_work_centers"] == ["Repair 1", "Repair 2"]
 
 
+def test_reset_to_defaults_reapplies_active_training_reservations(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    saved = []
+    calls = []
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_schedule",
+        lambda _day: staffing.Schedule(day=TARGET_DAY, assignments={"Master Recycler": ["Old"]}),
+    )
+    monkeypatch.setattr(rotations.staffing, "save_schedule", saved.append)
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_roster",
+        lambda: [_person("Adrian", 0, "Master Recycler"), _person("Alejandro", 3, "Master Recycler")],
+    )
+    monkeypatch.setattr(rotations.scheduler_time_off, "time_off_entries_for_day", lambda _day: [])
+    monkeypatch.setattr(
+        staffing_route, "_enabled_auto_work_centers", lambda _day: {"Master Recycler"}
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "defaults_only_schedule",
+        lambda *_args, **_kwargs: (
+            {"Master Recycler": ["Default"]},
+            {"Master Recycler": {"Default": "default"}},
+        ),
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "_apply_training_reservations_to_defaults",
+        lambda day, roster, assignments, sources, time_off, **kwargs: (
+            calls.append((day, assignments, sources, kwargs))
+            or (
+                {"Master Recycler": ["Adrian", "Alejandro"]},
+                {"Master Recycler": {"Adrian": "generated", "Alejandro": "generated"}},
+            )
+        ),
+    )
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = client.post(
+        "/api/rotations/rebuild",
+        json={"day": TARGET_DAY.isoformat(), "mode": "normal", "reset_to_defaults": True},
+    )
+
+    assert response.status_code == 200
+    assert calls and calls[0][:3] == (
+        TARGET_DAY,
+        {"Master Recycler": ["Default"]},
+        {"Master Recycler": {"Default": "default"}},
+    )
+    assert saved[0].assignments == {"Master Recycler": ["Adrian", "Alejandro"]}
+    assert saved[0].assignment_sources == {
+        "Master Recycler": {"Adrian": "generated", "Alejandro": "generated"}
+    }
+
+
 def test_reset_to_defaults_does_not_run_the_auto_solver(monkeypatch):
     """Reset loads defaults only — it must never invoke the rotation engine
     (that's the goal button's job), so no person is auto-placed past defaults."""
@@ -3850,6 +3908,42 @@ def test_rebuild_rejects_bad_day(monkeypatch):
     assert resp.status_code == 422
 
 
+def test_rebuild_validation_allows_only_the_generated_training_extra():
+    from zira_dashboard.routes import rotations
+
+    common = {
+        "available_people": ("Adrian", "Alejandro"),
+        "protected_assignments": {},
+        "enabled_centers": ("Master Recycler",),
+        "center_minimums": {"Master Recycler": 1},
+        "center_capacities": {"Master Recycler": 1},
+        "required_skills": {"Master Recycler": ("Repair",)},
+        "roster": [
+            staffing.Person("Adrian", skills={"Repair": 0}),
+            staffing.Person("Alejandro", skills={"Repair": 3}),
+        ],
+        "exact_defaults": {},
+        "group_defaults": {},
+        "user_group_centers": {},
+        "proposed_assignments": {"Master Recycler": ["Adrian", "Alejandro"]},
+        "proposed_sources": {
+            "Master Recycler": {"Adrian": "generated", "Alejandro": "generated"}
+        },
+    }
+
+    allowed = rotations._validate_complete_rebuild(
+        **common,
+        temporary_training_extras={"Master Recycler": ("Alejandro",)},
+    )
+    unapproved = rotations._validate_complete_rebuild(
+        **common,
+        temporary_training_extras={},
+    )
+
+    assert not [issue for issue in allowed if issue.code == "center_capacity_exceeded"]
+    assert [issue for issue in unapproved if issue.code == "center_capacity_exceeded"]
+
+
 # --------------------------------------------------------------------------- #
 # Staffing controls + reason data (static template / JS contract)
 # --------------------------------------------------------------------------- #
@@ -3858,6 +3952,7 @@ def test_rebuild_rejects_bad_day(monkeypatch):
 def test_staffing_exposes_unified_training_setup_and_removes_row_toggles():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
+    css = (ROOT / "src/zira_dashboard/static/staffing.css").read_text()
     print_css = (ROOT / "src/zira_dashboard/static/staffing-print.css").read_text()
 
     assert 'id="training-protocol-open"' in html
@@ -3866,6 +3961,10 @@ def test_staffing_exposes_unified_training_setup_and_removes_row_toggles():
     assert "setWcTraining" not in js
     assert ".wc-training-toggle" not in print_css
     assert "/api/rotations/training-blocks" in js
+    assert "training-reserved" in html
+    assert ".dd-item.untrained.training-reserved { display: flex; }" in css
+    assert "window.rebuildRotationForTraining" in js
+    assert "window.rebuildRotationForTraining(startInput.value)" in js
 
 
 def test_people_matrix_no_longer_renders_training_block_form():
@@ -5127,7 +5226,6 @@ def test_future_draft_is_not_overwritten_when_revision_lookup_fails(monkeypatch)
         "schedule_revision",
         lambda _day: (_ for _ in ()).throw(RuntimeError("database unavailable")),
     )
-
     assert (
         staffing_route._seed_new_future_draft(
             TARGET_DAY,
@@ -5138,6 +5236,180 @@ def test_future_draft_is_not_overwritten_when_revision_lookup_fails(monkeypatch)
         )
         is blank
     )
+
+
+def test_training_reservations_replace_only_defaults_at_their_exact_center(monkeypatch):
+    from zira_dashboard import rotation_training
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route,
+        "_block_effects_for_day",
+        lambda *args, **kwargs: [
+            rotation_training.BlockEffect(
+                locked_work_centers={"Master Recycler": ["Adrian"]},
+                temporary_extra_work_centers={"Master Recycler": ["Alejandro"]},
+            )
+        ],
+    )
+
+    assignments, sources = staffing_route._apply_training_reservations_to_defaults(
+        TARGET_DAY,
+        [
+            staffing.Person("Adrian", skills={"Repair": 0}),
+            staffing.Person("Alejandro", skills={"Repair": 3}),
+        ],
+        {
+            "Master Recycler": ["Default"],
+            "Repair 1": ["Adrian"],
+            "Unrelated": ["Unaffected"],
+        },
+        {
+            "Master Recycler": {"Default": "default"},
+            "Repair 1": {"Adrian": "default"},
+            "Unrelated": {"Unaffected": "default"},
+        },
+        [],
+    )
+
+    assert assignments["Master Recycler"] == ["Adrian", "Alejandro"]
+    assert sources["Master Recycler"] == {"Adrian": "generated", "Alejandro": "generated"}
+    assert assignments["Repair 1"] == []
+    assert assignments["Unrelated"] == ["Unaffected"]
+
+
+def test_training_reservations_do_not_seed_an_absent_day_one_trainer(monkeypatch):
+    from zira_dashboard import rotation_training
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route,
+        "_block_effects_for_day",
+        lambda *args, **kwargs: [
+            rotation_training.BlockEffect(
+                locked_work_centers={"Master Recycler": ["Adrian"]},
+                temporary_extra_work_centers={"Master Recycler": ["Alejandro"]},
+            )
+        ],
+    )
+
+    assignments, sources = staffing_route._apply_training_reservations_to_defaults(
+        TARGET_DAY,
+        [
+            staffing.Person("Adrian", skills={"Master Recycler": 0}),
+            staffing.Person("Alejandro", skills={"Master Recycler": 3}),
+        ],
+        {"Master Recycler": ["Default"]},
+        {"Master Recycler": {"Default": "default"}},
+        [{"name": "Alejandro", "hours": None}],
+        enabled_centers=["Master Recycler"],
+        center_capacities={"Master Recycler": 1},
+    )
+
+    # Day one is supervised: never save Adrian alone while Alejandro is out.
+    assert assignments == {"Master Recycler": ["Default"]}
+    assert sources == {"Master Recycler": {"Default": "default"}}
+
+
+def test_training_reservations_require_a_normal_trainee_slot(monkeypatch):
+    from zira_dashboard import rotation_training
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route,
+        "_block_effects_for_day",
+        lambda *args, **kwargs: [
+            rotation_training.BlockEffect(
+                locked_work_centers={"Master Recycler": ["Adrian"]},
+                temporary_extra_work_centers={"Master Recycler": ["Alejandro"]},
+            )
+        ],
+    )
+
+    assignments, sources = staffing_route._apply_training_reservations_to_defaults(
+        TARGET_DAY,
+        [
+            staffing.Person("Adrian", skills={"Master Recycler": 0}),
+            staffing.Person("Alejandro", skills={"Master Recycler": 3}),
+        ],
+        {"Master Recycler": ["Default"]},
+        {"Master Recycler": {"Default": "default"}},
+        [],
+        enabled_centers=["Master Recycler"],
+        center_capacities={"Master Recycler": 0},
+    )
+
+    # A trainer may be the one temporary extra; a zero-capacity center cannot
+    # accept even the trainee's normal operator slot.
+    assert assignments == {"Master Recycler": ["Default"]}
+    assert sources == {"Master Recycler": {"Default": "default"}}
+
+
+def test_new_future_draft_applies_training_reservations_after_defaults(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    blank = staffing.Schedule(day=TARGET_DAY, published=False, assignments={})
+    monkeypatch.setattr(staffing_route.staffing, "schedule_revision", lambda _day: None)
+    monkeypatch.setattr(staffing_route, "_default_auto_work_centers", lambda _day: ["Master Recycler"])
+    monkeypatch.setattr(
+        staffing_route,
+        "_configured_center_capacities",
+        lambda _centers, strict=False: {"Master Recycler": 1},
+    )
+    monkeypatch.setattr(
+        staffing_route,
+        "defaults_only_schedule",
+        lambda *_args, **_kwargs: ({"Master Recycler": ["Default"]}, {"Master Recycler": {"Default": "default"}}),
+    )
+    calls = []
+    monkeypatch.setattr(
+        staffing_route,
+        "_apply_training_reservations_to_defaults",
+        lambda day, roster, assignments, sources, time_off, **_kwargs: (
+            calls.append((day, assignments, sources))
+            or ({"Master Recycler": ["Adrian", "Alejandro"]}, {"Master Recycler": {"Adrian": "generated", "Alejandro": "generated"}})
+        ),
+    )
+    monkeypatch.setattr(staffing_route.staffing, "create_schedule_if_absent", lambda _sched: True)
+
+    seeded = staffing_route._seed_new_future_draft(
+        TARGET_DAY,
+        date(2026, 7, 13),
+        blank,
+        [],
+        [],
+        optional_day=None,
+        holidays_synced=True,
+    )
+
+    assert calls == [
+        (TARGET_DAY, {"Master Recycler": ["Default"]}, {"Master Recycler": {"Default": "default"}})
+    ]
+    assert seeded.assignments == {"Master Recycler": ["Adrian", "Alejandro"]}
+    assert seeded.assignment_sources == {
+        "Master Recycler": {"Adrian": "generated", "Alejandro": "generated"}
+    }
+
+
+def test_training_picker_reservations_include_only_exact_protocol_trainees(monkeypatch):
+    from zira_dashboard import rotation_training
+    from zira_dashboard.routes import staffing as staffing_route
+
+    monkeypatch.setattr(
+        staffing_route,
+        "_block_effects_for_day",
+        lambda *_args, **_kwargs: [
+            rotation_training.BlockEffect(
+                locked_work_centers={"Master Recycler": ["Adrian"]},
+                temporary_extra_work_centers={"Master Recycler": ["Alejandro"]},
+                locked_people={"Repair": ["Legacy trainee"]},
+            )
+        ],
+    )
+
+    assert staffing_route._training_picker_reservations_for_day(TARGET_DAY, []) == {
+        "Master Recycler": {"Adrian"}
+    }
 
 
 def test_first_future_staffing_view_does_not_seed_when_time_off_read_fails(monkeypatch):

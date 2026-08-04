@@ -90,6 +90,7 @@ def _validate_complete_rebuild(
     user_group_centers: Mapping[str, Sequence[str]],
     proposed_assignments: Mapping[str, Sequence[str]],
     proposed_sources: Mapping[str, Mapping[str, str]],
+    temporary_training_extras: Mapping[str, Sequence[str]],
 ) -> tuple[schedule_solver.PlacementIssue, ...]:
     """Independently verify a complete proposal immediately before saving."""
     enabled = frozenset(enabled_centers)
@@ -135,7 +136,14 @@ def _validate_complete_rebuild(
     for center in enabled:
         names = tuple(str(name) for name in proposed_assignments.get(center, ()))
         capacity = center_capacities.get(center)
-        if capacity is not None and len(names) > int(capacity):
+        training_extras = {
+            str(name)
+            for name in temporary_training_extras.get(center, ())
+            if proposed_sources.get(center, {}).get(str(name)) == "generated"
+            and str(name) in names
+        }
+        allowed_capacity = None if capacity is None else int(capacity) + len(training_extras)
+        if allowed_capacity is not None and len(names) > allowed_capacity:
             issues.append(
                 schedule_solver.PlacementIssue(
                     code="center_capacity_exceeded",
@@ -778,12 +786,34 @@ async def rebuild_rotation(request: Request):
                 sched.auto_enabled_work_centers
             )
             time_off = scheduler_time_off.time_off_entries_for_day(d)
-            defaults_fn = (
-                staffing_route.saturday_defaults_only_schedule
-                if current_optional_day is not None
-                else staffing_route.defaults_only_schedule
-            )
-            assignments, sources = defaults_fn(d, roster, time_off, enabled_centers)
+            if current_optional_day is not None:
+                assignments, sources = staffing_route.saturday_defaults_only_schedule(
+                    d,
+                    roster,
+                    time_off,
+                    enabled_centers,
+                )
+            else:
+                center_capacities = staffing_route._configured_center_capacities(
+                    enabled_centers,
+                    strict=True,
+                )
+                assignments, sources = staffing_route.defaults_only_schedule(
+                    d,
+                    roster,
+                    time_off,
+                    enabled_centers,
+                    center_capacities=center_capacities,
+                )
+                assignments, sources = staffing_route._apply_training_reservations_to_defaults(
+                    d,
+                    roster,
+                    assignments,
+                    sources,
+                    time_off,
+                    enabled_centers=enabled_centers,
+                    center_capacities=center_capacities,
+                )
         except saturday_recruiting_store.LifecycleConflict as exc:
             return _error(str(exc))
         except Exception:
@@ -955,6 +985,7 @@ async def rebuild_rotation(request: Request):
             user_group_centers=user_group_centers,
             proposed_assignments=new_assignments,
             proposed_sources=new_sources,
+            temporary_training_extras=suggestion.temporary_training_extras,
         )
         hard_issues = tuple(issue for issue in validation_issues if issue.code in _HARD_ISSUE_CODES)
         if hard_issues:

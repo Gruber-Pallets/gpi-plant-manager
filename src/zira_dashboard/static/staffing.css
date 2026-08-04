@@ -473,6 +473,7 @@
   /* Untrained people are hidden from ordinary pickers unless already scheduled. */
   .multi-dd .dd-item.untrained { display: none; }
   .multi-dd .dd-item.untrained.selected { display: flex; }
+  .multi-dd .dd-item.untrained.training-reserved { display: flex; }
 
   /* People already scheduled at another WC, in time off, or defaulted at another WC
      are hidden from sibling pickers. !important so this beats the reserves-section

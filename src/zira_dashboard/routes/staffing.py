@@ -688,6 +688,22 @@ def _block_effects_for_day(d: date, time_off_entries, *, assignments=None, assig
     return effects
 
 
+def _training_picker_reservations_for_day(d: date, time_off_entries) -> dict[str, set[str]]:
+    """Return level-zero trainees that must stay visible at their protocol center."""
+    reservations: dict[str, set[str]] = {}
+    try:
+        effects = _block_effects_for_day(d, time_off_entries)
+    except Exception:
+        log.exception("Could not load training picker reservations for %s", d)
+        return reservations
+    for effect in effects:
+        for center, names in (effect.locked_work_centers or {}).items():
+            clean_names = {str(name).strip() for name in names if str(name or "").strip()}
+            if clean_names:
+                reservations.setdefault(str(center), set()).update(clean_names)
+    return reservations
+
+
 def _current_training_trainees_by_center(day: date, assignments) -> dict[str, tuple[str, ...]]:
     """Project today's active training blocks without changing their lifecycle.
 
@@ -1117,6 +1133,8 @@ def defaults_only_schedule(
     roster: Sequence[staffing.Person],
     time_off_entries,
     enabled_centers,
+    *,
+    center_capacities: Mapping[str, int | None] | None = None,
 ) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
     """The day's "default schedule": place ONLY people configured as a default
     on a work center or group, at/among their centers. Non-default people stay
@@ -1131,7 +1149,8 @@ def defaults_only_schedule(
     demand; see Dale's 2026-07-23 decision.)
     """
     exact_defaults, group_defaults, user_group_centers = _default_inputs(strict=True)
-    center_capacities = _configured_center_capacities(enabled_centers, strict=True)
+    if center_capacities is None:
+        center_capacities = _configured_center_capacities(enabled_centers, strict=True)
     history = rotation_suggestions._load_recycled_history(
         day,
         group_locations=_auto_history_group_locations(),
@@ -1147,6 +1166,114 @@ def defaults_only_schedule(
         center_capacities=center_capacities,
         history=history,
     )
+
+
+def _apply_training_reservations_to_defaults(
+    day: date,
+    roster: Sequence[staffing.Person],
+    assignments: Mapping[str, Sequence[str]],
+    sources: Mapping[str, Mapping[str, str]],
+    time_off_entries,
+    *,
+    enabled_centers=None,
+    center_capacities: Mapping[str, int | None] | None = None,
+) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
+    """Overlay only applied Recycled training reservations onto fresh defaults.
+
+    A new future draft deliberately starts with permanent default people only.
+    An active training protocol is a temporary, generated commitment rather
+    than a permanent default, so retain the base draft and replace only the
+    default occupants that would conflict with its exact protocol reservation.
+    """
+    seeded_assignments = {center: list(names or ()) for center, names in assignments.items()}
+    seeded_sources = {
+        center: dict(center_sources or ()) for center, center_sources in sources.items()
+    }
+    enabled = set(enabled_centers) if enabled_centers is not None else set(seeded_assignments)
+    available = {
+        person.name
+        for person in roster
+        if person.active
+        and not person.reserve
+        and person.name
+        not in rotation_suggestions._full_day_time_off_names(time_off_entries or [])
+    }
+    training_by_center: dict[str, list[str]] = {}
+    try:
+        effects = _block_effects_for_day(day, time_off_entries)
+    except Exception:
+        log.exception("Could not load training reservations for new draft %s", day)
+        return seeded_assignments, seeded_sources
+    for effect in effects:
+        exact_locks = effect.locked_work_centers or {}
+        exact_extras = effect.temporary_extra_work_centers or {}
+        for raw_center in dict.fromkeys((*exact_locks, *exact_extras)):
+            center = str(raw_center)
+            if center not in enabled:
+                continue
+            locked = [
+                str(name).strip()
+                for name in exact_locks.get(raw_center, ())
+                if str(name or "").strip()
+            ]
+            extras = [
+                str(name).strip()
+                for name in exact_extras.get(raw_center, ())
+                if str(name or "").strip()
+            ]
+            if not locked:
+                continue
+            if center in training_by_center:
+                continue
+            # A protocol needs its trainee in a normal operator slot. Its
+            # day-one trainer may be the single temporary slot above that
+            # capacity, but no reservation can bypass an unavailable person
+            # or a zero/full trainee slot.
+            direct_names = tuple(dict.fromkeys((*locked, *extras)))
+            if any(name not in available for name in direct_names):
+                continue
+            capacity = (center_capacities or {}).get(center)
+            if capacity is not None and len(locked) > max(0, int(capacity)):
+                continue
+            target = training_by_center.setdefault(center, [])
+            for name in direct_names:
+                if name not in target:
+                    target.append(name)
+
+    if not training_by_center:
+        return seeded_assignments, seeded_sources
+
+    training_people = {name for names in training_by_center.values() for name in names}
+    for center, names in seeded_assignments.items():
+        center_sources = seeded_sources.setdefault(center, {})
+        retained = [
+            name
+            for name in names
+            if not (name in training_people and center_sources.get(name) == "default")
+        ]
+        seeded_assignments[center] = retained
+        seeded_sources[center] = {name: center_sources[name] for name in retained if name in center_sources}
+
+    for center, training_names in training_by_center.items():
+        center_sources = seeded_sources.setdefault(center, {})
+        retained = [
+            name
+            for name in seeded_assignments.get(center, ())
+            if center_sources.get(name) != "default"
+        ]
+        seeded_assignments[center] = retained + list(training_names)
+        seeded_sources[center] = {
+            name: source
+            for name, source in center_sources.items()
+            if name in retained
+        }
+        seeded_sources[center].update(
+            {
+                name: "generated"
+                for name in training_names
+            }
+        )
+    return seeded_assignments, seeded_sources
 
 
 def saturday_defaults_only_schedule(
@@ -1386,11 +1513,22 @@ def _seed_new_future_draft(
             # to defaults produces. Optional Saturdays and holidays keep
             # assignments blank for recruiting while still showing the
             # manager's enabled centers.
+            center_capacities = _configured_center_capacities(enabled_centers, strict=True)
             assignments, sources = defaults_only_schedule(
                 day,
                 roster,
                 time_off_entries,
                 enabled_centers,
+                center_capacities=center_capacities,
+            )
+            assignments, sources = _apply_training_reservations_to_defaults(
+                day,
+                roster,
+                assignments,
+                sources,
+                time_off_entries,
+                enabled_centers=enabled_centers,
+                center_capacities=center_capacities,
             )
     except Exception:
         log.exception("Could not seed default staffing draft for %s", day)
@@ -1675,6 +1813,7 @@ def staffing_page(
     # bands-A+B context keys (bays, publish_block_reasons, defaults_by_loc,
     # unassigned, reserves, time_off_names/entries, partial_*_by_name,
     # people_meta, all_active_people), merged into the template context below.
+    training_picker_reservations = _training_picker_reservations_for_day(d, time_off_entries)
     bay_model = staffing_view.build_staffing_bays(
         roster=roster,
         sched=sched,
@@ -1682,6 +1821,7 @@ def staffing_page(
         publish_blocked=publish_blocked,
         enabled_work_centers=enabled_auto_work_centers,
         publish_errors=publish_errors,
+        training_reservations_by_center=training_picker_reservations,
     )
     unscheduled_count = len(bay_model.get("unassigned") or ())
     auto_on_count = len(enabled_auto_work_centers)
@@ -1889,6 +2029,7 @@ def staffing_page(
             ),
             saturday_availability_overrides=sched.saturday_availability_overrides,
             publish_errors=publish_errors,
+            training_reservations_by_center=training_picker_reservations,
         )
         unscheduled_count = len(bay_model.get("unassigned") or ())
         rotation_auto_summary = {
