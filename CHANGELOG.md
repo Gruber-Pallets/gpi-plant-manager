@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 10:31 AM - One place for payroll questions
+
+- **Plant Manager is ready to make one Odoo task when a payroll item needs a person to review it.** The automatic payroll check is not turned on yet.
+
 ### 10:25 AM - Safer payroll test data
 
 - **More checks now keep real payroll records safe while the new payroll tool is tested.** The automatic check is not turned on yet.
