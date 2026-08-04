@@ -1536,6 +1536,33 @@ CREATE TABLE IF NOT EXISTS calendar_conflict_monitor (
   last_run_at       TIMESTAMPTZ
 );
 
+-- 2026-08-03: append-only Odoo payroll guard audit and singleton alert state.
+CREATE TABLE IF NOT EXISTS payroll_work_entry_corrections (
+  id                       BIGSERIAL PRIMARY KEY,
+  odoo_work_entry_id       INTEGER NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('duration_update', 'delete_zero_regular')),
+  employee_odoo_id         INTEGER NOT NULL,
+  employee_name            TEXT NOT NULL,
+  work_date                DATE NOT NULL,
+  before_duration          DOUBLE PRECISION NOT NULL,
+  after_duration           DOUBLE PRECISION NOT NULL,
+  attendance_regular       DOUBLE PRECISION NOT NULL,
+  attendance_overtime      DOUBLE PRECISION NOT NULL,
+  work_regular_before      DOUBLE PRECISION NOT NULL,
+  work_overtime            DOUBLE PRECISION NOT NULL,
+  verification_detail      TEXT NOT NULL,
+  corrected_at             TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS payroll_work_entry_corrections_entry_idx
+  ON payroll_work_entry_corrections (odoo_work_entry_id, corrected_at DESC);
+
+CREATE TABLE IF NOT EXISTS payroll_work_entry_guard_monitor (
+  id                    INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  odoo_task_id          INTEGER,
+  reported_issue_keys   TEXT[] NOT NULL DEFAULT '{}',
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- 2026-07-01: page-usage tracking. One row per (day, matched route pattern,
 -- method, signed-in user) with a running view count, upserted from an
 -- in-memory counter on the warmer tick (never per-request). Storing the route

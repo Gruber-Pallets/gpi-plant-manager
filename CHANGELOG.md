@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-04
 
+### 06:40 AM - Payroll fix history
+
+- **Plant Manager is ready to keep a permanent record of every safe payroll correction.** The automatic check is not turned on yet.
+
 ### 03:25 AM - Safer payroll mistake check
 
 - **Plant Manager now stops when payroll details are missing, do not match, or are not approved.** This keeps unclear cases from looking like the known extra-lunch mistake. The automatic check is still not turned on.
