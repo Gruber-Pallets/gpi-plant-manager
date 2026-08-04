@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-04
+
+### 03:25 AM - Safer payroll mistake check
+
+- **Plant Manager now stops when payroll details are missing, do not match, or are not approved.** This keeps unclear cases from looking like the known extra-lunch mistake. The automatic check is still not turned on.
+
 ## 2026-08-03
 
 ### 04:34 PM - Exact payroll mistake check

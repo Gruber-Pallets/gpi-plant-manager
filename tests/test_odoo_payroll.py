@@ -28,6 +28,7 @@ ATTENDANCE_FIELDS = [
     "overtime_status",
     "expected_hours",
 ]
+MISSING = object()
 
 
 def fake_execute(responses, calls):
@@ -37,6 +38,37 @@ def fake_execute(responses, calls):
         return value(*args, **kwargs) if callable(value) else value
 
     return execute
+
+
+def raw_work(duration=0.5):
+    row = {
+        "id": 8508,
+        "employee_id": [6, "Caleb Asmussen"],
+        "date": "2026-07-24",
+        "duration": duration,
+        "state": "draft",
+        "conflict": False,
+        "active": True,
+        "work_entry_type_id": [1, "Attendance"],
+        "attendance_id": [3804, "12:06"],
+        "write_date": "2026-07-30 18:14:48",
+    }
+    if duration is MISSING:
+        row.pop("duration")
+    return row
+
+
+def raw_attendance():
+    return {
+        "id": 3996,
+        "employee_id": [9, "Darren Donahue"],
+        "check_in": "2026-08-01 02:30:00",
+        "worked_hours": 8.5,
+        "overtime_hours": 5.0,
+        "validated_overtime_hours": 5.0,
+        "overtime_status": "approved",
+        "expected_hours": 3.5,
+    }
 
 
 def test_recent_candidates_use_write_date_date_and_linked_work100():
@@ -78,6 +110,7 @@ def test_recent_candidates_use_write_date_date_and_linked_work100():
         "state": "draft",
         "conflict": False,
         "active": True,
+        "numeric_data_valid": True,
         "type_code": "WORK100",
         "attendance_id": 3804,
         "write_date": "2026-07-30 18:14:48",
@@ -138,6 +171,7 @@ def test_fetch_inputs_maps_utc_attendance_to_central_work_date():
     assert attendance[0]["date"] == date(2026, 7, 31)
     assert attendance[0]["employee_id"] == 9
     assert attendance[0]["overtime_status"] == "approved"
+    assert attendance[0]["numeric_data_valid"] is True
     assert calls == [
         (
             "hr.work.entry.type",
@@ -236,7 +270,57 @@ def test_read_work_entry_returns_fresh_normalized_row():
     assert row["id"] == 8502
     assert row["type_code"] == "WORK100"
     assert row["attendance_id"] == 3811
+    assert row["numeric_data_valid"] is True
     assert calls[1][2] == ([8502],)
+
+
+@pytest.mark.parametrize("duration", [MISSING, None, nan, inf, -inf])
+def test_work_normalization_preserves_invalid_duration_evidence(duration):
+    normalized = payroll._normalize_work(raw_work(duration), {1: "WORK100"})
+
+    assert normalized["duration"] == 0.0
+    assert normalized["numeric_data_valid"] is False
+
+
+def test_work_normalization_keeps_odoo_false_as_valid_zero():
+    normalized = payroll._normalize_work(raw_work(False), {1: "WORK100"})
+
+    assert normalized["duration"] == 0.0
+    assert normalized["numeric_data_valid"] is True
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["expected_hours", "overtime_hours", "validated_overtime_hours"],
+)
+@pytest.mark.parametrize("invalid_value", [MISSING, None, nan, inf, -inf])
+def test_attendance_normalization_preserves_invalid_numeric_evidence(
+    field, invalid_value
+):
+    row = raw_attendance()
+    if invalid_value is MISSING:
+        row.pop(field)
+    else:
+        row[field] = invalid_value
+
+    normalized = payroll._normalize_attendance(row)
+
+    assert normalized[field] == 0.0
+    assert normalized["numeric_data_valid"] is False
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["expected_hours", "overtime_hours", "validated_overtime_hours"],
+)
+def test_attendance_normalization_keeps_odoo_false_as_valid_zero(field):
+    row = raw_attendance()
+    row[field] = False
+
+    normalized = payroll._normalize_attendance(row)
+
+    assert normalized[field] == 0.0
+    assert normalized["numeric_data_valid"] is True
 
 
 def test_public_odoo_client_wrappers_delegate(monkeypatch):

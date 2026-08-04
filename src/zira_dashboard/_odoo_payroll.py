@@ -45,6 +45,18 @@ def _m2o_name(value: Any) -> str:
     )
 
 
+def _finite_number(row: dict, field: str) -> tuple[float, bool]:
+    if field not in row or row[field] is None:
+        return 0.0, False
+    try:
+        value = float(row[field])
+    except (TypeError, ValueError):
+        return 0.0, False
+    if not math.isfinite(value):
+        return 0.0, False
+    return value, True
+
+
 def _type_maps(
     execute_fn: Callable[..., Any],
 ) -> tuple[dict[str, int], dict[int, str]]:
@@ -66,15 +78,17 @@ def _type_maps(
 def _normalize_work(row: dict, codes_by_id: dict[int, str]) -> dict:
     employee = row.get("employee_id")
     type_id = _m2o_id(row.get("work_entry_type_id"))
+    duration, duration_is_valid = _finite_number(row, "duration")
     return {
         "id": int(row["id"]),
         "employee_id": _m2o_id(employee),
         "employee_name": _m2o_name(employee),
         "date": date.fromisoformat(str(row["date"])),
-        "duration": float(row.get("duration") or 0),
+        "duration": duration,
         "state": str(row.get("state") or ""),
         "conflict": bool(row.get("conflict")),
         "active": bool(row.get("active")),
+        "numeric_data_valid": duration_is_valid,
         "type_code": codes_by_id.get(type_id, ""),
         "attendance_id": _m2o_id(row.get("attendance_id")),
         "write_date": row.get("write_date"),
@@ -86,18 +100,24 @@ def _normalize_attendance(row: dict) -> dict:
     check_in = datetime.strptime(row["check_in"], "%Y-%m-%d %H:%M:%S").replace(
         tzinfo=_odoo_attendance.UTC
     )
+    expected_hours, expected_is_valid = _finite_number(row, "expected_hours")
+    overtime_hours, overtime_is_valid = _finite_number(row, "overtime_hours")
+    validated_overtime_hours, validated_is_valid = _finite_number(
+        row, "validated_overtime_hours"
+    )
     return {
         "id": int(row["id"]),
         "employee_id": _m2o_id(employee),
         "employee_name": _m2o_name(employee),
         "date": check_in.astimezone(shift_config.SITE_TZ).date(),
         "worked_hours": float(row.get("worked_hours") or 0),
-        "overtime_hours": float(row.get("overtime_hours") or 0),
-        "validated_overtime_hours": float(
-            row.get("validated_overtime_hours") or 0
-        ),
+        "overtime_hours": overtime_hours,
+        "validated_overtime_hours": validated_overtime_hours,
         "overtime_status": row.get("overtime_status") or "",
-        "expected_hours": float(row.get("expected_hours") or 0),
+        "expected_hours": expected_hours,
+        "numeric_data_valid": (
+            expected_is_valid and overtime_is_valid and validated_is_valid
+        ),
     }
 
 
