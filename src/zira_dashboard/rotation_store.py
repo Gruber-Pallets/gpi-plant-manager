@@ -221,6 +221,137 @@ def active_blocks_for_day(day: date) -> list[TrainingBlock]:
     return [_block_from_row(row) for row in rows]
 
 
+def _block_rows_query(*, where_sql: str, params: tuple = ()) -> list[dict]:
+    """Load joined training-block rows for a caller-supplied filter."""
+    rows = db.query(
+        "SELECT b.id, trainee.name AS trainee_name, trainer.name AS trainer_name, skill.name AS skill, "
+        "  b.start_day, b.planned_attended_days, b.status, b.trainee_id, b.skill_id, b.work_center, b.skill_ids "
+        "FROM rotation_training_blocks b "
+        "JOIN people trainee ON trainee.id = b.trainee_id "
+        "JOIN people trainer ON trainer.id = b.trainer_id "
+        "JOIN skills skill ON skill.id = b.skill_id "
+        f"WHERE {where_sql} "
+        "ORDER BY b.start_day, b.id",
+        params,
+    )
+    return rows
+
+
+def get_block(block_id: int) -> TrainingBlock | None:
+    """Return one training block by id, or ``None`` when it does not exist."""
+    rows = _block_rows_query(where_sql="b.id = %s", params=(block_id,))
+    return _block_from_row(rows[0]) if rows else None
+
+
+def attended_day_count(block_id: int) -> int:
+    """Return how many attended workdays have been recorded for a block."""
+    return sum(1 for day in resolved_days(block_id) if day.status == "attended")
+
+
+def manageable_blocks() -> list[TrainingBlock]:
+    """Return every active or paused block for sidebar management."""
+    rows = _block_rows_query(where_sql="b.status IN ('active', 'paused')")
+    return [_block_from_row(row) for row in rows]
+
+
+def update_block(
+    block_id: int,
+    *,
+    trainer_id: int,
+    work_center: str,
+    start_day: date,
+    planned_attended_days: int,
+) -> TrainingBlock:
+    """Update editable fields on an active or paused training block."""
+    block = get_block(block_id)
+    if block is None or block.status not in ("active", "paused"):
+        raise InvalidTrainingBlock("Training is not editable.")
+    attended = attended_day_count(block_id)
+    if planned_attended_days < attended:
+        raise InvalidTrainingBlock(
+            f"Planned days cannot be below attended days ({attended})."
+        )
+    location = staffing.location_by_name(work_center)
+    if location is None:
+        raise InvalidTrainingBlock(f"Unknown work center: {work_center!r}.")
+    skill_ids = _skill_ids_for(staffing.required_skills_for(location))
+    for skill_id in skill_ids:
+        levels = db.query(
+            "SELECT "
+            "  COALESCE((SELECT level FROM person_skills WHERE person_id = %s AND skill_id = %s), 0) "
+            "    AS trainee_level, "
+            "  COALESCE((SELECT level FROM person_skills WHERE person_id = %s AND skill_id = %s), 0) "
+            "    AS trainer_level",
+            (block.trainee_id, skill_id, trainer_id, skill_id),
+        )
+        if not levels:
+            raise InvalidTrainingBlock("Could not determine training skill levels.")
+        validate_block(
+            level=int(levels[0]["trainee_level"]),
+            trainer_level=int(levels[0]["trainer_level"]),
+            workdays=planned_attended_days,
+        )
+    rows = db.query(
+        "WITH updated AS ("
+        "  UPDATE rotation_training_blocks "
+        "  SET trainer_id = %s, work_center = %s, skill_id = %s, skill_ids = %s, "
+        "      start_day = %s, planned_attended_days = %s "
+        "  WHERE id = %s AND status IN ('active', 'paused') "
+        "  RETURNING id, trainee_id, trainer_id, skill_id, work_center, skill_ids, start_day, planned_attended_days, status"
+        ") "
+        "SELECT u.id, trainee.name AS trainee_name, trainer.name AS trainer_name, skill.name AS skill, "
+        "  u.start_day, u.planned_attended_days, u.status, u.trainee_id, u.skill_id, u.work_center, u.skill_ids "
+        "FROM updated u "
+        "JOIN people trainee ON trainee.id = u.trainee_id "
+        "JOIN people trainer ON trainer.id = u.trainer_id "
+        "JOIN skills skill ON skill.id = u.skill_id",
+        (
+            trainer_id,
+            work_center,
+            skill_ids[0],
+            list(skill_ids),
+            start_day,
+            planned_attended_days,
+            block_id,
+        ),
+    )
+    if not rows:
+        raise InvalidTrainingBlock("Training is not editable.")
+    return _block_from_row(rows[0])
+
+
+def claim_early_completion(block_id: int) -> str | None:
+    """Atomically claim a block for early completion from active or paused."""
+    rows = db.query(
+        "WITH prior AS ("
+        "  SELECT id, status AS prior_status "
+        "  FROM rotation_training_blocks "
+        "  WHERE id = %s AND status IN ('active', 'paused')"
+        "), "
+        "updated AS ("
+        "  UPDATE rotation_training_blocks b "
+        "  SET status = 'completing' "
+        "  FROM prior p "
+        "  WHERE b.id = p.id "
+        "  RETURNING b.id, p.prior_status AS status"
+        ") "
+        "SELECT status FROM updated",
+        (block_id,),
+    )
+    return rows[0]["status"] if rows else None
+
+
+def release_early_completion_claim(block_id: int, prior_status: str) -> None:
+    """Restore a failed early-completion claim to its prior editable status."""
+    if prior_status not in ("active", "paused"):
+        return
+    db.execute(
+        "UPDATE rotation_training_blocks SET status = %s "
+        "WHERE id = %s AND status = 'completing'",
+        (prior_status, block_id),
+    )
+
+
 def _blocks_with_status(status: str) -> list[TrainingBlock]:
     """Return every block in ``status``, regardless of start day."""
     rows = db.query(

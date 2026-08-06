@@ -191,6 +191,51 @@ def test_training_block_resolves_dismantler_to_its_odoo_skill(monkeypatch):
     assert block.skill_ids == (4,)
 
 
+def test_manageable_blocks_includes_active_and_paused(monkeypatch):
+    from zira_dashboard import rotation_store
+
+    rows = [
+        {"id": 1, "trainee_name": "A", "trainer_name": "T", "skill": "Repair",
+         "start_day": date(2026, 8, 1), "planned_attended_days": 5, "status": "active",
+         "trainee_id": 1, "skill_id": 9, "work_center": "Repair 1", "skill_ids": [9]},
+        {"id": 2, "trainee_name": "B", "trainer_name": "T", "skill": "Repair",
+         "start_day": date(2026, 8, 2), "planned_attended_days": 3, "status": "paused",
+         "trainee_id": 2, "skill_id": 9, "work_center": "Repair 2", "skill_ids": [9]},
+    ]
+    monkeypatch.setattr(rotation_store.db, "query", lambda *a, **k: rows)
+    out = rotation_store.manageable_blocks()
+    assert [b.id for b in out] == [1, 2]
+    assert {b.status for b in out} == {"active", "paused"}
+
+
+def test_update_block_rejects_planned_days_below_attended(monkeypatch):
+    from zira_dashboard import rotation_store
+
+    existing = rotation_store.TrainingBlock(
+        id=1, trainee_name="A", trainer_name="T", skill="Repair",
+        start_day=date(2026, 8, 1), planned_attended_days=5, status="active",
+        trainee_id=1, skill_id=9, work_center="Repair 1", skill_ids=(9,),
+    )
+    monkeypatch.setattr(rotation_store, "get_block", lambda _id: existing)
+    monkeypatch.setattr(rotation_store, "attended_day_count", lambda _id: 3)
+    with pytest.raises(rotation_store.InvalidTrainingBlock, match="attended"):
+        rotation_store.update_block(
+            1, trainer_id=2, work_center="Repair 1",
+            start_day=date(2026, 8, 1), planned_attended_days=2,
+        )
+
+
+def test_claim_early_completion_accepts_paused(monkeypatch):
+    from zira_dashboard import rotation_store
+
+    monkeypatch.setattr(
+        rotation_store.db, "query",
+        lambda sql, params=None: [{"id": params[0], "status": "paused"}]
+        if "RETURNING" in sql else [],
+    )
+    assert rotation_store.claim_early_completion(7) == "paused"
+
+
 def test_legacy_training_block_hydrates_without_center_and_with_one_skill():
     from zira_dashboard import rotation_store
 
