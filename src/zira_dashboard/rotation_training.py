@@ -9,6 +9,8 @@ Two responsibilities:
   requested attended days are all recorded. It reaches the database *only*
   through :mod:`rotation_store` and the shared writer in :mod:`skill_levels`, so
   it is fully monkeypatchable and has no hidden side effects.
+- :func:`complete_block_now`, which promotes early from an active or paused
+  block using the early-completion claim helpers, then marks the block completed.
 
 ``BlockEffect`` is shaped to match what ``rotation_suggestions`` already
 consumes: ``locked_people`` occupies normal operator slots (exempt from the
@@ -267,3 +269,30 @@ def reconcile_blocks(as_of: date) -> list[int]:
             continue
         promoted.append(block.id)
     return promoted
+
+
+def complete_block_now(block_id: int) -> None:
+    """Promote a trainee early and mark the training block completed.
+
+    Claims the block from ``active`` or ``paused``, writes level 1 for every
+    target skill through the shared skill writer, then finalizes the block.
+    If promotion fails, restores the prior status so the manager can retry.
+    If finalization fails after a successful promotion, leave ``completing``
+    for a later reconcile/retry (same durable-claim contract as reconcile).
+    """
+    block = rotation_store.get_block(block_id)
+    if block is None:
+        raise rotation_store.InvalidTrainingBlock("Unknown training block.")
+    prior = rotation_store.claim_early_completion(block_id)
+    if prior is None:
+        raise rotation_store.InvalidTrainingBlock("Training cannot be completed.")
+    skill_ids = tuple(block.skill_ids or (block.skill_id,))
+    try:
+        for skill_id in skill_ids:
+            skill_levels.set_person_skill_level(block.trainee_id, skill_id, 1)
+    except Exception:
+        rotation_store.release_early_completion_claim(block_id, prior)
+        raise
+    # Promotion succeeded; finalize. If mark_completed fails, leave status
+    # ``completing`` so a later reconcile/retry can finish without re-promoting.
+    rotation_store.mark_completed(block_id)

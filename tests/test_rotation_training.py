@@ -870,3 +870,37 @@ def test_completed_training_block_promotes_to_one_and_never_repeats(monkeypatch)
     assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == [42]
     assert rotation_training.reconcile_blocks(date(2026, 7, 21)) == []
     assert calls == [(17, 9, 1)]
+
+def test_complete_block_now_promotes_before_planned_days_finish(monkeypatch):
+    from zira_dashboard import rotation_store, rotation_training
+
+    block = rotation_store.TrainingBlock(
+        id=1,
+        trainee_name="Adrian",
+        trainer_name="Green",
+        skill="Master Recycler",
+        start_day=date(2026, 8, 4),
+        planned_attended_days=5,
+        status="active",
+        trainee_id=10,
+        skill_id=11,
+        work_center="Master Recycler",
+        skill_ids=(11,),
+    )
+    monkeypatch.setattr(rotation_training.rotation_store, "get_block", lambda _id: block)
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "claim_early_completion", lambda _id: "active"
+    )
+    promoted = []
+    monkeypatch.setattr(
+        rotation_training.skill_levels,
+        "set_person_skill_level",
+        lambda pid, sid, level: promoted.append((pid, sid, level)),
+    )
+    marked = []
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "mark_completed", lambda _id: marked.append(_id)
+    )
+    rotation_training.complete_block_now(1)
+    assert promoted == [(10, 11, 1)]
+    assert marked == [1]

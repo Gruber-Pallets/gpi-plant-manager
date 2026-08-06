@@ -3,6 +3,8 @@
 Routes:
   POST /api/rotations/preferences      — save one person's group preference
   POST /api/rotations/training-blocks  — start a level-0 training block
+  POST /api/rotations/training-blocks/{id} — update an active/paused training block
+  POST /api/rotations/training-blocks/{id}/complete — early-complete a training block
   POST /api/rotations/auto-work-centers — save enabled auto-schedule centers
   POST /api/rotations/rebuild          — regenerate enabled auto-schedule centers
 
@@ -28,6 +30,7 @@ from .. import (
     db,
     optional_workday,
     rotation_store,
+    rotation_training,
     saturday_recruiting_store,
     schedule_solver,
     scheduler_time_off,
@@ -367,7 +370,12 @@ def _person_id_by_name(name: str) -> int | None:
     return int(rows[0]["id"]) if rows else None
 
 
-def _block_to_dict(block) -> dict:
+def _block_to_dict(block, *, attended_days: int | None = None) -> dict:
+    if attended_days is None:
+        try:
+            attended_days = rotation_store.attended_day_count(block.id)
+        except Exception:
+            attended_days = 0
     return {
         "id": block.id,
         "trainee": block.trainee_name,
@@ -378,6 +386,8 @@ def _block_to_dict(block) -> dict:
         "skill": block.skill,
         "start_day": block.start_day.isoformat(),
         "planned_attended_days": block.planned_attended_days,
+        "attended_days": attended_days,
+        "remaining_attended_days": max(0, block.planned_attended_days - attended_days),
         "status": block.status,
     }
 
@@ -474,6 +484,65 @@ async def create_training_block(request: Request):
         _http_cache.invalidate_today_cache()
         _http_cache.invalidate_stable_cache()
         return JSONResponse({"ok": True, "block": _block_to_dict(block)})
+
+    return await asyncio.to_thread(_work)
+
+
+@router.post("/api/rotations/training-blocks/{block_id}")
+async def update_training_block(block_id: int, request: Request):
+    if not isinstance(block_id, int) or isinstance(block_id, bool) or block_id <= 0:
+        return _error("block_id must be a positive integer.")
+    body = await _json_body(request)
+    if body is None:
+        return _error("Invalid JSON body.", 400)
+    trainer = str(body.get("trainer") or "").strip()
+    work_center = str(body.get("work_center") or "").strip()
+    start_day_raw = str(body.get("start_day") or "").strip()
+    workdays = body.get("workdays")
+
+    if not trainer or not work_center:
+        return _error("trainer and work center are required.")
+    try:
+        start_day = date.fromisoformat(start_day_raw)
+    except ValueError:
+        return _error("Invalid start day.")
+    if not isinstance(workdays, int) or isinstance(workdays, bool) or workdays < 1:
+        return _error("workdays must be a positive integer.")
+
+    def _work():
+        trainer_id = _person_id_by_name(trainer)
+        if trainer_id is None:
+            return _error(f"Unknown person: {trainer}")
+        try:
+            block = rotation_store.update_block(
+                block_id,
+                trainer_id=trainer_id,
+                work_center=work_center,
+                start_day=start_day,
+                planned_attended_days=workdays,
+            )
+        except rotation_store.InvalidTrainingBlock as exc:
+            return _error(str(exc))
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
+        return JSONResponse({"ok": True, "block": _block_to_dict(block)})
+
+    return await asyncio.to_thread(_work)
+
+
+@router.post("/api/rotations/training-blocks/{block_id}/complete")
+async def complete_training_block(block_id: int):
+    if not isinstance(block_id, int) or isinstance(block_id, bool) or block_id <= 0:
+        return _error("block_id must be a positive integer.")
+
+    def _work():
+        try:
+            rotation_training.complete_block_now(block_id)
+        except rotation_store.InvalidTrainingBlock as exc:
+            return _error(str(exc))
+        _http_cache.invalidate_today_cache()
+        _http_cache.invalidate_stable_cache()
+        return JSONResponse({"ok": True, "id": block_id, "status": "completed"})
 
     return await asyncio.to_thread(_work)
 

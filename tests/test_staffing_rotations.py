@@ -817,6 +817,48 @@ def test_block_lifecycle_endpoint_bad_id_422(monkeypatch, action):
     assert "block_id" in resp.json()["error"]
 
 
+
+def test_complete_endpoint_promotes_early(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    monkeypatch.setattr(rotations.rotation_training, "complete_block_now", lambda _id: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
+    resp = client.post("/api/rotations/training-blocks/42/complete", json={})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "id": 42, "status": "completed"}
+
+
+def test_update_endpoint_rejects_planned_below_attended(monkeypatch):
+    from zira_dashboard import rotation_store
+
+    client, rotations = _rotations_client(monkeypatch)
+    monkeypatch.setattr(
+        rotations.db,
+        "query",
+        lambda sql, params=None: [{"id": 2}] if "FROM people" in sql else [],
+    )
+
+    def boom(_block_id, **kwargs):
+        raise rotation_store.InvalidTrainingBlock(
+            "Planned days cannot be below attended days (3)."
+        )
+
+    monkeypatch.setattr(rotations.rotation_store, "update_block", boom)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+    monkeypatch.setattr(rotations._http_cache, "invalidate_stable_cache", lambda: None)
+    resp = client.post(
+        "/api/rotations/training-blocks/42",
+        json={
+            "trainer": "Green",
+            "work_center": "Repair 1",
+            "start_day": "2026-08-01",
+            "workdays": 1,
+        },
+    )
+    assert resp.status_code == 422
+    assert "attended" in resp.json()["error"]
+
+
 # --------------------------------------------------------------------------- #
 # POST /api/rotations/rebuild
 # --------------------------------------------------------------------------- #
