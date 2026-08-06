@@ -2032,9 +2032,24 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
     }
 
     // Nested <form> inside #staffing-form is invalid HTML5; validate fields directly.
+    // Do not use HTML required — empty collapsed create/edit controls would block Publish.
     function reportFieldsValidity(fields) {
       for (const field of fields) {
-        if (field && !field.checkValidity()) {
+        if (!field) continue;
+        const value = String(field.value || '').trim();
+        if (field.tagName === 'SELECT' && !value) {
+          field.setCustomValidity('Please select an option.');
+          field.reportValidity();
+          field.setCustomValidity('');
+          return false;
+        }
+        if (field.tagName === 'INPUT' && field.type !== 'checkbox' && field.type !== 'radio' && !value) {
+          field.setCustomValidity('Please fill out this field.');
+          field.reportValidity();
+          field.setCustomValidity('');
+          return false;
+        }
+        if (!field.checkValidity()) {
           field.reportValidity();
           return false;
         }
@@ -2102,7 +2117,6 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       const trainerField = document.createElement('label');
       trainerField.textContent = 'Trainer';
       const trainerSel = document.createElement('select');
-      trainerSel.required = true;
       addOptions(trainerSel, people, 'Select trainer');
       trainerSel.value = protocol.trainer || '';
       trainerField.appendChild(trainerSel);
@@ -2110,7 +2124,6 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       const wcField = document.createElement('label');
       wcField.textContent = 'Work center';
       const wcSel = document.createElement('select');
-      wcSel.required = true;
       addOptions(wcSel, workCenters, 'Select work center');
       wcSel.value = protocol.work_center || '';
       wcField.appendChild(wcSel);
@@ -2119,7 +2132,6 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       startField.textContent = 'Start date';
       const startDay = document.createElement('input');
       startDay.type = 'date';
-      startDay.required = true;
       startDay.value = protocol.start_day || '';
       startField.appendChild(startDay);
 
@@ -2129,7 +2141,6 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       daysInput.type = 'number';
       daysInput.min = String(Math.max(1, Number(protocol.attended_days) || 1));
       daysInput.step = '1';
-      daysInput.required = true;
       daysInput.value = String(protocol.planned_attended_days || 1);
       daysField.appendChild(daysInput);
 

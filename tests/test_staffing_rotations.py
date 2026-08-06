@@ -4053,6 +4053,37 @@ def test_staffing_training_lives_in_sidebar_not_modal():
     assert ".training-progress" in css
 
 
+def test_staffing_training_fields_omit_html_required_inside_staffing_form():
+    """Create/edit training controls live inside #staffing-form.
+
+    HTML ``required`` on empty collapsed create selects makes
+    ``form.checkValidity()`` false and blocks Publish on every non-posted day.
+    We omit HTML ``required`` and validate only via ``reportFieldsValidity``
+    immediately before training create/edit API submit.
+    """
+    html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
+    js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
+
+    form_start = html.index('id="staffing-form"')
+    form_end = html.index("</form>", form_start)
+    staffing_form = html[form_start:form_end]
+
+    for field_id in (
+        "training-sidebar-trainee",
+        "training-sidebar-trainer",
+        "training-sidebar-work-center",
+        "training-sidebar-start-day",
+        "training-sidebar-workdays",
+    ):
+        assert field_id in staffing_form
+        field_line = next(line for line in staffing_form.splitlines() if field_id in line)
+        assert "required" not in field_line, field_id
+
+    assert "function reportFieldsValidity" in js
+    assert "reportFieldsValidity([" in js
+    assert ".required = true" not in js.split("function buildEditPanel")[1].split("function renderTrainingProtocols")[0]
+
+
 def test_staffing_exposes_unified_training_setup_and_removes_row_toggles():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
