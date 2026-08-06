@@ -904,3 +904,92 @@ def test_complete_block_now_promotes_before_planned_days_finish(monkeypatch):
     rotation_training.complete_block_now(1)
     assert promoted == [(10, 11, 1)]
     assert marked == [1]
+
+
+def test_complete_block_now_release_claim_when_promotion_fails(monkeypatch):
+    from zira_dashboard import rotation_store, rotation_training, skill_levels
+
+    block = rotation_store.TrainingBlock(
+        id=1,
+        trainee_name="Adrian",
+        trainer_name="Green",
+        skill="Master Recycler",
+        start_day=date(2026, 8, 4),
+        planned_attended_days=5,
+        status="active",
+        trainee_id=10,
+        skill_id=11,
+        work_center="Master Recycler",
+        skill_ids=(11,),
+    )
+    prior_status = "active"
+    monkeypatch.setattr(rotation_training.rotation_store, "get_block", lambda _id: block)
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "claim_early_completion", lambda _id: prior_status
+    )
+    released: list[tuple] = []
+    monkeypatch.setattr(
+        rotation_training.rotation_store,
+        "release_early_completion_claim",
+        lambda bid, prior: released.append((bid, prior)),
+    )
+    marked: list[int] = []
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "mark_completed", lambda _id: marked.append(_id)
+    )
+    monkeypatch.setattr(
+        rotation_training.skill_levels,
+        "set_person_skill_level",
+        lambda *_args: (_ for _ in ()).throw(skill_levels.SkillSyncError("odoo down")),
+    )
+
+    with pytest.raises(skill_levels.SkillSyncError):
+        rotation_training.complete_block_now(1)
+
+    assert released == [(1, prior_status)]
+    assert marked == []
+
+
+def test_complete_block_now_leaves_completing_when_mark_completed_fails(monkeypatch):
+    from zira_dashboard import rotation_store, rotation_training
+
+    block = rotation_store.TrainingBlock(
+        id=1,
+        trainee_name="Adrian",
+        trainer_name="Green",
+        skill="Master Recycler",
+        start_day=date(2026, 8, 4),
+        planned_attended_days=5,
+        status="active",
+        trainee_id=10,
+        skill_id=11,
+        work_center="Master Recycler",
+        skill_ids=(11,),
+    )
+    monkeypatch.setattr(rotation_training.rotation_store, "get_block", lambda _id: block)
+    monkeypatch.setattr(
+        rotation_training.rotation_store, "claim_early_completion", lambda _id: "active"
+    )
+    released: list[tuple] = []
+    monkeypatch.setattr(
+        rotation_training.rotation_store,
+        "release_early_completion_claim",
+        lambda bid, prior: released.append((bid, prior)),
+    )
+    promoted: list[tuple] = []
+    monkeypatch.setattr(
+        rotation_training.skill_levels,
+        "set_person_skill_level",
+        lambda pid, sid, level: promoted.append((pid, sid, level)),
+    )
+    monkeypatch.setattr(
+        rotation_training.rotation_store,
+        "mark_completed",
+        lambda _id: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        rotation_training.complete_block_now(1)
+
+    assert promoted == [(10, 11, 1)]
+    assert released == []
