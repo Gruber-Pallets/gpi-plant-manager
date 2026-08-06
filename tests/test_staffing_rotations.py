@@ -4741,12 +4741,17 @@ def _render_staffing_page(
     recycled_context=None,
     bay_model=None,
     view="draft",
+    manageable_blocks=None,
+    attended_day_count=None,
 ):
     """Render the staffing page with all I/O stubbed, returning the captured
     template context. Mirrors the harness in test_staffing_trim_saw_defaults.
 
     ``smart_defaults`` optionally replaces the ``_smart_defaults_for_day`` stub
-    (e.g. a spy that records the ``mode`` it was called with)."""
+    (e.g. a spy that records the ``mode`` it was called with).
+
+    ``manageable_blocks`` defaults to an empty plant-wide list so page-context
+    tests do not depend on a live training table."""
     from zira_dashboard import cert_lookup
     from zira_dashboard import staffing as staffing_mod, staffing_view
     from zira_dashboard.routes import staffing as staffing_routes
@@ -4866,6 +4871,15 @@ def _render_staffing_page(
     )
     if recycled_context is not None:
         monkeypatch.setattr(staffing_routes, "_recycled_context_for_day", recycled_context)
+    monkeypatch.setattr(
+        staffing_routes.rotation_store,
+        "manageable_blocks",
+        manageable_blocks if manageable_blocks is not None else (lambda: []),
+    )
+    if attended_day_count is not None:
+        monkeypatch.setattr(
+            staffing_routes.rotation_store, "attended_day_count", attended_day_count
+        )
 
     def fake_build_staffing_bays(
         roster,
@@ -4916,6 +4930,59 @@ def test_blank_staffing_day_context_defaults_to_normal(monkeypatch):
     assert ctx["rotation_reasons"] == {}
     assert ctx["rotation_warnings"] == []
     assert ctx["active_training_blocks"] == []
+    assert ctx["manageable_training_blocks"] == []
+
+
+def test_manageable_training_blocks_context_degrades_to_empty_on_failure(monkeypatch):
+    def boom():
+        raise RuntimeError("db unavailable")
+
+    ctx = _render_staffing_page(monkeypatch, manageable_blocks=boom)
+    assert ctx["manageable_training_blocks"] == []
+
+
+def test_staffing_exposes_plant_wide_manageable_training_progress(monkeypatch):
+    from zira_dashboard import rotation_store
+
+    active = rotation_store.TrainingBlock(
+        id=1,
+        trainee_name="Adrian A.",
+        trainer_name="Green",
+        skill="Repair",
+        start_day=TARGET_DAY,
+        planned_attended_days=5,
+        status="active",
+        work_center="Repair 1",
+    )
+    paused = rotation_store.TrainingBlock(
+        id=2,
+        trainee_name="Paused Person",
+        trainer_name="Green",
+        skill="Dismantler",
+        start_day=TARGET_DAY,
+        planned_attended_days=4,
+        status="paused",
+        work_center="Dismantler 1",
+    )
+    attended_by_id = {1: 2, 2: 0}
+
+    ctx = _render_staffing_page(
+        monkeypatch,
+        manageable_blocks=lambda: [active, paused],
+        attended_day_count=lambda block_id: attended_by_id[block_id],
+    )
+    blocks = ctx["manageable_training_blocks"]
+    assert {b["status"] for b in blocks} == {"active", "paused"}
+    adrian = next(b for b in blocks if b["trainee"] == "Adrian A.")
+    assert adrian["attended_days"] == 2
+    assert adrian["planned_attended_days"] == 5
+    assert adrian["remaining_attended_days"] == 3
+    assert adrian["work_center"] == "Repair 1"
+    assert adrian["trainer"] == "Green"
+    assert adrian["id"] == 1
+    assert adrian["start_day"] == TARGET_DAY.isoformat()
+    # Day-scoped list stays separate from the plant-wide sidebar feed.
+    assert "active_training_blocks" in ctx
 
 
 def test_staffing_context_exposes_auto_summary_counts(monkeypatch):

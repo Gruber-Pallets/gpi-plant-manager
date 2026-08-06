@@ -524,7 +524,7 @@
   window.SATURDAY_COMMITTED_NAMES = {{ saturday_committed_names|default([], true)|tojson }};
   window.SATURDAY_AVAILABILITY_BY_NAME = {{ saturday_availability_by_name|default({}, true)|tojson }};
   window.FORKLIFT_LIVE_MODEL = {{ forklift_live_model|tojson }};
-  window.TRAINING_PROTOCOLS = {{ active_training_blocks|tojson }};
+  window.TRAINING_PROTOCOLS = {{ manageable_training_blocks|tojson }};
   window.TRAINING_PROTOCOL_PEOPLE = {{ training_protocol_people|tojson }};
   window.TRAINING_PROTOCOL_WORK_CENTERS = {{ training_protocol_work_centers|tojson }};
 </script>

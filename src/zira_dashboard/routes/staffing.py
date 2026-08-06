@@ -944,6 +944,32 @@ def _training_blocks_context(active_blocks, d: date):
     return out
 
 
+def _manageable_training_blocks_context():
+    """Plant-wide active/paused training blocks with progress for the sidebar."""
+    out = []
+    for block in rotation_store.manageable_blocks():
+        try:
+            attended = rotation_store.attended_day_count(block.id)
+        except Exception:
+            attended = 0
+        out.append(
+            {
+                "id": block.id,
+                "trainee": block.trainee_name,
+                "trainer": block.trainer_name,
+                "work_center": block.work_center,
+                "group": staffing.scheduling_group_for_skill(block.skill),
+                "skill": block.skill,
+                "start_day": block.start_day.isoformat(),
+                "planned_attended_days": block.planned_attended_days,
+                "attended_days": attended,
+                "remaining_attended_days": max(0, block.planned_attended_days - attended),
+                "status": block.status,
+            }
+        )
+    return out
+
+
 def _page_placement_issues_for_day(
     d: date,
     work_weekdays: frozenset[int],
@@ -2102,6 +2128,13 @@ def staffing_page(
         work_weekdays=work_weekdays,
         use_current_view_validation=not (viewing_posted or sched.published),
     )
+    # Plant-wide sidebar list (active + paused) with progress. Kept separate
+    # from day-scoped active_training_blocks used for Auto/seeding reservations.
+    try:
+        manageable_training_blocks = _manageable_training_blocks_context()
+    except Exception:
+        log.exception("Manageable training blocks failed; degrading to empty list")
+        manageable_training_blocks = []
 
     posted_delivery = (
         dict(sched.published_delivery or {}) if (sched.published or viewing_posted) else {}
@@ -2129,6 +2162,7 @@ def staffing_page(
                 "rotation_auto_summary": rotation_auto_summary,
                 "minimum_crew_balance": minimum_crew_balance,
                 "recycled_wc_names": _recycled_wc_names(),
+                "manageable_training_blocks": manageable_training_blocks,
                 "training_protocol_people": sorted(
                     (person.name for person in roster if person.active), key=str.lower
                 ),
