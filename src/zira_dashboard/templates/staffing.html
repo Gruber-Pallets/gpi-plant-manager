@@ -25,7 +25,6 @@
   {% set active_nav = 'staffing' %}{% include "_topnav.html" %}
   <div style="display:flex;gap:0.5rem;align-items:center">
     <span id="testing-pill" class="pub-pill" style="{% if not testing_day %}display:none;{% endif %}background:var(--warn-dim);color:var(--warn)">Testing Day<button type="button" id="testing-pill-clear" title="Clear Testing Day flag for this schedule" aria-label="Clear Testing Day" style="background:transparent;border:0;color:inherit;cursor:pointer;font-weight:700;font-size:0.95rem;line-height:1;padding:0;margin-left:0.4rem;opacity:0.75">×</button></span>
-    <button type="button" id="training-protocol-open" class="training-protocol-open" aria-haspopup="dialog">+ Training</button>
     <button type="button" class="undo-btn header-undo-redo" id="undo-btn" title="Undo" aria-label="Undo" disabled>↶</button>
     <button type="button" class="redo-btn header-undo-redo" id="redo-btn" title="Redo" aria-label="Redo" disabled>↷</button>
   </div>
@@ -368,6 +367,41 @@
       <label class="notes-label" for="notes-textarea">Notes for the day <span class="hint">— shown with the published schedule</span></label>
       <textarea id="notes-textarea" name="notes" rows="6" placeholder=""{% if viewing_posted %} readonly{% endif %}>{{ notes }}</textarea>
     </div>
+    <section id="training-sidebar" class="training-sidebar" aria-labelledby="training-sidebar-title"
+             data-readonly="{{ '1' if viewing_posted else '0' }}">
+      <div class="training-sidebar-head">
+        <h3 id="training-sidebar-title">Training</h3>
+        <span id="training-sidebar-count" class="hint"></span>
+      </div>
+      <p id="training-sidebar-error" class="training-protocol-error" role="alert" aria-live="assertive"></p>
+      <p id="training-sidebar-empty" class="training-protocol-empty">No active training protocols.</p>
+      <ul id="training-sidebar-list" class="training-sidebar-list"></ul>
+      {% if not viewing_posted %}
+      <button type="button" id="training-sidebar-start-toggle" class="training-start-toggle">+ Start training</button>
+      <form id="training-sidebar-create" class="training-sidebar-create" hidden>
+        <div class="training-protocol-fields">
+          <label>Trainee
+            <select id="training-sidebar-trainee" required></select>
+          </label>
+          <label>Trainer
+            <select id="training-sidebar-trainer" required></select>
+          </label>
+          <label>Work center
+            <select id="training-sidebar-work-center" required></select>
+          </label>
+          <label>Start date
+            <input id="training-sidebar-start-day" type="date" value="{{ day }}" required>
+          </label>
+          <label>Attended workdays
+            <input id="training-sidebar-workdays" type="number" min="1" step="1" value="5" required>
+          </label>
+        </div>
+        <div class="training-protocol-actions">
+          <button type="submit" id="training-sidebar-submit">Start training</button>
+        </div>
+      </form>
+      {% endif %}
+    </section>
     {% if auto_scheduler_available and (not is_optional_workday or saturday_recruiting_finished) %}
     <div class="rotation-controls" data-day="{{ day }}">
       <div class="rotation-mode" role="group" aria-labelledby="rotation-mode-label">
@@ -465,42 +499,6 @@
       <button type="button" id="scheduler-time-off-cancel" class="scheduler-time-off-cancel">Cancel time off</button>
       <button type="submit" id="scheduler-time-off-save">Save changes</button>
     </div>
-  </form>
-</dialog>
-
-<dialog id="training-protocol-modal" class="training-protocol-modal" aria-labelledby="training-protocol-title">
-  <form id="training-protocol-form" method="dialog">
-    <header class="training-protocol-head">
-      <h2 id="training-protocol-title">Training protocols</h2>
-      <button type="button" id="training-protocol-close" class="training-protocol-close" aria-label="Close training protocols">×</button>
-    </header>
-    <p class="training-protocol-intro">Start a paired training protocol. After day one, add the trainer to the normal schedule picker if needed.</p>
-    <p id="training-protocol-error" class="training-protocol-error" role="alert" aria-live="assertive"></p>
-    <div class="training-protocol-fields">
-      <label>Trainee
-        <select id="training-protocol-trainee" required></select>
-      </label>
-      <label>Trainer
-        <select id="training-protocol-trainer" required></select>
-      </label>
-      <label>Work center
-        <select id="training-protocol-work-center" required></select>
-      </label>
-      <label>Start date
-        <input id="training-protocol-start-day" type="date" value="{{ day }}" required>
-      </label>
-      <label>Attended workdays
-        <input id="training-protocol-workdays" type="number" min="1" step="1" value="5" required>
-      </label>
-    </div>
-    <div class="training-protocol-actions">
-      <button type="submit" id="training-protocol-submit">Start training</button>
-    </div>
-    <section class="training-protocol-list-section" aria-labelledby="training-protocol-active-title">
-      <h3 id="training-protocol-active-title">Active protocols</h3>
-      <p id="training-protocol-empty" class="training-protocol-empty">No active training protocols.</p>
-      <ul id="training-protocol-list" class="training-protocol-list"></ul>
-    </section>
   </form>
 </dialog>
 

@@ -4025,14 +4025,30 @@ def test_rebuild_validation_allows_later_day_training_trainee_without_green():
 # --------------------------------------------------------------------------- #
 
 
+def test_staffing_training_lives_in_sidebar_not_modal():
+    html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
+    js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
+    css = (ROOT / "src/zira_dashboard/static/staffing.css").read_text()
+
+    assert 'id="training-sidebar"' in html
+    assert "day-notes" in html  # panel follows notes in markup order
+    assert 'id="training-protocol-modal"' not in html
+    assert 'id="training-protocol-open"' not in html
+    assert "/api/rotations/training-blocks/" in js  # update/complete paths
+    assert "complete" in js
+    assert "attended_days" in js
+    assert ".training-progress" in css
+
+
 def test_staffing_exposes_unified_training_setup_and_removes_row_toggles():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
     css = (ROOT / "src/zira_dashboard/static/staffing.css").read_text()
     print_css = (ROOT / "src/zira_dashboard/static/staffing-print.css").read_text()
 
-    assert 'id="training-protocol-open"' in html
-    assert 'id="training-protocol-modal"' in html
+    assert 'id="training-sidebar"' in html
+    assert 'id="training-protocol-modal"' not in html
+    assert 'id="training-protocol-open"' not in html
     assert 'class="wc-training-cb"' not in html
     assert "setWcTraining" not in js
     assert ".wc-training-toggle" not in print_css
@@ -4040,7 +4056,7 @@ def test_staffing_exposes_unified_training_setup_and_removes_row_toggles():
     assert "training-reserved" in html
     assert ".dd-item.untrained.training-reserved { display: flex; }" in css
     assert "window.rebuildRotationForTraining" in js
-    assert "window.rebuildRotationForTraining(startInput.value)" in js
+    assert "window.rebuildRotationForTraining(" in js
 
 
 def test_people_matrix_no_longer_renders_training_block_form():

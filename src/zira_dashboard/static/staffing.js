@@ -2001,36 +2001,44 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
     if (!__viewingPosted && !window.SCHEDULE_PUBLISHED) validateCurrentView();
   })();
 
-  // ---------- Unified training protocol setup + lifecycle ----------
+  // ---------- Training sidebar: compact cards + create/edit ----------
   (function initTrainingProtocols() {
-    const openBtn = document.getElementById('training-protocol-open');
-    const modal = document.getElementById('training-protocol-modal');
-    if (!openBtn || !modal) return;
+    const panel = document.getElementById('training-sidebar');
+    if (!panel) return;
 
-    const closeBtn = document.getElementById('training-protocol-close');
-    const form = document.getElementById('training-protocol-form');
-    const traineeSelect = document.getElementById('training-protocol-trainee');
-    const trainerSelect = document.getElementById('training-protocol-trainer');
-    const workCenterSelect = document.getElementById('training-protocol-work-center');
-    const startInput = document.getElementById('training-protocol-start-day');
-    const workdaysInput = document.getElementById('training-protocol-workdays');
-    const submitBtn = document.getElementById('training-protocol-submit');
-    const errorEl = document.getElementById('training-protocol-error');
-    const list = document.getElementById('training-protocol-list');
-    const empty = document.getElementById('training-protocol-empty');
+    const list = document.getElementById('training-sidebar-list');
+    const empty = document.getElementById('training-sidebar-empty');
+    const countEl = document.getElementById('training-sidebar-count');
+    const errorEl = document.getElementById('training-sidebar-error');
+    const startToggle = document.getElementById('training-sidebar-start-toggle');
+    const createForm = document.getElementById('training-sidebar-create');
+    const traineeSelect = document.getElementById('training-sidebar-trainee');
+    const trainerSelect = document.getElementById('training-sidebar-trainer');
+    const workCenterSelect = document.getElementById('training-sidebar-work-center');
+    const startInput = document.getElementById('training-sidebar-start-day');
+    const workdaysInput = document.getElementById('training-sidebar-workdays');
+    const submitBtn = document.getElementById('training-sidebar-submit');
     const people = Array.isArray(window.TRAINING_PROTOCOL_PEOPLE) ? window.TRAINING_PROTOCOL_PEOPLE : [];
     const workCenters = Array.isArray(window.TRAINING_PROTOCOL_WORK_CENTERS)
       ? window.TRAINING_PROTOCOL_WORK_CENTERS : [];
     let protocols = Array.isArray(window.TRAINING_PROTOCOLS) ? window.TRAINING_PROTOCOLS.slice() : [];
-    let opener = null;
+    const readonly = panel.dataset.readonly === '1' || __viewingPosted;
+    let editingId = null;
 
     function addOptions(select, values, prompt) {
+      if (!select) return;
       select.replaceChildren(new Option(prompt, ''));
       values.forEach(value => select.add(new Option(value, value)));
     }
 
     function statusLabel(status) {
       return status === 'paused' ? 'Paused' : 'Active';
+    }
+
+    function progressCounts(protocol) {
+      const planned = Number(protocol.planned_attended_days) || 0;
+      const attended = Math.max(0, Number(protocol.attended_days) || 0);
+      return { attended, planned };
     }
 
     async function postJSON(url, body) {
@@ -2052,12 +2060,14 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
         errorEl.textContent = '';
         button.disabled = true;
         try {
-          const { resp, data } = await postJSON(
-            '/api/rotations/training-blocks/' + protocol.id + '/' + action, {}
-          );
+          const path = action === 'complete'
+            ? '/api/rotations/training-blocks/' + protocol.id + '/complete'
+            : '/api/rotations/training-blocks/' + protocol.id + '/' + action;
+          const { resp, data } = await postJSON(path, {});
           if (!resp.ok || !data.ok) throw new Error(data.error || 'Could not update training.');
-          if (action === 'end') {
+          if (action === 'end' || action === 'complete') {
             protocols = protocols.filter(item => item.id !== protocol.id);
+            if (editingId === protocol.id) editingId = null;
           } else {
             protocol.status = data.status;
           }
@@ -2070,92 +2080,217 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       return button;
     }
 
+    function buildEditForm(protocol) {
+      const form = document.createElement('form');
+      form.className = 'training-card-edit';
+      form.hidden = editingId !== protocol.id;
+
+      const fields = document.createElement('div');
+      fields.className = 'training-protocol-fields';
+
+      const trainerField = document.createElement('label');
+      trainerField.textContent = 'Trainer';
+      const trainerSel = document.createElement('select');
+      trainerSel.required = true;
+      addOptions(trainerSel, people, 'Select trainer');
+      trainerSel.value = protocol.trainer || '';
+      trainerField.appendChild(trainerSel);
+
+      const wcField = document.createElement('label');
+      wcField.textContent = 'Work center';
+      const wcSel = document.createElement('select');
+      wcSel.required = true;
+      addOptions(wcSel, workCenters, 'Select work center');
+      wcSel.value = protocol.work_center || '';
+      wcField.appendChild(wcSel);
+
+      const startField = document.createElement('label');
+      startField.textContent = 'Start date';
+      const startDay = document.createElement('input');
+      startDay.type = 'date';
+      startDay.required = true;
+      startDay.value = protocol.start_day || '';
+      startField.appendChild(startDay);
+
+      const daysField = document.createElement('label');
+      daysField.textContent = 'Attended workdays';
+      const daysInput = document.createElement('input');
+      daysInput.type = 'number';
+      daysInput.min = String(Math.max(1, Number(protocol.attended_days) || 1));
+      daysInput.step = '1';
+      daysInput.required = true;
+      daysInput.value = String(protocol.planned_attended_days || 1);
+      daysField.appendChild(daysInput);
+
+      fields.append(trainerField, wcField, startField, daysField);
+
+      const actions = document.createElement('div');
+      actions.className = 'training-protocol-actions';
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'submit';
+      saveBtn.textContent = 'Save';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.style.color = 'var(--fg)';
+      cancelBtn.style.background = 'var(--panel)';
+      cancelBtn.style.borderColor = 'var(--border)';
+      cancelBtn.addEventListener('click', () => {
+        editingId = null;
+        renderTrainingProtocols();
+      });
+      actions.append(saveBtn, cancelBtn);
+      form.append(fields, actions);
+
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        errorEl.textContent = '';
+        if (!form.reportValidity()) return;
+        saveBtn.disabled = true;
+        try {
+          const { resp, data } = await postJSON(
+            '/api/rotations/training-blocks/' + protocol.id,
+            {
+              trainer: trainerSel.value,
+              work_center: wcSel.value,
+              start_day: startDay.value,
+              workdays: Number(daysInput.value),
+            }
+          );
+          if (!resp.ok || !data.ok) throw new Error(data.error || 'Could not update training.');
+          const idx = protocols.findIndex(item => item.id === protocol.id);
+          if (idx >= 0) protocols[idx] = data.block || Object.assign({}, protocol, {
+            trainer: trainerSel.value,
+            work_center: wcSel.value,
+            start_day: startDay.value,
+            planned_attended_days: Number(daysInput.value),
+          });
+          editingId = null;
+          renderTrainingProtocols();
+        } catch (error) {
+          errorEl.textContent = error.message || 'Could not update training.';
+          saveBtn.disabled = false;
+        }
+      });
+      return form;
+    }
+
     function renderTrainingProtocols() {
       list.replaceChildren();
       const active = protocols.filter(protocol => protocol.status !== 'ended' && protocol.status !== 'completed');
       empty.hidden = active.length > 0;
+      if (countEl) {
+        countEl.textContent = active.length ? (active.length + ' open') : '';
+      }
       active.forEach(protocol => {
         const item = document.createElement('li');
-        item.className = 'training-protocol-item';
-        const details = document.createElement('div');
-        details.className = 'training-protocol-details';
+        item.className = 'training-card';
+        item.dataset.blockId = String(protocol.id);
+
         const title = document.createElement('strong');
-        title.textContent = protocol.trainee + ' with ' + protocol.trainer;
-        const meta = document.createElement('span');
+        title.className = 'training-card-title';
+        title.textContent = protocol.trainee || '';
+
+        const meta = document.createElement('div');
+        meta.className = 'training-card-meta';
         meta.textContent = [
-          protocol.work_center || protocol.group,
-          'starts ' + protocol.start_day,
-          protocol.planned_attended_days + ' workdays',
-          statusLabel(protocol.status),
-        ].join(' · ');
-        details.append(title, meta);
-        const actions = document.createElement('div');
-        actions.className = 'training-protocol-item-actions';
-        if (protocol.status === 'active') actions.appendChild(lifecycleButton(protocol, 'pause', 'Pause'));
-        if (protocol.status === 'paused') actions.appendChild(lifecycleButton(protocol, 'resume', 'Resume'));
-        actions.appendChild(lifecycleButton(protocol, 'end', 'End'));
-        item.append(details, actions);
+          protocol.work_center || protocol.group || '',
+          protocol.trainer ? ('with ' + protocol.trainer) : '',
+        ].filter(Boolean).join(' · ');
+
+        const { attended, planned } = progressCounts(protocol);
+        const progress = document.createElement('div');
+        progress.className = 'training-progress';
+        const progressLabel = document.createElement('div');
+        progressLabel.className = 'training-progress-label';
+        const counts = document.createElement('span');
+        counts.textContent = attended + ' of ' + planned;
+        const status = document.createElement('span');
+        status.textContent = statusLabel(protocol.status);
+        progressLabel.append(counts, status);
+        const bar = document.createElement('div');
+        bar.className = 'training-progress-bar';
+        const fill = document.createElement('span');
+        const pct = planned > 0 ? Math.min(100, Math.round((attended / planned) * 100)) : 0;
+        fill.style.width = pct + '%';
+        bar.appendChild(fill);
+        progress.append(progressLabel, bar);
+
+        item.append(title, meta, progress);
+
+        if (!readonly) {
+          const actions = document.createElement('div');
+          actions.className = 'training-card-actions';
+          const editBtn = document.createElement('button');
+          editBtn.type = 'button';
+          editBtn.className = 'training-card-edit-toggle';
+          editBtn.textContent = editingId === protocol.id ? 'Close' : 'Edit';
+          editBtn.addEventListener('click', () => {
+            editingId = editingId === protocol.id ? null : protocol.id;
+            renderTrainingProtocols();
+          });
+          actions.appendChild(editBtn);
+          if (protocol.status === 'active') actions.appendChild(lifecycleButton(protocol, 'pause', 'Pause'));
+          if (protocol.status === 'paused') actions.appendChild(lifecycleButton(protocol, 'resume', 'Resume'));
+          actions.appendChild(lifecycleButton(protocol, 'complete', 'Complete'));
+          actions.appendChild(lifecycleButton(protocol, 'end', 'End'));
+          item.appendChild(actions);
+          item.appendChild(buildEditForm(protocol));
+        }
+
         list.appendChild(item);
       });
     }
 
-    function openModal() {
-      if (__viewingPosted) return;
-      opener = openBtn;
-      errorEl.textContent = '';
-      renderTrainingProtocols();
-      modal.showModal();
-      traineeSelect.focus();
+    if (!readonly && traineeSelect && trainerSelect && workCenterSelect) {
+      addOptions(traineeSelect, people, 'Select trainee');
+      addOptions(trainerSelect, people, 'Select trainer');
+      addOptions(workCenterSelect, workCenters, 'Select work center');
     }
-
-    function closeModal() {
-      if (modal.open) modal.close();
-    }
-
-    addOptions(traineeSelect, people, 'Select trainee');
-    addOptions(trainerSelect, people, 'Select trainer');
-    addOptions(workCenterSelect, workCenters, 'Select work center');
     renderTrainingProtocols();
 
-    openBtn.addEventListener('click', openModal);
-    closeBtn.addEventListener('click', closeModal);
-    modal.addEventListener('close', () => {
-      if (opener && document.contains(opener)) opener.focus();
-      opener = null;
-    });
-    form.addEventListener('submit', async event => {
-      event.preventDefault();
-      errorEl.textContent = '';
-      if (!form.reportValidity()) return;
-      submitBtn.disabled = true;
-      try {
-        const protocolDay = startInput.value;
-        const { resp, data } = await postJSON('/api/rotations/training-blocks', {
-          trainee: traineeSelect.value,
-          trainer: trainerSelect.value,
-          work_center: workCenterSelect.value,
-          start_day: startInput.value,
-          workdays: Number(workdaysInput.value),
-        });
-        if (!resp.ok || !data.ok) throw new Error(data.error || 'Could not start training.');
-        const scheduled = await window.rebuildRotationForTraining(startInput.value);
-        if (!scheduled) {
-          throw new Error('Training was saved, but the schedule could not be updated.');
+    if (!readonly && startToggle && createForm && submitBtn && startInput && workdaysInput) {
+      startToggle.addEventListener('click', () => {
+        const open = createForm.hidden;
+        createForm.hidden = !open;
+        startToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) traineeSelect.focus();
+      });
+      createForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        errorEl.textContent = '';
+        if (!createForm.reportValidity()) return;
+        submitBtn.disabled = true;
+        try {
+          const protocolDay = startInput.value;
+          const { resp, data } = await postJSON('/api/rotations/training-blocks', {
+            trainee: traineeSelect.value,
+            trainer: trainerSelect.value,
+            work_center: workCenterSelect.value,
+            start_day: startInput.value,
+            workdays: Number(workdaysInput.value),
+          });
+          if (!resp.ok || !data.ok) throw new Error(data.error || 'Could not start training.');
+          const scheduled = await window.rebuildRotationForTraining(startInput.value);
+          if (!scheduled) {
+            throw new Error('Training was saved, but the schedule could not be updated.');
+          }
+          protocols.push(data.block);
+          renderTrainingProtocols();
+          createForm.hidden = true;
+          startToggle.setAttribute('aria-expanded', 'false');
+          if (protocolDay && protocolDay !== window.SCHEDULE_DAY) {
+            window.location.href = '/staffing?day=' + encodeURIComponent(protocolDay);
+            return;
+          }
+          window.location.reload();
+        } catch (error) {
+          errorEl.textContent = error.message || 'Could not start training.';
+        } finally {
+          submitBtn.disabled = false;
         }
-        protocols.push(data.block);
-        renderTrainingProtocols();
-        closeModal();
-        if (protocolDay && protocolDay !== window.SCHEDULE_DAY) {
-          window.location.href = '/staffing?day=' + encodeURIComponent(protocolDay);
-          return;
-        }
-        window.location.reload();
-      } catch (error) {
-        errorEl.textContent = error.message || 'Could not start training.';
-      } finally {
-        submitBtn.disabled = false;
-      }
-    });
+      });
+    }
   })();
 
   // Assignments to Do modal moved to the global footer; no per-page handler here.

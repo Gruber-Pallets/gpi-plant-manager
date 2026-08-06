@@ -782,54 +782,92 @@
     overflow-y: auto; overflow-wrap: anywhere;
   }
 
-  /* ---------- Unified training protocol dialog ---------- */
-  .training-protocol-open {
-    background: var(--accent); color: #fff; border: 1px solid var(--accent);
-    border-radius: 6px; padding: 0.3rem 0.65rem; font: inherit; font-size: 0.8rem;
-    font-weight: 650; cursor: pointer;
+  /* ---------- Training sidebar (under Notes) ---------- */
+  .training-sidebar {
+    margin-top: 0.85rem;
+    padding: 0.65rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
   }
-  .training-protocol-open:hover { filter: brightness(1.08); }
-  .training-protocol-modal {
-    width: min(38rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem);
-    overflow: auto; color: var(--fg); background: var(--panel); border: 1px solid var(--border);
-    border-radius: 12px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45); padding: 1rem;
+  .training-sidebar-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem;
+    margin-bottom: 0.45rem;
   }
-  .training-protocol-modal::backdrop { background: rgba(0, 0, 0, 0.55); }
-  .training-protocol-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-  .training-protocol-head h2 { margin: 0; font-size: 1.1rem; }
-  .training-protocol-close,
-  .training-protocol-lifecycle {
-    color: var(--fg); background: var(--panel-2); border: 1px solid var(--border);
-    border-radius: 6px; padding: 0.25rem 0.55rem; font: inherit; cursor: pointer;
+  .training-sidebar-head h3 {
+    margin: 0; font-size: 0.72rem; font-weight: 700;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px;
   }
-  .training-protocol-close { font-size: 1rem; line-height: 1; }
-  .training-protocol-close:hover,
-  .training-protocol-lifecycle:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .training-sidebar-head .hint { margin: 0; padding: 0; text-align: right; }
+  .training-protocol-error { min-height: 1.2em; margin: 0 0 0.45rem; color: var(--bad); font-size: 0.82rem; }
+  .training-protocol-empty { margin: 0 0 0.35rem; color: var(--muted); font-size: 0.82rem; }
+  .training-sidebar-list { display: grid; gap: 0.45rem; list-style: none; margin: 0; padding: 0; }
+  .training-card {
+    display: grid; gap: 0.35rem;
+    padding: 0.5rem 0.55rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .training-card-title { margin: 0; font-size: 0.88rem; font-weight: 700; }
+  .training-card-meta { color: var(--muted); font-size: 0.78rem; }
+  .training-progress {
+    display: grid; gap: 0.2rem;
+  }
+  .training-progress-label {
+    display: flex; justify-content: space-between; gap: 0.5rem;
+    font-size: 0.75rem; color: var(--muted);
+  }
+  .training-progress-bar {
+    height: 0.4rem; border-radius: 999px; background: color-mix(in srgb, var(--border) 70%, var(--panel));
+    overflow: hidden;
+  }
+  .training-progress-bar > span {
+    display: block; height: 100%; width: 0;
+    background: var(--accent); border-radius: inherit;
+  }
+  .training-card-actions {
+    display: flex; flex-wrap: wrap; gap: 0.3rem;
+  }
+  .training-protocol-lifecycle,
+  .training-card-edit-toggle,
+  .training-start-toggle {
+    color: var(--fg); background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.22rem 0.5rem; font: inherit; font-size: 0.78rem; cursor: pointer;
+  }
+  .training-protocol-lifecycle:hover:not(:disabled),
+  .training-card-edit-toggle:hover:not(:disabled),
+  .training-start-toggle:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   .training-protocol-lifecycle.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
-  .training-protocol-lifecycle:disabled { opacity: 0.55; cursor: progress; }
-  .training-protocol-intro { margin: 0.65rem 0; color: var(--muted); font-size: 0.85rem; }
-  .training-protocol-error { min-height: 1.2em; margin: 0 0 0.5rem; color: var(--bad); font-size: 0.85rem; }
-  .training-protocol-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
-  .training-protocol-fields label { display: grid; gap: 0.25rem; font-size: 0.82rem; font-weight: 650; }
+  .training-protocol-lifecycle:disabled,
+  .training-card-edit-toggle:disabled { opacity: 0.55; cursor: progress; }
+  .training-start-toggle {
+    width: 100%; margin-top: 0.5rem; font-weight: 650;
+  }
+  .training-card-edit,
+  .training-sidebar-create {
+    display: grid; gap: 0.45rem;
+    margin-top: 0.2rem; padding-top: 0.4rem;
+    border-top: 1px solid var(--border);
+  }
+  .training-card-edit[hidden],
+  .training-sidebar-create[hidden] { display: none; }
+  .training-protocol-fields { display: grid; grid-template-columns: 1fr; gap: 0.45rem; }
+  .training-protocol-fields label { display: grid; gap: 0.2rem; font-size: 0.78rem; font-weight: 650; }
   .training-protocol-fields select,
   .training-protocol-fields input {
-    width: 100%; box-sizing: border-box; color: var(--fg); background: var(--panel-2);
-    border: 1px solid var(--border); border-radius: 6px; padding: 0.38rem 0.45rem; font: inherit;
+    width: 100%; box-sizing: border-box; color: var(--fg); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.35rem 0.4rem; font: inherit;
   }
-  .training-protocol-actions { margin-top: 0.8rem; }
+  .training-protocol-actions { display: flex; gap: 0.35rem; }
   .training-protocol-actions button {
     color: #fff; background: var(--accent); border: 1px solid var(--accent); border-radius: 6px;
-    padding: 0.4rem 0.8rem; font: inherit; font-weight: 650; cursor: pointer;
+    padding: 0.35rem 0.7rem; font: inherit; font-size: 0.8rem; font-weight: 650; cursor: pointer;
   }
   .training-protocol-actions button:disabled { opacity: 0.6; cursor: progress; }
-  .training-protocol-list-section { margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
-  .training-protocol-list-section h3 { margin: 0 0 0.5rem; font-size: 0.88rem; }
-  .training-protocol-empty { margin: 0; color: var(--muted); font-size: 0.85rem; }
-  .training-protocol-list { display: grid; gap: 0.45rem; list-style: none; margin: 0; padding: 0; }
-  .training-protocol-item { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; }
-  .training-protocol-details { display: grid; gap: 0.15rem; min-width: 0; }
-  .training-protocol-details span { color: var(--muted); font-size: 0.78rem; }
-  .training-protocol-item-actions { display: flex; gap: 0.35rem; flex-shrink: 0; }
+  .training-sidebar[data-readonly="1"] .training-card-actions,
+  .training-sidebar[data-readonly="1"] .training-start-toggle,
+  .training-sidebar[data-readonly="1"] .training-sidebar-create { display: none; }
 
   .coverage-issue > span { font-weight: 650; }
   .coverage-why { margin-top: 0.3rem; color: var(--muted); }
