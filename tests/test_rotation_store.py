@@ -236,6 +236,22 @@ def test_claim_early_completion_accepts_paused(monkeypatch):
     assert rotation_store.claim_early_completion(7) == "paused"
 
 
+def test_claim_early_completion_update_requires_manageable_status(monkeypatch):
+    from zira_dashboard import rotation_store
+
+    captured: list[str] = []
+
+    def fake_query(sql, params=None):
+        captured.append(sql)
+        return []
+
+    monkeypatch.setattr(rotation_store.db, "query", fake_query)
+
+    assert rotation_store.claim_early_completion(7) is None
+    update_sql = next(sql for sql in captured if "UPDATE rotation_training_blocks b" in sql)
+    assert "b.status IN ('active', 'paused')" in update_sql
+
+
 def test_legacy_training_block_hydrates_without_center_and_with_one_skill():
     from zira_dashboard import rotation_store
 

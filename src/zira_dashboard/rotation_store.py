@@ -332,7 +332,7 @@ def claim_early_completion(block_id: int) -> str | None:
         "  UPDATE rotation_training_blocks b "
         "  SET status = 'completing' "
         "  FROM prior p "
-        "  WHERE b.id = p.id "
+        "  WHERE b.id = p.id AND b.status IN ('active', 'paused') "
         "  RETURNING b.id, p.prior_status AS status"
         ") "
         "SELECT status FROM updated",
