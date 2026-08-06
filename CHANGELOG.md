@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-06
 
+### GOAT goat shows by the short name
+
+#### Fixes
+
+- **The little goat mark now shows next to a record holder even when their short name looks different from their record name.** Example: someone listed as Jose L. still gets the mark for a Jose Luis record. That makes top producers easy to spot on the schedule.
+
 ### Training days after day one can save
 
 #### Fixes

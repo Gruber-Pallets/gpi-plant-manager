@@ -33,6 +33,8 @@ def _stub(monkeypatch, *, groups, goat_by_group, overrides=None):
         return slot
 
     monkeypatch.setattr(awards, "apply_overrides_single", _fake_apply)
+    # Default: no roster aliasing. Individual tests override when needed.
+    monkeypatch.setattr(awards, "_people_name_rows", lambda: [])
     # Bust the in-process TTL cache between tests.
     awards._GOAT_HOLDERS_CACHE.clear()
 
@@ -124,6 +126,7 @@ def test_broken_group_does_not_poison_map(monkeypatch):
     monkeypatch.setattr(
         awards, "apply_overrides_single", lambda slot, **kw: slot
     )
+    monkeypatch.setattr(awards, "_people_name_rows", lambda: [])
     out = awards.goat_holders_map()
     assert out == {"Alice": ["Repairs"]}
 
@@ -146,6 +149,7 @@ def test_ttl_cache_returns_same_object(monkeypatch):
     monkeypatch.setattr(
         awards, "apply_overrides_single", lambda slot, **kw: slot
     )
+    monkeypatch.setattr(awards, "_people_name_rows", lambda: [])
 
     awards.goat_holders_map()
     awards.goat_holders_map()
@@ -170,6 +174,7 @@ def test_ttl_cache_recomputes_after_expiry(monkeypatch):
     monkeypatch.setattr(
         awards, "apply_overrides_single", lambda slot, **kw: slot
     )
+    monkeypatch.setattr(awards, "_people_name_rows", lambda: [])
 
     # First call populates cache.
     awards.goat_holders_map()
@@ -178,3 +183,56 @@ def test_ttl_cache_recomputes_after_expiry(monkeypatch):
 
     awards.goat_holders_map()
     assert calls["n"] == 2
+
+
+def test_badge_name_aliases_maps_production_name_to_roster():
+    """Historical production labels must resolve to today's roster label.
+
+    GOAT rows can still say "Jose Luis" while staffing shows "Jose L.".
+    Badges look up by the name rendered on the page, so both must key the map.
+    """
+    from zira_dashboard import awards
+
+    people = [
+        {"name": "Jose L.", "full_name": "Jose Luis Hernandez Alvarez"},
+        {"name": "Jose O.", "full_name": "Jose Ochoa"},
+    ]
+    assert awards.badge_name_aliases("Jose Luis", people) == [
+        "Jose Luis",
+        "Jose L.",
+        "Jose Luis Hernandez Alvarez",
+    ]
+
+
+def test_badge_name_aliases_keeps_ambiguous_prefix_unaliased():
+    """If more than one person matches, do not guess — keep the award name only."""
+    from zira_dashboard import awards
+
+    people = [
+        {"name": "Jose L.", "full_name": "Jose Luis Hernandez Alvarez"},
+        {"name": "Jose C.", "full_name": "Jose Cabezas"},
+    ]
+    assert awards.badge_name_aliases("Jose", people) == ["Jose"]
+
+
+def test_goat_holders_map_keys_roster_alias(monkeypatch):
+    """Staffing pages look up 'Jose L.'; map must include that key."""
+    from zira_dashboard import awards
+
+    _stub(
+        monkeypatch,
+        groups=["Dismantlers"],
+        goat_by_group={
+            "Dismantlers": {"name": "Jose Luis", "units": 775},
+        },
+    )
+    monkeypatch.setattr(
+        awards,
+        "_people_name_rows",
+        lambda: [
+            {"name": "Jose L.", "full_name": "Jose Luis Hernandez Alvarez"},
+        ],
+    )
+    out = awards.goat_holders_map()
+    assert out["Jose L."] == ["Dismantlers"]
+    assert out["Jose Luis"] == ["Dismantlers"]

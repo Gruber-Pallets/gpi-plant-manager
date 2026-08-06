@@ -481,6 +481,60 @@ _GOAT_HOLDERS_TTL_SECONDS = 300  # 5 minutes
 _GOAT_HOLDERS_CACHE: dict = {}   # {"value": (map, expires_at)}
 
 
+def _people_name_rows() -> list[dict]:
+    """Active + inactive roster rows with a stored full_name.
+
+    Inactive people stay eligible so a historical GOAT still resolves to
+    the roster label used on staffing pages before they left.
+    """
+    from . import db
+
+    return list(
+        db.query(
+            "SELECT name, full_name FROM people "
+            "WHERE full_name IS NOT NULL AND full_name <> ''"
+        )
+    )
+
+
+def badge_name_aliases(award_name: str, people: list[dict]) -> list[str]:
+    """Names under which a GOAT badge should appear for ``award_name``.
+
+    Production attribution historically stored longer labels ("Jose Luis")
+    while staffing renders the compact roster label ("Jose L."). Badge
+    lookups are exact string matches against the rendered name, so the
+    holders map must include every unambiguous display variant.
+
+    Always includes ``award_name``. When exactly one person matches — by
+    roster name equality, full-name equality, or full-name prefix — also
+    includes that person's roster name and full_name. Ambiguous matches
+    leave the award name alone so we never pin a badge on the wrong person.
+    """
+    raw = (award_name or "").strip()
+    if not raw:
+        return []
+
+    key = raw.casefold()
+    matches: list[dict] = []
+    for person in people:
+        roster = (person.get("name") or "").strip()
+        full = (person.get("full_name") or "").strip()
+        if not roster:
+            continue
+        roster_key = roster.casefold()
+        full_key = full.casefold()
+        if key == roster_key or (full_key and (key == full_key or full_key.startswith(key + " "))):
+            matches.append({"name": roster, "full_name": full})
+
+    aliases = [raw]
+    if len(matches) == 1:
+        person = matches[0]
+        for candidate in (person["name"], person["full_name"]):
+            if candidate and candidate not in aliases:
+                aliases.append(candidate)
+    return aliases
+
+
 def goat_holders_map() -> dict[str, list[str]]:
     """Return {operator_name: [group_name, ...]} for every current GOAT.
 
@@ -488,6 +542,10 @@ def goat_holders_map() -> dict[str, list[str]]:
     (so manual reassignments / deletes flow through), and inverts.
     Groups where the GOAT slot is empty or override-deleted contribute
     nothing.
+
+    Each GOAT is keyed under the award name plus any unambiguous roster /
+    full-name aliases (see ``badge_name_aliases``), so staffing pages that
+    render "Jose L." still find a GOAT stored as "Jose Luis".
 
     Cached in-process for 5 minutes. The data updates structurally:
     goat() reads production_daily, which the nightly job + 45 s live
@@ -504,6 +562,11 @@ def goat_holders_map() -> dict[str, list[str]]:
     if cached is not None and now < cached[1]:
         return cached[0]
 
+    try:
+        people = _people_name_rows()
+    except Exception:
+        people = []
+
     out: dict[str, list[str]] = {}
     for g in work_centers_store.registered_groups():
         try:
@@ -516,7 +579,10 @@ def goat_holders_map() -> dict[str, list[str]]:
         name = final.get("name")
         if not name:
             continue
-        out.setdefault(name, []).append(g)
+        for alias in badge_name_aliases(str(name), people):
+            groups = out.setdefault(alias, [])
+            if g not in groups:
+                groups.append(g)
 
     _GOAT_HOLDERS_CACHE["value"] = (out, now + _GOAT_HOLDERS_TTL_SECONDS)
     return out
