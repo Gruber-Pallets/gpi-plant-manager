@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-06
 
+### Training on the schedule sidebar
+
+#### Features
+
+- **Training plans show on the right side of the schedule.** You can see how many days are done, change the plan, finish early to make the person ready for normal work, or stop the plan without finishing.
+
 ### GOAT goat shows by the short name
 
 #### Fixes

@@ -85,11 +85,14 @@ suggestions. Day-to-day manager workflow:
    context like primary operator, training pair, or least-recent center. Green
    names do not get a redundant badge. Manual assignments and saved default
    people are locked and survive rebuilds.
-5. **Start a training protocol.** On Staffing, click **+ Training**, then
-   choose the trainee, a level 3 trainer, the exact work center, start date,
-   and number of attended days. The scheduler places the pair at that work
-   center automatically on day one. On later attended days, add the trainer
-   manually beside the trainee when continued pairing is needed.
+5. **Manage training protocols.** On Staffing, use the **Training** panel under
+   day Notes on the right rail. Click **+ Start training** to choose the
+   trainee, a level 3 trainer, the exact work center, start date, and number of
+   attended days. Active and paused protocols show progress (attended of
+   planned) with options to edit, pause, complete early, or end without
+   promoting. The scheduler places the pair at that work center automatically
+   on day one. On later attended days, add the trainer manually beside the
+   trainee when continued pairing is needed.
 6. **Confirm completion.** A full-day absence does not consume a training day,
    so the protocol extends automatically. After the final attended day, the
    trainee is promoted from level 0 to level 1 in every protocol skill — verify
