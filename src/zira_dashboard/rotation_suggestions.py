@@ -83,6 +83,10 @@ class RecycledSuggestion:
     placement_issues: tuple[schedule_solver.PlacementIssue, ...] = ()
     default_assignments: dict[str, str] = field(default_factory=dict)
     temporary_training_extras: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Exact/legacy protocol trainees reserved into a normal operator slot.
+    # Rebuild validation uses this so later-day level-0 reservations can save
+    # without a day-one green partner beside them.
+    training_trainees: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def assigned_people(self) -> set[str]:
@@ -1109,6 +1113,7 @@ def suggest_recycled_assignments(
     exact_block_people: set[str] = set()
     block_centers: set[tuple[str, str]] = set()
     temporary_training_extras: dict[str, tuple[str, ...]] = {}
+    training_trainees: dict[str, tuple[str, ...]] = {}
     for effect in block_effects or ():
         warnings.extend(str(w) for w in (getattr(effect, "warnings", None) or ()))
 
@@ -1194,6 +1199,8 @@ def suggest_recycled_assignments(
                     _place(center, name, GENERATED_SOURCE, "training block", "training_block")
                     protected_block_people.add(name)
                     block_centers.add((group, center))
+                if locked_names:
+                    training_trainees[center] = tuple(dict.fromkeys(locked_names))
                 for name in extra_names:
                     if name not in assigned:
                         _place(center, name, GENERATED_SOURCE, "training pair", "training_block")
@@ -1232,6 +1239,9 @@ def suggest_recycled_assignments(
                 protected_block_people.add(name)
                 block_centers.add((group, center))
                 block_center_by_group[group] = center
+                prior = training_trainees.get(center, ())
+                if name not in prior:
+                    training_trainees[center] = (*prior, name)
         for group, names in (getattr(effect, "temporary_extra_people", None) or {}).items():
             centers = [center for center in groups.get(group, ()) if center in allowed_centers]
             if not centers:
@@ -1441,6 +1451,7 @@ def suggest_recycled_assignments(
             placed_people=placed,
             placement_issues=combined,
             temporary_training_extras=temporary_training_extras,
+            training_trainees=training_trainees,
         )
 
     candidate_edges: list[schedule_solver.CandidateEdge] = []
@@ -1840,4 +1851,5 @@ def suggest_recycled_assignments(
         placement_issues=tuple(placement_issues),
         default_assignments=default_assignments,
         temporary_training_extras=temporary_training_extras,
+        training_trainees=training_trainees,
     )

@@ -754,6 +754,27 @@ def test_exact_center_protocol_allows_trainer_as_one_temporary_extra_slot():
 
     assert out.assignments["Repair 2"] == ["Existing", "Trainee", "Trainer"]
     assert out.temporary_training_extras == {"Repair 2": ("Trainer",)}
+    assert out.training_trainees == {"Repair 2": ("Trainee",)}
+
+
+def test_exact_center_later_day_exposes_trainee_without_trainer_extra():
+    effect = _BlockEffect(locked_work_centers={"Master Recycler": ["Adrian"]})
+
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 15),
+        mode="normal",
+        roster=[staffing.Person(name="Adrian", skills={"Master Recycler": 0})],
+        group_locations={"Master Recycler": ("Master Recycler",)},
+        group_required_skills={"Master Recycler": ("Master Recycler",)},
+        center_minimums={"Master Recycler": 1},
+        center_capacities={"Master Recycler": 1},
+        runnable_centers={"Master Recycler"},
+        block_effects=[effect],
+    )
+
+    assert out.assignments["Master Recycler"] == ["Adrian"]
+    assert out.training_trainees == {"Master Recycler": ("Adrian",)}
+    assert out.temporary_training_extras == {}
 
 
 def test_exact_center_protocol_stays_unplaced_when_the_trainee_slot_is_full():

@@ -3944,6 +3944,40 @@ def test_rebuild_validation_allows_only_the_generated_training_extra():
     assert [issue for issue in unapproved if issue.code == "center_capacity_exceeded"]
 
 
+def test_rebuild_validation_allows_later_day_training_trainee_without_green():
+    """Later protocol days reserve only the trainee; Auto must still accept them."""
+    from zira_dashboard.routes import rotations
+
+    common = {
+        "available_people": ("Adrian",),
+        "protected_assignments": {},
+        "enabled_centers": ("Master Recycler",),
+        "center_minimums": {"Master Recycler": 1},
+        "center_capacities": {"Master Recycler": 1},
+        "required_skills": {"Master Recycler": ("Master Recycler",)},
+        "roster": [staffing.Person("Adrian", skills={"Master Recycler": 0})],
+        "exact_defaults": {},
+        "group_defaults": {},
+        "user_group_centers": {},
+        "proposed_assignments": {"Master Recycler": ["Adrian"]},
+        "proposed_sources": {"Master Recycler": {"Adrian": "generated"}},
+        "temporary_training_extras": {},
+    }
+
+    rejected = rotations._validate_complete_rebuild(**common)
+    allowed = rotations._validate_complete_rebuild(
+        **common,
+        training_trainees={"Master Recycler": ("Adrian",)},
+    )
+
+    assert [
+        issue for issue in rejected if issue.code == "generated_assignment_unqualified"
+    ]
+    assert not [
+        issue for issue in allowed if issue.code == "generated_assignment_unqualified"
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # Staffing controls + reason data (static template / JS contract)
 # --------------------------------------------------------------------------- #

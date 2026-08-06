@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-06
+
+### Training days after day one can save
+
+#### Fixes
+
+- **Auto can finish a day when someone is still in training.** After the first training day, the learner can stay in their work area alone, and Auto no longer stops the whole schedule because they are not fully trained yet.
+
 ## 2026-08-04
 
 ### Employee list restored

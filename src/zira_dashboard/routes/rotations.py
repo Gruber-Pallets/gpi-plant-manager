@@ -91,6 +91,7 @@ def _validate_complete_rebuild(
     proposed_assignments: Mapping[str, Sequence[str]],
     proposed_sources: Mapping[str, Mapping[str, str]],
     temporary_training_extras: Mapping[str, Sequence[str]],
+    training_trainees: Mapping[str, Sequence[str]] | None = None,
 ) -> tuple[schedule_solver.PlacementIssue, ...]:
     """Independently verify a complete proposal immediately before saving."""
     enabled = frozenset(enabled_centers)
@@ -133,6 +134,8 @@ def _validate_complete_rebuild(
         skills = tuple(required_skills.get(center, ()))
         return person is not None and all(person.level(skill) >= 1 for skill in skills)
 
+    training_trainees_by_center = training_trainees or {}
+
     for center in enabled:
         names = tuple(str(name) for name in proposed_assignments.get(center, ()))
         capacity = center_capacities.get(center)
@@ -152,14 +155,23 @@ def _validate_complete_rebuild(
                 )
             )
         qualified_names = {name for name in names if _qualified(name, center)}
-        # A level-zero training-block person is safe only with a fully trained
-        # co-worker at the same center.
+        # Protocol trainees are eligible at level 0 for their reserved center on
+        # every attended day. Day one usually also has a green partner; later
+        # days reserve only the trainee and must still save.
+        protocol_trainees = {
+            str(name)
+            for name in training_trainees_by_center.get(center, ())
+            if proposed_sources.get(center, {}).get(str(name)) == "generated"
+            and str(name) in names
+        }
+        # A level-zero person outside an explicit protocol reservation is safe
+        # only with a fully trained co-worker at the same center.
         has_green = any(
             (person := by_name.get(name)) is not None
             and all(person.level(skill) >= 3 for skill in required_skills.get(center, ()))
             for name in names
         )
-        safe_names = qualified_names | ({*names} if has_green else set())
+        safe_names = qualified_names | protocol_trainees | ({*names} if has_green else set())
         if len(safe_names) < int(center_minimums.get(center, 0)):
             issues.append(
                 schedule_solver.PlacementIssue(
@@ -986,6 +998,7 @@ async def rebuild_rotation(request: Request):
             proposed_assignments=new_assignments,
             proposed_sources=new_sources,
             temporary_training_extras=suggestion.temporary_training_extras,
+            training_trainees=suggestion.training_trainees,
         )
         hard_issues = tuple(issue for issue in validation_issues if issue.code in _HARD_ISSUE_CODES)
         if hard_issues:
