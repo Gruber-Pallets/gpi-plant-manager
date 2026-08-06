@@ -2011,7 +2011,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
     const countEl = document.getElementById('training-sidebar-count');
     const errorEl = document.getElementById('training-sidebar-error');
     const startToggle = document.getElementById('training-sidebar-start-toggle');
-    const createForm = document.getElementById('training-sidebar-create');
+    const createPanel = document.getElementById('training-sidebar-create');
     const traineeSelect = document.getElementById('training-sidebar-trainee');
     const trainerSelect = document.getElementById('training-sidebar-trainer');
     const workCenterSelect = document.getElementById('training-sidebar-work-center');
@@ -2029,6 +2029,17 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       if (!select) return;
       select.replaceChildren(new Option(prompt, ''));
       values.forEach(value => select.add(new Option(value, value)));
+    }
+
+    // Nested <form> inside #staffing-form is invalid HTML5; validate fields directly.
+    function reportFieldsValidity(fields) {
+      for (const field of fields) {
+        if (field && !field.checkValidity()) {
+          field.reportValidity();
+          return false;
+        }
+      }
+      return true;
     }
 
     function statusLabel(status) {
@@ -2080,10 +2091,10 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       return button;
     }
 
-    function buildEditForm(protocol) {
-      const form = document.createElement('form');
-      form.className = 'training-card-edit';
-      form.hidden = editingId !== protocol.id;
+    function buildEditPanel(protocol) {
+      const panelEl = document.createElement('div');
+      panelEl.className = 'training-card-edit';
+      panelEl.hidden = editingId !== protocol.id;
 
       const fields = document.createElement('div');
       fields.className = 'training-protocol-fields';
@@ -2127,7 +2138,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       const actions = document.createElement('div');
       actions.className = 'training-protocol-actions';
       const saveBtn = document.createElement('button');
-      saveBtn.type = 'submit';
+      saveBtn.type = 'button';
       saveBtn.textContent = 'Save';
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
@@ -2140,12 +2151,11 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
         renderTrainingProtocols();
       });
       actions.append(saveBtn, cancelBtn);
-      form.append(fields, actions);
+      panelEl.append(fields, actions);
 
-      form.addEventListener('submit', async event => {
-        event.preventDefault();
+      saveBtn.addEventListener('click', async () => {
         errorEl.textContent = '';
-        if (!form.reportValidity()) return;
+        if (!reportFieldsValidity([trainerSel, wcSel, startDay, daysInput])) return;
         saveBtn.disabled = true;
         try {
           const { resp, data } = await postJSON(
@@ -2172,7 +2182,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
           saveBtn.disabled = false;
         }
       });
-      return form;
+      return panelEl;
     }
 
     function renderTrainingProtocols() {
@@ -2235,7 +2245,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
           actions.appendChild(lifecycleButton(protocol, 'complete', 'Complete'));
           actions.appendChild(lifecycleButton(protocol, 'end', 'End'));
           item.appendChild(actions);
-          item.appendChild(buildEditForm(protocol));
+          item.appendChild(buildEditPanel(protocol));
         }
 
         list.appendChild(item);
@@ -2249,17 +2259,18 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
     }
     renderTrainingProtocols();
 
-    if (!readonly && startToggle && createForm && submitBtn && startInput && workdaysInput) {
+    if (!readonly && startToggle && createPanel && submitBtn && startInput && workdaysInput) {
       startToggle.addEventListener('click', () => {
-        const open = createForm.hidden;
-        createForm.hidden = !open;
+        const open = createPanel.hidden;
+        createPanel.hidden = !open;
         startToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
         if (open) traineeSelect.focus();
       });
-      createForm.addEventListener('submit', async event => {
-        event.preventDefault();
+      submitBtn.addEventListener('click', async () => {
         errorEl.textContent = '';
-        if (!createForm.reportValidity()) return;
+        if (!reportFieldsValidity([
+          traineeSelect, trainerSelect, workCenterSelect, startInput, workdaysInput,
+        ])) return;
         submitBtn.disabled = true;
         try {
           const protocolDay = startInput.value;
@@ -2277,7 +2288,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
           }
           protocols.push(data.block);
           renderTrainingProtocols();
-          createForm.hidden = true;
+          createPanel.hidden = true;
           startToggle.setAttribute('aria-expanded', 'false');
           if (protocolDay && protocolDay !== window.SCHEDULE_DAY) {
             window.location.href = '/staffing?day=' + encodeURIComponent(protocolDay);

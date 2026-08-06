@@ -378,7 +378,7 @@
       <ul id="training-sidebar-list" class="training-sidebar-list"></ul>
       {% if not viewing_posted %}
       <button type="button" id="training-sidebar-start-toggle" class="training-start-toggle">+ Start training</button>
-      <form id="training-sidebar-create" class="training-sidebar-create" hidden>
+      <div id="training-sidebar-create" class="training-sidebar-create" hidden>
         <div class="training-protocol-fields">
           <label>Trainee
             <select id="training-sidebar-trainee" required></select>
@@ -397,9 +397,9 @@
           </label>
         </div>
         <div class="training-protocol-actions">
-          <button type="submit" id="training-sidebar-submit">Start training</button>
+          <button type="button" id="training-sidebar-submit">Start training</button>
         </div>
-      </form>
+      </div>
       {% endif %}
     </section>
     {% if auto_scheduler_available and (not is_optional_workday or saturday_recruiting_finished) %}

@@ -4032,11 +4032,24 @@ def test_staffing_training_lives_in_sidebar_not_modal():
 
     assert 'id="training-sidebar"' in html
     assert "day-notes" in html  # panel follows notes in markup order
+    # Markup order: Notes → Training sidebar → Schedule Goal (rotation-controls)
+    notes_at = html.index('class="day-notes"')
+    sidebar_at = html.index('id="training-sidebar"')
+    rotation_at = html.index('class="rotation-controls"')
+    assert notes_at < sidebar_at < rotation_at
+    # Create UI must not nest a <form> inside #staffing-form (HTML5 early-closes outer form)
+    create_marker = 'id="training-sidebar-create"'
+    assert create_marker in html
+    create_at = html.index(create_marker)
+    create_tag_start = html.rfind("<", 0, create_at)
+    assert html[create_tag_start : create_at].startswith("<div")
+    assert "<form id=\"training-sidebar-create\"" not in html
     assert 'id="training-protocol-modal"' not in html
     assert 'id="training-protocol-open"' not in html
     assert "/api/rotations/training-blocks/" in js  # update/complete paths
     assert "complete" in js
     assert "attended_days" in js
+    assert "createElement('form')" not in js  # edit expand must also avoid nested forms
     assert ".training-progress" in css
 
 
