@@ -2270,6 +2270,24 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
     }
     renderTrainingProtocols();
 
+    // Create/edit inputs live inside #staffing-form; Enter would submit Publish
+    // (the sole type="submit"). Route Enter to the visible Start/Save action instead.
+    panel.addEventListener('keydown', event => {
+      if (event.key !== 'Enter') return;
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+      event.preventDefault();
+      const editPanel = target.closest('.training-card-edit');
+      if (editPanel && !editPanel.hidden) {
+        const saveBtn = editPanel.querySelector('.training-protocol-actions button');
+        if (saveBtn) saveBtn.click();
+        return;
+      }
+      if (createPanel && !createPanel.hidden && createPanel.contains(target) && submitBtn) {
+        submitBtn.click();
+      }
+    });
+
     if (!readonly && startToggle && createPanel && submitBtn && startInput && workdaysInput) {
       startToggle.addEventListener('click', () => {
         const open = createPanel.hidden;

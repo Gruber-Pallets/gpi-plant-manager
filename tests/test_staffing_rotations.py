@@ -4084,6 +4084,23 @@ def test_staffing_training_fields_omit_html_required_inside_staffing_form():
     assert ".required = true" not in js.split("function buildEditPanel")[1].split("function renderTrainingProtocols")[0]
 
 
+def test_staffing_training_sidebar_enter_routes_to_start_or_save_not_publish():
+    """Create/edit training controls live inside #staffing-form.
+
+    Enter in a date/number field would submit Publish (the sole ``type="submit"``).
+    ``initTrainingProtocols`` must intercept Enter on sidebar inputs and click the
+    visible Start or Save button instead.
+    """
+    js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
+    training_init = js.split("(function initTrainingProtocols() {", 1)[1].split("})();", 1)[0]
+
+    assert "panel.addEventListener('keydown'" in training_init
+    assert "event.key !== 'Enter'" in training_init
+    assert "event.preventDefault()" in training_init
+    assert "submitBtn.click()" in training_init
+    assert "saveBtn.click()" in training_init
+
+
 def test_staffing_exposes_unified_training_setup_and_removes_row_toggles():
     html = (ROOT / "src/zira_dashboard/templates/staffing.html").read_text()
     js = (ROOT / "src/zira_dashboard/static/staffing.js").read_text()
