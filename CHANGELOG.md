@@ -17,6 +17,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 #### Fixes
 
 - **The live board now shows a worker only at the station where they are working now.** When someone moves to another station, their old station no longer keeps their name for the rest of the day.
+- **A short job at another station now gets only a short goal there.** When a worker goes back to their normal station, its goal picks up again for the rest of the day.
 
 ## 2026-08-06
 

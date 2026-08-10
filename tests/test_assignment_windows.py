@@ -65,6 +65,22 @@ def test_closed_attribution_keeps_its_end():
     assert segs[0].end_utc == t(16, 30)
 
 
+def test_closed_attribution_temporarily_overrides_then_resumes_schedule():
+    segs = _resolve(
+        assignments={"Dismantler 2": ["Jesus G."]},
+        attributions=[{
+            "wc_name": "Repair 2", "person_name": "Jesus G.",
+            "start_utc": t(12, 4), "end_utc": t(12, 23),
+        }],
+    )
+
+    assert [(s.wc_name, s.start_utc, s.end_utc) for s in segs] == [
+        ("Dismantler 2", SHIFT_START, t(12, 4)),
+        ("Repair 2", t(12, 4), t(12, 23)),
+        ("Dismantler 2", t(12, 23), CAP),
+    ]
+
+
 def test_reassignment_closes_prior_open_segment_at_next_start():
     attrs = [
         {"wc_name": "Dismantler 4", "person_name": "Ana", "start_utc": t(13), "end_utc": None},

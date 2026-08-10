@@ -85,6 +85,45 @@ def resolve_segments(
     out: list[WorkSegment] = []
     for person, items in raw.items():
         items.sort(key=lambda x: x[1])
+
+        # A scheduled WC is this person's baseline for the whole shift. A
+        # closed manual attribution is a temporary detour from that baseline,
+        # not a permanent replacement for it. Preserve the schedule on both
+        # sides of the detour so someone who briefly helps at Repair and then
+        # returns to their scheduled Dismantler station accrues the correct
+        # goal at each WC. (Multiple scheduled WCs for one person are invalid
+        # schedule input; retain the established chronological behavior below.)
+        scheduled = [item for item in items if item[3] == "schedule"]
+        attributed = [item for item in items if item[3] == "attribution"]
+        if len(scheduled) == 1 and attributed:
+            schedule_wc = scheduled[0][0]
+            resolved_attributions: list[WorkSegment] = []
+            for i, (wc, start, end, source) in enumerate(attributed):
+                eff_start = max(start, shift_start_utc)
+                eff_end = end if end is not None else cap_utc
+                if i + 1 < len(attributed):
+                    eff_end = min(eff_end, attributed[i + 1][1])
+                eff_end = min(eff_end, cap_utc)
+                if eff_end > eff_start:
+                    resolved_attributions.append(
+                        WorkSegment(wc, person, eff_start, eff_end, source)
+                    )
+
+            schedule_cursor = shift_start_utc
+            for attribution in resolved_attributions:
+                if schedule_cursor < attribution.start_utc:
+                    out.append(WorkSegment(
+                        schedule_wc, person, schedule_cursor,
+                        attribution.start_utc, "schedule",
+                    ))
+                out.append(attribution)
+                schedule_cursor = max(schedule_cursor, attribution.end_utc)
+            if schedule_cursor < cap_utc:
+                out.append(WorkSegment(
+                    schedule_wc, person, schedule_cursor, cap_utc, "schedule"
+                ))
+            continue
+
         for i, (wc, start, end, source) in enumerate(items):
             eff_start = max(start, shift_start_utc)
             eff_end = end if end is not None else cap_utc
