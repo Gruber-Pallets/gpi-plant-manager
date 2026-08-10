@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-10
+
+### Live work-center labels
+
+#### Fixes
+
+- **The live board now shows a worker only at the station where they are working now.** When someone moves to another station, their old station no longer keeps their name for the rest of the day.
+
 ## 2026-08-06
 
 ### Training on the schedule sidebar

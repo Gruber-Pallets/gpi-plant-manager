@@ -178,6 +178,7 @@ def _department_day_data(
     window_end_local = min(now_local, shift_end_local) if is_today_d else shift_end_local
     window_start_utc = shift_start_local.astimezone(UTC)
     window_end_utc = window_end_local.astimezone(UTC)
+    shift_end_utc = shift_end_local.astimezone(UTC)
 
     # Merge timeclock attendance + open-ended attributions + schedule into closed
     # work segments. The TIMECLOCK is the source of truth for where each operator
@@ -198,10 +199,19 @@ def _department_day_data(
         time_off_key=staffing.TIME_OFF_KEY,
         excluded_people=_absent_today,
     )
-    who_by_wc = assignment_windows.who_by_wc(segments)
+    # Keep every resolved segment for station activation and pace math, but on
+    # today's live board show a person only at the WC whose segment remains
+    # open through now. Otherwise a transfer (Repair 2 -> Dismantler 2) leaves
+    # the operator visibly assigned to both cards for the rest of the day.
+    historical_who_by_wc = assignment_windows.who_by_wc(segments)
+    who_by_wc = assignment_windows.dashboard_who_by_wc(
+        segments,
+        cap_utc=window_end_utc,
+        is_live=is_today_d and now < shift_end_utc,
+    )
 
     ACTIVE_UNITS_THRESHOLD = 5
-    active_wc_names: set[str] = set(who_by_wc.keys())
+    active_wc_names: set[str] = set(historical_who_by_wc.keys())
     for r in results:
         if r.units > ACTIVE_UNITS_THRESHOLD:
             active_wc_names.add(r.station.name)
@@ -939,5 +949,4 @@ def tv_new_dept(request: Request, theme: str | None = Query(default=None)):
         tv_mode=True,
         tv_theme=tv_theme,
     )
-
 

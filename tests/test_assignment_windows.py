@@ -122,3 +122,27 @@ def test_who_by_wc_dedupes_and_orders():
         aw.WorkSegment("Dismantler 4", "Ana", t(15), CAP, "attribution"),
     ]
     assert aw.who_by_wc(segs) == {"Dismantler 4": "Eulogio + Ana"}
+
+
+def test_current_who_by_wc_hides_worker_from_station_left_earlier():
+    """The live board shows only a worker's current station, not their history."""
+    segs = [
+        aw.WorkSegment("Repair 2", "Jesus G.", SHIFT_START, t(12, 5), "punch"),
+        aw.WorkSegment("Dismantler 2", "Jesus G.", t(12, 5), CAP, "punch"),
+    ]
+
+    assert aw.current_who_by_wc(segs, cap_utc=CAP) == {
+        "Dismantler 2": "Jesus G.",
+    }
+
+
+def test_dashboard_who_by_wc_uses_history_after_the_live_shift():
+    segs = [
+        aw.WorkSegment("Repair 2", "Jesus G.", SHIFT_START, t(12, 5), "punch"),
+        aw.WorkSegment("Dismantler 2", "Jesus G.", t(12, 5), CAP, "punch"),
+    ]
+
+    assert aw.dashboard_who_by_wc(segs, cap_utc=CAP, is_live=False) == {
+        "Repair 2": "Jesus G.",
+        "Dismantler 2": "Jesus G.",
+    }

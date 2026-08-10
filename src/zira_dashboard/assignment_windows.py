@@ -132,3 +132,25 @@ def who_by_wc(segments: list[WorkSegment]) -> dict[str, str]:
         if s.person_name not in names:
             names.append(s.person_name)
     return {wc: " + ".join(ns) for wc, ns in order.items()}
+
+
+def current_who_by_wc(
+    segments: list[WorkSegment], *, cap_utc: datetime
+) -> dict[str, str]:
+    """Live operator labels for work segments still open at ``cap_utc``.
+
+    ``resolve_segments`` closes an otherwise-open current segment at ``cap_utc``
+    for pacing math. Earlier transfer segments retain their real end time, so
+    selecting only the cap-ending segments keeps a live board from showing a
+    person at both the station they left and the station where they now work.
+    """
+    return who_by_wc([s for s in segments if s.end_utc == cap_utc])
+
+
+def dashboard_who_by_wc(
+    segments: list[WorkSegment], *, cap_utc: datetime, is_live: bool
+) -> dict[str, str]:
+    """Operator labels appropriate for a live or completed-day dashboard."""
+    if is_live:
+        return current_who_by_wc(segments, cap_utc=cap_utc)
+    return who_by_wc(segments)
