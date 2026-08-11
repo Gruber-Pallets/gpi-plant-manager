@@ -474,8 +474,7 @@ def set_attendance_wc(attendance_id: int, wc_name: str | None) -> bool:
         dept_id = _department_id_for_wc(clean_wc_name)
         if dept_id:
             payload[dept_field] = dept_id
-    execute("hr.attendance", "write", [attendance_id], payload)
-    return True
+    return bool(execute("hr.attendance", "write", [attendance_id], payload))
 
 
 def clear_attendance_wc(attendance_id: int) -> None:
@@ -529,9 +528,10 @@ def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
         "overtime_status": "approved",
     }
     wc_field = _kiosk_wc_field()
-    odoo_wc_id = _odoo_work_center_id_for_wc(wc_name)
-    if wc_field and odoo_wc_id:
-        payload[wc_field] = odoo_wc_id
+    if wc_field:
+        odoo_wc_id = _odoo_work_center_id_for_wc(wc_name)
+        if odoo_wc_id:
+            payload[wc_field] = odoo_wc_id
     dept_field = _kiosk_department_field()
     if dept_field:
         dept_id = _department_id_for_wc(wc_name)

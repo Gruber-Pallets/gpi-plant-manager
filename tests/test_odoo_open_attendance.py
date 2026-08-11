@@ -95,6 +95,21 @@ def test_set_attendance_wc_writes_mapped_many2one_id(monkeypatch):
         "hr.attendance", "write", [88], {"x_studio_work_center": 41})
 
 
+def test_set_attendance_wc_returns_false_when_odoo_rejects_write(monkeypatch):
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.delenv("ODOO_KIOSK_DEPARTMENT_FIELD", raising=False)
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.odoo_work_center_id_for",
+        lambda name: 41 if name == "Repair 1" else None,
+    )
+    fake = MagicMock(return_value=False)
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    assert odoo_client.set_attendance_wc(88, "Repair 1") is False
+    fake.assert_called_once_with(
+        "hr.attendance", "write", [88], {"x_studio_work_center": 41})
+
+
 def test_set_attendance_wc_returns_false_without_mapping(monkeypatch):
     monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
     monkeypatch.setattr(
@@ -137,6 +152,25 @@ def test_clock_in_marks_kiosk_attendance_approved(monkeypatch):
             "overtime_status": "approved",
         },
     )
+
+
+def test_clock_in_skips_wc_mapping_when_field_is_not_configured(monkeypatch):
+    monkeypatch.delenv("ODOO_KIOSK_WC_FIELD", raising=False)
+    monkeypatch.delenv("ODOO_KIOSK_DEPARTMENT_FIELD", raising=False)
+
+    def unexpected_mapping_lookup(_wc_name):
+        raise AssertionError("WC mapping lookup should be skipped")
+
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.odoo_work_center_id_for",
+        unexpected_mapping_lookup,
+    )
+    fake = MagicMock(return_value=123)
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    assert odoo_client.clock_in(
+        5, "Repair 1", datetime(2026, 6, 16, 16, 30, tzinfo=timezone.utc)
+    ) == 123
 
 
 def test_clock_in_writes_mapped_many2one_id(monkeypatch):

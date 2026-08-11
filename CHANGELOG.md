@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Time clock work-area save check
+
+#### Fixes
+
+- **The time clock now keeps a missing work-area alert open if Odoo cannot save the work area.** This gives a manager another chance to fix it instead of hiding the problem.
+
 ### Kiosk names stay visible
 
 #### Fixes

@@ -1,6 +1,7 @@
 """Missing-WC routes: GET shape, assign (mocked Odoo) + dismiss record suppression."""
 
 import os
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,6 +46,10 @@ def test_assign_writes_wc_and_records_resolved(monkeypatch):
 
 def test_assign_rejects_work_center_without_active_odoo_mapping(monkeypatch):
     monkeypatch.setattr(odoo_client, "set_attendance_wc", lambda *_args: False)
+    resolve = MagicMock()
+    log_event = MagicMock()
+    monkeypatch.setattr(missing_wc, "resolve", resolve)
+    monkeypatch.setattr("zira_dashboard.inbox_log.log_event_safe", log_event)
 
     r = client.post(
         "/missing-wc/assign",
@@ -56,6 +61,8 @@ def test_assign_rejects_work_center_without_active_odoo_mapping(monkeypatch):
         "ok": False,
         "error": "That work center has no active Odoo mapping yet.",
     }
+    resolve.assert_not_called()
+    log_event.assert_not_called()
     assert ATT not in missing_wc.resolved_ids()
 
 
