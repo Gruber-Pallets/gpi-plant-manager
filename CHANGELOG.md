@@ -12,6 +12,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Work center stays after breaks
+
+#### Fixes
+
+- **Your work area now stays with you after lunch.** When the clock signs you back in, it uses the same work area you had before the break. This helps your time land in the right place.
+
+## 2026-08-11
+
 ### Automatic lunch keeps your work area
 
 #### Fixes

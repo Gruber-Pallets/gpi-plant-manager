@@ -20,6 +20,31 @@ Set these on the **web** service → Variables:
 
 Never commit any of the above.
 
+## Attendance work-center field
+
+`ODOO_KIOSK_WC_FIELD` is optional. When this release is deployed, set it to
+`x_studio_work_center`, an `hr.attendance` Many2one field that links to
+`mrp.workcenter` (Odoo Manufacturing Work Centers).
+
+Before enabling it, map every kiosk-selectable app work center to one active
+Odoo Manufacturing Work Center in Settings. Enable the Railway variable only
+with this release, because the application and the setting must go out together
+so the app can write Odoo work-center IDs safely.
+
+### Production rollout checklist
+
+After deployment, complete every check below before treating the rollout as
+complete:
+
+```text
+[ ] Every kiosk-selectable app work center has one active Odoo Manufacturing Work Center mapping.
+[ ] Railway's web service has ODOO_KIOSK_WC_FIELD=x_studio_work_center.
+[ ] A normal kiosk clock-in shows the selected Odoo Work Center on hr.attendance.
+[ ] A kiosk transfer creates the new attendance with its selected Odoo Work Center.
+[ ] An Auto-Lunch return creates the afternoon attendance with the pre-lunch Work Center.
+[ ] The Missing Work Center inbox remains empty after the three checks.
+```
+
 ## First-time setup
 
 1. **Add the Postgres add-on** in Railway: + New → Database → PostgreSQL.
