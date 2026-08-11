@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import (
     auth,
+    odoo_client,
     schedule_store,
     settings_context,
     settings_store,
@@ -31,6 +32,53 @@ from ..stations import CATEGORIES, STATIONS
 from .staffing import _default_auto_work_centers, _save_default_auto_work_centers
 
 router = APIRouter()
+
+
+class InvalidOdooWorkCenterMapping(ValueError):
+    pass
+
+
+def _odoo_work_center_field(loc) -> str:
+    key = loc.meter_id or f"name:{loc.name}"
+    return f"wc__{key}__odoo_work_center_id"
+
+
+def _odoo_work_center_updates(
+    form,
+    options: list[dict],
+    *,
+    claimed: dict[int, str] | None = None,
+) -> dict[str, dict]:
+    """Resolve posted Odoo record IDs against the freshly-read active catalog."""
+    active = {int(option["id"]): option["name"] for option in options}
+    result: dict[str, dict] = {}
+    claimed = dict(claimed or {})
+    for loc in staffing.LOCATIONS:
+        field = _odoo_work_center_field(loc)
+        if field not in form:
+            continue
+        raw = (form.get(field) or "").strip()
+        if not raw:
+            result[loc.name] = {"odoo_id": None, "odoo_name": None}
+            continue
+        try:
+            odoo_id = int(raw)
+        except ValueError as exc:
+            raise InvalidOdooWorkCenterMapping(
+                f"Invalid Odoo work center for {loc.name}."
+            ) from exc
+        odoo_name = active.get(odoo_id)
+        if odoo_name is None:
+            raise InvalidOdooWorkCenterMapping(
+                f"{loc.name} points to an inactive or unknown Odoo work center."
+            )
+        if odoo_id in claimed:
+            raise InvalidOdooWorkCenterMapping(
+                f"{loc.name} and {claimed[odoo_id]} cannot use the same Odoo work center."
+            )
+        claimed[odoo_id] = loc.name
+        result[loc.name] = {"odoo_id": odoo_id, "odoo_name": odoo_name}
+    return result
 
 
 def _odoo_configured() -> bool:
@@ -156,6 +204,17 @@ def settings_page(
     can_manage_api_keys = _can_manage_api_keys(request)
     if section == "api" and not can_manage_api_keys:
         return HTMLResponse("Forbidden", status_code=403)
+    odoo_work_centers: list[dict] = []
+    odoo_work_centers_error = ""
+    if section == "work_centers":
+        try:
+            odoo_work_centers = odoo_client.fetch_manufacturing_work_centers()
+        except Exception:  # noqa: BLE001 - settings remains usable during an Odoo outage
+            logging.warning("Settings: Odoo work-center catalog unavailable", exc_info=True)
+            odoo_work_centers_error = (
+                "Odoo work centers are unavailable. Saved mappings are shown below "
+                "but cannot be changed right now."
+            )
     roster_filter_active: list[dict] = []
     roster_filter_inactive: list[dict] = []
     if section == "roster_filter":
@@ -214,7 +273,7 @@ def settings_page(
             available_schedules = []
     time_off_settings: dict | None = None
     if section == "time_off":
-        from .. import db, odoo_client
+        from .. import db
         import logging as _logging
         _settings_log = _logging.getLogger(__name__)
         # Primary source: the local leave_types_cache table populated by
@@ -407,6 +466,8 @@ def settings_page(
         "settings.html",
         {
             "wc_rows": wc_rows,
+            "odoo_work_centers": odoo_work_centers,
+            "odoo_work_centers_error": odoo_work_centers_error,
             "default_auto_work_centers": default_auto_work_centers,
             "skills_all": skills_all,
             "departments": work_centers_store.synced_departments(),
@@ -914,6 +975,43 @@ async def settings_save_work_centers(request: Request):
     form = await request.form()
 
     def _work():
+        mapping_fields_posted = any(
+            _odoo_work_center_field(loc) in form
+            for loc in staffing.LOCATIONS
+        )
+        mapping_updates: dict[str, dict] = {}
+        if mapping_fields_posted:
+            try:
+                options = odoo_client.fetch_manufacturing_work_centers(force=True)
+            except Exception:  # noqa: BLE001 - controlled service failure for the form
+                message = (
+                    "Odoo work centers are unavailable. Please try again when Odoo is "
+                    "available; no settings were changed."
+                )
+                if (request.headers.get("accept") or "").startswith("application/json"):
+                    return JSONResponse({"ok": False, "error": message}, status_code=503)
+                query = urlencode({"section": "work_centers", "defaults_error": message})
+                return RedirectResponse(url=f"/settings?{query}", status_code=303)
+            try:
+                mapping_updates = _odoo_work_center_updates(form, options)
+                claimed_by_unposted_location: dict[int, str] = {}
+                for loc in staffing.LOCATIONS:
+                    if _odoo_work_center_field(loc) in form:
+                        continue
+                    existing_id = work_centers_store.effective(loc).get(
+                        "odoo_work_center_id"
+                    )
+                    if existing_id is not None:
+                        claimed_by_unposted_location[int(existing_id)] = loc.name
+                mapping_updates = _odoo_work_center_updates(
+                    form, options, claimed=claimed_by_unposted_location
+                )
+            except InvalidOdooWorkCenterMapping as exc:
+                if (request.headers.get("accept") or "").startswith("application/json"):
+                    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+                query = urlencode({"section": "work_centers", "defaults_error": str(exc)})
+                return RedirectResponse(url=f"/settings?{query}", status_code=303)
+
         original_groups = list(work_centers_store.registered_groups())
         exact_defaults: dict[str, list[str]] = {}
         for loc in staffing.LOCATIONS:
@@ -1001,6 +1099,8 @@ async def settings_save_work_centers(request: Request):
                 updates["groups"] = [v] if v else []
             if updates:
                 work_centers_store.save_one(loc, updates)
+        if mapping_fields_posted:
+            work_centers_store.replace_odoo_work_center_mappings(mapping_updates)
 
         # 3. Group + VS overrides.
         for kind in work_centers_store.GROUP_KINDS:

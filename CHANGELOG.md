@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Odoo work-area picker
+
+#### Features
+
+- **You can now pick the matching Odoo work area for each work area.** Odoo is the other work system. The app checks your choices first, so two work areas cannot accidentally point to the same place.
+
 ### Odoo work-area link
 
 #### Features

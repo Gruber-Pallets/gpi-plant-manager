@@ -157,7 +157,7 @@
       document.body.appendChild(bd);
     }
     const el = document.createElement('div');
-    const isErr = message === 'Save failed';
+    const isErr = message.startsWith('Save failed');
     el.className = 'save-toast' + (isErr ? ' error' : '');
     const label = document.createElement('span');
     label.textContent = message;
@@ -204,6 +204,11 @@
     let timer = null;
 
     function notify() { __activeForm = form; refreshPageBtns(); }
+    function responseErrorMessage(response) {
+      return response.json()
+        .then(body => body && body.error ? `Save failed: ${body.error}` : 'Save failed')
+        .catch(() => 'Save failed');
+    }
     function schedule() { clearTimeout(timer); timer = setTimeout(save, 600); }
     function save() {
       timer = null;
@@ -220,7 +225,7 @@
             notify();
             showSavedToast('Saved', before, () => performUndo(before));
           } else {
-            showSavedToast('Save failed');
+            return responseErrorMessage(r).then(showSavedToast);
           }
         })
         .catch(() => showSavedToast('Save failed'))

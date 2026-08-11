@@ -63,6 +63,9 @@
       {% if defaults_error %}
         <div class="defaults-error" role="alert" aria-live="assertive">{{ defaults_error }}</div>
       {% endif %}
+      {% if odoo_work_centers_error %}
+        <div class="defaults-error" role="alert" aria-live="assertive">{{ odoo_work_centers_error }}</div>
+      {% endif %}
 
       <input type="hidden" name="default_auto_work_centers_present" value="1">
 
@@ -70,6 +73,7 @@
         <thead>
           <tr>
             <th>Work Center</th>
+            <th>Odoo Work Center</th>
             <th>Auto</th>
             <th>Bay</th>
             <th>Department</th>
@@ -87,6 +91,23 @@
             {% set p = 'wc__' ~ r.key ~ '__' %}
             <tr>
               <td>{{ r.name }}</td>
+              <td>
+                {% if odoo_work_centers_error %}
+                  {% if r.odoo_work_center_name %}{{ r.odoo_work_center_name }}{% else %}<span class="empty">—</span>{% endif %}
+                {% else %}
+                  {% set active_odoo_ids = odoo_work_centers | map(attribute='id') | list %}
+                  <select name="{{ p }}odoo_work_center_id" aria-label="Odoo work center for {{ r.name }}">
+                    <option value="" {% if r.odoo_mapping_missing %}selected{% endif %}>— Select an Odoo work center —</option>
+                    {% if r.odoo_work_center_id is not none and r.odoo_work_center_id not in active_odoo_ids %}
+                      <option value="{{ r.odoo_work_center_id }}" selected>{{ r.odoo_work_center_name }} (inactive — choose a replacement)</option>
+                    {% endif %}
+                    {% for option in odoo_work_centers %}
+                      <option value="{{ option.id }}" {% if option.id == r.odoo_work_center_id %}selected{% endif %}>{{ option.name }}</option>
+                    {% endfor %}
+                  </select>
+                  {% if r.odoo_mapping_missing %}<span class="hint">Needs mapping</span>{% endif %}
+                {% endif %}
+              </td>
               <td class="auto-cell">
                 <input type="checkbox" name="default_auto_work_centers" value="{{ r.name }}"
                        aria-label="Enable {{ r.name }} for Auto by default"

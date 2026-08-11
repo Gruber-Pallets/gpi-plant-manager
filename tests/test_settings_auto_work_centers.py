@@ -41,6 +41,12 @@ def test_settings_page_renders_default_auto_work_centers(monkeypatch):
     from zira_dashboard.routes import settings
 
     monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: False)
+    odoo_work_centers = [{"id": 41, "name": "Repair #1"}]
+    monkeypatch.setattr(
+        settings.odoo_client,
+        "fetch_manufacturing_work_centers",
+        lambda: odoo_work_centers,
+    )
     monkeypatch.setattr(odoo_sync, "sync", lambda *, force: None)
     monkeypatch.setattr(settings.shift_config, "productive_minutes_per_day", lambda: 480)
     monkeypatch.setattr(settings.staffing, "load_roster", lambda: [])
@@ -71,6 +77,8 @@ def test_settings_page_renders_default_auto_work_centers(monkeypatch):
     response_context = settings.settings_page(SimpleNamespace())
 
     assert response_context["default_auto_work_centers"] == []
+    assert response_context["odoo_work_centers"] == odoo_work_centers
+    assert response_context["odoo_work_centers_error"] == ""
 
 
 def test_settings_missing_default_uses_staffing_first_run_resolver(monkeypatch):

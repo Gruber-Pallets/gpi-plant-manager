@@ -54,6 +54,8 @@ class OdooAuthError(RuntimeError):
 
 
 _uid_cache: int | None = None
+_manufacturing_work_centers_cache: tuple[list[dict], float] | None = None
+_MANUFACTURING_WORK_CENTERS_TTL_SECONDS = 300
 # xmlrpc.client.ServerProxy holds ONE persistent http.client connection and is
 # NOT thread-safe: two threads sharing a proxy interleave on the same connection
 # and corrupt its state machine (CannotSendRequest 'Request-sent' /
@@ -97,9 +99,10 @@ def _server_proxy(url: str) -> xmlrpc.client.ServerProxy:
 
 def _reset_cache_for_tests() -> None:
     """Clear cached uid + per-thread object proxy; tests call this between cases."""
-    global _uid_cache, _feedback_project_id
+    global _uid_cache, _feedback_project_id, _manufacturing_work_centers_cache
     _uid_cache = None
     _feedback_project_id = None
+    _manufacturing_work_centers_cache = None
     if hasattr(_thread_local, "object_proxy"):
         del _thread_local.object_proxy
 
@@ -289,6 +292,35 @@ def fetch_skills_for(employee_ids: list[int]) -> dict[int, list[dict]]:
 
 def fetch_spanish_skill_level_ids() -> dict[int, int]:
     return _odoo_skills.fetch_spanish_skill_level_ids(execute, unwrap_m2o)
+
+
+def fetch_manufacturing_work_centers(*, force: bool = False) -> list[dict]:
+    """Return the active Odoo manufacturing work-center catalog for Settings.
+
+    This is intentionally a Settings-only lookup. Kiosk punch paths use the
+    locally saved ID mapping and must not depend on this live catalog.
+    """
+    global _manufacturing_work_centers_cache
+    now = time.monotonic()
+    if (
+        not force
+        and _manufacturing_work_centers_cache is not None
+        and _manufacturing_work_centers_cache[1] > now
+    ):
+        return _manufacturing_work_centers_cache[0]
+    rows = execute(
+        "mrp.workcenter", "search_read", [("active", "=", True)],
+        fields=["id", "name"], order="name",
+    )
+    result = [
+        {"id": int(row["id"]), "name": str(row.get("name") or "").strip()}
+        for row in rows
+        if row.get("id") and str(row.get("name") or "").strip()
+    ]
+    _manufacturing_work_centers_cache = (
+        result, now + _MANUFACTURING_WORK_CENTERS_TTL_SECONDS
+    )
+    return result
 
 
 # ---------- Kiosk attendance writes (Phase 0 pilot) ----------

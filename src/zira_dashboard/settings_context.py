@@ -80,6 +80,9 @@ def work_center_rows(locations, people, effective_for) -> list[dict]:
                 "department": effective["department"],
                 "default_people": effective["default_people"],
                 "default_pool": pool,
+                "odoo_work_center_id": effective.get("odoo_work_center_id"),
+                "odoo_work_center_name": effective.get("odoo_work_center_name"),
+                "odoo_mapping_missing": effective.get("odoo_work_center_id") is None,
             }
         )
     return rows

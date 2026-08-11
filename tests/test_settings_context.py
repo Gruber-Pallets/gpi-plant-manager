@@ -70,6 +70,8 @@ def test_work_center_rows_keep_skill_default_people_and_identity_rules():
         "groups": groups,
         "department": "Recycled",
         "default_people": default_people,
+        "odoo_work_center_id": 41,
+        "odoo_work_center_name": "Repair #1",
     }
     effective_calls = []
 
@@ -94,6 +96,9 @@ def test_work_center_rows_keep_skill_default_people_and_identity_rules():
         "groups": groups,
         "department": "Recycled",
         "default_people": default_people,
+        "odoo_work_center_id": 41,
+        "odoo_work_center_name": "Repair #1",
+        "odoo_mapping_missing": False,
         "default_pool": [
             {"name": "alpha", "level": 3, "reserve": False, "preserved": False},
             {"name": "Ana", "level": 3, "reserve": False, "preserved": False},
@@ -108,6 +113,38 @@ def test_work_center_rows_keep_skill_default_people_and_identity_rules():
     assert rows[1]["key"] == "meter-2"
     assert rows[1]["max_ops"] == 2
     assert [person["level"] for person in rows[1]["default_pool"]] == [2] * 5
+
+
+def test_work_center_rows_expose_saved_odoo_mapping_and_missing_indicator():
+    location = SimpleNamespace(meter_id=None, name="Repair 1", bay="R1")
+    effective = {
+        "max_ops": 1,
+        "required_skills": [],
+        "min_ops": 1,
+        "goal_per_day": 100,
+        "note": "",
+        "groups": [],
+        "department": "Recycled",
+        "default_people": [],
+        "odoo_work_center_id": 41,
+        "odoo_work_center_name": "Repair #1",
+    }
+
+    mapped_row = settings_context.work_center_rows(
+        [location], [], lambda _location: effective
+    )[0]
+    blank_row = settings_context.work_center_rows(
+        [location], [], lambda _location: {
+            **effective,
+            "odoo_work_center_id": None,
+            "odoo_work_center_name": None,
+        }
+    )[0]
+
+    assert mapped_row["odoo_work_center_id"] == 41
+    assert mapped_row["odoo_work_center_name"] == "Repair #1"
+    assert mapped_row["odoo_mapping_missing"] is False
+    assert blank_row["odoo_mapping_missing"] is True
 
 
 def test_group_summary_preserves_override_display_and_store_call_order():
