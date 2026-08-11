@@ -41,6 +41,29 @@ def test_sync_rejects_inactive_employee_payload_before_any_write(monkeypatch):
     assert "inactive" in (result.error or "").lower()
 
 
+def test_sync_rejects_non_boolean_active_employee_payload_before_any_write(monkeypatch):
+    """Only an actual True value is safe for an active-only Odoo query."""
+    from zira_dashboard import odoo_sync
+
+    monkeypatch.setattr(odoo_sync, "_read_last_sync", lambda: None)
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employees",
+        lambda: [{"id": 1, "name": "Malformed Active", "active": 0}],
+    )
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_skills_for",
+        lambda _ids: pytest.fail("unsafe employee payload must stop before any further sync"),
+    )
+
+    result = odoo_sync.sync(force=True)
+
+    assert result.ok is False
+    assert result.refreshed is False
+    assert "active-only" in (result.error or "").lower()
+
+
 def test_authenticate_returns_uid_on_success(monkeypatch):
     monkeypatch.setenv("ODOO_URL", "https://example.odoo.com")
     monkeypatch.setenv("ODOO_DB", "Production")

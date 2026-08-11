@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Kiosk roster checks Odoo more carefully
+
+#### Fixes
+
+- **The time clock now ignores a broken people list from Odoo.** Odoo is the main work system. If it sends anything unclear about who is active, Plant Manager keeps the names it already has instead of hiding everyone.
+
 ### Time clock work-area save check
 
 #### Fixes

@@ -223,7 +223,7 @@ def sync(force: bool = False) -> SyncResult:
         # not an instruction to archive the local workforce. In particular,
         # this prevents a malformed all-inactive response from blanking every
         # Staffing picker before the next successful sync can repair it.
-        inactive_count = sum(employee.get("active") is False for employee in employees)
+        inactive_count = sum(employee.get("active") is not True for employee in employees)
         if inactive_count:
             return SyncResult(
                 ok=False,
@@ -233,7 +233,8 @@ def sync(force: bool = False) -> SyncResult:
                 last_sync_at=last,
                 error=(
                     "Odoo employee payload contained "
-                    f"{inactive_count} inactive record(s) despite the active-only query; sync skipped."
+                    f"{inactive_count} inactive or malformed record(s) despite the active-only "
+                    "query; sync skipped."
                 ),
             )
         emp_ids = [e["id"] for e in employees]
