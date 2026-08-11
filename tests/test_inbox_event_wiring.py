@@ -80,7 +80,7 @@ def test_missing_wc_assign_records_inbox_event(monkeypatch):
     from zira_dashboard.routes import missing_wc as missing_wc_route
 
     events = _capture_events(monkeypatch)
-    monkeypatch.setattr(odoo_client, "set_attendance_wc", lambda att_id, wc: None)
+    monkeypatch.setattr(odoo_client, "set_attendance_wc", lambda att_id, wc: True)
     monkeypatch.setattr(missing_wc, "resolve", lambda *a, **k: None)
     wc_name = staffing.LOCATIONS[0].name
 

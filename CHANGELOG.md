@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Better update checks
+
+#### Fixes
+
+- **The app now double-checks updates more carefully.** This helps keep changes safe.
+
 ### More reliable updates
 
 #### Fixes

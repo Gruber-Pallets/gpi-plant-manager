@@ -164,7 +164,7 @@ def test_optional_workday_reuses_existing_page_modal_navigation_and_api_contract
     recruiting_js = _recruiting_script()
 
     assert html.count('role="dialog"') == 1
-    assert html.count("<dialog") == 2
+    assert html.count("<dialog") == 1
     assert "{% include '_staffing_subnav.html' %}" in html
     assert "/staffing/holiday" not in html
     assert "holiday-modal" not in html

@@ -651,11 +651,22 @@ def test_synced_empty_mirror_keeps_normal_future_default_seeding(monkeypatch):
     monkeypatch.setattr(staffing, "schedule_revision", lambda _day: None)
     monkeypatch.setattr(staffing_routes, "_default_auto_work_centers", lambda _day: ["Repair 1"])
     monkeypatch.setattr(
+        staffing_routes, "_configured_center_capacities", lambda *_args, **_kwargs: {"Repair 1": 1}
+    )
+    monkeypatch.setattr(
         staffing_routes,
         "defaults_only_schedule",
-        lambda *_args: (
+        lambda *_args, **_kwargs: (
             {"Repair 1": ["Default"]},
             {"Repair 1": {"Default": "default"}},
+        ),
+    )
+    monkeypatch.setattr(
+        staffing_routes,
+        "_apply_training_reservations_to_defaults",
+        lambda _day, _roster, assignments, sources, _time_off_entries, **_kwargs: (
+            assignments,
+            sources,
         ),
     )
     monkeypatch.setattr(
