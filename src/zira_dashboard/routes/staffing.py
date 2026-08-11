@@ -8,7 +8,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date, datetime, timedelta, UTC
 from urllib.parse import urlencode
 
