@@ -46,13 +46,11 @@ def _odoo_work_center_field(loc) -> str:
 def _odoo_work_center_updates(
     form,
     options: list[dict],
-    *,
-    claimed: dict[int, str] | None = None,
 ) -> dict[str, dict]:
     """Resolve posted Odoo record IDs against the freshly-read active catalog."""
     active = {int(option["id"]): option["name"] for option in options}
     result: dict[str, dict] = {}
-    claimed = dict(claimed or {})
+    claimed_by_posted_location: dict[int, str] = {}
     for loc in staffing.LOCATIONS:
         field = _odoo_work_center_field(loc)
         if field not in form:
@@ -72,11 +70,12 @@ def _odoo_work_center_updates(
             raise InvalidOdooWorkCenterMapping(
                 f"{loc.name} points to an inactive or unknown Odoo work center."
             )
-        if odoo_id in claimed:
+        owner = claimed_by_posted_location.get(odoo_id)
+        if owner is not None:
             raise InvalidOdooWorkCenterMapping(
-                f"{loc.name} and {claimed[odoo_id]} cannot use the same Odoo work center."
+                f"{loc.name} and {owner} cannot use the same Odoo work center."
             )
-        claimed[odoo_id] = loc.name
+        claimed_by_posted_location[odoo_id] = loc.name
         result[loc.name] = {"odoo_id": odoo_id, "odoo_name": odoo_name}
     return result
 
@@ -994,18 +993,6 @@ async def settings_save_work_centers(request: Request):
                 return RedirectResponse(url=f"/settings?{query}", status_code=303)
             try:
                 mapping_updates = _odoo_work_center_updates(form, options)
-                claimed_by_unposted_location: dict[int, str] = {}
-                for loc in staffing.LOCATIONS:
-                    if _odoo_work_center_field(loc) in form:
-                        continue
-                    existing_id = work_centers_store.effective(loc).get(
-                        "odoo_work_center_id"
-                    )
-                    if existing_id is not None:
-                        claimed_by_unposted_location[int(existing_id)] = loc.name
-                mapping_updates = _odoo_work_center_updates(
-                    form, options, claimed=claimed_by_unposted_location
-                )
             except InvalidOdooWorkCenterMapping as exc:
                 if (request.headers.get("accept") or "").startswith("application/json"):
                     return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
@@ -1063,6 +1050,19 @@ async def settings_save_work_centers(request: Request):
             )
             return RedirectResponse(url=f"/settings?{query}", status_code=303)
 
+        # Persist mappings before every other Settings mutation. The store
+        # checks live DB ownership while holding its mapping lock, so a stale
+        # cache or concurrent request is a controlled validation failure, not
+        # a late unique-index 500 after row settings have already saved.
+        if mapping_fields_posted:
+            try:
+                work_centers_store.replace_odoo_work_center_mappings(mapping_updates)
+            except work_centers_store.OdooWorkCenterMappingConflict as exc:
+                if (request.headers.get("accept") or "").startswith("application/json"):
+                    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+                query = urlencode({"section": "work_centers", "defaults_error": str(exc)})
+                return RedirectResponse(url=f"/settings?{query}", status_code=303)
+
         # 1. Group registry (delete, rename, add) — do first so WC save sees updated names.
         for name in original_groups:
             if form.get(f"group_delete__{name}"):
@@ -1099,9 +1099,6 @@ async def settings_save_work_centers(request: Request):
                 updates["groups"] = [v] if v else []
             if updates:
                 work_centers_store.save_one(loc, updates)
-        if mapping_fields_posted:
-            work_centers_store.replace_odoo_work_center_mappings(mapping_updates)
-
         # 3. Group + VS overrides.
         for kind in work_centers_store.GROUP_KINDS:
             for name in work_centers_store.all_group_names(kind):

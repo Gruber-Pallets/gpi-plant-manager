@@ -1,4 +1,7 @@
 from datetime import date
+
+import pytest
+
 from zira_dashboard import odoo_client
 
 
@@ -90,6 +93,29 @@ def test_fetch_attendance_intervals_reverse_maps_many2one_id(monkeypatch):
     out = odoo_client.fetch_attendance_intervals_for_day(date(2026, 6, 1))
 
     assert out[0]["wc_name"] == "Repair 1"
+
+
+@pytest.mark.parametrize(
+    "odoo_value",
+    ["Legacy work center", ["not-an-odoo-id", "Legacy work center"]],
+)
+def test_fetch_attendance_intervals_omits_malformed_odoo_work_center_values(
+    monkeypatch, odoo_value
+):
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store._odoo_work_center_maps",
+        lambda: ({}, {41: "Repair 1"}),
+    )
+    monkeypatch.setattr(odoo_client, "execute", lambda *_a, **_kw: [
+        {"id": 2, "employee_id": [8, "Bob"],
+         "check_in": "2026-06-01 13:00:00", "check_out": "2026-06-01 17:00:00",
+         "x_studio_work_center": odoo_value},
+    ])
+
+    intervals = odoo_client.fetch_attendance_intervals_for_day(date(2026, 6, 1))
+
+    assert intervals[0]["wc_name"] is None
 
 
 def test_fetch_attendances_for_day_skips_near_zero_duration_rows(monkeypatch):

@@ -18,6 +18,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Your work area now stays with you after lunch.** When the clock signs you back in, it uses the same work area you had before the break. This helps your time land in the right place.
 
+### Safer work-area saves
+
+#### Fixes
+
+- **The work-area picker now catches save problems before changing anything else.** It also safely ignores old or broken work-area information from Odoo instead of stopping the time clock.
+
 ## 2026-08-11
 
 ### Automatic lunch keeps your work area

@@ -193,18 +193,23 @@ def test_invalid_mapping_rejects_before_any_settings_mutation(monkeypatch):
 
 
 def test_partial_mapping_post_rejects_id_owned_by_an_unposted_location(monkeypatch):
-    monkeypatch.setattr(settings.asyncio, "to_thread", _run_inline)
+    replacements = []
+    _stub_work_center_save(monkeypatch, replacements=replacements)
     monkeypatch.setattr(
         settings.odoo_client, "fetch_manufacturing_work_centers", lambda *, force: OPTIONS
     )
     monkeypatch.setattr(
         settings.work_centers_store,
-        "effective",
-        lambda location: {"odoo_work_center_id": 41 if location is REPAIR_2 else None},
+        "replace_odoo_work_center_mappings",
+        lambda _updates: (_ for _ in ()).throw(
+            settings.work_centers_store.OdooWorkCenterMappingConflict(
+                "Repair 1 and Repair 2 cannot use the same Odoo work center."
+            )
+        ),
     )
     for name in (
-        "registered_groups", "default_people", "save_one", "replace_default_targets",
-        "replace_odoo_work_center_mappings",
+        "delete_group", "rename_group", "add_group", "save_one",
+        "save_group_override", "replace_default_targets",
     ):
         monkeypatch.setattr(
             settings.work_centers_store,
@@ -219,6 +224,47 @@ def test_partial_mapping_post_rejects_id_owned_by_an_unposted_location(monkeypat
     ))
 
     assert response.status_code == 422
+    assert replacements == []
+
+
+def test_stale_mapping_preflight_rejects_db_conflict_before_work_center_save(monkeypatch):
+    """A live mapping conflict must not turn a partial form post into a 500.
+
+    ``effective`` intentionally returns a stale cache value here.  The mapping
+    store is the DB-authoritative boundary and reports the real collision.
+    """
+    replacements = []
+    _stub_work_center_save(monkeypatch, replacements=replacements)
+    monkeypatch.setattr(
+        settings.odoo_client, "fetch_manufacturing_work_centers", lambda *, force: OPTIONS
+    )
+    monkeypatch.setattr(
+        settings.work_centers_store,
+        "save_one",
+        lambda *_args: pytest.fail("row updates must not persist before mapping conflict"),
+    )
+    monkeypatch.setattr(
+        settings.work_centers_store,
+        "replace_odoo_work_center_mappings",
+        lambda _updates: (_ for _ in ()).throw(
+            settings.work_centers_store.OdooWorkCenterMappingConflict(
+                "Repair 1 and Repair 2 cannot use the same Odoo work center."
+            )
+        ),
+    )
+
+    response = asyncio.run(settings.settings_save_work_centers(
+        _Request({
+            _mapping_field(REPAIR_1): "41",
+            f"wc__{REPAIR_1.meter_id}__goal_per_day": "101",
+        })
+    ))
+
+    assert response.status_code == 422
+    assert response.body == (
+        b'{"ok":false,"error":"Repair 1 and Repair 2 cannot use the same Odoo work center."}'
+    )
+    assert replacements == []
 
 
 def test_unavailable_catalog_rejects_mapping_post_before_any_settings_mutation(monkeypatch):

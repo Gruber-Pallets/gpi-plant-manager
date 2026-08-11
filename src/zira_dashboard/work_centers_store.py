@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 
+from psycopg2.errors import UniqueViolation
+
 from .shift_config import TARGET_PER_DAY, productive_minutes_per_day
 from .staffing import (
     LOADING_JOCKEYING_REQUIRED_SKILLS,
@@ -43,6 +45,16 @@ class InvalidDefaultTargets(ValueError):
             )
         )
         super().__init__(f"Each person may have only one default target. {rendered}")
+
+
+class OdooWorkCenterMappingConflict(ValueError):
+    """Raised when a live Odoo work-center mapping is already claimed."""
+
+
+# Mapping saves are rare. A single transaction-scoped lock lets their
+# DB-authoritative claim check remain valid through the following write,
+# including partial Settings form posts and swaps.
+_ODOO_WORK_CENTER_MAPPING_LOCK_KEY = 6_291_478_102_684_110_923
 
 
 def _clean_names(values: Sequence[str]) -> tuple[str, ...]:
@@ -147,10 +159,10 @@ def odoo_work_center_id_for(app_wc_name: str | None) -> int | None:
     return _odoo_work_center_maps()[0].get(app_wc_name)
 
 
-def app_work_center_name_for_odoo_id(odoo_wc_id: int | None) -> str | None:
-    if odoo_wc_id is None:
+def app_work_center_name_for_odoo_id(odoo_wc_id: object) -> str | None:
+    if not isinstance(odoo_wc_id, int) or isinstance(odoo_wc_id, bool):
         return None
-    return _odoo_work_center_maps()[1].get(int(odoo_wc_id))
+    return _odoo_work_center_maps()[1].get(odoo_wc_id)
 
 
 def set_odoo_work_center(
@@ -158,17 +170,77 @@ def set_odoo_work_center(
 ) -> None:
     from . import db
 
-    db.execute(
-        "INSERT INTO work_centers (name, category, cell, meter_id, min_ops, max_ops) "
-        "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING",
-        (loc.name, loc.skill, loc.bay, loc.meter_id, loc.min_ops, loc.max_ops),
-    )
-    db.execute(
-        "UPDATE work_centers SET odoo_work_center_id = %s, "
-        "odoo_work_center_name = %s WHERE name = %s",
-        (odoo_id, odoo_name, loc.name),
-    )
+    try:
+        with db.cursor() as cur:
+            _lock_odoo_work_center_mappings(cur)
+            cur.execute(
+                "INSERT INTO work_centers (name, category, cell, meter_id, min_ops, max_ops) "
+                "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING",
+                (loc.name, loc.skill, loc.bay, loc.meter_id, loc.min_ops, loc.max_ops),
+            )
+            _validate_odoo_work_center_mapping_updates(
+                cur,
+                {loc.name: {"odoo_id": odoo_id}},
+            )
+            cur.execute(
+                "UPDATE work_centers SET odoo_work_center_id = %s, "
+                "odoo_work_center_name = %s WHERE name = %s",
+                (odoo_id, odoo_name, loc.name),
+            )
+    except UniqueViolation as exc:
+        raise OdooWorkCenterMappingConflict(
+            "That Odoo work center is already mapped. Please reload and try again."
+        ) from exc
     _invalidate_caches()
+
+
+def _lock_odoo_work_center_mappings(cur) -> None:
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(%s::bigint)",
+        (_ODOO_WORK_CENTER_MAPPING_LOCK_KEY,),
+    )
+
+
+def _validate_odoo_work_center_mapping_updates(
+    cur,
+    updates: Mapping[str, Mapping[str, object]],
+) -> None:
+    """Reject duplicate requested IDs and IDs owned by unposted rows.
+
+    Callers hold the mapping advisory lock, so this live DB read remains
+    authoritative until their mapping write commits or rolls back.
+    """
+    requested_by_id: dict[int, str] = {}
+    for name, mapping in updates.items():
+        odoo_id = mapping["odoo_id"]
+        if odoo_id is None:
+            continue
+        normalized_id = int(odoo_id)
+        owner = requested_by_id.get(normalized_id)
+        if owner is not None:
+            raise OdooWorkCenterMappingConflict(
+                f"{name} and {owner} cannot use the same Odoo work center."
+            )
+        requested_by_id[normalized_id] = name
+
+    if not requested_by_id:
+        return
+
+    names = list(updates)
+    cur.execute(
+        "SELECT name, odoo_work_center_id FROM work_centers "
+        "WHERE odoo_work_center_id IS NOT NULL AND name <> ALL(%s)",
+        (names,),
+    )
+    claimed_by_id = {
+        int(row["odoo_work_center_id"]): row["name"]
+        for row in cur.fetchall()
+    }
+    for odoo_id, name in requested_by_id.items():
+        if owner := claimed_by_id.get(odoo_id):
+            raise OdooWorkCenterMappingConflict(
+                f"{name} and {owner} cannot use the same Odoo work center."
+            )
 
 
 def replace_odoo_work_center_mappings(
@@ -179,21 +251,48 @@ def replace_odoo_work_center_mappings(
     from . import db
 
     names = list(updates)
-    with db.cursor() as cur:
-        cur.execute(
-            "UPDATE work_centers SET odoo_work_center_id = NULL, "
-            "odoo_work_center_name = NULL WHERE name = ANY(%s)",
-            (names,),
-        )
-        for name, mapping in updates.items():
-            odoo_id = mapping["odoo_id"]
-            if odoo_id is None:
-                continue
+    try:
+        with db.cursor() as cur:
+            _lock_odoo_work_center_mappings(cur)
+            locations_by_name = {loc.name: loc for loc in LOCATIONS}
+            for name in names:
+                if loc := locations_by_name.get(name):
+                    cur.execute(
+                        "INSERT INTO work_centers "
+                        "(name, category, cell, meter_id, min_ops, max_ops) "
+                        "VALUES (%s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (name) DO NOTHING",
+                        (
+                            loc.name,
+                            loc.skill,
+                            loc.bay,
+                            loc.meter_id,
+                            loc.min_ops,
+                            loc.max_ops,
+                        ),
+                    )
+            _validate_odoo_work_center_mapping_updates(cur, updates)
             cur.execute(
-                "UPDATE work_centers SET odoo_work_center_id = %s, "
-                "odoo_work_center_name = %s WHERE name = %s",
-                (int(odoo_id), str(mapping["odoo_name"]), name),
+                "UPDATE work_centers SET odoo_work_center_id = NULL, "
+                "odoo_work_center_name = NULL WHERE name = ANY(%s)",
+                (names,),
             )
+            for name, mapping in updates.items():
+                odoo_id = mapping["odoo_id"]
+                if odoo_id is None:
+                    continue
+                cur.execute(
+                    "UPDATE work_centers SET odoo_work_center_id = %s, "
+                    "odoo_work_center_name = %s WHERE name = %s",
+                    (int(odoo_id), str(mapping["odoo_name"]), name),
+                )
+    except UniqueViolation as exc:
+        # A legacy/manual writer that does not use this lock can still race
+        # us. The transaction has rolled back, so present it as the same
+        # controlled Settings validation failure instead of a 500.
+        raise OdooWorkCenterMappingConflict(
+            "That Odoo work center is already mapped. Please reload and try again."
+        ) from exc
     _invalidate_caches()
 
 

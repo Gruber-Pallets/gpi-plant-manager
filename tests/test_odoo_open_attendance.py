@@ -8,14 +8,16 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
+import pytest
+
 from zira_dashboard import odoo_client
 
 
 def test_fetch_open_attendances_maps_rows(monkeypatch):
     monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
     monkeypatch.setattr(
-        "zira_dashboard.work_centers_store.app_work_center_name_for_odoo_id",
-        lambda odoo_id: {41: "Repair 1"}.get(odoo_id),
+        "zira_dashboard.work_centers_store._odoo_work_center_maps",
+        lambda: ({}, {41: "Repair 1"}),
     )
     fake = MagicMock(return_value=[
         {"id": 88, "employee_id": [5, "Bob"],
@@ -52,6 +54,25 @@ def test_open_attendance_omits_unknown_odoo_work_center_display_label(monkeypatc
         {"id": 88, "employee_id": [5, "Bob"],
          "check_in": "2026-06-01 11:02:00",
          "x_studio_work_center": [999, "Odoo-only work center"]},
+    ])
+
+    assert odoo_client.fetch_open_attendances()[0]["wc_name"] is None
+
+
+@pytest.mark.parametrize(
+    "odoo_value",
+    ["Legacy work center", ["not-an-odoo-id", "Legacy work center"]],
+)
+def test_open_attendance_omits_malformed_odoo_work_center_values(monkeypatch, odoo_value):
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store._odoo_work_center_maps",
+        lambda: ({}, {41: "Repair 1"}),
+    )
+    monkeypatch.setattr(odoo_client, "execute", lambda *_a, **_kw: [
+        {"id": 88, "employee_id": [5, "Bob"],
+         "check_in": "2026-06-01 11:02:00",
+         "x_studio_work_center": odoo_value},
     ])
 
     assert odoo_client.fetch_open_attendances()[0]["wc_name"] is None
