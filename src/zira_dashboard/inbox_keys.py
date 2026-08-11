@@ -52,3 +52,8 @@ def breakdown(wc_name, stop_iso, person_name=None) -> str:
     if person_name:
         return f"breakdown:{wc_name}:{stop_iso}:{person_name}"
     return f"breakdown:{wc_name}:{stop_iso}"
+
+
+def odoo_roster_sync() -> str:
+    """Identity for an Odoo payload rejected before it can hide the roster."""
+    return "odoo_roster_sync:active_status"

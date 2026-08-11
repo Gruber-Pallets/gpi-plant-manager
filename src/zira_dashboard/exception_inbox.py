@@ -250,7 +250,7 @@ def _queue_from_sections(sections: list[dict]) -> list[dict]:
 
 
 def build_summary() -> dict:
-    from . import missing_wc, missed_punch_out, machine_breakdown, unexpected_worker
+    from . import missing_wc, missed_punch_out, machine_breakdown, odoo_sync, unexpected_worker
     from .routes import staffing as staffing_routes
 
     today = plant_day.today()
@@ -264,6 +264,9 @@ def build_summary() -> dict:
     breakdown_rows = _capture(source_errors, "Machine Breakdown", machine_breakdown.current_rows, [])
     unexpected_rows = _capture(
         source_errors, "Unexpected Workers", lambda: unexpected_worker.open_events(today), []
+    )
+    roster_sync_alert = _capture(
+        source_errors, "Timeclock Roster", odoo_sync.roster_sync_alert, None
     )
     schedule_count = _capture(
         source_errors, "Plant Schedule", lambda: _plant_schedule_reminder()[0], 0
@@ -280,6 +283,7 @@ def build_summary() -> dict:
     missing_count = len(missing_rows)
     missed_count = len(missed_rows)
     breakdown_count = len(breakdown_rows)
+    roster_sync_count = int(roster_sync_alert is not None)
     urgent_total = (
         len(late.get("scheduled_late") or [])
         + len(late.get("unscheduled_late") or [])
@@ -288,6 +292,7 @@ def build_summary() -> dict:
         + len(unexpected_rows)
         + pending_urgent_count
         + sum(1 for r in breakdown_rows if r.get("priority") == "urgent")
+        + roster_sync_count
     )
     total = (
         assignment_count
@@ -299,6 +304,7 @@ def build_summary() -> dict:
         + len(unexpected_rows)
         + pending_count
         + breakdown_count
+        + roster_sync_count
     )
     return {
         "today": today.isoformat(),
@@ -319,12 +325,13 @@ def build_summary() -> dict:
             "unexpected_workers": len(unexpected_rows),
             "time_off": pending_count,
             "breakdown": breakdown_count,
+            "odoo_roster_sync": roster_sync_count,
         },
     }
 
 
 def build_snapshot() -> dict:
-    from . import missing_wc, missed_punch_out, machine_breakdown, unexpected_worker
+    from . import missing_wc, missed_punch_out, machine_breakdown, odoo_sync, unexpected_worker
     from .routes import staffing as staffing_routes
 
     today = plant_day.today()
@@ -341,6 +348,9 @@ def build_snapshot() -> dict:
         "Unexpected Workers",
         lambda: _unexpected_worker_rows(unexpected_worker.open_events(today)),
         [],
+    )
+    roster_sync_alert = _capture(
+        source_errors, "Timeclock Roster", odoo_sync.roster_sync_alert, None
     )
     schedule_count, schedule_rows = _capture(
         source_errors, "Plant Schedule", _plant_schedule_reminder, (0, [])
@@ -434,6 +444,33 @@ def build_snapshot() -> dict:
         })
 
     sections = [
+        {
+            "id": "odoo_roster_sync",
+            "title": "Timeclock Roster",
+            "count": int(roster_sync_alert is not None),
+            "tone": "bad",
+            "action_key": None,
+            "action_label": None,
+            "href": "/staffing/skills",
+            "empty": "All clear",
+            "context": {},
+            "rows": [
+                {
+                    "name": "Timeclock roster",
+                    "label": "Odoo roster update blocked",
+                    "detail": (
+                        "Odoo sent invalid active-status data for "
+                        f"{roster_sync_alert.get('invalid_count') or 'some'} people. "
+                        "The timeclock is using the last good update."
+                    ),
+                    "priority": "urgent",
+                    "badge": "Roster",
+                    "href": "/staffing/skills",
+                    "row_key": _row_key("odoo_roster_sync", "active_status"),
+                    "item_key": inbox_keys.odoo_roster_sync(),
+                }
+            ] if roster_sync_alert else [],
+        },
         {
             "id": "assignments",
             "title": "Assignments To Do",

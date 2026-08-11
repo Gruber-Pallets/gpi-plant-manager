@@ -21,6 +21,7 @@ from . import odoo_client
 log = logging.getLogger(__name__)
 
 TTL = timedelta(hours=1)
+ROSTER_SYNC_ALERT_KEY = "odoo_roster_sync_alert"
 
 
 def _m2o_id(val):
@@ -57,6 +58,32 @@ class SyncResult:
     skill_column_count: int
     last_sync_at: datetime | None
     error: str | None = None
+
+
+def roster_sync_alert() -> dict | None:
+    """Return the persisted unsafe-roster warning, if one is still open.
+
+    The warning is deliberately separate from the normal last-sync timestamp:
+    a rejected Odoo payload must never overwrite the last known-good roster.
+    """
+    from . import app_settings
+
+    try:
+        value = app_settings.get_setting(ROSTER_SYNC_ALERT_KEY)
+    except Exception:  # noqa: BLE001 -- the Inbox must remain usable if its optional warning cannot load
+        log.warning("unable to read Odoo roster-sync alert", exc_info=True)
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _set_roster_sync_alert(value: dict | None) -> None:
+    """Persist the warning without obscuring the sync result if storage is down."""
+    from . import app_settings
+
+    try:
+        app_settings.set_setting(ROSTER_SYNC_ALERT_KEY, value)
+    except Exception:  # noqa: BLE001 -- roster writes stay protected either way
+        log.exception("unable to save Odoo roster-sync alert")
 
 
 def _read_last_sync() -> datetime | None:
@@ -225,17 +252,25 @@ def sync(force: bool = False) -> SyncResult:
         # Staffing picker before the next successful sync can repair it.
         inactive_count = sum(employee.get("active") is not True for employee in employees)
         if inactive_count:
+            error = (
+                "Odoo employee payload contained "
+                f"{inactive_count} inactive or malformed record(s) despite the active-only "
+                "query; sync skipped."
+            )
+            _set_roster_sync_alert(
+                {
+                    "invalid_count": inactive_count,
+                    "error": error,
+                    "detected_at": now.isoformat(),
+                },
+            )
             return SyncResult(
                 ok=False,
                 refreshed=False,
                 employee_count=0,
                 skill_column_count=0,
                 last_sync_at=last,
-                error=(
-                    "Odoo employee payload contained "
-                    f"{inactive_count} inactive or malformed record(s) despite the active-only "
-                    "query; sync skipped."
-                ),
+                error=error,
             )
         emp_ids = [e["id"] for e in employees]
         emp_skills = odoo_client.fetch_skills_for(emp_ids)
@@ -396,6 +431,7 @@ def sync(force: bool = False) -> SyncResult:
                 )
 
     _write_last_sync(pulled_at)
+    _set_roster_sync_alert(None)
 
     # Bust caches that depend on the freshly-synced data.
     from . import cert_lookup, staffing

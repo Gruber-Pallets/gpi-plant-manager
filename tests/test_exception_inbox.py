@@ -122,6 +122,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
     assert snap["source_errors"] == []
     counts = {s["id"]: s["count"] for s in snap["sections"]}
     assert counts == {
+        "odoo_roster_sync": 0,
         "assignments": 1,
         "plant_schedule": 0,
         "saturday_recruiting": 0,
@@ -308,6 +309,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     assert summary["follow_up_total"] == 2
     assert summary["source_errors"] == []
     assert summary["sections"] == {
+        "odoo_roster_sync": 0,
         "assignments": 2,
         "plant_schedule": 0,
         "saturday_recruiting": 0,
@@ -456,6 +458,7 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     assert snap["total"] == 0
     assert snap["source_errors"] == [{"source": "Assignments To Do"}]
     assert [s["id"] for s in snap["sections"]] == [
+        "odoo_roster_sync",
         "assignments",
         "plant_schedule",
         "saturday_recruiting",
@@ -492,6 +495,30 @@ def _empty_inbox_sources(monkeypatch):
     monkeypatch.setattr(exception_inbox, "_pending_time_off_counts", lambda today: (0, 0))
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
     monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _today: (0, []))
+
+
+def test_build_snapshot_surfaces_an_unsafe_roster_sync_as_urgent(monkeypatch):
+    from zira_dashboard import odoo_sync
+
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    monkeypatch.setattr(
+        odoo_sync,
+        "roster_sync_alert",
+        lambda: {"invalid_count": 36, "detected_at": "2026-08-11T19:24:45+00:00"},
+    )
+
+    snapshot = exception_inbox.build_snapshot()
+
+    section = next(s for s in snapshot["sections"] if s["id"] == "odoo_roster_sync")
+    assert section["count"] == 1
+    assert section["rows"][0]["priority"] == "urgent"
+    assert section["rows"][0]["item_key"] == "odoo_roster_sync:active_status"
+    assert "last good update" in section["rows"][0]["detail"]
+    assert snapshot["total"] == 1
+    assert snapshot["urgent_total"] == 1
 
 
 def test_closed_saturday_recruiting_is_an_inbox_action(monkeypatch):

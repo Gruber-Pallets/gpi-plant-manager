@@ -84,6 +84,21 @@ def test_complete_kinds_includes_late_when_item_key_repeats_across_buckets():
     assert "late" in inbox_reconcile._complete_kinds(snapshot)
 
 
+def test_complete_kinds_includes_healthy_roster_sync_alert():
+    snapshot = {
+        "source_errors": [],
+        "sections": [
+            {
+                "id": "odoo_roster_sync",
+                "count": 0,
+                "rows": [],
+            },
+        ],
+    }
+
+    assert "odoo_roster_sync" in inbox_reconcile._complete_kinds(snapshot)
+
+
 def _mirror_row(**over):
     base = {
         "item_key": "missing_wc:1", "item_kind": "missing_wc",

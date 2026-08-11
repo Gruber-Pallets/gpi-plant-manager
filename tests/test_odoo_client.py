@@ -64,6 +64,70 @@ def test_sync_rejects_non_boolean_active_employee_payload_before_any_write(monke
     assert "active-only" in (result.error or "").lower()
 
 
+def test_sync_records_an_alert_for_a_non_boolean_active_value(monkeypatch):
+    """An unsafe roster is visible to managers without mutating people."""
+    from zira_dashboard import app_settings, odoo_sync
+
+    saved = []
+    monkeypatch.setattr(odoo_sync, "_read_last_sync", lambda: None)
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employees",
+        lambda: [{"id": 1, "name": "Malformed Active", "active": 0}],
+    )
+    monkeypatch.setattr(
+        app_settings,
+        "set_setting",
+        lambda key, value: saved.append((key, value)),
+    )
+
+    result = odoo_sync.sync(force=True)
+
+    assert result.ok is False
+    assert saved[0][0] == odoo_sync.ROSTER_SYNC_ALERT_KEY
+    assert saved[0][1]["invalid_count"] == 1
+    assert "active-only" in saved[0][1]["error"]
+
+
+def test_successful_fresh_sync_clears_roster_alert(monkeypatch):
+    """A verified fresh roster lets the Inbox clear the prior warning."""
+    from contextlib import contextmanager
+
+    from zira_dashboard import app_settings, db, odoo_sync
+
+    saved = []
+
+    @contextmanager
+    def fake_cursor():
+        yield MagicMock()
+
+    monkeypatch.setattr(odoo_sync, "_read_last_sync", lambda: None)
+    monkeypatch.setattr(odoo_sync, "_write_last_sync", lambda _now: None)
+    monkeypatch.setattr(odoo_sync, "refresh_work_schedule_hours", lambda: None)
+    monkeypatch.setattr(db, "cursor", fake_cursor)
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employees",
+        lambda: [{"id": 1, "name": "Healthy Person", "active": True}],
+    )
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skills_for", lambda _ids: {})
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_spanish_skill_level_ids", lambda: {})
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_columns_with_types", lambda: [])
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_level_buckets", lambda: {})
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_departments", lambda: [])
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_work_schedules", lambda: [])
+    monkeypatch.setattr(
+        app_settings,
+        "set_setting",
+        lambda key, value: saved.append((key, value)),
+    )
+
+    result = odoo_sync.sync(force=True)
+
+    assert result.ok is True
+    assert saved == [(odoo_sync.ROSTER_SYNC_ALERT_KEY, None)]
+
+
 def test_authenticate_returns_uid_on_success(monkeypatch):
     monkeypatch.setenv("ODOO_URL", "https://example.odoo.com")
     monkeypatch.setenv("ODOO_DB", "Production")

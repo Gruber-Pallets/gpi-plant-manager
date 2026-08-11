@@ -24,6 +24,7 @@ _AUTO_RESOLVE_GRACE_SECONDS = 90
 
 # Snapshot section id -> canonical item_kind.
 _SECTION_KIND = {
+    "odoo_roster_sync": "odoo_roster_sync",
     "assignments": "assignment",
     "plant_schedule": "plant_schedule",
     "late": "late",
@@ -36,6 +37,7 @@ _SECTION_KIND = {
 # item_kind -> the build_snapshot source label (matches _capture(...) names),
 # used to tell whether a category's source errored this tick.
 _KIND_SOURCE = {
+    "odoo_roster_sync": "Timeclock Roster",
     "assignment": "Assignments To Do",
     "plant_schedule": "Plant Schedule",
     "late": "Late / Absence",

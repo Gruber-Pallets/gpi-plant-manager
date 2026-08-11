@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Time clock roster warning
+
+#### Fixes
+
+- **The Inbox now warns managers when Odoo sends a broken people list.** The time clock keeps using the last good list of names until Odoo sends a healthy update.
+
 ### Better update checks
 
 #### Fixes
