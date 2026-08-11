@@ -10,12 +10,12 @@ class PersonModel(object_api.ObjectModel):
     name = "plant.person"
     display_name = "People"
     default_order = "name asc"
-    writable_fields = {"active", "reserve", "excluded", "spanish_speaker"}
+    writable_fields = {"reserve", "excluded", "spanish_speaker"}
     fields = {
         "id": object_api.FieldSpec("integer", "ID", readonly=True),
         "odoo_id": object_api.FieldSpec("integer", "Odoo ID", readonly=True),
         "name": object_api.FieldSpec("char", "Name", readonly=True),
-        "active": object_api.FieldSpec("boolean", "Active"),
+        "active": object_api.FieldSpec("boolean", "Active", readonly=True),
         "reserve": object_api.FieldSpec("boolean", "Reserve"),
         "excluded": object_api.FieldSpec("boolean", "Excluded"),
         "wage_type": object_api.FieldSpec("char", "Wage Type", readonly=True),

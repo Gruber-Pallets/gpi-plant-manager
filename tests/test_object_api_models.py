@@ -42,6 +42,28 @@ def test_person_model_reads_people_with_skills(monkeypatch):
     assert model.all_records({})[0]["skills"] == {"Repair": 3}
 
 
+def test_person_model_keeps_odoo_active_status_read_only():
+    """A local API update must not hide the Odoo-managed kiosk roster."""
+    model = object_models.PersonModel()
+
+    assert model.fields["active"].readonly is True
+    assert "active" not in model.writable_fields
+
+    body, status = object_api.execute(
+        object_models.build_registry(),
+        {"scopes": ["admin:*"], "name": "Test"},
+        {
+            "model": "plant.person",
+            "method": "write",
+            "args": [[1], {"active": False}],
+        },
+    )
+
+    assert status == 400
+    assert body["error"]["code"] == "invalid_field"
+    assert body["error"]["message"] == "Field is read-only: active"
+
+
 def test_work_center_model_uses_effective_settings(monkeypatch):
     loc = object_models.staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", "40721")
     monkeypatch.setattr(object_models.staffing, "LOCATIONS", (loc,))

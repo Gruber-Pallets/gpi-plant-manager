@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Kiosk names stay visible
+
+#### Fixes
+
+- **The time clock names are back.** Only Odoo, the main work system, can now decide who is active. A local update cannot hide the whole team again.
+
 ### Time clock work-area links
 
 #### Fixes
