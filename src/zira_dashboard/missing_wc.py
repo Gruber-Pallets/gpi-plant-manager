@@ -21,6 +21,7 @@ _log = logging.getLogger(__name__)
 # monotonic() of the last retention DELETE in write_cache; 0.0 means run
 # on the first tick after boot.
 _last_retention_at: float = 0.0
+_MONITORING_STARTED_AT_SETTING = "missing_wc.monitoring_started_at"
 
 
 def write_cache(rows: list[dict]) -> None:
@@ -99,6 +100,71 @@ def _as_int(value) -> int | None:
         return None
 
 
+def _as_utc_datetime(value) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def monitoring_started_at(*, now: datetime | None = None) -> datetime:
+    """Return the first moment this deployment began enforcing missing-WC
+    alerts, creating that one-time rollout boundary when absent.
+
+    Attendance from before the optional Odoo field was activated cannot be
+    repaired by the new workflow, so it must not be retroactively treated as
+    urgent inbox work.
+    """
+    from . import app_settings
+
+    saved = app_settings.get_setting(_MONITORING_STARTED_AT_SETTING)
+    if isinstance(saved, dict):
+        started = _as_utc_datetime(saved.get("at"))
+        if started is not None:
+            return started
+
+    started = now or datetime.now(UTC)
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    else:
+        started = started.astimezone(UTC)
+    app_settings.set_setting(
+        _MONITORING_STARTED_AT_SETTING, {"at": started.isoformat()}
+    )
+    return started
+
+
+def locally_unmapped_attendance_ids(attendance_ids: set[int]) -> set[int]:
+    """Kiosk-created records whose selected app WC has no Odoo mapping.
+
+    These records are already visible as Settings readiness gaps. They cannot
+    be corrected from the inbox's per-attendance picker, so do not turn every
+    lunch return at one into an urgent row.
+    """
+    ids = sorted({int(att_id) for att_id in attendance_ids})
+    if not ids:
+        return set()
+    from . import db
+
+    rows = db.query(
+        "SELECT DISTINCT l.odoo_attendance_id "
+        "FROM timeclock_punches_log l "
+        "LEFT JOIN work_centers wc ON wc.name = l.wc_name "
+        "WHERE l.odoo_attendance_id = ANY(%s) "
+        "AND l.action IN ('clock_in', 'transfer_in') "
+        "AND l.wc_name IS NOT NULL "
+        "AND wc.odoo_work_center_id IS NULL",
+        (ids,),
+    )
+    return {
+        att_id for row in rows
+        if (att_id := _as_int(row.get("odoo_attendance_id"))) is not None
+    }
+
+
 def _check_in_label(check_in_iso) -> str:
     """ISO UTC string -> 'H:MM AM/PM Ddd' in site-local time, '' on bad input."""
     if not check_in_iso:
@@ -114,17 +180,35 @@ def _check_in_label(check_in_iso) -> str:
     return local.strftime(fmt)
 
 
-def shape_rows(cached: list[dict], people_by_odoo_id: dict, resolved: set) -> list[dict]:
+def shape_rows(
+    cached: list[dict],
+    people_by_odoo_id: dict,
+    resolved: set,
+    *,
+    monitoring_started_at: datetime | None = None,
+    locally_unmapped_attendance_ids: set[int] | None = None,
+) -> list[dict]:
     """Pure: cached rows + {odoo_id: {name, wage_type, active, excluded}} +
     resolved att_id set -> modal rows for ACTIVE HOURLY people, newest first.
     One row per attendance record (each needs its own work center)."""
     out: list[dict] = []
+    monitoring_start = _as_utc_datetime(monitoring_started_at)
+    locally_unmapped_ids = {
+        att_id for value in (locally_unmapped_attendance_ids or set())
+        if (att_id := _as_int(value)) is not None
+    }
     for r in cached:
         att_id = _as_int(r.get("att_id"))
         if att_id is None:
             continue
         if att_id in resolved:
             continue
+        if att_id in locally_unmapped_ids:
+            continue
+        check_in_at = _as_utc_datetime(r.get("check_in"))
+        if monitoring_start is not None and check_in_at is not None:
+            if check_in_at < monitoring_start:
+                continue
         employee_odoo_id = _as_int(r.get("employee_odoo_id"))
         p = people_by_odoo_id.get(employee_odoo_id)
         if not p or p.get("wage_type") != "hourly":
@@ -152,4 +236,14 @@ def current_rows() -> list[dict]:
         "WHERE odoo_id IS NOT NULL"
     )
     people_by_odoo_id = {int(r["odoo_id"]): r for r in prows}
-    return shape_rows(cached, people_by_odoo_id, resolved_ids())
+    attendance_ids = {
+        att_id for row in cached
+        if (att_id := _as_int(row.get("att_id"))) is not None
+    }
+    return shape_rows(
+        cached,
+        people_by_odoo_id,
+        resolved_ids(),
+        monitoring_started_at=monitoring_started_at(),
+        locally_unmapped_attendance_ids=locally_unmapped_attendance_ids(attendance_ids),
+    )

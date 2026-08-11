@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Clearer work-area alerts
+
+#### Fixes
+
+- **The Inbox no longer fills up with old work-area alerts.** It now starts watching when this new check is turned on. Work areas that do not have an Odoo match yet stay on the Settings checklist instead of making a big urgent list.
+
 ### Work center stays after breaks
 
 #### Fixes
