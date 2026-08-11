@@ -47,12 +47,12 @@ def test_clock_in_creates_when_nothing_open(monkeypatch, fake_db):
     assert upd and upd[0][1][0] == 88
 
 
-def test_clock_in_adopts_existing_open_no_duplicate(monkeypatch, fake_db):
+def test_clock_in_adopts_existing_open_when_optional_wc_is_unmapped(monkeypatch, fake_db):
     monkeypatch.setattr(timeclock_sync.odoo_client, "get_current_attendance",
                         MagicMock(return_value={"id": 99, "check_in": "x"}))
     create = MagicMock()
     monkeypatch.setattr(timeclock_sync.odoo_client, "clock_in", create)
-    set_wc = MagicMock()
+    set_wc = MagicMock(return_value=False)
     monkeypatch.setattr(timeclock_sync.odoo_client, "set_attendance_wc", set_wc)
 
     timeclock_sync._retry_one(_row())

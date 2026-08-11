@@ -35,12 +35,28 @@ def test_get_returns_count_rows_and_work_centers():
 def test_assign_writes_wc_and_records_resolved(monkeypatch):
     calls = {}
     monkeypatch.setattr(odoo_client, "set_attendance_wc",
-                        lambda att_id, wc: calls.update(att_id=att_id, wc=wc))
+                        lambda att_id, wc: calls.update(att_id=att_id, wc=wc) or True)
     r = client.post("/missing-wc/assign",
                     json={"attendance_id": ATT, "wc_name": "Dismantler 1", "name": "Maria"})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert calls == {"att_id": ATT, "wc": "Dismantler 1"}
     assert ATT in missing_wc.resolved_ids()
+
+
+def test_assign_rejects_work_center_without_active_odoo_mapping(monkeypatch):
+    monkeypatch.setattr(odoo_client, "set_attendance_wc", lambda *_args: False)
+
+    r = client.post(
+        "/missing-wc/assign",
+        json={"attendance_id": ATT, "wc_name": "Dismantler 1", "name": "Maria"},
+    )
+
+    assert r.status_code == 409
+    assert r.json() == {
+        "ok": False,
+        "error": "That work center has no active Odoo mapping yet.",
+    }
+    assert ATT not in missing_wc.resolved_ids()
 
 
 def test_assign_rejects_unknown_wc():

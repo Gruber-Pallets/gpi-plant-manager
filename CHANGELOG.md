@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Time clock work-area links
+
+#### Fixes
+
+- **Time clock entries now send the matching work area to Odoo.** The app uses the saved match instead of guessing from a name. If a work area is not matched yet, it still saves the clock time and tells a manager what is needed.
+
 ### Odoo work-area picker
 
 #### Features

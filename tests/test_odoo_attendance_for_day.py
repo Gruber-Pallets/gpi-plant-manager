@@ -75,6 +75,23 @@ def test_fetch_attendance_intervals_for_day_skips_zero_duration_rows(monkeypatch
     assert out[0]["employee_odoo_id"] == 8
 
 
+def test_fetch_attendance_intervals_reverse_maps_many2one_id(monkeypatch):
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.app_work_center_name_for_odoo_id",
+        lambda odoo_id: {41: "Repair 1"}.get(odoo_id),
+    )
+    monkeypatch.setattr(odoo_client, "execute", lambda *_a, **_kw: [
+        {"id": 2, "employee_id": [8, "Bob"],
+         "check_in": "2026-06-01 13:00:00", "check_out": "2026-06-01 17:00:00",
+         "x_studio_work_center": [41, "Repair #1"]},
+    ])
+
+    out = odoo_client.fetch_attendance_intervals_for_day(date(2026, 6, 1))
+
+    assert out[0]["wc_name"] == "Repair 1"
+
+
 def test_fetch_attendances_for_day_skips_near_zero_duration_rows(monkeypatch):
     fake_rows = [
         {"id": 1, "employee_id": [7, "A"], "check_in": "2026-06-01 05:00:00", "check_out": "2026-06-01 05:00:01"},

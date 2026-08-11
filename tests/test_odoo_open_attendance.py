@@ -12,12 +12,17 @@ from zira_dashboard import odoo_client
 
 
 def test_fetch_open_attendances_maps_rows(monkeypatch):
-    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_kiosk_wc")
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.app_work_center_name_for_odoo_id",
+        lambda odoo_id: {41: "Repair 1"}.get(odoo_id),
+    )
     fake = MagicMock(return_value=[
         {"id": 88, "employee_id": [5, "Bob"],
-         "check_in": "2026-06-01 11:02:00", "x_kiosk_wc": "Bay 3 Nailer"},
+         "check_in": "2026-06-01 11:02:00",
+         "x_studio_work_center": [41, "Repair #1"]},
         {"id": 90, "employee_id": [7, "Al"],
-         "check_in": "2026-06-01 12:15:00", "x_kiosk_wc": False},
+         "check_in": "2026-06-01 12:15:00", "x_studio_work_center": False},
     ])
     monkeypatch.setattr(odoo_client, "execute", fake)
 
@@ -27,14 +32,29 @@ def test_fetch_open_attendances_maps_rows(monkeypatch):
     args, kwargs = fake.call_args
     assert args[0] == "hr.attendance" and args[1] == "search_read"
     assert ("check_out", "=", False) in args[2]
-    assert "x_kiosk_wc" in kwargs["fields"]
+    assert "x_studio_work_center" in kwargs["fields"]
 
     assert out == [
         {"att_id": 88, "employee_odoo_id": 5,
-         "check_in": "2026-06-01T11:02:00+00:00", "wc_name": "Bay 3 Nailer"},
+         "check_in": "2026-06-01T11:02:00+00:00", "wc_name": "Repair 1"},
         {"att_id": 90, "employee_odoo_id": 7,
          "check_in": "2026-06-01T12:15:00+00:00", "wc_name": None},
     ]
+
+
+def test_open_attendance_omits_unknown_odoo_work_center_display_label(monkeypatch):
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.app_work_center_name_for_odoo_id",
+        lambda odoo_id: None,
+    )
+    monkeypatch.setattr(odoo_client, "execute", lambda *_a, **_kw: [
+        {"id": 88, "employee_id": [5, "Bob"],
+         "check_in": "2026-06-01 11:02:00",
+         "x_studio_work_center": [999, "Odoo-only work center"]},
+    ])
+
+    assert odoo_client.fetch_open_attendances()[0]["wc_name"] is None
 
 
 def test_fetch_open_attendances_no_wc_field(monkeypatch):
@@ -59,16 +79,33 @@ def test_odoo_dt_to_iso_parses_naive_utc():
     assert odoo_client._odoo_dt_to_iso(None) is None
 
 
-def test_set_attendance_wc_writes_field(monkeypatch):
-    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_kiosk_wc")
+def test_set_attendance_wc_writes_mapped_many2one_id(monkeypatch):
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
     monkeypatch.delenv("ODOO_KIOSK_DEPARTMENT_FIELD", raising=False)
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.odoo_work_center_id_for",
+        lambda name: 41 if name == "Repair 1" else None,
+    )
     fake = MagicMock()
     monkeypatch.setattr(odoo_client, "execute", fake)
 
-    odoo_client.set_attendance_wc(88, "Bay 3 Nailer")
+    assert odoo_client.set_attendance_wc(88, "Repair 1") is True
 
     fake.assert_called_once_with(
-        "hr.attendance", "write", [88], {"x_kiosk_wc": "Bay 3 Nailer"})
+        "hr.attendance", "write", [88], {"x_studio_work_center": 41})
+
+
+def test_set_attendance_wc_returns_false_without_mapping(monkeypatch):
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.odoo_work_center_id_for",
+        lambda _name: None,
+    )
+    fake = MagicMock()
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    assert odoo_client.set_attendance_wc(88, "Repair 1") is False
+    fake.assert_not_called()
 
 
 def test_set_attendance_wc_noop_without_field(monkeypatch):
@@ -76,8 +113,8 @@ def test_set_attendance_wc_noop_without_field(monkeypatch):
     fake = MagicMock()
     monkeypatch.setattr(odoo_client, "execute", fake)
 
-    odoo_client.set_attendance_wc(88, "Bay 3 Nailer")
-    odoo_client.set_attendance_wc(88, None)  # also no-op
+    assert odoo_client.set_attendance_wc(88, "Bay 3 Nailer") is False
+    assert odoo_client.set_attendance_wc(88, None) is False
 
     fake.assert_not_called()
 
@@ -92,6 +129,56 @@ def test_clock_in_marks_kiosk_attendance_approved(monkeypatch):
     assert odoo_client.clock_in(5, None, ts) == 123
 
     fake.assert_called_once_with(
+        "hr.attendance", "create",
+        {
+            "employee_id": 5,
+            "check_in": "2026-06-16 16:30:00",
+            "in_mode": "kiosk",
+            "overtime_status": "approved",
+        },
+    )
+
+
+def test_clock_in_writes_mapped_many2one_id(monkeypatch):
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.delenv("ODOO_KIOSK_DEPARTMENT_FIELD", raising=False)
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.odoo_work_center_id_for",
+        lambda name: 41 if name == "Repair 1" else None,
+    )
+    fake = MagicMock(return_value=123)
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    odoo_client.clock_in(
+        5, "Repair 1", datetime(2026, 6, 16, 16, 30, tzinfo=timezone.utc)
+    )
+
+    assert fake.call_args.args == (
+        "hr.attendance", "create",
+        {
+            "employee_id": 5,
+            "check_in": "2026-06-16 16:30:00",
+            "in_mode": "kiosk",
+            "overtime_status": "approved",
+            "x_studio_work_center": 41,
+        },
+    )
+
+
+def test_clock_in_without_mapping_still_creates_attendance(monkeypatch):
+    monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.delenv("ODOO_KIOSK_DEPARTMENT_FIELD", raising=False)
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.odoo_work_center_id_for",
+        lambda _name: None,
+    )
+    fake = MagicMock(return_value=123)
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    assert odoo_client.clock_in(
+        5, "Unmapped", datetime(2026, 6, 16, 16, 30, tzinfo=timezone.utc)
+    ) == 123
+    assert fake.call_args.args == (
         "hr.attendance", "create",
         {
             "employee_id": 5,

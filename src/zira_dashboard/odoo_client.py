@@ -32,6 +32,7 @@ from . import (
     _odoo_payroll,
     _odoo_skills,
     _odoo_time_off,
+    work_centers_store,
 )
 
 
@@ -332,12 +333,11 @@ def fetch_manufacturing_work_centers(*, force: bool = False) -> list[dict]:
 
 def _kiosk_wc_field() -> str | None:
     """Custom field on hr.attendance where the kiosk records the work
-    center the employee is punched into. The field has to exist in Odoo
-    (added via Studio or a custom module — recommended:
-    `x_kiosk_workcenter_name` as a Char). Set the env var when the field
-    is in place; leave unset to skip it entirely (early dev / pre-Odoo-setup
-    testing). Without the field, attendance rows are still written, just
-    without the WC attribution."""
+    center the employee is punched into. It must be a Many2one to
+    mrp.workcenter (for example, `x_studio_work_center`). Set the env var
+    when the field is in place; leave unset to skip it entirely (early dev /
+    pre-Odoo-setup testing). Without the field, attendance rows are still
+    written, just without the WC attribution."""
     return os.environ.get("ODOO_KIOSK_WC_FIELD") or None
 
 
@@ -400,6 +400,16 @@ def _department_id_for_wc(wc_name: str | None) -> int | None:
     return dept_id
 
 
+def _odoo_work_center_id_for_wc(wc_name: str | None) -> int | None:
+    """Return the locally configured Odoo ID for an app work-center name."""
+    return work_centers_store.odoo_work_center_id_for(wc_name)
+
+
+def _app_wc_name_for_odoo_id(odoo_id: int | None) -> str | None:
+    """Return the app work-center name for a locally configured Odoo ID."""
+    return work_centers_store.app_work_center_name_for_odoo_id(odoo_id)
+
+
 _to_odoo_dt = _odoo_attendance.to_odoo_dt
 _odoo_dt_to_iso = _odoo_attendance.odoo_dt_to_iso
 _is_zero_duration_attendance = _odoo_attendance.is_zero_duration_attendance
@@ -422,7 +432,10 @@ def fetch_attendances_missing_wc(since) -> list[dict]:
 
 def fetch_open_attendances() -> list[dict]:
     return _odoo_attendance.fetch_open_attendances(
-        execute, _kiosk_wc_field(), _kiosk_department_field()
+        execute,
+        _kiosk_wc_field(),
+        _kiosk_department_field(),
+        _app_wc_name_for_odoo_id,
     )
 
 
@@ -438,25 +451,31 @@ def fetch_employee_attendances_for_day(employee_odoo_id: int, day) -> list[dict]
 
 def fetch_attendance_intervals_for_day(day) -> list[dict]:
     return _odoo_attendance.fetch_attendance_intervals_for_day(
-        execute, day, _kiosk_wc_field()
+        execute, day, _kiosk_wc_field(), _app_wc_name_for_odoo_id
     )
 
 
-def set_attendance_wc(attendance_id: int, wc_name: str | None) -> None:
+def set_attendance_wc(attendance_id: int, wc_name: str | None) -> bool:
     """Write the kiosk WC (and resolved department) onto an existing
-    hr.attendance. No-op when the WC field isn't configured or wc_name is
-    empty. Used when the sync adopts a manually-created open attendance, so
-    kiosk WC/department reports still attribute it."""
+    hr.attendance. Returns False when the optional field is unavailable or
+    the app work center has no active local Odoo mapping. Used when the sync
+    adopts a manually-created open attendance, so kiosk WC/department reports
+    still attribute it when a mapping exists."""
     wc_field = _kiosk_wc_field()
-    if not wc_field or not wc_name:
-        return
-    payload: dict[str, Any] = {wc_field: wc_name}
+    clean_wc_name = (wc_name or "").strip()
+    if not wc_field or not clean_wc_name:
+        return False
+    odoo_wc_id = _odoo_work_center_id_for_wc(clean_wc_name)
+    if not odoo_wc_id:
+        return False
+    payload: dict[str, Any] = {wc_field: odoo_wc_id}
     dept_field = _kiosk_department_field()
     if dept_field:
-        dept_id = _department_id_for_wc(wc_name)
+        dept_id = _department_id_for_wc(clean_wc_name)
         if dept_id:
             payload[dept_field] = dept_id
     execute("hr.attendance", "write", [attendance_id], payload)
+    return True
 
 
 def clear_attendance_wc(attendance_id: int) -> None:
@@ -497,7 +516,8 @@ def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
     To Approve. Actual missed-punch corrections still have their own local
     alert flow.
 
-    Writes the WC name into ODOO_KIOSK_WC_FIELD when configured (Char).
+    Writes the mapped Odoo WC ID into ODOO_KIOSK_WC_FIELD when configured
+    (Many2one to mrp.workcenter).
     Writes the WC's resolved Odoo department into ODOO_KIOSK_DEPARTMENT_FIELD
     when configured (Many2one to hr.department), so reports that group
     hours by department attribute kiosk-created attendance correctly
@@ -509,8 +529,9 @@ def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
         "overtime_status": "approved",
     }
     wc_field = _kiosk_wc_field()
-    if wc_field and wc_name:
-        payload[wc_field] = wc_name
+    odoo_wc_id = _odoo_work_center_id_for_wc(wc_name)
+    if wc_field and odoo_wc_id:
+        payload[wc_field] = odoo_wc_id
     dept_field = _kiosk_department_field()
     if dept_field:
         dept_id = _department_id_for_wc(wc_name)

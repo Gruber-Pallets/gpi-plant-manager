@@ -131,6 +131,7 @@ def fetch_open_attendances(
     execute_fn: Callable[..., Any],
     wc_field: str | None,
     department_field: str | None,
+    app_wc_name_for_odoo_id: Callable[[int | None], str | None],
 ) -> list[dict]:
     """Return normalized currently-open attendance rows."""
     del department_field
@@ -154,7 +155,8 @@ def fetch_open_attendances(
                 "employee_odoo_id": employee_id,
                 "check_in": odoo_dt_to_iso(row.get("check_in")),
                 "wc_name": (
-                    (row.get(wc_field) or None) if wc_field else None
+                    app_wc_name_for_odoo_id(_unwrap_m2o(row.get(wc_field)))
+                    if wc_field else None
                 ),
             }
         )
@@ -229,7 +231,10 @@ def fetch_employee_attendances_for_day(
 
 
 def fetch_attendance_intervals_for_day(
-    execute_fn: Callable[..., Any], day: date, wc_field: str | None
+    execute_fn: Callable[..., Any],
+    day: date,
+    wc_field: str | None,
+    app_wc_name_for_odoo_id: Callable[[int | None], str | None],
 ) -> list[dict]:
     """Return every meaningful attendance interval for a local day."""
     start_local = datetime.combine(day, _time.min, tzinfo=shift_config.SITE_TZ)
@@ -262,7 +267,8 @@ def fetch_attendance_intervals_for_day(
                 "check_in": check_in,
                 "check_out": odoo_dt_to_iso(row.get("check_out")),
                 "wc_name": (
-                    (row.get(wc_field) or None) if wc_field else None
+                    app_wc_name_for_odoo_id(_unwrap_m2o(row.get(wc_field)))
+                    if wc_field else None
                 ),
             }
         )

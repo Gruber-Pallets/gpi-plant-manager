@@ -44,9 +44,14 @@ def _assign_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     if wc_name not in {loc.name for loc in staffing.LOCATIONS}:
         return JSONResponse({"ok": False, "error": "unknown work center"}, status_code=400)
     try:
-        odoo_client.set_attendance_wc(att_id, wc_name)
+        wrote_mapping = odoo_client.set_attendance_wc(att_id, wc_name)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    if not wrote_mapping:
+        return JSONResponse(
+            {"ok": False, "error": "That work center has no active Odoo mapping yet."},
+            status_code=409,
+        )
     missing_wc.resolve(att_id, "assigned", name=name, wc_name=wc_name)
     eid = inbox_log.log_event_safe(
         item_kind="missing_wc",

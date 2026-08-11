@@ -24,7 +24,14 @@ def test_attendance_facade_resolves_dependencies_at_call_time(monkeypatch):
     )
 
     assert odoo_client.fetch_open_attendances() == []
-    assert calls == [(execute_fn, "x_current_wc", "x_current_department")]
+    assert calls == [
+        (
+            execute_fn,
+            "x_current_wc",
+            "x_current_department",
+            odoo_client._app_wc_name_for_odoo_id,
+        )
+    ]
 
 
 def test_facade_uses_execute_replaced_after_import(monkeypatch):
