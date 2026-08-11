@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-11
+
+### Odoo work-area link
+
+#### Features
+
+- **Plant Manager is ready to link each work area to the same work area in Odoo.** This will help make sure future time entries go to the right place, even when the two names are different.
+
 ## 2026-08-10
 
 ### Live work-center labels

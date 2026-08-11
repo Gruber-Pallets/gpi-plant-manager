@@ -125,6 +125,13 @@ CREATE TABLE IF NOT EXISTS work_centers (
   last_pushed_at  TIMESTAMPTZ,
   local_dirty     BOOLEAN NOT NULL DEFAULT FALSE
 );
+ALTER TABLE work_centers
+  ADD COLUMN IF NOT EXISTS odoo_work_center_id INTEGER;
+ALTER TABLE work_centers
+  ADD COLUMN IF NOT EXISTS odoo_work_center_name TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS work_centers_odoo_work_center_id_unique
+  ON work_centers (odoo_work_center_id)
+  WHERE odoo_work_center_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS work_center_required_skills (
   wc_id           INTEGER NOT NULL REFERENCES work_centers(id) ON DELETE CASCADE,

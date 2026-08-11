@@ -114,6 +114,7 @@ from ._cache import TTLCache
 _EFFECTIVE_CACHE = TTLCache(ttl_seconds=60.0, max_entries=128)
 _GOAL_OVERRIDE_CACHE = TTLCache(ttl_seconds=60.0, max_entries=64)
 _GROUP_NAMES_CACHE = TTLCache(ttl_seconds=60.0, max_entries=4)
+_ODOO_WORK_CENTER_MAP_CACHE = TTLCache(ttl_seconds=60.0, max_entries=1)
 
 
 def _invalidate_caches() -> None:
@@ -122,6 +123,78 @@ def _invalidate_caches() -> None:
     _EFFECTIVE_CACHE.invalidate()
     _GOAL_OVERRIDE_CACHE.invalidate()
     _GROUP_NAMES_CACHE.invalidate()
+    _ODOO_WORK_CENTER_MAP_CACHE.invalidate()
+
+
+def _odoo_work_center_maps() -> tuple[dict[str, int], dict[int, str]]:
+    def build() -> tuple[dict[str, int], dict[int, str]]:
+        from . import db
+
+        rows = db.query(
+            "SELECT name, odoo_work_center_id FROM work_centers "
+            "WHERE odoo_work_center_id IS NOT NULL"
+        )
+        forward = {row["name"]: int(row["odoo_work_center_id"]) for row in rows}
+        reverse = {odoo_id: name for name, odoo_id in forward.items()}
+        return forward, reverse
+
+    return _ODOO_WORK_CENTER_MAP_CACHE.get_or_compute("maps", build)
+
+
+def odoo_work_center_id_for(app_wc_name: str | None) -> int | None:
+    if not app_wc_name:
+        return None
+    return _odoo_work_center_maps()[0].get(app_wc_name)
+
+
+def app_work_center_name_for_odoo_id(odoo_wc_id: int | None) -> str | None:
+    if odoo_wc_id is None:
+        return None
+    return _odoo_work_center_maps()[1].get(int(odoo_wc_id))
+
+
+def set_odoo_work_center(
+    loc: Location, *, odoo_id: int | None, odoo_name: str | None
+) -> None:
+    from . import db
+
+    db.execute(
+        "INSERT INTO work_centers (name, category, cell, meter_id, min_ops, max_ops) "
+        "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING",
+        (loc.name, loc.skill, loc.bay, loc.meter_id, loc.min_ops, loc.max_ops),
+    )
+    db.execute(
+        "UPDATE work_centers SET odoo_work_center_id = %s, "
+        "odoo_work_center_name = %s WHERE name = %s",
+        (odoo_id, odoo_name, loc.name),
+    )
+    _invalidate_caches()
+
+
+def replace_odoo_work_center_mappings(
+    updates: Mapping[str, Mapping[str, object]],
+) -> None:
+    if not updates:
+        return
+    from . import db
+
+    names = list(updates)
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE work_centers SET odoo_work_center_id = NULL, "
+            "odoo_work_center_name = NULL WHERE name = ANY(%s)",
+            (names,),
+        )
+        for name, mapping in updates.items():
+            odoo_id = mapping["odoo_id"]
+            if odoo_id is None:
+                continue
+            cur.execute(
+                "UPDATE work_centers SET odoo_work_center_id = %s, "
+                "odoo_work_center_name = %s WHERE name = %s",
+                (int(odoo_id), str(mapping["odoo_name"]), name),
+            )
+    _invalidate_caches()
 
 
 def _default_goal_for(loc: Location) -> int:
@@ -152,7 +225,8 @@ def _effective_map_uncached() -> dict[str, dict]:
     from . import db
     wc_rows = db.query(
         "SELECT name, goal_per_day_override, min_ops, max_ops, department, "
-        "       group_name, note FROM work_centers"
+        "       group_name, note, odoo_work_center_id, odoo_work_center_name "
+        "FROM work_centers"
     )
     rec_by_name = {r["name"]: r for r in wc_rows}
     req_rows = db.query(
@@ -189,7 +263,7 @@ def _effective_uncached(loc: Location) -> dict:
     from . import db
     rows = db.query(
         "SELECT goal_per_day_override, min_ops, max_ops, department, "
-        "       group_name, note "
+        "       group_name, note, odoo_work_center_id, odoo_work_center_name "
         "FROM work_centers WHERE name = %s",
         (loc.name,),
     )
@@ -240,6 +314,8 @@ def _shape_effective(loc: Location, rec: dict, req: list[str],
         "groups": [rec.get("group_name")] if rec.get("group_name") else [],
         "department": rec.get("department") or "",
         "default_people": defaults,
+        "odoo_work_center_id": rec.get("odoo_work_center_id"),
+        "odoo_work_center_name": rec.get("odoo_work_center_name"),
     }
 
 
