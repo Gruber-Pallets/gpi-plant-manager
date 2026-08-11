@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-11
 
+### Automatic lunch keeps your work area
+
+#### Fixes
+
+- **After automatic lunch, people go back to the same work area.** This check helps make sure a different name in Odoo does not send someone to the wrong spot.
+
 ### Kiosk roster checks Odoo more carefully
 
 #### Fixes

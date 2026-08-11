@@ -58,10 +58,16 @@ def test_scheduled_auto_out_then_auto_in(monkeypatch):
     # Now they're clocked OUT (cache empty) and it's lunch end -> auto clock_in.
     monkeypatch.setattr(live_cache, "read_open_attendance", lambda: ({}, now_ref))
     al.run_tick(now=lunch_in)
-    acts = [r["action"] for r in db.query(
-        "SELECT action, COALESCE(rounded_at,occurred_at) AS at FROM "
-        "timeclock_punches_log WHERE person_odoo_id=%s ORDER BY at", (PID,))]
-    assert acts == ["clock_out", "clock_in"]
+    rows = db.query(
+        "SELECT action, wc_name FROM timeclock_punches_log "
+        "WHERE person_odoo_id = %s "
+        "ORDER BY COALESCE(rounded_at, occurred_at), id",
+        (PID,),
+    )
+    assert [(row["action"], row["wc_name"]) for row in rows] == [
+        ("clock_out", None),
+        ("clock_in", "Bay 3"),
+    ]
     assert db.query("SELECT state FROM auto_lunch_runs WHERE person_odoo_id=%s",
                     (PID,))[0]["state"] == "done"
 

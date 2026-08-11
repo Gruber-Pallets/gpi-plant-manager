@@ -138,6 +138,30 @@ def test_attendance_windows_maps_names_and_drops_no_wc(monkeypatch):
     assert "Ghost" not in out
 
 
+def test_attendance_windows_keep_reverse_mapped_app_work_center(monkeypatch):
+    """Odoo's ``Repair #1`` display name must not leak past Task 3's boundary."""
+    from zira_dashboard import timeclock_windows, odoo_client, attendance
+
+    timeclock_windows._past_cache.clear()
+    timeclock_windows._today_cache.clear()
+    monkeypatch.setattr(
+        odoo_client,
+        "fetch_attendance_intervals_for_day",
+        lambda _day: [{
+            "employee_odoo_id": 101,
+            "check_in": t(12).isoformat(),
+            "check_out": t(16).isoformat(),
+            # The Odoo client already reverse-mapped [41, "Repair #1"].
+            "wc_name": "Repair 1",
+        }],
+    )
+    monkeypatch.setattr(attendance, "person_id_to_name", lambda: {"101": "Jose Cabezas"})
+
+    assert timeclock_windows.attendance_windows_for_day(date(2026, 6, 2)) == {
+        "Jose Cabezas": [("Repair 1", t(12), t(16))]
+    }
+
+
 def test_attendance_windows_past_day_fetched_once(monkeypatch):
     """Past days are immutable -> the Odoo pull is cached after the first call."""
     from zira_dashboard import timeclock_windows, odoo_client, attendance

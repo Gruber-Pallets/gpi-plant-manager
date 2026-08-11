@@ -73,6 +73,53 @@ def test_forgot_to_punch_in_added_in_odoo_shows_clock_out(monkeypatch):
     assert st["check_in_ts"] == datetime(2026, 6, 1, 11, 0, tzinfo=timezone.utc)
 
 
+def test_auto_lunch_persists_reverse_mapped_app_work_center(monkeypatch):
+    """The cache contains Task 3's app name, not Odoo's display label."""
+    from types import SimpleNamespace
+
+    from zira_dashboard import auto_lunch as al
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    now = datetime(2026, 6, 2, 11, 0, tzinfo=timezone.utc)
+    persisted = []
+    monkeypatch.setattr(al.live_cache, "is_stale", lambda _refreshed_at: False)
+    monkeypatch.setattr(al.db, "cursor", lambda: Cursor())
+    monkeypatch.setattr(al, "_write_auto_punch", lambda *_args, **_kwargs: 99)
+    monkeypatch.setattr(
+        al,
+        "_upsert_run",
+        lambda *_args, **kwargs: persisted.append(kwargs),
+    )
+    monkeypatch.setattr(al.timeclock_sync, "sync_one_by_id", lambda _punch_id: None)
+
+    al._advance_person(
+        5,
+        now.date(),
+        now,
+        al.Window(now, now + timedelta(minutes=30)),
+        set(),
+        SimpleNamespace(observe_only=False),
+        run=None,
+        snapshot={"5": {
+            "att_id": 88,
+            "check_in": now.isoformat(),
+            # Task 3 reverse-mapped Odoo's [41, "Repair #1"] to this app name.
+            "wc_name": "Repair 1",
+        }},
+        refreshed_at=now,
+        latest=None,
+    )
+
+    assert persisted[0]["wc_name"] == "Repair 1"
+    assert persisted[0]["wc_name"] != "Repair #1"
+
+
 def test_just_clocked_in_unsynced_stays_clocked_in(monkeypatch):
     """Race-guard: fresh kiosk punch not yet in the cache → trust local."""
     _set_cache(monkeypatch, {}, _now())  # cache doesn't show them yet
