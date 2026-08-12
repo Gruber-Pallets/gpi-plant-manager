@@ -313,7 +313,9 @@ def load_roster() -> list[Person]:
 def save_roster(people: list[Person]) -> None:
     """Upsert each person + their skill levels. Skills not in p.skills are
     left untouched (sync owns server-mastered fields); levels at 0 are
-    deleted from person_skills."""
+    deleted from person_skills. ``active`` applies only when inserting a new
+    local person. Odoo sync exclusively owns that field on existing rows, so
+    a stale cached roster can never replay an old employment status."""
     from . import db
 
     with db.cursor() as cur:
@@ -321,8 +323,7 @@ def save_roster(people: list[Person]) -> None:
             cur.execute(
                 "INSERT INTO people (name, active, reserve, odoo_id, local_dirty) "
                 "VALUES (%s, %s, %s, %s, TRUE) "
-                "ON CONFLICT (name) DO UPDATE SET active = EXCLUDED.active, "
-                "reserve = EXCLUDED.reserve, "
+                "ON CONFLICT (name) DO UPDATE SET reserve = EXCLUDED.reserve, "
                 "odoo_id = COALESCE(EXCLUDED.odoo_id, people.odoo_id), "
                 "local_dirty = TRUE",
                 (p.name, p.active, p.reserve, p.employee_id),
