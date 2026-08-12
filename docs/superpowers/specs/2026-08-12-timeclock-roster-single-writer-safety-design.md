@@ -1,6 +1,6 @@
 # Timeclock Roster Single-Writer Safety Design
 
-**Status:** Approved design; awaiting written-spec review
+**Status:** Approved for implementation
 
 ## Problem
 
