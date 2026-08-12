@@ -89,10 +89,11 @@ def test_empty_home_roster_shows_bilingual_manager_alert_and_logs_diagnostics(
         response = client.get("/timeclock")
 
     assert response.status_code == 200
-    assert "Names are unavailable. Please get a manager." in response.text
-    assert "Los nombres no están disponibles. Por favor, busca a un gerente." in response.text
+    assert "The employee list is unavailable. Please tell a manager." in response.text
+    assert "La lista de empleados no está disponible. Avísale a un gerente." in response.text
     assert 'id="filter"' not in response.text
-    assert "last_good_sync=2026-08-12T12:58:00+00:00" in caplog.text
+    assert "timeclock roster is empty" in caplog.text
+    assert "last_sync_at=2026-08-12T12:58:00+00:00" in caplog.text
     assert "unsafe snapshot" in caplog.text
 
 

@@ -62,6 +62,6 @@ def test_home_with_people_does_not_show_the_roster_unavailable_alert():
         session_expired=False,
     )
 
-    assert "Names are unavailable" not in html
+    assert "The employee list is unavailable" not in html
     assert "Maria Garcia" in html
     assert 'id="filter"' in html

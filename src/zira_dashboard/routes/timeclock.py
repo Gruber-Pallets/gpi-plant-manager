@@ -530,7 +530,7 @@ def timeclock_home(request: Request, expired: int = Query(default=0)):
         except Exception:  # noqa: BLE001 -- the kiosk warning must always render
             last_good_sync = None
         _log.critical(
-            "timeclock roster unavailable: active rows=0 last_good_sync=%s alert=%r",
+            "timeclock roster is empty; active_rows=0 last_sync_at=%s roster_alert=%r",
             last_good_sync.isoformat() if last_good_sync else "unknown",
             odoo_sync.roster_sync_alert(),
         )
