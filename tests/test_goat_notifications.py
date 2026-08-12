@@ -5,6 +5,25 @@ import pytest
 from zira_dashboard import goat_categories, goat_notifications
 
 
+def _delivery(**changes):
+    delivery = {
+        "id": 7,
+        "category_key": "repairs",
+        "group_name": "Repairs",
+        "person": "Jose O.",
+        "wc_name": "Repair 3",
+        "units": 898,
+        "achieved_day": date(2026, 7, 29),
+        "prior_record_holder": "Jose Ochoa",
+        "prior_record_units": 891,
+        "prior_record_day": date(2026, 6, 10),
+        "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9",
+        "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d",
+    }
+    delivery.update(changes)
+    return delivery
+
+
 def test_winner_uses_person_day_total_and_largest_contributing_center(monkeypatch):
     category = goat_categories.GoatCategory("repairs", "Repairs", "Repair GOAT", group_name="Repairs")
     monkeypatch.setattr(goat_categories, "work_center_names", lambda _: {"Repair 1", "Repair 3"})
@@ -51,15 +70,113 @@ def test_message_payload_keeps_previous_record_secondary():
 
 
 def test_drain_requeues_a_slack_error(monkeypatch):
-    delivery = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10), "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9", "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d"}
+    delivery = _delivery(achieved_day=date(2026, 7, 28))
     monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: delivery)
     monkeypatch.setattr(goat_notifications.slack_client, "post_message", lambda **kwargs: (_ for _ in ()).throw(goat_notifications.slack_client.SlackError("not_in_channel")))
     seen = []
     monkeypatch.setattr(goat_notifications.store, "return_delivery_to_pending", lambda delivery_id, claim_token, error: seen.append((delivery_id, claim_token, error)))
 
-    assert goat_notifications.drain_deliveries() == 0
+    assert goat_notifications.drain_deliveries(date(2026, 7, 29)) == 0
     assert seen == [(7, delivery["claim_token"], "not_in_channel")]
+
+
+def test_drain_suppresses_a_noncanonical_delivery_without_posting(monkeypatch):
+    delivery = _delivery(category_key="pytest-goat-4e10e3564cd543bfac6924d796bbc864")
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
+    monkeypatch.setattr(
+        goat_notifications.store, "claim_delivery", iter([delivery, None]).__next__
+    )
+    suppressed = []
+    monkeypatch.setattr(
+        goat_notifications.store,
+        "suppress_delivery",
+        lambda *args: suppressed.append(args),
+    )
+    monkeypatch.setattr(
+        goat_notifications.slack_client,
+        "post_message",
+        lambda **_: pytest.fail("unsafe delivery reached Slack"),
+    )
+
+    assert goat_notifications.drain_deliveries(date(2026, 7, 29)) == 0
+    assert suppressed == [
+        (delivery["id"], delivery["claim_token"], "unknown GOAT category")
+    ]
+
+
+def test_drain_suppresses_a_future_delivery_without_posting(monkeypatch):
+    delivery = _delivery(achieved_day=date(2099, 1, 2))
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
+    monkeypatch.setattr(
+        goat_notifications.store, "claim_delivery", iter([delivery, None]).__next__
+    )
+    suppressed = []
+    monkeypatch.setattr(
+        goat_notifications.store,
+        "suppress_delivery",
+        lambda *args: suppressed.append(args),
+    )
+    monkeypatch.setattr(
+        goat_notifications.slack_client,
+        "post_message",
+        lambda **_: pytest.fail("future delivery reached Slack"),
+    )
+
+    assert goat_notifications.drain_deliveries(date(2026, 8, 12)) == 0
+    assert suppressed == [
+        (delivery["id"], delivery["claim_token"], "achieved day is in the future")
+    ]
+
+
+def test_drain_suppresses_an_expired_delivery_without_posting(monkeypatch):
+    delivery = _delivery(achieved_day=date(2026, 7, 28))
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
+    monkeypatch.setattr(
+        goat_notifications.store, "claim_delivery", iter([delivery, None]).__next__
+    )
+    suppressed = []
+    monkeypatch.setattr(
+        goat_notifications.store,
+        "suppress_delivery",
+        lambda *args: suppressed.append(args),
+    )
+    monkeypatch.setattr(
+        goat_notifications.slack_client,
+        "post_message",
+        lambda **_: pytest.fail("expired delivery reached Slack"),
+    )
+
+    assert goat_notifications.drain_deliveries(date(2026, 7, 31)) == 0
+    assert suppressed == [
+        (delivery["id"], delivery["claim_token"], "delivery window expired")
+    ]
+
+
+def test_drain_posts_a_current_canonical_delivery(monkeypatch):
+    delivery = _delivery()
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
+    monkeypatch.setattr(
+        goat_notifications.store, "claim_delivery", iter([delivery, None]).__next__
+    )
+    posted = []
+    monkeypatch.setattr(
+        goat_notifications.slack_client,
+        "post_message",
+        lambda **kwargs: posted.append(kwargs) or {"message_ts": "1722280000.000100"},
+    )
+    marked = []
+    monkeypatch.setattr(
+        goat_notifications.store,
+        "mark_delivery_sent",
+        lambda *args: marked.append(args),
+    )
+
+    assert goat_notifications.drain_deliveries(date(2026, 7, 29)) == 1
+    assert [post["client_msg_id"] for post in posted] == [delivery["client_msg_id"]]
+    assert marked == [
+        (delivery["id"], delivery["claim_token"], "1722280000.000100")
+    ]
 
 
 def test_finalize_precomputes_then_creates_one_transactional_alert(monkeypatch):
@@ -127,7 +244,7 @@ def test_finalize_does_not_announce_an_initial_record_without_a_prior_holder(mon
 
 
 def test_drain_marks_each_delivery_sent(monkeypatch):
-    first = {"id": 7, "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898, "achieved_day": date(2026, 7, 28), "prior_record_holder": "Jose Ochoa", "prior_record_units": 891, "prior_record_day": date(2026, 6, 10), "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9", "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d"}
+    first = _delivery(achieved_day=date(2026, 7, 28))
     second = {**first, "id": 8, "person": "Ana", "client_msg_id": "80b7b976-b02b-4a31-a211-4c3c649e1bcf", "claim_token": "f3d5e049-37bd-4881-bcfb-43d41c28e5a9"}
     deliveries = iter([first, second, None])
     monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
@@ -137,26 +254,14 @@ def test_drain_marks_each_delivery_sent(monkeypatch):
     marked = []
     monkeypatch.setattr(goat_notifications.store, "mark_delivery_sent", lambda delivery_id, claim_token, message_ts: marked.append((delivery_id, claim_token, message_ts)))
 
-    assert goat_notifications.drain_deliveries() == 2
+    assert goat_notifications.drain_deliveries(date(2026, 7, 28)) == 2
     assert [post["channel_id"] for post in posted] == ["C-MGMT", "C-MGMT"]
     assert [post["client_msg_id"] for post in posted] == [first["client_msg_id"], second["client_msg_id"]]
     assert marked == [(7, first["claim_token"], "ts-1"), (8, second["claim_token"], "ts-2")]
 
 
 def test_drain_retries_with_the_same_persisted_client_message_id(monkeypatch):
-    delivery = {
-        "id": 7,
-        "group_name": "Repairs",
-        "person": "Jose O.",
-        "wc_name": "Repair 3",
-        "units": 898,
-        "achieved_day": date(2026, 7, 28),
-        "prior_record_holder": "Jose Ochoa",
-        "prior_record_units": 891,
-        "prior_record_day": date(2026, 6, 10),
-        "client_msg_id": "1f7194a2-79de-4e95-a5f4-087743431fe9",
-        "claim_token": "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d",
-    }
+    delivery = _delivery(achieved_day=date(2026, 7, 28))
     monkeypatch.setenv("SLACK_CHANNEL_ID", "C-MGMT")
     claims = iter([delivery, {**delivery, "claim_token": "f3d5e049-37bd-4881-bcfb-43d41c28e5a9"}, None])
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: next(claims))
@@ -172,8 +277,8 @@ def test_drain_retries_with_the_same_persisted_client_message_id(monkeypatch):
     monkeypatch.setattr(goat_notifications.store, "return_delivery_to_pending", lambda *_: None)
     monkeypatch.setattr(goat_notifications.store, "mark_delivery_sent", lambda *_: None)
 
-    assert goat_notifications.drain_deliveries() == 0
-    assert goat_notifications.drain_deliveries() == 1
+    assert goat_notifications.drain_deliveries(date(2026, 7, 28)) == 0
+    assert goat_notifications.drain_deliveries(date(2026, 7, 28)) == 1
     assert sent == [delivery["client_msg_id"], delivery["client_msg_id"]]
 
 
@@ -182,7 +287,7 @@ def test_drain_warns_and_leaves_outbox_untouched_without_the_schedule_channel(mo
     claimed = []
     monkeypatch.setattr(goat_notifications.store, "claim_delivery", lambda: claimed.append(True))
 
-    assert goat_notifications.drain_deliveries() == 0
+    assert goat_notifications.drain_deliveries(date(2026, 7, 29)) == 0
     assert claimed == []
     assert "SLACK_CHANNEL_ID" in caplog.text
 
@@ -198,7 +303,11 @@ def test_run_due_recovers_unfinalized_workdays_before_the_current_shift_ends(mon
     monkeypatch.setattr(goat_notifications.store, "unfinalized_workdays", lambda day: events.append(("due", day)) or expected_days)
     monkeypatch.setattr(goat_notifications, "finalize_day", lambda day, client: events.append(("finalize", day, client)))
     monkeypatch.setattr(goat_notifications.store, "record_finalized_day", lambda day: finalized.append(day))
-    monkeypatch.setattr(goat_notifications, "drain_deliveries", lambda: events.append(("drain",)))
+    monkeypatch.setattr(
+        goat_notifications,
+        "drain_deliveries",
+        lambda today: events.append(("drain", today)),
+    )
 
     goat_notifications.run_due(now_utc, client="client")
 
@@ -207,7 +316,7 @@ def test_run_due_recovers_unfinalized_workdays_before_the_current_shift_ends(mon
         ("due", date(2026, 7, 28)),
         ("finalize", date(2026, 7, 27), "client"),
         ("finalize", date(2026, 7, 28), "client"),
-        ("drain",),
+        ("drain", date(2026, 7, 29)),
     ]
     assert finalized == expected_days
 
@@ -222,7 +331,7 @@ def test_run_due_finalizes_a_published_saturday(monkeypatch):
     monkeypatch.setattr(goat_notifications.store, "unfinalized_workdays", lambda day: [day])
     monkeypatch.setattr(goat_notifications, "finalize_day", lambda day, _: finalized.append(day))
     monkeypatch.setattr(goat_notifications.store, "record_finalized_day", lambda _: None)
-    monkeypatch.setattr(goat_notifications, "drain_deliveries", lambda: None)
+    monkeypatch.setattr(goat_notifications, "drain_deliveries", lambda _today: None)
 
     goat_notifications.run_due(now_utc, client=object())
 
@@ -235,7 +344,7 @@ def test_run_due_finalizes_the_current_day_once_its_shift_has_ended(monkeypatch)
     monkeypatch.setattr(goat_notifications.shift_config, "shift_end_for", lambda _: time(15, 30))
     monkeypatch.setattr(goat_notifications.store, "ensure_enabled_on", lambda _: None)
     monkeypatch.setattr(goat_notifications.store, "unfinalized_workdays", lambda day: selected.append(day) or [])
-    monkeypatch.setattr(goat_notifications, "drain_deliveries", lambda: None)
+    monkeypatch.setattr(goat_notifications, "drain_deliveries", lambda _today: None)
 
     goat_notifications.run_due(now_utc, client="client")
 

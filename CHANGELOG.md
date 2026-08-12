@@ -18,6 +18,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **A saved missed clock-in now stays cleared from the Inbox.** Plant Manager uses the saved clock-in right away while Odoo catches up, so the same alert does not pop back up.
 
+### Safer GOAT celebrations
+
+#### Fixes
+
+- **GOAT celebration messages now ignore test, future, and old records.** This keeps pretend results out of Slack while real new records can still be celebrated on time.
+
 ## 2026-08-11
 
 ### Time clock roster warning

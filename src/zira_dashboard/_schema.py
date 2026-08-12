@@ -740,11 +740,14 @@ CREATE TABLE IF NOT EXISTS goat_slack_deliveries (
   goat_alert_id     INTEGER NOT NULL UNIQUE REFERENCES goat_alerts(id) ON DELETE CASCADE,
   client_msg_id     UUID NOT NULL,
   claim_token       UUID,
-  status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sending', 'sent')),
+  status            TEXT NOT NULL DEFAULT 'pending'
+                    CONSTRAINT goat_slack_deliveries_status_check
+                    CHECK (status IN ('pending', 'sending', 'sent', 'suppressed')),
   attempts          INTEGER NOT NULL DEFAULT 0,
   last_error        TEXT,
   attempted_at      TIMESTAMPTZ,
   sent_at           TIMESTAMPTZ,
+  suppressed_at     TIMESTAMPTZ,
   slack_message_ts  TEXT,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -752,6 +755,12 @@ CREATE TABLE IF NOT EXISTS goat_slack_deliveries (
 -- already-created databases; legacy rows receive an id when first claimed.
 ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS client_msg_id UUID;
 ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS claim_token UUID;
+ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS suppressed_at TIMESTAMPTZ;
+ALTER TABLE goat_slack_deliveries
+  DROP CONSTRAINT IF EXISTS goat_slack_deliveries_status_check;
+ALTER TABLE goat_slack_deliveries
+  ADD CONSTRAINT goat_slack_deliveries_status_check
+  CHECK (status IN ('pending', 'sending', 'sent', 'suppressed'));
 -- Only Task 3/4 feature alerts have a durable delivery. Backfill those rows
 -- before adding the category-day uniqueness rule; dashboard-only alerts stay
 -- NULL so their historical behavior is unchanged.

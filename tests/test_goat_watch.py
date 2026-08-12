@@ -46,6 +46,7 @@ def test_goat_alert_remains_visible_through_closed_holiday(monkeypatch):
         lambda *_args, **_kwargs: [
             {
                 "id": 1,
+                "category_key": "repairs",
                 "achieved_day": friday,
                 "group_name": "Repair",
                 "person": "Ana",
@@ -59,3 +60,26 @@ def test_goat_alert_remains_visible_through_closed_holiday(monkeypatch):
     )
 
     assert [row["id"] for row in goat_watch.active_alerts(tuesday)] == [1]
+
+
+def test_active_alerts_exclude_future_and_noncanonical_rows(monkeypatch):
+    today = date(2026, 8, 12)
+    monkeypatch.setattr(goat_watch, "maybe_finalize_today", lambda _today: None)
+    monkeypatch.setattr(
+        db,
+        "query",
+        lambda *_args, **_kwargs: [
+            {
+                "id": 1,
+                "category_key": "repairs",
+                "achieved_day": date(2099, 1, 2),
+            },
+            {
+                "id": 2,
+                "category_key": "pytest-goat",
+                "achieved_day": today,
+            },
+        ],
+    )
+
+    assert goat_watch.active_alerts(today) == []

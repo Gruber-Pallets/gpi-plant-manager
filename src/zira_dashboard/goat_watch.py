@@ -244,10 +244,10 @@ def active_alerts(today: date) -> list[dict]:
     records are persisted before the banner renders.
     """
     maybe_finalize_today(today)
-    from . import db
+    from . import db, goat_categories
     try:
         rows = db.query(
-            "SELECT id, achieved_day, group_name, person, wc_name, units, "
+            "SELECT id, achieved_day, category_key, group_name, person, wc_name, units, "
             "       prior_record_units, prior_record_holder, prior_record_day "
             "FROM goat_alerts "
             "WHERE dismissed_at IS NULL "
@@ -258,7 +258,10 @@ def active_alerts(today: date) -> list[dict]:
     out: list[dict] = []
     for r in rows:
         ach = r["achieved_day"]
-        if today <= next_business_day(ach):
+        if (
+            goat_categories.has_category_key(r.get("category_key"))
+            and ach <= today <= next_business_day(ach)
+        ):
             out.append(dict(r))
     return out
 

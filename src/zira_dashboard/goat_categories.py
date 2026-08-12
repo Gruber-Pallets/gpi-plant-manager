@@ -27,6 +27,10 @@ def all_categories() -> tuple[GoatCategory, ...]:
     return _CATEGORIES
 
 
+def has_category_key(key: str | None) -> bool:
+    return any(category.key == key for category in _CATEGORIES)
+
+
 def category_for_key(key: str) -> GoatCategory:
     return next(category for category in _CATEGORIES if category.key == key)
 

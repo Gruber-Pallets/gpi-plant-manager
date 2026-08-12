@@ -98,7 +98,7 @@ def claim_delivery() -> dict | None:
             "client_msg_id = COALESCE(delivery.client_msg_id, %s::uuid), claim_token = %s::uuid "
             "FROM candidate, goat_alerts alert "
             "WHERE delivery.id = candidate.id AND alert.id = delivery.goat_alert_id "
-            "RETURNING delivery.id, delivery.goat_alert_id, delivery.client_msg_id, delivery.claim_token, alert.achieved_day, alert.group_name, alert.person, alert.wc_name, alert.units, alert.prior_record_units, alert.prior_record_holder, alert.prior_record_day",
+            "RETURNING delivery.id, delivery.goat_alert_id, delivery.client_msg_id, delivery.claim_token, alert.category_key, alert.achieved_day, alert.group_name, alert.person, alert.wc_name, alert.units, alert.prior_record_units, alert.prior_record_holder, alert.prior_record_day",
             (str(uuid4()), str(uuid4())),
         )
         return cur.fetchone()
@@ -113,6 +113,18 @@ def mark_delivery_sent(delivery_id: int, claim_token: str, message_ts: str) -> N
             "slack_message_ts = %s, last_error = NULL "
             "WHERE id = %s AND status = 'sending' AND claim_token = %s::uuid",
             (message_ts, delivery_id, str(claim_token)),
+        )
+
+
+def suppress_delivery(delivery_id: int, claim_token: str, reason: str) -> None:
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE goat_slack_deliveries "
+            "SET status = 'suppressed', suppressed_at = now(), last_error = %s "
+            "WHERE id = %s AND status = 'sending' AND claim_token = %s::uuid",
+            (reason, delivery_id, str(claim_token)),
         )
 
 

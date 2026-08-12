@@ -10,6 +10,7 @@ from . import (
     awards,
     goat_categories,
     goat_notification_store as store,
+    goat_watch,
     precompute,
     production_history,
     shift_config,
@@ -113,13 +114,28 @@ def message_payload(alert: dict) -> tuple[str, list[dict]]:
     return text, blocks
 
 
-def drain_deliveries() -> int:
+def delivery_suppression_reason(delivery: dict, today: date) -> str | None:
+    if not goat_categories.has_category_key(delivery.get("category_key")):
+        return "unknown GOAT category"
+    achieved_day = delivery["achieved_day"]
+    if achieved_day > today:
+        return "achieved day is in the future"
+    if today > goat_watch.next_business_day(achieved_day):
+        return "delivery window expired"
+    return None
+
+
+def drain_deliveries(today: date) -> int:
     channel_id = os.environ.get("SLACK_CHANNEL_ID")
     if not channel_id:
         logger.warning("SLACK_CHANNEL_ID is not configured; GOAT deliveries remain pending")
         return 0
     sent = 0
     while delivery := store.claim_delivery():
+        reason = delivery_suppression_reason(delivery, today)
+        if reason is not None:
+            store.suppress_delivery(delivery["id"], delivery["claim_token"], reason)
+            continue
         text, blocks = message_payload(delivery)
         try:
             result = slack_client.post_message(
@@ -156,4 +172,4 @@ def run_due(now_utc: datetime, client) -> None:
     for day in store.unfinalized_workdays(latest_completed_day):
         finalize_day(day, client)
         store.record_finalized_day(day)
-    drain_deliveries()
+    drain_deliveries(today)

@@ -1,16 +1,53 @@
 import os
+from contextlib import nullcontext
 from datetime import date
 from uuid import uuid4
 
+import psycopg2
 import pytest
 
 from zira_dashboard import db, goat_notification_store as store
 from zira_dashboard._schema import SCHEMA_DDL
 
 
-needs_postgres = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"), reason="needs Postgres"
+_LOOPBACK_DATABASE_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_UNSAFE_DATABASE_DSN_OPTIONS = {"hostaddr", "service", "servicefile"}
+
+
+def _database_integration_is_safe(
+    database_url: str | None,
+    explicit_opt_in: str | None,
+) -> bool:
+    if explicit_opt_in != "1" or not database_url:
+        return False
+    try:
+        params = psycopg2.extensions.parse_dsn(database_url)
+    except (TypeError, psycopg2.Error):
+        return False
+    if _UNSAFE_DATABASE_DSN_OPTIONS.intersection(params):
+        return False
+    return (
+        params.get("host") in _LOOPBACK_DATABASE_HOSTS
+        and params.get("dbname", "").endswith("_test")
+    )
+
+
+SAFE_TEST_DATABASE = _database_integration_is_safe(
+    os.environ.get("DATABASE_URL"),
+    os.environ.get("PAYROLL_GUARD_TEST_DATABASE"),
 )
+
+needs_postgres = pytest.mark.skipif(
+    not SAFE_TEST_DATABASE,
+    reason=(
+        "requires PAYROLL_GUARD_TEST_DATABASE=1 and a loopback DATABASE_URL "
+        "whose database name ends in _test"
+    ),
+)
+
+
+class _RollbackIntegrationData(Exception):
+    pass
 
 
 class _RecordingCursor:
@@ -49,6 +86,21 @@ def _patch_cursors(monkeypatch, *cursors):
     monkeypatch.setattr(db, "cursor", lambda: _CursorContext(next(remaining)))
 
 
+def _assert_in_rolled_back_transaction(monkeypatch, assertions):
+    db.bootstrap_schema()
+    with pytest.raises(_RollbackIntegrationData):
+        with db.cursor() as cur:
+            def query_in_transaction(sql, params=None):
+                cur.execute(sql, params)
+                return list(cur.fetchall())
+
+            with monkeypatch.context() as patch:
+                patch.setattr(db, "cursor", lambda: nullcontext(cur))
+                patch.setattr(db, "query", query_in_transaction)
+                assertions()
+            raise _RollbackIntegrationData
+
+
 def _alert():
     marker = uuid4().hex
     return {
@@ -76,6 +128,9 @@ def test_schema_defines_durable_goat_notification_tables():
     assert "ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS client_msg_id UUID" in SCHEMA_DDL
     assert "claim_token       UUID" in SCHEMA_DDL
     assert "ALTER TABLE goat_slack_deliveries ADD COLUMN IF NOT EXISTS claim_token UUID" in SCHEMA_DDL
+    assert "suppressed_at     TIMESTAMPTZ" in SCHEMA_DDL
+    assert "'suppressed'" in SCHEMA_DDL
+    assert "ADD COLUMN IF NOT EXISTS suppressed_at TIMESTAMPTZ" in SCHEMA_DDL
     assert "idx_goat_slack_deliveries_claim" in SCHEMA_DDL
 
 
@@ -163,15 +218,12 @@ def test_activation_day_is_written_once_without_touching_shared_state(monkeypatc
 
 
 @needs_postgres
-def test_alert_and_delivery_are_single_transactional_unit():
-    """Use one UUID-marked inert alert and delete only its returned ID."""
-    db.bootstrap_schema()
+def test_alert_and_delivery_are_single_transactional_unit(monkeypatch):
+    """The integration row is always rolled back before the test returns."""
     alert = _alert()
-    alert_id = None
 
-    try:
+    def assertions():
         alert_id = store.insert_alert_and_delivery(alert)
-
         assert isinstance(alert_id, int)
         assert store.insert_alert_and_delivery(alert) is None
         rows = db.query(
@@ -180,27 +232,18 @@ def test_alert_and_delivery_are_single_transactional_unit():
             (alert_id,),
         )
         assert rows == [{"goat_alert_id": alert_id, "status": "pending", "attempts": 0}]
-    finally:
-        if alert_id is not None:
-            db.execute("DELETE FROM goat_alerts WHERE id = %s", (alert_id,))
-            assert db.query(
-                "SELECT id FROM goat_slack_deliveries WHERE goat_alert_id = %s",
-                (alert_id,),
-            ) == []
+
+    _assert_in_rolled_back_transaction(monkeypatch, assertions)
 
 
 @needs_postgres
-def test_changed_work_center_retry_creates_one_category_day_alert_and_delivery():
+def test_changed_work_center_retry_creates_one_category_day_alert_and_delivery(monkeypatch):
     """A retry with revised source rows must not publish a second category GOAT."""
-    db.bootstrap_schema()
     alert = _alert()
-    first_alert_id = None
-    retry_alert_id = None
 
-    try:
+    def assertions():
         first_alert_id = store.insert_alert_and_delivery(alert)
         retry_alert_id = store.insert_alert_and_delivery({**alert, "wc_name": "Repair 9"})
-
         assert isinstance(first_alert_id, int)
         assert retry_alert_id is None
         rows = db.query(
@@ -212,16 +255,15 @@ def test_changed_work_center_retry_creates_one_category_day_alert_and_delivery()
         assert len(rows) == 1
         assert rows[0]["id"] == first_alert_id
         assert isinstance(rows[0]["delivery_id"], int)
-    finally:
-        for alert_id in (retry_alert_id, first_alert_id):
-            if alert_id is not None:
-                db.execute("DELETE FROM goat_alerts WHERE id = %s", (alert_id,))
+
+    _assert_in_rolled_back_transaction(monkeypatch, assertions)
 
 
 def test_claim_retry_and_sent_updates_target_the_same_delivery(monkeypatch):
     delivery = {
         "id": 41,
         "goat_alert_id": 23,
+        "category_key": "repairs",
         "achieved_day": date(2026, 7, 29),
         "group_name": "Repairs",
         "person": "Jose O.",
@@ -309,6 +351,20 @@ def test_old_claim_failure_cannot_revert_a_newer_success(monkeypatch):
         sql = cursor.executed[0][0]
         assert "WHERE id = %s AND status = 'sending' AND claim_token = %s::uuid" in sql
     assert late_old_failure.executed[0][1] == ("late timeout", 41, old_claim_token)
+
+
+def test_suppress_delivery_records_the_reason_only_for_its_current_claim(monkeypatch):
+    cursor = _RecordingCursor()
+    _patch_cursors(monkeypatch, cursor)
+    token = "a02b5f81-2c89-4f2d-bcdf-c9f0f431838d"
+
+    store.suppress_delivery(41, token, "unknown GOAT category")
+
+    sql, params = cursor.executed[0]
+    assert "SET status = 'suppressed'" in sql
+    assert "suppressed_at = now()" in sql
+    assert "WHERE id = %s AND status = 'sending' AND claim_token = %s::uuid" in sql
+    assert params == ("unknown GOAT category", 41, token)
 
 
 def test_insert_alert_persists_a_client_message_id(monkeypatch):
