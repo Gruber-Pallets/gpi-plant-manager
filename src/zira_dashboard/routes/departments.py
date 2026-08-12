@@ -17,6 +17,7 @@ from .. import (
     settings_store,
     shift_config,
     staffing,
+    timeclock_windows,
     wc_dashboard_data,
     widget_customizer,
     work_centers_store,
@@ -179,21 +180,26 @@ def _department_day_data(
     window_start_utc = shift_start_local.astimezone(UTC)
     window_end_utc = window_end_local.astimezone(UTC)
     shift_end_utc = shift_end_local.astimezone(UTC)
+    is_live_dashboard = is_today_d and now < shift_end_utc
 
-    # Merge timeclock attendance + open-ended attributions + schedule into closed
-    # work segments. The TIMECLOCK is the source of truth for where each operator
-    # is clocked in: attendance_windows_for_day reads the COMPLETE set of Odoo
-    # hr.attendance records (morning record, auto-lunch's afternoon record, every
-    # mid-shift transfer), so a person clocked in all day gets a full-day goal and
-    # a mid-day transfer moves the goal to the new WC. Manual attributions are the
-    # fallback for production at a WC the operator never transferred into. Per
-    # person, the timeclock wins over the schedule; people with no attendance
-    # records fall back to their schedule.
-    from .. import assignment_windows, timeclock_windows, wc_attributions, machine_breakdown
+    # Merge Odoo attendance + open-ended attributions + schedule into closed
+    # work segments. Odoo is the source of truth for where each operator
+    # worked: its full-day intervals preserve earlier tablet sign-ins, and its
+    # live snapshot supersedes an earlier accidental station as soon as the
+    # person signs in at the new tablet. Manual attributions are the fallback
+    # for production at a WC the operator never transferred into. People with
+    # no attendance records fall back to their schedule.
+    from .. import assignment_windows, wc_attributions, machine_breakdown
+    attendance_windows = timeclock_windows.attendance_windows_for_day(d)
+    if is_live_dashboard:
+        current_windows, _refreshed_at = timeclock_windows.current_attendance_windows()
+        attendance_windows = timeclock_windows.with_current_attendance_overrides(
+            attendance_windows, current_windows
+        )
     segments = assignment_windows.resolve_segments(
         assignments=present_assignments,
         attributions=wc_attributions.creditable_for_day(d),
-        punch_windows=timeclock_windows.attendance_windows_for_day(d),
+        punch_windows=attendance_windows,
         shift_start_utc=window_start_utc,
         cap_utc=window_end_utc,
         time_off_key=staffing.TIME_OFF_KEY,
@@ -207,7 +213,7 @@ def _department_day_data(
     who_by_wc = assignment_windows.dashboard_who_by_wc(
         segments,
         cap_utc=window_end_utc,
-        is_live=is_today_d and now < shift_end_utc,
+        is_live=is_live_dashboard,
     )
 
     ACTIVE_UNITS_THRESHOLD = 5
@@ -508,7 +514,14 @@ def _render_recycling(
 
     # Cache key includes both bounds.
     from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
-    cache_key = ("recycling", start_d.isoformat(), end_d.isoformat(), tv_mode, tv_theme)
+    live_attendance_version = None
+    if range_includes_today:
+        _current_windows, refreshed_at = timeclock_windows.current_attendance_windows()
+        live_attendance_version = refreshed_at.isoformat() if refreshed_at else None
+    cache_key = (
+        "recycling", start_d.isoformat(), end_d.isoformat(), tv_mode, tv_theme,
+        live_attendance_version,
+    )
     cached = get_cached_response(cache_key, includes_today=range_includes_today)
     if cached is not None:
         return cached
@@ -792,8 +805,13 @@ def _render_new_dept(
     range_includes_today = start_d <= today <= end_d
 
     from .._http_cache import get_cached_response, set_cache_headers, store_cached_response
+    live_attendance_version = None
+    if range_includes_today:
+        _current_windows, refreshed_at = timeclock_windows.current_attendance_windows()
+        live_attendance_version = refreshed_at.isoformat() if refreshed_at else None
     cache_key = (
-        "new_dept", start_d.isoformat(), end_d.isoformat(), tv_mode, tv_theme
+        "new_dept", start_d.isoformat(), end_d.isoformat(), tv_mode, tv_theme,
+        live_attendance_version,
     )
     cached = get_cached_response(cache_key, includes_today=range_includes_today)
     if cached is not None:
@@ -949,4 +967,3 @@ def tv_new_dept(request: Request, theme: str | None = Query(default=None)):
         tv_mode=True,
         tv_theme=tv_theme,
     )
-

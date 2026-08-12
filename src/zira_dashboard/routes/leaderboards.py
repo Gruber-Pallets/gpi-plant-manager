@@ -74,7 +74,12 @@ def averages_for_wc(
         # with no goal-days at all gets avg_pct=None (renders "—", not "0%").
         pct_per_day: list[float] = []
         for r in recs:
-            prod_min = productive_minutes_for(r["day"]) - r.get("excluded_minutes", 0.0)
+            # `hours` is a per-work-center fact. A tablet transfer can leave
+            # someone at this station for only part of the day, so its goal
+            # must use the recorded interval rather than the whole shift.
+            recorded_minutes = float(r.get("hours") or 0.0) * 60.0
+            scheduled_minutes = productive_minutes_for(r["day"])
+            prod_min = min(recorded_minutes, scheduled_minutes) - r.get("excluded_minutes", 0.0)
             expected = target_per_hour * max(0.0, prod_min) / 60.0
             if expected > 0:
                 pct_per_day.append(r["units"] / expected)
@@ -141,7 +146,9 @@ def averages_for_group(
         wc_counts: dict[str, int] = {}
         for r in recs:
             wc_counts[r["wc"]] = wc_counts.get(r["wc"], 0) + 1
-            prod_min = productive_minutes_for(r["day"]) - r.get("excluded_minutes", 0.0)
+            recorded_minutes = float(r.get("hours") or 0.0) * 60.0
+            scheduled_minutes = productive_minutes_for(r["day"])
+            prod_min = min(recorded_minutes, scheduled_minutes) - r.get("excluded_minutes", 0.0)
             target = target_per_hour_by_wc.get(r["wc"], 0.0)
             expected = target * max(0.0, prod_min) / 60.0
             if expected > 0:

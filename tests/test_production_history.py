@@ -1,7 +1,8 @@
 from datetime import date
 
 from zira_dashboard import production_history
-from zira_dashboard.production_history import attribute_for_day
+from zira_dashboard.assignment_windows import WorkSegment
+from zira_dashboard.production_history import attribute_for_day, attribute_for_segments
 
 
 def test_attribute_for_day_empty_schedule_returns_empty():
@@ -55,6 +56,105 @@ def test_three_operators_split_evenly():
     for n in ("A", "B", "C"):
         assert out[n]["Hand Build #1"]["units"] == 30.0
         assert out[n]["Hand Build #1"]["downtime"] == 3.0
+
+
+def test_attendance_segments_split_units_and_hours_when_operator_moves_work_centers():
+    """A tablet transfer must stop both credit and time at the old station."""
+    from datetime import datetime, timezone
+
+    utc = timezone.utc
+    start = datetime(2026, 8, 12, 12, 0, tzinfo=utc)
+    moved = datetime(2026, 8, 12, 17, 20, tzinfo=utc)
+    end = datetime(2026, 8, 12, 20, 0, tzinfo=utc)
+    segments = [
+        WorkSegment("Dismantler 3", "Jesus", start, end, "punch"),
+        WorkSegment("Dismantler 3", "Christian", start, moved, "punch"),
+        WorkSegment("Repair 2", "Christian", moved, end, "punch"),
+    ]
+
+    out = attribute_for_segments(
+        segments,
+        wc_totals={"Dismantler 3": (60, 0), "Repair 2": (40, 0)},
+        samples_by_wc={
+            "Dismantler 3": [
+                (datetime(2026, 8, 12, 12, 10, tzinfo=utc), 10),
+                (datetime(2026, 8, 12, 17, 10, tzinfo=utc), 20),
+                (datetime(2026, 8, 12, 17, 30, tzinfo=utc), 30),
+            ],
+            "Repair 2": [(datetime(2026, 8, 12, 17, 30, tzinfo=utc), 40)],
+        },
+        productive_minutes=lambda _person, _wc, s, e: (e - s).total_seconds() / 60,
+    )
+
+    # The two Dismantler samples before Christian's Repair tablet sign-in are
+    # shared; the later Dismantler sample belongs to Jesus alone.
+    assert out["Jesus"]["Dismantler 3"]["units"] == 45.0
+    assert out["Christian"]["Dismantler 3"]["units"] == 15.0
+    assert out["Christian"]["Repair 2"]["units"] == 40.0
+    assert out["Christian"]["Dismantler 3"]["hours"] == 5 + 20 / 60
+    assert out["Christian"]["Repair 2"]["hours"] == 2 + 40 / 60
+
+
+def test_attribution_for_uses_odoo_work_center_intervals_for_historical_credit(monkeypatch):
+    """Stored records retain the Odoo transfer instead of the full-day schedule."""
+    from datetime import datetime, time, timezone
+    from zira_dashboard import (
+        shift_config,
+        staffing,
+        timeclock_windows,
+        wc_attributions,
+    )
+
+    utc = timezone.utc
+    day = date(2026, 8, 1)
+    start = datetime(2026, 8, 1, 12, 0, tzinfo=utc)
+    moved = datetime(2026, 8, 1, 17, 20, tzinfo=utc)
+    end = datetime(2026, 8, 1, 20, 0, tzinfo=utc)
+    schedule = staffing.Schedule(
+        day=day,
+        published=True,
+        assignments={"Dismantler 3": ["Jesus", "Christian"]},
+    )
+    monkeypatch.setattr(staffing, "load_schedule", lambda _d: schedule)
+    monkeypatch.setattr(
+        timeclock_windows,
+        "attendance_windows_for_day_with_availability",
+        lambda _d: ({
+            "Jesus": [("Dismantler 3", start, end)],
+            "Christian": [
+                ("Dismantler 3", start, moved),
+                ("Repair 2", moved, end),
+            ],
+        }, True),
+    )
+    monkeypatch.setattr(wc_attributions, "people_by_wc", lambda _d: {})
+    monkeypatch.setattr(wc_attributions, "creditable_for_day", lambda _d: [])
+    monkeypatch.setattr(wc_attributions, "testing_windows_for_day", lambda _d: {})
+    monkeypatch.setattr(production_history, "_fetch_wc_totals", lambda _client, _d: {
+        "Dismantler 3": (60, 0), "Repair 2": (40, 0),
+    })
+    monkeypatch.setattr(production_history, "_fetch_wc_samples", lambda _client, _d: {
+        "Dismantler 3": [
+            (datetime(2026, 8, 1, 12, 10, tzinfo=utc), 10),
+            (datetime(2026, 8, 1, 17, 10, tzinfo=utc), 20),
+            (datetime(2026, 8, 1, 17, 30, tzinfo=utc), 30),
+        ],
+        "Repair 2": [(datetime(2026, 8, 1, 17, 30, tzinfo=utc), 40)],
+    })
+    monkeypatch.setattr(production_history, "_excluded_minutes_by_person_wc", lambda *_: {})
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _d: time(7, 0))
+    monkeypatch.setattr(shift_config, "shift_end_for", lambda _d: time(15, 0))
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda _d, s, e: (e - s).total_seconds() / 60,
+    )
+
+    out = production_history.attribution_for(day, client=object())
+
+    assert out["Jesus"]["Dismantler 3"]["units"] == 45.0
+    assert out["Christian"]["Dismantler 3"]["hours"] == 5 + 20 / 60
+    assert out["Christian"]["Repair 2"]["units"] == 40.0
 
 
 from zira_dashboard.staffing import TIME_OFF_KEY

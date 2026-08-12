@@ -13,6 +13,7 @@ data and is fully testable. The wrappers (`attribution_for`,
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, datetime, UTC
 
 
@@ -80,6 +81,106 @@ def attribute_for_day(
                 "days_worked": 1,
                 "excluded_minutes": excluded_minutes.get(person, {}).get(wc_name, 0.0),
             }
+    return out
+
+
+def attribute_for_segments(
+    segments,
+    *,
+    wc_totals: dict[str, tuple[int, int]],
+    samples_by_wc: dict[str, list[tuple]],
+    productive_minutes: Callable[[str, str, datetime, datetime], float],
+    excluded_minutes: dict[str, dict[str, float]] | None = None,
+) -> dict[str, dict[str, dict[str, float]]]:
+    """Credit output to the people at each WC when the unit was recorded.
+
+    ``segments`` is the Odoo-attendance-backed output of
+    :func:`assignment_windows.resolve_segments`.  Every positive Zira sample
+    is split only among the people whose segment contains the sample's
+    timestamp.  This lets a tablet work-center sign-in move both credit and
+    worked hours immediately, while the schedule remains the fallback for
+    people with no Odoo work-center attendance.
+
+    Downtime has no per-event timestamp, so it is divided by each person's
+    productive minutes at that work center.  Any total without samples uses
+    the same worked-time ratio as a safe compatibility fallback.
+    """
+    excluded_minutes = excluded_minutes or {}
+    out: dict[str, dict[str, dict[str, float]]] = {}
+    by_wc: dict[str, list] = {}
+
+    def _entry(person: str, wc_name: str) -> dict[str, float]:
+        wc_map = out.setdefault(person, {})
+        return wc_map.setdefault(
+            wc_name,
+            {
+                "units": 0.0,
+                "downtime": 0.0,
+                "hours": 0.0,
+                "days_worked": 1,
+                "excluded_minutes": excluded_minutes.get(person, {}).get(wc_name, 0.0),
+            },
+        )
+
+    # Seed every actually worked interval, including unmetered WCs and zero-
+    # output intervals, so hourly averages have the correct denominator.
+    for segment in segments:
+        minutes = productive_minutes(
+            segment.person_name,
+            segment.wc_name,
+            segment.start_utc,
+            segment.end_utc,
+        )
+        if minutes <= 0:
+            continue
+        _entry(segment.person_name, segment.wc_name)["hours"] += minutes / 60.0
+        by_wc.setdefault(segment.wc_name, []).append(segment)
+
+    # Assign a meter reading only to people at that specific work center at
+    # that instant.  The resolver has already closed an earlier Odoo interval
+    # when a later tablet sign-in starts, so no stale station can receive it.
+    accounted_units: dict[str, float] = {}
+    for wc_name, samples in (samples_by_wc or {}).items():
+        wc_segments = by_wc.get(wc_name, [])
+        for timestamp, raw_units in samples:
+            units = float(raw_units or 0)
+            if units <= 0:
+                continue
+            accounted_units[wc_name] = accounted_units.get(wc_name, 0.0) + units
+            people = []
+            for segment in wc_segments:
+                if segment.start_utc <= timestamp < segment.end_utc:
+                    if segment.person_name not in people:
+                        people.append(segment.person_name)
+            if not people:
+                continue
+            per_person = units / len(people)
+            for person in people:
+                _entry(person, wc_name)["units"] += per_person
+
+    for wc_name, (total_units, downtime) in (wc_totals or {}).items():
+        wc_segments = by_wc.get(wc_name, [])
+        people = []
+        for segment in wc_segments:
+            if segment.person_name not in people:
+                people.append(segment.person_name)
+        if not people:
+            continue
+
+        total_hours = sum(_entry(person, wc_name)["hours"] for person in people)
+        if total_hours <= 0:
+            continue
+        for person in people:
+            share = _entry(person, wc_name)["hours"] / total_hours
+            # Normally every unit has a sample. If an integration returns a
+            # total without samples, preserve that output using worked-time
+            # sharing instead of silently dropping it.
+            remaining_units = max(
+                0.0,
+                float(total_units or 0) - accounted_units.get(wc_name, 0.0),
+            )
+            _entry(person, wc_name)["units"] += remaining_units * share
+            _entry(person, wc_name)["downtime"] += float(downtime or 0) * share
     return out
 
 
@@ -160,11 +261,31 @@ def _apply_testing_offsets(
         samples = samples_by_wc.get(wc, [])
         testing_units = sum(
             u for (t, u) in samples
-            if any(s <= t < e for (s, e) in windows)
+            if any(e is not None and s <= t < e for (s, e) in windows)
         )
         units, downtime = out[wc]
         out[wc] = (max(0, units - testing_units), downtime)
     return out
+
+
+def _without_testing_samples(
+    samples_by_wc: dict[str, list[tuple]],
+    testing_windows: dict[str, list[tuple]],
+) -> dict[str, list[tuple]]:
+    """Drop samples that were produced in a no-credit testing window."""
+    if not testing_windows:
+        return samples_by_wc
+    return {
+        wc_name: [
+            (timestamp, units)
+            for timestamp, units in samples
+            if not any(
+                end is not None and start <= timestamp < end
+                for start, end in testing_windows.get(wc_name, [])
+            )
+        ]
+        for wc_name, samples in samples_by_wc.items()
+    }
 
 
 def _elapsed_minutes_for(d: date) -> int:
@@ -217,15 +338,69 @@ def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
     `attribute_for_day` (empty merged dict).
     """
     from datetime import datetime
-    from . import staffing, wc_attributions
+    from . import (
+        assignment_windows,
+        shift_config,
+        staffing,
+        timeclock_windows,
+        wc_attributions,
+    )
     sched = staffing.load_schedule(d)
     today = datetime.now(UTC).date()
     if d >= today and not sched.published:
         return {}
     wc_totals = _fetch_wc_totals(client, d)
+    testing = wc_attributions.testing_windows_for_day(d)
+    attendance_windows, attendance_available = (
+        timeclock_windows.attendance_windows_for_day_with_availability(d)
+    )
+    if attendance_available and attendance_windows:
+        site_today = datetime.now(shift_config.SITE_TZ).date()
+        if d == site_today:
+            current_windows, _refreshed_at = timeclock_windows.current_attendance_windows()
+            attendance_windows = timeclock_windows.with_current_attendance_overrides(
+                attendance_windows, current_windows
+            )
+
+        shift_start = datetime.combine(
+            d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ
+        ).astimezone(UTC)
+        shift_end = datetime.combine(
+            d, shift_config.shift_end_for(d), tzinfo=shift_config.SITE_TZ
+        ).astimezone(UTC)
+        cap_utc = min(datetime.now(UTC), shift_end) if d == site_today else shift_end
+        segments = assignment_windows.resolve_segments(
+            assignments=sched.assignments,
+            attributions=wc_attributions.creditable_for_day(d),
+            punch_windows=attendance_windows,
+            shift_start_utc=shift_start,
+            cap_utc=cap_utc,
+            time_off_key=staffing.TIME_OFF_KEY,
+            excluded_people=set(sched.assignments.get(staffing.TIME_OFF_KEY, [])),
+        )
+        if segments:
+            samples_by_wc = _fetch_wc_samples(client, d)
+            if testing:
+                wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)
+                samples_by_wc = _without_testing_samples(samples_by_wc, testing)
+            try:
+                excluded = _excluded_minutes_by_person_wc(
+                    d, _effective_now(d, datetime.now(UTC))
+                )
+            except Exception:
+                excluded = {}
+            return attribute_for_segments(
+                segments,
+                wc_totals=wc_totals,
+                samples_by_wc=samples_by_wc,
+                productive_minutes=lambda _person, _wc_name, start, end: (
+                    shift_config.productive_minutes_in_window(d, start, end)
+                ),
+                excluded_minutes=excluded,
+            )
+
     elapsed = _elapsed_minutes_for(d)
     extra = wc_attributions.people_by_wc(d)
-    testing = wc_attributions.testing_windows_for_day(d)
     if testing:
         samples_by_wc = _fetch_wc_samples(client, d)
         wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)

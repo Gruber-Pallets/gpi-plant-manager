@@ -337,6 +337,29 @@ def test_refresh_builds_keyed_snapshot(monkeypatch):
     }
 
 
+def test_refresh_keeps_the_latest_open_attendance_for_each_employee(monkeypatch):
+    """A tablet's later work-center sign-in must win regardless of row order."""
+    from zira_dashboard import live_cache
+
+    monkeypatch.setattr(
+        "zira_dashboard.odoo_client.fetch_open_attendances",
+        lambda: [
+            {"att_id": 90, "employee_odoo_id": 5,
+             "check_in": "2026-06-01T12:20:00+00:00", "wc_name": "Repair 2"},
+            {"att_id": 88, "employee_odoo_id": 5,
+             "check_in": "2026-06-01T12:00:00+00:00", "wc_name": "Dismantler 3"},
+        ],
+    )
+    written = {}
+    monkeypatch.setattr(live_cache, "write_open_attendance", lambda snapshot: written.update(snapshot))
+
+    live_cache.refresh_odoo_open_attendance()
+
+    assert written == {
+        "5": {"att_id": 90, "check_in": "2026-06-01T12:20:00+00:00", "wc_name": "Repair 2"}
+    }
+
+
 def test_refresh_swallows_errors(monkeypatch):
     from zira_dashboard import live_cache
 

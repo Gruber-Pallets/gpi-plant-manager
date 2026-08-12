@@ -95,14 +95,27 @@ def refresh_odoo_open_attendance() -> None:
     try:
         from . import odoo_client
         rows = odoo_client.fetch_open_attendances()
-        snapshot = {
-            str(r["employee_odoo_id"]): {
-                "att_id": r["att_id"],
-                "check_in": r["check_in"],
-                "wc_name": r["wc_name"],
+        # A tablet sign-in can briefly leave more than one attendance row open
+        # for an employee.  Odoo does not promise a row order here, so a plain
+        # dict comprehension could preserve an earlier mistaken station. Keep
+        # the newest attendance explicitly; its work-center tag is the live
+        # source of truth for the dashboard and timeclock.
+        snapshot: dict[str, dict] = {}
+        for row in rows:
+            person_id = str(row["employee_odoo_id"])
+            candidate = {
+                "att_id": row["att_id"],
+                "check_in": row["check_in"],
+                "wc_name": row["wc_name"],
             }
-            for r in rows
-        }
+            existing = snapshot.get(person_id)
+            candidate_key = (str(candidate["check_in"] or ""), int(candidate["att_id"] or 0))
+            existing_key = (
+                (str(existing["check_in"] or ""), int(existing["att_id"] or 0))
+                if existing else None
+            )
+            if existing_key is None or candidate_key > existing_key:
+                snapshot[person_id] = candidate
         write_open_attendance(snapshot)
     except Exception as e:  # noqa: BLE001 — warmer must never die
         _log.warning("refresh_odoo_open_attendance failed: %s", e)

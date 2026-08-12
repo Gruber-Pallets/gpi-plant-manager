@@ -26,6 +26,63 @@ def test_transfer_splits_into_two_windows():
     ]
 
 
+def test_current_odoo_attendance_overrides_an_earlier_window_for_live_labels():
+    """The latest Odoo work center wins over an earlier mistaken sign-in."""
+    from zira_dashboard import assignment_windows, timeclock_windows
+
+    odoo_windows = {
+        "Jesus Ma.": [("Dismantler 3", t(12), None)],
+        "Christian C.": [("Dismantler 3", t(12), None)],
+    }
+    current_odoo_windows = {
+        "Christian C.": [("Repair 2", t(12, 20), None)],
+    }
+
+    windows = timeclock_windows.with_current_attendance_overrides(
+        odoo_windows, current_odoo_windows
+    )
+    segments = assignment_windows.resolve_segments(
+        assignments={}, attributions=[], punch_windows=windows,
+        shift_start_utc=t(12), cap_utc=t(13), time_off_key="__time_off",
+    )
+
+    assert assignment_windows.dashboard_who_by_wc(
+        segments, cap_utc=t(13), is_live=True
+    ) == {
+        "Dismantler 3": "Jesus Ma.",
+        "Repair 2": "Christian C.",
+    }
+
+
+def test_current_attendance_windows_uses_the_live_odoo_work_center(monkeypatch):
+    from zira_dashboard import attendance, live_cache, timeclock_windows
+
+    refreshed_at = t(12, 21)
+    monkeypatch.setattr(
+        live_cache,
+        "read_open_attendance",
+        lambda: ({
+            "101": {
+                "att_id": 88,
+                "check_in": t(12, 20).isoformat(),
+                "wc_name": "Repair 2",
+            },
+            "102": {
+                "att_id": 89,
+                "check_in": t(12, 15).isoformat(),
+                "wc_name": None,
+            },
+        }, refreshed_at),
+    )
+    monkeypatch.setattr(live_cache, "is_stale", lambda _refreshed_at: False)
+    monkeypatch.setattr(attendance, "person_id_to_name", lambda: {"101": "Christian C."})
+
+    windows, version = timeclock_windows.current_attendance_windows()
+
+    assert windows == {"Christian C.": [("Repair 2", t(12, 20), None)]}
+    assert version == refreshed_at
+
+
 def test_still_clocked_in_trailing_window_is_open():
     rows = [{"action": "clock_in", "wc_name": "Dismantler 4", "at": t(13)}]
     assert _segments_from_rows(rows) == [("Dismantler 4", t(13), None)]

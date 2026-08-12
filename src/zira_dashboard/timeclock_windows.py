@@ -1,12 +1,9 @@
-"""Per-person work-center windows derived from the local kiosk punch log
-(timeclock_punches_log). A clock_in/transfer_in opens a window at its
-wc_name; a transfer_out/clock_out (or the next open) closes it. Trailing
-open windows (still clocked in) get end=None and are closed downstream by
-assignment_windows against the shift cap.
+"""Per-person work-center windows.
 
-Kiosk is still a Phase-0 pilot, so most operators have no punches yet --
-punch_windows_for_day returns {} for them and the resolver falls back to
-schedule + manual attributions.
+The dashboard and production records use Odoo's tagged attendance intervals
+as the source of truth. This module also retains the local kiosk-log helper
+for legacy callers; workers without a tagged Odoo interval fall back to the
+published schedule and manual attributions.
 """
 from __future__ import annotations
 
@@ -86,6 +83,70 @@ def punch_windows_for_day(day: date) -> dict[str, list[tuple[str, datetime, date
         if segs:
             out[name] = segs
     return out
+
+
+def with_current_attendance_overrides(
+    attendance_windows: dict[str, list[tuple[str, datetime, datetime | None]]],
+    current_windows: dict[str, list[tuple[str, datetime, datetime | None]]],
+) -> dict[str, list[tuple[str, datetime, datetime | None]]]:
+    """Layer Odoo's current attendance record over that day's history.
+
+    ``attendance_windows`` holds the day's Odoo attendance intervals.  The
+    open-attendance snapshot is Odoo's live source of truth: if it names a
+    work center, append that current interval for the person.  The assignment
+    resolver closes an earlier open interval at this new check-in time, which
+    preserves any real prior work while moving the active operator to the
+    latest tablet work center.
+    """
+    merged = {
+        name: list(windows)
+        for name, windows in (attendance_windows or {}).items()
+    }
+    for name, windows in (current_windows or {}).items():
+        if windows:
+            existing = merged.setdefault(name, [])
+            for window in windows:
+                if window not in existing:
+                    existing.append(window)
+    return merged
+
+
+def current_attendance_windows() -> tuple[
+    dict[str, list[tuple[str, datetime, datetime | None]]], datetime | None
+]:
+    """Return Odoo's current, work-center-tagged attendance by roster name.
+
+    The normal day intervals retain history; this small live overlay makes
+    tablet sign-ins visible as soon as the Odoo open-attendance snapshot is
+    refreshed.  Missing work centers are intentionally ignored: they provide
+    no reliable station to display or credit.
+    """
+    try:
+        from . import attendance, live_cache
+
+        snapshot, refreshed_at = live_cache.read_open_attendance()
+        if snapshot is None or live_cache.is_stale(refreshed_at):
+            live_cache.refresh_odoo_open_attendance()
+            snapshot, refreshed_at = live_cache.read_open_attendance()
+        if not snapshot:
+            return {}, refreshed_at
+        id_to_name = attendance.person_id_to_name()
+    except Exception:
+        return {}, None
+
+    out: dict[str, list[tuple[str, datetime, datetime | None]]] = {}
+    for person_id, record in snapshot.items():
+        name = id_to_name.get(str(person_id))
+        wc_name = record.get("wc_name") if isinstance(record, dict) else None
+        check_in = record.get("check_in") if isinstance(record, dict) else None
+        if not name or not wc_name or not check_in:
+            continue
+        try:
+            started_at = datetime.fromisoformat(check_in)
+        except (TypeError, ValueError):
+            continue
+        out[name] = [(wc_name, started_at, None)]
+    return out, refreshed_at
 
 
 def _windows_from_intervals(intervals: list[dict]) -> list[tuple[str, datetime, datetime | None]]:

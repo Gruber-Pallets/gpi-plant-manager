@@ -2,10 +2,10 @@
 of "who worked where, when":
 
   1. The published schedule (full-shift assignments).
-  2. Kiosk punch windows (clock_in/transfer_in -> transfer_out/clock_out).
+  2. Odoo attendance work-center windows (tablet sign-ins and transfers).
   3. Open-ended retro WC attributions (end_utc may be None = still running).
 
-Hybrid precedence: a person's KIOSK PUNCHES win over both their schedule
+Hybrid precedence: a person's ODOO ATTENDANCE WINDOWS win over both their schedule
 segment and any manual attribution for that day -- they were physically where
 they punched. People with no punches fall back to schedule + attributions.
 
@@ -68,7 +68,7 @@ def resolve_segments(
                 continue
             _add(person, wc, shift_start_utc, None, "schedule")
 
-    # 2. Punches -- authoritative for the people who have them.
+    # 2. Odoo attendance windows -- authoritative for the people who have them.
     for person, windows in punch_windows.items():
         for (wc, start, end) in windows:
             if not wc:

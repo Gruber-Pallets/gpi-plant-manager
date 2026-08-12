@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-12
 
+### Tablet work areas stay current
+
+#### Fixes
+
+- **The dashboard now uses the last work area a person signs in to on a tablet.** When someone switches work areas, their name, work time, and production move with them. This keeps their hourly numbers fair.
+
 ### Clock-ins stay cleared
 
 #### Fixes

@@ -101,6 +101,19 @@ def test_averages_custom_hours_shrinks_expected():
     assert abs(rows[0]["avg_pct"] - 1.0) < 1e-9
 
 
+def test_averages_uses_recorded_partial_work_center_hours_for_expected():
+    # Christian spent four hours at this WC. The expected amount must use
+    # those hours, not the full seven-hour schedule, so the rate stays fair
+    # after a tablet transfer. Four hours is the leaderboard's minimum for a
+    # qualified daily score.
+    records = [{
+        "day": date(2026, 4, 27), "person": "Christian", "wc": "WC1",
+        "units": 120, "downtime": 0.0, "hours": 4.0,
+    }]
+    rows = averages_for_wc(records, 30.0, _const_productive, "pct")
+    assert abs(rows[0]["avg_pct"] - 1.0) < 1e-9
+
+
 def test_averages_empty_records_returns_empty_list():
     assert averages_for_wc([], 30.0, _const_productive, "units") == []
 
@@ -134,6 +147,22 @@ def test_group_averages_basic_two_wcs():
     # All three days were exactly at goal → pct = 1.0
     assert abs(r["avg_pct"] - 1.0) < 1e-9
     assert r["top_wc"] == "Repair-1"  # 2 days vs 1
+
+
+def test_group_percent_uses_each_work_centers_recorded_hours_after_transfer():
+    records = [
+        {"day": date(2026, 4, 27), "person": "Christian", "wc": "Repair-1",
+         "units": 90, "downtime": 0.0, "hours": 3.0},
+        {"day": date(2026, 4, 27), "person": "Christian", "wc": "Repair-2",
+         "units": 120, "downtime": 0.0, "hours": 4.0},
+    ]
+    rows = averages_for_group(
+        records,
+        {"Repair-1": 30.0, "Repair-2": 30.0},
+        _const_productive,
+        "pct",
+    )
+    assert abs(rows[0]["avg_pct"] - 1.0) < 1e-9
 
 
 def test_group_averages_top_wc_alphabetical_tiebreak():
