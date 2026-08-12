@@ -78,6 +78,15 @@
     Your session timed out — tap your name again to clock in or out.
   </div>
   {% endif %}
+  {% if roster_unavailable %}
+  <div class="k-warning" role="alert"
+       style="max-width: 720px; text-align: center; margin: 3rem auto 0; padding: 2rem; font-size: 1.4rem;">
+    <strong>Names are unavailable. Please get a manager.</strong>
+    <span class="k-es" style="display:block; margin-top:0.75rem;">
+      Los nombres no están disponibles. Por favor, busca a un gerente.
+    </span>
+  </div>
+  {% else %}
   <input
     type="text" id="filter" placeholder="Search your name… · Busca tu nombre…"
     aria-label="Search your name"
@@ -107,8 +116,10 @@
     </a>
     {% endfor %}
   </div>
+  {% endif %}
 </div>
 <script>
+  {% if not roster_unavailable %}
   document.getElementById('filter').addEventListener('input', function(e) {
     var q = e.target.value.toLowerCase().trim();
     document.querySelectorAll('.person-btn').forEach(function(btn) {
@@ -116,6 +127,7 @@
       btn.style.display = (!q || name.indexOf(q) >= 0) ? '' : 'none';
     });
   });
+  {% endif %}
 
   (function() {
     var scheduleTrigger = document.getElementById('saturday-schedule-trigger');

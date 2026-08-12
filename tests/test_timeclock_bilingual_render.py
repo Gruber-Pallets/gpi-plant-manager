@@ -53,3 +53,15 @@ def test_home_search_input_has_accessible_name():
 
     assert 'id="filter"' in html
     assert 'aria-label="Search your name"' in html
+
+
+def test_home_with_people_does_not_show_the_roster_unavailable_alert():
+    html = _env().get_template("timeclock_home.html").render(
+        people=[{"id": 1, "name": "Maria Garcia"}],
+        roster_unavailable=False,
+        session_expired=False,
+    )
+
+    assert "Names are unavailable" not in html
+    assert "Maria Garcia" in html
+    assert 'id="filter"' in html

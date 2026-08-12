@@ -1,4 +1,5 @@
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
+import logging
 
 from fastapi.testclient import TestClient
 
@@ -71,6 +72,28 @@ def test_person_lookup_queries_people_table(monkeypatch):
     assert timeclock._person_by_id(1) == PERSON
     assert "FROM people" in captured["sql"]
     assert captured["params"] == (1,)
+
+
+def test_empty_home_roster_shows_bilingual_manager_alert_and_logs_diagnostics(
+    monkeypatch,
+    caplog,
+):
+    last_good_sync = datetime(2026, 8, 12, 12, 58, tzinfo=UTC)
+    alert = {"error": "unsafe snapshot", "invalid_count": 36}
+    monkeypatch.setattr(timeclock.db, "query", lambda *_args: [])
+    monkeypatch.setattr(timeclock, "_saturday_banner_context", lambda: None)
+    monkeypatch.setattr(timeclock.odoo_sync, "_read_last_sync", lambda: last_good_sync)
+    monkeypatch.setattr(timeclock.odoo_sync, "roster_sync_alert", lambda: alert)
+
+    with caplog.at_level(logging.CRITICAL, logger=timeclock.__name__):
+        response = client.get("/timeclock")
+
+    assert response.status_code == 200
+    assert "Names are unavailable. Please get a manager." in response.text
+    assert "Los nombres no están disponibles. Por favor, busca a un gerente." in response.text
+    assert 'id="filter"' not in response.text
+    assert "last_good_sync=2026-08-12T12:58:00+00:00" in caplog.text
+    assert "unsafe snapshot" in caplog.text
 
 
 def test_home_shows_bilingual_banner_with_deadline(monkeypatch):

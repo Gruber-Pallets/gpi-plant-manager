@@ -63,6 +63,7 @@ from .. import (
     timeclock_sync,
     unexpected_worker,
     odoo_client,
+    odoo_sync,
 )
 from .. import employee_notifications, saturday_work_reminder, time_off_reminder
 
@@ -522,11 +523,23 @@ def timeclock_home(request: Request, expired: int = Query(default=0)):
     rows = db.query(
         "SELECT id, name FROM people WHERE active = TRUE AND NOT excluded ORDER BY lower(name)"
     )
+    roster_unavailable = not rows
+    if roster_unavailable:
+        try:
+            last_good_sync = odoo_sync._read_last_sync()
+        except Exception:  # noqa: BLE001 -- the kiosk warning must always render
+            last_good_sync = None
+        _log.critical(
+            "timeclock roster unavailable: active rows=0 last_good_sync=%s alert=%r",
+            last_good_sync.isoformat() if last_good_sync else "unknown",
+            odoo_sync.roster_sync_alert(),
+        )
     return templates.TemplateResponse(
         request,
         "timeclock_home.html",
         {
             "people": rows,
+            "roster_unavailable": roster_unavailable,
             "session_expired": bool(expired),
             "saturday_banner": _saturday_banner_context(),
         },
