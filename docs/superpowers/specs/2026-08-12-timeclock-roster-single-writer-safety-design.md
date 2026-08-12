@@ -1,6 +1,6 @@
 # Timeclock Roster Single-Writer Safety Design
 
-**Status:** Approved for implementation
+**Status:** Implemented
 
 ## Problem
 

@@ -50,7 +50,7 @@
 - Consumes: `staffing.Person` and `staffing.save_roster(people: list[Person]) -> None`.
 - Produces: an upsert that uses `active` only on insert and never in the conflict-update clause.
 
-- [ ] **Step 1: Write the failing stale-cache regression**
+- [x] **Step 1: Write the failing stale-cache regression**
 
 Create a fake context-managed cursor and assert against the exact ownership boundary:
 
@@ -89,7 +89,7 @@ def test_save_roster_never_updates_active_on_an_existing_person(monkeypatch):
     assert params == ("Cached Worker", False, True, 41)
 ```
 
-- [ ] **Step 2: Run the ownership test red**
+- [x] **Step 2: Run the ownership test red**
 
 Run:
 
@@ -99,7 +99,7 @@ DATABASE_URL= .venv/bin/python -m pytest tests/test_staffing_roster_status_owner
 
 Expected: FAIL because the conflict clause currently contains `active = EXCLUDED.active`.
 
-- [ ] **Step 3: Remove `active` from the existing-row update**
+- [x] **Step 3: Remove `active` from the existing-row update**
 
 Keep `active` in the `INSERT` values so a newly added local person remains active. Change only the conflict clause:
 
@@ -116,7 +116,7 @@ cur.execute(
 
 Update the docstring to say explicitly that Odoo owns existing employment status.
 
-- [ ] **Step 4: Run the ownership test green and commit**
+- [x] **Step 4: Run the ownership test green and commit**
 
 Run:
 
@@ -153,7 +153,7 @@ git push origin main
 - Produces: `odoo_sync._employee_snapshot_error(active_rows, status_rows) -> tuple[str, int] | None`.
 - Preserves: `odoo_sync.sync(force: bool = False) -> SyncResult`, where `employee_count` remains the active-employee count.
 
-- [ ] **Step 1: Write the Odoo request-shape test**
+- [x] **Step 1: Write the Odoo request-shape test**
 
 Add this beside the existing `fetch_employees` test:
 
@@ -174,7 +174,7 @@ def test_fetch_employee_statuses_includes_archived_records(monkeypatch):
     assert kwargs["context"] == {"active_test": False}
 ```
 
-- [ ] **Step 2: Replace unsafe-payload tests with complete snapshot tests**
+- [x] **Step 2: Replace unsafe-payload tests with complete snapshot tests**
 
 Keep the existing active-only contradiction test: a record returned from
 `fetch_employees()` with `active is not True` must still be rejected. Add tests
@@ -226,7 +226,7 @@ Update the successful-sync unit fixture to return
 `[{"id": 1, "active": True}]` from `fetch_employee_statuses` and retain its
 assertion that the prior alert clears only on success.
 
-- [ ] **Step 3: Write Postgres regressions for omission and explicit archive**
+- [x] **Step 3: Write Postgres regressions for omission and explicit archive**
 
 Extend `_stub_client` with an optional `employee_statuses` argument. Its
 default derives `id` and `active` from `employees`, while an explicit value is
@@ -277,7 +277,7 @@ def test_sync_preserves_an_omitted_person_until_odoo_explicitly_archives_them(mo
     assert rows == [{"odoo_id": 99100, "active": True}, {"odoo_id": 99101, "active": False}]
 ```
 
-- [ ] **Step 4: Run the new sync tests red**
+- [x] **Step 4: Run the new sync tests red**
 
 Run:
 
@@ -290,7 +290,7 @@ not exist and the Inbox copy is still specific to active-field corruption.
 The Postgres regression is intentionally exercised by CI; locally it skips
 unless a safe test database is configured.
 
-- [ ] **Step 5: Add the archived-inclusive status read**
+- [x] **Step 5: Add the archived-inclusive status read**
 
 Add to `odoo_client.py` without changing the active-only `fetch_employees()`
 contract:
@@ -307,7 +307,7 @@ def fetch_employee_statuses() -> list[dict]:
     )
 ```
 
-- [ ] **Step 6: Validate both snapshots before dependent reads or writes**
+- [x] **Step 6: Validate both snapshots before dependent reads or writes**
 
 Add a pure validator to `odoo_sync.py`. It must reject an empty active list,
 non-dict rows, nonpositive or duplicate IDs, blank active-employee names,
@@ -365,7 +365,7 @@ skills or any database cursor. On error, persist the existing roster alert
 with `invalid_count`, `received_count`, `error`, and `detected_at`, then return
 the failed `SyncResult` without changing the success timestamp.
 
-- [ ] **Step 7: Apply only explicit statuses**
+- [x] **Step 7: Apply only explicit statuses**
 
 Keep the active upsert loop, but pass `True` explicitly and build skills only
 for `active_rows`. Remove the `seen_employee_ids` set-difference update.
@@ -391,7 +391,7 @@ Change the Inbox detail to generic copy:
 "Odoo sent an unsafe employee list. The timeclock is using the last good update."
 ```
 
-- [ ] **Step 8: Run sync tests green and commit**
+- [x] **Step 8: Run sync tests green and commit**
 
 Run:
 
@@ -425,7 +425,7 @@ git push origin main
 - Produces: template context `roster_unavailable: bool`.
 - Preserves: the existing `/timeclock` route, search input, employee links, Saturday banner, and session-expired behavior when people exist.
 
-- [ ] **Step 1: Write route and template regressions**
+- [x] **Step 1: Write route and template regressions**
 
 Add a route test that returns no people, disables the Saturday banner, and
 patches the diagnostic reads:
@@ -456,7 +456,7 @@ Add a template render test with one person and `roster_unavailable=False` that
 asserts the employee link and search input remain and the unavailable copy is
 absent.
 
-- [ ] **Step 2: Run the timeclock tests red**
+- [x] **Step 2: Run the timeclock tests red**
 
 Run:
 
@@ -467,7 +467,7 @@ DATABASE_URL= .venv/bin/python -m pytest tests/test_timeclock_saturday_recruitin
 Expected: FAIL because the route does not expose `roster_unavailable`, does
 not log the critical diagnostic, and still renders the search box.
 
-- [ ] **Step 3: Add guarded diagnostics and context**
+- [x] **Step 3: Add guarded diagnostics and context**
 
 Import `odoo_sync` in `routes/timeclock.py`. After the people query:
 
@@ -488,7 +488,7 @@ if roster_unavailable:
 Pass `roster_unavailable` to the template. `roster_sync_alert()` already
 contains its own storage guard.
 
-- [ ] **Step 4: Render one of two mutually exclusive home states**
+- [x] **Step 4: Render one of two mutually exclusive home states**
 
 In `timeclock_home.html`, keep the session banner first. When
 `roster_unavailable` is true, render:
@@ -507,7 +507,7 @@ Put the existing filter, grid, and filter-event script in the `{% else %}`
 branch so the unavailable page has no nonfunctional search control. Keep the
 Saturday modal script outside this branch.
 
-- [ ] **Step 5: Run the timeclock tests green and commit**
+- [x] **Step 5: Run the timeclock tests green and commit**
 
 Run:
 
@@ -539,7 +539,7 @@ git push origin main
 - Consumes: all Task 1-3 behavior.
 - Produces: verified commits on `origin/main` plus production count, refresh, Reserve-save, and timeclock-page evidence.
 
-- [ ] **Step 1: Add the plain-language patch note**
+- [x] **Step 1: Add the plain-language patch note**
 
 At the top of the existing August 12 section, add:
 
@@ -551,7 +551,7 @@ At the top of the existing August 12 section, add:
 - **The timeclock now protects the list of names during updates.** Changing a person's Reserve setting cannot hide everyone. If the list ever cannot load, the tablet tells workers to get a manager instead of showing a blank page.
 ```
 
-- [ ] **Step 2: Run focused and full local verification**
+- [x] **Step 2: Run focused and full local verification**
 
 Run these fresh commands:
 
@@ -567,7 +567,7 @@ Expected: all runnable tests pass, Postgres-gated tests skip without a local
 test database, Ruff is clean, compilation exits zero, and the diff check emits
 no output.
 
-- [ ] **Step 3: Review scope, mark the spec implemented, and commit**
+- [x] **Step 3: Review scope, mark the spec implemented, and commit**
 
 Change the design status only after Step 2 succeeds. Then run:
 
@@ -581,13 +581,13 @@ git push origin main
 
 Do not add `.cursorignore`, `.python-version`, or `uv.lock`.
 
-- [ ] **Step 4: Wait for Railway and verify the deployed revision**
+- [x] **Step 4: Wait for Railway and verify the deployed revision**
 
 Use Railway deployment status/logs to wait for the implementation commit to
 report healthy. Verify the deployed commit hash matches `origin/main` before
 production mutation checks.
 
-- [ ] **Step 5: Verify the production failure path and normal path**
+- [x] **Step 5: Verify the production failure path and normal path**
 
 Run read-only production queries to record total, active, inactive, excluded,
 and `local_dirty` counts. Confirm the `/timeclock` query returns the Odoo-active
