@@ -234,6 +234,82 @@ def _roster_names(employees: list[dict]) -> dict[int, str]:
     return labels
 
 
+def _employee_snapshot_error(
+    active_rows: object,
+    status_rows: object,
+) -> tuple[str, int] | None:
+    """Validate both Odoo roster views before dependent reads or local writes."""
+    if not isinstance(active_rows, list) or not isinstance(status_rows, list):
+        return "Odoo employee payload was malformed; sync skipped.", 1
+    if not active_rows:
+        return "Odoo active employee payload was empty; sync skipped.", 0
+
+    active_by_id: dict[int, dict] = {}
+    invalid_active = 0
+    for employee in active_rows:
+        if not isinstance(employee, dict):
+            invalid_active += 1
+            continue
+        employee_id = employee.get("id")
+        if (
+            isinstance(employee_id, bool)
+            or not isinstance(employee_id, int)
+            or employee_id <= 0
+            or employee_id in active_by_id
+            or not isinstance(employee.get("name"), str)
+            or not employee["name"].strip()
+            or employee.get("active") is not True
+        ):
+            invalid_active += 1
+            continue
+        active_by_id[employee_id] = employee
+
+    if invalid_active:
+        return (
+            "Odoo active employee payload contained "
+            f"{invalid_active} malformed or duplicate record(s); sync skipped.",
+            invalid_active,
+        )
+
+    status_by_id: dict[int, bool] = {}
+    invalid_status = 0
+    for status in status_rows:
+        if not isinstance(status, dict):
+            invalid_status += 1
+            continue
+        employee_id = status.get("id")
+        active = status.get("active")
+        if (
+            isinstance(employee_id, bool)
+            or not isinstance(employee_id, int)
+            or employee_id <= 0
+            or employee_id in status_by_id
+            or not isinstance(active, bool)
+        ):
+            invalid_status += 1
+            continue
+        status_by_id[employee_id] = active
+
+    if invalid_status:
+        return (
+            "Odoo employee status payload contained "
+            f"{invalid_status} malformed or duplicate record(s); sync skipped.",
+            invalid_status,
+        )
+
+    contradicted = sum(
+        status_by_id.get(employee_id) is not True
+        for employee_id in active_by_id
+    )
+    if contradicted:
+        return (
+            "Odoo employee status payload contradicted or omitted "
+            f"{contradicted} active employee(s); sync skipped.",
+            contradicted,
+        )
+    return None
+
+
 def sync(force: bool = False) -> SyncResult:
     last = _read_last_sync()
     now = datetime.now(UTC)
@@ -245,21 +321,14 @@ def sync(force: bool = False) -> SyncResult:
 
     try:
         employees = odoo_client.fetch_employees()
-        # ``fetch_employees`` explicitly asks Odoo for ``active = True``.
-        # Treat a contradictory inactive record as an unsafe upstream payload,
-        # not an instruction to archive the local workforce. In particular,
-        # this prevents a malformed all-inactive response from blanking every
-        # Staffing picker before the next successful sync can repair it.
-        inactive_count = sum(employee.get("active") is not True for employee in employees)
-        if inactive_count:
-            error = (
-                "Odoo employee payload contained "
-                f"{inactive_count} inactive or malformed record(s) despite the active-only "
-                "query; sync skipped."
-            )
+        employee_statuses = odoo_client.fetch_employee_statuses()
+        snapshot_error = _employee_snapshot_error(employees, employee_statuses)
+        if snapshot_error:
+            error, invalid_count = snapshot_error
             _set_roster_sync_alert(
                 {
-                    "invalid_count": inactive_count,
+                    "invalid_count": invalid_count,
+                    "received_count": len(employees) if isinstance(employees, list) else 0,
                     "error": error,
                     "detected_at": now.isoformat(),
                 },
@@ -346,9 +415,7 @@ def sync(force: bool = False) -> SyncResult:
             (pulled_at, columns),
         )
         # Employees: upsert by odoo_id (stable across renames).
-        seen_employee_ids = set()
         for emp in employees:
-            seen_employee_ids.add(emp["id"])
             # Odoo selection fields return False when unset; normalize to None.
             wage_type = emp.get("wage_type") or None
             spanish_level = int(buckets.get(spanish_level_ids.get(emp["id"]), 0))
@@ -368,22 +435,22 @@ def sync(force: bool = False) -> SyncResult:
                 "is_flexible = EXCLUDED.is_flexible, "
                 "last_pulled_at = EXCLUDED.last_pulled_at",
                 (emp["id"], roster_names[int(emp["id"])],
-                 (emp.get("name") or "").strip(), bool(emp.get("active", True)),
+                 (emp.get("name") or "").strip(), True,
                  wage_type, spanish_speaker, spanish_level,
                  _m2o_id(emp.get("resource_calendar_id")), is_flex, pulled_at),
             )
-        # Deactivate Odoo-mapped people who disappeared from the response —
-        # i.e., archived (or deleted) in Odoo. fetch_employees() searches
-        # with active=True so this set covers both cases. Guard against
-        # an unexpectedly empty response (we'd never want to deactivate
-        # everyone) by skipping when no employees came back at all.
-        if seen_employee_ids:
+        # Only an explicit archived status can deactivate a local person.
+        # Absence from either Odoo response is never treated as an instruction.
+        inactive_ids = [
+            status["id"]
+            for status in employee_statuses
+            if status["active"] is False
+        ]
+        if inactive_ids:
             cur.execute(
                 "UPDATE people SET active = FALSE, last_pulled_at = %s "
-                "WHERE odoo_id IS NOT NULL "
-                "AND odoo_id != ALL(%s) "
-                "AND active = TRUE",
-                (pulled_at, list(seen_employee_ids)),
+                "WHERE odoo_id = ANY(%s) AND active = TRUE",
+                (pulled_at, inactive_ids),
             )
         # Refresh person_skills: for each employee, replace their skill levels
         # with the Odoo set. We use DELETE + INSERT inside one transaction so

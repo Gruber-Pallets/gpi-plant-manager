@@ -459,8 +459,7 @@ def build_snapshot() -> dict:
                     "name": "Timeclock roster",
                     "label": "Odoo roster update blocked",
                     "detail": (
-                        "Odoo sent invalid active-status data for "
-                        f"{roster_sync_alert.get('invalid_count') or 'some'} people. "
+                        "Odoo sent an unsafe employee list. "
                         "The timeclock is using the last good update."
                     ),
                     "priority": "urgent",

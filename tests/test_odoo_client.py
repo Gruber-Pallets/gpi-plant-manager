@@ -28,6 +28,7 @@ def test_sync_rejects_inactive_employee_payload_before_any_write(monkeypatch):
         "fetch_employees",
         lambda: [{"id": 1, "name": "Unexpectedly Inactive", "active": False}],
     )
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employee_statuses", lambda: [])
     monkeypatch.setattr(
         odoo_sync.odoo_client,
         "fetch_skills_for",
@@ -38,7 +39,7 @@ def test_sync_rejects_inactive_employee_payload_before_any_write(monkeypatch):
 
     assert result.ok is False
     assert result.refreshed is False
-    assert "inactive" in (result.error or "").lower()
+    assert "malformed" in (result.error or "").lower()
 
 
 def test_sync_rejects_non_boolean_active_employee_payload_before_any_write(monkeypatch):
@@ -51,6 +52,7 @@ def test_sync_rejects_non_boolean_active_employee_payload_before_any_write(monke
         "fetch_employees",
         lambda: [{"id": 1, "name": "Malformed Active", "active": 0}],
     )
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employee_statuses", lambda: [])
     monkeypatch.setattr(
         odoo_sync.odoo_client,
         "fetch_skills_for",
@@ -61,7 +63,7 @@ def test_sync_rejects_non_boolean_active_employee_payload_before_any_write(monke
 
     assert result.ok is False
     assert result.refreshed is False
-    assert "active-only" in (result.error or "").lower()
+    assert "malformed" in (result.error or "").lower()
 
 
 def test_sync_records_an_alert_for_a_non_boolean_active_value(monkeypatch):
@@ -75,6 +77,7 @@ def test_sync_records_an_alert_for_a_non_boolean_active_value(monkeypatch):
         "fetch_employees",
         lambda: [{"id": 1, "name": "Malformed Active", "active": 0}],
     )
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employee_statuses", lambda: [])
     monkeypatch.setattr(
         app_settings,
         "set_setting",
@@ -86,7 +89,59 @@ def test_sync_records_an_alert_for_a_non_boolean_active_value(monkeypatch):
     assert result.ok is False
     assert saved[0][0] == odoo_sync.ROSTER_SYNC_ALERT_KEY
     assert saved[0][1]["invalid_count"] == 1
-    assert "active-only" in saved[0][1]["error"]
+    assert "malformed" in saved[0][1]["error"]
+
+
+@pytest.mark.parametrize(
+    ("active_rows", "status_rows", "message"),
+    [
+        ([], [], "empty"),
+        (
+            [{"id": 1, "name": "A", "active": True}],
+            [{"id": 1, "active": 1}],
+            "malformed",
+        ),
+        (
+            [{"id": 1, "name": "A", "active": True}],
+            [{"id": 1, "active": True}, {"id": 1, "active": True}],
+            "duplicate",
+        ),
+        (
+            [{"id": 1, "name": "A", "active": True}],
+            [{"id": 1, "active": False}],
+            "contradict",
+        ),
+    ],
+)
+def test_sync_rejects_unsafe_employee_snapshots_before_writes(
+    monkeypatch, active_rows, status_rows, message
+):
+    from zira_dashboard import app_settings, db, odoo_sync
+
+    saved = []
+    monkeypatch.setattr(odoo_sync, "_read_last_sync", lambda: None)
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employees", lambda: active_rows)
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employee_statuses", lambda: status_rows)
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_skills_for",
+        lambda _ids: pytest.fail("unsafe snapshot reached dependent reads"),
+    )
+    monkeypatch.setattr(db, "cursor", lambda: pytest.fail("unsafe snapshot reached writes"))
+    monkeypatch.setattr(
+        app_settings,
+        "set_setting",
+        lambda key, value: saved.append((key, value)),
+    )
+
+    result = odoo_sync.sync(force=True)
+
+    assert result.ok is False
+    assert result.refreshed is False
+    assert message in (result.error or "").lower()
+    assert saved[0][0] == odoo_sync.ROSTER_SYNC_ALERT_KEY
+    assert saved[0][1]["error"] == result.error
+    assert all(key != "odoo_last_sync" for key, _value in saved)
 
 
 def test_successful_fresh_sync_clears_roster_alert(monkeypatch):
@@ -109,6 +164,11 @@ def test_successful_fresh_sync_clears_roster_alert(monkeypatch):
         odoo_sync.odoo_client,
         "fetch_employees",
         lambda: [{"id": 1, "name": "Healthy Person", "active": True}],
+    )
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employee_statuses",
+        lambda: [{"id": 1, "active": True}],
     )
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skills_for", lambda _ids: {})
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_spanish_skill_level_ids", lambda: {})
@@ -439,6 +499,22 @@ def test_fetch_employees_returns_active_only_with_required_fields(monkeypatch):
     # Search must filter to active only
     args = calls[0][2]
     assert ("active", "=", True) in args[0]
+
+
+def test_fetch_employee_statuses_includes_archived_records(monkeypatch):
+    responses = {
+        ("hr.employee", "search_read"): [
+            {"id": 1, "active": True},
+            {"id": 2, "active": False},
+        ],
+    }
+    calls = _stub_execute(monkeypatch, responses)
+
+    assert odoo_client.fetch_employee_statuses() == responses[("hr.employee", "search_read")]
+    _model, _method, args, kwargs = calls[0]
+    assert args[0] == []
+    assert kwargs["fields"] == ["id", "active"]
+    assert kwargs["context"] == {"active_test": False}
 
 
 def test_fetch_skills_for_groups_by_employee_id(monkeypatch):

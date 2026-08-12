@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-12
 
+### Names stay on the time clock
+
+#### Fixes
+
+- **The time clock now protects its list of names during updates.** Changing a person's Reserve setting cannot hide everyone. If an update looks broken, the time clock keeps the last good list.
+
 ### Work-area records stay accurate
 
 #### Fixes

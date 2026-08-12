@@ -61,8 +61,19 @@ def _stub_client(
     columns_meta,
     buckets,
     spanish_level_ids=None,
+    employee_statuses=None,
 ):
+    if employee_statuses is None:
+        employee_statuses = [
+            {"id": employee["id"], "active": employee.get("active")}
+            for employee in employees
+        ]
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employees", lambda: employees)
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employee_statuses",
+        lambda: employee_statuses,
+    )
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skills_for", lambda ids: skills_for)
     monkeypatch.setattr(
         odoo_sync.odoo_client,
@@ -205,7 +216,7 @@ def test_sync_updates_skill_name_by_stable_odoo_id(monkeypatch):
     db.execute("DELETE FROM skills WHERE odoo_id = 7010 OR name IN ('TestRenameOld', 'TestRenameNew')")
     _stub_client(
         monkeypatch,
-        employees=[],
+        employees=[{"id": 99990, "name": "Test Sync", "active": True}],
         skills_for={},
         columns_meta=[
             {"id": 7010, "name": "TestRenameOld", "type": "Production Skills"},
@@ -216,7 +227,7 @@ def test_sync_updates_skill_name_by_stable_odoo_id(monkeypatch):
 
     _stub_client(
         monkeypatch,
-        employees=[],
+        employees=[{"id": 99990, "name": "Test Sync", "active": True}],
         skills_for={},
         columns_meta=[
             {"id": 7010, "name": "TestRenameNew", "type": "Production Skills"},
@@ -241,7 +252,7 @@ def test_sync_hides_stale_legacy_null_id_skill_after_odoo_rename(monkeypatch):
     )
     _stub_client(
         monkeypatch,
-        employees=[],
+        employees=[{"id": 99990, "name": "Test Sync", "active": True}],
         skills_for={},
         columns_meta=[
             {"id": 7011, "name": "TestLegacyNew", "type": "Production Skills"},
@@ -313,7 +324,7 @@ def test_sync_merges_legacy_name_collision_before_stable_odoo_rename(monkeypatch
     )
     _stub_client(
         monkeypatch,
-        employees=[],
+        employees=[{"id": 99990, "name": "Test Sync", "active": True}],
         skills_for={},
         columns_meta=[
             {"id": 7012, "name": "TestCollisionNew", "type": "Production Skills"},
@@ -426,44 +437,65 @@ def test_sync_upsert_does_not_clear_excluded_flag():
     db.execute("DELETE FROM people WHERE odoo_id = %s", (999995,))
 
 
-def test_sync_deactivates_employees_missing_from_odoo_response(monkeypatch):
-    """When Odoo archives an employee, fetch_employees() (which filters
-    on active=True) stops returning them. The sync must then flip the
-    local people.active to FALSE so they drop out of the scheduler."""
+def test_sync_preserves_an_omitted_person_until_odoo_explicitly_archives_them(monkeypatch):
+    """Absence is not proof of archival; only an explicit false status is."""
     from zira_dashboard import db
 
-    # Seed two people: one will be in the next sync, one won't (archived).
     cols = [
         {"name": "TestRepair", "type": "skill"},
         {"name": "TestDismantler", "type": "skill"},
     ]
+    employees = [
+        {"id": 99100, "name": "Still Active", "active": True},
+        {"id": 99101, "name": "Archived Later", "active": True},
+    ]
     _stub_client(
         monkeypatch,
-        employees=[
-            {"id": 99100, "name": "Still Active", "active": True},
-            {"id": 99101, "name": "About To Be Archived", "active": True},
-        ],
+        employees=employees,
         skills_for={},
         columns_meta=cols,
         buckets={},
     )
-    odoo_sync.sync(force=True)
-    rows = db.query("SELECT active FROM people WHERE odoo_id IN (99100, 99101) ORDER BY odoo_id")
-    assert [r["active"] for r in rows] == [True, True]
+    assert odoo_sync.sync(force=True).ok is True
 
-    # Second sync: only 99100 comes back. 99101 should flip to inactive.
     _stub_client(
         monkeypatch,
-        employees=[{"id": 99100, "name": "Still Active", "active": True}],
+        employees=[employees[0]],
         skills_for={},
         columns_meta=cols,
         buckets={},
+        employee_statuses=[{"id": 99100, "active": True}],
     )
-    odoo_sync.sync(force=True)
-    rows = db.query("SELECT odoo_id, active FROM people WHERE odoo_id IN (99100, 99101) ORDER BY odoo_id")
-    by_id = {r["odoo_id"]: r["active"] for r in rows}
-    assert by_id[99100] is True
-    assert by_id[99101] is False, "archived-in-Odoo person must be deactivated locally"
+    assert odoo_sync.sync(force=True).ok is True
+    rows = db.query(
+        "SELECT odoo_id, active FROM people "
+        "WHERE odoo_id IN (99100, 99101) ORDER BY odoo_id"
+    )
+    assert rows == [
+        {"odoo_id": 99100, "active": True},
+        {"odoo_id": 99101, "active": True},
+    ]
+
+    _stub_client(
+        monkeypatch,
+        employees=[employees[0]],
+        skills_for={},
+        columns_meta=cols,
+        buckets={},
+        employee_statuses=[
+            {"id": 99100, "active": True},
+            {"id": 99101, "active": False},
+        ],
+    )
+    assert odoo_sync.sync(force=True).ok is True
+    rows = db.query(
+        "SELECT odoo_id, active FROM people "
+        "WHERE odoo_id IN (99100, 99101) ORDER BY odoo_id"
+    )
+    assert rows == [
+        {"odoo_id": 99100, "active": True},
+        {"odoo_id": 99101, "active": False},
+    ]
 
 
 def test_sync_deactivation_skips_when_no_employees_returned(monkeypatch):
@@ -488,7 +520,9 @@ def test_sync_deactivation_skips_when_no_employees_returned(monkeypatch):
         columns_meta=cols,
         buckets={},
     )
-    odoo_sync.sync(force=True)
+    result = odoo_sync.sync(force=True)
+    assert result.ok is False
+    assert result.refreshed is False
     rows = db.query("SELECT active FROM people WHERE odoo_id = %s", (99200,))
     assert rows[0]["active"] is True, "empty Odoo response must not deactivate existing people"
 

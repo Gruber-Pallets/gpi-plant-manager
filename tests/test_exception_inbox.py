@@ -516,7 +516,10 @@ def test_build_snapshot_surfaces_an_unsafe_roster_sync_as_urgent(monkeypatch):
     assert section["count"] == 1
     assert section["rows"][0]["priority"] == "urgent"
     assert section["rows"][0]["item_key"] == "odoo_roster_sync:active_status"
-    assert "last good update" in section["rows"][0]["detail"]
+    assert section["rows"][0]["detail"] == (
+        "Odoo sent an unsafe employee list. "
+        "The timeclock is using the last good update."
+    )
     assert snapshot["total"] == 1
     assert snapshot["urgent_total"] == 1
 

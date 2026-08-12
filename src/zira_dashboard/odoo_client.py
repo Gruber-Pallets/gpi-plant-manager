@@ -287,6 +287,17 @@ def fetch_employees() -> list[dict]:
     )
 
 
+def fetch_employee_statuses() -> list[dict]:
+    """Return explicit active flags for active and archived employees."""
+    return execute(
+        "hr.employee",
+        "search_read",
+        [],
+        fields=["id", "active"],
+        context={"active_test": False},
+    )
+
+
 def fetch_skills_for(employee_ids: list[int]) -> dict[int, list[dict]]:
     return _odoo_skills.fetch_skills_for(execute, employee_ids, unwrap_m2o)
 
