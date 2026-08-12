@@ -203,7 +203,9 @@ def _department_day_data(
         shift_start_utc=window_start_utc,
         cap_utc=window_end_utc,
         time_off_key=staffing.TIME_OFF_KEY,
-        excluded_people=_absent_today,
+        # A tagged Odoo attendance row proves the person worked despite a
+        # stale time-off/absence marker, so Odoo wins for that person.
+        excluded_people=_absent_today - set(attendance_windows),
     )
     # Keep every resolved segment for station activation and pace math, but on
     # today's live board show a person only at the WC whose segment remains
@@ -237,23 +239,25 @@ def _department_day_data(
     except Exception:
         _partials = None
 
-    total_man_minutes = 0
-    total_recycling_people = 0
-    for loc in staffing.LOCATIONS:
-        # Filter on loc.department (the static "Recycled / New / Supervisor /
-        # Maintenance" classification) rather than the user-editable
-        # work_centers_store.department — the latter has Loading/Jockeying,
-        # Tablets, and Work Orders set to "Recycled" as a value-stream
-        # association, but those are forklift + mechanic support roles, not
-        # production-line labor on the recycling line.
-        if loc.department != labor_department:
-            continue
-        for person_name in present_assignments.get(loc.name, []):
-            total_recycling_people += 1
-            total_man_minutes += staffing.effective_minutes_worked(
-                person_name, d, window_start_utc, window_end_utc,
-                partials=_partials,
-            )
+    # Department labor follows the same resolved Odoo-backed work segments as
+    # station goals. This moves a person's hours when they move tablets and
+    # counts an unscheduled worker only for the time actually spent here.
+    labor_segments = [
+        segment for segment in segments
+        if staffing.department_for_wc(segment.wc_name) == labor_department
+    ]
+    labor_people = {segment.person_name for segment in labor_segments}
+    total_recycling_people = len(labor_people)
+    total_man_minutes = sum(
+        staffing.effective_minutes_worked(
+            segment.person_name,
+            d,
+            segment.start_utc,
+            segment.end_utc,
+            partials=_partials,
+        )
+        for segment in labor_segments
+    )
     # Fallback for days without a published schedule: if nobody was scheduled
     # but production still happened, estimate man-hours from the active WCs.
     # Each WC that produced above the activity threshold counts as one person

@@ -46,10 +46,15 @@ def test_apply_testing_offsets_multiple_windows_same_wc():
 
 
 def test_attribution_for_excludes_testing_units(monkeypatch):
-    from zira_dashboard import staffing, wc_attributions
+    from zira_dashboard import staffing, timeclock_windows, wc_attributions
 
     sched = staffing.Schedule(day=date(2026, 6, 2), published=True, assignments={})
     monkeypatch.setattr(staffing, "load_schedule", lambda d: sched)
+    monkeypatch.setattr(
+        timeclock_windows,
+        "attendance_windows_for_day_with_availability",
+        lambda _d: ({}, True),
+    )
     monkeypatch.setattr(production_history, "_fetch_wc_totals",
                         lambda client, day: {"Junior #2": (40, 0)})
     monkeypatch.setattr(production_history, "_fetch_wc_samples",

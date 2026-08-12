@@ -17,6 +17,10 @@ from collections.abc import Callable
 from datetime import date, datetime, UTC
 
 
+class ProductionSourceUnavailable(RuntimeError):
+    """Raised when a precompute cannot safely replace saved production."""
+
+
 def attribute_for_day(
     assignments: dict[str, list[str]],
     wc_totals: dict[str, tuple[int, int]],
@@ -327,12 +331,10 @@ def _excluded_minutes_by_person_wc(day: date, now: datetime) -> dict[str, dict[s
 def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
     """Attribute production on a single day.
 
-    For past days, uses whatever schedule_assignments are saved — even
-    if the schedule was never formally published — because by the time
-    a day is in the past, the saved draft is the closest available
-    record of what actually happened. Today and future days still gate
-    on `published` so an in-flight draft (e.g., supervisor mid-edit)
-    doesn't pollute leaderboards / player cards / popups.
+    Odoo work-center attendance is authoritative whenever it is available.
+    The schedule fills only people without a tagged Odoo interval. For a
+    current unpublished draft, tagged Odoo attendance can still be saved but
+    the draft itself is never used as a fallback.
 
     Days with no saved assignments at all naturally produce {} via
     `attribute_for_day` (empty merged dict).
@@ -346,21 +348,36 @@ def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
         wc_attributions,
     )
     sched = staffing.load_schedule(d)
-    today = datetime.now(UTC).date()
-    if d >= today and not sched.published:
-        return {}
-    wc_totals = _fetch_wc_totals(client, d)
-    testing = wc_attributions.testing_windows_for_day(d)
+    site_today = datetime.now(shift_config.SITE_TZ).date()
     attendance_windows, attendance_available = (
         timeclock_windows.attendance_windows_for_day_with_availability(d)
     )
-    if attendance_available and attendance_windows:
-        site_today = datetime.now(shift_config.SITE_TZ).date()
-        if d == site_today:
-            current_windows, _refreshed_at = timeclock_windows.current_attendance_windows()
-            attendance_windows = timeclock_windows.with_current_attendance_overrides(
-                attendance_windows, current_windows
-            )
+    if not attendance_available:
+        # precompute_day replaces every saved row for the day. A schedule
+        # fallback during an Odoo outage could therefore erase an accurate
+        # earlier snapshot or move production back to the scheduled station.
+        raise ProductionSourceUnavailable(
+            f"Odoo attendance is unavailable for {d.isoformat()}; "
+            "saved production was left unchanged"
+        )
+
+    if d == site_today:
+        current_windows, _refreshed_at = timeclock_windows.current_attendance_windows()
+        attendance_windows = timeclock_windows.with_current_attendance_overrides(
+            attendance_windows, current_windows
+        )
+
+    if d >= site_today and not sched.published and not attendance_windows:
+        return {}
+
+    wc_totals = _fetch_wc_totals(client, d)
+    testing = wc_attributions.testing_windows_for_day(d)
+    if attendance_windows:
+        assignments = (
+            sched.assignments
+            if sched.published or d < site_today
+            else {}
+        )
 
         shift_start = datetime.combine(
             d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ
@@ -370,34 +387,34 @@ def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
         ).astimezone(UTC)
         cap_utc = min(datetime.now(UTC), shift_end) if d == site_today else shift_end
         segments = assignment_windows.resolve_segments(
-            assignments=sched.assignments,
+            assignments=assignments,
             attributions=wc_attributions.creditable_for_day(d),
             punch_windows=attendance_windows,
             shift_start_utc=shift_start,
             cap_utc=cap_utc,
             time_off_key=staffing.TIME_OFF_KEY,
-            excluded_people=set(sched.assignments.get(staffing.TIME_OFF_KEY, [])),
         )
-        if segments:
-            samples_by_wc = _fetch_wc_samples(client, d)
-            if testing:
-                wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)
-                samples_by_wc = _without_testing_samples(samples_by_wc, testing)
-            try:
-                excluded = _excluded_minutes_by_person_wc(
-                    d, _effective_now(d, datetime.now(UTC))
-                )
-            except Exception:
-                excluded = {}
-            return attribute_for_segments(
-                segments,
-                wc_totals=wc_totals,
-                samples_by_wc=samples_by_wc,
-                productive_minutes=lambda _person, _wc_name, start, end: (
-                    shift_config.productive_minutes_in_window(d, start, end)
-                ),
-                excluded_minutes=excluded,
+        if not segments:
+            return {}
+        samples_by_wc = _fetch_wc_samples(client, d)
+        if testing:
+            wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)
+            samples_by_wc = _without_testing_samples(samples_by_wc, testing)
+        try:
+            excluded = _excluded_minutes_by_person_wc(
+                d, _effective_now(d, datetime.now(UTC))
             )
+        except Exception:
+            excluded = {}
+        return attribute_for_segments(
+            segments,
+            wc_totals=wc_totals,
+            samples_by_wc=samples_by_wc,
+            productive_minutes=lambda _person, _wc_name, start, end: (
+                shift_config.productive_minutes_in_window(d, start, end)
+            ),
+            excluded_minutes=excluded,
+        )
 
     elapsed = _elapsed_minutes_for(d)
     extra = wc_attributions.people_by_wc(d)
@@ -527,7 +544,7 @@ def daily_records(start_d: date, end_d: date) -> list[dict]:
 def normalized_daily_records(start_d: date, end_d: date) -> list[dict]:
     """Return records for normalized production averages.
 
-    Includes zero-unit worked days so 4+ hour days count fairly in normalized
+    Includes zero-unit worked days so one-hour-or-longer stints count fairly in normalized
     average denominators. Award/trophy paths should keep using
     ``daily_records``.
     """

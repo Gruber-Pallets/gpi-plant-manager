@@ -23,6 +23,19 @@ def test_get_current_attendance_parses_department(monkeypatch):
     assert row["department_name"] == "01 Recycled"
 
 
+def test_get_current_attendance_requests_newest_open_row(monkeypatch):
+    """A later tablet sign-in must win if Odoo briefly has two open rows."""
+    fake = MagicMock(return_value=[{
+        "id": 56, "employee_id": [5, "Bob"], "check_in": "2026-06-02 13:05:00",
+    }])
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    assert odoo_client.get_current_attendance(5)["id"] == 56
+
+    _args, kwargs = fake.call_args
+    assert kwargs["order"] == "check_in desc, id desc"
+
+
 def test_get_current_attendance_no_dept_field(monkeypatch):
     monkeypatch.delenv("ODOO_KIOSK_DEPARTMENT_FIELD", raising=False)
     fake = MagicMock(return_value=[{

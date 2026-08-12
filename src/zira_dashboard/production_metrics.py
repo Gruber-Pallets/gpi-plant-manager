@@ -11,7 +11,7 @@ def normalized_daily_scores(
     *,
     wc_names: set[str],
     standard_full_day_hours: float,
-    min_hours: float = 4.0,
+    min_hours: float = 1.0,
 ) -> list[dict]:
     """One normalized score per (person, day) inside a WC scope.
 
@@ -55,7 +55,7 @@ def normalized_average_by_person(
     *,
     wc_names: set[str],
     standard_full_day_hours: float,
-    min_hours: float = 4.0,
+    min_hours: float = 1.0,
 ) -> list[dict]:
     """Average normalized pallets/day by person for one WC/group/role scope."""
     scores = normalized_daily_scores(

@@ -100,6 +100,8 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         "Dismantler 2": "Jesus G.",
     }
     assert live["active_wc_names"] == {"Repair 2", "Dismantler 2"}
+    assert live["total_recycling_people"] == 1
+    assert live["total_man_hours"] == 7.0
 
     after_shift = departments._department_day_data(
         day,

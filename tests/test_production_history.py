@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from zira_dashboard import production_history
 from zira_dashboard.assignment_windows import WorkSegment
 from zira_dashboard.production_history import attribute_for_day, attribute_for_segments
@@ -157,6 +159,120 @@ def test_attribution_for_uses_odoo_work_center_intervals_for_historical_credit(m
     assert out["Christian"]["Repair 2"]["units"] == 40.0
 
 
+def test_attribution_for_uses_current_odoo_row_when_day_intervals_are_empty(monkeypatch):
+    """A fresh open tablet row is enough to override an unpublished draft."""
+    from datetime import datetime, time, timedelta, UTC
+    from zira_dashboard import (
+        shift_config,
+        staffing,
+        timeclock_windows,
+        wc_attributions,
+    )
+    from zira_dashboard.plant_day import today as plant_today
+
+    day = plant_today()
+    start = datetime.combine(day, time.min, tzinfo=shift_config.SITE_TZ).astimezone(UTC)
+    schedule = staffing.Schedule(
+        day=day,
+        published=False,
+        assignments={"Dismantler 3": ["Christian"]},
+    )
+    monkeypatch.setattr(staffing, "load_schedule", lambda _d: schedule)
+    monkeypatch.setattr(
+        timeclock_windows,
+        "attendance_windows_for_day_with_availability",
+        lambda _d: ({}, True),
+    )
+    monkeypatch.setattr(
+        timeclock_windows,
+        "current_attendance_windows",
+        lambda: ({"Christian": [("Repair 2", start, None)]}, start),
+    )
+    monkeypatch.setattr(wc_attributions, "creditable_for_day", lambda _d: [])
+    monkeypatch.setattr(wc_attributions, "testing_windows_for_day", lambda _d: {})
+    monkeypatch.setattr(production_history, "_fetch_wc_totals", lambda *_: {"Repair 2": (30, 0)})
+    monkeypatch.setattr(
+        production_history,
+        "_fetch_wc_samples",
+        lambda *_: {"Repair 2": [(start + timedelta(minutes=1), 30)]},
+    )
+    monkeypatch.setattr(production_history, "_excluded_minutes_by_person_wc", lambda *_: {})
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _d: time.min)
+    monkeypatch.setattr(shift_config, "shift_end_for", lambda _d: time(23, 59))
+    monkeypatch.setattr(shift_config, "productive_minutes_in_window", lambda _d, s, e: (e - s).total_seconds() / 60)
+
+    out = production_history.attribution_for(day, client=object())
+
+    assert "Dismantler 3" not in out["Christian"]
+    assert out["Christian"]["Repair 2"]["units"] == 30.0
+
+
+def test_attribution_for_odoo_attendance_overrides_time_off_schedule(monkeypatch):
+    """A real tablet sign-in wins over a stale time-off schedule entry."""
+    from datetime import datetime, time, timezone
+    from zira_dashboard import shift_config, staffing, timeclock_windows, wc_attributions
+
+    utc = timezone.utc
+    day = date(2026, 8, 1)
+    start = datetime(2026, 8, 1, 12, tzinfo=utc)
+    end = datetime(2026, 8, 1, 13, tzinfo=utc)
+    schedule = staffing.Schedule(
+        day=day,
+        published=True,
+        assignments={staffing.TIME_OFF_KEY: ["Christian"]},
+    )
+    monkeypatch.setattr(staffing, "load_schedule", lambda _d: schedule)
+    monkeypatch.setattr(
+        timeclock_windows,
+        "attendance_windows_for_day_with_availability",
+        lambda _d: ({"Christian": [("Repair 2", start, end)]}, True),
+    )
+    monkeypatch.setattr(wc_attributions, "creditable_for_day", lambda _d: [])
+    monkeypatch.setattr(wc_attributions, "testing_windows_for_day", lambda _d: {})
+    monkeypatch.setattr(wc_attributions, "people_by_wc", lambda _d: {})
+    monkeypatch.setattr(production_history, "_fetch_wc_totals", lambda *_: {"Repair 2": (30, 0)})
+    monkeypatch.setattr(production_history, "_fetch_wc_samples", lambda *_: {"Repair 2": [(start, 30)]})
+    monkeypatch.setattr(production_history, "_elapsed_minutes_for", lambda _d: 480)
+    monkeypatch.setattr(production_history, "_excluded_minutes_by_person_wc", lambda *_: {})
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _d: time(7))
+    monkeypatch.setattr(shift_config, "shift_end_for", lambda _d: time(15))
+    monkeypatch.setattr(shift_config, "productive_minutes_in_window", lambda _d, s, e: (e - s).total_seconds() / 60)
+
+    out = production_history.attribution_for(day, client=object())
+
+    assert out["Christian"]["Repair 2"]["units"] == 30.0
+    assert out["Christian"]["Repair 2"]["hours"] == 1.0
+
+
+def test_attribution_for_does_not_fall_back_when_odoo_read_fails(monkeypatch):
+    """A failed Odoo read must abort before accurate saved rows are replaced."""
+    from zira_dashboard import staffing, timeclock_windows, wc_attributions
+
+    day = date(2026, 8, 1)
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda _d: staffing.Schedule(
+            day=day,
+            published=True,
+            assignments={"Dismantler 3": ["Christian"]},
+        ),
+    )
+    monkeypatch.setattr(production_history, "_fetch_wc_totals", lambda *_: {"Dismantler 3": (30, 0)})
+    monkeypatch.setattr(wc_attributions, "testing_windows_for_day", lambda _d: {})
+    monkeypatch.setattr(wc_attributions, "people_by_wc", lambda _d: {})
+    monkeypatch.setattr(
+        timeclock_windows,
+        "attendance_windows_for_day_with_availability",
+        lambda _d: ({}, False),
+    )
+    monkeypatch.setattr(production_history, "_elapsed_minutes_for", lambda _d: 480)
+    monkeypatch.setattr(production_history, "_excluded_minutes_by_person_wc", lambda *_: {})
+
+    with pytest.raises(RuntimeError, match="Odoo attendance"):
+        production_history.attribution_for(day, client=object())
+
+
 from zira_dashboard.staffing import TIME_OFF_KEY
 
 
@@ -213,16 +329,25 @@ def test_attribution_for_today_drafts_return_empty(monkeypatch):
     """Today's drafts (published=False) don't count — supervisor may be
     mid-edit and partial assignments would skew live leaderboards."""
     from datetime import datetime, timezone
-    from zira_dashboard import staffing
+    from zira_dashboard import staffing, timeclock_windows
+    from zira_dashboard.plant_day import today as plant_today
     from zira_dashboard.production_history import attribution_for
 
-    today = datetime.now(timezone.utc).date()
+    today = plant_today(datetime.now(timezone.utc))
     fake_sched = staffing.Schedule(
         day=today,
         published=False,
         assignments={"Repair 1": ["Christian"]},
     )
     monkeypatch.setattr(staffing, "load_schedule", lambda d: fake_sched)
+    monkeypatch.setattr(
+        timeclock_windows,
+        "attendance_windows_for_day_with_availability",
+        lambda _d: ({}, True),
+    )
+    monkeypatch.setattr(
+        timeclock_windows, "current_attendance_windows", lambda: ({}, None)
+    )
     out = attribution_for(today, client=object())
     assert out == {}
 
@@ -231,7 +356,7 @@ def test_attribution_for_past_unpublished_day_uses_assignments(monkeypatch):
     """Past days use saved assignments even if never formally published —
     by the time a day is in the past, the saved draft is the closest
     record of what actually happened."""
-    from zira_dashboard import staffing
+    from zira_dashboard import staffing, timeclock_windows
     from zira_dashboard.production_history import attribution_for
 
     fake_sched = staffing.Schedule(
@@ -240,6 +365,11 @@ def test_attribution_for_past_unpublished_day_uses_assignments(monkeypatch):
         assignments={"Repair 1": ["Christian"]},
     )
     monkeypatch.setattr(staffing, "load_schedule", lambda d: fake_sched)
+    monkeypatch.setattr(
+        timeclock_windows,
+        "attendance_windows_for_day_with_availability",
+        lambda _d: ({}, True),
+    )
     monkeypatch.setattr(production_history, "_fetch_wc_totals",
                         lambda client, day: {"Repair 1": (95, 5)})
     monkeypatch.setattr(production_history, "_elapsed_minutes_for", lambda d: 480)
@@ -250,7 +380,7 @@ def test_attribution_for_past_unpublished_day_uses_assignments(monkeypatch):
 
 
 def test_attribution_for_uses_published_assignments(monkeypatch):
-    from zira_dashboard import staffing
+    from zira_dashboard import staffing, timeclock_windows
     from zira_dashboard.production_history import attribution_for
 
     fake_sched = staffing.Schedule(
@@ -259,6 +389,11 @@ def test_attribution_for_uses_published_assignments(monkeypatch):
         assignments={"Trim Saw 1": ["Iban", "Porfirio"]},
     )
     monkeypatch.setattr(staffing, "load_schedule", lambda d: fake_sched)
+    monkeypatch.setattr(
+        timeclock_windows,
+        "attendance_windows_for_day_with_availability",
+        lambda _d: ({}, True),
+    )
 
     # Stub the per-day Zira lookup so we don't hit the real API.
     def fake_wc_totals(client, day):
@@ -298,9 +433,6 @@ def test_rank_by_category_filters_to_category_wcs_and_threshold():
 
 import os
 from datetime import date as _date
-
-import pytest
-
 
 @pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),

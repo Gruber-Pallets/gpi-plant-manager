@@ -220,7 +220,7 @@ def normalized_daily_records_in_range(start: date, end: date) -> list[dict]:
     """Records for normalized production averages.
 
     Unlike ``daily_records_in_range`` this intentionally includes zero-unit
-    rows, because a 4+ hour day with no output should count as a qualified day
+    rows, because a one-hour-or-longer stint with no output should count as a qualified day
     with a zero normalized score. Trophy/award paths keep using the legacy
     positive-units reader.
     """

@@ -104,14 +104,40 @@ def test_averages_custom_hours_shrinks_expected():
 def test_averages_uses_recorded_partial_work_center_hours_for_expected():
     # Christian spent four hours at this WC. The expected amount must use
     # those hours, not the full seven-hour schedule, so the rate stays fair
-    # after a tablet transfer. Four hours is the leaderboard's minimum for a
-    # qualified daily score.
+    # after a tablet transfer.
     records = [{
         "day": date(2026, 4, 27), "person": "Christian", "wc": "WC1",
         "units": 120, "downtime": 0.0, "hours": 4.0,
     }]
     rows = averages_for_wc(records, 30.0, _const_productive, "pct")
     assert abs(rows[0]["avg_pct"] - 1.0) < 1e-9
+
+
+def test_averages_includes_one_hour_work_center_stint():
+    records = [{
+        "day": date(2026, 4, 27), "person": "Christian", "wc": "WC1",
+        "units": 30, "downtime": 0.0, "hours": 1.0,
+    }]
+
+    rows = averages_for_wc(
+        records, 30.0, _const_productive, "pct", standard_full_day_hours=7.0
+    )
+
+    assert rows[0]["avg_pct"] == 1.0
+    assert rows[0]["avg_units"] == 210.0
+
+
+def test_wc_percent_weights_partial_days_by_their_recorded_hours():
+    records = [
+        {"day": date(2026, 4, 27), "person": "Christian", "wc": "WC1",
+         "units": 60, "downtime": 0.0, "hours": 1.0},
+        {"day": date(2026, 4, 28), "person": "Christian", "wc": "WC1",
+         "units": 180, "downtime": 0.0, "hours": 6.0},
+    ]
+
+    rows = averages_for_wc(records, 30.0, _const_productive, "pct")
+
+    assert abs(rows[0]["avg_pct"] - (240 / 210)) < 1e-9
 
 
 def test_averages_empty_records_returns_empty_list():
@@ -163,6 +189,42 @@ def test_group_percent_uses_each_work_centers_recorded_hours_after_transfer():
         "pct",
     )
     assert abs(rows[0]["avg_pct"] - 1.0) < 1e-9
+
+
+def test_group_percent_weights_split_work_centers_by_expected_output():
+    records = [
+        {"day": date(2026, 4, 27), "person": "Christian", "wc": "Repair-1",
+         "units": 60, "downtime": 0.0, "hours": 1.0},
+        {"day": date(2026, 4, 27), "person": "Christian", "wc": "Repair-2",
+         "units": 180, "downtime": 0.0, "hours": 6.0},
+    ]
+
+    rows = averages_for_group(
+        records,
+        {"Repair-1": 30.0, "Repair-2": 30.0},
+        _const_productive,
+        "pct",
+    )
+
+    assert abs(rows[0]["avg_pct"] - (240 / 210)) < 1e-9
+
+
+def test_group_top_work_center_uses_recorded_hours_not_row_count():
+    records = [
+        {"day": date(2026, 4, 27), "person": "Christian", "wc": "Repair-1",
+         "units": 30, "downtime": 0.0, "hours": 1.0},
+        {"day": date(2026, 4, 27), "person": "Christian", "wc": "Repair-2",
+         "units": 180, "downtime": 0.0, "hours": 6.0},
+    ]
+
+    rows = averages_for_group(
+        records,
+        {"Repair-1": 30.0, "Repair-2": 30.0},
+        _const_productive,
+        "units",
+    )
+
+    assert rows[0]["top_wc"] == "Repair-2"
 
 
 def test_group_averages_top_wc_alphabetical_tiebreak():
@@ -294,9 +356,9 @@ def test_averages_for_wc_units_counts_zero_unit_qualified_day():
     assert rows[0]["name_count"] == 2
 
 
-def test_averages_for_wc_units_excludes_under_4_hour_day():
+def test_averages_for_wc_units_excludes_under_1_hour_day():
     records = [
-        {"day": date(2026, 7, 1), "person": "Alice", "wc": "WC1", "units": 200, "downtime": 0.0, "hours": 3.99},
+        {"day": date(2026, 7, 1), "person": "Alice", "wc": "WC1", "units": 200, "downtime": 0.0, "hours": 0.99},
     ]
     assert averages_for_wc(
         records,

@@ -12,6 +12,15 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-12
 
+### Work-area records stay accurate
+
+#### Fixes
+
+- **The newest tablet sign-in always wins.** Old or out-of-date sign-ins can no longer put someone back in a work area they already left.
+- **Saved production stays safe if Odoo cannot be reached.** The app keeps the last good numbers instead of replacing them with the morning plan.
+- **One-hour work periods now count in performance numbers.** Short work periods are measured by their real hours, so they do not count like a full day.
+- **Department hours now follow tablet moves.** When someone changes work areas, their labor time moves with them too.
+
 ### Tablet work areas stay current
 
 #### Fixes

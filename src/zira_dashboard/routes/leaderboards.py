@@ -22,6 +22,10 @@ from .._cache import TTLCache
 _PERSON_DAYS_CACHE_TODAY = TTLCache(ttl_seconds=60.0, max_entries=128)
 _PERSON_DAYS_CACHE_PAST = TTLCache(ttl_seconds=3600.0, max_entries=512)
 
+# A one-hour tablet stint is a real partial-day sample. Shorter rows remain
+# excluded from normalized rankings to avoid magnifying accidental taps.
+_MIN_WORK_CENTER_HOURS = 1.0
+
 
 def averages_for_wc(
     records: list[dict],
@@ -45,8 +49,8 @@ def averages_for_wc(
     `mode` is 'units' or 'pct' — drives the sort.
 
     Returns rows sorted by the active metric desc, with rank assigned.
-    Days under the normalized-time cutoff are excluded. Qualified zero-output
-    days remain, so full days with no output fairly reduce the average.
+    Work-center days under one hour are excluded. Qualified zero-output days
+    remain, so worked time with no output fairly reduces the average.
     Tiebreak: more qualified days ranks higher.
     """
     rows = list(records)
@@ -55,10 +59,19 @@ def averages_for_wc(
             (productive_minutes_for(r["day"]) for r in rows),
             default=0.0,
         ) / 60.0
+    wc_names = {r["wc"] for r in rows}
+    scores = production_metrics.normalized_daily_scores(
+        rows,
+        wc_names=wc_names,
+        standard_full_day_hours=standard_full_day_hours,
+        min_hours=_MIN_WORK_CENTER_HOURS,
+    )
+    qualified_days = {(r["name"], r["day"]) for r in scores}
     normalized_rows = production_metrics.normalized_average_by_person(
         rows,
-        wc_names={r["wc"] for r in rows},
+        wc_names=wc_names,
         standard_full_day_hours=standard_full_day_hours,
+        min_hours=_MIN_WORK_CENTER_HOURS,
     )
     normalized_by_name = {r["name"]: r for r in normalized_rows}
     by_person: dict[str, list[dict]] = {}
@@ -70,10 +83,14 @@ def averages_for_wc(
     for person, recs in by_person.items():
         norm = normalized_by_name[person]
 
-        # Days without a configured goal contribute no pct sample; a person
-        # with no goal-days at all gets avg_pct=None (renders "—", not "0%").
-        pct_per_day: list[float] = []
+        # Weight percent by the expected output for the actual recorded time.
+        # This makes a one-hour stint one seventh the weight of a seven-hour
+        # day instead of treating both percentages as equal samples.
+        actual_for_pct = 0.0
+        expected_for_pct = 0.0
         for r in recs:
+            if (person, r["day"]) not in qualified_days:
+                continue
             # `hours` is a per-work-center fact. A tablet transfer can leave
             # someone at this station for only part of the day, so its goal
             # must use the recorded interval rather than the whole shift.
@@ -82,8 +99,13 @@ def averages_for_wc(
             prod_min = min(recorded_minutes, scheduled_minutes) - r.get("excluded_minutes", 0.0)
             expected = target_per_hour * max(0.0, prod_min) / 60.0
             if expected > 0:
-                pct_per_day.append(r["units"] / expected)
-        avg_pct = sum(pct_per_day) / len(pct_per_day) if pct_per_day else None
+                actual_for_pct += float(r.get("units") or 0.0)
+                expected_for_pct += expected
+        avg_pct = (
+            actual_for_pct / expected_for_pct
+            if expected_for_pct > 0
+            else None
+        )
 
         out.append({
             "name": person,
@@ -113,10 +135,10 @@ def averages_for_group(
 ) -> list[dict]:
     """Per-person averages across a group's WCs.
 
-    Each (person, day, wc) record is one sample. `expected` for the
-    pct math is computed per record using that record's WC target.
-    `top_wc` = the WC the operator most often worked in the range
-    (highest day count); ties broken by WC name alphabetical.
+    `expected` is computed per record using that WC's target, then actual and
+    expected output are summed so split shifts are weighted by their real
+    hours. `top_wc` is the WC with the most recorded hours in the range; ties
+    are broken by WC name alphabetical.
 
     Same filtering, sorting, and tiebreak rules as averages_for_wc.
     """
@@ -126,37 +148,54 @@ def averages_for_group(
             (productive_minutes_for(r["day"]) for r in rows),
             default=0.0,
         ) / 60.0
+    wc_names = set(target_per_hour_by_wc)
+    scoped_rows = [r for r in rows if r.get("wc") in wc_names]
+    scores = production_metrics.normalized_daily_scores(
+        scoped_rows,
+        wc_names=wc_names,
+        standard_full_day_hours=standard_full_day_hours,
+        min_hours=_MIN_WORK_CENTER_HOURS,
+    )
+    qualified_days = {(r["name"], r["day"]) for r in scores}
     normalized_rows = production_metrics.normalized_average_by_person(
         rows,
-        wc_names=set(target_per_hour_by_wc.keys()),
+        wc_names=wc_names,
         standard_full_day_hours=standard_full_day_hours,
+        min_hours=_MIN_WORK_CENTER_HOURS,
     )
     normalized_by_name = {r["name"]: r for r in normalized_rows}
     by_person: dict[str, list[dict]] = {}
-    for r in rows:
-        if r["person"] in normalized_by_name:
+    for r in scoped_rows:
+        if (
+            r["person"] in normalized_by_name
+            and (r["person"], r["day"]) in qualified_days
+        ):
             by_person.setdefault(r["person"], []).append(r)
 
     out: list[dict] = []
     for person, recs in by_person.items():
         norm = normalized_by_name[person]
 
-        # Same None-means-no-goal convention as averages_for_wc.
-        pct_per_day: list[float] = []
-        wc_counts: dict[str, int] = {}
+        actual_for_pct = 0.0
+        expected_for_pct = 0.0
+        wc_hours: dict[str, float] = {}
         for r in recs:
-            wc_counts[r["wc"]] = wc_counts.get(r["wc"], 0) + 1
             recorded_minutes = float(r.get("hours") or 0.0) * 60.0
+            wc_hours[r["wc"]] = wc_hours.get(r["wc"], 0.0) + recorded_minutes / 60.0
             scheduled_minutes = productive_minutes_for(r["day"])
             prod_min = min(recorded_minutes, scheduled_minutes) - r.get("excluded_minutes", 0.0)
             target = target_per_hour_by_wc.get(r["wc"], 0.0)
             expected = target * max(0.0, prod_min) / 60.0
             if expected > 0:
-                pct_per_day.append(r["units"] / expected)
-        avg_pct = sum(pct_per_day) / len(pct_per_day) if pct_per_day else None
+                actual_for_pct += float(r.get("units") or 0.0)
+                expected_for_pct += expected
+        avg_pct = (
+            actual_for_pct / expected_for_pct
+            if expected_for_pct > 0
+            else None
+        )
 
-        # top_wc: highest count; tiebreak alphabetical by WC name.
-        top_wc = min(wc_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+        top_wc = min(wc_hours.items(), key=lambda kv: (-kv[1], kv[0]))[0]
 
         out.append({
             "name": person,
