@@ -83,17 +83,41 @@ def _attendance_with_fallback(day, ids):
     values are {first_check_in, currently_open}. _safe_attendance turns
     these into a status dict via attendance.compute_status.
     """
-    from . import live_cache, attendance
+    from . import attendance_state, live_cache
     wanted = {str(i) for i in ids}
-    return _live_or_fallback(
-        day,
-        read=live_cache.read_attendance,
-        refresh=live_cache.refresh_attendance,
-        fallback=lambda: attendance.punches_for_day(day),
-        transform=lambda payload: {
-            sid: info for sid, info in payload.items() if sid in wanted
-        },
-    )
+    payload, refreshed_at = live_cache.read_attendance(day)
+    if payload is None or live_cache.is_stale(refreshed_at):
+        try:
+            live_cache.refresh_attendance(day)
+            payload, refreshed_at = live_cache.read_attendance(day)
+        except Exception:
+            payload = None
+        if payload is None:
+            return attendance.punches_for_day(day)
+
+    punches = {sid: info for sid, info in payload.items() if sid in wanted}
+    # The Odoo attendance cache can predate a just-saved clock-in correction.
+    # Until its next refresh sees that correction, use the local punch log —
+    # the same reconciliation rule that keeps the kiosk from flashing the
+    # wrong punch action just after a tap.
+    try:
+        for emp_id, latest in attendance_state.latest_punches_bulk(wanted).items():
+            if not attendance_state.trust_local(latest, refreshed_at):
+                continue
+            if latest.get("action") not in ("clock_in", "transfer_in"):
+                continue
+            occurred_at = latest.get("occurred_at")
+            if occurred_at is None:
+                continue
+            sid = str(emp_id)
+            entry = dict(punches.get(sid) or {})
+            entry["first_check_in"] = entry.get("first_check_in") or occurred_at.isoformat()
+            entry["currently_open"] = True
+            punches[sid] = entry
+    except Exception:
+        # A local-log problem must not hide otherwise-good Odoo attendance.
+        pass
+    return punches
 
 
 def _timeoff_names_with_fallback(day):

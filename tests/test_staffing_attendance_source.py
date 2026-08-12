@@ -1,11 +1,19 @@
-from datetime import datetime, date, time
+from datetime import UTC, datetime, date, time, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 pytest.importorskip("fastapi")  # routes import FastAPI; skip locally where it's absent
 
-from zira_dashboard import attendance, staffing, shift_config, staffing_attendance, plant_day
+from zira_dashboard import (
+    attendance,
+    attendance_state,
+    live_cache,
+    plant_day,
+    shift_config,
+    staffing,
+    staffing_attendance,
+)
 
 
 def test_safe_attendance_keys_by_odoo_id(monkeypatch):
@@ -37,3 +45,32 @@ def test_safe_attendance_keys_by_odoo_id(monkeypatch):
     assert pkg["unscheduled_ids"] == ["2"]
     assert pkg["by_id"]["1"]["status"] == "no_punch"
     assert pkg["by_name"]["Ana"]["status"] == "no_punch"
+
+
+def test_recent_local_clock_in_overrides_older_attendance_cache(monkeypatch):
+    """A correction must not be re-flagged while the Odoo cache catches up."""
+    day = date(2026, 6, 1)
+    cached_at = datetime(2026, 6, 1, 18, 0, tzinfo=UTC)
+    correction_at = datetime.combine(day, time(6, 10), tzinfo=shift_config.SITE_TZ)
+    monkeypatch.setattr(live_cache, "read_attendance", lambda _day: ({}, cached_at))
+    monkeypatch.setattr(live_cache, "is_stale", lambda _refreshed_at: False)
+    monkeypatch.setattr(
+        attendance_state,
+        "latest_punches_bulk",
+        lambda _ids: {
+            1: {
+                "action": "clock_in",
+                "wc_name": "Baler",
+                "occurred_at": correction_at,
+                "synced_to_odoo": True,
+                "synced_at": cached_at + timedelta(seconds=1),
+            }
+        },
+    )
+
+    punches = staffing_attendance._attendance_with_fallback(day, ["1"])
+
+    assert punches.get("1") == {
+        "first_check_in": correction_at.isoformat(),
+        "currently_open": True,
+    }

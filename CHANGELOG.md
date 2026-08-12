@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-12
+
+### Clock-ins stay cleared
+
+#### Fixes
+
+- **A saved missed clock-in now stays cleared from the Inbox.** Plant Manager uses the saved clock-in right away while Odoo catches up, so the same alert does not pop back up.
+
 ## 2026-08-11
 
 ### Time clock roster warning
