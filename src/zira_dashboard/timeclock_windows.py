@@ -128,6 +128,11 @@ def current_attendance_windows() -> tuple[
         if snapshot is None or live_cache.is_stale(refreshed_at):
             live_cache.refresh_odoo_open_attendance()
             snapshot, refreshed_at = live_cache.read_open_attendance()
+        # refresh_odoo_open_attendance deliberately keeps the previous good
+        # row when Odoo is unavailable. Recheck its age so that fail-soft
+        # behavior never turns an old station into today's live truth.
+        if live_cache.is_stale(refreshed_at):
+            return {}, refreshed_at
         if not snapshot:
             return {}, refreshed_at
         id_to_name = attendance.person_id_to_name()

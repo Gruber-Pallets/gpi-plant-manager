@@ -72,6 +72,7 @@ def get_current_attendance(
         "search_read",
         [("employee_id", "=", employee_odoo_id), ("check_out", "=", False)],
         fields=fields,
+        order="check_in desc, id desc",
         limit=1,
     )
     if not rows:

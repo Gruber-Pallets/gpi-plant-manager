@@ -83,6 +83,31 @@ def test_current_attendance_windows_uses_the_live_odoo_work_center(monkeypatch):
     assert version == refreshed_at
 
 
+def test_current_attendance_windows_rejects_snapshot_still_stale_after_refresh(monkeypatch):
+    """An Odoo outage must not put someone back at an old cached station."""
+    from zira_dashboard import attendance, live_cache, timeclock_windows
+
+    stale_at = t(11)
+    stale_snapshot = {
+        "101": {
+            "att_id": 77,
+            "check_in": t(10).isoformat(),
+            "wc_name": "Dismantler 3",
+        }
+    }
+    monkeypatch.setattr(
+        live_cache, "read_open_attendance", lambda: (stale_snapshot, stale_at)
+    )
+    monkeypatch.setattr(live_cache, "is_stale", lambda _refreshed_at: True)
+    monkeypatch.setattr(live_cache, "refresh_odoo_open_attendance", lambda: None)
+    monkeypatch.setattr(attendance, "person_id_to_name", lambda: {"101": "Christian C."})
+
+    windows, version = timeclock_windows.current_attendance_windows()
+
+    assert windows == {}
+    assert version == stale_at
+
+
 def test_still_clocked_in_trailing_window_is_open():
     rows = [{"action": "clock_in", "wc_name": "Dismantler 4", "at": t(13)}]
     assert _segments_from_rows(rows) == [("Dismantler 4", t(13), None)]

@@ -17,26 +17,26 @@ def rec(day, person, wc, units, hours):
     }
 
 
-def test_normalized_daily_scores_ignores_under_4_hours():
+def test_normalized_daily_scores_ignores_under_1_hour():
     rows = pm.normalized_daily_scores(
-        [rec(date(2026, 7, 1), "Alice", "Repair 1", 60, 3.99)],
+        [rec(date(2026, 7, 1), "Alice", "Repair 1", 60, 0.99)],
         wc_names={"Repair 1"},
         standard_full_day_hours=STD_HOURS,
     )
     assert rows == []
 
 
-def test_normalized_daily_scores_exactly_4_hours_qualifies():
+def test_normalized_daily_scores_exactly_1_hour_qualifies():
     rows = pm.normalized_daily_scores(
-        [rec(date(2026, 7, 1), "Alice", "Repair 1", 80, 4.0)],
+        [rec(date(2026, 7, 1), "Alice", "Repair 1", 20, 1.0)],
         wc_names={"Repair 1"},
         standard_full_day_hours=STD_HOURS,
     )
     assert len(rows) == 1
     assert rows[0]["name"] == "Alice"
     assert rows[0]["day"] == date(2026, 7, 1)
-    assert rows[0]["units"] == 80.0
-    assert rows[0]["hours"] == 4.0
+    assert rows[0]["units"] == 20.0
+    assert rows[0]["hours"] == 1.0
     assert rows[0]["normalized_units"] == 140.0
 
 
@@ -60,7 +60,7 @@ def test_normalized_average_by_person_averages_qualified_days():
         [
             rec(date(2026, 7, 1), "Alice", "Repair 1", 80, 4.0),   # 140
             rec(date(2026, 7, 2), "Alice", "Repair 1", 70, 7.0),   # 70
-            rec(date(2026, 7, 3), "Alice", "Repair 1", 999, 3.0),  # ignored
+            rec(date(2026, 7, 3), "Alice", "Repair 1", 999, 0.99),  # ignored
         ],
         wc_names={"Repair 1"},
         standard_full_day_hours=STD_HOURS,
@@ -129,7 +129,7 @@ def test_build_recycling_leaderboard_ribbons_use_normalized_amount():
     records = [
         rec(date(2026, 7, 2), "Short Day", "Repair 1", 80, 4.0),  # normalized 140
         rec(date(2026, 7, 3), "Full Day", "Repair 1", 100, 7.0),  # normalized 100
-        rec(date(2026, 7, 4), "Tiny", "Repair 1", 200, 3.0),      # ignored
+        rec(date(2026, 7, 4), "Tiny", "Repair 1", 200, 0.5),      # ignored
     ]
     data = pm.build_recycling_leaderboard(
         records,
@@ -171,7 +171,7 @@ def test_build_family_leaderboard_keeps_families_independent_and_ordered():
 
 def test_build_family_leaderboard_hides_family_without_qualifying_rows():
     data = pm.build_family_leaderboard(
-        [rec(date(2026, 7, 1), "Short Shift", "Woodpecker #1", 200, 3.99)],
+        [rec(date(2026, 7, 1), "Short Shift", "Woodpecker #1", 200, 0.99)],
         today=date(2026, 7, 10),
         standard_full_day_hours=STD_HOURS,
         family_wc_names={
