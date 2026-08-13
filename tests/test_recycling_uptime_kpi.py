@@ -64,8 +64,15 @@ def test_recycling_template_declares_kpi_uptime_widget():
     assert "band-good" in html and "band-warn" in html and "band-bad" in html
 
 
-def test_recycling_css_locks_uptime_band_colors():
+def _uptime_band_css() -> str:
     css = _css()
+    start = css.index("/* Uptime KPI:")
+    end = css.index(".grid-stack-item-content .label", start)
+    return css[start:end]
+
+
+def test_recycling_css_locks_uptime_band_colors():
+    css = _uptime_band_css()
     assert 'gs-id="kpi-uptime"' in css or "[gs-id='kpi-uptime']" in css or '[gs-id="kpi-uptime"]' in css
     assert "band-good" in css and "var(--good)" in css
     assert "band-warn" in css and "var(--warn)" in css
@@ -85,6 +92,19 @@ def test_uptime_kpi_renders_whole_percent_and_warn_band():
 def test_uptime_kpi_band_boundaries():
     assert "band-good" in _render(uptime_pct=90.0)
     assert "band-warn" in _render(uptime_pct=80.0)
-    assert "band-bad" in _render(uptime_pct=79.9)
+    assert "band-bad" in _render(uptime_pct=79.4)
     assert "band-good" in _render(uptime_pct=99.9)
     assert "band-bad" in _render(uptime_pct=0.0)
+
+
+def test_uptime_kpi_bands_use_displayed_whole_percent():
+    """Band class must match the rounded label, not the raw float."""
+    html = _render(uptime_pct=79.9)
+    assert ">80%<" in html or "80%" in html
+    assert "band-warn" in html
+    assert "band-bad" not in html
+
+    html = _render(uptime_pct=89.6)
+    assert ">90%<" in html or "90%" in html
+    assert "band-good" in html
+    assert "band-warn" not in html

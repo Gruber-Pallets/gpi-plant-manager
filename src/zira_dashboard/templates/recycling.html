@@ -79,10 +79,11 @@
   <div class="grid-stack" data-layout-page="recycling" data-tv-mode="{{ '1' if tv_mode else '0' }}" data-fallback-rows="30">
 
     {# kpi-uptime is back as a dedicated KPI; Downtime Report still shows the same percent in its header. #}
+    {% set uptime_display = uptime_pct|round(0)|int %}
     {% set kpi_defs = [
       ('kpi-pallets',   'Total Pallets Processed', '{:,}'.format(total_units)),
       ('kpi-palletshr', 'pallets/hr/person',       pph_per_person),
-      ('kpi-uptime',    'Uptime',                  (uptime_pct|round(0)|int)|string ~ '%'),
+      ('kpi-uptime',    'Uptime',                  uptime_display|string ~ '%'),
     ] %}
     {% for k in kpi_defs %}
       {% set kid = k[0] %}{% set ktitle = k[1] %}{% set kval = k[2] %}
@@ -93,7 +94,7 @@
           {% if not tv_mode %}{{ edit_controls(kid, ktitle, 'kpi') }}{% endif %}
           <div class="label">{{ widget_title(kid, ktitle) }}</div>
           {% if kid == 'kpi-uptime' %}
-            {% set uptime_band = 'band-good' if uptime_pct >= 90 else ('band-warn' if uptime_pct >= 80 else 'band-bad') %}
+            {% set uptime_band = 'band-good' if uptime_display >= 90 else ('band-warn' if uptime_display >= 80 else 'band-bad') %}
           {% endif %}
           <div class="val{% if kid == 'kpi-uptime' %} {{ uptime_band }}{% endif %}"
             {%- if kid == 'kpi-palletshr' %} style="color: var(--fg) !important"
