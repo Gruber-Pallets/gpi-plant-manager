@@ -34,6 +34,23 @@ def test_is_ribbon_announce_day_mid_month_false(monkeypatch):
     assert ribbon_announce.is_ribbon_announce_day(date(2026, 8, 15)) is False
 
 
+def test_is_ribbon_announce_day_propagates_is_workday_error(monkeypatch):
+    import pytest
+
+    from zira_dashboard import ribbon_announce, shift_config
+
+    def _raising_is_workday(d):
+        if d.day == 1:
+            raise RuntimeError("shift config unavailable")
+        return d.weekday() < 5
+
+    monkeypatch.setattr(shift_config, "is_workday", _raising_is_workday)
+    with pytest.raises(RuntimeError, match="shift config unavailable"):
+        ribbon_announce.is_ribbon_announce_day(date(2026, 8, 1))
+    with pytest.raises(RuntimeError, match="shift config unavailable"):
+        ribbon_announce.ribbon_announce_payload(date(2026, 8, 1))
+
+
 def test_payload_none_off_announce_day(monkeypatch):
     from zira_dashboard import ribbon_announce, shift_config
     monkeypatch.setattr(shift_config, "is_workday", lambda d: d.weekday() < 5)
@@ -94,6 +111,41 @@ def test_payload_omits_zero_production_groups(monkeypatch):
     assert [g["group"] for g in payload["groups"]] == ["Repairs"]
     assert [e["name"] for e in payload["groups"][0]["entries"]] == ["Alice", "Bob", "Cara"]
     assert [e["position"] for e in payload["groups"][0]["entries"]] == [1, 2, 3]
+
+
+def test_payload_omits_group_when_apply_overrides_empty(monkeypatch):
+    from zira_dashboard import awards, ribbon_announce, shift_config
+
+    monkeypatch.setattr(shift_config, "is_workday", lambda d: d.weekday() < 5)
+    _stub_groups_and_records(
+        monkeypatch,
+        groups=["Repairs", "StrippedGroup"],
+        members_map={
+            "Repairs": ["Repair 1"],
+            "StrippedGroup": ["Strip 1"],
+        },
+        records=[
+            {"day": date(2026, 7, 10), "person": "Alice", "wc": "Repair 1",
+             "units": 100.0, "hours": 8.0, "downtime": 0.0},
+            {"day": date(2026, 7, 11), "person": "Bob", "wc": "Repair 1",
+             "units": 90.0, "hours": 8.0, "downtime": 0.0},
+            {"day": date(2026, 7, 12), "person": "Cara", "wc": "Repair 1",
+             "units": 80.0, "hours": 8.0, "downtime": 0.0},
+            {"day": date(2026, 7, 10), "person": "Dan", "wc": "Strip 1",
+             "units": 50.0, "hours": 8.0, "downtime": 0.0},
+        ],
+    )
+
+    def _strip_stripped_group(slots, **kw):
+        if kw.get("group_name") == "StrippedGroup":
+            return []
+        return slots
+
+    monkeypatch.setattr(awards, "apply_overrides", _strip_stripped_group)
+
+    payload = ribbon_announce.ribbon_announce_payload(date(2026, 8, 3))
+    assert payload is not None
+    assert [g["group"] for g in payload["groups"]] == ["Repairs"]
 
 
 def test_payload_none_when_all_groups_empty(monkeypatch):

@@ -17,11 +17,8 @@ def is_ribbon_announce_day(today: date) -> bool:
     """True iff `today` is the first plant workday of its calendar month."""
     cursor = date(today.year, today.month, 1)
     while cursor <= today:
-        try:
-            if shift_config.is_workday(cursor):
-                return cursor == today
-        except Exception:
-            pass
+        if shift_config.is_workday(cursor):
+            return cursor == today
         cursor = cursor + timedelta(days=1)
     return False
 
