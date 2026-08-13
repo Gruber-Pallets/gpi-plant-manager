@@ -1,6 +1,7 @@
 """Ribbon winners banner — template wiring + route context."""
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,3 +37,50 @@ def test_recycling_and_new_include_ribbon_on_desktop_and_tv():
     for name in ("recycling.html", "new_dept.html"):
         html = _read(name)
         assert html.count('include "_ribbon_winners_banner.html"') >= 2
+
+
+def test_safe_helpers_exist_on_routes():
+    from zira_dashboard.routes import wc_dashboard, departments
+    assert callable(getattr(wc_dashboard, "_ribbon_announce", None))
+    assert callable(getattr(departments, "_ribbon_announce", None))
+
+
+def test_wc_and_departments_set_ribbon_announce_context():
+    from zira_dashboard.routes import wc_dashboard, departments
+    wc_src = Path(wc_dashboard.__file__).read_text()
+    dept_src = Path(departments.__file__).read_text()
+    assert '"ribbon_announce":' in wc_src
+    assert "_ribbon_announce" in wc_src
+    assert "tv_mode" in wc_src
+    assert '"ribbon_announce":' in dept_src
+    assert "_ribbon_announce" in dept_src
+    # Both recycling and new render paths must set the key.
+    assert dept_src.count('"ribbon_announce":') >= 2
+
+
+def test_ribbon_announce_wrapper_returns_none_on_error(monkeypatch):
+    from zira_dashboard.routes import departments
+
+    def _boom(today):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(
+        "zira_dashboard.ribbon_announce.ribbon_announce_payload",
+        _boom,
+    )
+    assert departments._ribbon_announce(date(2026, 8, 3)) is None
+
+
+def test_ribbon_announce_wrapper_returns_payload(monkeypatch):
+    from zira_dashboard.routes import departments
+    sample = {
+        "year": 2026,
+        "month": 7,
+        "label": "July 2026",
+        "groups": [{"group": "Repairs", "entries": []}],
+    }
+    monkeypatch.setattr(
+        "zira_dashboard.ribbon_announce.ribbon_announce_payload",
+        lambda today: sample,
+    )
+    assert departments._ribbon_announce(date(2026, 8, 3)) == sample

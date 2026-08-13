@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-13
 
+### Ribbon winners get a shout-out
+
+#### Features
+
+- **On the first work day of a new month, the boards celebrate last month’s ribbon winners.** Operator TVs and the Recycling and New screens show gold, silver, and bronze for every group that had real production, so the plant can cheer them on together.
+
 ### Uptime orange is clearer
 
 #### Fixes

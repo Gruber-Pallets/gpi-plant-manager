@@ -721,6 +721,7 @@ def _render_recycling(
                 _goat_watch_contenders(today, now) if is_today else []
             ),
             "goat_alerts_active": _goat_watch_active_alerts(today),
+            "ribbon_announce": _ribbon_announce(today),
         },
     )
     set_cache_headers(response, includes_today=range_includes_today)
@@ -742,6 +743,14 @@ def _goat_watch_active_alerts(today):
         return goat_watch.active_alerts(today)
     except Exception:
         return []
+
+
+def _ribbon_announce(today):
+    try:
+        from .. import ribbon_announce
+        return ribbon_announce.ribbon_announce_payload(today)
+    except Exception:
+        return None
 
 
 @router.get("/tv/recycling", response_class=HTMLResponse)
@@ -951,6 +960,7 @@ def _render_new_dept(
             # only — they're a per-group projection, not a per-WC stat.
             "goat_alerts_active": _goat_watch_active_alerts(today),
             "goat_contenders": [],
+            "ribbon_announce": _ribbon_announce(today),
         },
     )
     set_cache_headers(response, includes_today=range_includes_today)

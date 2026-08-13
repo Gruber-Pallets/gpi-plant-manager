@@ -158,6 +158,7 @@ def _render_wc_dashboard(
             # only — they're a per-group projection, not a per-WC stat.
             "goat_alerts_active": _goat_watch_active_alerts(today),
             "goat_contenders": [],
+            "ribbon_announce": _ribbon_announce(today) if tv_mode else None,
         },
     )
     set_cache_headers(response, includes_today=is_today)
@@ -171,6 +172,14 @@ def _goat_watch_active_alerts(today):
         return goat_watch.active_alerts(today)
     except Exception:
         return []
+
+
+def _ribbon_announce(today):
+    try:
+        from .. import ribbon_announce
+        return ribbon_announce.ribbon_announce_payload(today)
+    except Exception:
+        return None
 
 
 @router.get("/wc/{slug}", response_class=HTMLResponse)
