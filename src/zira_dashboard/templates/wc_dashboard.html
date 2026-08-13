@@ -31,6 +31,7 @@
 <link rel="stylesheet" href="/static/wc_dashboard.css?v={{ static_v('wc_dashboard.css') }}">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
+<link rel="stylesheet" href="/static/ribbon_announce.css?v={{ static_v('ribbon_announce.css') }}">
 {% if tv_mode %}
 <link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
 <script defer src="/static/tv-refresh.js?v={{ static_v('tv-refresh.js') }}"></script>
@@ -45,7 +46,7 @@
       wc_name,
       crumb="OPERATOR · " + (wc_group or "")|upper,
       right=operators_display or "(unassigned)",
-  ) %}{% include "_goat_watch_banner.html" %}{% endcall %}
+  ) %}{% include "_ribbon_winners_banner.html" %}{% include "_goat_watch_banner.html" %}{% endcall %}
 {% else %}
   <header>
     {% set active_nav = 'performance' %}{% include "_topnav.html" %}

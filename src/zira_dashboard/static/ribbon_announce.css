@@ -1,0 +1,59 @@
+/* Monthly ribbon winners banner — Recycling / New / operator TV header. */
+
+.ribbon-announce-banner {
+  margin: 0.5rem 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: linear-gradient(135deg, #fef9c3 0%, #fde68a 100%);
+  border: 1px solid #d97706;
+  border-radius: 10px;
+  padding: 0.4rem 0.75rem;
+  color: #422006;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  font-size: 0.9rem;
+  line-height: 1.25;
+  max-width: 100%;
+}
+html[data-tv-theme="dark"] .ribbon-announce-banner {
+  background: linear-gradient(135deg, #422006 0%, #78350f 100%);
+  color: #fef3c7;
+  border-color: #f59e0b;
+}
+
+.ribbon-announce-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.ribbon-announce-title {
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+.ribbon-announce-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.85rem;
+}
+.ribbon-announce-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+}
+.ribbon-announce-group-name {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+.ribbon-announce-entry {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2rem;
+  white-space: nowrap;
+}
+.ribbon-announce-meta {
+  opacity: 0.75;
+  font-size: 0.78rem;
+}

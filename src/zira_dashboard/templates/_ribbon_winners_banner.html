@@ -1,0 +1,31 @@
+{# Monthly ribbon winners celebration banner.
+   Shown on the first plant workday of the month for the previous month.
+   Inputs: ribbon_announce — dict from ribbon_announce.ribbon_announce_payload
+   or None/absent. #}
+{% if ribbon_announce and ribbon_announce.groups %}
+<div class="ribbon-announce-banner" role="region"
+     aria-label="{{ ribbon_announce.label }} ribbon winners">
+  <div class="ribbon-announce-head">
+    <span class="ribbon-announce-medal" aria-hidden="true">🏅</span>
+    <span class="ribbon-announce-title">{{ ribbon_announce.label }} Ribbon Winners</span>
+  </div>
+  <div class="ribbon-announce-groups">
+    {% for g in ribbon_announce.groups %}
+      <div class="ribbon-announce-group">
+        <span class="ribbon-announce-group-name">{{ g.group }}</span>
+        {% for e in g.entries %}
+          <span class="ribbon-announce-entry">
+            <span class="ribbon-announce-pos" aria-hidden="true">
+              {% if e.position == 1 %}🥇{% elif e.position == 2 %}🥈{% else %}🥉{% endif %}
+            </span>
+            <span class="ribbon-announce-person">{{ e.name }}</span>
+            {% if e.units is defined and e.units is not none %}
+              <span class="ribbon-announce-meta">{{ "%.0f"|format(e.units) }}</span>
+            {% endif %}
+          </span>
+        {% endfor %}
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}

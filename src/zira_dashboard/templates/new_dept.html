@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
+<link rel="stylesheet" href="/static/ribbon_announce.css?v={{ static_v('ribbon_announce.css') }}">
 {% if tv_mode %}
 <link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
 {% endif %}
@@ -22,7 +23,7 @@
 {% endblock %}
 {% block header %}
 {% if tv_mode %}
-{% call tv_header("New", crumb="DEPARTMENTS · TODAY") %}{% include "_goat_watch_banner.html" %}{% endcall %}
+{% call tv_header("New", crumb="DEPARTMENTS · TODAY") %}{% include "_ribbon_winners_banner.html" %}{% include "_goat_watch_banner.html" %}{% endcall %}
 {% else %}
 <header>
   {% set active_nav = 'performance' %}{% include "_topnav.html" %}
@@ -60,7 +61,7 @@
 </form>
 {# TV mode seats the banner in the header center (tv_header {% call %}
    above); screen mode keeps it here below the edit bar. #}
-{% include "_goat_watch_banner.html" %}
+{% include "_ribbon_winners_banner.html" %}{% include "_goat_watch_banner.html" %}
 {% endif %}
 {% endblock %}
 {% macro widget_attrs(id, dx, dy, dw, dh) -%}

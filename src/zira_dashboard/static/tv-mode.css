@@ -214,3 +214,23 @@ html[data-tv-theme] .tv-header-center .goat-alert-prior {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+html[data-tv-theme] .tv-header .tv-header-center {
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+html[data-tv-theme] .tv-header .tv-header-center .ribbon-announce-banner {
+  margin: 0;
+  max-width: 100%;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.6rem;
+}
+html[data-tv-theme] .tv-header-center .ribbon-announce-groups {
+  gap: 0.25rem 0.6rem;
+}
+html[data-tv-theme] .tv-header-center .ribbon-announce-meta {
+  /* Prefer ellipsizing meta before names when the center slot is tight. */
+  max-width: 4.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
