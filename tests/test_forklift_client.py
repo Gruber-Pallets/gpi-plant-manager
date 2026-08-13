@@ -12,7 +12,9 @@ def _json_response(body):
     return r
 
 
-def test_fetch_drivers_calls_api_path_and_returns_json(monkeypatch):
+def test_fetch_drivers_uses_external_bearer_api(monkeypatch):
+    """Internal /api/drivers now requires a workstation/admin session; the
+    snapshot/backfill path must use the Bearer external feed instead."""
     monkeypatch.setenv("FORKLIFT_BASE_URL", "https://fk.example")
     monkeypatch.setenv("FORKLIFT_API_KEY", "gpifk__test")
     captured = {}
@@ -27,8 +29,19 @@ def test_fetch_drivers_calls_api_path_and_returns_json(monkeypatch):
     drivers = forklift_client.fetch_drivers()
 
     assert drivers == [{"id": "fk-1", "name": "Trent"}]
-    assert captured["url"] == "https://fk.example/api/drivers"
-    assert captured["headers"]["X-API-Key"] == "gpifk__test"
+    assert captured["url"] == "https://fk.example/api/external/v1/drivers"
+    assert captured["headers"] == {"Authorization": "Bearer gpifk__test"}
+
+
+def test_fetch_drivers_requires_api_key(monkeypatch):
+    monkeypatch.delenv("FORKLIFT_API_KEY", raising=False)
+
+    def fake_get(url, **kwargs):
+        raise AssertionError("should not call the API without a key")
+
+    monkeypatch.setattr(forklift_client.requests, "get", fake_get)
+    with pytest.raises(forklift_client.ForkliftError):
+        forklift_client.fetch_drivers()
 
 
 def test_default_base_url_when_unset(monkeypatch):
@@ -65,6 +78,7 @@ def test_fetch_dashboard_passes_since_param(monkeypatch):
 
 def test_http_error_is_wrapped_in_forklift_error(monkeypatch):
     monkeypatch.setenv("FORKLIFT_BASE_URL", "https://fk.example")
+    monkeypatch.setenv("FORKLIFT_API_KEY", "gpifk__test")
 
     def fake_get(url, **kwargs):
         r = MagicMock()

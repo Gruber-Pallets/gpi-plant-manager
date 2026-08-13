@@ -45,8 +45,11 @@ def snapshot_today(client, day: date) -> dict:
     forklift_store.upsert_calls_daily(calls_row)
     n = forklift_store.upsert_driver_daily(driver_rows)
 
-    backups = [d.get("name") for d in (drivers or [])
-               if d.get("isOverloadResponder") and d.get("name")]
-    app_settings.set_setting("forklift_overload_responders", backups)
+    # External /drivers may omit isOverloadResponder — only overwrite the
+    # saved backup list when the payload actually carries that flag.
+    if any("isOverloadResponder" in d for d in (drivers or []) if isinstance(d, dict)):
+        backups = [d.get("name") for d in (drivers or [])
+                   if d.get("isOverloadResponder") and d.get("name")]
+        app_settings.set_setting("forklift_overload_responders", backups)
 
     return {"day": day.isoformat(), "calls": calls_row["total_calls"], "drivers": n}

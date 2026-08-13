@@ -4,10 +4,11 @@ The forklift app runs a call-and-dispatch queue; this client pulls demand and
 driver-performance data into the Plant Manager. GET-only — we never write.
 
 Config (read per-call, so importing this module has no side effects):
-  FORKLIFT_API_KEY   - the internal endpoints accept it as the X-API-Key header
-                       (best-effort; they currently serve reads without auth).
-                       The external completions feed REQUIRES it as a
-                       `Authorization: Bearer <key>` header.
+  FORKLIFT_API_KEY   - required as `Authorization: Bearer <key>` for the
+                       external feeds (completions + drivers). Also sent as
+                       X-API-Key on legacy internal endpoints when present;
+                       those now need a driver/admin session and usually 401
+                       for server-to-server callers.
   FORKLIFT_BASE_URL  - defaults to https://www.gpiforklift.com
 """
 from __future__ import annotations
@@ -62,8 +63,16 @@ def fetch_queue_history() -> list[dict]:
 
 
 def fetch_drivers() -> list[dict]:
-    """Forklift drivers: {id, name, isOverloadResponder, skills}."""
-    return _get("/api/drivers")
+    """Forklift drivers from the external feed: at least {id, name}.
+
+    Uses `/api/external/v1/drivers` (Bearer). The legacy `/api/drivers` route
+    now requires a workstation/admin session and is unusable from the warmer.
+    The external payload may omit `isOverloadResponder` / `skills`.
+    """
+    data = _external_get("/api/external/v1/drivers", params={})
+    if isinstance(data, list):
+        return data
+    return data.get("items") or data.get("drivers") or []
 
 
 def fetch_weekly_trends() -> dict:

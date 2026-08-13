@@ -41,9 +41,12 @@ def backfill_history(client=None, since: int = 0) -> dict:
             total_calls += row["total_calls"]
         n_drivers = forklift_store.upsert_driver_daily(driver_rows)
 
-        backups = [d.get("name") for d in (drivers or [])
-                   if d.get("isOverloadResponder") and d.get("name")]
-        app_settings.set_setting("forklift_overload_responders", backups)
+        # External /drivers may omit isOverloadResponder — only overwrite the
+        # saved backup list when the payload actually carries that flag.
+        if any("isOverloadResponder" in d for d in (drivers or []) if isinstance(d, dict)):
+            backups = [d.get("name") for d in (drivers or [])
+                       if d.get("isOverloadResponder") and d.get("name")]
+            app_settings.set_setting("forklift_overload_responders", backups)
 
         summary = {"days": len(calls_rows), "drivers": n_drivers, "calls": total_calls}
         _log.info("forklift backfill complete: %s", summary)

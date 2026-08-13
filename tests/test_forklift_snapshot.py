@@ -43,6 +43,25 @@ def test_snapshot_today_fetches_aggregates_and_stores(monkeypatch):
     assert out["calls"] == 1
 
 
+def test_snapshot_today_preserves_overload_responders_without_flag(monkeypatch):
+    """External /drivers is {id, name} only — do not clobber saved backups."""
+    saved = {}
+    monkeypatch.setattr(forklift_snapshot.forklift_client, "fetch_completions",
+                        lambda since=0: [])
+    monkeypatch.setattr(forklift_snapshot.forklift_client, "fetch_drivers",
+                        lambda: [{"id": "fk-1", "name": "Trent"}])
+    monkeypatch.setattr(forklift_snapshot.forklift_store, "upsert_calls_daily",
+                        lambda row: None)
+    monkeypatch.setattr(forklift_snapshot.forklift_store, "upsert_driver_daily",
+                        lambda rows: 0)
+    monkeypatch.setattr(forklift_snapshot.app_settings, "set_setting",
+                        lambda k, v: saved.update({k: v}))
+
+    forklift_snapshot.snapshot_today(client=None, day=DAY)
+
+    assert "forklift_overload_responders" not in saved
+
+
 def test_snapshot_today_empty_day_writes_zero_row(monkeypatch):
     captured = {}
     monkeypatch.setattr(forklift_snapshot.forklift_client, "fetch_completions",
