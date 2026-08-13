@@ -61,8 +61,8 @@ def test_aggregate_completions_driver_rows():
     assert r["on_call_ms"] == 300000 + 200000 + 150000   # sum(handlingMs)
     assert r["avg_ms"] == round((120000 + 180000 + 240000) / 3)
     assert r["max_ms"] == 240000
-    # fields the feed can't supply
-    assert r["on_time"] == 0 and r["late"] == 0 and r["utilization_pct"] == 0
+    # fields the feed still can't supply
+    assert r["utilization_pct"] == 0
     assert r["available_ms"] == 0
 
     # fk-2 on day1: only c3
@@ -73,6 +73,26 @@ def test_aggregate_completions_driver_rows():
     # fk-2 on day2: only c5
     r3 = by_key[(date(2026, 6, 27), "fk-2")]
     assert r3["calls"] == 1
+
+
+def test_aggregate_completions_counts_ontime_and_late_flags():
+    """External completions now carry boolean onTime/late — count them per driver-day."""
+    items = [
+        {"id": "a", "completedBy": "fk-1", "createdAt": 1782484200000,
+         "responseMs": 1000, "handlingMs": 2000, "onTime": True, "late": False},
+        {"id": "b", "completedBy": "fk-1", "createdAt": 1782485100000,
+         "responseMs": 1000, "handlingMs": 2000, "onTime": False, "late": True},
+        {"id": "c", "completedBy": "fk-1", "createdAt": 1782501300000,
+         "responseMs": 1000, "handlingMs": 2000, "onTime": True, "late": False},
+        # missing flags -> neither bucket
+        {"id": "d", "completedBy": "fk-1", "createdAt": 1782520200000,
+         "responseMs": 1000, "handlingMs": 2000},
+    ]
+    _, driver_rows = forklift_ingest.aggregate_completions(items, ID2NAME, TZ)
+    r = driver_rows[0]
+    assert r["calls"] == 4
+    assert r["on_time"] == 2
+    assert r["late"] == 1
 
 
 def test_aggregate_completions_unknown_driver_falls_back_to_id():

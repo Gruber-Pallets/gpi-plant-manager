@@ -53,8 +53,9 @@ def aggregate_completions(items: list[dict], id_to_name: dict, tz) -> tuple[list
       * calls_rows  - one row per plant-local day, matching forklift_calls_daily.
       * driver_rows - one row per (day, completedBy), matching forklift_driver_daily.
 
-    Pure (no I/O). Items missing createdAt or completedBy are skipped. The feed
-    carries no priority/skill/late/utilization data, so those fields are 0/{}.
+    Pure (no I/O). Items missing createdAt or completedBy are skipped. Priority,
+    skill, overload, and utilization still aren't on the feed (those stay 0/{}).
+    Per-call ``onTime`` / ``late`` booleans are counted when present.
     """
     # Per-day aggregates.
     day_total: dict[date, int] = defaultdict(int)
@@ -62,6 +63,8 @@ def aggregate_completions(items: list[dict], id_to_name: dict, tz) -> tuple[list
     day_station: dict[date, Counter] = defaultdict(Counter)
     # Per-(day, driver) aggregates.
     drv_calls: dict[tuple, int] = defaultdict(int)
+    drv_ontime: dict[tuple, int] = defaultdict(int)
+    drv_late: dict[tuple, int] = defaultdict(int)
     drv_response: dict[tuple, list[int]] = defaultdict(list)
     drv_handling: dict[tuple, int] = defaultdict(int)
 
@@ -82,6 +85,10 @@ def aggregate_completions(items: list[dict], id_to_name: dict, tz) -> tuple[list
 
         key = (day, driver)
         drv_calls[key] += 1
+        if it.get("late") is True:
+            drv_late[key] += 1
+        elif it.get("onTime") is True:
+            drv_ontime[key] += 1
         resp = it.get("responseMs")
         if resp is not None:
             drv_response[key].append(int(resp))
@@ -116,8 +123,8 @@ def aggregate_completions(items: list[dict], id_to_name: dict, tz) -> tuple[list
             "driver_id": str(driver),
             "name": id_to_name.get(str(driver)) or str(driver),
             "calls": drv_calls[(day, driver)],
-            "on_time": 0,
-            "late": 0,
+            "on_time": drv_ontime[(day, driver)],
+            "late": drv_late[(day, driver)],
             "avg_ms": avg_ms,
             "max_ms": max_ms,
             "utilization_pct": 0,

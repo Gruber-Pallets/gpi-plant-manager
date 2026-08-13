@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-13
 
+### Forklift on-time is back
+
+#### Fixes
+
+- **Forklift on-time and late counts show up again.** The app now reads those flags from each finished forklift call, so the Performance boards can show how often drivers beat the clock.
+
 ### Ribbon winners get a shout-out
 
 #### Features
