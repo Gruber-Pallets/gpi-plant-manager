@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-13
 
+### Uptime orange is clearer
+
+#### Fixes
+
+- **The middle uptime color looks more orange now.** The 80–90% number was too brown, so it is easier to tell apart from green and red.
+
 ### Recycling uptime at a glance
 
 #### Features

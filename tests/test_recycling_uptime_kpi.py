@@ -75,7 +75,9 @@ def test_recycling_css_locks_uptime_band_colors():
     css = _uptime_band_css()
     assert 'gs-id="kpi-uptime"' in css or "[gs-id='kpi-uptime']" in css or '[gs-id="kpi-uptime"]' in css
     assert "band-good" in css and "var(--good)" in css
-    assert "band-warn" in css and "var(--warn)" in css
+    # Mid band must read as orange, not the app-wide brownish --warn (#a16207).
+    assert "band-warn" in css and "#ea580c" in css
+    assert "var(--warn)" not in css
     assert "band-bad" in css and "var(--bad)" in css
     # Threshold colors must win over any customizer inline color.
     assert css.count("!important") >= 3

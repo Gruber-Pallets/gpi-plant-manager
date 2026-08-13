@@ -136,7 +136,8 @@
     color: var(--good) !important;
   }
   .grid-stack-item[gs-id="kpi-uptime"] .val.band-warn {
-    color: var(--warn) !important;
+    /* Brighter orange than app-wide --warn (#a16207), which reads brown. */
+    color: #ea580c !important;
   }
   .grid-stack-item[gs-id="kpi-uptime"] .val.band-bad {
     color: var(--bad) !important;
