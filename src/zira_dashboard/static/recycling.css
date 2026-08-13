@@ -131,6 +131,16 @@
     letter-spacing: 0.02em;
     white-space: nowrap; /* wraps below the number as one unit, never mid-text */
   }
+  /* Uptime KPI: traffic-light bands always win over widget color customizer. */
+  .grid-stack-item[gs-id="kpi-uptime"] .val.band-good {
+    color: var(--good) !important;
+  }
+  .grid-stack-item[gs-id="kpi-uptime"] .val.band-warn {
+    color: var(--warn) !important;
+  }
+  .grid-stack-item[gs-id="kpi-uptime"] .val.band-bad {
+    color: var(--bad) !important;
+  }
   .grid-stack-item-content .label {
     font-size: clamp(0.78rem, 10cqh, 1.25rem);
     flex: 0 0 auto;

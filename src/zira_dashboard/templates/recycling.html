@@ -78,11 +78,11 @@
 {% block content %}
   <div class="grid-stack" data-layout-page="recycling" data-tv-mode="{{ '1' if tv_mode else '0' }}" data-fallback-rows="30">
 
-    {# Total Downtime KPI dropped 2026-05-14 + Up Time KPI dropped 2026-05-15 —
-       both numbers now sit at the top-right of the Downtime Report widget. #}
+    {# kpi-uptime is back as a dedicated KPI; Downtime Report still shows the same percent in its header. #}
     {% set kpi_defs = [
       ('kpi-pallets',   'Total Pallets Processed', '{:,}'.format(total_units)),
       ('kpi-palletshr', 'pallets/hr/person',       pph_per_person),
+      ('kpi-uptime',    'Uptime',                  (uptime_pct|round(0)|int)|string ~ '%'),
     ] %}
     {% for k in kpi_defs %}
       {% set kid = k[0] %}{% set ktitle = k[1] %}{% set kval = k[2] %}
@@ -92,7 +92,14 @@
         <div class="grid-stack-item-content align-{{ align }}">
           {% if not tv_mode %}{{ edit_controls(kid, ktitle, 'kpi') }}{% endif %}
           <div class="label">{{ widget_title(kid, ktitle) }}</div>
-          <div class="val"{% if kid == 'kpi-palletshr' %} style="color: var(--fg) !important"{% else %} {{ widget_color_style(kid, 'color') }}{% endif %}>{{ kval }}{% if kid == 'kpi-palletshr' %}<span class="val-secondary" title="Same metric but Dismantler 4's pallets are excluded from the numerator (their man-hours are still in the denominator). D4 reprocesses reject material that the ERP doesn't count as new throughput.">({{ pph_per_person_ex_d4 }} excl. D4)</span>{% endif %}</div>
+          {% if kid == 'kpi-uptime' %}
+            {% set uptime_band = 'band-good' if uptime_pct >= 90 else ('band-warn' if uptime_pct >= 80 else 'band-bad') %}
+          {% endif %}
+          <div class="val{% if kid == 'kpi-uptime' %} {{ uptime_band }}{% endif %}"
+            {%- if kid == 'kpi-palletshr' %} style="color: var(--fg) !important"
+            {%- elif kid == 'kpi-uptime' %}
+            {%- else %} {{ widget_color_style(kid, 'color') }}
+            {%- endif -%}>{{ kval }}{% if kid == 'kpi-palletshr' %}<span class="val-secondary" title="Same metric but Dismantler 4's pallets are excluded from the numerator (their man-hours are still in the denominator). D4 reprocesses reject material that the ERP doesn't count as new throughput.">({{ pph_per_person_ex_d4 }} excl. D4)</span>{% endif %}</div>
         </div>
       </div>
     {% endfor %}

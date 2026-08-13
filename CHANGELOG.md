@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-13
 
+### Recycling uptime at a glance
+
+#### Features
+
+- **Recycling now shows total uptime as a big number.** It uses green when uptime is 90% or higher, orange from 80% up to 90%, and red below 80%, so you can see plant health quickly without hunting in the downtime chart.
+
 ### Forklift scores are back
 
 #### Fixes
