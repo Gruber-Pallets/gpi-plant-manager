@@ -104,12 +104,12 @@ def validate_availability(start: time, end: time, shift_start: time, shift_end: 
 def eligible_work_centers(
     skill_levels: Mapping[str, int], openings: Sequence[Opening]
 ) -> frozenset[int]:
-    """Return work centers whose every required skill is exactly level 2 or 3."""
+    """Return work centers whose every required skill is at least level 1."""
     return frozenset(
         opening.wc_id
         for opening in openings
         if opening.required_skills
-        and all(int(skill_levels.get(skill, 0)) in (2, 3) for skill in opening.required_skills)
+        and all(int(skill_levels.get(skill, 0)) >= 1 for skill in opening.required_skills)
     )
 
 
@@ -188,7 +188,7 @@ def validate_publish(
                 reasons.append(f"{name} has approved full-day time off.")
             if opening is not None:
                 is_qualified = person is not None and all(
-                    person.level(skill) in (2, 3) for skill in opening.required_skills
+                    person.level(skill) >= 1 for skill in opening.required_skills
                 )
                 if not is_qualified:
                     qualification_label = (

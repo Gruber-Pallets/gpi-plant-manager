@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-14
 
+### Saturday uses the same skill rules as weekdays
+
+#### Fixes
+
+- **People with level-1 training can now say yes to Saturday work and be scheduled there.** Saturday now uses the same skill rules as the rest of the week.
+
 ### Saturday schedule warnings are fairer
 
 #### Fixes

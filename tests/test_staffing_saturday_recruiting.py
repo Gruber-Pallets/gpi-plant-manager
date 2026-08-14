@@ -261,12 +261,23 @@ def test_publish_accepts_manager_marked_saturday_unassigned_person():
     assert reasons == []
 
 
+def test_publish_accepts_level_one_qualified_operator():
+    people = _people(ana_repair=1)
+
+    assert sr.validate_publish(
+        _bundle(),
+        {"Repair 1": ["Ana"], "Dismantle": ["Bob"]},
+        people,
+        set(),
+    ) == []
+
+
 @pytest.mark.parametrize(
     ("assignments", "people", "full_day_off_names", "expected"),
     [
         ({"Repair 1": ["Ana", "Ana"], "Dismantle": ["Bob"]}, _people(), set(), "Ana is assigned more than once."),
         ({"Repair 1": ["Cara"], "Dismantle": ["Bob"]}, _people(), set(), "Cara is not committed to Saturday."),
-        ({"Repair 1": ["Ana"], "Dismantle": ["Bob"]}, _people(ana_repair=1), set(), "Ana is no longer qualified for Repair."),
+        ({"Repair 1": ["Ana"], "Dismantle": ["Bob"]}, _people(ana_repair=0), set(), "Ana is no longer qualified for Repair."),
         ({"Repair 1": ["Ana"], "Dismantle": ["Bob"]}, _people(ana_active=False), set(), "Ana is inactive."),
         ({"Repair 1": ["Ana"], "Dismantle": ["Bob"]}, _people(), {"Ana"}, "Ana has approved full-day time off."),
     ],

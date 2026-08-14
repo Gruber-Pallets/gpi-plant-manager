@@ -118,11 +118,10 @@ def _opening(wc_id, count, *skills):
     return sr.Opening(wc_id, f"WC {wc_id}", count, tuple(skills))
 
 
-def test_eligibility_requires_level_two_in_every_skill():
+def test_eligibility_accepts_level_one_in_every_skill():
     openings = [_opening(10, 1, "Repair", "Forklift")]
-    assert sr.eligible_work_centers({"Repair": 3, "Forklift": 2}, openings) == {10}
-    assert sr.eligible_work_centers({"Repair": 3, "Forklift": 1}, openings) == set()
-    assert sr.eligible_work_centers({"Repair": 3, "Forklift": 4}, openings) == set()
+    assert sr.eligible_work_centers({"Repair": 3, "Forklift": 1}, openings) == {10}
+    assert sr.eligible_work_centers({"Repair": 3, "Forklift": 0}, openings) == set()
 
 
 def test_matcher_rematches_multiskilled_person():

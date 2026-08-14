@@ -735,7 +735,7 @@ def _current_training_trainees_by_center(day: date, assignments) -> dict[str, tu
 
 
 def current_view_validation_for_day(
-    *, day, assignments, enabled_work_centers
+    *, day, assignments, enabled_work_centers, expected_working_names=None
 ) -> list[dict[str, object]]:
     """Validate the exact staffing assignments currently visible to the user."""
     enabled = _ordered_work_center_names(enabled_work_centers)
@@ -764,6 +764,7 @@ def current_view_validation_for_day(
         exact_defaults=exact_defaults,
         group_defaults=group_defaults,
         user_group_centers=user_group_centers,
+        expected_working_names=expected_working_names,
     )
     return [issue.to_dict() for issue in issues]
 
@@ -994,6 +995,7 @@ def _recycled_context_for_day(
     *,
     work_weekdays: frozenset[int],
     use_current_view_validation: bool = True,
+    expected_working_names=None,
 ):
     """Recycled template context: mode, per-assignment reasons, warnings, blocks.
 
@@ -1101,6 +1103,7 @@ def _recycled_context_for_day(
                 day=d,
                 assignments=current_assignments if current_assignments is not None else {},
                 enabled_work_centers=enabled,
+                expected_working_names=expected_working_names,
             )
             ctx["rotation_warnings"] = [issue["message"] for issue in visible_issues]
             ctx["rotation_issues"].extend(visible_issues)
@@ -2127,6 +2130,11 @@ def staffing_page(
         current_assignments=sched.assignments,
         work_weekdays=work_weekdays,
         use_current_view_validation=not (viewing_posted or sched.published),
+        expected_working_names=(
+            set(bay_model.get("saturday_committed_names") or ())
+            if render_as_optional_day
+            else None
+        ),
     )
     # Plant-wide sidebar list (active + paused) with progress. Kept separate
     # from day-scoped active_training_blocks used for Auto/seeding reservations.

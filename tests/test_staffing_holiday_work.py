@@ -385,6 +385,7 @@ def _render_staffing(
     patch_shift_config: bool = True,
     real_bay_model: bool = False,
     prepare_closed=None,
+    recycled_context=None,
     rendered_html: list[str] | None = None,
 ):
     """Render one scheduler page with every external read replaced."""
@@ -487,17 +488,20 @@ def _render_staffing(
             recommended_centers=(),
         ),
     )
-    monkeypatch.setattr(
-        staffing_routes,
-        "_recycled_context_for_day",
-        lambda *_args, **_kwargs: {
+    def default_recycled_context(*_args, **_kwargs):
+        return {
             "recycled_rotation_mode": "normal",
             "rotation_reasons": {},
             "rotation_reason_codes": {},
             "rotation_warnings": [],
             "rotation_issues": [],
             "active_training_blocks": [],
-        },
+        }
+
+    monkeypatch.setattr(
+        staffing_routes,
+        "_recycled_context_for_day",
+        recycled_context or default_recycled_context,
     )
     monkeypatch.setattr(
         staffing_routes.saturday_recruiting_store,
@@ -604,6 +608,32 @@ def _render_staffing(
         view="draft",
     )
     return captured["context"], bay_calls, created
+
+
+def test_optional_workday_passes_only_committed_volunteers_to_validation(monkeypatch):
+    captured = {}
+
+    def capture_recycled_context(*_args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "recycled_rotation_mode": "normal",
+            "rotation_reasons": {},
+            "rotation_reason_codes": {},
+            "rotation_warnings": [],
+            "rotation_issues": [],
+            "active_training_blocks": [],
+        }
+
+    _render_staffing(
+        monkeypatch,
+        optional_day=_holiday(),
+        bundle=_bundle(),
+        roster=[_person("Volunteer"), _person("Saturday Off")],
+        real_bay_model=True,
+        recycled_context=capture_recycled_context,
+    )
+
+    assert captured["expected_working_names"] == {"Volunteer"}
 
 
 def test_next_working_day_skips_adjacent_mirrored_holidays(monkeypatch):
