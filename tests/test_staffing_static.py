@@ -778,6 +778,142 @@ def test_current_view_snapshot_carries_optional_worker_names():
     assert ": null," in snapshot
 
 
+def test_saturday_availability_changes_refresh_live_validation_workers():
+    js = _script()
+    save_availability = (
+        "async function _saveSaturdayAvailability(button) {"
+        + js.split("async function _saveSaturdayAvailability(button) {", 1)[1].split(
+            "  document.addEventListener('click', event => {", 1
+        )[0]
+    )
+    validation = (
+        "let validationTimer = null;"
+        + js.split("let validationTimer = null;", 1)[1].split(
+            "function setWorkCenterOnState", 1
+        )[0]
+    )
+    harness = textwrap.dedent(
+        f"""
+        const saveAvailability = {save_availability!r};
+        const validation = {validation!r};
+        const committedNames = new Set();
+        const scheduledCallbacks = [];
+        const moves = [];
+        const sequence = [];
+        const validationRequests = [];
+        const availabilityResponses = [];
+        const toasts = [];
+        let scheduleCurrentViewValidation = () => {{}};
+        const __viewingPosted = false;
+        const __saturdayRecruiting = true;
+        const __saturdayCommittedNames = committedNames;
+        const day = '2026-07-29';
+        const window = {{
+          AUTO_SCHEDULE_WC_NAMES: ['Repair 1'],
+          SCHEDULE_DAY: day,
+          SCHEDULE_PUBLISHED: false,
+        }};
+        const document = {{ querySelectorAll: () => [] }};
+        class AbortController {{
+          constructor() {{ this.signal = {{}}; }}
+          abort() {{ this.aborted = true; }}
+        }}
+        function _moveSaturdayAvailabilityRow(name, destination) {{
+          moves.push([name, destination]);
+          sequence.push('move');
+        }}
+        function showToast(message) {{ toasts.push(message); }}
+        function setTimeout(callback) {{
+          sequence.push('schedule');
+          scheduledCallbacks.push(callback);
+          return callback;
+        }}
+        function clearTimeout() {{}}
+        async function fetch(url, options) {{
+          if (url === '/api/staffing/saturday-availability') {{
+            const response = availabilityResponses.shift();
+            if (!response) throw new Error('missing availability response');
+            return response;
+          }}
+          if (url === '/api/rotations/validate-current') {{
+            validationRequests.push(JSON.parse(options.body));
+            return {{ok: true, json: async () => ({{ok: true, issues: []}})}};
+          }}
+          throw new Error('unexpected request ' + url);
+        }}
+        function renderCoverageIssues() {{}}
+        const {{ _saveSaturdayAvailability }} = eval(
+          validation + '\\n' + saveAvailability + '\\n({{ _saveSaturdayAvailability }})'
+        );
+
+        async function saveAndValidate(destination, initiallyCommitted) {{
+          committedNames.clear();
+          if (initiallyCommitted) committedNames.add('Riley');
+          scheduledCallbacks.length = 0;
+          moves.length = 0;
+          sequence.length = 0;
+          validationRequests.length = 0;
+          availabilityResponses.push({{
+            ok: true,
+            json: async () => ({{
+              ok: true,
+              unassigned_count: destination === 'unassigned' ? 1 : 0,
+              off_count: destination === 'off' ? 1 : 0,
+            }}),
+          }});
+          await _saveSaturdayAvailability({{
+            disabled: false,
+            dataset: {{name: 'Riley', destination}},
+          }});
+          if (moves.length !== 1 || sequence.join(',') !== 'move,schedule') {{
+            throw new Error('successful availability save did not move then schedule validation');
+          }}
+          if (scheduledCallbacks.length !== 1) {{
+            throw new Error('successful availability save did not schedule validation');
+          }}
+          await scheduledCallbacks[0]();
+          if (validationRequests.length !== 1) throw new Error('validation did not run');
+          return validationRequests[0].expected_working_names;
+        }}
+
+        const afterMovingOff = await saveAndValidate('off', true);
+        if (afterMovingOff.length !== 0) {{
+          throw new Error('person moved off remained in validation workers');
+        }}
+        const afterMovingBack = await saveAndValidate('unassigned', false);
+        if (afterMovingBack.length !== 1 || afterMovingBack[0] !== 'Riley') {{
+          throw new Error('person moved to unassigned was absent from validation workers');
+        }}
+
+        committedNames.clear();
+        committedNames.add('Riley');
+        scheduledCallbacks.length = 0;
+        moves.length = 0;
+        availabilityResponses.push({{
+          ok: false,
+          json: async () => ({{ok: false, error: 'Could not save'}}),
+        }});
+        await _saveSaturdayAvailability({{
+          disabled: false,
+          dataset: {{name: 'Riley', destination: 'off'}},
+        }});
+        if (scheduledCallbacks.length || moves.length || !committedNames.has('Riley')) {{
+          throw new Error('failed availability save changed workers or scheduled validation');
+        }}
+        if (toasts.length !== 1) throw new Error('failed availability save did not report its error');
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_live_validation_ignores_an_out_of_order_stale_response():
     js = _script()
     validation = (

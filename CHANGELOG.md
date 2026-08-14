@@ -24,6 +24,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **The schedule checker can now skip people who are not expected at work before it looks for their work spots.** It still tells managers when a work area does not have enough people to work safely.
 - **Saturday “off” people stay out of warnings while you edit the schedule.** The yellow warning list now keeps out people who did not say yes to that Saturday shift. It still shows real safety and staffing problems.
+- **Changing a Saturday answer updates the warning list right away.** If someone says they are off, their name leaves the yellow list. If they say yes, the list checks their work spot again.
 
 ## 2026-08-13
 

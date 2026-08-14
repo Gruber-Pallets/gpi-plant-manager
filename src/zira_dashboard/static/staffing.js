@@ -521,6 +521,9 @@
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || 'Could not update Saturday availability.');
       _moveSaturdayAvailabilityRow(name, destination, data);
+      if (destination === 'unassigned') __saturdayCommittedNames.add(name);
+      if (destination === 'off') __saturdayCommittedNames.delete(name);
+      scheduleCurrentViewValidation();
     } catch (error) {
       showToast(error.message || 'Could not update Saturday availability.', null, 'error');
     } finally {
