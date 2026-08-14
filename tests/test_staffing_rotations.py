@@ -199,6 +199,34 @@ def test_live_validation_endpoint_uses_the_submitted_current_view_without_saving
     }
 
 
+def test_live_validation_endpoint_passes_expected_workers(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    captured = {}
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "_configured_center_capacities",
+        lambda centers, strict=False: {center: 2 for center in centers},
+    )
+    monkeypatch.setattr(
+        rotations.staffing_route,
+        "current_view_validation_for_day",
+        lambda **kwargs: captured.update(kwargs) or [],
+    )
+
+    response = client.post(
+        "/api/rotations/validate-current",
+        json={
+            "day": TARGET_DAY.isoformat(),
+            "enabled_work_centers": ["Repair 1"],
+            "assignments": {"Repair 1": ["Volunteer"]},
+            "expected_working_names": ["Volunteer"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["expected_working_names"] == ["Volunteer"]
+
+
 def test_live_validation_endpoint_rejects_unknown_center_and_duplicate_names(monkeypatch):
     client, _rotations = _rotations_client(monkeypatch)
 

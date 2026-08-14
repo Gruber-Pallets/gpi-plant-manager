@@ -767,6 +767,17 @@ def test_live_validation_is_disabled_for_every_posted_schedule_view():
     assert "if (!__viewingPosted && !window.SCHEDULE_PUBLISHED) validateCurrentView();" in js
 
 
+def test_current_view_snapshot_carries_optional_worker_names():
+    js = _script()
+    snapshot = js.split("function currentViewSnapshot()", 1)[1].split(
+        "function validationUnavailableIssue()", 1
+    )[0]
+
+    assert "expected_working_names: __saturdayRecruiting" in snapshot
+    assert "? [...__saturdayCommittedNames]" in snapshot
+    assert ": null," in snapshot
+
+
 def test_live_validation_ignores_an_out_of_order_stale_response():
     js = _script()
     validation = (
@@ -794,6 +805,8 @@ def test_live_validation_ignores_an_out_of_order_stale_response():
         }}
         let scheduleCurrentViewValidation = () => {{}};
         const __viewingPosted = false;
+        const __saturdayRecruiting = false;
+        const __saturdayCommittedNames = new Set();
         global.window = {{
           AUTO_SCHEDULE_WC_NAMES: ['Repair 1'],
           SCHEDULE_PUBLISHED: false,
@@ -874,6 +887,8 @@ def test_live_validation_failed_auto_cannot_replace_the_explicit_failure():
         let scheduleCurrentViewValidation = () => {{}};
         let savingAutoCenters = false;
         const __viewingPosted = false;
+        const __saturdayRecruiting = false;
+        const __saturdayCommittedNames = new Set();
         const day = '2026-07-29';
         class AbortController {{
           constructor() {{ this.signal = {{}}; controllers.push(this); }}

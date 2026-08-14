@@ -273,7 +273,7 @@ async def _json_body(request: Request):
 
 def _parse_current_validation_snapshot(
     body: Mapping[str, object],
-) -> tuple[date, dict[str, list[str]], list[str]]:
+) -> tuple[date, dict[str, list[str]], list[str], list[str] | None]:
     """Parse a complete, read-only snapshot of the staffing view.
 
     This deliberately validates the browser's view without normalizing away
@@ -322,7 +322,25 @@ def _parse_current_validation_snapshot(
             names.append(name)
         assignments[center] = names
 
-    return day, assignments, enabled
+    expected_workers_raw = body.get("expected_working_names")
+    expected_workers = None
+    if expected_workers_raw is not None:
+        if not isinstance(expected_workers_raw, list):
+            raise ValueError("expected_working_names must be a list.")
+        expected_workers = []
+        for raw_name in expected_workers_raw:
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                raise ValueError(
+                    "expected_working_names must contain non-empty names."
+                )
+            name = raw_name.strip()
+            if name in expected_workers:
+                raise ValueError(
+                    "expected_working_names must not contain duplicates."
+                )
+            expected_workers.append(name)
+
+    return day, assignments, enabled, expected_workers
 
 
 def _validate_current_validation_capacities(assignments: Mapping[str, Sequence[str]]) -> None:
@@ -343,7 +361,7 @@ async def validate_current_rotation_view(request: Request):
     if body is None:
         return _error("Invalid JSON body.", 400)
     try:
-        day, assignments, enabled = _parse_current_validation_snapshot(body)
+        day, assignments, enabled, expected_workers = _parse_current_validation_snapshot(body)
     except ValueError as exc:
         return _error(str(exc))
 
@@ -354,6 +372,7 @@ async def validate_current_rotation_view(request: Request):
                 day=day,
                 assignments=assignments,
                 enabled_work_centers=enabled,
+                expected_working_names=expected_workers,
             )
         except ValueError as exc:
             return _error(str(exc))

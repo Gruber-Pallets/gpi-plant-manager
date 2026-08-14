@@ -1707,6 +1707,9 @@
         day,
         enabled_work_centers: [...(window.AUTO_SCHEDULE_WC_NAMES || [])],
         assignments,
+        expected_working_names: __saturdayRecruiting
+          ? [...__saturdayCommittedNames]
+          : null,
       };
     }
 
