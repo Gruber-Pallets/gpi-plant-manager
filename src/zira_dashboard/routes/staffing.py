@@ -1099,9 +1099,16 @@ def _recycled_context_for_day(
 
     if use_current_view_validation:
         try:
+            validation_assignments = current_assignments if current_assignments is not None else {}
+            if expected_working_names is not None:
+                expected_names = set(expected_working_names)
+                validation_assignments = {
+                    center: [name for name in names if name in expected_names]
+                    for center, names in validation_assignments.items()
+                }
             visible_issues = current_view_validation_for_day(
                 day=d,
-                assignments=current_assignments if current_assignments is not None else {},
+                assignments=validation_assignments,
                 enabled_work_centers=enabled,
                 expected_working_names=expected_working_names,
             )

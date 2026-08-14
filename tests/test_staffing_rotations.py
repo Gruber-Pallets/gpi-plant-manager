@@ -1955,6 +1955,39 @@ def test_recycled_context_uses_current_staffing_instead_of_auto_preview_shortage
     assert context["rotation_warnings"] == []
 
 
+def test_recycled_context_ignores_nonvolunteer_assignments_in_current_validation(
+    monkeypatch,
+):
+    staffing_route = _stub_recommendation_inputs(monkeypatch)
+    captured = {}
+
+    def capture_current_validation(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        staffing_route,
+        "current_view_validation_for_day",
+        capture_current_validation,
+    )
+
+    staffing_route._recycled_context_for_day(
+        TARGET_DAY,
+        roster=[_person("Volunteer", 3), _person("Saturday Off", 3)],
+        mode="normal",
+        base_assignments={},
+        locked_assignments={},
+        time_off_entries=[],
+        enabled_work_centers={"Repair 1"},
+        assignment_sources={},
+        current_assignments={"Repair 1": ["Volunteer", "Saturday Off"]},
+        work_weekdays=frozenset({0, 1, 2, 3, 4}),
+        expected_working_names={"Volunteer"},
+    )
+
+    assert captured["assignments"] == {"Repair 1": ["Volunteer"]}
+
+
 def test_recycled_context_keeps_legacy_preview_warnings_for_posted_view(monkeypatch):
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     preview_issue = schedule_solver.CoverageIssue(
