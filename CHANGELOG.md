@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-14
+
+### Saturday schedule warnings are fairer
+
+#### Fixes
+
+- **The schedule checker can now skip people who are not expected at work before it looks for their work spots.** It still tells managers when a work area does not have enough people to work safely.
+
 ## 2026-08-13
 
 ### Forklift on-time is back

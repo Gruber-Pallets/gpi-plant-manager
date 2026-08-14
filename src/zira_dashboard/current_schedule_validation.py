@@ -32,6 +32,7 @@ def validate_current_assignments(
     exact_defaults: Mapping[str, Sequence[str]],
     group_defaults: Mapping[str, Sequence[str]],
     user_group_centers: Mapping[str, Sequence[str]],
+    expected_working_names: Collection[str] | None = None,
 ) -> tuple[schedule_solver.PlacementIssue, ...]:
     locations_by_name = {location.name: location for location in locations}
     enabled = tuple(
@@ -39,6 +40,9 @@ def validate_current_assignments(
     )
     by_name = {person.name: person for person in roster}
     off = set(full_day_off_names)
+    expected_workers = (
+        None if expected_working_names is None else {str(name) for name in expected_working_names}
+    )
     visible = {
         center: tuple(name for name in map(str, names or ()) if name in by_name)
         for center, names in assignments.items()
@@ -162,6 +166,7 @@ def validate_current_assignments(
             and not person.reserve
             and person.name not in off
             and person.name not in assigned_names
+            and (expected_workers is None or person.name in expected_workers)
         ):
             issues.append(
                 _issue(
@@ -179,6 +184,8 @@ def validate_current_assignments(
         for name in names:
             defaults_by_person[str(name)].append(("group", group))
     for name, targets in sorted(defaults_by_person.items(), key=lambda item: item[0].lower()):
+        if expected_workers is not None and name not in expected_workers:
+            continue
         if name not in by_name or not by_name[name].active or by_name[name].reserve or name in off:
             continue
         unique = tuple(sorted(set(targets), key=lambda item: (item[0], item[1].lower())))

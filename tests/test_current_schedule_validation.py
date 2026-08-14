@@ -179,3 +179,32 @@ def test_current_validation_requires_a_non_trainee_green_training_partner():
         "training_partner_missing",
         "center_minimum_unmet",
     }
+
+
+def test_current_validation_requires_only_expected_optional_workers_to_be_placed():
+    locations = (
+        staffing.Location("Repair 1", "Repair", "Bay 1", "Recycled", None, 1, 1),
+    )
+
+    issues = current_schedule_validation.validate_current_assignments(
+        roster=[_person("Volunteer", Repair=3), _person("Saturday Off", Repair=3)],
+        assignments={},
+        enabled_centers={"Repair 1"},
+        locations=locations,
+        minimums={"Repair 1": 1},
+        capacities={"Repair 1": 1},
+        required_skills={"Repair 1": ("Repair",)},
+        full_day_off_names=set(),
+        trim_saw_centers=set(),
+        training_trainees_by_center={},
+        exact_defaults={"Repair 1": ["Saturday Off"]},
+        group_defaults={},
+        user_group_centers={},
+        expected_working_names={"Volunteer"},
+    )
+
+    codes_by_person = {(issue.code, issue.person) for issue in issues}
+    assert ("person_unplaced", "Volunteer") in codes_by_person
+    assert ("person_unplaced", "Saturday Off") not in codes_by_person
+    assert not any(issue.person == "Saturday Off" for issue in issues)
+    assert "center_minimum_unmet" in {issue.code for issue in issues}
