@@ -1215,7 +1215,7 @@ def test_manual_lock_survives_rebuild_and_engine_fills_around_it():
     assert out.assignments["Repair 1"][0] == "Manual Person"
     assert out.sources["Repair 1"]["Manual Person"] == "manual"
     assert "Manual Person" not in out.reasons.get("Repair 1", {})
-    # Stale generated inputs are rebuilt, but every available person is placed.
+    # Seated generated people stay; leftover people fill remaining capacity.
     assert {"Fresh", "Stale Generated"} <= out.assigned_people
     all_names = [name for names in out.assignments.values() for name in names]
     assert all_names.count("Manual Person") == 1

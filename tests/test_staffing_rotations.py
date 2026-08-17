@@ -3581,12 +3581,11 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
     saved = []
     prior = staffing.Schedule(
         day=BLACK_FRIDAY,
-        assignments={"Repair 1": ["Volunteer", "Corrected", "Other"]},
+        assignments={"Repair 1": ["Volunteer", "Other"]},
         assignment_sources={
             "Repair 1": {
                 "Volunteer": "manual",
-                "Corrected": "manual",
-                "Other": "manual",
+                "Other": "generated",
             },
         },
         auto_enabled_work_centers=["Repair 1"],
@@ -3631,6 +3630,7 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
             _person("Volunteer", 3),
             _person("Corrected", 3),
             _person("Other", 3),
+            _person("Outsider", 3),
         ],
     )
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda _day: prior)
@@ -3658,22 +3658,15 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
     monkeypatch.setattr(
         staffing_route,
         "_configured_center_capacities",
-        lambda centers, strict=False: {center: 3 for center in centers},
+        lambda centers, strict=False: {center: 4 for center in centers},
     )
 
-    def suggest(_day, roster, _mode, **kwargs):
+    real_suggest = staffing_route._recycled_suggestion_for_day
+
+    def suggest(day, roster, mode, **kwargs):
         captured["roster"] = [person.name for person in roster]
         captured.update(kwargs)
-        return rotation_suggestions.RecycledSuggestion(
-            assignments={"Repair 1": ["Corrected"]},
-            sources={"Repair 1": {"Corrected": "generated"}},
-            reasons={},
-            warnings=(),
-            group_locations={"Repair": ("Repair 1",)},
-            complete=True,
-            available_people=("Corrected",),
-            placed_people=("Corrected",),
-        )
+        return real_suggest(day, roster, mode, **kwargs)
 
     monkeypatch.setattr(staffing_route, "_recycled_suggestion_for_day", suggest)
     monkeypatch.setattr(
@@ -3697,11 +3690,13 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
 
     assert response.status_code == 200
     assert captured["roster"] == ["Corrected"]
-    assert captured["locked_assignments"] == {
-        "Repair 1": ["Volunteer", "Corrected", "Other"],
-    }
+    assert captured["locked_assignments"] == {"Repair 1": ["Volunteer"]}
     assert captured["minimum_only"] is False
-    assert saved[-1].assignments == {"Repair 1": ["Corrected"]}
+    assert saved[-1].assignments == {"Repair 1": ["Volunteer", "Other", "Corrected"]}
+    assert saved[-1].assignment_sources["Repair 1"]["Volunteer"] == "manual"
+    assert saved[-1].assignment_sources["Repair 1"]["Other"] == "generated"
+    assert saved[-1].assignment_sources["Repair 1"]["Corrected"] == "generated"
+    assert "Outsider" not in saved[-1].assignments["Repair 1"]
     assert saved[-1].saturday_availability_overrides == {
         "Volunteer": "off",
         "Corrected": "unassigned",
@@ -4131,6 +4126,35 @@ def test_rebuild_validation_keeps_already_unqualified_generated_seat():
     )
 
     assert not [
+        issue for issue in issues if issue.code == "generated_assignment_unqualified"
+    ]
+
+
+def test_rebuild_validation_still_rejects_new_unqualified_generated_seat():
+    """Fill-only must still 422 a new generated unqualified seat on a prior board."""
+    from zira_dashboard.routes import rotations
+
+    issues = rotations._validate_complete_rebuild(
+        available_people=("Adrian", "Alejandro"),
+        protected_assignments={},
+        enabled_centers=("Master Recycler",),
+        center_minimums={"Master Recycler": 1},
+        center_capacities={"Master Recycler": 2},
+        required_skills={"Master Recycler": ("Master Recycler",)},
+        roster=[
+            staffing.Person("Adrian", skills={"Master Recycler": 0}),
+            staffing.Person("Alejandro", skills={"Repair": 3}),
+        ],
+        exact_defaults={},
+        group_defaults={},
+        user_group_centers={},
+        proposed_assignments={"Master Recycler": ["Adrian"]},
+        proposed_sources={"Master Recycler": {"Adrian": "generated"}},
+        temporary_training_extras={},
+        previous_assignments={"Repair 1": ["Alejandro"]},
+    )
+
+    assert [
         issue for issue in issues if issue.code == "generated_assignment_unqualified"
     ]
 

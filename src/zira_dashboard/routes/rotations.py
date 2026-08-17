@@ -97,7 +97,10 @@ def _validate_complete_rebuild(
     training_trainees: Mapping[str, Sequence[str]] | None = None,
     previous_assignments: Mapping[str, Sequence[str]] | None = None,
 ) -> tuple[schedule_solver.PlacementIssue, ...]:
-    """Independently verify a complete proposal immediately before saving."""
+    """Independently verify a fill-only proposal immediately before saving.
+
+    Existing seats are exempt from some hard checks; only unsafe new seats fail.
+    """
     enabled = frozenset(enabled_centers)
     available = tuple(dict.fromkeys(str(name) for name in available_people))
     available_set = frozenset(available)

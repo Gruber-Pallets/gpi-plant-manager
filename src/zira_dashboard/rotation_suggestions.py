@@ -1067,8 +1067,9 @@ def suggest_recycled_assignments(
         ]
         return choose_center(name, group, prioritized, resolved_history)
 
-    # 1. Valid manual locks survive rebuilds. Invalid locks are cleared like
-    # any other enabled Auto assignment so rebuild never leaves an unsafe slot.
+    # 1. Valid manual locks survive rebuilds. Already-seated locks keep their
+    # seat. An invalid lock that is not already on the board is skipped so
+    # leftover fill never adds an unsafe new lock.
     for center, names in (locked_assignments or {}).items():
         for name in names or []:
             name = str(name).strip()

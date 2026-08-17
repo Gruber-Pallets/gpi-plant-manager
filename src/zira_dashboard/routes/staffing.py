@@ -532,7 +532,8 @@ def _roster_minus_full_day_off(roster, time_off_entries):
 def _manual_locks_from_sources(assignment_sources, assignments=None):
     """Return ``{wc: [names]}`` for entries whose source is ``manual``.
 
-    A rebuild preserves exactly these; every other Recycled slot is regenerated.
+    A rebuild preserves these as hard locks. Seated people of every source stay
+    put; only unassigned people receive new Auto placements.
     Order follows the current assignment list when available so locks come back
     in their on-screen order.
     """
