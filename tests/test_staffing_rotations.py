@@ -4080,6 +4080,95 @@ def test_rebuild_validation_allows_later_day_training_trainee_without_green():
     ]
 
 
+def test_rebuild_validation_keeps_already_over_max_seat_when_headcount_unchanged():
+    """Fill-only: an already-over-max center must not 422 if headcount stays the same."""
+    from zira_dashboard.routes import rotations
+
+    issues = rotations._validate_complete_rebuild(
+        available_people=("Adrian", "Alejandro"),
+        protected_assignments={},
+        enabled_centers=("Master Recycler",),
+        center_minimums={"Master Recycler": 1},
+        center_capacities={"Master Recycler": 1},
+        required_skills={"Master Recycler": ("Repair",)},
+        roster=[
+            staffing.Person("Adrian", skills={"Repair": 3}),
+            staffing.Person("Alejandro", skills={"Repair": 3}),
+        ],
+        exact_defaults={},
+        group_defaults={},
+        user_group_centers={},
+        proposed_assignments={"Master Recycler": ["Adrian", "Alejandro"]},
+        proposed_sources={
+            "Master Recycler": {"Adrian": "generated", "Alejandro": "generated"}
+        },
+        temporary_training_extras={},
+        previous_assignments={"Master Recycler": ["Adrian", "Alejandro"]},
+    )
+
+    assert not [issue for issue in issues if issue.code == "center_capacity_exceeded"]
+
+
+def test_rebuild_validation_keeps_already_unqualified_generated_seat():
+    """Fill-only: a generated unqualified seat already on the center must not 422."""
+    from zira_dashboard.routes import rotations
+
+    issues = rotations._validate_complete_rebuild(
+        available_people=("Adrian",),
+        protected_assignments={},
+        enabled_centers=("Master Recycler",),
+        center_minimums={"Master Recycler": 1},
+        center_capacities={"Master Recycler": 1},
+        required_skills={"Master Recycler": ("Master Recycler",)},
+        roster=[staffing.Person("Adrian", skills={"Master Recycler": 0})],
+        exact_defaults={},
+        group_defaults={},
+        user_group_centers={},
+        proposed_assignments={"Master Recycler": ["Adrian"]},
+        proposed_sources={"Master Recycler": {"Adrian": "generated"}},
+        temporary_training_extras={},
+        previous_assignments={"Master Recycler": ["Adrian"]},
+    )
+
+    assert not [
+        issue for issue in issues if issue.code == "generated_assignment_unqualified"
+    ]
+
+
+def test_rebuild_validation_still_rejects_new_seat_over_max():
+    """Fill-only must still hard-fail when a new headcount pushes past max."""
+    from zira_dashboard.routes import rotations
+
+    issues = rotations._validate_complete_rebuild(
+        available_people=("Adrian", "Alejandro", "Blake"),
+        protected_assignments={},
+        enabled_centers=("Master Recycler",),
+        center_minimums={"Master Recycler": 1},
+        center_capacities={"Master Recycler": 1},
+        required_skills={"Master Recycler": ("Repair",)},
+        roster=[
+            staffing.Person("Adrian", skills={"Repair": 3}),
+            staffing.Person("Alejandro", skills={"Repair": 3}),
+            staffing.Person("Blake", skills={"Repair": 3}),
+        ],
+        exact_defaults={},
+        group_defaults={},
+        user_group_centers={},
+        proposed_assignments={"Master Recycler": ["Adrian", "Alejandro", "Blake"]},
+        proposed_sources={
+            "Master Recycler": {
+                "Adrian": "generated",
+                "Alejandro": "generated",
+                "Blake": "generated",
+            }
+        },
+        temporary_training_extras={},
+        previous_assignments={"Master Recycler": ["Adrian", "Alejandro"]},
+    )
+
+    assert [issue for issue in issues if issue.code == "center_capacity_exceeded"]
+
+
 # --------------------------------------------------------------------------- #
 # Staffing controls + reason data (static template / JS contract)
 # --------------------------------------------------------------------------- #
