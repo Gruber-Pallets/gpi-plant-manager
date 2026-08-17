@@ -4374,6 +4374,13 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "content: '•';" in css
     assert "@media (max-width: 1100px)" in css
     assert ".day-context .rotation-controls { position: static; width: auto; }" in css
+    from zira_dashboard.routes import staffing as staffing_route
+
+    assert all(
+        text.startswith("Auto fills unassigned people without moving the current board.")
+        for text in staffing_route._ROTATION_MODE_HELP.values()
+    )
+    assert "Auto fills unassigned people without moving the current board" in js
 
 
 def test_staffing_keeps_automation_controls_and_warnings_in_the_notes_sidebar():

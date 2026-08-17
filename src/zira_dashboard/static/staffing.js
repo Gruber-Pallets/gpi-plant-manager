@@ -1536,9 +1536,9 @@
     // Per-mode help lines mirror routes/staffing.py::_ROTATION_MODE_HELP so the
     // hint updates instantly when the goal changes (no reload).
     const HELP = {
-      optimized: 'Optimized favors the strongest coverage on auto work centers.',
-      normal: 'Normal balances coverage, preferences, and fair rotation.',
-      training: 'Training develops level-1/2 operators while protecting coverage.',
+      optimized: 'Auto fills unassigned people without moving the current board. Optimized favors the strongest leftover coverage.',
+      normal: 'Auto fills unassigned people without moving the current board. Normal balances leftover coverage, preferences, and fair rotation.',
+      training: 'Auto fills unassigned people without moving the current board. Training develops leftover level-1/2 operators while protecting coverage.',
     };
 
     function currentMode() {

@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-17
 
+### Auto leaves scheduled people in place
+
+#### Features
+
+- **The Auto buttons now only fill empty spots.** People already on a work center stay there. People with no work center yet are placed in leftover open seats. Reset to defaults and Clear schedule are still the ways to start the day over.
+
 ### Empty notes stay off the printed schedule
 
 #### Fixes
