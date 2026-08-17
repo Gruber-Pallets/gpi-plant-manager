@@ -333,7 +333,7 @@ def test_partial_rebuild_keeps_valid_existing_assignment_and_fills_open_capacity
     assert result.complete is False
 
 
-def test_partial_rebuild_clears_unqualified_enabled_assignment_before_fill():
+def test_partial_rebuild_keeps_unqualified_existing_assignment():
     result = suggest_recycled_assignments(
         TARGET_DAY,
         "normal",
@@ -349,8 +349,8 @@ def test_partial_rebuild_clears_unqualified_enabled_assignment_before_fill():
         runnable_centers={"Repair 1"},
     )
 
-    assert result.assignments["Repair 1"] == ["Qualified"]
-    assert result.unused_people == ("Invalid",)
+    assert result.assignments["Repair 1"] == ["Invalid"]
+    assert result.unused_people == ("Qualified",)
 
 
 def test_valid_trim_saw_pair_rules():
@@ -1221,6 +1221,138 @@ def test_manual_lock_survives_rebuild_and_engine_fills_around_it():
     assert all_names.count("Manual Person") == 1
 
 
+def test_existing_assignments_stay_and_leftover_fills_remaining_capacity():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[
+            _person("Seated A", 3),
+            _person("Seated B", 3),
+            _person("Leftover", 3),
+        ],
+        base_assignments={"Repair 1": ["Seated A", "Seated B"]},
+        group_locations={"Repair": ("Repair 1",)},
+        group_required_skills={"Repair": ("Repair",)},
+        center_minimums={"Repair 1": 2},
+        center_capacities={"Repair 1": 3},
+        runnable_centers={"Repair 1"},
+        minimum_only=False,
+    )
+
+    assert out.assignments["Repair 1"] == ["Seated A", "Seated B", "Leftover"]
+
+
+def test_existing_assignment_is_not_pulled_to_exact_default():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[_person("Default Person", 3)],
+        base_assignments={"Repair 2": ["Default Person"]},
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        group_required_skills={"Repair": ("Repair",)},
+        exact_defaults={"Repair 1": ("Default Person",)},
+        center_minimums={"Repair 1": 1, "Repair 2": 1},
+        center_capacities={"Repair 1": 1, "Repair 2": 1},
+        runnable_centers={"Repair 1", "Repair 2"},
+        minimum_only=False,
+    )
+
+    assert out.assignments["Repair 2"] == ["Default Person"]
+    assert "Default Person" not in out.assignments.get("Repair 1", [])
+
+
+def test_leftover_uses_other_center_when_default_is_full():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[_person("Seated", 3), _person("Default Leftover", 3)],
+        base_assignments={"Repair 1": ["Seated"]},
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        group_required_skills={"Repair": ("Repair",)},
+        exact_defaults={"Repair 1": ("Default Leftover",)},
+        center_minimums={"Repair 1": 1, "Repair 2": 1},
+        center_capacities={"Repair 1": 1, "Repair 2": 1},
+        runnable_centers={"Repair 1", "Repair 2"},
+        minimum_only=False,
+    )
+
+    assert out.assignments["Repair 1"] == ["Seated"]
+    assert out.assignments["Repair 2"] == ["Default Leftover"]
+
+
+def test_unqualified_existing_assignment_stays():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[
+            staffing.Person(name="Unskilled", skills={"Repair": 0}),
+            _person("Leftover", 3),
+        ],
+        base_assignments={"Repair 1": ["Unskilled"]},
+        group_locations={"Repair": ("Repair 1",)},
+        group_required_skills={"Repair": ("Repair",)},
+        center_minimums={"Repair 1": 1},
+        center_capacities={"Repair 1": 2},
+        runnable_centers={"Repair 1"},
+        minimum_only=False,
+    )
+
+    assert out.assignments["Repair 1"][0] == "Unskilled"
+    assert "Leftover" in out.assignments["Repair 1"]
+
+
+def test_training_block_does_not_relocate_seated_trainer():
+    effect = _BlockEffect(
+        locked_work_centers={"Repair 2": ["Trainee"]},
+        temporary_extra_work_centers={"Repair 2": ["Trainer"]},
+    )
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[
+            staffing.Person(name="Trainee", skills={"Repair": 0}),
+            _person("Trainer", 3),
+        ],
+        base_assignments={"Repair 1": ["Trainer"]},
+        group_locations={"Repair": ("Repair 1", "Repair 2")},
+        group_required_skills={"Repair": ("Repair",)},
+        center_minimums={"Repair 1": 1, "Repair 2": 1},
+        center_capacities={"Repair 1": 2, "Repair 2": 2},
+        runnable_centers={"Repair 1", "Repair 2"},
+        block_effects=[effect],
+        minimum_only=False,
+    )
+
+    assert out.assignments["Repair 1"] == ["Trainer"]
+    assert "Trainer" not in out.assignments.get("Repair 2", [])
+
+
+def test_existing_trim_saw_pair_is_not_relocated():
+    out = suggest_recycled_assignments(
+        day=date(2026, 7, 14),
+        mode="normal",
+        roster=[
+            staffing.Person(name="Saw One", skills={"Trim Saw": 3}),
+            staffing.Person(name="Saw Two", skills={"Trim Saw": 3}),
+            staffing.Person(name="Leftover", skills={"Repair": 3, "Trim Saw": 3}),
+        ],
+        base_assignments={"Trim Saw 1": ["Saw One", "Saw Two"]},
+        group_locations={
+            "Trim Saw": ("Trim Saw 1", "Trim Saw 2"),
+            "Repair": ("Repair 1",),
+        },
+        group_required_skills={"Trim Saw": ("Trim Saw",), "Repair": ("Repair",)},
+        center_minimums={"Trim Saw 1": 2, "Trim Saw 2": 2, "Repair 1": 1},
+        center_capacities={"Trim Saw 1": 2, "Trim Saw 2": 2, "Repair 1": 1},
+        runnable_centers={"Trim Saw 1", "Trim Saw 2", "Repair 1"},
+        minimum_only=False,
+    )
+
+    assert out.assignments["Trim Saw 1"] == ["Saw One", "Saw Two"]
+    assert "Saw One" not in out.assignments.get("Trim Saw 2", [])
+    assert "Saw Two" not in out.assignments.get("Trim Saw 2", [])
+
+
 def _duplicate_protected_lock_suggestion(locked_assignments):
     return suggest_recycled_assignments(
         day=date(2026, 7, 14), mode="normal",
@@ -1336,8 +1468,9 @@ def test_non_recycled_base_assignments_pass_through_untouched():
         history=RecycledHistory(), locked_assignments={}, block_effects=(),
     )
     assert out.assignments["Woodpecker #1"] == ["New Guy"]
-    # New Guy already works elsewhere, so the open Repair slot goes to Fresh.
-    assert out.assignments["Repair 1"] == ["Fresh"]
+    # Seated Auto-on names stay; Repair 1 is already full with Old Generated.
+    assert out.assignments["Repair 1"] == ["Old Generated"]
+    assert out.unused_people == ("Fresh",)
     all_names = [name for names in out.assignments.values() for name in names]
     assert all_names.count("New Guy") == 1
     # Inputs are never mutated.

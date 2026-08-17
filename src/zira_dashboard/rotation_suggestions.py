@@ -967,11 +967,11 @@ def suggest_recycled_assignments(
 ) -> RecycledSuggestion:
     """Suggest safe Recycled assignments for enabled Auto work centers.
 
-    Assignments outside enabled Auto centers pass through unchanged. Within an
-    enabled center, valid unique assignments and locks are retained; duplicate,
-    unavailable, unqualified, or over-capacity assignments are removed before
-    greedy safe partial placement. Minimum/default/unplaced conditions are reported
-    without rolling back safe assignments.
+    Assignments outside enabled Auto centers pass through unchanged. Every seated
+    Auto-on base assignment is retained; duplicate copies are skipped (first
+    center wins). Invalid locks are removed before greedy safe partial placement.
+    Minimum/default/unplaced conditions are reported without rolling back safe
+    assignments.
     """
     if mode not in MODE_SKILL_POINTS:
         raise ValueError(f"Unknown recycled rotation mode: {mode!r}")
@@ -1026,21 +1026,9 @@ def suggest_recycled_assignments(
             assignments[center] = copied
             assigned.update(copied)
             continue
-        group = center_group.get(center)
         for raw_name in names or ():
             name = str(raw_name or "").strip()
-            person = by_name.get(name)
             if not name or name in assigned:
-                continue
-            if (
-                group is None
-                or name not in available_set
-                or _group_level(person, group, resolved_group_required_skills) < 1
-                or len(assignments.get(center, ())) >= _effective_capacity(center)
-            ):
-                warnings.append(
-                    f"{name} was removed from {center} because it is not a safe Auto assignment."
-                )
                 continue
             assignments.setdefault(center, []).append(name)
             assigned.add(name)
