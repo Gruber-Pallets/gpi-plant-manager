@@ -95,6 +95,7 @@ def _validate_complete_rebuild(
     proposed_sources: Mapping[str, Mapping[str, str]],
     temporary_training_extras: Mapping[str, Sequence[str]],
     training_trainees: Mapping[str, Sequence[str]] | None = None,
+    previous_assignments: Mapping[str, Sequence[str]] | None = None,
 ) -> tuple[schedule_solver.PlacementIssue, ...]:
     """Independently verify a complete proposal immediately before saving."""
     enabled = frozenset(enabled_centers)
@@ -108,6 +109,15 @@ def _validate_complete_rebuild(
             name = str(raw_name)
             if name in available_set:
                 locations[name].append(center)
+    previous_pairs: set[tuple[str, str]] = set()
+    previous_centers_by_person: dict[str, set[str]] = {}
+    previous_counts: dict[str, int] = {}
+    for center, names in (previous_assignments or {}).items():
+        listed = tuple(str(name) for name in (names or ()))
+        previous_counts[str(center)] = len(listed)
+        for name in listed:
+            previous_pairs.add((str(center), name))
+            previous_centers_by_person.setdefault(name, set()).add(str(center))
 
     issues: list[schedule_solver.PlacementIssue] = []
     for name in available:
@@ -121,16 +131,18 @@ def _validate_complete_rebuild(
                 )
             )
         elif len(centers) > 1:
-            issues.append(
-                schedule_solver.PlacementIssue(
-                    code="person_assigned_multiple_centers",
-                    person=name,
-                    centers=centers,
-                    message=(
-                        f"{name} is assigned to multiple work centers. Previous schedule kept."
-                    ),
+            previous = previous_centers_by_person.get(name, set())
+            if not set(centers).issubset(previous):
+                issues.append(
+                    schedule_solver.PlacementIssue(
+                        code="person_assigned_multiple_centers",
+                        person=name,
+                        centers=centers,
+                        message=(
+                            f"{name} is assigned to multiple work centers. Previous schedule kept."
+                        ),
+                    )
                 )
-            )
 
     def _qualified(name: str, center: str) -> bool:
         person = by_name.get(name)
@@ -149,7 +161,11 @@ def _validate_complete_rebuild(
             and str(name) in names
         }
         allowed_capacity = None if capacity is None else int(capacity) + len(training_extras)
-        if allowed_capacity is not None and len(names) > allowed_capacity:
+        if (
+            allowed_capacity is not None
+            and len(names) > allowed_capacity
+            and len(names) > previous_counts.get(center, 0)
+        ):
             issues.append(
                 schedule_solver.PlacementIssue(
                     code="center_capacity_exceeded",
@@ -184,7 +200,11 @@ def _validate_complete_rebuild(
                 )
             )
         for name in names:
-            if proposed_sources.get(center, {}).get(name) == "generated" and name not in safe_names:
+            if (
+                proposed_sources.get(center, {}).get(name) == "generated"
+                and name not in safe_names
+                and (center, name) not in previous_pairs
+            ):
                 issues.append(
                     schedule_solver.PlacementIssue(
                         code="generated_assignment_unqualified",
@@ -203,7 +223,9 @@ def _validate_complete_rebuild(
         generated = tuple(
             name
             for name, source in sources.items()
-            if source == "generated" and name in available_set
+            if source == "generated"
+            and name in available_set
+            and (center, name) not in previous_pairs
         )
         if generated:
             issues.append(
@@ -733,18 +755,33 @@ async def save_auto_work_centers(request: Request):
 
 
 def _build_assignment_sources(existing_sources, suggestion) -> dict[str, dict[str, str]]:
-    """Manual entries kept as ``manual``, engine placements as ``generated``.
-
-    Non-Recycled centers keep whatever source they already had; the engine only
-    reports sources for the Recycled centers it (re)built.
-    """
+    """Keep prior sources for seated people; overlay new engine sources."""
     managed = {c for centers in suggestion.group_locations.values() for c in centers}
     new_sources: dict[str, dict[str, str]] = {}
     for wc, sources in (existing_sources or {}).items():
         if wc not in managed:
             new_sources[wc] = dict(sources)
-    for wc, sources in suggestion.sources.items():
-        new_sources[wc] = dict(sources)
+    assigned_names = {
+        wc: set(str(name) for name in names or ())
+        for wc, names in suggestion.assignments.items()
+    }
+    for wc, names in suggestion.assignments.items():
+        if wc not in managed:
+            continue
+        previous = dict((existing_sources or {}).get(wc) or {})
+        kept = {
+            name: source
+            for name, source in previous.items()
+            if name in assigned_names.get(wc, set())
+        }
+        kept.update(dict(suggestion.sources.get(wc) or {}))
+        kept = {
+            name: source
+            for name, source in kept.items()
+            if name in assigned_names.get(wc, set())
+        }
+        if kept:
+            new_sources[wc] = kept
     return new_sources
 
 
@@ -791,28 +828,6 @@ def _optional_auto_roster(
         )
     )
     return [person for person in roster if person.name in available_names]
-
-
-def _saturday_protected_locks(
-    schedule: staffing.Schedule,
-    available_names: set[str],
-    enabled_centers: Sequence[str],
-) -> dict[str, list[str]]:
-    """Keep manual and prepared-default volunteers in place during Auto."""
-    enabled = set(enabled_centers)
-    locks: dict[str, list[str]] = {}
-    for center, names in schedule.assignments.items():
-        if center not in enabled:
-            continue
-        kept = [
-            name
-            for name in names
-            if name in available_names
-            and schedule.assignment_sources.get(center, {}).get(name) in {"manual", "default"}
-        ]
-        if kept:
-            locks[center] = kept
-    return locks
 
 
 @router.post("/api/rotations/rebuild")
@@ -1016,20 +1031,13 @@ async def rebuild_rotation(request: Request):
                 enabled_centers,
                 strict=True,
             )
-            if current_optional_day is not None:
-                manual_locks = _saturday_protected_locks(
-                    sched,
-                    {person.name for person in roster},
-                    enabled_centers,
-                )
-            else:
-                manual_locks = staffing_route._protected_locks(
-                    existing_sources,
-                    base_assignments,
-                    allowed_centers=enabled_centers,
-                    strict_default_reads=True,
-                    include_saved_defaults=False,
-                )
+            manual_locks = staffing_route._manual_locks_from_sources(
+                existing_sources,
+                base_assignments,
+            )
+            manual_locks = {
+                wc: names for wc, names in manual_locks.items() if wc in set(enabled_centers)
+            }
             center_minimums = {
                 loc.name: staffing_route._effective_minimum(loc)
                 for loc in staffing.LOCATIONS
@@ -1061,10 +1069,7 @@ async def rebuild_rotation(request: Request):
             exact_defaults=exact_defaults,
             group_defaults=group_defaults,
             user_group_centers=user_group_centers,
-            # Weekdays staff to their configured minimum. A manager's explicit
-            # optional-day Auto action instead places remaining volunteers
-            # around the prepared defaults/manual locks.
-            minimum_only=current_optional_day is None,
+            minimum_only=False,
         )
         if suggestion is None:
             return _error("Could not rebuild the schedule.", 503)
@@ -1087,6 +1092,7 @@ async def rebuild_rotation(request: Request):
             proposed_sources=new_sources,
             temporary_training_extras=suggestion.temporary_training_extras,
             training_trainees=suggestion.training_trainees,
+            previous_assignments=base_assignments,
         )
         hard_issues = tuple(issue for issue in validation_issues if issue.code in _HARD_ISSUE_CODES)
         if hard_issues:

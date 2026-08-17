@@ -902,13 +902,12 @@ def _recycled_suggestion_for_day(
             for wc, names in (locked_assignments or {}).items()
             if wc in enabled
         }
-        solver_base_assignments = _auto_solver_base_assignments(base_assignments, enabled)
         suggestion = rotation_suggestions.suggest_recycled_assignments(
             day=d,
             mode=mode,
             roster=available,
             preferences=preferences,
-            base_assignments=solver_base_assignments,
+            base_assignments=base_assignments,
             group_locations=group_locations,
             group_required_skills=group_required_skills,
             history=history,
@@ -2147,10 +2146,7 @@ def staffing_page(
         d,
         roster,
         sched.rotation_mode or "normal",
-        base_assignments=_auto_solver_base_assignments(
-            sched.assignments,
-            enabled_auto_work_centers,
-        ),
+        base_assignments=sched.assignments,
         locked_assignments=_protected_locks(
             sched.assignment_sources,
             sched.assignments,

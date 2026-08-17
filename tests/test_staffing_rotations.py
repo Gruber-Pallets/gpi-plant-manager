@@ -1525,10 +1525,9 @@ def test_reset_to_defaults_with_no_defaults_clears_to_empty(monkeypatch):
     assert saved[0].assignment_sources == {}
 
 
-def test_goal_button_rebuild_still_staffs_to_minimum_crew(monkeypatch):
-    """The non-reset goal button keeps its minimum-crew contract: the user
-    balances Auto centers with the advisory, then the rebuild fills minimum
-    slots only. Only reset/seed fill past minimums."""
+def test_goal_button_rebuild_fills_remaining_capacity(monkeypatch):
+    """The non-reset goal button keeps seated people and fills leftover
+    maximum seats. Reset/seed still load defaults only."""
     client, rotations = _rotations_client(monkeypatch)
     staffing_route = _stub_recommendation_inputs(monkeypatch)
     captured = {}
@@ -1558,7 +1557,7 @@ def test_goal_button_rebuild_still_staffs_to_minimum_crew(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert captured["minimum_only"] is True
+    assert captured["minimum_only"] is False
 
 
 def test_reset_to_defaults_spreads_group_people_across_enabled_auto_centers(monkeypatch):
@@ -1774,11 +1773,9 @@ def test_rebuild_generates_and_reports_reasons(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     generated = {n for names in body["assignments"].values() for n in names}
-    # A goal rebuild staffs only the enabled centers' minimums. Extra people
-    # remain in the unassigned list so the operator can turn another center on.
-    assert len(generated) == 1
-    assert generated <= {"Green One", "Green Two"}
-    assert len(body["unplaced"]) == 1
+    # An empty board filling remaining max on Repair 1 (stub max 3) places both.
+    assert generated == {"Green One", "Green Two"}
+    assert body["unplaced"] == []
     # Every generated placement carries a source. Green/proficient placements
     # intentionally do not render a redundant visible reason badge.
     for wc, sources in body["sources"].items():
@@ -3700,7 +3697,9 @@ def test_holiday_auto_uses_only_effective_volunteers_and_optional_locks(
 
     assert response.status_code == 200
     assert captured["roster"] == ["Corrected"]
-    assert captured["locked_assignments"] == {"Repair 1": ["Corrected"]}
+    assert captured["locked_assignments"] == {
+        "Repair 1": ["Volunteer", "Corrected", "Other"],
+    }
     assert captured["minimum_only"] is False
     assert saved[-1].assignments == {"Repair 1": ["Corrected"]}
     assert saved[-1].saturday_availability_overrides == {
@@ -5944,7 +5943,7 @@ def test_staffing_context_does_not_treat_exact_default_as_duplicate_lock(monkeyp
         recycled_context=fake_recycled_context,
     )
 
-    assert captured["base_assignments"] == {}
+    assert captured["base_assignments"] == {"Repair 2": ["Default Green"]}
     assert captured["locked_assignments"] == {}
     assert captured["current_assignments"] == {
         "Repair 2": ["Default Green"],
@@ -6055,19 +6054,22 @@ def test_bad_json_body_returns_400(monkeypatch):
     assert "JSON" in resp.json()["error"]
 
 
-def test_rebuild_drops_stale_generated_source(monkeypatch):
-    """A person left as a 'generated' source but no longer placed by the engine
-    disappears from BOTH assignments and sources after a rebuild."""
+def test_rebuild_keeps_generated_assignment_and_fills_unassigned(monkeypatch):
     client, rotations = _rotations_client(monkeypatch)
     _stub_recommendation_inputs(monkeypatch)
 
     saved: list = []
     sched = staffing.Schedule(
         day=TARGET_DAY,
-        assignments={"Repair 1": ["Gone"]},
-        assignment_sources={"Repair 1": {"Gone": "generated"}},
+        assignments={"Repair 1": ["Seated"]},
+        assignment_sources={"Repair 1": {"Seated": "generated"}},
+        auto_enabled_work_centers=["Repair 1"],
     )
-    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Green One", 3)])
+    monkeypatch.setattr(
+        rotations.staffing,
+        "load_roster",
+        lambda: [_person("Seated", 3), _person("Leftover", 3)],
+    )
     monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: sched)
     monkeypatch.setattr(rotations.staffing, "save_schedule", lambda s: saved.append(s))
     monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
@@ -6076,13 +6078,34 @@ def test_rebuild_drops_stale_generated_source(monkeypatch):
 
     assert resp.status_code == 200
     body = resp.json()
-    all_assigned = {n for names in body["assignments"].values() for n in names}
-    all_sourced = {n for src in body["sources"].values() for n in src}
-    assert "Gone" not in all_assigned
-    assert "Gone" not in all_sourced
-    assert "Green One" in all_assigned  # the real green person took the slot
-    # And the persisted schedule is equally clean.
-    assert "Gone" not in {n for names in saved[-1].assignments.values() for n in names}
+    assert "Seated" in body["assignments"]["Repair 1"]
+    assert body["sources"]["Repair 1"]["Seated"] == "generated"
+    assert "Leftover" in {n for names in body["assignments"].values() for n in names}
+    assert saved[-1].assignment_sources["Repair 1"]["Seated"] == "generated"
+
+
+def test_rebuild_preserves_default_source_on_seated_person(monkeypatch):
+    client, rotations = _rotations_client(monkeypatch)
+    _stub_recommendation_inputs(monkeypatch)
+
+    saved: list = []
+    sched = staffing.Schedule(
+        day=TARGET_DAY,
+        assignments={"Repair 1": ["Default Seat"]},
+        assignment_sources={"Repair 1": {"Default Seat": "default"}},
+        auto_enabled_work_centers=["Repair 1"],
+    )
+    monkeypatch.setattr(rotations.staffing, "load_roster", lambda: [_person("Default Seat", 3)])
+    monkeypatch.setattr(rotations.staffing, "load_schedule", lambda d: sched)
+    monkeypatch.setattr(rotations.staffing, "save_schedule", lambda s: saved.append(s))
+    monkeypatch.setattr(rotations._http_cache, "invalidate_today_cache", lambda: None)
+
+    resp = client.post("/api/rotations/rebuild", json={"day": "2026-07-14", "mode": "optimized"})
+
+    assert resp.status_code == 200
+    assert resp.json()["assignments"]["Repair 1"] == ["Default Seat"]
+    assert resp.json()["sources"]["Repair 1"]["Default Seat"] == "default"
+    assert saved[-1].assignment_sources["Repair 1"]["Default Seat"] == "default"
 
 
 def test_rebuild_does_not_restore_person_after_clear_removes_manual_source(monkeypatch):
