@@ -1179,6 +1179,60 @@ def test_hours_save_on_new_day_starts_with_default_work_centers(monkeypatch):
     assert captured["initial_auto_enabled_work_centers"] == ["Repair 1", "Repair 2"]
 
 
+def test_hours_save_on_new_day_copies_previous_working_day_centers(monkeypatch):
+    captured = {}
+    today = date(2026, 7, 13)
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "schedule_revision",
+        lambda d: "rev" if d == today else None,
+    )
+    monkeypatch.setattr(
+        staffing_routes.optional_workday,
+        "previous_normal_workday",
+        lambda *_args, **_kwargs: today,
+    )
+    monkeypatch.setattr(
+        staffing_routes.staffing,
+        "load_schedule",
+        lambda d: staffing.Schedule(
+            day=d,
+            auto_enabled_work_centers=["Trim Saw 1", "Repair 1"] if d == today else [],
+        ),
+    )
+    monkeypatch.setattr(
+        staffing_routes,
+        "_default_auto_work_centers",
+        lambda _day: [],
+    )
+    monkeypatch.setattr(
+        staffing_routes.schedule_store,
+        "current",
+        lambda: SimpleNamespace(work_weekdays=frozenset({0, 1, 2, 3, 4})),
+    )
+    monkeypatch.setattr(
+        staffing_routes,
+        "_update_schedule_metadata_work",
+        lambda _day, **kwargs: captured.update(kwargs) or staffing.Schedule(day=DAY),
+    )
+    monkeypatch.setattr(staffing_routes._http_cache, "invalidate_today_cache", lambda: None)
+
+    response = asyncio.run(
+        staffing_routes.staffing_hours_save(
+            _FormRequest(
+                {
+                    "day": DAY.isoformat(),
+                    "start": "06:00",
+                    "end": "12:00",
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert captured["initial_auto_enabled_work_centers"] == ["Repair 1", "Trim Saw 1"]
+
+
 def test_hours_save_preserves_existing_work_center_selection(monkeypatch):
     captured = {}
     monkeypatch.setattr(staffing_routes.staffing, "schedule_revision", lambda _day: "r1")

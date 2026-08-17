@@ -103,6 +103,15 @@ def _next_working_day(d: date) -> date:
         return d + timedelta(days=1)
 
 
+def _previous_working_day(d: date) -> date:
+    """Return the previous date before `d` that is a work-day per the shift schedule."""
+    wd = schedule_store.current().work_weekdays or frozenset({0, 1, 2, 3, 4})
+    try:
+        return optional_workday.previous_normal_workday(d, wd)
+    except optional_workday.NoNormalWorkday:
+        return d - timedelta(days=1)
+
+
 def _holiday_mirror_has_synced() -> bool:
     """Fail closed when the first-sync state cannot be verified."""
     try:
@@ -420,13 +429,30 @@ def _recently_used_work_centers(d: date) -> list[str]:
 
 
 def _default_auto_work_centers(d: date) -> list[str]:
-    """Return the default template used when a staffing day is first created."""
+    """Return the Settings template used when no previous working day exists."""
     saved = app_settings.get_setting(DEFAULT_AUTO_WORK_CENTERS_SETTING)
     if isinstance(saved, list):
         return _ordered_work_center_names(saved)
     defaults = _recently_used_work_centers(d)
     app_settings.set_setting(DEFAULT_AUTO_WORK_CENTERS_SETTING, defaults)
     return defaults
+
+
+def _new_day_auto_work_centers(d: date) -> list[str]:
+    """Enabled Auto centers for a brand-new staffing day.
+
+    Copy the previous working day's saved On/Off set when that day exists.
+    Fall back to the Settings template when there is no prior schedule.
+    """
+    try:
+        prior = _previous_working_day(d)
+        if prior != d and staffing.schedule_revision(prior) is not None:
+            return _ordered_work_center_names(
+                staffing.load_schedule(prior).auto_enabled_work_centers
+            )
+    except Exception:
+        log.exception("Could not copy previous-day work centers for %s", d)
+    return _default_auto_work_centers(d)
 
 
 def _save_default_auto_work_centers(names, *, cur=None) -> list[str]:
@@ -1538,7 +1564,7 @@ def _seed_new_future_draft(
     try:
         if staffing.schedule_revision(day) is not None:
             return staffing.load_schedule(day)
-        enabled_centers = _default_auto_work_centers(day)
+        enabled_centers = _new_day_auto_work_centers(day)
         if optional_day is _UNRESOLVED:
             optional_day = optional_workday.for_day(day)
         if optional_day is not None:
@@ -1724,7 +1750,7 @@ def staffing_page(
         sched.published_delivery = staffing._delivery_mapping(snap.get("published_delivery"))
     try:
         if staffing.schedule_revision(d) is None:
-            enabled_auto_work_centers = _default_auto_work_centers(d)
+            enabled_auto_work_centers = _new_day_auto_work_centers(d)
         else:
             enabled_auto_work_centers = list(sched.auto_enabled_work_centers)
     except Exception:
@@ -2742,7 +2768,7 @@ async def staffing_hours_save(request: Request):
             return JSONResponse({"ok": False, "error": "bad day"}, status_code=400)
 
         initial_auto_work_centers = (
-            _default_auto_work_centers(d) if staffing.schedule_revision(d) is None else ()
+            _new_day_auto_work_centers(d) if staffing.schedule_revision(d) is None else ()
         )
 
         if form.get("reset") == "1":

@@ -871,13 +871,13 @@ async def rebuild_rotation(request: Request):
                 )
             if schedule_existed is None:
                 if staffing.schedule_revision(d) is None:
-                    sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
+                    sched.auto_enabled_work_centers = staffing_route._new_day_auto_work_centers(d)
                 else:
                     sched.auto_enabled_work_centers = staffing_route._ordered_work_center_names(
                         staffing_route._enabled_auto_work_centers(d)
                     )
             elif not schedule_existed:
-                sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
+                sched.auto_enabled_work_centers = staffing_route._new_day_auto_work_centers(d)
             else:
                 sched.auto_enabled_work_centers = staffing_route._ordered_work_center_names(
                     sched.auto_enabled_work_centers
@@ -994,13 +994,13 @@ async def rebuild_rotation(request: Request):
         try:
             if schedule_existed is None:
                 if staffing.schedule_revision(d) is None:
-                    sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
+                    sched.auto_enabled_work_centers = staffing_route._new_day_auto_work_centers(d)
                 else:
                     sched.auto_enabled_work_centers = staffing_route._ordered_work_center_names(
                         staffing_route._enabled_auto_work_centers(d)
                     )
             elif not schedule_existed:
-                sched.auto_enabled_work_centers = staffing_route._default_auto_work_centers(d)
+                sched.auto_enabled_work_centers = staffing_route._new_day_auto_work_centers(d)
             else:
                 sched.auto_enabled_work_centers = staffing_route._ordered_work_center_names(
                     sched.auto_enabled_work_centers

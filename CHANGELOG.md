@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-17
+
+### Next-day schedule keeps today's work centers
+
+#### Fixes
+
+- **A new day's schedule now starts with the same work centers turned on as the last workday.** Before, a new day copied a Settings list that could be empty, so every work center could show as off. You can still turn any work center on or off after the day opens.
+
 ## 2026-08-14
 
 ### Saturday uses the same skill rules as weekdays

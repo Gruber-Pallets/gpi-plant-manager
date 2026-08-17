@@ -5450,6 +5450,38 @@ def test_first_future_staffing_view_copies_default_auto_work_centers(monkeypatch
     assert saved[0].auto_enabled_work_centers == ["Repair 1", "Repair 2"]
 
 
+def test_first_future_staffing_view_copies_previous_working_day_work_centers(monkeypatch):
+    from zira_dashboard.routes import staffing as staffing_route
+
+    saved = []
+    today = date(2026, 7, 13)
+    monkeypatch.setattr(
+        staffing_route.optional_workday,
+        "previous_normal_workday",
+        lambda *_args, **_kwargs: today,
+    )
+
+    def loader(d):
+        if d == today:
+            return staffing.Schedule(
+                day=d,
+                auto_enabled_work_centers=["Trim Saw 1", "Repair 1"],
+            )
+        return staffing.Schedule(day=d, published=False, assignments={})
+
+    _render_staffing_page(
+        monkeypatch,
+        schedule_revision=lambda d: "rev" if d == today else None,
+        schedule_loader=loader,
+        roster=[_person("Ana", 1)],
+        auto_centers=set(),
+        default_inputs=lambda strict=False: ({"Repair 1": ("Ana",)}, {}, {}),
+        saved_schedules=saved,
+    )
+
+    assert saved[0].auto_enabled_work_centers == ["Repair 1", "Trim Saw 1"]
+
+
 def test_saved_day_uses_its_auto_work_centers_not_current_defaults(monkeypatch):
     schedule = staffing.Schedule(
         day=TARGET_DAY,
