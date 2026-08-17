@@ -1090,7 +1090,7 @@ async def settings_save_work_centers(request: Request):
             # distinguish "no checkboxes posted" (form didn't include this
             # section — leave DB alone) from "explicitly cleared" (form
             # did include it but no skills checked — save the empty list).
-            if (prefix + "required_skills_present") in form:
+            if loc.name != "Truck Driver" and (prefix + "required_skills_present") in form:
                 updates["required_skills"] = form.getlist(prefix + "required_skills")
             # Single-value Group select (stored internally as a 1-element list in `groups`).
             group_field = prefix + "group"

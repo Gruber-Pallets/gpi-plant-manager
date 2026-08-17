@@ -158,6 +158,9 @@
                 </details>
               </td>
               <td class="skills-cell">
+                {% if r.name == "Truck Driver" %}
+                  <span class="req-skills-locked">CDL certified</span>
+                {% else %}
                 <input type="hidden" name="{{ p }}required_skills_present" value="1">
                 <details class="skills-picker req-skills-picker">
                   <summary>
@@ -174,6 +177,7 @@
                     {% endfor %}
                   </div>
                 </details>
+                {% endif %}
               </td>
               <td class="skills-cell">
                 <input type="hidden" name="{{ p }}default_people_present" value="1">

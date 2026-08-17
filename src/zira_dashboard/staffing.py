@@ -38,6 +38,14 @@ LOADING_JOCKEYING_REQUIRED_SKILLS: tuple[str, ...] = (
     "Trailer Jockeying",
 )
 
+CDL_CERTIFICATIONS: tuple[str, ...] = (
+    "CDL (Automatics) Certified",
+    "CDL (Manuals) Certified",
+)
+TRUCK_DRIVER_REQUIRED_SKILLS: tuple[str, ...] = (
+    "CDL (Automatics) Certified",
+)
+
 # Scheduling groups retain the names used by work-center configuration and
 # persisted rotation preferences. Odoo calls the corresponding production
 # skill "Dismantle", so resolve the group to that source-of-truth skill when
@@ -122,6 +130,7 @@ LOCATIONS: tuple[Location, ...] = (
         None,
         min_ops=1,
         max_ops=None,
+        required_skills=TRUCK_DRIVER_REQUIRED_SKILLS,
     ),
 )
 
@@ -218,7 +227,10 @@ class Person:
     is_flexible: bool = False  # Odoo "Schedule Type" flexible; excluded from late report
 
     def level(self, skill: str) -> int:
-        return int(self.skills.get(skill_name_for_scheduling_group(skill), 0))
+        key = skill_name_for_scheduling_group(skill)
+        if key in CDL_CERTIFICATIONS:
+            return max(int(self.skills.get(name, 0)) for name in CDL_CERTIFICATIONS)
+        return int(self.skills.get(key, 0))
 
 
 PLANT_SCHEDULER_CSV = Path("Plant Scheduler(Plant Scheduler).csv")

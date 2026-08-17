@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-17
 
+### Truck Driver only shows people with a CDL
+
+#### Fixes
+
+- **The Truck Driver list now only shows people who have a CDL.** A CDL is the truck-driving license. Before, that list showed everybody, because the job had no skill picked in Settings. It now always requires a CDL (automatic or manual). That rule is built in, so it cannot be turned off by accident.
+
 ### Next-day schedule keeps today's work centers
 
 #### Fixes

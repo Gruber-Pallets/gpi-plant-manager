@@ -167,6 +167,11 @@ header .page-actions .redo-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 /* Untrained people hidden by default; a selected one stays visible. */
 .default-people-picker .skills-list .dd-item.untrained { display: none; }
 .default-people-picker .skills-list .dd-item.untrained:has(input:checked) { display: flex; }
+.req-skills-locked {
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-style: italic;
+}
 /* Reserves group at bottom of default-people picker (always visible items inside). */
 .default-people-picker .dp-reserves {
   margin-top: 0.35rem;

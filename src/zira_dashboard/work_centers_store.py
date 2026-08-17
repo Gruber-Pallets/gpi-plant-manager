@@ -19,6 +19,7 @@ from .staffing import (
     LOADING_JOCKEYING_REQUIRED_SKILLS,
     LOCATIONS,
     Location,
+    TRUCK_DRIVER_REQUIRED_SKILLS,
     required_skills_for,
 )
 
@@ -402,6 +403,10 @@ def _shape_effective(loc: Location, rec: dict, req: list[str],
         # Operationally this row is always color-coded by the three
         # loading/jockeying skills; ignore stale saved rows such as Heat Treat.
         req = list(LOADING_JOCKEYING_REQUIRED_SKILLS)
+    if loc.name == "Truck Driver":
+        # Driving is CDL-only. Ignore a blank or stale Settings skill list so
+        # non-drivers never appear as assignable.
+        req = list(TRUCK_DRIVER_REQUIRED_SKILLS)
     goal = rec.get("goal_per_day_override")
     minimum = rec.get("min_ops")
     return {
