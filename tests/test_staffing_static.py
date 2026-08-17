@@ -465,6 +465,18 @@ def test_staffing_print_hides_schedule_goal_and_schedule_actions():
     assert ".sidebar-schedule-actions" in css
 
 
+def test_staffing_print_hides_empty_day_notes_and_training():
+    css = _print_css()
+    html = _template()
+    hidden = css.split(".section.reserves,", 1)[1].split("{", 1)[0]
+
+    assert ".day-notes:has(#notes-textarea:placeholder-shown)," in hidden
+    assert ".training-sidebar:not(:has(.training-card))," in hidden
+    assert ".training-start-toggle," in hidden
+    assert 'id="notes-textarea"' in html
+    assert 'placeholder=" "' in html.split('id="notes-textarea"', 1)[1].split(">", 1)[0]
+
+
 def test_work_center_toggles_initialize_without_saturday_goal_controls():
     js = _script()
     controller = js.split(

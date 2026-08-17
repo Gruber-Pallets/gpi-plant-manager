@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-17
 
+### Empty notes stay off the printed schedule
+
+#### Fixes
+
+- **The printed schedule no longer shows empty Notes or Training boxes.** Those boxes still show on the screen so you can fill them in. They only print when there is a note or an active training.
+
 ### Truck Driver only shows people with a CDL
 
 #### Fixes
