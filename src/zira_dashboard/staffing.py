@@ -95,7 +95,7 @@ LOCATIONS: tuple[Location, ...] = (
     Location("Trim Saw 1", "Trim Saw", "Bay 4", "Recycled", "43286", min_ops=2, max_ops=2),
     Location("Master Recycler", "Master Recycler", "Bay 4", "Recycled", None),
     # Bay 5
-    Location("Repair 4", "Repair", "Bay 5", "Recycled", None),
+    Location("Repair 4", "Repair", "Bay 5", "Recycled", "44483"),
     Location("Repair 5", "Repair", "Bay 5", "Recycled", None),
     Location("Hand Build #2", "Hand Build", "Bay 5", "New", None, min_ops=2, max_ops=2),
     # Bay 6

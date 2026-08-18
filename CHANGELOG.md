@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-18
 
+### Repair 4 production
+
+#### Features
+
+- **Repair 4 now shows its production.** Its new Zira meter is connected like Repairs 1–3, so its pallet counts can appear on dashboards, reports, and leaderboards.
+
 ### Inbox alerts
 
 #### Fixes
