@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from zira_dashboard import production_identity_aliases as aliases
 
 
@@ -162,8 +164,34 @@ def test_upsert_empty_candidates_performs_no_database_write(monkeypatch):
         "execute_many",
         lambda sql, params: writes.append((sql, params)),
     )
+    monkeypatch.setattr(aliases.db, "query", lambda sql, params: [])
 
-    assert aliases.upsert_confirmed_aliases(()) == 0
+    assert aliases.upsert_confirmed_aliases(aliases.find_confirmed_aliases()) == 0
+
+    assert writes == []
+
+
+def test_upsert_rejects_a_manually_constructed_approved_result(monkeypatch):
+    writes = []
+    monkeypatch.setattr(
+        aliases.db,
+        "execute_many",
+        lambda sql, params: writes.append((sql, params)),
+    )
+    fabricated = aliases.ReconciliationResult(
+        candidates=(
+            aliases.AliasCandidate(
+                legacy_emp_id="LEGACY-7",
+                canonical_emp_id="ODOO-42",
+                confirmed_name=APPROVED_NAME,
+                production_days=(date(2026, 6, 1),),
+            ),
+        ),
+        skipped=(),
+    )
+
+    with pytest.raises(ValueError, match="verified reconciliation result"):
+        aliases.upsert_confirmed_aliases(fabricated)
 
     assert writes == []
 
@@ -175,16 +203,13 @@ def test_upsert_writes_only_approved_candidates_with_a_parameterized_conflict_up
         "execute_many",
         lambda sql, params: writes.append((sql, list(params))),
     )
-    candidates = (
-        aliases.AliasCandidate(
-            legacy_emp_id="LEGACY-7",
-            canonical_emp_id="ODOO-42",
-            confirmed_name=APPROVED_NAME,
-            production_days=(date(2026, 6, 1),),
-        ),
+    monkeypatch.setattr(
+        aliases.db,
+        "query",
+        lambda sql, params: [_row(emp_id="ODOO-42"), _row(emp_id="LEGACY-7")],
     )
 
-    assert aliases.upsert_confirmed_aliases(candidates) == 1
+    assert aliases.upsert_confirmed_aliases(aliases.find_confirmed_aliases()) == 1
 
     sql, params = writes[0]
     assert "ON CONFLICT (legacy_emp_id) DO UPDATE" in sql
@@ -192,18 +217,21 @@ def test_upsert_writes_only_approved_candidates_with_a_parameterized_conflict_up
     assert params == [("LEGACY-7", "ODOO-42", APPROVED_NAME, aliases.SOURCE)]
 
 
-def test_upsert_rejects_candidate_outside_the_approved_name_allow_list(monkeypatch):
-    monkeypatch.setattr(aliases.db, "execute_many", lambda sql, params: None)
+def test_upsert_rejects_a_candidate_iterable_without_a_verified_result(monkeypatch):
+    writes = []
+    monkeypatch.setattr(
+        aliases.db,
+        "execute_many",
+        lambda sql, params: writes.append((sql, params)),
+    )
     candidate = aliases.AliasCandidate(
         legacy_emp_id="LEGACY-7",
         canonical_emp_id="ODOO-42",
-        confirmed_name="Unapproved Person",
+        confirmed_name=APPROVED_NAME,
         production_days=(date(2026, 6, 1),),
     )
 
-    try:
+    with pytest.raises(ValueError, match="verified reconciliation result"):
         aliases.upsert_confirmed_aliases((candidate,))
-    except ValueError as exc:
-        assert "approved-name reconciliation" in str(exc)
-    else:
-        raise AssertionError("expected an unsafe candidate to be rejected")
+
+    assert writes == []

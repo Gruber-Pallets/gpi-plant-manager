@@ -6,10 +6,8 @@ proposals in ``production_identity_aliases``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
-from collections.abc import Iterable
-
 from . import db
 
 
@@ -29,6 +27,7 @@ APPROVED_NAMES: frozenset[str] = frozenset({
     "Porfirio Cazares",
 })
 SOURCE = "legacy_name_reconciliation"
+_RESULT_PROVENANCE_TOKEN = object()
 
 
 @dataclass(frozen=True)
@@ -58,6 +57,7 @@ class ReconciliationResult:
 
     candidates: tuple[AliasCandidate, ...]
     skipped: tuple[SkippedName, ...]
+    _provenance_token: object | None = field(default=None, repr=False, compare=False)
 
 
 def _nonempty_id(value: object) -> str | None:
@@ -192,16 +192,25 @@ def find_confirmed_aliases() -> ReconciliationResult:
                 production_days=legacy_days,
             ))
 
-    return ReconciliationResult(tuple(candidates), tuple(skipped))
+    return ReconciliationResult(
+        tuple(candidates),
+        tuple(skipped),
+        _provenance_token=_RESULT_PROVENANCE_TOKEN,
+    )
 
 
-def upsert_confirmed_aliases(candidates: Iterable[AliasCandidate]) -> int:
-    """Persist candidates produced by :func:`find_confirmed_aliases`.
+def upsert_confirmed_aliases(result: ReconciliationResult) -> int:
+    """Persist aliases from a result produced by :func:`find_confirmed_aliases`.
 
-    The defensive validation keeps callers from turning this into a generic
-    name-based identity-writing API.
+    A private provenance token prevents callers from turning this into a
+    generic name-based identity-writing API with hand-built candidates.
     """
-    candidates = tuple(candidates)
+    if (
+        not isinstance(result, ReconciliationResult)
+        or result._provenance_token is not _RESULT_PROVENANCE_TOKEN
+    ):
+        raise ValueError("upsert requires a verified reconciliation result")
+    candidates = result.candidates
     if not candidates:
         return 0
     for candidate in candidates:
