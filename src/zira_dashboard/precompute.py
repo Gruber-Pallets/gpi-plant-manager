@@ -227,7 +227,7 @@ def normalized_daily_records_in_range(start: date, end: date) -> list[dict]:
     from . import db
     rows = db.query(
         """
-        SELECT day, name AS person, wc_name AS wc,
+        SELECT day, emp_id, name AS person, wc_name AS wc,
                units, downtime, hours, excluded_minutes
         FROM production_daily
         WHERE day BETWEEN %s AND %s
@@ -242,6 +242,7 @@ def normalized_daily_records_in_range(start: date, end: date) -> list[dict]:
     return [
         {
             "day": r["day"],
+            "emp_id": str(r.get("emp_id") or ""),
             "person": r["person"],
             "wc": r["wc"],
             "units": float(r["units"]),

@@ -44,3 +44,17 @@ def test_normalized_daily_records_in_range_includes_zero_units(monkeypatch):
     rows = precompute.normalized_daily_records_in_range(date(2026, 7, 8), date(2026, 7, 8))
     assert rows[0]["units"] == 0.0
     assert rows[0]["hours"] == 8.0
+
+
+def test_normalized_daily_records_in_range_includes_employee_identity(monkeypatch):
+    from zira_dashboard import db, precompute
+
+    monkeypatch.setattr(db, "query", lambda sql, params: [{
+        "day": date(2026, 7, 8), "emp_id": "501", "person": "Jesus G.",
+        "wc": "Dismantler 2", "units": 0.0, "downtime": 10.0,
+        "hours": 8.0, "excluded_minutes": 30.0,
+    }])
+    rows = precompute.normalized_daily_records_in_range(
+        date(2026, 7, 8), date(2026, 7, 8)
+    )
+    assert rows[0]["emp_id"] == "501"
