@@ -86,6 +86,39 @@ def test_normalized_average_merges_renamed_employee_by_employee_id():
     assert rows[0]["avg_units"] == 105.0
 
 
+def test_normalized_daily_scores_combines_aliases_on_the_same_day():
+    records = [
+        {
+            **rec(date(2026, 6, 2), "Jose Garcia", "Repair 1", 67.5, 6.75),
+            "emp_id": "canonical-501",
+            "source_emp_id": "legacy-501",
+        },
+        {
+            **rec(date(2026, 6, 2), "Jose Garcia", "Repair 1", 9.0, 0.9),
+            "emp_id": "canonical-501",
+            "source_emp_id": "501",
+        },
+    ]
+    rows = pm.normalized_daily_scores(
+        records,
+        wc_names={"Repair 1"}, standard_full_day_hours=STD_HOURS,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["identity"] == ("emp_id", "canonical-501")
+    assert rows[0]["day"] == date(2026, 6, 2)
+    assert rows[0]["hours"] == 7.65
+    assert rows[0]["units"] == 76.5
+
+    people = pm.normalized_average_by_person(
+        records,
+        wc_names={"Repair 1"}, standard_full_day_hours=STD_HOURS,
+    )
+    assert len(people) == 1
+    assert people[0]["days"] == 1
+    assert people[0]["total_hours"] == 7.65
+
+
 def test_normalized_average_keeps_same_name_different_employee_ids_separate():
     rows = pm.normalized_average_by_person(
         [

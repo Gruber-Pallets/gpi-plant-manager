@@ -227,14 +227,17 @@ def normalized_daily_records_in_range(start: date, end: date) -> list[dict]:
     from . import db
     rows = db.query(
         """
-        SELECT day, emp_id, name AS person, wc_name AS wc,
-               units, downtime, hours, excluded_minutes
-        FROM production_daily
-        WHERE day BETWEEN %s AND %s
+        SELECT pd.day, COALESCE(pia.canonical_emp_id, pd.emp_id) AS emp_id,
+               pd.name AS person, pd.wc_name AS wc,
+               pd.units, pd.downtime, pd.hours, pd.excluded_minutes
+        FROM production_daily pd
+        LEFT JOIN production_identity_aliases pia
+          ON pia.legacy_emp_id = pd.emp_id
+        WHERE pd.day BETWEEN %s AND %s
           AND NOT EXISTS (
             SELECT 1 FROM manual_absences ma
-            WHERE ma.day = production_daily.day
-              AND ma.name = production_daily.name
+            WHERE ma.day = pd.day
+              AND ma.name = pd.name
           )
         """,
         (start, end),
