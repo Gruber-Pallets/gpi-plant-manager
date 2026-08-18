@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +11,18 @@ from zira_dashboard import production_identity_aliases as aliases
 
 
 APPROVED_NAME = "Adrian Aragon"
+COMMAND_PATH = Path(__file__).resolve().parent.parent / "scripts" / "reconcile_production_identity_aliases.py"
+
+
+def _load_command_module():
+    assert COMMAND_PATH.is_file(), "operator command has not been added"
+    spec = importlib.util.spec_from_file_location(
+        "reconcile_production_identity_aliases_command", COMMAND_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _row(
@@ -228,3 +242,133 @@ def test_apply_writes_only_finder_candidates_with_a_parameterized_conflict_updat
     assert "ON CONFLICT (legacy_emp_id) DO UPDATE" in sql
     assert "confirmed_at = now()" in sql
     assert params == [("LEGACY-7", "ODOO-42", APPROVED_NAME, aliases.SOURCE)]
+
+
+def test_operator_command_dry_run_reports_candidates_and_skips_without_schema_or_writes(
+    monkeypatch, capsys
+):
+    command = _load_command_module()
+    events = []
+    result = aliases.ReconciliationResult(
+        candidates=(
+            aliases.AliasCandidate(
+                legacy_emp_id="LEGACY-7",
+                canonical_emp_id="ODOO-42",
+                confirmed_name=APPROVED_NAME,
+                production_days=(date(2026, 6, 1), date(2026, 6, 3)),
+            ),
+        ),
+        skipped=(
+            aliases.SkippedName(
+                name="Jose Ochoa",
+                reason="canonical_id_missing_from_production",
+                canonical_emp_id="ODOO-99",
+                observed_emp_ids=("LEGACY-99",),
+                production_days=(date(2026, 6, 2),),
+            ),
+        ),
+    )
+    monkeypatch.setattr(command.db, "init_pool", lambda: events.append("pool"))
+    monkeypatch.setattr(
+        command.identity_aliases,
+        "find_confirmed_aliases",
+        lambda: events.append("find") or result,
+    )
+    monkeypatch.setattr(
+        command.db,
+        "bootstrap_schema",
+        lambda: events.append("bootstrap"),
+    )
+    monkeypatch.setattr(
+        command.identity_aliases,
+        "apply_confirmed_aliases",
+        lambda: events.append("apply") or result,
+    )
+
+    assert command.main([]) == 1
+
+    output = capsys.readouterr().out
+    assert events == ["pool", "find"]
+    assert "Adrian Aragon: LEGACY-7 -> ODOO-42" in output
+    assert "2026-06-01" in output
+    assert "2026-06-03" in output
+    assert "Jose Ochoa: SKIPPED (canonical_id_missing_from_production" in output
+    assert "Dry run only" in output
+
+
+def test_operator_command_apply_bootstraps_then_uses_service_result_for_written_count(
+    monkeypatch, capsys
+):
+    command = _load_command_module()
+    events = []
+    result = aliases.ReconciliationResult(
+        candidates=(
+            aliases.AliasCandidate(
+                legacy_emp_id="LEGACY-7",
+                canonical_emp_id="ODOO-42",
+                confirmed_name=APPROVED_NAME,
+                production_days=(date(2026, 6, 1),),
+            ),
+        ),
+        skipped=(),
+    )
+    monkeypatch.setattr(command.db, "init_pool", lambda: events.append("pool"))
+    monkeypatch.setattr(
+        command.db,
+        "bootstrap_schema",
+        lambda: events.append("bootstrap"),
+    )
+    monkeypatch.setattr(
+        command.identity_aliases,
+        "find_confirmed_aliases",
+        lambda: pytest.fail("apply must use the persistence service's fresh discovery"),
+    )
+    monkeypatch.setattr(
+        command.identity_aliases,
+        "apply_confirmed_aliases",
+        lambda: events.append("apply") or result,
+    )
+
+    assert command.main(["--apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert events == ["pool", "bootstrap", "apply"]
+    assert "Written aliases: 1" in output
+    assert "Adrian Aragon: LEGACY-7 -> ODOO-42" in output
+
+
+def test_operator_command_apply_returns_nonzero_for_skipped_name_without_direct_writer(
+    monkeypatch, capsys
+):
+    command = _load_command_module()
+    events = []
+    result = aliases.ReconciliationResult(
+        candidates=(),
+        skipped=(
+            aliases.SkippedName(
+                name=APPROVED_NAME,
+                reason="blank_production_id",
+                canonical_emp_id="ODOO-42",
+                observed_emp_ids=("", "ODOO-42"),
+                production_days=(date(2026, 6, 1),),
+            ),
+        ),
+    )
+    monkeypatch.setattr(command.db, "init_pool", lambda: events.append("pool"))
+    monkeypatch.setattr(
+        command.db,
+        "bootstrap_schema",
+        lambda: events.append("bootstrap"),
+    )
+    monkeypatch.setattr(
+        command.identity_aliases,
+        "apply_confirmed_aliases",
+        lambda: events.append("apply") or result,
+    )
+
+    assert command.main(["--apply"]) == 1
+
+    output = capsys.readouterr().out
+    assert events == ["pool", "bootstrap", "apply"]
+    assert "Adrian Aragon: SKIPPED (blank_production_id" in output
+    assert "Written aliases: 0" in output
