@@ -16,7 +16,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 #### Fixes
 
-- **Each person now appears just once on production scoreboards.** If someone’s name was written a little differently in older records, their work is now put together on one line.
+- **Each person now appears just once on production scoreboards.** Old and new employee records and ID numbers for the same person now stay together on one line.
 
 ## 2026-08-17
 
