@@ -107,6 +107,55 @@ def test_full_day_avg_per_wc_added_to_rows(monkeypatch):
     assert rows[0]["days_worked"] == 1
 
 
+def test_player_card_preserves_name_scoped_metrics_for_historical_namesakes(monkeypatch):
+    """A name-addressed card keeps its combined legacy production history."""
+    _stub_route_dependencies(
+        monkeypatch,
+        person_data={
+            "Repair 1": {"units": 210.0, "downtime": 0.0, "hours": 14.0, "days_worked": 2},
+        },
+        registered=["Repairs"],
+        members_map={"Repairs": ["Repair 1"]},
+    )
+    from datetime import date
+    from zira_dashboard import production_history
+
+    monkeypatch.setattr(
+        production_history,
+        "normalized_daily_records",
+        lambda s, e: [
+            {
+                "day": date(2026, 7, 1), "person": "Test Person", "emp_id": "101",
+                "wc": "Repair 1", "units": 70.0, "downtime": 0.0, "hours": 7.0,
+            },
+            {
+                "day": date(2026, 7, 2), "person": "Test Person", "emp_id": "202",
+                "wc": "Repair 1", "units": 140.0, "downtime": 0.0, "hours": 7.0,
+            },
+        ],
+    )
+    captured = {}
+
+    def _capture(request, template, ctx):
+        captured["ctx"] = ctx
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse("ok")
+
+    from zira_dashboard.deps import templates
+    monkeypatch.setattr(templates, "TemplateResponse", _capture)
+
+    response = _make_client().get(
+        "/staffing/people/Test Person?start=2026-07-01&end=2026-07-02"
+    )
+
+    assert response.status_code == 200
+    assert captured["ctx"]["rows"][0]["full_day_avg"] == 105.0
+    assert captured["ctx"]["rows"][0]["days_worked"] == 2
+    assert captured["ctx"]["group_avgs"] == [
+        {"name": "Repairs", "avg_units": 105.0, "days": 2},
+    ]
+
+
 def test_full_day_avg_zero_hours_returns_none(monkeypatch):
     """Defensive: sub-cutoff hours produce no normalized average."""
     _stub_route_dependencies(

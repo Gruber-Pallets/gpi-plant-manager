@@ -62,3 +62,95 @@ ZIRA_API_KEY=test uv run --extra dev python -m pytest \
 ```
 
 `uv run --extra dev` was used because the checked-in `.venv` lacks pytest.
+
+---
+
+# Player-card identity regression fix — 2026-08-18
+
+## Scope
+
+Fixed only the final-review finding that the shared identity-safe leaderboard
+aggregation changed historical player-card totals for same-display-name
+employees. The player-card route remains explicitly name-addressed; leaderboard
+identity behavior is unchanged. The pre-existing untracked `uv.lock` was not
+changed or staged.
+
+## Change
+
+- The player-card route now clears `emp_id` on its already name-filtered metric
+  records before passing them to the shared metric helper.
+- Added a route regression with two `Test Person` records carrying distinct
+  employee IDs. It asserts the per-work-center and group card values retain the
+  historical combined average of `105.0` across two qualifying days.
+
+## RED evidence
+
+The bare `pytest` command was unavailable on `PATH`:
+
+```text
+$ pytest -q tests/test_player_card_stats.py::test_player_card_preserves_name_scoped_metrics_for_historical_namesakes
+zsh:1: command not found: pytest
+```
+
+Before the route change, the existing worktree runner produced the intended
+failure:
+
+```text
+$ .venv/bin/pytest -q tests/test_player_card_stats.py::test_player_card_preserves_name_scoped_metrics_for_historical_namesakes
+F                                                                        [100%]
+E       assert 140.0 == 105.0
+=========================== short test summary info ============================
+FAILED tests/test_player_card_stats.py::test_player_card_preserves_name_scoped_metrics_for_historical_namesakes
+1 failed in 0.37s
+```
+
+The `140.0` result was the arbitrary first employee-ID row rather than the
+legacy name-scoped average.
+
+## GREEN evidence and test output
+
+Focused regression after the route change:
+
+```text
+$ .venv/bin/pytest -q tests/test_player_card_stats.py::test_player_card_preserves_name_scoped_metrics_for_historical_namesakes
+.                                                                        [100%]
+1 passed in 0.24s
+```
+
+Relevant player-card suites and static checks:
+
+```text
+$ .venv/bin/pytest -q tests/test_player_card_stats.py tests/test_player_card.py
+...............                                                          [100%]
+15 passed in 0.31s
+
+$ .venv/bin/ruff check src/zira_dashboard/routes/people.py tests/test_player_card_stats.py
+All checks passed!
+
+$ git diff --check
+(no output; passed)
+```
+
+## Changed files
+
+- `src/zira_dashboard/routes/people.py`
+- `tests/test_player_card_stats.py`
+- `.superpowers/sdd/final-fix-report.md`
+
+## Self-review
+
+- Employee identity is removed only from the local player-card metric copies,
+  after the existing exact-name filter; source records and leaderboard inputs
+  are not mutated.
+- Per-work-center and group-card calls continue to use the shared metric helper
+  with their existing work-center scopes and qualification behavior.
+- The regression observes rendered route context rather than helper internals,
+  covering both player-card metric consumers that previously selected an
+  arbitrary identity row.
+- No patch-note text or unrelated application behavior was changed.
+
+## Concerns
+
+- The public player-card URL is name-based, so historical namesakes remain
+  intentionally combined on that card. This is the required legacy contract;
+  leaderboards remain employee-identity-safe.
