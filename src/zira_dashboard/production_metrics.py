@@ -6,6 +6,14 @@ from datetime import date, timedelta
 from math import ceil
 
 
+def person_identity(record: dict) -> tuple[str, str]:
+    """Stable identity for leaderboard math; never infer identity from a label."""
+    emp_id = str(record.get("emp_id") or "").strip()
+    if emp_id:
+        return ("emp_id", emp_id)
+    return ("name", str(record["person"]))
+
+
 def normalized_daily_scores(
     records: list[dict],
     *,
@@ -21,25 +29,27 @@ def normalized_daily_scores(
     if standard_full_day_hours <= 0:
         return []
     scoped = [r for r in records if r.get("wc") in wc_names]
-    by_person_day: dict[tuple[str, date], dict] = defaultdict(
+    by_person_day: dict[tuple[tuple[str, str], date], dict] = defaultdict(
         lambda: {"units": 0.0, "hours": 0.0}
     )
     for r in scoped:
-        person = str(r["person"])
+        identity = person_identity(r)
         day = r["day"]
-        bucket = by_person_day[(person, day)]
+        bucket = by_person_day[(identity, day)]
+        bucket["name"] = str(r["person"])
         bucket["units"] += float(r.get("units") or 0.0)
         bucket["hours"] += float(r.get("hours") or 0.0)
 
     out: list[dict] = []
-    for (person, day), totals in by_person_day.items():
+    for (identity, day), totals in by_person_day.items():
         hours = totals["hours"]
         if hours < min_hours or hours <= 0:
             continue
         normalized = totals["units"] / hours * standard_full_day_hours
         out.append(
             {
-                "name": person,
+                "name": totals["name"],
+                "identity": identity,
                 "day": day,
                 "units": totals["units"],
                 "hours": hours,
@@ -64,7 +74,7 @@ def normalized_average_by_person(
         standard_full_day_hours=standard_full_day_hours,
         min_hours=min_hours,
     )
-    by_person: dict[str, dict] = defaultdict(
+    by_person: dict[tuple[str, str], dict] = defaultdict(
         lambda: {
             "total_normalized_units": 0.0,
             "total_units": 0.0,
@@ -73,20 +83,22 @@ def normalized_average_by_person(
         }
     )
     for s in scores:
-        bucket = by_person[s["name"]]
+        bucket = by_person[s["identity"]]
+        bucket["name"] = s["name"]
         bucket["total_normalized_units"] += s["normalized_units"]
         bucket["total_units"] += s["units"]
         bucket["total_hours"] += s["hours"]
         bucket["days"] += 1
 
     out: list[dict] = []
-    for name, totals in by_person.items():
+    for identity, totals in by_person.items():
         days = totals["days"]
         if days <= 0:
             continue
         out.append(
             {
-                "name": name,
+                "name": totals["name"],
+                "identity": identity,
                 "avg_units": totals["total_normalized_units"] / days,
                 "days": days,
                 "total_units": totals["total_units"],

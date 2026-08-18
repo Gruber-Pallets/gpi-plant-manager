@@ -72,6 +72,31 @@ def test_normalized_average_by_person_averages_qualified_days():
     assert rows[0]["total_hours"] == 11.0
 
 
+def test_normalized_average_merges_renamed_employee_by_employee_id():
+    rows = pm.normalized_average_by_person(
+        [
+            {**rec(date(2026, 1, 2), "Jesus Galindo", "Repair 1", 70, 7), "emp_id": "501"},
+            {**rec(date(2026, 1, 3), "Jesus G.", "Repair 1", 140, 7), "emp_id": "501"},
+        ],
+        wc_names={"Repair 1"}, standard_full_day_hours=7,
+    )
+    assert len(rows) == 1
+    assert rows[0]["identity"] == ("emp_id", "501")
+    assert rows[0]["days"] == 2
+    assert rows[0]["avg_units"] == 105.0
+
+
+def test_normalized_average_keeps_same_name_different_employee_ids_separate():
+    rows = pm.normalized_average_by_person(
+        [
+            {**rec(date(2026, 1, 2), "Jose Garcia", "Repair 1", 70, 7), "emp_id": "501"},
+            {**rec(date(2026, 1, 3), "Jose Garcia", "Repair 1", 140, 7), "emp_id": "502"},
+        ],
+        wc_names={"Repair 1"}, standard_full_day_hours=7,
+    )
+    assert {row["identity"] for row in rows} == {("emp_id", "501"), ("emp_id", "502")}
+
+
 def test_normalized_average_by_person_sorts_by_avg_then_days_then_name():
     rows = pm.normalized_average_by_person(
         [
