@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -200,10 +200,17 @@ def test_payload_goat_failure_omits_chip_but_keeps_family_data(monkeypatch):
     payload = fake_payload()
     payload.pop("current_goats")
     payload.pop("error_message")
+    records = [{
+        "day": date(2026, 7, 10),
+        "person": "Junior Operator",
+        "wc": "Junior #2",
+        "units": 1,
+        "hours": 1,
+    }]
     monkeypatch.setattr(
         new_leaderboard.production_history,
         "normalized_daily_records",
-        lambda start, end: [],
+        lambda start, end: records,
     )
     monkeypatch.setattr(
         new_leaderboard.production_metrics,
@@ -219,6 +226,96 @@ def test_payload_goat_failure_omits_chip_but_keeps_family_data(monkeypatch):
     data = new_leaderboard._leaderboard_payload(date(2026, 7, 10))
     assert data["active_families"] == ["Juniors"]
     assert data["current_goats"] == []
+
+
+def test_hand_build_goat_chip_waits_for_30_positive_days(monkeypatch):
+    from zira_dashboard.routes import new_leaderboard
+
+    payload = fake_payload()
+    payload["active_families"] = ["Hand Build"]
+    payload["current_goats"] = []
+    payload["families"]["Hand Build"] = payload["families"]["Juniors"]
+    records = [
+        {
+            "day": date(2026, 7, 1) + timedelta(days=offset),
+            "person": "Builder",
+            "wc": "Hand Build #1",
+            "units": 100,
+            "hours": 7,
+        }
+        for offset in range(29)
+    ]
+    calls = []
+    monkeypatch.setattr(
+        new_leaderboard.production_history,
+        "normalized_daily_records",
+        lambda *_: records,
+    )
+    monkeypatch.setattr(
+        new_leaderboard.production_metrics,
+        "build_family_leaderboard",
+        lambda *_args, **_kwargs: payload,
+    )
+    monkeypatch.setattr(new_leaderboard.awards, "load_overrides", lambda: [])
+    monkeypatch.setattr(
+        new_leaderboard.awards,
+        "goat_for_wc_names",
+        lambda *_args, **_kwargs: calls.append(True),
+    )
+
+    data = new_leaderboard._leaderboard_payload(date(2026, 8, 18))
+
+    assert data["current_goats"] == []
+    assert calls == []
+
+
+def test_hand_build_goat_chip_activates_on_day_30(monkeypatch):
+    from zira_dashboard.routes import new_leaderboard
+
+    payload = fake_payload()
+    payload["active_families"] = ["Hand Build"]
+    payload["current_goats"] = []
+    payload["families"]["Hand Build"] = payload["families"]["Juniors"]
+    records = [
+        {
+            "day": date(2026, 7, 1) + timedelta(days=offset),
+            "person": "Builder",
+            "wc": "Hand Build #1",
+            "units": 100 + offset,
+            "hours": 7,
+        }
+        for offset in range(30)
+    ]
+    monkeypatch.setattr(
+        new_leaderboard.production_history,
+        "normalized_daily_records",
+        lambda *_: records,
+    )
+    monkeypatch.setattr(
+        new_leaderboard.production_metrics,
+        "build_family_leaderboard",
+        lambda *_args, **_kwargs: payload,
+    )
+    monkeypatch.setattr(new_leaderboard.awards, "load_overrides", lambda: [])
+    monkeypatch.setattr(
+        new_leaderboard.awards,
+        "goat_for_wc_names",
+        lambda *_args, **_kwargs: {
+            "name": "Builder",
+            "units": 129,
+            "day": records[-1]["day"],
+        },
+    )
+
+    data = new_leaderboard._leaderboard_payload(date(2026, 8, 18))
+
+    assert data["current_goats"] == [{
+        "label": "Hand Build GOAT",
+        "group": "Hand Build",
+        "name": "Builder",
+        "units": 129,
+        "day": records[-1]["day"],
+    }]
 
 
 def test_new_leaderboard_response_cache_avoids_duplicate_payload(monkeypatch):

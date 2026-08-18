@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 
@@ -54,6 +54,55 @@ def test_finalize_requires_a_strict_new_record(monkeypatch):
     assert inserted == []
 
 
+def test_hand_build_notifications_wait_for_30_positive_days(monkeypatch):
+    category = goat_categories.category_for_key("hand_build")
+    records = [
+        {
+            "day": date(2026, 7, 1) + timedelta(days=offset),
+            "person": "Builder",
+            "wc": "Hand Build #1",
+            "units": 100 + offset,
+            "hours": 7,
+        }
+        for offset in range(29)
+    ]
+    winner_calls = []
+    inserted = []
+    monkeypatch.setattr(
+        goat_categories,
+        "work_center_names",
+        lambda _: {"Hand Build #1"},
+    )
+    monkeypatch.setattr(
+        goat_notifications,
+        "_eligible_categories",
+        lambda: (category,),
+    )
+    monkeypatch.setattr(
+        goat_notifications.precompute,
+        "precompute_day",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(goat_notifications, "_records_through", lambda _: records)
+    monkeypatch.setattr(
+        goat_notifications,
+        "winner_for_day",
+        lambda *_: winner_calls.append(True),
+    )
+    monkeypatch.setattr(
+        goat_notifications.store,
+        "insert_alert_and_delivery",
+        inserted.append,
+    )
+
+    assert goat_notifications.finalize_day(
+        records[-1]["day"],
+        client=object(),
+    ) == []
+    assert winner_calls == []
+    assert inserted == []
+
+
 def test_message_payload_keeps_previous_record_secondary():
     text, blocks = goat_notifications.message_payload({
         "group_name": "Repairs", "person": "Jose O.", "wc_name": "Repair 3", "units": 898,
@@ -103,6 +152,73 @@ def test_drain_suppresses_a_noncanonical_delivery_without_posting(monkeypatch):
     assert suppressed == [
         (delivery["id"], delivery["claim_token"], "unknown GOAT category")
     ]
+
+
+def test_delivery_suppresses_saved_hand_build_alert_before_day_30(monkeypatch):
+    delivery = _delivery(
+        category_key="hand_build",
+        group_name="Hand Build",
+        achieved_day=date(2026, 8, 18),
+    )
+    records = [
+        {
+            "day": date(2026, 7, 1) + timedelta(days=offset),
+            "person": "Builder",
+            "wc": "Hand Build #1",
+            "units": 100,
+            "hours": 7,
+        }
+        for offset in range(29)
+    ]
+    monkeypatch.setattr(
+        goat_categories,
+        "work_center_names",
+        lambda _: {"Hand Build #1"},
+    )
+    monkeypatch.setattr(goat_notifications, "_records_through", lambda _: records)
+
+    assert goat_notifications.delivery_suppression_reason(
+        delivery,
+        date(2026, 8, 18),
+    ) == "Hand Build GOAT requires 30 production days"
+
+
+def test_delivery_does_not_replay_day_29_alert_after_day_30(monkeypatch):
+    achieved_day = date(2026, 8, 18)
+    today = date(2026, 8, 19)
+    delivery = _delivery(
+        category_key="hand_build",
+        group_name="Hand Build",
+        achieved_day=achieved_day,
+    )
+    records = [
+        {
+            "day": date(2026, 7, 1) + timedelta(days=offset),
+            "person": "Builder",
+            "wc": "Hand Build #1",
+            "units": 100,
+            "hours": 7,
+        }
+        for offset in range(30)
+    ]
+    requested_through = []
+    monkeypatch.setattr(
+        goat_categories,
+        "work_center_names",
+        lambda _: {"Hand Build #1"},
+    )
+
+    def records_through(day):
+        requested_through.append(day)
+        return records[:29] if day == achieved_day else records
+
+    monkeypatch.setattr(goat_notifications, "_records_through", records_through)
+
+    assert goat_notifications.delivery_suppression_reason(
+        delivery,
+        today,
+    ) == "Hand Build GOAT requires 30 production days"
+    assert requested_through == [achieved_day]
 
 
 def test_drain_suppresses_a_future_delivery_without_posting(monkeypatch):

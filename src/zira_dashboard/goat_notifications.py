@@ -52,6 +52,8 @@ def finalize_day(day: date, client) -> list[dict]:
     alerts: list[dict] = []
 
     for category in _eligible_categories():
+        if not goat_categories.is_goat_ready(category, records):
+            continue
         winner = winner_for_day(category, day, records)
         if winner is None:
             continue
@@ -122,6 +124,17 @@ def delivery_suppression_reason(delivery: dict, today: date) -> str | None:
         return "achieved day is in the future"
     if today > goat_watch.next_business_day(achieved_day):
         return "delivery window expired"
+    category = goat_categories.category_for_key(delivery["category_key"])
+    if category.minimum_data_days > 1:
+        try:
+            records = _records_through(achieved_day)
+        except Exception:
+            return f"{category.label} GOAT readiness unavailable"
+        if not goat_categories.is_goat_ready(category, records):
+            return (
+                f"{category.label} GOAT requires "
+                f"{category.minimum_data_days} production days"
+            )
     return None
 
 

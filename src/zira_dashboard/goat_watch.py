@@ -244,7 +244,7 @@ def active_alerts(today: date) -> list[dict]:
     records are persisted before the banner renders.
     """
     maybe_finalize_today(today)
-    from . import db, goat_categories
+    from . import awards, db, goat_categories, production_history
     try:
         rows = db.query(
             "SELECT id, achieved_day, category_key, group_name, person, wc_name, units, "
@@ -256,13 +256,29 @@ def active_alerts(today: date) -> list[dict]:
     except Exception:
         return []
     out: list[dict] = []
+    readiness_records_by_day: dict[date, list[dict]] = {}
     for r in rows:
         ach = r["achieved_day"]
-        if (
-            goat_categories.has_category_key(r.get("category_key"))
-            and ach <= today <= next_business_day(ach)
-        ):
-            out.append(dict(r))
+        if not goat_categories.has_category_key(r.get("category_key")):
+            continue
+        if not ach <= today <= next_business_day(ach):
+            continue
+        category = goat_categories.category_for_key(r["category_key"])
+        if category.minimum_data_days > 1:
+            try:
+                if ach not in readiness_records_by_day:
+                    readiness_records_by_day[ach] = production_history.daily_records(
+                        awards.AWARDS_DATA_FLOOR,
+                        ach,
+                    )
+                if not goat_categories.is_goat_ready(
+                    category,
+                    readiness_records_by_day[ach],
+                ):
+                    continue
+            except Exception:
+                continue
+        out.append(dict(r))
     return out
 
 

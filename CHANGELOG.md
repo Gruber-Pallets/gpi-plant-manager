@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-18
 
+### Hand Build GOAT timing
+
+#### Improvements
+
+- **Hand Build GOATs now wait for enough history.** The app waits for 30 workdays with pallet counts before naming a Hand Build GOAT. Regular production scores still show right away.
+
 ### Hand Build production
 
 #### Features

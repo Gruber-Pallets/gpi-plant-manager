@@ -555,7 +555,7 @@ def goat_holders_map() -> dict[str, list[str]]:
     A broken group (goat() raises) is logged and skipped — it must not
     poison the rest of the map.
     """
-    from . import work_centers_store
+    from . import goat_categories, work_centers_store
 
     now = _time.time()
     cached = _GOAT_HOLDERS_CACHE.get("value")
@@ -568,7 +568,24 @@ def goat_holders_map() -> dict[str, list[str]]:
         people = []
 
     out: dict[str, list[str]] = {}
+    readiness_records: list[dict] | None = None
     for g in work_centers_store.registered_groups():
+        category = goat_categories.category_for_group_name(g)
+        if category is not None and category.minimum_data_days > 1:
+            try:
+                if readiness_records is None:
+                    from datetime import datetime
+                    from . import production_history
+
+                    today = datetime.now(UTC).date()
+                    readiness_records = production_history.daily_records(
+                        AWARDS_DATA_FLOOR,
+                        today,
+                    )
+                if not goat_categories.is_goat_ready(category, readiness_records):
+                    continue
+            except Exception:
+                continue
         try:
             live = goat(g)
         except Exception:

@@ -48,6 +48,9 @@ def _leaderboard_payload(today: date) -> dict:
     goat_labels = {family: label for family, _skill, label in _FAMILY_SKILLS}
     goats: list[dict] = []
     for family in data["active_families"]:
+        category = goat_categories.category_for_group_name(family)
+        if category is not None and not goat_categories.is_goat_ready(category, records):
+            continue
         try:
             winner = awards.goat_for_wc_names(
                 family_wc_names[family],

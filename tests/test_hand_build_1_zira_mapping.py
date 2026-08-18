@@ -60,3 +60,4 @@ def test_hand_build_1_auto_activates_existing_new_paths(monkeypatch):
 
     category = goat_categories.category_for_key("hand_build")
     assert goat_categories.has_metered_source(category) is True
+    assert category.minimum_data_days == 30

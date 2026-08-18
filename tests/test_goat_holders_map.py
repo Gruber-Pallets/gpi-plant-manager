@@ -6,6 +6,7 @@ via monkeypatch so they run without a DB.
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 
 
 def _stub(monkeypatch, *, groups, goat_by_group, overrides=None):
@@ -106,6 +107,56 @@ def test_override_deletes_slot(monkeypatch):
         overrides={"Repairs": None},
     )
     assert awards.goat_holders_map() == {}
+
+
+def test_hand_build_badge_and_override_wait_for_30_days(monkeypatch):
+    from zira_dashboard import (
+        awards,
+        goat_categories,
+        production_history,
+        work_centers_store,
+    )
+
+    awards._GOAT_HOLDERS_CACHE.clear()
+    goat_calls = []
+    monkeypatch.setattr(
+        work_centers_store,
+        "registered_groups",
+        lambda: ["Hand Builds"],
+    )
+    monkeypatch.setattr(
+        goat_categories,
+        "work_center_names",
+        lambda _: {"Hand Build #1"},
+    )
+    monkeypatch.setattr(
+        production_history,
+        "daily_records",
+        lambda *_: [
+            {
+                "day": date(2026, 7, 1) + timedelta(days=offset),
+                "person": "Builder",
+                "wc": "Hand Build #1",
+                "units": 100,
+                "hours": 7,
+            }
+            for offset in range(29)
+        ],
+    )
+    monkeypatch.setattr(
+        awards,
+        "goat",
+        lambda group: goat_calls.append(group) or None,
+    )
+    monkeypatch.setattr(
+        awards,
+        "apply_overrides_single",
+        lambda *_args, **_kwargs: {"name": "Manual Builder"},
+    )
+    monkeypatch.setattr(awards, "_people_name_rows", lambda: [])
+
+    assert awards.goat_holders_map() == {}
+    assert goat_calls == []
 
 
 def test_broken_group_does_not_poison_map(monkeypatch):
