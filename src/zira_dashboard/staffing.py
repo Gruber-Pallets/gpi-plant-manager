@@ -99,7 +99,7 @@ LOCATIONS: tuple[Location, ...] = (
     Location("Repair 5", "Repair", "Bay 5", "Recycled", None),
     Location("Hand Build #2", "Hand Build", "Bay 5", "New", None, min_ops=2, max_ops=2),
     # Bay 6
-    Location("Hand Build #1", "Hand Build", "Bay 6", "New", None, min_ops=2, max_ops=2),
+    Location("Hand Build #1", "Hand Build", "Bay 6", "New", "44484", min_ops=2, max_ops=2),
     # Bay 14
     Location("Chop/Notch", "Chop/Notch", "Bay 14", "New", None),
     Location("Big Build #1", "Hand Build", "Bay 14", "New", None, min_ops=2, max_ops=2),

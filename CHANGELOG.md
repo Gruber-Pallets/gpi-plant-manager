@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-18
 
+### Hand Build production
+
+#### Features
+
+- **Hand Build #1 now shows its pallet count.** Its new Zira camera is connected to dashboards, reports, and leaderboards. Its daily goal starts at 400 pallets.
+
 ### Repair 4 production
 
 #### Features

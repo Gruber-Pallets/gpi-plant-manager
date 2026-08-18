@@ -22,6 +22,7 @@ STATIONS: tuple[Station, ...] = (
     Station(meter_id="44483", name="Repair 4",    category="Repair",    cell="Recycling"),
     Station(meter_id="43286", name="Trim Saw",    category="Other",     cell="Other"),
     Station(meter_id="42345", name="Junior 2",    category="Other",     cell="Other"),
+    Station(meter_id="44484", name="Hand Build #1", category="Hand Build", cell="New"),
 )
 
 CATEGORIES: tuple[str, ...] = ("Dismantler", "Repair", "Other")
