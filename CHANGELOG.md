@@ -10,9 +10,13 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
-- **Inbox alerts now stay red everywhere.** When there is work to do, the Inbox word and number stay red on every normal app page, so it is easier to spot.
-
 ## 2026-08-18
+
+### Inbox alerts
+
+#### Fixes
+
+- **Inbox alerts now stay red everywhere.** When there is work to do, the Inbox word and number stay red on every normal app page, so it is easier to spot.
 
 ### Production scoreboards
 
