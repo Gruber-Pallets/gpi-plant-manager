@@ -63,7 +63,7 @@ def test_bootstrap_creates_precompute_tables():
     rows = db.query(
         "SELECT table_name FROM information_schema.tables "
         "WHERE table_schema = 'public' AND table_name IN "
-        "('production_daily','today_attendance_cache',"
+        "('production_daily','production_identity_aliases','today_attendance_cache',"
         "'today_timeoff_cache','today_production_cache')"
     )
     names = {r["table_name"] for r in rows}
