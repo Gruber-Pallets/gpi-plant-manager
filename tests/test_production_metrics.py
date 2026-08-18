@@ -136,6 +136,26 @@ def test_build_recycling_leaderboard_l30_only_person_gets_ytd_not_enough_days():
     assert recent["l30"]["days"] == 1
 
 
+def test_build_recycling_leaderboard_keeps_same_name_different_employee_ids_separate():
+    records = [
+        {**rec(date(2026, 7, 5), "Jose Garcia", "Repair 1", 70, 7), "emp_id": "501"},
+        {**rec(date(2026, 7, 5), "Jose Garcia", "Repair 1", 140, 7), "emp_id": "502"},
+    ]
+
+    data = pm.build_recycling_leaderboard(
+        records,
+        today=date(2026, 7, 9),
+        standard_full_day_hours=STD_HOURS,
+        wc_role_by_name={"Repair 1": "Repair"},
+    )
+
+    repairs = data["roles"]["Repair"]["rows"]
+    assert len(repairs) == 2
+    assert [row["name"] for row in repairs] == ["Jose Garcia", "Jose Garcia"]
+    assert {row["ytd"]["avg_units"] for row in repairs} == {70.0, 140.0}
+    assert {row["l30"]["avg_units"] for row in repairs} == {70.0, 140.0}
+
+
 def test_build_recycling_leaderboard_thresholds_are_ceil_10_percent():
     records = [
         rec(date(2026, 1, day), "Leader", "Dismantler 1", 70, 7.0)
@@ -167,6 +187,27 @@ def test_build_recycling_leaderboard_ribbons_use_normalized_amount():
     assert july["repair"]["name"] == "Short Day"
     assert july["repair"]["day"] == date(2026, 7, 2)
     assert july["repair"]["amount"] == 140.0
+
+
+def test_build_recycling_leaderboard_ribbons_remain_name_scoped_after_rename():
+    records = [
+        {**rec(date(2026, 7, 2), "Jesus Galindo", "Repair 1", 70, 7), "emp_id": "501"},
+        {**rec(date(2026, 7, 2), "Jesus G.", "Repair 1", 140, 7), "emp_id": "501"},
+    ]
+
+    data = pm.build_recycling_leaderboard(
+        records,
+        today=date(2026, 7, 9),
+        standard_full_day_hours=STD_HOURS,
+        wc_role_by_name={"Repair 1": "Repair"},
+    )
+
+    assert data["ribbons"][0]["repair"] == {
+        "name": "Jesus G.",
+        "day": date(2026, 7, 2),
+        "amount": 140.0,
+        "days": 1,
+    }
 
 
 def test_build_family_leaderboard_keeps_families_independent_and_ordered():

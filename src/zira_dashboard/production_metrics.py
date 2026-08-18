@@ -114,8 +114,8 @@ def _threshold(rows: list[dict]) -> int:
     return ceil(leader_days * 0.10) if leader_days > 0 else 0
 
 
-def _by_name(rows: list[dict]) -> dict[str, dict]:
-    return {r["name"]: r for r in rows}
+def _by_identity(rows: list[dict]) -> dict[tuple[str, str], dict]:
+    return {r["identity"]: r for r in rows}
 
 
 def _span_cell(row: dict | None, threshold: int) -> dict:
@@ -142,18 +142,26 @@ def _role_rows(
     ytd_threshold: int,
     l30_threshold: int,
 ) -> list[dict]:
-    ytd = _by_name(ytd_rows)
-    l30 = _by_name(l30_rows)
-    names = {
-        r["name"] for r in ytd_rows if ytd_threshold > 0 and r["days"] >= ytd_threshold
+    ytd = _by_identity(ytd_rows)
+    l30 = _by_identity(l30_rows)
+    identities = {
+        r["identity"] for r in ytd_rows if ytd_threshold > 0 and r["days"] >= ytd_threshold
     } | {
-        r["name"] for r in l30_rows if l30_threshold > 0 and r["days"] >= l30_threshold
+        r["identity"] for r in l30_rows if l30_threshold > 0 and r["days"] >= l30_threshold
     }
     rows: list[dict] = []
-    for name in names:
-        ytd_cell = _span_cell(ytd.get(name), ytd_threshold)
-        l30_cell = _span_cell(l30.get(name), l30_threshold)
-        rows.append({"name": name, "ytd": ytd_cell, "l30": l30_cell})
+    for identity in identities:
+        ytd_row = ytd.get(identity)
+        l30_row = l30.get(identity)
+        ytd_cell = _span_cell(ytd_row, ytd_threshold)
+        l30_cell = _span_cell(l30_row, l30_threshold)
+        rows.append(
+            {
+                "name": (ytd_row or l30_row)["name"],
+                "ytd": ytd_cell,
+                "l30": l30_cell,
+            }
+        )
 
     def sort_key(row):
         if row["ytd"]["eligible"]:
@@ -193,8 +201,10 @@ def _best_ribbon(
     wc_names: set[str],
     standard_full_day_hours: float,
 ) -> dict | None:
+    # Ribbons retain their historical name-scoped daily candidates.
+    name_scoped_records = [{**record, "emp_id": ""} for record in records]
     scores = normalized_daily_scores(
-        records,
+        name_scoped_records,
         wc_names=wc_names,
         standard_full_day_hours=standard_full_day_hours,
     )
