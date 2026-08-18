@@ -133,6 +133,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS work_centers_odoo_work_center_id_unique
   ON work_centers (odoo_work_center_id)
   WHERE odoo_work_center_id IS NOT NULL;
 
+-- Repair 4 received its Zira source after the work-center row already existed.
+-- Fill only a blank mapping so a later deliberate replacement stays intact.
+UPDATE work_centers
+   SET meter_id = '44483'
+ WHERE name = 'Repair 4'
+   AND COALESCE(meter_id, '') = '';
+
 CREATE TABLE IF NOT EXISTS work_center_required_skills (
   wc_id           INTEGER NOT NULL REFERENCES work_centers(id) ON DELETE CASCADE,
   skill_id        INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
