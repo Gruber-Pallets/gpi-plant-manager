@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-18
+
+### Production scoreboards
+
+#### Fixes
+
+- **Each person now appears just once on production scoreboards.** If someone’s name was written a little differently in older records, their work is now put together on one line.
+
 ## 2026-08-17
 
 ### Auto leaves scheduled people in place

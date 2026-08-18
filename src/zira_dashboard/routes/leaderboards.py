@@ -66,22 +66,26 @@ def averages_for_wc(
         standard_full_day_hours=standard_full_day_hours,
         min_hours=_MIN_WORK_CENTER_HOURS,
     )
-    qualified_days = {(r["name"], r["day"]) for r in scores}
+    qualified_days = {(r["identity"], r["day"]) for r in scores}
     normalized_rows = production_metrics.normalized_average_by_person(
         rows,
         wc_names=wc_names,
         standard_full_day_hours=standard_full_day_hours,
         min_hours=_MIN_WORK_CENTER_HOURS,
     )
-    normalized_by_name = {r["name"]: r for r in normalized_rows}
-    by_person: dict[str, list[dict]] = {}
+    normalized_by_identity = {r["identity"]: r for r in normalized_rows}
+    by_person: dict[tuple[str, str], list[dict]] = {}
     for r in rows:
-        if r["person"] in normalized_by_name:
-            by_person.setdefault(r["person"], []).append(r)
+        identity = production_metrics.person_identity(r)
+        if (
+            identity in normalized_by_identity
+            and (identity, r["day"]) in qualified_days
+        ):
+            by_person.setdefault(identity, []).append(r)
 
     out: list[dict] = []
-    for person, recs in by_person.items():
-        norm = normalized_by_name[person]
+    for identity, recs in by_person.items():
+        norm = normalized_by_identity[identity]
 
         # Weight percent by the expected output for the actual recorded time.
         # This makes a one-hour stint one seventh the weight of a seven-hour
@@ -89,8 +93,6 @@ def averages_for_wc(
         actual_for_pct = 0.0
         expected_for_pct = 0.0
         for r in recs:
-            if (person, r["day"]) not in qualified_days:
-                continue
             # `hours` is a per-work-center fact. A tablet transfer can leave
             # someone at this station for only part of the day, so its goal
             # must use the recorded interval rather than the whole shift.
@@ -108,7 +110,7 @@ def averages_for_wc(
         )
 
         out.append({
-            "name": person,
+            "name": norm["name"],
             "name_count": norm["days"],
             "avg_units": norm["avg_units"],
             "avg_pct": avg_pct,
@@ -156,25 +158,26 @@ def averages_for_group(
         standard_full_day_hours=standard_full_day_hours,
         min_hours=_MIN_WORK_CENTER_HOURS,
     )
-    qualified_days = {(r["name"], r["day"]) for r in scores}
+    qualified_days = {(r["identity"], r["day"]) for r in scores}
     normalized_rows = production_metrics.normalized_average_by_person(
         rows,
         wc_names=wc_names,
         standard_full_day_hours=standard_full_day_hours,
         min_hours=_MIN_WORK_CENTER_HOURS,
     )
-    normalized_by_name = {r["name"]: r for r in normalized_rows}
-    by_person: dict[str, list[dict]] = {}
+    normalized_by_identity = {r["identity"]: r for r in normalized_rows}
+    by_person: dict[tuple[str, str], list[dict]] = {}
     for r in scoped_rows:
+        identity = production_metrics.person_identity(r)
         if (
-            r["person"] in normalized_by_name
-            and (r["person"], r["day"]) in qualified_days
+            identity in normalized_by_identity
+            and (identity, r["day"]) in qualified_days
         ):
-            by_person.setdefault(r["person"], []).append(r)
+            by_person.setdefault(identity, []).append(r)
 
     out: list[dict] = []
-    for person, recs in by_person.items():
-        norm = normalized_by_name[person]
+    for identity, recs in by_person.items():
+        norm = normalized_by_identity[identity]
 
         actual_for_pct = 0.0
         expected_for_pct = 0.0
@@ -198,7 +201,7 @@ def averages_for_group(
         top_wc = min(wc_hours.items(), key=lambda kv: (-kv[1], kv[0]))[0]
 
         out.append({
-            "name": person,
+            "name": norm["name"],
             "name_count": norm["days"],
             "top_wc": top_wc,
             "avg_units": norm["avg_units"],

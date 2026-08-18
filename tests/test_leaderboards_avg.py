@@ -36,6 +36,19 @@ def test_averages_single_person_multiple_days():
     assert abs(r["avg_pct"] - (200/210 + 220/210 + 210/210) / 3) < 1e-9
 
 
+def test_averages_for_wc_merges_renamed_employee_by_employee_id():
+    records = [
+        {**_rec(date(2026, 4, 27), "Jesus Galindo", "WC1", 140), "emp_id": "501"},
+        {**_rec(date(2026, 4, 28), "Jesus G.", "WC1", 280), "emp_id": "501"},
+    ]
+    rows = averages_for_wc(records, 30.0, _const_productive, "units")
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Jesus G."
+    assert rows[0]["name_count"] == 2
+    assert rows[0]["avg_units"] == 210.0
+    assert rows[0]["avg_pct"] == 1.0
+
+
 def test_averages_sort_by_units_desc():
     records = [
         _rec(date(2026, 4, 27), "Alice", "WC1", 100),
@@ -383,3 +396,16 @@ def test_averages_for_group_units_sums_same_day_wcs_before_cutoff():
     )
     assert rows[0]["avg_units"] == 126.0
     assert rows[0]["name_count"] == 1
+
+
+def test_averages_for_group_merges_renamed_employee_by_employee_id():
+    records = [
+        {**_rec(date(2026, 4, 27), "Jesus Galindo", "WC1", 140), "emp_id": "501"},
+        {**_rec(date(2026, 4, 28), "Jesus G.", "WC1", 280), "emp_id": "501"},
+    ]
+    rows = averages_for_group(records, {"WC1": 30.0}, _const_productive, "units")
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Jesus G."
+    assert rows[0]["name_count"] == 2
+    assert rows[0]["avg_units"] == 210.0
+    assert rows[0]["avg_pct"] == 1.0
