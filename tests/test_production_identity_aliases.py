@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -157,46 +158,57 @@ def test_all_proposed_aliases_keep_the_approved_display_name(monkeypatch):
     assert all(candidate.confirmed_name in aliases.APPROVED_NAMES for candidate in result.candidates)
 
 
-def test_upsert_empty_candidates_performs_no_database_write(monkeypatch):
+def test_apply_empty_candidates_performs_no_database_write(monkeypatch):
     writes = []
     monkeypatch.setattr(
         aliases.db,
         "execute_many",
         lambda sql, params: writes.append((sql, params)),
     )
-    monkeypatch.setattr(aliases.db, "query", lambda sql, params: [])
+    monkeypatch.setattr(
+        aliases,
+        "find_confirmed_aliases",
+        lambda: aliases.ReconciliationResult(candidates=(), skipped=()),
+    )
 
-    assert aliases.upsert_confirmed_aliases(aliases.find_confirmed_aliases()) == 0
+    result = aliases.apply_confirmed_aliases()
 
+    assert result.candidates == ()
     assert writes == []
 
 
-def test_upsert_rejects_a_manually_constructed_approved_result(monkeypatch):
+def test_public_apply_cannot_write_candidates_replaced_on_a_genuine_result(monkeypatch):
     writes = []
+    monkeypatch.setattr(
+        aliases.db,
+        "query",
+        lambda sql, params: [_row(emp_id="ODOO-42"), _row(emp_id="LEGACY-7")],
+    )
     monkeypatch.setattr(
         aliases.db,
         "execute_many",
         lambda sql, params: writes.append((sql, params)),
     )
-    fabricated = aliases.ReconciliationResult(
+    genuine_result = aliases.find_confirmed_aliases()
+    replaced_result = replace(
+        genuine_result,
         candidates=(
             aliases.AliasCandidate(
-                legacy_emp_id="LEGACY-7",
+                legacy_emp_id="ARBITRARY-99",
                 canonical_emp_id="ODOO-42",
                 confirmed_name=APPROVED_NAME,
                 production_days=(date(2026, 6, 1),),
             ),
         ),
-        skipped=(),
     )
 
-    with pytest.raises(ValueError, match="verified reconciliation result"):
-        aliases.upsert_confirmed_aliases(fabricated)
+    with pytest.raises(TypeError):
+        aliases.apply_confirmed_aliases(replaced_result)
 
     assert writes == []
 
 
-def test_upsert_writes_only_approved_candidates_with_a_parameterized_conflict_update(monkeypatch):
+def test_apply_writes_only_finder_candidates_with_a_parameterized_conflict_update(monkeypatch):
     writes = []
     monkeypatch.setattr(
         aliases.db,
@@ -209,29 +221,10 @@ def test_upsert_writes_only_approved_candidates_with_a_parameterized_conflict_up
         lambda sql, params: [_row(emp_id="ODOO-42"), _row(emp_id="LEGACY-7")],
     )
 
-    assert aliases.upsert_confirmed_aliases(aliases.find_confirmed_aliases()) == 1
+    result = aliases.apply_confirmed_aliases()
 
+    assert len(result.candidates) == 1
     sql, params = writes[0]
     assert "ON CONFLICT (legacy_emp_id) DO UPDATE" in sql
     assert "confirmed_at = now()" in sql
     assert params == [("LEGACY-7", "ODOO-42", APPROVED_NAME, aliases.SOURCE)]
-
-
-def test_upsert_rejects_a_candidate_iterable_without_a_verified_result(monkeypatch):
-    writes = []
-    monkeypatch.setattr(
-        aliases.db,
-        "execute_many",
-        lambda sql, params: writes.append((sql, params)),
-    )
-    candidate = aliases.AliasCandidate(
-        legacy_emp_id="LEGACY-7",
-        canonical_emp_id="ODOO-42",
-        confirmed_name=APPROVED_NAME,
-        production_days=(date(2026, 6, 1),),
-    )
-
-    with pytest.raises(ValueError, match="verified reconciliation result"):
-        aliases.upsert_confirmed_aliases((candidate,))
-
-    assert writes == []

@@ -6,8 +6,9 @@ proposals in ``production_identity_aliases``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
+
 from . import db
 
 
@@ -27,7 +28,6 @@ APPROVED_NAMES: frozenset[str] = frozenset({
     "Porfirio Cazares",
 })
 SOURCE = "legacy_name_reconciliation"
-_RESULT_PROVENANCE_TOKEN = object()
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,6 @@ class ReconciliationResult:
 
     candidates: tuple[AliasCandidate, ...]
     skipped: tuple[SkippedName, ...]
-    _provenance_token: object | None = field(default=None, repr=False, compare=False)
 
 
 def _nonempty_id(value: object) -> str | None:
@@ -192,25 +191,23 @@ def find_confirmed_aliases() -> ReconciliationResult:
                 production_days=legacy_days,
             ))
 
-    return ReconciliationResult(
-        tuple(candidates),
-        tuple(skipped),
-        _provenance_token=_RESULT_PROVENANCE_TOKEN,
-    )
+    return ReconciliationResult(tuple(candidates), tuple(skipped))
 
 
-def upsert_confirmed_aliases(result: ReconciliationResult) -> int:
-    """Persist aliases from a result produced by :func:`find_confirmed_aliases`.
+def apply_confirmed_aliases() -> ReconciliationResult:
+    """Discover and persist safe aliases immediately before the write.
 
-    A private provenance token prevents callers from turning this into a
-    generic name-based identity-writing API with hand-built candidates.
+    Returning the newly discovered result gives the operator command its exact
+    written count and any structured skips without accepting caller-supplied
+    identity candidates.
     """
-    if (
-        not isinstance(result, ReconciliationResult)
-        or result._provenance_token is not _RESULT_PROVENANCE_TOKEN
-    ):
-        raise ValueError("upsert requires a verified reconciliation result")
-    candidates = result.candidates
+    result = find_confirmed_aliases()
+    _upsert_alias_candidates(result.candidates)
+    return result
+
+
+def _upsert_alias_candidates(candidates: tuple[AliasCandidate, ...]) -> int:
+    """Persist finder-owned candidates through the parameterized alias UPSERT."""
     if not candidates:
         return 0
     for candidate in candidates:
