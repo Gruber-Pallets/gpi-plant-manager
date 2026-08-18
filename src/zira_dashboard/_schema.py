@@ -582,6 +582,15 @@ CREATE INDEX IF NOT EXISTS idx_production_daily_name_day
 CREATE INDEX IF NOT EXISTS idx_production_daily_wc_day
   ON production_daily (wc_name, day);
 
+CREATE TABLE IF NOT EXISTS production_identity_aliases (
+  legacy_emp_id    TEXT PRIMARY KEY,
+  canonical_emp_id TEXT NOT NULL,
+  confirmed_name   TEXT NOT NULL,
+  confirmed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  source           TEXT NOT NULL,
+  CHECK (legacy_emp_id <> canonical_emp_id)
+);
+
 -- Live cache tables ----------------------------------------------------
 -- Single-row JSONB blobs keyed by today's date. The live warmer
 -- overwrites them every 45 s. Routes read from here instead of calling

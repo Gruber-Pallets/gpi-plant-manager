@@ -69,6 +69,7 @@ def test_bootstrap_creates_precompute_tables():
     names = {r["table_name"] for r in rows}
     assert names == {
         "production_daily",
+        "production_identity_aliases",
         "today_attendance_cache",
         "today_timeoff_cache",
         "today_production_cache",
@@ -112,6 +113,27 @@ def test_production_daily_pk_and_indexes():
         by_idx.setdefault(r["idx"], []).append(r["col"])
     assert by_idx["idx_production_daily_name_day"] == ["name", "day"]
     assert by_idx["idx_production_daily_wc_day"] == ["wc_name", "day"]
+
+
+def test_production_identity_aliases_primary_key_and_check_constraint():
+    db.init_pool()
+    db.bootstrap_schema()
+    pk_rows = db.query(
+        "SELECT a.attname FROM pg_index i "
+        "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) "
+        "WHERE i.indrelid = 'production_identity_aliases'::regclass AND i.indisprimary"
+    )
+    assert [r["attname"] for r in pk_rows] == ["legacy_emp_id"]
+
+    check_rows = db.query(
+        "SELECT pg_get_constraintdef(oid) AS definition "
+        "FROM pg_constraint "
+        "WHERE conrelid = 'production_identity_aliases'::regclass "
+        "AND contype = 'c'"
+    )
+    assert any(
+        "legacy_emp_id <> canonical_emp_id" in r["definition"] for r in check_rows
+    )
 
 
 def test_bootstrap_creates_tv_displays_table():
