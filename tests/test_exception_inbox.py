@@ -1181,7 +1181,6 @@ def test_inbox_css_styles_absent_button_orange():
 
 def test_footer_enhances_inbox_nav_with_summary_count():
     js = (STATIC_DIR / "footer.js").read_text(encoding="utf-8")
-    css = (STATIC_DIR / "footer.css").read_text(encoding="utf-8")
 
     assert "/api/exceptions/summary" in js
     assert "startInboxSummary(ensureInboxLink())" in js
@@ -1192,11 +1191,18 @@ def test_footer_enhances_inbox_nav_with_summary_count():
     assert "source_errors" in js
     assert "link.classList.toggle('has-open', total > 0)" in js
     assert "link.classList.toggle('is-degraded', degraded && total <= 0)" in js
-    assert ".inbox-nav-count" in css
-    assert ".inbox-nav-link.has-open" in css
-    assert ".brand-row nav a.inbox-nav-link.has-open" in css
-    assert ".inbox-nav-link.has-open .inbox-nav-count" in css
-    assert ".inbox-nav-link.is-degraded .inbox-nav-count" in css
+
+
+def test_inbox_nav_styles_are_available_without_the_footer_bundle():
+    topnav_css = (STATIC_DIR / "topnav.css").read_text(encoding="utf-8")
+    footer_css = (STATIC_DIR / "footer.css").read_text(encoding="utf-8")
+
+    assert ".inbox-nav-count" in topnav_css
+    assert ".inbox-nav-link.has-open" in topnav_css
+    assert ".brand-row nav a.inbox-nav-link.has-open" in topnav_css
+    assert ".inbox-nav-link.has-open .inbox-nav-count" in topnav_css
+    assert ".inbox-nav-link.is-degraded .inbox-nav-count" in topnav_css
+    assert ".inbox-nav-link.has-open" not in footer_css
 
 
 def test_footer_refreshes_the_server_bootstrap_before_the_first_poll():
