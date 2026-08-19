@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-19
+
+### Default people stay saved
+
+#### Fixes
+
+- **Default people no longer disappear after another Settings change.** The app now changes this list only when you edit the Default People box itself. Changes to goals, skills, groups, or other work centers leave the saved people alone.
+
 ## 2026-08-18
 
 ### Hand Build GOAT timing

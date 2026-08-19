@@ -1,16 +1,15 @@
-"""Default people must survive a Work Centers save that didn't touch them.
+"""Default people must survive Work Centers saves that did not touch them.
 
-The Settings → Work Centers form autosaves the WHOLE ``#wc-form`` on any edit
-(a goal, a min/max, a required skill, an Undo), and ``replace_default_targets``
-rewrites both default tables from that post. So any configured default person
-whose checkbox the page didn't render is deleted — silently, because the picker
-summary still lists the name. That desync is what these tests lock down: every
-selected person gets a rendered (checked) checkbox, however ineligible they've
-since become.
+The Settings → Work Centers form autosaves the whole ``#wc-form`` on any edit.
+Only default-person pickers changed since the last successful save may replace
+their live values; an older open tab must not make its stale checkbox snapshot
+authoritative. When a picker really does change, every selected person must
+still have a rendered checkbox, however ineligible they have since become.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from html.parser import HTMLParser
 from types import SimpleNamespace
@@ -221,6 +220,103 @@ def test_pickers_render_preserved_defaults_so_the_form_reposts_them():
     assert (
         ".default-people-picker .dd-item.preserved-default:has(input:checked)" in css
     )
+
+
+class _RouteForm(dict):
+    def getlist(self, key):
+        value = self.get(key, [])
+        return value if isinstance(value, list) else [value]
+
+
+class _RouteRequest:
+    headers = {"accept": "application/json"}
+
+    def __init__(self, form):
+        self._form = _RouteForm(form)
+
+    async def form(self):
+        return self._form
+
+
+async def _run_inline(work):
+    return work()
+
+
+def _stub_default_save_route(monkeypatch):
+    from zira_dashboard.routes import settings
+
+    replacements = []
+    monkeypatch.setattr(settings.asyncio, "to_thread", _run_inline)
+    monkeypatch.setattr(settings.staffing, "LOCATIONS", [_LOCATION])
+    monkeypatch.setattr(settings.work_centers_store, "registered_groups", lambda: [])
+    monkeypatch.setattr(settings.work_centers_store, "all_group_names", lambda _kind: [])
+    monkeypatch.setattr(
+        settings.work_centers_store,
+        "_exact_defaults_map",
+        lambda: {_LOCATION.name: ["Ana"]},
+    )
+    monkeypatch.setattr(settings.work_centers_store, "group_defaults_map", lambda: {})
+    monkeypatch.setattr(
+        settings.work_centers_store, "_normalize_default_targets", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(settings.work_centers_store, "save_one", lambda *_args: None)
+    monkeypatch.setattr(
+        settings.work_centers_store,
+        "replace_default_targets",
+        lambda **kwargs: replacements.append(kwargs),
+    )
+    return settings, replacements
+
+
+def test_stale_untouched_picker_cannot_erase_a_newer_saved_default(monkeypatch):
+    settings, replacements = _stub_default_save_route(monkeypatch)
+    prefix = "wc__name:Work Orders__"
+
+    response = asyncio.run(
+        settings.settings_save_work_centers(
+            _RouteRequest(
+                {
+                    prefix + "goal_per_day": "101",
+                    prefix + "default_people_present": "1",
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert replacements == []
+
+
+def test_dirty_picker_can_intentionally_clear_a_saved_default(monkeypatch):
+    settings, replacements = _stub_default_save_route(monkeypatch)
+    prefix = "wc__name:Work Orders__"
+    field = prefix + "default_people"
+
+    response = asyncio.run(
+        settings.settings_save_work_centers(
+            _RouteRequest(
+                {
+                    prefix + "default_people_present": "1",
+                    "default_people_dirty": field,
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert replacements == [
+        {"exact_by_center": {_LOCATION.name: []}, "group_by_name": {}}
+    ]
+
+
+def test_autosave_marks_only_changed_default_picker_fields_dirty():
+    from pathlib import Path
+
+    javascript = Path("src/zira_dashboard/static/settings.js").read_text()
+
+    assert "function _formDataForSave(form, before, after)" in javascript
+    assert "body.append('default_people_dirty', field)" in javascript
+    assert "_formDataForSave(form, before, after)" in javascript
 
 
 @pytestmark_db

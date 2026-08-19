@@ -1000,42 +1000,65 @@ async def settings_save_work_centers(request: Request):
                 return RedirectResponse(url=f"/settings?{query}", status_code=303)
 
         original_groups = list(work_centers_store.registered_groups())
-        exact_defaults: dict[str, list[str]] = {}
-        for loc in staffing.LOCATIONS:
-            key = loc.meter_id or f"name:{loc.name}"
-            prefix = f"wc__{key}__"
-            exact_defaults[loc.name] = (
-                form.getlist(prefix + "default_people")
-                if (prefix + "default_people_present") in form
-                else work_centers_store.default_people(loc)
-            )
-        group_defaults = {
-            name: (
-                form.getlist(f"group_default_people__{name}")
-                if f"group_default_people_present__{name}" in form
-                else work_centers_store.group_default_people(name)
-            )
-            for name in original_groups
+        dirty_default_fields = set(form.getlist("default_people_dirty"))
+        deleted_groups = {
+            name for name in original_groups if form.get(f"group_delete__{name}")
         }
-
-        # Apply group registry edits to the in-memory target map before any
-        # database writes, so duplicate defaults reject the whole target set.
-        for name in original_groups:
-            if form.get(f"group_delete__{name}"):
-                group_defaults.pop(name, None)
-                continue
-            new_name = (form.get(f"group_rename__{name}") or "").strip()[:80]
-            if new_name and new_name != name:
-                group_defaults[new_name] = group_defaults.pop(name, [])
+        renamed_groups = {
+            name: (form.get(f"group_rename__{name}") or "").strip()[:80]
+            for name in original_groups
+            if name not in deleted_groups
+        }
+        renamed_groups = {
+            old: new for old, new in renamed_groups.items() if new and new != old
+        }
         new_group = (form.get("group_new") or "").strip()[:80]
-        if new_group:
-            group_defaults.setdefault(new_group, [])
+        default_targets_changed = bool(
+            dirty_default_fields or deleted_groups or renamed_groups or new_group
+        )
+        exact_defaults: dict[str, list[str]] = {}
+        group_defaults: dict[str, list[str]] = {}
+        if default_targets_changed:
+            # Start from the live database state, not from every checkbox in
+            # this page. The form autosaves as one large snapshot, and a tab
+            # can stay open while a newer tab saves defaults. Only a picker
+            # changed since this page's last successful save is authoritative.
+            exact_defaults = work_centers_store._exact_defaults_map()
+            for loc in staffing.LOCATIONS:
+                key = loc.meter_id or f"name:{loc.name}"
+                prefix = f"wc__{key}__"
+                field = prefix + "default_people"
+                exact_defaults.setdefault(loc.name, [])
+                if (
+                    field in dirty_default_fields
+                    and (prefix + "default_people_present") in form
+                ):
+                    exact_defaults[loc.name] = form.getlist(field)
+            group_defaults = work_centers_store.group_defaults_map()
+            for name in original_groups:
+                field = f"group_default_people__{name}"
+                group_defaults.setdefault(name, [])
+                if (
+                    field in dirty_default_fields
+                    and f"group_default_people_present__{name}" in form
+                ):
+                    group_defaults[name] = form.getlist(field)
+
+            # Apply group registry edits to the in-memory target map before
+            # any database writes, so duplicate defaults reject the whole set.
+            for name in deleted_groups:
+                group_defaults.pop(name, None)
+            for old, new in renamed_groups.items():
+                group_defaults[new] = group_defaults.pop(old, [])
+            if new_group:
+                group_defaults.setdefault(new_group, [])
 
         try:
-            work_centers_store._normalize_default_targets(
-                exact_by_center=exact_defaults,
-                group_by_name=group_defaults,
-            )
+            if default_targets_changed:
+                work_centers_store._normalize_default_targets(
+                    exact_by_center=exact_defaults,
+                    group_by_name=group_defaults,
+                )
         except work_centers_store.InvalidDefaultTargets as exc:
             if (request.headers.get("accept") or "").startswith("application/json"):
                 return JSONResponse(
@@ -1105,10 +1128,11 @@ async def settings_save_work_centers(request: Request):
                 field = f"group_override__{kind}__{name}"
                 if field in form:
                     work_centers_store.save_group_override(kind, name, form.get(field) or "")
-        work_centers_store.replace_default_targets(
-            exact_by_center=exact_defaults,
-            group_by_name=group_defaults,
-        )
+        if default_targets_changed:
+            work_centers_store.replace_default_targets(
+                exact_by_center=exact_defaults,
+                group_by_name=group_defaults,
+            )
         if "default_auto_work_centers_present" in form:
             _save_default_auto_work_centers(form.getlist("default_auto_work_centers"))
         if (request.headers.get("accept") or "").startswith("application/json"):

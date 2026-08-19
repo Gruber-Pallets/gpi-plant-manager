@@ -134,6 +134,22 @@
     }
     return map;
   }
+  function _formDataForSave(form, before, after) {
+    const body = new FormData(form);
+    if (form.id !== 'wc-form') return body;
+    const fields = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const field of fields) {
+      const isDefaultPeople = field.startsWith('group_default_people__')
+        || (field.startsWith('wc__') && field.endsWith('__default_people'));
+      if (!isDefaultPeople) continue;
+      const oldValues = [...(before[field] || [])].sort();
+      const newValues = [...(after[field] || [])].sort();
+      if (JSON.stringify(oldValues) !== JSON.stringify(newValues)) {
+        body.append('default_people_dirty', field);
+      }
+    }
+    return body;
+  }
   function _applyState(form, snap) {
     for (const el of form.querySelectorAll('input, select, textarea')) {
       if (!el.name) continue;
@@ -216,7 +232,7 @@
       saving = true;
       const before = snapshot;
       const after = _serializeForm(form);
-      fetch(url, { method: 'POST', body: new FormData(form), headers: {'Accept':'application/json'} })
+      fetch(url, { method: 'POST', body: _formDataForSave(form, before, after), headers: {'Accept':'application/json'} })
         .then(r => {
           if (r.ok) {
             snapshot = after;
@@ -235,10 +251,11 @@
       if (!snap || saving) return;
       const beforeRevert = _serializeForm(form);
       _applyState(form, snap);
+      const afterRevert = _serializeForm(form);
       clearTimeout(timer);
       timer = null;
       saving = true;
-      fetch(url, { method: 'POST', body: new FormData(form), headers: {'Accept':'application/json'} })
+      fetch(url, { method: 'POST', body: _formDataForSave(form, beforeRevert, afterRevert), headers: {'Accept':'application/json'} })
         .finally(() => {
           snapshot = _serializeForm(form);
           lastUndo = null;
@@ -252,10 +269,11 @@
       if (!snap || saving) return;
       const beforeRedo = _serializeForm(form);
       _applyState(form, snap);
+      const afterRedo = _serializeForm(form);
       clearTimeout(timer);
       timer = null;
       saving = true;
-      fetch(url, { method: 'POST', body: new FormData(form), headers: {'Accept':'application/json'} })
+      fetch(url, { method: 'POST', body: _formDataForSave(form, beforeRedo, afterRedo), headers: {'Accept':'application/json'} })
         .finally(() => {
           snapshot = _serializeForm(form);
           lastUndo = beforeRedo;
@@ -287,7 +305,10 @@
       if (!timer) return;
       clearTimeout(timer);
       timer = null;
-      if (navigator.sendBeacon) navigator.sendBeacon(url, new FormData(form));
+      if (navigator.sendBeacon) {
+        const after = _serializeForm(form);
+        navigator.sendBeacon(url, _formDataForSave(form, snapshot, after));
+      }
     });
   }
 
