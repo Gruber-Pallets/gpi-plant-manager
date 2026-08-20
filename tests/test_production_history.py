@@ -97,6 +97,35 @@ def test_attendance_segments_split_units_and_hours_when_operator_moves_work_cent
     assert out["Christian"]["Repair 2"]["hours"] == 2 + 40 / 60
 
 
+def test_attribute_for_segments_aggregates_returning_worker_without_merging_credit_windows():
+    from datetime import datetime, timezone
+
+    utc = timezone.utc
+    t0 = datetime(2026, 8, 20, 12, tzinfo=utc)
+    t1 = datetime(2026, 8, 20, 13, tzinfo=utc)
+    t2 = datetime(2026, 8, 20, 14, tzinfo=utc)
+    t3 = datetime(2026, 8, 20, 15, tzinfo=utc)
+    out = attribute_for_segments(
+        [
+            WorkSegment("Repair 4", "Humberto S.", t0, t1, "punch"),
+            WorkSegment("Repair 4", "Humberto S.", t2, t3, "punch"),
+        ],
+        wc_totals={"Repair 4": (30, 8)},
+        samples_by_wc={"Repair 4": [(t0, 10), (t2, 20)]},
+        productive_minutes=lambda _person, _wc, start, end: (
+            end - start
+        ).total_seconds()
+        / 60,
+    )
+    assert out["Humberto S."]["Repair 4"] == {
+        "units": 30.0,
+        "downtime": 8.0,
+        "hours": 2.0,
+        "days_worked": 1,
+        "excluded_minutes": 0.0,
+    }
+
+
 def test_attribution_for_uses_odoo_work_center_intervals_for_historical_credit(monkeypatch):
     """Stored records retain the Odoo transfer instead of the full-day schedule."""
     from datetime import datetime, time, timezone

@@ -16,6 +16,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import date, datetime, UTC
 
+from .production_segments import credit_work_segments
+
 
 class ProductionSourceUnavailable(RuntimeError):
     """Raised when a precompute cannot safely replace saved production."""
@@ -110,81 +112,49 @@ def attribute_for_segments(
     the same worked-time ratio as a safe compatibility fallback.
     """
     excluded_minutes = excluded_minutes or {}
+    credits = credit_work_segments(
+        segments,
+        wc_totals={wc_name: totals[0] for wc_name, totals in wc_totals.items()},
+        samples_by_wc=samples_by_wc,
+        productive_minutes=productive_minutes,
+    )
     out: dict[str, dict[str, dict[str, float]]] = {}
-    by_wc: dict[str, list] = {}
 
-    def _entry(person: str, wc_name: str) -> dict[str, float]:
-        wc_map = out.setdefault(person, {})
-        return wc_map.setdefault(
+    def entry(person: str, wc_name: str) -> dict[str, float]:
+        return out.setdefault(person, {}).setdefault(
             wc_name,
             {
                 "units": 0.0,
                 "downtime": 0.0,
                 "hours": 0.0,
                 "days_worked": 1,
-                "excluded_minutes": excluded_minutes.get(person, {}).get(wc_name, 0.0),
+                "excluded_minutes": excluded_minutes.get(person, {}).get(
+                    wc_name, 0.0
+                ),
             },
         )
 
-    # Seed every actually worked interval, including unmetered WCs and zero-
-    # output intervals, so hourly averages have the correct denominator.
-    for segment in segments:
-        minutes = productive_minutes(
-            segment.person_name,
-            segment.wc_name,
-            segment.start_utc,
-            segment.end_utc,
-        )
-        if minutes <= 0:
-            continue
-        _entry(segment.person_name, segment.wc_name)["hours"] += minutes / 60.0
-        by_wc.setdefault(segment.wc_name, []).append(segment)
-
-    # Assign a meter reading only to people at that specific work center at
-    # that instant.  The resolver has already closed an earlier Odoo interval
-    # when a later tablet sign-in starts, so no stale station can receive it.
-    accounted_units: dict[str, float] = {}
-    for wc_name, samples in (samples_by_wc or {}).items():
-        wc_segments = by_wc.get(wc_name, [])
-        for timestamp, raw_units in samples:
-            units = float(raw_units or 0)
-            if units <= 0:
+    for wc_name, wc_credits in credits.items():
+        for credit in wc_credits:
+            if credit.person_name is None or credit.productive_minutes <= 0:
                 continue
-            accounted_units[wc_name] = accounted_units.get(wc_name, 0.0) + units
-            people = []
-            for segment in wc_segments:
-                if segment.start_utc <= timestamp < segment.end_utc:
-                    if segment.person_name not in people:
-                        people.append(segment.person_name)
-            if not people:
-                continue
-            per_person = units / len(people)
-            for person in people:
-                _entry(person, wc_name)["units"] += per_person
+            totals = entry(credit.person_name, wc_name)
+            totals["units"] += credit.actual_units
+            totals["hours"] += credit.productive_minutes / 60.0
 
-    for wc_name, (total_units, downtime) in (wc_totals or {}).items():
-        wc_segments = by_wc.get(wc_name, [])
-        people = []
-        for segment in wc_segments:
-            if segment.person_name not in people:
-                people.append(segment.person_name)
-        if not people:
-            continue
-
-        total_hours = sum(_entry(person, wc_name)["hours"] for person in people)
+    for wc_name, (_units, downtime) in wc_totals.items():
+        people = [
+            (person, wc_map[wc_name])
+            for person, wc_map in out.items()
+            if wc_name in wc_map
+        ]
+        total_hours = sum(totals["hours"] for _person, totals in people)
         if total_hours <= 0:
             continue
-        for person in people:
-            share = _entry(person, wc_name)["hours"] / total_hours
-            # Normally every unit has a sample. If an integration returns a
-            # total without samples, preserve that output using worked-time
-            # sharing instead of silently dropping it.
-            remaining_units = max(
-                0.0,
-                float(total_units or 0) - accounted_units.get(wc_name, 0.0),
+        for _person, totals in people:
+            totals["downtime"] += (
+                float(downtime or 0) * totals["hours"] / total_hours
             )
-            _entry(person, wc_name)["units"] += remaining_units * share
-            _entry(person, wc_name)["downtime"] += float(downtime or 0) * share
     return out
 
 
