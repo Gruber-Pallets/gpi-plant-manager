@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-20
 
+### Safer shared feedback plan
+
+#### Improvements
+
+- **A safety plan is ready for sharing feedback with the improvements list.** The plan keeps this app's feedback separate from other apps and keeps feedback saved when Odoo is down. Nothing is being sent yet.
+
 ### Production follows each worker
 
 #### Features
