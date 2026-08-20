@@ -18,6 +18,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Feedback now has a safe place to keep its progress.** This storage is ready before anything can be shared with Odoo.
 
+### Auto-Lunch safety plan
+
+#### Improvements
+
+- **A safety plan is ready for Auto-Lunch.** The app will warn in the Inbox if lunch deductions are not Live and remember who changed the setting. Nothing in the app has changed yet.
+
 ### Safer shared feedback plan
 
 #### Improvements
