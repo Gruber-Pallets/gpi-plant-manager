@@ -282,6 +282,7 @@ def test_completed_shift_hides_worker_from_left_but_keeps_segment_history():
     )
     assert bars[0]["who"] is None
     assert bars[0]["no_one_here_now"] is False
+    assert bars[0]["has_worker_history"] is True
     assert bars[0]["segments"][0]["person_name"] == "Humberto S."
 
 

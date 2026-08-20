@@ -97,6 +97,62 @@ def test_recycling_bar_row_renders_person_and_wc_stacked(monkeypatch):
     assert "Alice" in html and "Repair-1" in html
 
 
+def test_recycling_transferred_worker_moves_into_bar_and_left_says_no_one_here_now(
+    monkeypatch,
+):
+    _freeze_route_clock_mid_shift(monkeypatch)
+    from zira_dashboard import shift_config, timeclock_windows, wc_attributions
+    from zira_dashboard.leaderboard import StationTotal
+    from zira_dashboard.plant_day import today as plant_today
+    from zira_dashboard.stations import Station
+
+    day = plant_today()
+    start = datetime.combine(
+        day, time(7), tzinfo=shift_config.SITE_TZ
+    ).astimezone(timezone.utc)
+    moved = datetime.combine(
+        day, time(12), tzinfo=shift_config.SITE_TZ
+    ).astimezone(timezone.utc)
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda d: staffing.Schedule(
+            day=d,
+            published=True,
+            assignments={"Repair 4": ["Humberto S."]},
+        ),
+    )
+    monkeypatch.setattr(
+        timeclock_windows,
+        "attendance_windows_for_day",
+        lambda _d: {"Humberto S.": [("Repair 4", start, moved)]},
+    )
+    monkeypatch.setattr(
+        timeclock_windows, "current_attendance_windows", lambda: ({}, moved)
+    )
+    monkeypatch.setattr(wc_attributions, "creditable_for_day", lambda _d: [])
+    station = Station("44483", "Repair 4", "Repair", "Recycling")
+    with patch("zira_dashboard.routes.departments.leaderboard") as lb:
+        lb.return_value = [
+            StationTotal(
+                station,
+                units=516,
+                reading_count=1,
+                truncated=False,
+                downtime_minutes=0,
+                active_minutes=300,
+                last_reading_at=moved,
+                last_status="Working",
+                samples=((start, 516),),
+                active_intervals=(),
+            )
+        ]
+        html = TestClient(app).get("/recycling").text
+    assert "No one here now" in html
+    assert "Humberto S." in html
+    assert "worker-segment-fill" in html
+
+
 def test_recycling_bar_row_no_assignment_fallback(monkeypatch):
     monkeypatch.setattr(staffing, "load_schedule", lambda d: staffing.Schedule(
         day=d, published=True, assignments={},

@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-20
+
+### Production follows each worker
+
+#### Features
+
+- **Work-center bars now remember who made the pallets.** When someone moves to another job, their name, work time, pallet count, and goal stay in the bar. The next person gets a fresh goal, so they do not carry the first person's missed work.
+
 ## 2026-08-19
 
 ### Default people stay saved

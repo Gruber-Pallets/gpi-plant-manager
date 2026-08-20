@@ -254,3 +254,26 @@ def test_new_tv_keeps_full_worker_text_visible_in_shared_markup():
     assert "Humberto S." in html and "7a-2:33p" in html
     assert "516/700" in html and "184 behind" in html
     assert "Ana M." in html and "32/25" in html and "7 ahead" in html
+
+
+def test_new_vertical_bar_renders_segment_blocks_finish_markers_and_visible_list():
+    html = _render_new(
+        customs={"new-bars": {"orientation": "vertical"}},
+        new_bars=[_segmented_bar()],
+    )
+    assert 'class="vworker-segment-fill result-behind"' in html
+    assert 'class="vworker-segment-shortfall"' in html
+    assert 'class="vworker-segment-goal completed"' in html
+    assert 'class="vworker-segment-goal live"' in html
+    assert 'class="vworker-segment-list"' in html
+    assert "Humberto S." in html and "184 behind" in html
+    assert "Ana M." in html and "7 ahead" in html
+
+
+def test_new_completed_shift_keeps_history_without_no_assignment_wording():
+    bar = _segmented_bar()
+    bar.update(no_one_here_now=False, has_worker_history=True)
+    html = _render_new(new_bars=[bar])
+    assert "Repair 4" in html and "Humberto S." in html
+    assert "No one here now" not in html
+    assert "(no assignment)" not in html

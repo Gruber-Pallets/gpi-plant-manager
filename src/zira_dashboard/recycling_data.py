@@ -155,11 +155,14 @@ def build_bars(
             cursor += runway
         row["segments"] = geometry
         row["has_segments"] = bool(geometry)
+        row["has_worker_history"] = any(
+            segment.get("person_name") for segment in geometry
+        )
         row["no_one_here_now"] = bool(
             is_live
             and geometry
             and not row["who"]
-            and any(segment.get("person_name") for segment in geometry)
+            and row["has_worker_history"]
         )
         row["pct"] = float(row["units"]) / scale * 100.0
         row["target_pct"] = (

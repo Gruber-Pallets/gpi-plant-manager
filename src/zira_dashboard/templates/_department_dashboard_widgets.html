@@ -24,15 +24,42 @@
         <div class="vbar-col" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
           {% if numpos == 'widget' %}<div class="vbar-val">{{ b.units }}{% if b.expected %}<span class="pct"> / {{ b.expected }}</span>{% endif %}</div>{% endif %}
           <div class="vbar-track">
-            <div class="vbar-fill" style="height: {{ b.pct }}%; background: {{ fill_color }}">
-              {% if numpos == 'inside' %}<span class="in">{{ b.units }}</span>{% endif %}
-              {% if numpos == 'bar'    %}<span class="edge">{{ b.units }}</span>{% endif %}
-            </div>
-            {% if b.target_pct is not none %}<div class="vbar-target-line" style="bottom: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
+            {% if b.has_segments %}
+              {% for s in b.segments %}
+                {% if s.actual_pct > 0 %}
+                  <div class="vworker-segment-fill result-{{ s.result }}"
+                       style="bottom:{{ s.start_pct }}%;height:{{ s.actual_pct }}%"
+                       title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }} / {{ s.goal_units|round|int }} · {{ s.result_label }}"></div>
+                {% endif %}
+                {% if s.shortfall_pct > 0 %}
+                  <div class="vworker-segment-shortfall"
+                       style="bottom:{{ s.shortfall_start_pct }}%;height:{{ s.shortfall_pct }}%"
+                       aria-hidden="true"></div>
+                {% endif %}
+                {% if s.finish_pct is not none %}
+                  <div class="vworker-segment-goal {{ 'live' if s.is_active else 'completed' }}"
+                       style="bottom:{{ s.finish_pct }}%"
+                       title="{{ 'Goal now' if s.is_active else 'Finish goal' }} {{ s.goal_units|round|int }}"></div>
+                {% endif %}
+              {% endfor %}
+              {% if numpos == 'inside' %}<span class="vsegment-total in">{{ b.units }}</span>{% endif %}
+              {% if numpos == 'bar' %}<span class="vsegment-total edge">{{ b.units }}</span>{% endif %}
+            {% else %}
+              <div class="vbar-fill" style="height: {{ b.pct }}%; background: {{ fill_color }}">
+                {% if numpos == 'inside' %}<span class="in">{{ b.units }}</span>{% endif %}
+                {% if numpos == 'bar'    %}<span class="edge">{{ b.units }}</span>{% endif %}
+              </div>
+              {% if b.target_pct is not none %}<div class="vbar-target-line" style="bottom: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
+            {% endif %}
           </div>
           <div class="vbar-name">
             {% if is_range %}
               <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
+            {% elif b.no_one_here_now %}
+              <span class="name-primary current-empty">No one here now</span>
+              <span class="name-secondary">{{ b.name }}</span>
+            {% elif b.has_worker_history and not b.who %}
+              <span class="name-primary">{{ b.name }}</span>
             {% elif b.who and b.who != b.name %}
               {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
               {{ operator_name(b.who, operator_href, true) }}
@@ -47,6 +74,15 @@
               {% endif %}
             {% endif %}
           </div>
+          {% if b.has_segments %}
+            <div class="vworker-segment-list">
+              {% for s in b.segments %}
+                <span class="result-{{ s.result }}">
+                  {{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
+                </span>
+              {% endfor %}
+            </div>
+          {% endif %}
         </div>
       {% endfor %}
     </div>
@@ -60,6 +96,8 @@
           {% elif b.no_one_here_now %}
             <span class="name-primary current-empty">No one here now</span>
             <span class="name-secondary">{{ b.name }}</span>
+          {% elif b.has_worker_history and not b.who %}
+            <span class="name-primary">{{ b.name }}</span>
           {% elif b.who and b.who != b.name %}
             {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
             {{ operator_name(b.who, operator_href, true) }}
