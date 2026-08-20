@@ -154,6 +154,137 @@ def test_build_bars_is_range_suppresses_who():
     assert bars[0]["who"] is None
 
 
+def test_build_bars_places_independent_runways_on_one_scale():
+    segments = {
+        "Repair 4": (
+            {
+                "person_name": "Humberto S.",
+                "person_label": "Humberto S.",
+                "time_label": "7a-2:33p",
+                "actual_units": 516.0,
+                "goal_units": 700.0,
+                "runway_units": 700.0,
+                "is_active": False,
+                "result": "behind",
+                "result_label": "184 behind",
+            },
+            {
+                "person_name": "Ana M.",
+                "person_label": "Ana M.",
+                "time_label": "since 2:35p",
+                "actual_units": 32.0,
+                "goal_units": 25.0,
+                "runway_units": 32.0,
+                "is_active": True,
+                "result": "ahead",
+                "result_label": "7 ahead",
+            },
+        )
+    }
+    bars = rd.build_bars(
+        "Repair",
+        agg_active_names={"Repair 4"},
+        agg_category={"Repair 4": "Repair"},
+        agg_units={"Repair 4": 548},
+        agg_expected={"Repair 4": 725.0},
+        agg_who_today={"Repair 4": "Ana M."},
+        is_range=False,
+        agg_downtime={},
+        agg_segments=segments,
+        is_live=True,
+    )
+    (bar,) = bars
+    humberto, ana = bar["segments"]
+    scale = 732.0 * 1.1
+    assert humberto["start_pct"] == 0.0
+    assert humberto["actual_pct"] == 516.0 / scale * 100
+    assert humberto["shortfall_pct"] == 184.0 / scale * 100
+    assert humberto["finish_pct"] == 700.0 / scale * 100
+    assert ana["start_pct"] == 700.0 / scale * 100
+    assert ana["finish_pct"] == 725.0 / scale * 100
+    assert bar["who"] == "Ana M."
+    assert bar["no_one_here_now"] is False
+
+
+def test_build_bars_marks_live_station_empty_when_history_remains():
+    bars = rd.build_bars(
+        "Repair",
+        agg_active_names={"Repair 4"},
+        agg_category={"Repair 4": "Repair"},
+        agg_units={"Repair 4": 10},
+        agg_expected={"Repair 4": 20},
+        agg_who_today={},
+        is_range=False,
+        agg_downtime={},
+        agg_segments={
+            "Repair 4": (
+                {
+                    "person_name": "Humberto S.",
+                    "person_label": "Humberto S.",
+                    "time_label": "7-8a",
+                    "actual_units": 10.0,
+                    "goal_units": 20.0,
+                    "runway_units": 20.0,
+                    "is_active": False,
+                    "result": "behind",
+                    "result_label": "10 behind",
+                },
+            )
+        },
+        is_live=True,
+    )
+    assert bars[0]["no_one_here_now"] is True
+
+
+def test_range_bars_ignore_single_day_segments():
+    bars = rd.build_bars(
+        "Repair",
+        agg_active_names={"Repair 4"},
+        agg_category={"Repair 4": "Repair"},
+        agg_units={"Repair 4": 10},
+        agg_expected={"Repair 4": 20},
+        agg_who_today={"Repair 4": "Humberto S."},
+        is_range=True,
+        agg_downtime={},
+        agg_segments={"Repair 4": ({"runway_units": 20.0},)},
+        is_live=False,
+    )
+    assert bars[0]["segments"] == []
+    assert bars[0]["who"] is None
+
+
+def test_completed_shift_hides_worker_from_left_but_keeps_segment_history():
+    bars = rd.build_bars(
+        "Repair",
+        agg_active_names={"Repair 4"},
+        agg_category={"Repair 4": "Repair"},
+        agg_units={"Repair 4": 516},
+        agg_expected={"Repair 4": 700},
+        agg_who_today={"Repair 4": "Humberto S."},
+        is_range=False,
+        agg_downtime={},
+        agg_segments={
+            "Repair 4": (
+                {
+                    "person_name": "Humberto S.",
+                    "person_label": "Humberto S.",
+                    "time_label": "7a-2:33p",
+                    "actual_units": 516.0,
+                    "goal_units": 700.0,
+                    "runway_units": 700.0,
+                    "is_active": False,
+                    "result": "behind",
+                    "result_label": "184 behind",
+                },
+            )
+        },
+        is_live=False,
+    )
+    assert bars[0]["who"] is None
+    assert bars[0]["no_one_here_now"] is False
+    assert bars[0]["segments"][0]["person_name"] == "Humberto S."
+
+
 def test_sort_bars_honors_widget_preference():
     items = [
         {"name": "Beta", "units": 5},

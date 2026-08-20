@@ -689,6 +689,8 @@ def _render_recycling(
             agg_who_today=agg_who_today,
             is_range=is_range,
             agg_downtime=agg_downtime,
+            agg_segments=aggregate.single_day_segments,
+            is_live=aggregate.single_day_is_live,
         )
 
     def _sorted_bars(items: list, widget_id: str) -> list:
@@ -935,6 +937,8 @@ def _render_new_dept(
         agg_who_today=aggregate.agg_who_today,
         is_range=is_range,
         agg_downtime=aggregate.agg_downtime,
+        agg_segments=aggregate.single_day_segments,
+        is_live=aggregate.single_day_is_live,
     )
     new_bars = sort_bars(new_bars, "new-bars", customs_all=customs_all)
     downtime_rows = build_downtime_rows(

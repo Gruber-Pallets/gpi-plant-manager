@@ -76,6 +76,8 @@ def build_bars(
     agg_who_today: dict,
     is_range: bool,
     agg_downtime: dict,
+    agg_segments: dict | None = None,
+    is_live: bool = True,
 ) -> list[dict]:
     """Per-WC bar rows for a category, with progress color + scaled bar widths.
 
@@ -92,21 +94,79 @@ def build_bars(
         pct_of_target = (units / expected * 100.0) if expected > 0 else None
         out.append({
             "name": name,
-            "who": agg_who_today.get(name) if not is_range else None,
+            "who": (
+                agg_who_today.get(name)
+                if not is_range and is_live
+                else None
+            ),
             "units": units,
             "pct_of_target": round(pct_of_target, 1) if pct_of_target is not None else None,
             "expected": int(round(expected)),
             "color": progress_color(pct_of_target),
             "downtime_minutes": agg_downtime.get(name, 0),
         })
-    max_u = max((r["units"] for r in out), default=0)
-    max_e = max((r["expected"] for r in out), default=0)
-    base = max(max_u, max_e)
-    scale = (base * 1.1) if base > 0 else 1.0
-    has_target_line = (max_e > 0)
-    for r in out:
-        r["pct"] = (r["units"] / scale * 100.0) if scale else 0.0
-        r["target_pct"] = (r["expected"] / scale * 100.0) if (scale and has_target_line) else None
+
+    agg_segments = agg_segments or {}
+    spans = {
+        row["name"]: sum(
+            float(segment.get("runway_units", 0.0) or 0.0)
+            for segment in agg_segments.get(row["name"], ())
+        )
+        for row in out
+    }
+    base = (
+        max(
+            spans[row["name"]]
+            if not is_range and spans[row["name"]] > 0
+            else max(float(row["units"]), float(row["expected"]))
+            for row in out
+        )
+        if out
+        else 0.0
+    )
+    scale = base * 1.1 if base > 0 else 1.0
+    has_target_line = any(row["expected"] > 0 for row in out)
+
+    for row in out:
+        source_segments = (
+            tuple(agg_segments.get(row["name"], ())) if not is_range else ()
+        )
+        cursor = 0.0
+        geometry = []
+        for segment in source_segments:
+            actual = max(0.0, float(segment.get("actual_units", 0.0) or 0.0))
+            goal = max(0.0, float(segment.get("goal_units", 0.0) or 0.0))
+            runway = max(actual, goal)
+            item = dict(segment)
+            item.update(
+                {
+                    "start_pct": cursor / scale * 100.0,
+                    "actual_pct": actual / scale * 100.0,
+                    "shortfall_start_pct": (cursor + actual) / scale * 100.0,
+                    "shortfall_pct": max(goal - actual, 0.0) / scale * 100.0,
+                    "finish_pct": (
+                        (cursor + goal) / scale * 100.0 if goal > 0 else None
+                    ),
+                    "runway_pct": runway / scale * 100.0,
+                    "label_below": actual / scale * 100.0 < 18.0,
+                }
+            )
+            geometry.append(item)
+            cursor += runway
+        row["segments"] = geometry
+        row["has_segments"] = bool(geometry)
+        row["no_one_here_now"] = bool(
+            is_live
+            and geometry
+            and not row["who"]
+            and any(segment.get("person_name") for segment in geometry)
+        )
+        row["pct"] = float(row["units"]) / scale * 100.0
+        row["target_pct"] = (
+            float(row["expected"]) / scale * 100.0
+            if scale and has_target_line and not geometry
+            else None
+        )
     return out
 
 
