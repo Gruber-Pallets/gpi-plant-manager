@@ -1457,6 +1457,196 @@ CREATE TABLE IF NOT EXISTS feedback (
 );
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS task_type TEXT;
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS odoo_task_id BIGINT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS status TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS lifecycle_origin TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS finished_by TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS resolution_note TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS projection_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS legacy_lifecycle_migrated_at TIMESTAMPTZ;
+
+DO $feedback_checks$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'feedback_status_check'
+  ) THEN
+    ALTER TABLE feedback ADD CONSTRAINT feedback_status_check CHECK (
+      status IS NULL OR status IN ('requested', 'in_progress', 'completed', 'declined')
+    );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'feedback_lifecycle_origin_check'
+  ) THEN
+    ALTER TABLE feedback ADD CONSTRAINT feedback_lifecycle_origin_check CHECK (
+      lifecycle_origin IS NULL OR lifecycle_origin IN ('local', 'legacy_project_task')
+    );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'feedback_local_terminal_fields_check'
+  ) THEN
+    ALTER TABLE feedback ADD CONSTRAINT feedback_local_terminal_fields_check CHECK (
+      lifecycle_origin <> 'local'
+      OR (
+        status IN ('completed', 'declined')
+        AND finished_at IS NOT NULL
+        AND btrim(COALESCE(finished_by, '')) <> ''
+        AND btrim(COALESCE(resolution_note, '')) <> ''
+      )
+      OR (
+        status IN ('requested', 'in_progress')
+        AND finished_at IS NULL
+        AND finished_by IS NULL
+        AND resolution_note IS NULL
+      )
+    );
+  END IF;
+END
+$feedback_checks$;
+
+CREATE TABLE IF NOT EXISTS feedback_images (
+  feedback_id BIGINT NOT NULL REFERENCES feedback(id),
+  role TEXT NOT NULL CHECK (role IN ('before', 'after')),
+  jpeg_bytes BYTEA NOT NULL,
+  sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  byte_length INTEGER NOT NULL CHECK (byte_length > 0 AND byte_length <= 5242880),
+  width INTEGER NOT NULL CHECK (width > 0 AND width <= 2048),
+  height INTEGER NOT NULL CHECK (height > 0 AND height <= 2048),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (feedback_id, role)
+);
+
+CREATE TABLE IF NOT EXISTS feedback_odoo_sync (
+  feedback_id BIGINT PRIMARY KEY REFERENCES feedback(id),
+  desired_version BIGINT NOT NULL CHECK (desired_version > 0),
+  last_synced_version BIGINT NOT NULL DEFAULT 0 CHECK (last_synced_version >= 0),
+  odoo_improvement_id INTEGER,
+  due_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  state TEXT NOT NULL DEFAULT 'idle' CHECK (state IN ('idle', 'in_flight', 'quarantined')),
+  claim_owner TEXT,
+  claim_token UUID,
+  claim_expires_at TIMESTAMPTZ,
+  active_attempt_id UUID,
+  last_error_class TEXT,
+  last_error_summary TEXT,
+  quarantine_reason TEXT,
+  quarantined_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS feedback_odoo_attempts (
+  attempt_id UUID PRIMARY KEY,
+  feedback_id BIGINT NOT NULL REFERENCES feedback(id),
+  projection_version BIGINT NOT NULL CHECK (projection_version > 0),
+  mutation_kind TEXT NOT NULL CHECK (mutation_kind IN ('create', 'update')),
+  remote_id INTEGER,
+  manifest JSONB NOT NULL,
+  manifest_digest TEXT NOT NULL CHECK (manifest_digest ~ '^[0-9a-f]{64}$'),
+  before_sha256 TEXT,
+  before_byte_length INTEGER,
+  after_sha256 TEXT,
+  after_byte_length INTEGER,
+  state TEXT NOT NULL CHECK (state IN (
+    'prepared', 'dispatch_marked', 'rpc_succeeded', 'verified',
+    'definitive_failed', 'ambiguous'
+  )),
+  dispatch_marked_at TIMESTAMPTZ,
+  rpc_succeeded_at TIMESTAMPTZ,
+  readback_at TIMESTAMPTZ,
+  settled_at TIMESTAMPTZ,
+  outcome_detail TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (feedback_id, projection_version, attempt_id)
+);
+
+DO $feedback_sync_fk$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'feedback_odoo_sync_active_attempt_fk'
+  ) THEN
+    ALTER TABLE feedback_odoo_sync
+      ADD CONSTRAINT feedback_odoo_sync_active_attempt_fk
+      FOREIGN KEY (active_attempt_id) REFERENCES feedback_odoo_attempts(attempt_id)
+      DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END
+$feedback_sync_fk$;
+
+CREATE OR REPLACE FUNCTION reject_feedback_attempt_manifest_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $function$
+BEGIN
+  IF NEW.attempt_id IS DISTINCT FROM OLD.attempt_id
+     OR NEW.feedback_id IS DISTINCT FROM OLD.feedback_id
+     OR NEW.projection_version IS DISTINCT FROM OLD.projection_version
+     OR NEW.mutation_kind IS DISTINCT FROM OLD.mutation_kind
+     OR NEW.manifest IS DISTINCT FROM OLD.manifest
+     OR NEW.manifest_digest IS DISTINCT FROM OLD.manifest_digest
+     OR NEW.before_sha256 IS DISTINCT FROM OLD.before_sha256
+     OR NEW.before_byte_length IS DISTINCT FROM OLD.before_byte_length
+     OR NEW.after_sha256 IS DISTINCT FROM OLD.after_sha256
+     OR NEW.after_byte_length IS DISTINCT FROM OLD.after_byte_length THEN
+    RAISE EXCEPTION 'feedback Odoo attempt manifest is immutable';
+  END IF;
+  RETURN NEW;
+END
+$function$;
+
+DROP TRIGGER IF EXISTS feedback_odoo_attempts_immutable_manifest
+  ON feedback_odoo_attempts;
+CREATE TRIGGER feedback_odoo_attempts_immutable_manifest
+BEFORE UPDATE ON feedback_odoo_attempts
+FOR EACH ROW EXECUTE FUNCTION reject_feedback_attempt_manifest_mutation();
+
+CREATE OR REPLACE FUNCTION reject_feedback_attempt_removal()
+RETURNS trigger LANGUAGE plpgsql AS $function$
+BEGIN
+  RAISE EXCEPTION 'feedback Odoo attempts are append-only';
+END
+$function$;
+
+DROP TRIGGER IF EXISTS feedback_odoo_attempts_reject_delete
+  ON feedback_odoo_attempts;
+CREATE TRIGGER feedback_odoo_attempts_reject_delete
+BEFORE DELETE ON feedback_odoo_attempts
+FOR EACH ROW EXECUTE FUNCTION reject_feedback_attempt_removal();
+
+DROP TRIGGER IF EXISTS feedback_odoo_attempts_reject_truncate
+  ON feedback_odoo_attempts;
+CREATE TRIGGER feedback_odoo_attempts_reject_truncate
+BEFORE TRUNCATE ON feedback_odoo_attempts
+FOR EACH STATEMENT EXECUTE FUNCTION reject_feedback_attempt_removal();
+
+CREATE TABLE IF NOT EXISTS feedback_odoo_warnings (
+  feedback_id BIGINT NOT NULL REFERENCES feedback(id),
+  projection_version BIGINT NOT NULL CHECK (projection_version > 0),
+  warning_class TEXT NOT NULL CHECK (
+    warning_class IN ('employee_missing', 'employee_ambiguous')
+  ),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (feedback_id, projection_version, warning_class)
+);
+
+CREATE TABLE IF NOT EXISTS feedback_odoo_operator_actions (
+  id BIGSERIAL PRIMARY KEY,
+  attempt_id UUID NOT NULL REFERENCES feedback_odoo_attempts(attempt_id),
+  action TEXT NOT NULL CHECK (
+    action IN ('keep', 'release_definitive', 'supersede_and_retry')
+  ),
+  reviewer TEXT NOT NULL CHECK (btrim(reviewer) <> ''),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS feedback_odoo_backfill_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  last_feedback_id BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO feedback_odoo_backfill_state (id) VALUES (1)
+ON CONFLICT (id) DO NOTHING;
 
 -- 2026-06-24: append-only audit log of time-off approve/deny decisions made
 -- in-app. Deliberately denormalized (no FK to time_off_requests): the leave
