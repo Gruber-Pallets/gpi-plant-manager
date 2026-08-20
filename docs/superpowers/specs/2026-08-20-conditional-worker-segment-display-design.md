@@ -3,8 +3,9 @@
 ## Goal
 
 Keep the original department production bar for a work center whose worker
-coverage did not change during the viewed part of the shift. Show the newer
-per-worker segment runway only when worker coverage was actually split.
+coverage did not change during the productive part of the viewed shift. Show
+the newer per-worker segment runway only when worker coverage was actually
+split.
 
 This keeps ordinary work centers familiar and compact while preserving the
 transfer history that explains who produced the pallets when staffing changes.
@@ -14,7 +15,14 @@ transfer history that explains who produced the pallets when staffing changes.
 ### Original bar
 
 Use the original bar when exactly one named worker continuously covers the
-entire viewed shift window for that work center.
+entire productive portion of the viewed shift window for that work center.
+
+Odoo may represent one uninterrupted work-center assignment as separate
+morning and afternoon attendance records around lunch. When the same worker
+returns to the same work center across a configured scheduled break, treat
+those records as one continuous worker segment. The scheduled break still
+subtracts from the worker's goal; it does not create another finish line or
+switch the station to the split format.
 
 The original bar keeps:
 
@@ -39,9 +47,14 @@ includes:
   Repair 4;
 - a worker starting after the viewed shift window begins;
 - a worker leaving before the viewed shift window ends;
-- the same worker leaving and later returning;
+- the same worker leaving and later returning across productive time;
 - overlapping workers; and
-- any sequence containing more than one named worker segment.
+- any sequence containing more than one named worker segment after scheduled
+  break normalization.
+
+A same-worker, same-work-center attendance gap contained within a configured
+scheduled break is not a split. A worker change during lunch is still a real
+split because the names or work centers differ.
 
 The split runway keeps the approved independent goals, red/green results,
 hatched shortfalls, completed finish lines, current goal line, worker names,
@@ -56,30 +69,50 @@ remain unchanged and continue to use the aggregate legacy presentation.
 
 ## Split decision
 
-Keep segment scoring independent from the display decision. The scorer still
+Keep production credit independent from the display decision. The scorer still
 produces all worker and unassigned credit so production history and station
 totals remain unchanged.
 
+Before building dashboard labels and finish lines, normalize the scored worker
+segments for display:
+
+- Merge touching or overlapping scores for the same named worker at the same
+  work center.
+- Merge consecutive scores for the same named worker at the same work center
+  when the entire gap between them is contained within one of that day's
+  configured scheduled breaks.
+- Sum the actual units, productive minutes, and goal units of merged scores.
+  Recalculate the combined runway and ahead/behind result from those sums.
+- Keep the first start, final end, and final live/completed state.
+- Do not merge different workers, different work centers, or gaps containing
+  productive time.
+- Keep unassigned production separate. Normalization changes presentation,
+  not sample credit or station totals.
+
 For each single-day work center, determine whether its named-worker segments
-form exactly one continuous segment whose start is at or before the viewed
-shift-window start and whose end is at or after the viewed shift-window end.
+after normalization form exactly one continuous segment whose start is at or
+before the viewed shift-window start and whose end is at or after the viewed
+shift-window end.
 
 - If yes, set `uses_split_format` to false.
 - Otherwise, when named worker history exists, set `uses_split_format` to true.
 - If no named worker history exists, keep the existing unassigned station
   presentation and assignment action.
 
-The comparison uses timestamps, not formatted labels or worker-name counts.
-This correctly detects a same-worker leave-and-return and avoids treating an
-unassigned meter reading as a staffing handoff.
+The comparison uses timestamps and configured break windows, not formatted
+labels or worker-name counts. This detects a same-worker leave-and-return
+during productive time, ignores an administrative lunch split, and avoids
+treating an unassigned meter reading as a staffing handoff.
 
 ## Components and data flow
 
 ### Department data preparation
 
-The department route already knows the single-day scoring window and the raw
-scored segment start/end timestamps. It calculates the split decision per work
-center and passes that decision alongside the segment view data.
+The department route already knows the single-day scoring window, the day's
+configured break windows, and the raw scored segment start/end timestamps. It
+uses a pure production-segment helper to normalize display scores, calculates
+the split decision per work center, and passes that decision alongside the
+segment view data.
 
 The visible segment dictionaries remain focused on rendering. No template
 should infer staffing changes from display text.
@@ -110,8 +143,13 @@ No CSS redesign is needed. Existing segment and legacy styles remain in place.
 
 - A full-window scheduled worker uses the original bar.
 - A full-window attendance-backed worker uses the original bar.
+- Morning and afternoon attendance records for the same worker and work center
+  across scheduled lunch use one original bar and one goal line.
+- The combined lunch-spanning goal still excludes lunch minutes.
+- A worker transfer during lunch uses the split runway.
 - Two simultaneous workers use the split runway.
-- One worker with multiple separated segments uses the split runway.
+- One worker with multiple segments separated by productive time uses the
+  split runway.
 - A worker who leaves a live station vacant uses the split runway and keeps
   **No one here now**.
 - A worker who begins after the shift-window start uses the split runway even
@@ -130,11 +168,17 @@ Add tests that prove:
 - one continuous active worker uses the original horizontal bar and target
   line;
 - one continuous completed-day worker uses the original format;
+- same-worker, same-work-center attendance records separated by scheduled
+  lunch combine into one display score, one legacy bar, and one goal line;
+- the combined lunch-spanning goal equals the sum of the two break-adjusted
+  goals and does not add lunch minutes;
+- a different worker returning after lunch still creates a split;
 - a transfer between two workers uses independent segment runways;
 - Humberto leaving Repair 4 vacant still uses the segment runway and shows
   **No one here now**;
 - a late-starting worker uses the segment runway;
-- the same worker leaving and returning uses the segment runway;
+- the same worker leaving and returning across productive time uses the
+  segment runway;
 - overlapping workers use the segment runway;
 - unassigned readings alone do not trigger the segment runway;
 - vertical and TV views follow the same conditional rule;
