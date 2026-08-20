@@ -244,6 +244,50 @@ def test_clock_in_without_mapping_still_creates_attendance(monkeypatch):
     )
 
 
+def test_create_closed_attendance_writes_both_times_before_overtime_status(monkeypatch):
+    fake = MagicMock(return_value=123)
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    created = odoo_client.create_closed_attendance(
+        5,
+        None,
+        datetime(2026, 6, 16, 16, 30, tzinfo=timezone.utc),
+        datetime(2026, 6, 16, 21, 0, tzinfo=timezone.utc),
+    )
+
+    assert created == 123
+    assert fake.call_args_list[0].args == (
+        "hr.attendance", "create",
+        {
+            "employee_id": 5,
+            "check_in": "2026-06-16 16:30:00",
+            "check_out": "2026-06-16 21:00:00",
+            "in_mode": "kiosk",
+            "out_mode": "kiosk",
+            "overtime_status": "approved",
+        },
+    )
+    assert fake.call_count == 1
+
+
+def test_close_historical_attendance_sets_checkout_and_approves(monkeypatch):
+    fake = MagicMock(return_value=True)
+    monkeypatch.setattr(odoo_client, "execute", fake)
+
+    odoo_client.close_historical_attendance(
+        88, datetime(2026, 6, 16, 21, 0, tzinfo=timezone.utc)
+    )
+
+    assert fake.call_args.args == (
+        "hr.attendance", "write", [88],
+        {
+            "check_out": "2026-06-16 21:00:00",
+            "out_mode": "kiosk",
+            "overtime_status": "approved",
+        },
+    )
+
+
 def test_clock_out_approves_regular_hours_after_odoo_computes_no_overtime(monkeypatch):
     fake = MagicMock(side_effect=[True, [{"overtime_hours": 0}], True])
     monkeypatch.setattr(odoo_client, "execute", fake)

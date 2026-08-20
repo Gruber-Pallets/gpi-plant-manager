@@ -518,6 +518,29 @@ def _overtime_status_for_attendance(attendance_id: int) -> str:
     return "to_approve" if overtime_hours > 0 else "approved"
 
 
+def _attendance_create_payload(
+    employee_odoo_id: int, wc_name: str | None, check_in: datetime
+) -> dict[str, Any]:
+    """Build the common kiosk attendance-create payload."""
+    payload: dict[str, Any] = {
+        "employee_id": employee_odoo_id,
+        "check_in": _to_odoo_dt(check_in),
+        "in_mode": "kiosk",
+        "overtime_status": "approved",
+    }
+    wc_field = _kiosk_wc_field()
+    if wc_field:
+        odoo_wc_id = _odoo_work_center_id_for_wc(wc_name)
+        if odoo_wc_id:
+            payload[wc_field] = odoo_wc_id
+    dept_field = _kiosk_department_field()
+    if dept_field:
+        dept_id = _department_id_for_wc(wc_name)
+        if dept_id:
+            payload[dept_field] = dept_id
+    return payload
+
+
 def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
     """Create a new hr.attendance with check_in=ts. Returns the new id.
 
@@ -532,23 +555,44 @@ def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
     when configured (Many2one to hr.department), so reports that group
     hours by department attribute kiosk-created attendance correctly
     even when an employee transfers between departments mid-shift."""
-    payload: dict[str, Any] = {
-        "employee_id": employee_odoo_id,
-        "check_in": _to_odoo_dt(ts),
-        "in_mode": "kiosk",
-        "overtime_status": "approved",
-    }
-    wc_field = _kiosk_wc_field()
-    if wc_field:
-        odoo_wc_id = _odoo_work_center_id_for_wc(wc_name)
-        if odoo_wc_id:
-            payload[wc_field] = odoo_wc_id
-    dept_field = _kiosk_department_field()
-    if dept_field:
-        dept_id = _department_id_for_wc(wc_name)
-        if dept_id:
-            payload[dept_field] = dept_id
-    return execute("hr.attendance", "create", payload)
+    return execute(
+        "hr.attendance", "create", _attendance_create_payload(employee_odoo_id, wc_name, ts)
+    )
+
+
+def create_closed_attendance(
+    employee_odoo_id: int,
+    wc_name: str | None,
+    check_in: datetime,
+    check_out: datetime,
+) -> int:
+    """Create a completed historical kiosk attendance interval.
+
+    Odoo permits a historical closed interval even while the employee has a
+    different current open record. Creating it with both times prevents the
+    open-attendance constraint from blocking a historical lunch return.
+    """
+    payload = _attendance_create_payload(employee_odoo_id, wc_name, check_in)
+    payload["check_out"] = _to_odoo_dt(check_out)
+    payload["out_mode"] = "kiosk"
+    return int(execute("hr.attendance", "create", payload))
+
+
+def close_historical_attendance(attendance_id: int, ts: datetime) -> None:
+    """Close a backfilled interval in one Odoo call.
+
+    The backfill operates on completed past days. Marking overtime approved in
+    the same write is sufficient and avoids extra network calls per repair.
+    """
+    execute(
+        "hr.attendance", "write",
+        [attendance_id],
+        {
+            "check_out": _to_odoo_dt(ts),
+            "out_mode": "kiosk",
+            "overtime_status": "approved",
+        },
+    )
 
 
 def clock_out(attendance_id: int, ts: datetime, *, mode: str = "kiosk") -> None:

@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-20
+
+### Safer lunch repairs
+
+#### Fixes
+
+- **Missed lunches can now be fixed safely.** The app can repair a missed lunch without changing the time a person is clocked in right now.
+
 ## 2026-08-19
 
 ### Default people stay saved
