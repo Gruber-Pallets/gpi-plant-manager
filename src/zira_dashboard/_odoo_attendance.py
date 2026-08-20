@@ -264,6 +264,7 @@ def fetch_attendance_intervals_for_day(
             continue
         out.append(
             {
+                "id": int(row["id"]),
                 "employee_odoo_id": employee_id,
                 "check_in": check_in,
                 "check_out": odoo_dt_to_iso(row.get("check_out")),

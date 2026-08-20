@@ -75,6 +75,7 @@ def test_fetch_attendance_intervals_for_day_skips_zero_duration_rows(monkeypatch
     out = odoo_client.fetch_attendance_intervals_for_day(date(2026, 6, 1))
 
     assert len(out) == 1
+    assert out[0]["id"] == 2
     assert out[0]["employee_odoo_id"] == 8
 
 
