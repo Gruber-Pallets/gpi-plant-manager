@@ -13,10 +13,12 @@ from fastapi.responses import HTMLResponse
 
 from .. import (
     layout_store,
+    production_segments,
     recycling_range,
     settings_store,
     shift_config,
     staffing,
+    time_format,
     timeclock_windows,
     wc_dashboard_data,
     widget_customizer,
@@ -44,6 +46,51 @@ router = APIRouter()
 # this one lives for the process. Cap at 4 workers so we don't starve the DB
 # pool (maxconn=20) or hammer the Zira API on multi-month ranges.
 _RANGE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="dept-range")
+
+
+def _segment_view(score) -> dict:
+    start_local = (
+        score.start_utc.astimezone(shift_config.SITE_TZ)
+        if score.start_utc is not None
+        else None
+    )
+    end_local = (
+        score.end_utc.astimezone(shift_config.SITE_TZ)
+        if score.end_utc is not None
+        else None
+    )
+    if score.person_name is None:
+        time_label = ""
+    elif score.is_active and start_local is not None:
+        time_label = f"since {time_format.fmt_time_short(start_local.isoformat())}"
+    elif start_local is not None and end_local is not None:
+        time_label = time_format.fmt_time_range(
+            start_local.isoformat(), end_local.isoformat()
+        )
+    else:
+        time_label = ""
+    delta = score.actual_units - score.goal_units
+    if score.person_name is None:
+        result_label = "unassigned"
+    elif score.goal_units <= 0:
+        result_label = "no goal"
+    elif round(delta) == 0:
+        result_label = "goal met"
+    else:
+        result_label = f"{abs(round(delta))} {'ahead' if delta > 0 else 'behind'}"
+    return {
+        "segment_id": score.segment_id,
+        "person_name": score.person_name,
+        "person_label": score.person_name or "Unassigned production",
+        "time_label": time_label,
+        "actual_units": score.actual_units,
+        "goal_units": score.goal_units,
+        "runway_units": score.runway_units,
+        "productive_minutes": score.productive_minutes,
+        "is_active": score.is_active,
+        "result": score.result,
+        "result_label": result_label,
+    }
 
 
 def _present_assignments(
@@ -408,6 +455,31 @@ def _department_day_data(
         target_per_hour=target_per_hour,
         productive_minutes=_productive_minutes_less_breakdown,
     )
+    try:
+        credits = production_segments.credit_work_segments(
+            [
+                segment
+                for segment in segments
+                if segment.wc_name in active_wc_names
+            ],
+            wc_totals={r.station.name: r.units for r in active_results},
+            samples_by_wc={
+                r.station.name: list(getattr(r, "samples", ()) or ())
+                for r in active_results
+            },
+            productive_minutes=_productive_minutes_less_breakdown,
+            live_cap_utc=window_end_utc if is_live_dashboard else None,
+        )
+        scored = production_segments.score_work_segments(
+            credits,
+            target_per_hour=target_per_hour,
+        )
+        per_wc_segments = {
+            wc_name: tuple(_segment_view(score) for score in scores)
+            for wc_name, scores in scored.items()
+        }
+    except Exception:
+        per_wc_segments = {}
     per_wc_state = {r.station.name: _state(r, now, is_today_d) for r in active_results}
     per_wc_who = {r.station.name: who_by_wc.get(r.station.name) for r in active_results}
     per_wc_category = {r.station.name: r.station.category for r in active_results}
@@ -424,6 +496,8 @@ def _department_day_data(
         "per_wc_units": per_wc_units,
         "per_wc_downtime": per_wc_downtime,
         "per_wc_expected": per_wc_expected,
+        "per_wc_segments": per_wc_segments,
+        "is_live_dashboard": is_live_dashboard,
         "per_wc_state": per_wc_state,
         "per_wc_who": per_wc_who,
         "per_wc_category": per_wc_category,

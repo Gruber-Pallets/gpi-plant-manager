@@ -21,6 +21,10 @@ def _day(units, who, *, station_obj=None):
         "per_wc_category": {"Dismantler 1": "Dismantler"},
         "per_wc_station_obj": {"Dismantler 1": station_obj or object()},
         "schedule_assignments": {"Dismantler 1": [who]},
+        "per_wc_segments": {
+            "Dismantler 1": ({"person_name": who, "actual_units": units},)
+        },
+        "is_live_dashboard": True,
     }
 
 
@@ -32,6 +36,8 @@ def test_single_day_keeps_who_and_assignments():
     assert result.total_units == 100
     assert result.agg_who_today is item["per_wc_who"]
     assert result.schedule_today_assignments is item["schedule_assignments"]
+    assert result.single_day_segments is item["per_wc_segments"]
+    assert result.single_day_is_live is True
 
 
 def test_multi_day_sums_work_center_metrics_without_single_day_labels():
@@ -52,6 +58,8 @@ def test_multi_day_sums_work_center_metrics_without_single_day_labels():
     assert result.agg_expected == {"Dismantler 1": 160.0}
     assert result.agg_who_today == {}
     assert result.schedule_today_assignments == {}
+    assert result.single_day_segments == {}
+    assert result.single_day_is_live is False
 
 
 def test_aggregation_preserves_day_order_and_later_dict_overwrites():

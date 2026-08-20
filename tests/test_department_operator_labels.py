@@ -44,10 +44,20 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     dismantler = Station("dismantler-2", "Dismantler 2", "Dismantler", "Recycling")
     rows = [
         SimpleNamespace(
-            station=repair, units=34, downtime_minutes=0, active_intervals=(), last_reading_at=None
+            station=repair,
+            units=34,
+            downtime_minutes=0,
+            active_intervals=(),
+            last_reading_at=None,
+            samples=((datetime(2026, 6, 2, 12, 2, tzinfo=timezone.utc), 34),),
         ),
         SimpleNamespace(
-            station=dismantler, units=384, downtime_minutes=0, active_intervals=(), last_reading_at=None
+            station=dismantler,
+            units=384,
+            downtime_minutes=0,
+            active_intervals=(),
+            last_reading_at=None,
+            samples=((datetime(2026, 6, 2, 12, 10, tzinfo=timezone.utc), 384),),
         ),
     ]
 
@@ -69,7 +79,18 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     )
     monkeypatch.setattr(settings_store, "station_target", lambda _station: 60)
     monkeypatch.setattr(departments, "progress_buckets", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(attendance, "partial_off_intervals", lambda _d: {})
+    monkeypatch.setattr(
+        attendance,
+        "partial_off_intervals",
+        lambda _d: {
+            "Jesus G.": [
+                (
+                    datetime(2026, 6, 2, 13, tzinfo=timezone.utc),
+                    datetime(2026, 6, 2, 13, 30, tzinfo=timezone.utc),
+                )
+            ]
+        },
+    )
     monkeypatch.setattr(
         timeclock_windows,
         "attendance_windows_for_day",
@@ -82,9 +103,22 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         },
     )
     monkeypatch.setattr(wc_attributions, "creditable_for_day", lambda _d: [])
-    monkeypatch.setattr(wc_attributions, "breakdown_windows_for_day", lambda _d: {})
     monkeypatch.setattr(
-        machine_breakdown, "excluded_minutes_overlapping", lambda *_args, **_kwargs: 0.0
+        wc_attributions,
+        "breakdown_windows_for_day",
+        lambda _d: {
+            ("Jesus G.", "Repair 2"): [
+                (
+                    datetime(2026, 6, 2, 12, tzinfo=timezone.utc),
+                    datetime(2026, 6, 2, 12, 2, tzinfo=timezone.utc),
+                )
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        machine_breakdown,
+        "excluded_minutes_overlapping",
+        lambda windows, *_args, **_kwargs: 2.0 if windows else 0.0,
     )
 
     live = departments._department_day_data(
@@ -101,7 +135,26 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     }
     assert live["active_wc_names"] == {"Repair 2", "Dismantler 2"}
     assert live["total_recycling_people"] == 1
-    assert live["total_man_hours"] == 7.0
+    assert live["total_man_hours"] == 6.5
+
+    repair_score = live["per_wc_segments"]["Repair 2"][0]
+    assert repair_score["person_name"] == "Jesus G."
+    assert repair_score["actual_units"] == 34.0
+    assert repair_score["goal_units"] == 3.0
+    assert repair_score["is_active"] is False
+    assert repair_score["time_label"] == "7-7:05a"
+
+    dismantler_score = live["per_wc_segments"]["Dismantler 2"][0]
+    assert dismantler_score["person_name"] == "Jesus G."
+    assert dismantler_score["actual_units"] == 384.0
+    assert dismantler_score["goal_units"] == 415.0
+    assert dismantler_score["is_active"] is True
+    assert dismantler_score["time_label"] == "since 7:05a"
+    assert live["is_live_dashboard"] is True
+    assert live["per_wc_expected"] == {
+        "Repair 2": 3.0,
+        "Dismantler 2": 415.0,
+    }
 
     after_shift = departments._department_day_data(
         day,
@@ -115,6 +168,23 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         "Repair 2": "Jesus G.",
         "Dismantler 2": "Jesus G.",
     }
+
+    from zira_dashboard import production_segments
+
+    def fail_credit(*_args, **_kwargs):
+        raise RuntimeError("sample source unavailable")
+
+    monkeypatch.setattr(production_segments, "credit_work_segments", fail_credit)
+    fallback = departments._department_day_data(
+        day,
+        datetime(2026, 6, 2, 19, tzinfo=timezone.utc),
+        True,
+        stations=[repair, dismantler],
+        labor_department="Recycled",
+        group_categories=("Repair", "Dismantler"),
+    )
+    assert fallback["per_wc_segments"] == {}
+    assert fallback["per_wc_units"] == {"Repair 2": 34, "Dismantler 2": 384}
 
 
 def test_department_day_data_uses_latest_open_odoo_work_center(monkeypatch):
