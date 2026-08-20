@@ -15,7 +15,7 @@ def _html():
 
 
 def _render_new(*, customs=None, new_bars=None, configured_new_meter_count=1,
-                new_progress=None):
+                new_progress=None, tv_mode=False):
     """Render the actual New template with only the dashboard context it needs.
 
     This deliberately exercises Jinja rather than checking template source so
@@ -25,7 +25,7 @@ def _render_new(*, customs=None, new_bars=None, configured_new_meter_count=1,
     return templates.get_template("new_dept.html").render(
         request=request,
         static_v=lambda path: "test",
-        tv_mode=False,
+        tv_mode=tv_mode,
         tv_theme="dark",
         window="today",
         custom_range_active=False,
@@ -42,6 +42,9 @@ def _render_new(*, customs=None, new_bars=None, configured_new_meter_count=1,
         uptime_pct=0,
         new_people=0,
         is_range=False,
+        is_today=True,
+        now_label="2:41",
+        shift_start_label="07:00",
         new_progress=new_progress or [
             {"label": "7:00", "actual": 4, "target": 6, "in_progress": False},
         ],
@@ -55,6 +58,56 @@ def _render_new(*, customs=None, new_bars=None, configured_new_meter_count=1,
         goat_alerts_active=[],
         goat_contenders=[],
     )
+
+
+def _segmented_bar():
+    return {
+        "name": "Repair 4",
+        "who": None,
+        "units": 548,
+        "expected": 725,
+        "pct": 68.0,
+        "target_pct": None,
+        "pct_of_target": 75.6,
+        "color": None,
+        "downtime_minutes": 0,
+        "has_segments": True,
+        "no_one_here_now": True,
+        "segments": [
+            {
+                "person_name": "Humberto S.",
+                "person_label": "Humberto S.",
+                "time_label": "7a-2:33p",
+                "actual_units": 516.0,
+                "goal_units": 700.0,
+                "result": "behind",
+                "result_label": "184 behind",
+                "is_active": False,
+                "start_pct": 0.0,
+                "actual_pct": 59.0,
+                "shortfall_start_pct": 59.0,
+                "shortfall_pct": 21.0,
+                "finish_pct": 80.0,
+                "label_below": False,
+            },
+            {
+                "person_name": "Ana M.",
+                "person_label": "Ana M.",
+                "time_label": "since 2:35p",
+                "actual_units": 32.0,
+                "goal_units": 25.0,
+                "result": "ahead",
+                "result_label": "7 ahead",
+                "is_active": True,
+                "start_pct": 80.0,
+                "actual_pct": 15.0,
+                "shortfall_start_pct": 95.0,
+                "shortfall_pct": 0.0,
+                "finish_pct": 92.0,
+                "label_below": True,
+            },
+        ],
+    }
 
 
 def test_new_has_full_recycling_range_toolbar():
@@ -157,3 +210,47 @@ def test_new_empty_state_distinguishes_unconfigured_meters_from_no_readings():
 
     assert "Configure a Zira meter" in unconfigured
     assert "No readings received" in offline
+
+
+def test_new_horizontal_bar_renders_worker_segments_and_finish_states():
+    html = _render_new(new_bars=[_segmented_bar()])
+    assert 'class="worker-segment-fill result-behind"' in html
+    assert 'class="worker-segment-shortfall"' in html
+    assert 'class="worker-segment-goal completed"' in html
+    assert 'class="worker-segment-goal live"' in html
+    assert "Humberto S." in html and "7a-2:33p" in html
+    assert "Ana M." in html and "since 2:35p" in html
+    assert "184 behind" in html and "7 ahead" in html
+    assert 'class="worker-segment-result"' in html
+    assert "516/700" in html and "32/25" in html
+    assert "No one here now" in html
+    assert 'class="bar-target-line"' not in html
+
+
+def test_new_segmented_bar_keeps_widget_number_position():
+    html = _render_new(
+        customs={"new-bars": {"number_position": "inside"}},
+        new_bars=[_segmented_bar()],
+    )
+    assert 'class="segment-total in"' in html
+    assert ">548<" in html
+
+
+def test_new_unsegmented_bar_keeps_legacy_fill_and_target():
+    bar = _segmented_bar()
+    bar.update(
+        has_segments=False,
+        segments=[],
+        no_one_here_now=False,
+        target_pct=80.0,
+    )
+    html = _render_new(new_bars=[bar])
+    assert 'class="bar-fill"' in html
+    assert 'class="bar-target-line"' in html
+
+
+def test_new_tv_keeps_full_worker_text_visible_in_shared_markup():
+    html = _render_new(tv_mode=True, new_bars=[_segmented_bar()])
+    assert "Humberto S." in html and "7a-2:33p" in html
+    assert "516/700" in html and "184 behind" in html
+    assert "Ana M." in html and "32/25" in html and "7 ahead" in html

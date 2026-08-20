@@ -57,6 +57,9 @@
         <div class="name">
           {% if is_range %}
             <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
+          {% elif b.no_one_here_now %}
+            <span class="name-primary current-empty">No one here now</span>
+            <span class="name-secondary">{{ b.name }}</span>
           {% elif b.who and b.who != b.name %}
             {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
             {{ operator_name(b.who, operator_href, true) }}
@@ -72,16 +75,56 @@
           {% endif %}
         </div>
         <div class="bar-track">
-          <div class="bar-fill" style="width: {{ b.pct }}%; background: {{ fill_color }}">
-            {% if numpos == 'inside' %}<span class="in">{{ b.units }}</span>{% endif %}
-            {% if numpos == 'bar'    %}<span class="edge">{{ b.units }}</span>{% endif %}
-          </div>
-          {% if b.target_pct is not none %}<div class="bar-target-line" style="left: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
+          {% if b.has_segments %}
+            {% for s in b.segments %}
+              {% if s.actual_pct > 0 %}
+                <div class="worker-segment-fill result-{{ s.result }}"
+                     style="left:{{ s.start_pct }}%;width:{{ s.actual_pct }}%"
+                     title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }} / {{ s.goal_units|round|int }} · {{ s.result_label }}">
+                  {% if not s.label_below %}
+                    <span class="worker-segment-name">
+                      {{ s.person_label }}
+                      <small class="worker-segment-result">
+                        {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
+                      </small>
+                    </span>
+                  {% endif %}
+                </div>
+              {% endif %}
+              {% if s.shortfall_pct > 0 %}
+                <div class="worker-segment-shortfall"
+                     style="left:{{ s.shortfall_start_pct }}%;width:{{ s.shortfall_pct }}%"
+                     aria-hidden="true"></div>
+              {% endif %}
+              {% if s.finish_pct is not none %}
+                <div class="worker-segment-goal {{ 'live' if s.is_active else 'completed' }}"
+                     style="left:{{ s.finish_pct }}%"
+                     title="{{ 'Goal now' if s.is_active else 'Finish goal' }} {{ s.goal_units|round|int }}"></div>
+              {% endif %}
+            {% endfor %}
+            {% if numpos == 'inside' %}<span class="segment-total in">{{ b.units }}</span>{% endif %}
+            {% if numpos == 'bar' %}<span class="segment-total edge">{{ b.units }}</span>{% endif %}
+          {% else %}
+            <div class="bar-fill" style="width: {{ b.pct }}%; background: {{ fill_color }}">
+              {% if numpos == 'inside' %}<span class="in">{{ b.units }}</span>{% endif %}
+              {% if numpos == 'bar'    %}<span class="edge">{{ b.units }}</span>{% endif %}
+            </div>
+            {% if b.target_pct is not none %}<div class="bar-target-line" style="left: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
+          {% endif %}
         </div>
+        {% if b.has_segments %}
+          <div class="worker-segment-labels">
+            {% for s in b.segments if s.label_below %}
+              <span class="worker-segment-callout result-{{ s.result }}">
+                {{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
+              </span>
+            {% endfor %}
+          </div>
+        {% endif %}
         {% if numpos == 'widget' %}<div class="val">{{ b.units }}{% if b.expected %}<span class="pct">/{{ b.expected }}</span>{% endif %}</div>{% endif %}
       </div>
     {% endfor %}
-    {% if widget_target_pct is not none and not is_range %}
+    {% if widget_target_pct is not none and not is_range and not (items | selectattr('has_segments') | list) %}
       <div class="bar-row axis-row numpos-{{ numpos }}">
         <div></div>
         <div class="axis-track">
