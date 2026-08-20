@@ -36,6 +36,13 @@
 - Every task must leave `main` independently deployable, commit only scoped files, add the exact plain-language What's New note assigned below, and push the commit to `origin/main`.
 - No rollout command that reads production Odoo may be executed without Dale's explicit approval. No production Odoo write, gate change, credential change, Studio change, or historical backfill may be performed without its separately required approval.
 
+## Approved Pre-Flight Resolutions
+
+- `Projection.fields` contains nonbinary values only. Base64 image values exist only in the fresh dictionary returned by `Projection.dispatch_fields()` immediately before an RPC.
+- Employee-resolution warnings are persisted against the exact immutable projection version being processed, not a later version read from the feedback row.
+- Task 11 may add the narrow quarantine-disposition persistence functions to `feedback_sync_store.py`; operator actions belong in the sync store rather than the CLI.
+- If a write gate closes after dispatch is marked but before the allowlisted wrapper calls Odoo, record a definitive failure and report `retry_scheduled`; do not classify that state as deferred or ambiguous.
+
 ## File and Responsibility Map
 
 **Create:**
@@ -1480,7 +1487,7 @@ def _manifest(fields: dict, binaries: dict[str, BinaryEvidence]) -> tuple[dict, 
     return value, hashlib.sha256(encoded).hexdigest()
 ```
 
-`build_projection` escapes the note with `html.escape(note, quote=True)` and wraps it in one `<p>`. It puts base64 image strings in `fields` only for dispatch, while manifest `fields` excludes the two binary strings and `binary_evidence` carries only hash/length. Keep `Projection.dispatch_fields()` responsible for adding base64 at the last moment so no stored object accidentally serializes raw image/base64 into JSON.
+`build_projection` escapes the note with `html.escape(note, quote=True)` and wraps it in one `<p>`. Its `fields` contain nonbinary values only; `Projection.dispatch_fields()` adds base64 image strings to a fresh in-memory dictionary only for dispatch. Manifest `fields` excludes the two binary strings and `binary_evidence` carries only hash/length, so no stored object accidentally serializes raw image/base64 into JSON.
 
 - [ ] **Step 4: Implement exact normalized employee resolution**
 
@@ -1974,7 +1981,11 @@ def build_projection_from_snapshot(snapshot, *, client, contract):
             client,
             email,
             feedback_id=snapshot.feedback["id"],
-            warn=feedback_store.record_sync_warning,
+            warn=lambda feedback_id, warning_class: feedback_store.record_sync_warning(
+                feedback_id,
+                snapshot.feedback["projection_version"],
+                warning_class,
+            ),
         )
 
     return build_projection(
@@ -1986,8 +1997,10 @@ def build_projection_from_snapshot(snapshot, *, client, contract):
     )
 ```
 
-`record_sync_warning(feedback_id, warning_class)` stores only those two safe
-values; it never stores or logs an email address. Then use this control flow;
+`record_sync_warning(feedback_id, projection_version, warning_class)` stores only
+those three safe values; it never stores or logs an email address. The version
+must come from the immutable snapshot, not a fresh read of the mutable feedback
+row. Then use this control flow;
 every store function opens and closes its own short transaction:
 
 ```python
@@ -2064,7 +2077,7 @@ def process_claim(claim: Claim, *, client: ImprovementsClient, now: datetime) ->
         sync_store.record_definitive_failure(
             claim, attempt, "gate_closed_before_rpc", "mutation was not called", now
         )
-        return "deferred"
+        return "retry_scheduled"
     except xmlrpc.client.Fault as error:
         sync_store.record_definitive_failure(claim, attempt, "odoo_fault", safe_fault(error), now)
         return "retry_scheduled"
@@ -2502,6 +2515,7 @@ git push origin main
 
 - Create: `scripts/feedback_odoo_rollout.py`
 - Create: `docs/odoo-2s-feedback-operations.md`
+- Modify: `src/zira_dashboard/feedback_sync_store.py`
 - Modify: `.env.example`
 - Modify: `README.md`
 - Modify: `CHANGELOG.md`
@@ -2578,6 +2592,11 @@ def require_flag(value: bool, message: str) -> None:
 ```
 
 `preflight`, `dry-run`, `migrate-legacy`, and `canary-report` require `--confirm-read-only` before constructing an Odoo client. `migrate-legacy` additionally requires `--confirm-local-migration`. `enqueue-history` requires `--confirm-local-backfill`. `reconcile` and quarantine listing read only local state.
+
+Add narrow quarantine-listing and disposition functions to
+`feedback_sync_store.py`. The CLI validates arguments and formats reports, but
+all row locking, state validation, append-only operator-audit insertion, and
+desired-version changes remain in short sync-store transactions.
 
 Normalize `--reviewer` by trimming it and reject blank values. Store it only in
 the local operator-action audit; do not print it in reports. Quarantine
