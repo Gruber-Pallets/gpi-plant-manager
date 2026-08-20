@@ -17,6 +17,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 #### Improvements
 
 - **A safety plan is ready for sharing feedback with the improvements list.** The plan keeps this app's feedback separate from other apps and keeps feedback saved when Odoo is down. Nothing is being sent yet.
+- **The build steps for the safer feedback connection are now ready.** Each small step has its own safety check, and the Odoo connection will still start turned off.
 
 ### Production follows each worker
 
