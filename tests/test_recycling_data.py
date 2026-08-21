@@ -192,6 +192,7 @@ def test_build_bars_places_independent_runways_on_one_scale():
         agg_downtime={},
         agg_segments=segments,
         agg_segment_display={"Repair 4": True},
+        agg_producers={"Repair 4": ("Humberto S.", "Ana M.")},
         is_live=True,
     )
     (bar,) = bars
@@ -204,10 +205,13 @@ def test_build_bars_places_independent_runways_on_one_scale():
     assert ana["start_pct"] == 700.0 / scale * 100
     assert ana["finish_pct"] == 725.0 / scale * 100
     assert bar["who"] == "Ana M."
+    assert bar["producer_names"] == ("Humberto S.", "Ana M.")
+    assert bar["sole_producer_name"] is None
+    assert bar["show_segment_worker_names"] is True
     assert bar["no_one_here_now"] is False
 
 
-def test_build_bars_marks_live_station_empty_when_history_remains():
+def test_build_bars_keeps_stopped_sole_producer_on_left_with_segment_geometry():
     bars = rd.build_bars(
         "Repair",
         agg_active_names={"Repair 4"},
@@ -233,12 +237,59 @@ def test_build_bars_marks_live_station_empty_when_history_remains():
             )
         },
         agg_segment_display={"Repair 4": True},
+        agg_producers={"Repair 4": ("Humberto S.",)},
         is_live=True,
     )
-    assert bars[0]["uses_split_format"] is True
-    assert bars[0]["has_segments"] is True
-    assert bars[0]["target_pct"] is None
-    assert bars[0]["no_one_here_now"] is True
+    bar = bars[0]
+    assert bar["uses_split_format"] is True
+    assert bar["has_segments"] is True
+    assert bar["target_pct"] is None
+    assert bar["who"] is None
+    assert bar["sole_producer_name"] == "Humberto S."
+    assert bar["show_segment_worker_names"] is False
+    assert bar["no_one_here_now"] is False
+    assert bar["segments"][0]["finish_pct"] is not None
+
+
+def test_build_bars_unassigned_units_do_not_displace_sole_named_producer():
+    bars = rd.build_bars(
+        "Repair",
+        agg_active_names={"Repair 1"},
+        agg_category={"Repair 1": "Repair"},
+        agg_units={"Repair 1": 638},
+        agg_expected={"Repair 1": 611},
+        agg_who_today={},
+        is_range=False,
+        agg_downtime={},
+        agg_segments={
+            "Repair 1": (
+                {
+                    "person_name": "Jose O.",
+                    "actual_units": 635.0,
+                    "goal_units": 611.0,
+                    "runway_units": 635.0,
+                    "is_active": False,
+                    "result": "ahead",
+                },
+                {
+                    "person_name": None,
+                    "actual_units": 3.0,
+                    "goal_units": 0.0,
+                    "runway_units": 3.0,
+                    "is_active": False,
+                    "result": "neutral",
+                },
+            )
+        },
+        agg_segment_display={"Repair 1": True},
+        agg_producers={"Repair 1": ("Jose O.",)},
+        is_live=True,
+    )
+
+    (bar,) = bars
+    assert bar["sole_producer_name"] == "Jose O."
+    assert bar["show_segment_worker_names"] is False
+    assert bar["no_one_here_now"] is False
 
 
 def test_range_bars_ignore_single_day_segments():

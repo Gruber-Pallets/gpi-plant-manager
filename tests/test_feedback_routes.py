@@ -190,6 +190,6 @@ def test_post_feedback_drops_unsafe_page_url(monkeypatch):
     assert captured["page_url"] is None
 
 
-def test_admin_feedback_route_removed():
+def test_admin_feedback_route_requires_super_admin():
     response = client.get("/admin/feedback")
-    assert response.status_code == 404
+    assert response.status_code == 403

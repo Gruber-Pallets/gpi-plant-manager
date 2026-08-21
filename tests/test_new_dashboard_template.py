@@ -74,6 +74,9 @@ def _segmented_bar():
         "downtime_minutes": 0,
         "has_segments": True,
         "no_one_here_now": True,
+        "producer_names": ("Humberto S.", "Ana M."),
+        "sole_producer_name": None,
+        "show_segment_worker_names": True,
         "segments": [
             {
                 "person_name": "Humberto S.",
@@ -111,6 +114,21 @@ def _segmented_bar():
     }
 
 
+def _stopped_sole_producer_bar():
+    bar = _segmented_bar()
+    bar.update(
+        who=None,
+        units=516,
+        expected=700,
+        producer_names=("Humberto S.",),
+        sole_producer_name="Humberto S.",
+        show_segment_worker_names=False,
+        no_one_here_now=False,
+        segments=[bar["segments"][0]],
+    )
+    return bar
+
+
 def _legacy_worker_bar():
     bar = _segmented_bar()
     bar.update(
@@ -124,6 +142,9 @@ def _legacy_worker_bar():
         has_worker_history=True,
         uses_split_format=False,
         no_one_here_now=False,
+        producer_names=("Jesus G.",),
+        sole_producer_name="Jesus G.",
+        show_segment_worker_names=False,
     )
     return bar
 
@@ -243,6 +264,60 @@ def test_new_horizontal_bar_renders_worker_segments_and_finish_states():
     assert "516/700" in html and "32/25" in html
     assert "No one here now" in html
     assert 'class="bar-target-line"' not in html
+
+
+def test_stopped_sole_producer_name_is_left_while_finish_marker_stays_in_bar():
+    html = _render_new(new_bars=[_stopped_sole_producer_bar()])
+
+    assert '<span class="name-primary">Humberto S.</span>' in html
+    assert '<span class="name-secondary">Repair 4</span>' in html
+    assert 'class="worker-segment-goal completed"' in html
+    assert "7a-2:33p" in html and "516/700" in html and "184 behind" in html
+    assert '<span class="worker-segment-person">Humberto S.</span>' not in html
+    assert "No one here now" not in html
+
+
+def test_multiple_producers_keep_each_name_inside_horizontal_bar():
+    html = _render_new(new_bars=[_segmented_bar()])
+
+    assert '<span class="worker-segment-person">Humberto S.</span>' in html
+    assert '<span class="worker-segment-person">Ana M.</span>' in html
+    assert '<span class="name-primary">Humberto S.</span>' not in html
+    assert '<span class="name-primary">Ana M.</span>' not in html
+
+
+def test_active_multi_producer_row_identifies_work_center_on_left():
+    bar = _segmented_bar()
+    bar.update(who="Ana M.", no_one_here_now=False)
+
+    html = _render_new(new_bars=[bar])
+
+    assert '<span class="name-primary">Repair 4</span>' in html
+    assert '<span class="worker-segment-person">Humberto S.</span>' in html
+    assert '<span class="worker-segment-person">Ana M.</span>' in html
+    assert '<span class="name-primary">Ana M.</span>' not in html
+
+
+def test_vacant_multi_producer_row_keeps_empty_status_on_left():
+    html = _render_new(new_bars=[_segmented_bar()])
+
+    assert '<span class="name-primary current-empty">No one here now</span>' in html
+    assert '<span class="worker-segment-person">Humberto S.</span>' in html
+    assert '<span class="worker-segment-person">Ana M.</span>' in html
+
+
+def test_vertical_and_tv_views_keep_sole_producer_left_without_duplication():
+    vertical = _render_new(
+        customs={"new-bars": {"orientation": "vertical"}},
+        new_bars=[_stopped_sole_producer_bar()],
+    )
+    tv = _render_new(tv_mode=True, new_bars=[_stopped_sole_producer_bar()])
+
+    for html in (vertical, tv):
+        assert '<span class="name-primary">Humberto S.</span>' in html
+        assert '<span class="worker-segment-person">Humberto S.</span>' not in html
+        assert "7a-2:33p" in html and "516/700" in html
+        assert 'worker-segment-goal completed' in html
 
 
 def test_new_segmented_bar_keeps_widget_number_position():

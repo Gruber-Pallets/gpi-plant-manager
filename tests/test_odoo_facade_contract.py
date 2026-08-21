@@ -274,6 +274,7 @@ def test_facade_department_helper_is_resolved_at_call_time(monkeypatch):
     calls = []
     monkeypatch.setenv("ODOO_KIOSK_DEPARTMENT_FIELD", "x_kiosk_department_id")
     monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda wc: 44)
+    monkeypatch.setattr(odoo_client, "_odoo_work_center_id_for_wc", lambda wc: 77)
     monkeypatch.setattr(
         odoo_client,
         "execute",

@@ -78,6 +78,7 @@ def build_bars(
     agg_downtime: dict,
     agg_segments: dict | None = None,
     agg_segment_display: dict | None = None,
+    agg_producers: dict[str, tuple[str, ...]] | None = None,
     is_live: bool = True,
 ) -> list[dict]:
     """Per-WC bar rows for a category, with progress color + scaled bar widths.
@@ -109,10 +110,19 @@ def build_bars(
 
     agg_segments = agg_segments or {}
     agg_segment_display = agg_segment_display or {}
+    agg_producers = agg_producers or {}
     for row in out:
         row["uses_split_format"] = bool(
             not is_range and agg_segment_display.get(row["name"], False)
         )
+        producer_names = (
+            tuple(agg_producers.get(row["name"], ())) if not is_range else ()
+        )
+        row["producer_names"] = producer_names
+        row["sole_producer_name"] = (
+            producer_names[0] if len(producer_names) == 1 else None
+        )
+        row["show_segment_worker_names"] = len(producer_names) >= 2
     spans = {
         row["name"]: sum(
             float(segment.get("runway_units", 0.0) or 0.0)
@@ -167,6 +177,7 @@ def build_bars(
         row["no_one_here_now"] = bool(
             is_live
             and row["has_segments"]
+            and row["show_segment_worker_names"]
             and not row["who"]
             and row["has_worker_history"]
         )

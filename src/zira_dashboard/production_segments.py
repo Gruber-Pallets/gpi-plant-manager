@@ -131,6 +131,21 @@ def coalesce_display_scores(
     return tuple(sorted([*merged, *unassigned], key=_score_order))
 
 
+def distinct_named_producers(
+    scores: Sequence[SegmentScore],
+) -> tuple[str, ...]:
+    """Return named producers once each, in scored-segment time order."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for score in sorted(scores, key=_score_order):
+        person_name = score.person_name
+        if not person_name or person_name in seen:
+            continue
+        seen.add(person_name)
+        names.append(person_name)
+    return tuple(names)
+
+
 def worker_coverage_is_split(
     scores: Sequence[SegmentScore],
     *,

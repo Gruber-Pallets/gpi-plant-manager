@@ -30,6 +30,7 @@ from .routes import (
     dashboard,
     exceptions,
     feedback,
+    feedback_admin,
     forklift_leaderboards,
     goat_watch,
     new_leaderboard,
@@ -611,6 +612,7 @@ app.include_router(object_api.router)
 app.include_router(api_layout.router)
 app.include_router(changelog.router)
 app.include_router(feedback.router)
+app.include_router(feedback_admin.router)
 app.include_router(admin.router)
 app.include_router(goat_watch.router)
 app.include_router(timeclock.router)

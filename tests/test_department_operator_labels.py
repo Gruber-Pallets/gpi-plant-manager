@@ -159,6 +159,10 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         "Repair 2": True,
         "Dismantler 2": True,
     }
+    assert live["per_wc_producers"] == {
+        "Repair 2": ("Jesus G.",),
+        "Dismantler 2": ("Jesus G.",),
+    }
 
     after_shift = departments._department_day_data(
         day,
@@ -227,7 +231,7 @@ def test_department_segment_display_keeps_scheduled_lunch_continuous():
         active=True,
     )
 
-    views, decisions, live_workers = departments._prepare_segment_display(
+    views, decisions, producers, live_workers = departments._prepare_segment_display(
         {"Dismantler 1": (morning, afternoon)},
         break_windows=((
             datetime(2026, 6, 2, 16, tzinfo=timezone.utc),
@@ -242,6 +246,7 @@ def test_department_segment_display_keeps_scheduled_lunch_continuous():
     assert views["Dismantler 1"][0]["time_label"] == "since 7a"
     assert views["Dismantler 1"][0]["goal_units"] == 520
     assert decisions == {"Dismantler 1": False}
+    assert producers == {"Dismantler 1": ("Jesus G.",)}
     assert live_workers == {"Dismantler 1": "Jesus G."}
 
 

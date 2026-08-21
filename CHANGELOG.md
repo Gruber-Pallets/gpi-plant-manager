@@ -12,6 +12,19 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-20
 
+### Worker names stay easy to find
+
+#### Improvements
+
+- **One worker's name now stays beside the work center.** Their stop line and score still show in the bar. When more than one person made pallets there, every name stays with that person's part of the bar.
+
+### Feedback progress
+
+#### Features
+
+- **Feedback can now be worked on and finished inside Plant Manager.** The person handling it can mark progress, explain the result, and add an after picture.
+- **Feedback now stops safely if its sharing step is missing or busy.** Old feedback stays separate, and two helpers cannot share the same message at the same time.
+
 ### Feedback stays safe
 
 #### Fixes
@@ -32,6 +45,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **Feedback progress cannot lose its step or mix with another message.** Each saved step now stays with the right feedback.
 - **Feedback pictures are cleaned and resized before they are saved.** This removes hidden picture details and avoids very large files.
 - **Feedback picture safety checks now cover more file kinds and size limits.** They make sure hidden details are removed, turned pictures face the right way, and clear backgrounds turn white.
+- **The new Odoo connection has its own locked door.** It cannot change other kinds of Odoo records, and it is still turned off.
+- **The new Odoo connection now checks every door before it can change feedback.** It keeps sign-ins private, requires the right feedback name and number, and refuses unsafe links or employee fields.
+- **The Odoo connection now remembers exactly what it is allowed to change.** It stops if any name, number, or detail is different.
+- **Plant Manager now knows exactly how feedback will fit the shared improvements list.** Each app gets its own name and number so records do not mix.
 
 ### Auto-Lunch stays visible
 
