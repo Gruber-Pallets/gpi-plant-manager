@@ -120,6 +120,10 @@ def _prepare_segment_display(
         wc_name: tuple(_segment_view(score) for score in scores)
         for wc_name, scores in display_scored.items()
     }
+    producers = {
+        wc_name: production_segments.distinct_named_producers(scores)
+        for wc_name, scores in display_scored.items()
+    }
     continuous_live_workers = {
         wc_name: next(
             score.person_name
@@ -131,7 +135,7 @@ def _prepare_segment_display(
         and not decisions.get(wc_name, False)
         and any(score.person_name is not None for score in scores)
     }
-    return views, decisions, continuous_live_workers
+    return views, decisions, producers, continuous_live_workers
 
 
 def _present_assignments(
@@ -515,18 +519,22 @@ def _department_day_data(
             credits,
             target_per_hour=target_per_hour,
         )
-        per_wc_segments, per_wc_segment_display, continuous_live_workers = (
-            _prepare_segment_display(
-                scored,
-                break_windows=breaks_utc,
-                window_start_utc=window_start_utc,
-                window_end_utc=window_end_utc,
-                is_live=is_live_dashboard,
-            )
+        (
+            per_wc_segments,
+            per_wc_segment_display,
+            per_wc_producers,
+            continuous_live_workers,
+        ) = _prepare_segment_display(
+            scored,
+            break_windows=breaks_utc,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            is_live=is_live_dashboard,
         )
     except Exception:
         per_wc_segments = {}
         per_wc_segment_display = {}
+        per_wc_producers = {}
         continuous_live_workers = {}
     per_wc_state = {r.station.name: _state(r, now, is_today_d) for r in active_results}
     per_wc_who = {r.station.name: who_by_wc.get(r.station.name) for r in active_results}
@@ -549,6 +557,7 @@ def _department_day_data(
         "per_wc_expected": per_wc_expected,
         "per_wc_segments": per_wc_segments,
         "per_wc_segment_display": per_wc_segment_display,
+        "per_wc_producers": per_wc_producers,
         "is_live_dashboard": is_live_dashboard,
         "per_wc_state": per_wc_state,
         "per_wc_who": per_wc_who,
