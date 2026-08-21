@@ -46,6 +46,8 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **Feedback pictures are cleaned and resized before they are saved.** This removes hidden picture details and avoids very large files.
 - **Feedback picture safety checks now cover more file kinds and size limits.** They make sure hidden details are removed, turned pictures face the right way, and clear backgrounds turn white.
 - **The new Odoo connection has its own locked door.** It cannot change other kinds of Odoo records, and it is still turned off.
+- **The new Odoo connection now checks every door before it can change feedback.** It keeps sign-ins private, requires the right feedback name and number, and refuses unsafe links or employee fields.
+- **The Odoo connection now remembers exactly what it is allowed to change.** It stops if any name, number, or detail is different.
 
 ### Auto-Lunch safety plan
 

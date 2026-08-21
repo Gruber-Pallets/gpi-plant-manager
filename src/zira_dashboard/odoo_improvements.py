@@ -68,8 +68,10 @@ _DATETIME_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}",
     re.ASCII,
 )
+_MAX_IDENTIFIER = 9_223_372_036_854_775_807
+_MAX_IDENTIFIER_DIGITS = len(str(_MAX_IDENTIFIER))
 _XMLRPC_TIMEOUT_SECONDS = 15
-_CONTRACT_ATTRIBUTES = ["type", "readonly", "selection"]
+_CONTRACT_ATTRIBUTES = ["type", "readonly", "selection", "relation"]
 _READ_FIELDS = frozenset({"id"}) | TARGET_FIELDS
 _EXPECTED_TYPES = {
     "x_name": "char",
@@ -136,10 +138,15 @@ class ImprovementsConfig:
         if missing:
             raise ImprovementsConfigError("missing dedicated Odoo settings: " + ", ".join(missing))
 
-        url = values["url"].rstrip("/")
-        parsed = urlsplit(url)
+        raw_url = values["url"].rstrip("/")
+        parsed = None
+        try:
+            parsed = urlsplit(raw_url)
+        except ValueError:
+            pass
         if (
-            parsed.scheme not in {"http", "https"}
+            parsed is None
+            or parsed.scheme not in {"http", "https"}
             or not parsed.hostname
             or parsed.username is not None
             or parsed.password is not None
@@ -149,7 +156,7 @@ class ImprovementsConfig:
             raise ImprovementsConfigError(
                 "ODOO_IMPROVEMENTS_URL must be a plain HTTP or HTTPS base URL"
             )
-        values["url"] = url
+        values["url"] = parsed._replace(scheme=parsed.scheme.casefold()).geturl().rstrip("/")
         return cls(**values)
 
 
@@ -157,6 +164,17 @@ class ImprovementsConfig:
 class ImprovementContract:
     start_type: str
     stop_type: str
+
+
+@dataclass(frozen=True, repr=False)
+class _MutationBinding:
+    method: str
+    feedback_id: int
+    remote_id: int | None
+    fields: tuple[tuple[str, Any], ...]
+
+    def __repr__(self) -> str:
+        return "_MutationBinding(<redacted>)"
 
 
 class _TimeoutTransport(xmlrpc.client.Transport):
@@ -174,19 +192,35 @@ class _TimeoutSafeTransport(xmlrpc.client.SafeTransport):
 
 
 def _server_proxy(url: str) -> xmlrpc.client.ServerProxy:
-    transport = _TimeoutSafeTransport() if url.startswith("https://") else _TimeoutTransport()
+    transport = (
+        _TimeoutSafeTransport()
+        if urlsplit(url).scheme.casefold() == "https"
+        else _TimeoutTransport()
+    )
     return xmlrpc.client.ServerProxy(url, transport=transport)
 
 
-def _raise_safe_transport_error(error: Exception) -> None:
-    """Preserve retry classification without echoing a URL or remote payload."""
+def _sanitized_transport_error(error: Exception) -> Exception:
+    """Classify a failure without retaining its text, traceback, or chaining."""
     if isinstance(error, xmlrpc.client.Fault):
-        raise xmlrpc.client.Fault(error.faultCode, "dedicated Odoo request failed") from None
+        return xmlrpc.client.Fault(0, "dedicated Odoo request failed")
     if isinstance(error, TimeoutError):
-        raise TimeoutError("dedicated Odoo request timed out") from None
+        return TimeoutError("dedicated Odoo request timed out")
     if isinstance(error, ConnectionError):
-        raise ConnectionError("dedicated Odoo connection failed") from None
-    raise OSError("dedicated Odoo request failed") from None
+        return ConnectionError("dedicated Odoo connection failed")
+    return OSError("dedicated Odoo request failed")
+
+
+def _call_safely(operation: Callable[[], Any]) -> Any:
+    sanitized: Exception | None = None
+    try:
+        return operation()
+    except Exception as error:
+        sanitized = _sanitized_transport_error(error)
+    # This raise deliberately occurs after leaving the except suite. Python
+    # therefore attaches neither the remote exception nor its secret-bearing
+    # traceback as __context__ or __cause__.
+    raise sanitized from None
 
 
 class _XmlRpcExecutor:
@@ -202,24 +236,23 @@ class _XmlRpcExecutor:
     def authenticate(self) -> int:
         if self._uid is not None:
             return self._uid
-        try:
-            uid = self._common.authenticate(
+        uid = _call_safely(
+            lambda: self._common.authenticate(
                 self._config.database,
                 self._config.login,
                 self._config.api_key,
                 {},
             )
-        except Exception as error:
-            _raise_safe_transport_error(error)
-        if type(uid) is not int or uid <= 0:
+        )
+        if not _is_positive_identifier(uid):
             raise ImprovementsAuthenticationError("dedicated Odoo credentials were rejected")
         self._uid = uid
         return uid
 
     def __call__(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         uid = self.authenticate()
-        try:
-            return self._object.execute_kw(
+        return _call_safely(
+            lambda: self._object.execute_kw(
                 self._config.database,
                 uid,
                 self._config.api_key,
@@ -228,27 +261,38 @@ class _XmlRpcExecutor:
                 list(args),
                 kwargs,
             )
-        except Exception as error:
-            _raise_safe_transport_error(error)
+        )
 
 
 def _build_default_executor(config: ImprovementsConfig) -> _XmlRpcExecutor:
     return _XmlRpcExecutor(config)
 
 
+def _is_positive_identifier(value: object) -> bool:
+    return type(value) is int and 0 < value <= _MAX_IDENTIFIER
+
+
 def _positive_integer(value: object, label: str) -> int:
-    if type(value) is not int or value <= 0:
+    if not _is_positive_identifier(value):
         raise ContractError(f"{label} must be a positive integer")
     return value
 
 
 def _canonical_source_id(value: object) -> tuple[str, int]:
-    if not isinstance(value, str):
+    if type(value) is not str:
+        raise ContractError("source id must use the GPI-PM-FB format")
+    if len(value) > len("GPI-PM-FB-") + _MAX_IDENTIFIER_DIGITS:
         raise ContractError("source id must use the GPI-PM-FB format")
     match = _SOURCE_ID_RE.fullmatch(value)
     if match is None:
         raise ContractError("source id must use the GPI-PM-FB format")
-    return value, int(match.group(1))
+    numeric = match.group(1)
+    if len(numeric) > _MAX_IDENTIFIER_DIGITS:
+        raise ContractError("source id must use the GPI-PM-FB format")
+    feedback_id = int(numeric)
+    if not _is_positive_identifier(feedback_id):
+        raise ContractError("source id must use the GPI-PM-FB format")
+    return value, feedback_id
 
 
 def _row_list(value: object, *, label: str, maximum: int) -> list[dict[str, Any]]:
@@ -301,13 +345,13 @@ def _validate_field_value(field_name: str, value: object, feedback_id: int) -> N
         if not decoded:
             raise ContractError(f"{field_name} must contain binary data")
     elif field_name == "x_studio_type":
-        if value not in _WRITABLE_TYPE_VALUES:
+        if type(value) is not str or value not in _WRITABLE_TYPE_VALUES:
             raise ContractError("x_studio_type is outside the writable selection")
     elif field_name == "x_studio_status":
-        if value not in _WRITABLE_STATUS_VALUES:
+        if type(value) is not str or value not in _WRITABLE_STATUS_VALUES:
             raise ContractError("x_studio_status is outside the writable selection")
     elif field_name == "x_studio_source":
-        if value != SOURCE_VALUE:
+        if type(value) is not str or value != SOURCE_VALUE:
             raise ContractError("x_studio_source is outside this app's namespace")
 
 
@@ -347,8 +391,9 @@ class ImprovementsClient:
         if uid is not None:
             _positive_integer(uid, "user id")
         self._config = config
-        self._executor = executor
+        self.__executor = executor
         self._uid = uid
+        self.__mutation_authorizations: dict[object, _MutationBinding] = {}
 
     def __repr__(self) -> str:
         return "ImprovementsClient(<redacted>)"
@@ -360,26 +405,34 @@ class ImprovementsClient:
         uid: int | None = None,
     ) -> ImprovementsClient:
         config = ImprovementsConfig.from_env()
-        selected_executor = cls.default_executor(config) if executor is None else executor
+        selected_executor = (
+            _call_safely(lambda: cls.default_executor(config)) if executor is None else executor
+        )
         return cls(config, selected_executor, uid=uid)
 
     def authenticate(self) -> int:
         if self._uid is not None:
             return self._uid
-        authenticate = getattr(self._executor, "authenticate", None)
+        authenticate = getattr(self.__executor, "authenticate", None)
         if not callable(authenticate):
             raise ContractError("injected executor requires an explicit user id")
-        uid = authenticate()
+        uid = _call_safely(authenticate)
         self._uid = _positive_integer(uid, "authenticated user id")
         return self._uid
 
     def _execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        if type(model) is not str or type(method) is not str:
+            raise ContractError("Odoo model and method are not allowlisted")
         if (model, method) not in ALLOWED:
-            raise ContractError(f"{model}.{method} is not allowlisted")
-        return self._executor(model, method, *args, **kwargs)
+            raise ContractError("Odoo model and method are not allowlisted")
+        if model == TARGET_MODEL and method in {"create", "write"}:
+            raise ContractError("target mutations require the internal consumer")
+        if "authorization" in kwargs:
+            raise ContractError("internal mutation authorization is not valid here")
+        return _call_safely(lambda: self.__executor(model, method, *args, **kwargs))
 
     def assert_mutation_allowed(self, feedback_id: int) -> None:
-        if type(feedback_id) is not int or feedback_id <= 0:
+        if not _is_positive_identifier(feedback_id):
             raise GateClosed("feedback id must be a positive integer")
         if os.environ.get("ODOO_SHARED_REPORTING_WRITE_ENABLED") != "true":
             raise GateClosed("shared reporting write gate is closed")
@@ -387,12 +440,25 @@ class ImprovementsClient:
             raise GateClosed("improvements write gate is closed")
         raw_canary = os.environ.get("ODOO_IMPROVEMENTS_CANARY_FEEDBACK_ID")
         if raw_canary not in {None, ""}:
-            if not raw_canary.isascii() or not raw_canary.isdigit() or int(raw_canary) <= 0:
+            if (
+                len(raw_canary) > _MAX_IDENTIFIER_DIGITS
+                or not raw_canary.isascii()
+                or not raw_canary.isdigit()
+            ):
                 raise GateClosed("invalid improvements canary feedback id")
-            if int(raw_canary) != feedback_id:
+            canary = int(raw_canary)
+            if not _is_positive_identifier(canary):
+                raise GateClosed("invalid improvements canary feedback id")
+            if canary != feedback_id:
                 raise GateClosed("feedback is outside the canary fence")
 
-    def _validate_target_fields(self, fields: object, *, feedback_id: int) -> dict[str, Any]:
+    def _validate_target_fields(
+        self,
+        fields: object,
+        *,
+        feedback_id: int,
+        require_identity: bool = False,
+    ) -> dict[str, Any]:
         _positive_integer(feedback_id, "feedback id")
         if type(fields) is not dict or not fields:
             raise ContractError("target fields must be a nonempty dictionary")
@@ -404,9 +470,103 @@ class ImprovementsClient:
             if field_name == "active":
                 raise ContractError("active is not writable")
             if field_name not in TARGET_FIELDS:
-                raise ContractError(f"{field_name} is not an allowed target field")
+                raise ContractError("target payload contains a forbidden field")
             _validate_field_value(field_name, value, feedback_id)
-        return fields
+        if require_identity and (
+            fields.get("x_studio_source") != SOURCE_VALUE
+            or fields.get("x_studio_source_id") != f"GPI-PM-FB-{feedback_id}"
+        ):
+            raise ContractError("create payload requires exact compound identity")
+        return dict(fields)
+
+    def _validate_mutation_operation(
+        self,
+        method: str,
+        *,
+        feedback_id: int,
+        remote_id: object,
+        fields: object,
+    ) -> _MutationBinding:
+        if type(method) is not str or method not in {"create", "write"}:
+            raise ContractError("target mutation requires internal authorization")
+        safe_feedback_id = _positive_integer(feedback_id, "feedback id")
+        if method == "create":
+            if remote_id is not None:
+                raise ContractError("create must not include a remote id")
+            safe_remote_id = None
+        else:
+            safe_remote_id = _positive_integer(remote_id, "remote id")
+        safe_fields = self._validate_target_fields(
+            fields,
+            feedback_id=safe_feedback_id,
+            require_identity=method == "create",
+        )
+        return _MutationBinding(
+            method=method,
+            feedback_id=safe_feedback_id,
+            remote_id=safe_remote_id,
+            fields=tuple(sorted(safe_fields.items(), key=lambda item: item[0])),
+        )
+
+    def _authorize_mutation(
+        self,
+        method: str,
+        *,
+        feedback_id: int,
+        remote_id: object,
+        fields: object,
+        expected_contract: ImprovementContract,
+    ) -> object:
+        binding = self._validate_mutation_operation(
+            method,
+            feedback_id=feedback_id,
+            remote_id=remote_id,
+            fields=fields,
+        )
+        if type(expected_contract) is not ImprovementContract:
+            raise ContractError("expected contract must be immutable contract metadata")
+        self.assert_mutation_allowed(binding.feedback_id)
+        fresh_contract = self.verify_target_identity()
+        if fresh_contract != expected_contract:
+            raise TargetIdentityError("target contract changed before mutation")
+        self.assert_mutation_allowed(binding.feedback_id)
+        authorization = object()
+        self.__mutation_authorizations[authorization] = binding
+        return authorization
+
+    def _consume_mutation_authorization(
+        self,
+        authorization: object,
+        method: str,
+        *,
+        feedback_id: int,
+        remote_id: object,
+        fields: object,
+    ) -> Any:
+        expected_binding = None
+        try:
+            expected_binding = self.__mutation_authorizations.pop(authorization, None)
+        except TypeError:
+            pass
+        if expected_binding is None:
+            raise ContractError("target mutation requires internal authorization")
+
+        supplied_binding = self._validate_mutation_operation(
+            method,
+            feedback_id=feedback_id,
+            remote_id=remote_id,
+            fields=fields,
+        )
+        if supplied_binding != expected_binding:
+            raise ContractError("target mutation authorization does not match operation")
+
+        safe_fields = dict(supplied_binding.fields)
+        if method == "create":
+            rpc_args = (safe_fields,)
+        else:
+            rpc_args = ([supplied_binding.remote_id], safe_fields)
+        self.assert_mutation_allowed(supplied_binding.feedback_id)
+        return _call_safely(lambda: self.__executor(TARGET_MODEL, method, *rpc_args))
 
     def find_exact(self, source_id: str) -> list[dict[str, Any]]:
         canonical, _feedback_id = _canonical_source_id(source_id)
@@ -430,19 +590,67 @@ class ImprovementsClient:
                 raise ContractError("exact lookup returned a record outside its domain")
         return rows
 
-    def create_improvement(self, fields: dict, *, feedback_id: int) -> int:
-        safe_fields = self._validate_target_fields(fields, feedback_id=feedback_id)
-        self.assert_mutation_allowed(feedback_id)
-        result = self._execute(TARGET_MODEL, "create", safe_fields)
-        if type(result) is not int or result <= 0:
+    def create_improvement(
+        self,
+        fields: dict,
+        *,
+        feedback_id: int,
+        expected_contract: ImprovementContract,
+    ) -> int:
+        operation = self._validate_mutation_operation(
+            "create",
+            feedback_id=feedback_id,
+            remote_id=None,
+            fields=fields,
+        )
+        safe_fields = dict(operation.fields)
+        authorization = self._authorize_mutation(
+            "create",
+            feedback_id=operation.feedback_id,
+            remote_id=None,
+            fields=safe_fields,
+            expected_contract=expected_contract,
+        )
+        result = self._consume_mutation_authorization(
+            authorization,
+            "create",
+            feedback_id=operation.feedback_id,
+            remote_id=None,
+            fields=safe_fields,
+        )
+        if not _is_positive_identifier(result):
             raise MalformedMutationResponse("create response was not a positive integer")
         return result
 
-    def write_improvement(self, remote_id: int, fields: dict, *, feedback_id: int) -> None:
-        safe_remote_id = _positive_integer(remote_id, "remote id")
-        safe_fields = self._validate_target_fields(fields, feedback_id=feedback_id)
-        self.assert_mutation_allowed(feedback_id)
-        result = self._execute(TARGET_MODEL, "write", [safe_remote_id], safe_fields)
+    def write_improvement(
+        self,
+        remote_id: int,
+        fields: dict,
+        *,
+        feedback_id: int,
+        expected_contract: ImprovementContract,
+    ) -> None:
+        operation = self._validate_mutation_operation(
+            "write",
+            feedback_id=feedback_id,
+            remote_id=remote_id,
+            fields=fields,
+        )
+        safe_fields = dict(operation.fields)
+        authorization = self._authorize_mutation(
+            "write",
+            feedback_id=operation.feedback_id,
+            remote_id=operation.remote_id,
+            fields=safe_fields,
+            expected_contract=expected_contract,
+        )
+        result = self._consume_mutation_authorization(
+            authorization,
+            "write",
+            feedback_id=operation.feedback_id,
+            remote_id=operation.remote_id,
+            fields=safe_fields,
+        )
         if result is not True:
             raise MalformedMutationResponse("write response was not exactly true")
 
@@ -469,7 +677,11 @@ class ImprovementsClient:
             kwargs["context"] = {"bin_size": False}
         result = self._execute(TARGET_MODEL, "read", [safe_remote_id], **kwargs)
         rows = _row_list(result, label="improvement read", maximum=1)
-        if len(rows) != 1 or rows[0].get("id") != safe_remote_id:
+        if (
+            len(rows) != 1
+            or type(rows[0].get("id")) is not int
+            or rows[0].get("id") != safe_remote_id
+        ):
             raise ContractError("improvement read did not return the requested record")
         if any(field_name not in rows[0] for field_name in fields):
             raise ContractError("improvement read omitted a requested field")
@@ -477,9 +689,11 @@ class ImprovementsClient:
 
     def find_employees_by_email(self, email: str, *, limit: int) -> list[dict[str, Any]]:
         if (
-            not isinstance(email, str)
+            type(email) is not str
             or email != email.strip().casefold()
             or not email.isascii()
+            or len(email) > 320
+            or any(wildcard in email for wildcard in ("%", "_", "\\"))
             or _EMAIL_RE.fullmatch(email) is None
         ):
             raise ContractError("employee email must be normalized")
@@ -494,10 +708,16 @@ class ImprovementsClient:
             context={"active_test": False},
         )
         rows = _row_list(result, label="employee lookup", maximum=3)
+        seen_ids: set[int] = set()
         for row in rows:
-            _positive_integer(row.get("id"), "employee id")
-            if not isinstance(row.get("work_email"), str):
+            employee_id = _positive_integer(row.get("id"), "employee id")
+            if (
+                employee_id in seen_ids
+                or type(row.get("work_email")) is not str
+                or row.get("work_email") != email
+            ):
                 raise ContractError("employee lookup response was malformed")
+            seen_ids.add(employee_id)
         return rows
 
     def read_legacy_task_stages(self, task_ids: list[int]) -> list[dict[str, Any]]:
@@ -506,7 +726,7 @@ class ImprovementsClient:
             or not task_ids
             or len(task_ids) > 100
             or len(task_ids) != len(set(task_ids))
-            or any(type(task_id) is not int or task_id <= 0 for task_id in task_ids)
+            or any(not _is_positive_identifier(task_id) for task_id in task_ids)
         ):
             raise ContractError("legacy task ids must be 1 to 100 unique positive integers")
         result = self._execute("project.task", "read", list(task_ids), fields=["id", "stage_id"])
@@ -521,10 +741,9 @@ class ImprovementsClient:
                 stage is not False
                 and stage is not None
                 and not (
-                    isinstance(stage, (list, tuple))
+                    type(stage) is list
                     and len(stage) == 2
-                    and type(stage[0]) is int
-                    and stage[0] > 0
+                    and _is_positive_identifier(stage[0])
                     and isinstance(stage[1], str)
                 )
             ):
@@ -554,6 +773,10 @@ class ImprovementsClient:
             if result[field_name].get("type") != expected_type:
                 raise ContractError(f"{field_name} has the wrong type")
 
+        for field_name in {"x_studio_submitted_by", "x_studio_completed_by"}:
+            if result[field_name].get("relation") != "hr.employee":
+                raise ContractError("employee field has the wrong relation")
+
         start_type = result["x_studio_date_start"].get("type")
         stop_type = result["x_studio_date_stop"].get("type")
         if start_type not in {"date", "datetime"}:
@@ -580,10 +803,7 @@ class ImprovementsClient:
         """Freshly verify database, current company, and target metadata."""
         uid = self.authenticate()
         database_uuid = self._execute("ir.config_parameter", "get_param", "database.uuid")
-        if (
-            not isinstance(database_uuid, str)
-            or database_uuid != self._config.expected_database_uuid
-        ):
+        if type(database_uuid) is not str or database_uuid != self._config.expected_database_uuid:
             raise TargetIdentityError("dedicated Odoo database identity mismatch")
 
         user_rows = _row_list(
@@ -591,14 +811,19 @@ class ImprovementsClient:
             label="current user",
             maximum=1,
         )
-        if len(user_rows) != 1 or user_rows[0].get("id") != uid:
+        if (
+            len(user_rows) != 1
+            or type(user_rows[0].get("id")) is not int
+            or user_rows[0].get("id") != uid
+        ):
             raise TargetIdentityError("dedicated Odoo current user was malformed")
         company_value = user_rows[0].get("company_id")
         if (
-            not isinstance(company_value, (list, tuple))
-            or len(company_value) < 1
-            or type(company_value[0]) is not int
-            or company_value[0] <= 0
+            type(company_value) is not list
+            or len(company_value) != 2
+            or not _is_positive_identifier(company_value[0])
+            or type(company_value[1]) is not str
+            or company_value[1] != self._config.expected_company
         ):
             raise TargetIdentityError("dedicated Odoo current company was malformed")
         company_id = company_value[0]
@@ -610,6 +835,7 @@ class ImprovementsClient:
         )
         if (
             len(company_rows) != 1
+            or type(company_rows[0].get("id")) is not int
             or company_rows[0].get("id") != company_id
             or company_rows[0].get("name") != self._config.expected_company
         ):

@@ -45,6 +45,7 @@
 - Task 1 review governs three plan-provided SQL defects: a local-origin row must have a non-null valid status; an active attempt must belong to the same feedback record as its sync row; and idempotence guards must scope constraint-name checks to the intended table.
 - `tests/test_feedback_sync_store.py` begins in Task 7, where it receives meaningful state-machine tests. Task 1 does not create a meaningless empty test file.
 - Task 4 review governs lifecycle/sync integrity: the locked row must already have `lifecycle_origin = 'local'`; a missing sync row fails and rolls back the entire transition; and advancing desired truth preserves both `in_flight` and `quarantined` states so no overlapping claim can start.
+- Task 5 review governs the dedicated client boundary: normalize the accepted URL scheme before transport selection; direct `_execute` calls cannot perform target mutations; create/write wrappers validate their complete payload, require the expected immutable contract, freshly verify target identity and contract, recheck both gates immediately before the executor, and then use a one-use internal mutation authorization bound to the exact method, feedback ID, remote ID, and defensively copied payload. Authorization minting repeats complete operation validation, consumption compares the exact binding, and the raw executor is not exposed through the ordinary client interface. Every create contains exact `GPI Plant Manager` Source and the canonical Source ID for its feedback ID. Contract metadata requires both employee fields to have relation exactly `hr.employee`. Sanitized exceptions contain no caller- or remote-controlled values and retain no secret-bearing cause or context. Remote IDs are exact positive non-boolean integers, company many2one values have exact shape, employee results have unique exact IDs and exact normalized emails, wildcard email inputs are rejected, and oversized numeric text fails closed with a domain exception.
 
 ## File and Responsibility Map
 
@@ -1255,24 +1256,41 @@ def find_exact(self, source_id: str) -> list[dict]:
     ) or []
 
 
-def create_improvement(self, fields: dict, *, feedback_id: int) -> int:
+def create_improvement(
+    self,
+    fields: dict,
+    *,
+    feedback_id: int,
+    expected_contract: ImprovementContract,
+) -> int:
+    self._validate_target_fields(fields, feedback_id=feedback_id, require_identity=True)
+    authorization = self._authorize_mutation(feedback_id, expected_contract)
     self.assert_mutation_allowed(feedback_id)
-    self._validate_target_fields(fields)
-    result = self._execute(TARGET_MODEL, "create", fields)
+    result = self._execute(TARGET_MODEL, "create", fields, authorization=authorization)
     if type(result) is not int or result <= 0:
         raise MalformedMutationResponse("create response was not a positive integer")
     return result
 
 
-def write_improvement(self, remote_id: int, fields: dict, *, feedback_id: int) -> None:
+def write_improvement(
+    self,
+    remote_id: int,
+    fields: dict,
+    *,
+    feedback_id: int,
+    expected_contract: ImprovementContract,
+) -> None:
+    self._validate_target_fields(fields, feedback_id=feedback_id)
+    authorization = self._authorize_mutation(feedback_id, expected_contract)
     self.assert_mutation_allowed(feedback_id)
-    self._validate_target_fields(fields)
-    result = self._execute(TARGET_MODEL, "write", [remote_id], fields)
+    result = self._execute(
+        TARGET_MODEL, "write", [remote_id], fields, authorization=authorization
+    )
     if result is not True:
         raise MalformedMutationResponse("write response was not exactly true")
 ```
 
-`_validate_target_fields` requires a nonempty subset of `TARGET_FIELDS`, rejects `active`, and rejects any key containing `token`. `read_improvement` accepts only positive IDs and an explicit subset of `{"id"} | TARGET_FIELDS`; when binary verification is requested, pass context `{"bin_size": False}`. `read_legacy_task_stages` accepts only a nonempty list of positive IDs sourced by the rollout layer and always fixes fields to `["id", "stage_id"]`.
+`_validate_target_fields` requires a nonempty subset of `TARGET_FIELDS`, rejects `active`, and rejects any key containing `token`. Create additionally requires exact Source and canonical matching Source ID. `_execute` always rejects target `create`/`write`. A separate internal mutation consumer accepts only a one-use authorization minted after complete validation, fresh identity/contract equality, and an open-gate check; the authorization is bound to and compared against the exact method, feedback ID, remote ID, and copied payload, then the gates are re-read immediately before the hidden executor call. The authorization-minting helper independently validates the same complete operation so calling it directly cannot authorize different fields. `read_improvement` accepts only exact positive non-boolean integer IDs and an explicit subset of `{"id"} | TARGET_FIELDS`; when binary verification is requested, pass context `{"bin_size": False}`. `read_legacy_task_stages` accepts only a nonempty list of exact positive IDs sourced by the rollout layer and always fixes fields to `["id", "stage_id"]`.
 
 - [ ] **Step 5: Add contract and fresh identity verification tests**
 
@@ -1302,9 +1320,10 @@ Implement `verify_target_identity` with exact string equality for UUID/company a
 
 Also expose `read_contract() -> ImprovementContract` as the same uncached
 `fields_get` validation without UUID/company reads. The worker uses it to build
-the immutable manifest, then calls `verify_target_identity()` immediately before
-dispatch and requires the fresh returned contract to equal the manifest's
-contract.
+the immutable manifest, then passes that contract to `create_improvement` or
+`write_improvement`. The wrapper freshly calls `verify_target_identity()` and
+requires its return value to equal the supplied immutable contract before the
+mutation executor can be reached.
 
 - [ ] **Step 6: Run client and existing facade tests**
 
@@ -1886,14 +1905,14 @@ class FakeClient:
         self.calls.append(("find_exact", source_id))
         return self.exact_rows
 
-    def create_improvement(self, fields, *, feedback_id):
+    def create_improvement(self, fields, *, feedback_id, expected_contract):
         self.mutation_calls.append("create")
         self.create_fields = fields
         if self.create_error is not None:
             raise self.create_error
         return self.create_result
 
-    def write_improvement(self, remote_id, fields, *, feedback_id):
+    def write_improvement(self, remote_id, fields, *, feedback_id, expected_contract):
         self.mutation_calls.append("write")
         self.write_id = remote_id
         self.write_fields = fields
@@ -2066,33 +2085,20 @@ def process_claim(claim: Claim, *, client: ImprovementsClient, now: datetime) ->
     except GateClosed:
         sync_store.defer_prepared_for_closed_gate(claim, attempt, now)
         return "deferred"
-    try:
-        fresh_contract = client.verify_target_identity()
-    except (TimeoutError, ConnectionError, OSError) as error:
-        sync_store.record_definitive_failure(
-            claim, attempt, "identity_read_failed", safe_class(error), now
-        )
-        return "retry_scheduled"
-    except (TargetIdentityError, ContractError):
-        sync_store.quarantine(
-            claim, "target_identity_or_contract_mismatch", now, attempt=attempt
-        )
-        return "quarantined"
-    if fresh_contract != contract:
-        sync_store.quarantine(
-            claim, "contract_changed_before_dispatch", now, attempt=attempt
-        )
-        return "quarantined"
-
     sync_store.mark_dispatch(claim, attempt, now)
     try:
         if mutation_kind == "create":
             remote_id = client.create_improvement(
-                projection.dispatch_fields(), feedback_id=claim.feedback_id
+                projection.dispatch_fields(),
+                feedback_id=claim.feedback_id,
+                expected_contract=contract,
             )
         else:
             client.write_improvement(
-                remote_id, projection.dispatch_fields(), feedback_id=claim.feedback_id
+                remote_id,
+                projection.dispatch_fields(),
+                feedback_id=claim.feedback_id,
+                expected_contract=contract,
             )
         sync_store.mark_rpc_succeeded(claim, attempt, remote_id, now)
     except GateClosed:
@@ -2100,6 +2106,11 @@ def process_claim(claim: Claim, *, client: ImprovementsClient, now: datetime) ->
             claim, attempt, "gate_closed_before_rpc", "mutation was not called", now
         )
         return "retry_scheduled"
+    except (TargetIdentityError, ContractError):
+        sync_store.quarantine(
+            claim, "target_identity_or_contract_mismatch", now, attempt=attempt
+        )
+        return "quarantined"
     except xmlrpc.client.Fault as error:
         sync_store.record_definitive_failure(claim, attempt, "odoo_fault", safe_fault(error), now)
         return "retry_scheduled"
