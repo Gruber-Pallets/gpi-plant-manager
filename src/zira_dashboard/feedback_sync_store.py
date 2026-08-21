@@ -56,12 +56,20 @@ _DEFINITIVE_FAILURE_SUMMARIES = {
     "identity_read_failed": "The Odoo identity check could not finish.",
     "odoo_fault": "Odoo refused the feedback change.",
 }
+_UNPREPARED_READ_FAILURE_SUMMARIES = {
+    "identity_read_failed": "The Odoo feedback lookup could not finish.",
+    "odoo_fault": "Odoo could not complete the feedback lookup.",
+}
 _QUARANTINE_SUMMARIES = {
     "ambiguous_mutation": "The Odoo result is unclear, so this feedback stopped.",
     "ambiguous_stale_dispatch": "Sharing stopped after it may have started.",
     "contract_changed_before_dispatch": "The Odoo field setup changed before sharing.",
+    "compound_identity_changed_before_dispatch": (
+        "The Odoo feedback record changed before sharing."
+    ),
     "duplicate_compound_identity": "More than one Odoo record has this feedback number.",
     "local_binary_evidence_changed": "The saved picture no longer matches this step.",
+    "local_projection_unavailable": "The saved local feedback version could not be read.",
     "readback_mismatch": "The Odoo copy did not match the saved feedback.",
     "saved_id_ownership_conflict": "The saved Odoo record no longer matches this feedback.",
     "target_identity_or_contract_mismatch": "The Odoo target or fields changed.",
@@ -697,6 +705,205 @@ def load_active_attempt(claim: Claim) -> Attempt | None:
             raise StateTransitionError("active attempt identity changed")
         _validate_attempt_claim_relation(claim, loaded)
         return loaded
+
+
+def release_stale_unprepared_claim(claim: Claim, now: datetime) -> bool:
+    """Release an owned unprepared claim only after desired truth advanced."""
+    if type(claim) is not Claim or claim.active_attempt_id is not None:
+        raise ValueError("claim is not an unprepared owned claim")
+    current = _aware_datetime(now, "stale claim release time")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT feedback_id, desired_version, last_synced_version,
+                   odoo_improvement_id, claim_owner, claim_token,
+                   claim_expires_at, active_attempt_id, attempt_count
+            FROM feedback_odoo_sync
+            WHERE feedback_id = %s
+              AND state = 'in_flight'
+              AND desired_version >= %s
+              AND last_synced_version = %s
+              AND odoo_improvement_id IS NOT DISTINCT FROM %s
+              AND claim_owner = %s
+              AND claim_token = %s
+              AND claim_expires_at = %s
+              AND active_attempt_id IS NULL
+              AND attempt_count = %s
+            FOR UPDATE
+            """,
+            (
+                claim.feedback_id,
+                claim.desired_version,
+                claim.last_synced_version,
+                claim.odoo_improvement_id,
+                claim.claim_owner,
+                claim.claim_token,
+                claim.claim_expires_at,
+                claim.attempt_count,
+            ),
+        )
+        selected = _claim_from_row(_one_row(cursor, "stale unprepared claim lock"))
+        if (
+            selected.feedback_id != claim.feedback_id
+            or selected.desired_version < claim.desired_version
+            or selected.last_synced_version != claim.last_synced_version
+            or selected.odoo_improvement_id != claim.odoo_improvement_id
+            or selected.claim_owner != claim.claim_owner
+            or selected.claim_token != claim.claim_token
+            or selected.claim_expires_at != claim.claim_expires_at
+            or selected.active_attempt_id is not None
+            or selected.attempt_count != claim.attempt_count
+        ):
+            raise StateTransitionError("stale claim lock returned different authority")
+        if selected.desired_version == claim.desired_version:
+            return False
+        cursor.execute(
+            """
+            UPDATE feedback_odoo_sync
+            SET state = 'idle', claim_owner = NULL, claim_token = NULL,
+                claim_expires_at = NULL, due_at = %s, updated_at = %s
+            WHERE feedback_id = %s
+              AND state = 'in_flight'
+              AND desired_version = %s
+              AND desired_version > %s
+              AND last_synced_version = %s
+              AND odoo_improvement_id IS NOT DISTINCT FROM %s
+              AND claim_owner = %s
+              AND claim_token = %s
+              AND claim_expires_at = %s
+              AND active_attempt_id IS NULL
+              AND attempt_count = %s
+            RETURNING feedback_id, desired_version
+            """,
+            (
+                current,
+                current,
+                claim.feedback_id,
+                selected.desired_version,
+                claim.desired_version,
+                claim.last_synced_version,
+                claim.odoo_improvement_id,
+                claim.claim_owner,
+                claim.claim_token,
+                claim.claim_expires_at,
+                claim.attempt_count,
+            ),
+        )
+        updated = _one_row(cursor, "stale unprepared claim release")
+        if (
+            updated.get("feedback_id") != claim.feedback_id
+            or updated.get("desired_version") != selected.desired_version
+        ):
+            raise StateTransitionError("stale claim release returned different authority")
+    return True
+
+
+def defer_unprepared_read_failure(
+    claim: Claim,
+    error_class: str,
+    now: datetime,
+) -> bool:
+    """Safely release owned unprepared work after a pre-mutation Odoo read failure."""
+    if type(claim) is not Claim or claim.active_attempt_id is not None:
+        raise ValueError("claim is not an unprepared owned claim")
+    safe_error_class, safe_summary = _known_summary(
+        error_class,
+        _UNPREPARED_READ_FAILURE_SUMMARIES,
+        "error class",
+    )
+    current = _aware_datetime(now, "unprepared read failure time")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT feedback_id, desired_version, last_synced_version,
+                   odoo_improvement_id, claim_owner, claim_token,
+                   claim_expires_at, active_attempt_id, attempt_count
+            FROM feedback_odoo_sync
+            WHERE feedback_id = %s
+              AND state = 'in_flight'
+              AND desired_version >= %s
+              AND last_synced_version = %s
+              AND odoo_improvement_id IS NOT DISTINCT FROM %s
+              AND claim_owner = %s
+              AND claim_token = %s
+              AND claim_expires_at = %s
+              AND active_attempt_id IS NULL
+              AND attempt_count = %s
+            FOR UPDATE
+            """,
+            (
+                claim.feedback_id,
+                claim.desired_version,
+                claim.last_synced_version,
+                claim.odoo_improvement_id,
+                claim.claim_owner,
+                claim.claim_token,
+                claim.claim_expires_at,
+                claim.attempt_count,
+            ),
+        )
+        selected = _claim_from_row(_one_row(cursor, "unprepared read failure lock"))
+        if (
+            selected.feedback_id != claim.feedback_id
+            or selected.desired_version < claim.desired_version
+            or selected.last_synced_version != claim.last_synced_version
+            or selected.odoo_improvement_id != claim.odoo_improvement_id
+            or selected.claim_owner != claim.claim_owner
+            or selected.claim_token != claim.claim_token
+            or selected.claim_expires_at != claim.claim_expires_at
+            or selected.active_attempt_id is not None
+            or selected.attempt_count != claim.attempt_count
+        ):
+            raise StateTransitionError("unprepared read failure lock returned different authority")
+        due = (
+            current
+            if selected.desired_version > claim.desired_version
+            else current + RETRY_DELAYS[0]
+        )
+        cursor.execute(
+            """
+            UPDATE feedback_odoo_sync
+            SET state = 'idle', claim_owner = NULL, claim_token = NULL,
+                claim_expires_at = NULL, due_at = %s,
+                last_error_class = %s, last_error_summary = %s,
+                updated_at = %s
+            WHERE feedback_id = %s
+              AND state = 'in_flight'
+              AND desired_version = %s
+              AND desired_version >= %s
+              AND last_synced_version = %s
+              AND odoo_improvement_id IS NOT DISTINCT FROM %s
+              AND claim_owner = %s
+              AND claim_token = %s
+              AND claim_expires_at = %s
+              AND active_attempt_id IS NULL
+              AND attempt_count = %s
+            RETURNING feedback_id, desired_version, due_at
+            """,
+            (
+                due,
+                safe_error_class,
+                safe_summary,
+                current,
+                claim.feedback_id,
+                selected.desired_version,
+                claim.desired_version,
+                claim.last_synced_version,
+                claim.odoo_improvement_id,
+                claim.claim_owner,
+                claim.claim_token,
+                claim.claim_expires_at,
+                claim.attempt_count,
+            ),
+        )
+        updated = _one_row(cursor, "unprepared read failure release")
+        if (
+            updated.get("feedback_id") != claim.feedback_id
+            or updated.get("desired_version") != selected.desired_version
+            or updated.get("due_at") != due
+        ):
+            raise StateTransitionError("unprepared read failure returned different authority")
+    return True
 
 
 def _lock_unprepared_claim(cursor, claim: Claim) -> Claim:
@@ -1649,6 +1856,7 @@ __all__ = [
     "RETRY_DELAYS",
     "StateTransitionError",
     "claim_due",
+    "defer_unprepared_read_failure",
     "defer_prepared_for_closed_gate",
     "load_active_attempt",
     "mark_dispatch",
@@ -1656,6 +1864,7 @@ __all__ = [
     "prepare_attempt",
     "quarantine",
     "record_definitive_failure",
+    "release_stale_unprepared_claim",
     "recover_expired_claims",
     "retry_due",
     "schedule_readback",

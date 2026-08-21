@@ -431,26 +431,36 @@ class ImprovementsClient:
             raise ContractError("internal mutation authorization is not valid here")
         return _call_safely(lambda: self.__executor(model, method, *args, **kwargs))
 
-    def assert_mutation_allowed(self, feedback_id: int) -> None:
-        if not _is_positive_identifier(feedback_id):
-            raise GateClosed("feedback id must be a positive integer")
+    def assert_worker_enabled(self) -> None:
+        """Check the two exact write gates without configuration or RPC work."""
         if os.environ.get("ODOO_SHARED_REPORTING_WRITE_ENABLED") != "true":
             raise GateClosed("shared reporting write gate is closed")
         if os.environ.get("ODOO_IMPROVEMENTS_WRITE_ENABLED") != "true":
             raise GateClosed("improvements write gate is closed")
+
+    def canary_feedback_id(self) -> int | None:
+        """Return the optional exact canary fence using environment data only."""
         raw_canary = os.environ.get("ODOO_IMPROVEMENTS_CANARY_FEEDBACK_ID")
-        if raw_canary not in {None, ""}:
-            if (
-                len(raw_canary) > _MAX_IDENTIFIER_DIGITS
-                or not raw_canary.isascii()
-                or not raw_canary.isdigit()
-            ):
-                raise GateClosed("invalid improvements canary feedback id")
-            canary = int(raw_canary)
-            if not _is_positive_identifier(canary):
-                raise GateClosed("invalid improvements canary feedback id")
-            if canary != feedback_id:
-                raise GateClosed("feedback is outside the canary fence")
+        if raw_canary in {None, ""}:
+            return None
+        if (
+            len(raw_canary) > _MAX_IDENTIFIER_DIGITS
+            or not raw_canary.isascii()
+            or not raw_canary.isdigit()
+        ):
+            raise GateClosed("invalid improvements canary feedback id")
+        canary = int(raw_canary)
+        if not _is_positive_identifier(canary):
+            raise GateClosed("invalid improvements canary feedback id")
+        return canary
+
+    def assert_mutation_allowed(self, feedback_id: int) -> None:
+        if not _is_positive_identifier(feedback_id):
+            raise GateClosed("feedback id must be a positive integer")
+        self.assert_worker_enabled()
+        canary = self.canary_feedback_id()
+        if canary is not None and canary != feedback_id:
+            raise GateClosed("feedback is outside the canary fence")
 
     def _validate_target_fields(
         self,

@@ -50,6 +50,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **The Odoo connection now remembers exactly what it is allowed to change.** It stops if any name, number, or detail is different.
 - **Plant Manager now knows exactly how feedback will fit the shared improvements list.** Each app gets its own name and number so records do not mix.
 - **Feedback sharing work can safely wait and continue after a restart.** The app remembers each step without putting private pictures in its work notes.
+- Shared feedback must be read back and checked after every change. Unclear results stop for review instead of being sent twice.
 
 ### Auto-Lunch stays visible
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
@@ -14,6 +15,11 @@ from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
 
 _MAX_SIGNED_64 = 9_223_372_036_854_775_807
 _WARNING_CLASSES = frozenset({"employee_missing", "employee_ambiguous"})
+_DIGEST_RE = re.compile(r"[0-9a-f]{64}", re.ASCII)
+_ATTEMPT_BINARY_ROLES = {
+    "x_studio_image": "before",
+    "x_studio_after_image": "after",
+}
 
 
 class InvalidTransition(ValueError):
@@ -142,6 +148,82 @@ def projection_snapshot(feedback_id: int, projection_version: int) -> Projection
         feedback=MappingProxyType(feedback),
         images=MappingProxyType(images),
     )
+
+
+def attempt_image_snapshot(
+    feedback_id: int,
+    binary_evidence: Mapping[str, Mapping[str, object]],
+) -> Mapping[str, NormalizedImage]:
+    """Copy only image bytes required by one immutable saved attempt."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    if not isinstance(binary_evidence, Mapping):
+        raise ProjectionSnapshotUnavailable("saved image evidence is malformed")
+    expected: dict[str, tuple[str, int]] = {}
+    for field_name, evidence in binary_evidence.items():
+        if (
+            type(field_name) is not str
+            or field_name not in _ATTEMPT_BINARY_ROLES
+            or not isinstance(evidence, Mapping)
+            or set(evidence) != {"sha256", "byte_length"}
+        ):
+            raise ProjectionSnapshotUnavailable("saved image evidence is malformed")
+        digest = evidence.get("sha256")
+        byte_length = evidence.get("byte_length")
+        if (
+            type(digest) is not str
+            or _DIGEST_RE.fullmatch(digest) is None
+            or type(byte_length) is not int
+            or not 0 < byte_length <= MAX_OUTPUT_BYTES
+        ):
+            raise ProjectionSnapshotUnavailable("saved image evidence is malformed")
+        expected[field_name] = (digest, byte_length)
+    if not expected:
+        return MappingProxyType({})
+
+    required_roles = sorted(_ATTEMPT_BINARY_ROLES[field_name] for field_name in expected)
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT feedback_id, role, jpeg_bytes, sha256, byte_length, width, height "
+            "FROM feedback_images WHERE feedback_id = %s AND role = ANY(%s) "
+            "AND byte_length > 0 AND byte_length <= %s "
+            "AND octet_length(jpeg_bytes) > 0 "
+            "AND octet_length(jpeg_bytes) <= %s "
+            "AND octet_length(jpeg_bytes) = byte_length "
+            "ORDER BY role LIMIT 2",
+            (
+                safe_feedback_id,
+                required_roles,
+                MAX_OUTPUT_BYTES,
+                MAX_OUTPUT_BYTES,
+            ),
+        )
+        rows = cur.fetchall()
+    if type(rows) is not list or len(rows) != len(required_roles) or len(rows) > 2:
+        raise ProjectionSnapshotUnavailable("feedback image rows are malformed")
+
+    by_role: dict[str, Mapping[str, object]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ProjectionSnapshotUnavailable("feedback image row is malformed")
+        role = row.get("role")
+        if type(role) is not str or role not in {"before", "after"}:
+            raise ProjectionSnapshotUnavailable("feedback image role is malformed")
+        if role in by_role:
+            raise ProjectionSnapshotUnavailable("duplicate image role")
+        by_role[role] = row
+    if set(by_role) != set(required_roles):
+        raise ProjectionSnapshotUnavailable("saved image roles are unavailable")
+
+    selected: dict[str, NormalizedImage] = {}
+    for field_name, (digest, byte_length) in expected.items():
+        row = by_role.get(_ATTEMPT_BINARY_ROLES[field_name])
+        if row is None:
+            raise ProjectionSnapshotUnavailable("saved image is unavailable")
+        image = _snapshot_image(row, safe_feedback_id)
+        if image.sha256 != digest or image.byte_length != byte_length:
+            raise ProjectionSnapshotUnavailable("saved image evidence changed")
+        selected[field_name] = image
+    return MappingProxyType(selected)
 
 
 def record_sync_warning(
