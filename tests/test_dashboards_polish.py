@@ -97,7 +97,7 @@ def test_recycling_bar_row_renders_person_and_wc_stacked(monkeypatch):
     assert "Alice" in html and "Repair-1" in html
 
 
-def test_recycling_transferred_worker_moves_into_bar_and_left_says_no_one_here_now(
+def test_recycling_stopped_sole_producer_stays_left_and_keeps_finish_line(
     monkeypatch,
 ):
     _freeze_route_clock_mid_shift(monkeypatch)
@@ -148,8 +148,9 @@ def test_recycling_transferred_worker_moves_into_bar_and_left_says_no_one_here_n
             )
         ]
         html = TestClient(app).get("/recycling").text
-    assert "No one here now" in html
     assert "Humberto S." in html
+    assert "Repair 4" in html
+    assert "No one here now" not in html
     assert "worker-segment-fill" in html
     assert "worker-segment-goal completed" in html
 

@@ -55,9 +55,15 @@
           <div class="vbar-name">
             {% if is_range %}
               <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
+            {% elif b.sole_producer_name %}
+              {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
+              {{ operator_name(b.sole_producer_name, operator_href, true) }}
+              <span class="name-secondary">{{ b.name }}</span>
             {% elif b.no_one_here_now %}
               <span class="name-primary current-empty">No one here now</span>
               <span class="name-secondary">{{ b.name }}</span>
+            {% elif b.show_segment_worker_names %}
+              <span class="name-primary">{{ b.name }}</span>
             {% elif b.has_worker_history and not b.who %}
               <span class="name-primary">{{ b.name }}</span>
             {% elif b.who and b.who != b.name %}
@@ -78,7 +84,10 @@
             <div class="vworker-segment-list">
               {% for s in b.segments %}
                 <span class="result-{{ s.result }}">
-                  {{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
+                  {% if b.show_segment_worker_names or not s.person_name %}
+                    <span class="worker-segment-person">{{ s.person_label }}</span> ·
+                  {% endif %}
+                  {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
                 </span>
               {% endfor %}
             </div>
@@ -93,9 +102,15 @@
         <div class="name">
           {% if is_range %}
             <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
+          {% elif b.sole_producer_name %}
+            {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
+            {{ operator_name(b.sole_producer_name, operator_href, true) }}
+            <span class="name-secondary">{{ b.name }}</span>
           {% elif b.no_one_here_now %}
             <span class="name-primary current-empty">No one here now</span>
             <span class="name-secondary">{{ b.name }}</span>
+          {% elif b.show_segment_worker_names %}
+            <span class="name-primary">{{ b.name }}</span>
           {% elif b.has_worker_history and not b.who %}
             <span class="name-primary">{{ b.name }}</span>
           {% elif b.who and b.who != b.name %}
@@ -121,7 +136,9 @@
                      title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }} / {{ s.goal_units|round|int }} · {{ s.result_label }}">
                   {% if not s.label_below %}
                     <span class="worker-segment-name">
-                      {{ s.person_label }}
+                      {% if b.show_segment_worker_names or not s.person_name %}
+                        <span class="worker-segment-person">{{ s.person_label }}</span>
+                      {% endif %}
                       <small class="worker-segment-result">
                         {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
                       </small>
@@ -154,7 +171,10 @@
           <div class="worker-segment-labels">
             {% for s in b.segments if s.label_below %}
               <span class="worker-segment-callout result-{{ s.result }}">
-                {{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
+                {% if b.show_segment_worker_names or not s.person_name %}
+                  <span class="worker-segment-person">{{ s.person_label }}</span> ·
+                {% endif %}
+                {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
               </span>
             {% endfor %}
           </div>

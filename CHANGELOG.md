@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-20
 
+### Worker names stay easy to find
+
+#### Improvements
+
+- **One worker's name now stays beside the work center.** Their stop line and score still show in the bar. When more than one person made pallets there, every name stays with that person's part of the bar.
+
 ### Feedback progress
 
 #### Features
