@@ -653,10 +653,10 @@
           {% for event in auto_lunch_history %}
           <li>
             <strong>{{ event.time_label }}</strong> · {{ event.actor_label }}<br>
-            {% if event.is_baseline %}
-              {{ event.after_label }}
-            {% else %}
+            {% if event.has_before %}
               {{ event.before_label }} → {{ event.after_label }}
+            {% else %}
+              {{ event.after_label }}
             {% endif %}
           </li>
           {% endfor %}

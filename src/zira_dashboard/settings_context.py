@@ -255,6 +255,15 @@ def auto_lunch_history_context(events: list[dict]) -> list[dict]:
     for row in events:
         source = row.get("source")
         baseline = source == "baseline"
+        has_before = all(
+            row.get(field) is not None
+            for field in (
+                "before_enabled",
+                "before_observe_only",
+                "before_flex_after_hours",
+                "before_flex_minutes",
+            )
+        )
         if baseline:
             actor_label = "Monitoring started"
         elif source == "external":
@@ -264,9 +273,12 @@ def auto_lunch_history_context(events: list[dict]) -> list[dict]:
         changed_at = row["changed_at"].astimezone(shift_config.SITE_TZ)
         shaped.append({
             "time_label": changed_at.strftime("%-m/%-d/%Y %-I:%M %p"),
-            "before_label": None if baseline else _auto_lunch_value_label(row, "before"),
+            "before_label": (
+                _auto_lunch_value_label(row, "before") if has_before else None
+            ),
             "after_label": _auto_lunch_value_label(row, "after"),
             "actor_label": actor_label,
+            "has_before": has_before,
             "is_baseline": baseline,
         })
     return shaped

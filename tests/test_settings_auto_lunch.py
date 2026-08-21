@@ -5,6 +5,7 @@ are Postgres-backed (skip without DATABASE_URL; run in CI).
 """
 import os
 from pathlib import Path
+import re
 
 import pytest
 
@@ -55,6 +56,32 @@ def test_auto_lunch_template_has_recent_history_block():
     html = TEMPLATE.read_text()
     assert 'id="auto-lunch-history"' in html
     assert "Recent Auto-Lunch changes" in html
+
+
+def test_auto_lunch_template_renders_after_only_when_before_snapshot_is_absent():
+    html = TEMPLATE.read_text()
+    match = re.search(
+        r'(<div id="auto-lunch-history".*?</div>)',
+        html,
+        flags=re.DOTALL,
+    )
+    assert match, "Auto-Lunch history block missing from settings.html"
+
+    rendered = settings_routes.templates.env.from_string(match.group(1)).render(
+        auto_lunch_history=[{
+            "time_label": "8/20/2026 4:30 PM",
+            "before_label": None,
+            "after_label": "Live · 5 hours · 30 minutes",
+            "actor_label": "Dale",
+            "has_before": False,
+            "is_baseline": False,
+        }]
+    )
+
+    assert "Dale" in rendered
+    assert "Live · 5 hours · 30 minutes" in rendered
+    assert "→" not in rendered
+    assert "None" not in rendered
 
 
 # ---- GET render + POST save (DB-backed, CI) ----

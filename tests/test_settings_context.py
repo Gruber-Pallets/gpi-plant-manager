@@ -1,6 +1,7 @@
 """DB-free contract tests for the settings page's pure context builders."""
 
 from datetime import UTC, datetime, time
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -338,6 +339,7 @@ def test_auto_lunch_history_context_uses_plain_labels_and_site_time():
         "before_label": "Off · 5 hours · 30 minutes",
         "after_label": "Live · 5 hours · 30 minutes",
         "actor_label": "Dale",
+        "has_before": True,
         "is_baseline": False,
     }]
 
@@ -364,7 +366,66 @@ def test_auto_lunch_history_context_labels_external_and_baseline():
 
     assert result[0]["actor_label"] == "Outside app / detected automatically"
     assert result[1]["actor_label"] == "Monitoring started"
+    assert result[1]["has_before"] is False
     assert result[1]["is_baseline"] is True
+
+
+def test_auto_lunch_history_context_handles_first_settings_save_without_before_snapshot():
+    rows = [{
+        "source": "settings",
+        "actor_name": "Dale", "actor_upn": "dale@gruberpallets.com",
+        "changed_at": datetime(2026, 8, 20, 21, 30, tzinfo=UTC),
+        "before_enabled": None, "before_observe_only": None,
+        "before_flex_after_hours": None, "before_flex_minutes": None,
+        "after_enabled": True, "after_observe_only": False,
+        "after_flex_after_hours": 5, "after_flex_minutes": 30,
+    }]
+
+    assert settings_context.auto_lunch_history_context(rows) == [{
+        "time_label": "8/20/2026 4:30 PM",
+        "before_label": None,
+        "after_label": "Live · 5 hours · 30 minutes",
+        "actor_label": "Dale",
+        "has_before": False,
+        "is_baseline": False,
+    }]
+
+
+def test_auto_lunch_history_context_formats_flex_only_decimal_and_uses_upn_actor():
+    rows = [{
+        "source": "settings",
+        "actor_name": None, "actor_upn": "manager@gruberpallets.com",
+        "changed_at": datetime(2026, 8, 20, 21, 30, tzinfo=UTC),
+        "before_enabled": True, "before_observe_only": False,
+        "before_flex_after_hours": Decimal("5.0"), "before_flex_minutes": 30,
+        "after_enabled": True, "after_observe_only": False,
+        "after_flex_after_hours": Decimal("5.5"), "after_flex_minutes": 45,
+    }]
+
+    result = settings_context.auto_lunch_history_context(rows)[0]
+
+    assert result["before_label"] == "Live · 5 hours · 30 minutes"
+    assert result["after_label"] == "Live · 5.5 hours · 45 minutes"
+    assert result["actor_label"] == "manager@gruberpallets.com"
+    assert result["has_before"] is True
+
+
+def test_auto_lunch_history_context_omits_partial_before_and_uses_unknown_actor():
+    rows = [{
+        "source": "settings",
+        "actor_name": None, "actor_upn": None,
+        "changed_at": datetime(2026, 8, 20, 21, 30, tzinfo=UTC),
+        "before_enabled": False, "before_observe_only": None,
+        "before_flex_after_hours": 5, "before_flex_minutes": 30,
+        "after_enabled": True, "after_observe_only": False,
+        "after_flex_after_hours": 5, "after_flex_minutes": 30,
+    }]
+
+    result = settings_context.auto_lunch_history_context(rows)[0]
+
+    assert result["before_label"] is None
+    assert result["actor_label"] == "Unknown manager"
+    assert result["has_before"] is False
 
 
 def test_group_default_rows_include_only_nonreserve_people_qualified_somewhere():
