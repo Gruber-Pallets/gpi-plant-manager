@@ -60,6 +60,61 @@ class TransactionalDatabase:
                 self.commits.append(settings.Settings(**self.row))
 
 
+class ReconcileSaveCursor:
+    def __init__(self, database):
+        self.database = database
+        self.results = []
+        self.pending_settings = None
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(sql.split())
+        if "FROM auto_lunch_settings WHERE id = 1 FOR UPDATE" in normalized:
+            self.results.append(dict(self.database.row))
+        elif "FROM auto_lunch_setting_events" in normalized:
+            self.results.append(dict(self.database.latest))
+        elif "INSERT INTO auto_lunch_settings " in normalized:
+            self.pending_settings = dict(zip(OFF, params, strict=True))
+
+    def fetchone(self):
+        return self.results.pop(0)
+
+
+class ReconcileSaveDatabase:
+    def __init__(self):
+        self.row = dict(OFF)
+        self.latest = {
+            "after_enabled": False,
+            "after_observe_only": True,
+            "after_flex_after_hours": 5.0,
+            "after_flex_minutes": 30,
+        }
+        self.commits = []
+        self._row_lock = Lock()
+
+    @contextmanager
+    def cursor(self):
+        with self._row_lock:
+            cursor = ReconcileSaveCursor(self)
+            yield cursor
+            if cursor.pending_settings is not None:
+                self.row = cursor.pending_settings
+                committed = settings.Settings(**self.row)
+                self.commits.append(committed)
+                self.latest = {
+                    "after_enabled": committed.enabled,
+                    "after_observe_only": committed.observe_only,
+                    "after_flex_after_hours": committed.flex_after_hours,
+                    "after_flex_minutes": committed.flex_minutes,
+                }
+
+
+class FailingAuditCursor(RecordingCursor):
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        if "INSERT INTO auto_lunch_setting_events" in sql:
+            raise RuntimeError("audit unavailable")
+
+
 def cursor_context(cursor, *, fail_after_yield=False):
     @contextmanager
     def opened():
@@ -181,6 +236,64 @@ def test_concurrent_saves_publish_cache_in_commit_order(monkeypatch):
     }
 
 
+def test_reconcile_and_save_publish_cache_in_commit_order(monkeypatch):
+    database = ReconcileSaveDatabase()
+    monkeypatch.setattr(db, "cursor", database.cursor)
+    off = settings.Settings()
+    live = settings.Settings(True, False, 6.0, 45)
+    reconcile_at_cache = Event()
+    release_reconcile_cache = Event()
+    save_started = Event()
+    save_published = Event()
+    published = []
+    errors = []
+
+    def publish(value):
+        if value == off and not reconcile_at_cache.is_set():
+            reconcile_at_cache.set()
+            if not release_reconcile_cache.wait(5):
+                raise AssertionError("reconciliation cache was not released")
+        published.append(value)
+        if value == live:
+            save_published.set()
+
+    def run_reconcile():
+        try:
+            settings.reconcile_external_change()
+        except BaseException as exc:  # pragma: no cover - asserted in main thread
+            errors.append(exc)
+
+    def run_save():
+        try:
+            save_started.set()
+            settings.save(live)
+        except BaseException as exc:  # pragma: no cover - asserted in main thread
+            errors.append(exc)
+
+    monkeypatch.setattr(settings._store, "set", publish)
+    reconcile_thread = Thread(target=run_reconcile)
+    save_thread = Thread(target=run_save)
+
+    reconcile_thread.start()
+    assert reconcile_at_cache.wait(2)
+    save_thread.start()
+    assert save_started.wait(2)
+    try:
+        save_overtook_reconcile = save_published.wait(1)
+    finally:
+        release_reconcile_cache.set()
+    reconcile_thread.join(2)
+    save_thread.join(2)
+
+    assert not reconcile_thread.is_alive()
+    assert not save_thread.is_alive()
+    assert errors == []
+    assert save_overtook_reconcile is False
+    assert database.commits == [live]
+    assert published == [off, live]
+    assert published[-1] == settings.Settings(**database.row)
+
+
 def test_save_rejects_an_invalid_audit_source(monkeypatch):
     cursor = RecordingCursor([OFF])
     monkeypatch.setattr(db, "cursor", cursor_context(cursor))
@@ -209,7 +322,11 @@ def test_reconcile_seeds_one_baseline_when_history_is_empty(monkeypatch):
 
     assert settings.reconcile_external_change() == settings.Settings()
     assert "FOR UPDATE" in cursor.executed[0][0]
-    assert cursor.executed[-1][1][-1] == "baseline"
+    event_inserts = [
+        call for call in cursor.executed
+        if "INSERT INTO auto_lunch_setting_events" in call[0]
+    ]
+    assert event_inserts[0][1][-1] == "baseline"
 
 
 def test_reconcile_records_one_external_change(monkeypatch):
@@ -222,7 +339,33 @@ def test_reconcile_records_one_external_change(monkeypatch):
 
     settings.reconcile_external_change()
 
-    assert cursor.executed[-1][1][-3:] == (None, None, "external")
+    event_inserts = [
+        call for call in cursor.executed
+        if "INSERT INTO auto_lunch_setting_events" in call[0]
+    ]
+    assert event_inserts[0][1][-3:] == (None, None, "external")
+
+
+def test_reconcile_records_a_flex_only_external_change(monkeypatch):
+    persisted_live = {
+        "enabled": True, "observe_only": False,
+        "flex_after_hours": 6.0, "flex_minutes": 45,
+    }
+    previous_live = {
+        "after_enabled": True, "after_observe_only": False,
+        "after_flex_after_hours": 5.0, "after_flex_minutes": 30,
+    }
+    cursor = RecordingCursor([persisted_live, previous_live])
+    monkeypatch.setattr(db, "cursor", cursor_context(cursor))
+
+    observed = settings.reconcile_external_change()
+
+    event_inserts = [
+        call for call in cursor.executed
+        if "INSERT INTO auto_lunch_setting_events" in call[0]
+    ]
+    assert observed == settings.Settings(True, False, 6.0, 45)
+    assert event_inserts[0][1][-3:] == (None, None, "external")
 
 
 def test_reconcile_does_not_duplicate_matching_signature(monkeypatch):
@@ -235,7 +378,10 @@ def test_reconcile_does_not_duplicate_matching_signature(monkeypatch):
 
     settings.reconcile_external_change()
 
-    assert len(cursor.executed) == 2
+    assert all(
+        "INSERT INTO auto_lunch_setting_events" not in sql
+        for sql, _params in cursor.executed
+    )
 
 
 def test_reconcile_refreshes_the_shared_cache(monkeypatch):
@@ -250,4 +396,38 @@ def test_reconcile_refreshes_the_shared_cache(monkeypatch):
 
     settings.reconcile_external_change()
 
+    cache_set.assert_called_once_with(settings.Settings())
+
+
+def test_reconcile_does_not_publish_cache_when_commit_fails(monkeypatch):
+    latest = {
+        "after_enabled": False, "after_observe_only": True,
+        "after_flex_after_hours": 5.0, "after_flex_minutes": 30,
+    }
+    cursor = RecordingCursor([OFF, latest])
+    monkeypatch.setattr(db, "cursor", cursor_context(cursor, fail_after_yield=True))
+    cache_set = Mock()
+    monkeypatch.setattr(settings._store, "set", cache_set)
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        settings.reconcile_external_change()
+
+    cache_set.assert_not_called()
+
+
+def test_reconcile_returns_persisted_state_when_audit_append_fails(
+    monkeypatch, caplog,
+):
+    live = {
+        "after_enabled": True, "after_observe_only": False,
+        "after_flex_after_hours": 5.0, "after_flex_minutes": 30,
+    }
+    cursor = FailingAuditCursor([OFF, live])
+    monkeypatch.setattr(db, "cursor", cursor_context(cursor))
+    cache_set = Mock()
+    monkeypatch.setattr(settings._store, "set", cache_set)
+
+    assert settings.reconcile_external_change() == settings.Settings()
+    assert "external change audit failed" in caplog.text
+    assert any("ROLLBACK TO SAVEPOINT" in sql for sql, _ in cursor.executed)
     cache_set.assert_called_once_with(settings.Settings())

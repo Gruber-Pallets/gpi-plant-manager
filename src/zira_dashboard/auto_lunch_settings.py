@@ -5,9 +5,13 @@ same pattern as schedule_store.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from threading import Lock
 
 from ._singleton import CachedSingleton
+
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -132,26 +136,43 @@ def _event_after_settings(row: dict) -> Settings:
 
 def reconcile_external_change() -> Settings:
     from . import db
-    with db.cursor() as cur:
-        cur.execute(
-            f"SELECT {_FIELDS} FROM auto_lunch_settings WHERE id = 1 FOR UPDATE"
-        )
-        row = cur.fetchone()
-        persisted = _row_to_settings(row) if row else DEFAULT
-        cur.execute(
-            "SELECT after_enabled, after_observe_only, after_flex_after_hours, "
-            "after_flex_minutes FROM auto_lunch_setting_events "
-            "ORDER BY changed_at DESC, id DESC LIMIT 1"
-        )
-        latest = cur.fetchone()
-        if latest is None:
-            _insert_event(cur, None, persisted, None, None, "baseline")
-        else:
-            audited = _event_after_settings(latest)
-            if audited != persisted:
-                _insert_event(cur, audited, persisted, None, None, "external")
-    _store.set(persisted)
-    return persisted
+    with _save_lock:
+        with db.cursor() as cur:
+            cur.execute(
+                f"SELECT {_FIELDS} FROM auto_lunch_settings "
+                "WHERE id = 1 FOR UPDATE"
+            )
+            row = cur.fetchone()
+            persisted = _row_to_settings(row) if row else DEFAULT
+            cur.execute("SAVEPOINT auto_lunch_external_audit")
+            try:
+                cur.execute(
+                    "SELECT after_enabled, after_observe_only, "
+                    "after_flex_after_hours, after_flex_minutes "
+                    "FROM auto_lunch_setting_events "
+                    "ORDER BY changed_at DESC, id DESC LIMIT 1"
+                )
+                latest = cur.fetchone()
+                if latest is None:
+                    _insert_event(
+                        cur, None, persisted, None, None, "baseline"
+                    )
+                else:
+                    audited = _event_after_settings(latest)
+                    if audited != persisted:
+                        _insert_event(
+                            cur, audited, persisted, None, None, "external"
+                        )
+            except Exception:
+                _log.warning(
+                    "Auto-Lunch external change audit failed", exc_info=True
+                )
+                cur.execute("ROLLBACK TO SAVEPOINT auto_lunch_external_audit")
+                cur.execute("RELEASE SAVEPOINT auto_lunch_external_audit")
+            else:
+                cur.execute("RELEASE SAVEPOINT auto_lunch_external_audit")
+        _store.set(persisted)
+        return persisted
 
 
 def reload() -> Settings:

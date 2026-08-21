@@ -12,12 +12,18 @@ _DETAIL = "Lunch deductions are not being written. Restore Live mode."
 
 
 def observe() -> Settings:
-    persisted = auto_lunch_settings.reload()
     try:
         return auto_lunch_settings.reconcile_external_change()
     except Exception:
         _log.warning("Auto-Lunch external change audit failed", exc_info=True)
-        return persisted
+        try:
+            return auto_lunch_settings.reload()
+        except Exception:
+            _log.error(
+                "Auto-Lunch settings reload failed; using safe defaults",
+                exc_info=True,
+            )
+            return auto_lunch_settings.DEFAULT
 
 
 def mode_label(settings: Settings) -> str:
