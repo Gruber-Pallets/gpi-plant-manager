@@ -176,7 +176,11 @@
       </div>
     {% endfor %}
     <div class="queue-empty" data-queue-empty {% if queue %}hidden{% endif %}>
+      {% if snapshot.get('source_errors') %}
+      Some checks could not load. Try again.
+      {% else %}
       Inbox zero — nothing needs you right now.
+      {% endif %}
     </div>
   </div>
 

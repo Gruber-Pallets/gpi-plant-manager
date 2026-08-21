@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from threading import RLock
 
@@ -14,6 +15,15 @@ _UNSET = object()
 _refresh_lock = RLock()
 _state_lock = RLock()
 _published_alert: object = _UNSET
+
+
+class AutoLunchSourceError(RuntimeError):
+    """A fresh reader-facing error for a failed persisted observation."""
+
+
+@dataclass(frozen=True, slots=True)
+class _FailureSnapshot:
+    message: str = "Auto-Lunch settings unavailable."
 
 
 def observe() -> Settings:
@@ -54,38 +64,44 @@ def _alert_for(current: Settings) -> dict | None:
 
 
 def _copy_alert(alert: object) -> dict | None:
-    if isinstance(alert, Exception):
-        raise alert
+    if isinstance(alert, _FailureSnapshot):
+        raise AutoLunchSourceError(alert.message) from None
     return dict(alert) if isinstance(alert, dict) else None
+
+
+def _publish(alert: object) -> None:
+    global _published_alert
+
+    with _state_lock:
+        _published_alert = alert
+
+
+def _observe_and_publish() -> dict | None:
+    try:
+        observed_alert = _alert_for(observe())
+    except Exception:
+        _publish(_FailureSnapshot())
+        raise
+    _publish(observed_alert)
+    return _copy_alert(observed_alert)
 
 
 def refresh() -> dict | None:
     """Observe persisted settings and atomically publish the resulting alert."""
-    global _published_alert
     with _refresh_lock:
-        try:
-            observed_alert = _alert_for(observe())
-        except Exception as exc:
-            with _state_lock:
-                _published_alert = exc
-            raise
-        with _state_lock:
-            _published_alert = observed_alert
-            return _copy_alert(_published_alert)
+        return _observe_and_publish()
 
 
 def current_alert() -> dict | None:
     """Return the warmed alert, observing once if this process is still cold."""
-    global _published_alert
     with _state_lock:
-        if _published_alert is not _UNSET:
-            return _copy_alert(_published_alert)
+        published = _published_alert
+    if published is not _UNSET:
+        return _copy_alert(published)
 
     with _refresh_lock:
         with _state_lock:
-            if _published_alert is not _UNSET:
-                return _copy_alert(_published_alert)
-        observed_alert = _alert_for(observe())
-        with _state_lock:
-            _published_alert = observed_alert
-            return _copy_alert(_published_alert)
+            published = _published_alert
+        if published is not _UNSET:
+            return _copy_alert(published)
+        return _observe_and_publish()

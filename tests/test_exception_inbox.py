@@ -23,6 +23,7 @@ from zira_dashboard.routes import exceptions as exceptions_route
 from zira_dashboard.routes import staffing as staffing_routes
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "zira_dashboard" / "static"
+_REAL_AUTO_LUNCH_CURRENT_ALERT = auto_lunch_guard.current_alert
 
 
 @pytest.fixture(autouse=True)
@@ -590,6 +591,64 @@ def test_auto_lunch_guard_failure_degrades_without_breaking_inbox(monkeypatch):
     assert {"source": "Auto-Lunch"} in snapshot["source_errors"]
 
 
+def test_published_auto_lunch_failure_flows_through_inbox_and_recovers(monkeypatch):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "current_alert",
+        _REAL_AUTO_LUNCH_CURRENT_ALERT,
+    )
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "_published_alert",
+        auto_lunch_guard._UNSET,
+    )
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "observe",
+        lambda: (_ for _ in ()).throw(RuntimeError("settings unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="settings unavailable"):
+        auto_lunch_guard.refresh()
+    try:
+        auto_lunch_guard.current_alert()
+    except Exception as exc:  # noqa: BLE001 -- verify the cached failure boundary
+        assert isinstance(exc, auto_lunch_guard.AutoLunchSourceError)
+    else:
+        pytest.fail("published failure did not raise")
+
+    failed = exception_inbox.build_snapshot()
+    failed_section = next(s for s in failed["sections"] if s["id"] == "auto_lunch")
+    assert failed_section["rows"] == []
+    assert failed["source_errors"] == [{"source": "Auto-Lunch"}]
+
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "observe",
+        lambda: auto_lunch_guard.Settings(True, False, 5.0, 30),
+    )
+    assert auto_lunch_guard.refresh() is None
+    live = exception_inbox.build_snapshot()
+    live_section = next(s for s in live["sections"] if s["id"] == "auto_lunch")
+    assert live_section["rows"] == []
+    assert {"source": "Auto-Lunch"} not in live["source_errors"]
+
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "observe",
+        lambda: auto_lunch_guard.Settings(False, True, 5.0, 30),
+    )
+    assert auto_lunch_guard.refresh()["label"] == "Off"
+    off = exception_inbox.build_snapshot()
+    off_section = next(s for s in off["sections"] if s["id"] == "auto_lunch")
+    assert [row["label"] for row in off_section["rows"]] == ["Off"]
+    assert {"source": "Auto-Lunch"} not in off["source_errors"]
+
+
 def test_build_snapshot_surfaces_an_unsafe_roster_sync_as_urgent(monkeypatch):
     from zira_dashboard import odoo_sync
 
@@ -1023,6 +1082,22 @@ def test_exceptions_page_shows_inbox_zero_when_queue_empty(monkeypatch):
 
     assert resp.status_code == 200
     assert "Inbox zero — nothing needs you right now." in resp.text
+
+
+def test_exceptions_page_does_not_claim_all_clear_when_empty_source_failed(monkeypatch):
+    snapshot = _snapshot()
+    snapshot["total"] = 0
+    snapshot["queue"] = []
+    snapshot["sections"] = []
+    snapshot["source_errors"] = [{"source": "Auto-Lunch"}]
+    monkeypatch.setattr(exceptions_route.exception_inbox, "build_snapshot", lambda: snapshot)
+    client = TestClient(app)
+
+    resp = client.get("/exceptions")
+
+    assert resp.status_code == 200
+    assert "Some checks could not load. Try again." in resp.text
+    assert "Inbox zero — nothing needs you right now." not in resp.text
 
 
 def test_exceptions_page_bootstraps_nav_summary(monkeypatch):

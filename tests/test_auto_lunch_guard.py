@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
+import traceback
 
 import pytest
 
@@ -85,6 +86,53 @@ def test_current_alert_serializes_concurrent_cold_start(monkeypatch):
     assert calls == ["observe"]
 
 
+def test_concurrent_cold_failure_is_published_once_and_refresh_recovers(monkeypatch):
+    observation_started = Event()
+    release_observation = Event()
+    waiter_one_started = Event()
+    waiter_two_started = Event()
+    failures = []
+
+    def fail_observation():
+        failures.append(RuntimeError("settings unavailable"))
+        observation_started.set()
+        assert release_observation.wait(timeout=2)
+        raise failures[-1]
+
+    def wait_for_alert(started):
+        started.set()
+        return guard.current_alert()
+
+    monkeypatch.setattr(guard, "observe", fail_observation)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        initiating = pool.submit(guard.current_alert)
+        assert observation_started.wait(timeout=2)
+        waiter_one = pool.submit(wait_for_alert, waiter_one_started)
+        waiter_two = pool.submit(wait_for_alert, waiter_two_started)
+        assert waiter_one_started.wait(timeout=2)
+        assert waiter_two_started.wait(timeout=2)
+        release_observation.set()
+
+        initiating_failure = initiating.exception(timeout=2)
+        waiter_failures = [
+            waiter_one.exception(timeout=2),
+            waiter_two.exception(timeout=2),
+        ]
+
+    assert len(failures) == 1
+    assert initiating_failure is failures[0]
+    assert all(isinstance(exc, guard.AutoLunchSourceError) for exc in waiter_failures)
+    assert all("settings unavailable" in str(exc) for exc in waiter_failures)
+
+    monkeypatch.setattr(
+        guard,
+        "observe",
+        lambda: Settings(False, True, 5.0, 30),
+    )
+    assert guard.refresh()["label"] == "Off"
+    assert guard.current_alert()["label"] == "Off"
+
+
 def test_refresh_publishes_latest_alert_without_consumer_reobservation(monkeypatch):
     observed = iter([
         Settings(False, True, 5.0, 30),
@@ -123,6 +171,46 @@ def test_failed_refresh_replaces_stale_alert_with_source_failure(monkeypatch):
         guard.refresh()
     with pytest.raises(RuntimeError, match="settings unavailable"):
         guard.current_alert()
+
+
+def test_published_failure_raises_fresh_bounded_exceptions_until_recovery(monkeypatch):
+    original = RuntimeError("settings unavailable")
+    monkeypatch.setattr(
+        guard,
+        "observe",
+        lambda: (_ for _ in ()).throw(original),
+    )
+
+    with pytest.raises(RuntimeError, match="settings unavailable") as initiating:
+        guard.refresh()
+
+    assert initiating.value is original
+    assert guard._published_alert is not original
+    assert not isinstance(guard._published_alert, BaseException)
+
+    published_failures = []
+    traceback_lengths = []
+    for _ in range(3):
+        try:
+            guard.current_alert()
+        except Exception as exc:  # noqa: BLE001 -- inspect the published source error
+            published_failures.append(exc)
+            traceback_lengths.append(len(traceback.extract_tb(exc.__traceback__)))
+        else:
+            pytest.fail("published failure did not raise")
+
+    assert all(isinstance(exc, guard.AutoLunchSourceError) for exc in published_failures)
+    assert len({id(exc) for exc in published_failures}) == 3
+    assert len(set(traceback_lengths)) == 1
+    assert traceback_lengths[0] <= 3
+
+    monkeypatch.setattr(
+        guard,
+        "observe",
+        lambda: Settings(True, False, 5.0, 30),
+    )
+    assert guard.refresh() is None
+    assert guard.current_alert() is None
 
 
 def test_current_alert_returns_prior_publication_while_refresh_observes(monkeypatch):
