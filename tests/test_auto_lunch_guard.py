@@ -1,9 +1,20 @@
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+
+import pytest
 
 from zira_dashboard import auto_lunch_guard as guard
 from zira_dashboard import db
 from zira_dashboard import inbox_keys
 from zira_dashboard.auto_lunch_settings import Settings
+
+_UNSET = getattr(guard, "_UNSET", object())
+
+
+@pytest.fixture(autouse=True)
+def _reset_published_alert(monkeypatch):
+    monkeypatch.setattr(guard, "_published_alert", _UNSET, raising=False)
 
 
 class FailingAuditCursor:
@@ -28,6 +39,70 @@ def cursor_context(cursor):
 def test_live_mode_has_no_alert_even_with_nondefault_flex(monkeypatch):
     monkeypatch.setattr(guard, "observe", lambda: Settings(True, False, 7.0, 60))
     assert guard.current_alert() is None
+
+
+def test_current_alert_cold_start_observes_once_then_reuses_published_value(
+    monkeypatch,
+):
+    calls = []
+    off = Settings(False, True, 5.0, 30)
+    monkeypatch.setattr(guard, "observe", lambda: calls.append("observe") or off)
+
+    assert guard.current_alert()["label"] == "Off"
+    assert guard.current_alert()["label"] == "Off"
+
+    assert calls == ["observe"]
+
+
+def test_current_alert_serializes_concurrent_cold_start(monkeypatch):
+    first_observation_started = Event()
+    release_first_observation = Event()
+    second_observation_started = Event()
+    calls = []
+    off = Settings(False, True, 5.0, 30)
+
+    def observe():
+        calls.append("observe")
+        if len(calls) == 1:
+            first_observation_started.set()
+            assert release_first_observation.wait(timeout=2)
+        else:
+            second_observation_started.set()
+        return off
+
+    monkeypatch.setattr(guard, "observe", observe)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(guard.current_alert)
+        assert first_observation_started.wait(timeout=2)
+        second = pool.submit(guard.current_alert)
+        try:
+            assert not second_observation_started.wait(timeout=0.2)
+        finally:
+            release_first_observation.set()
+        assert first.result(timeout=2)["label"] == "Off"
+        assert second.result(timeout=2)["label"] == "Off"
+
+    assert calls == ["observe"]
+
+
+def test_refresh_publishes_latest_alert_without_consumer_reobservation(monkeypatch):
+    observed = iter([
+        Settings(False, True, 5.0, 30),
+        Settings(True, False, 5.0, 30),
+    ])
+    calls = []
+
+    def observe():
+        calls.append("observe")
+        return next(observed)
+
+    monkeypatch.setattr(guard, "observe", observe)
+
+    assert guard.refresh()["label"] == "Off"
+    assert guard.current_alert()["label"] == "Off"
+    assert guard.refresh() is None
+    assert guard.current_alert() is None
+    assert calls == ["observe", "observe"]
 
 
 def test_off_mode_returns_stable_urgent_inbox_row(monkeypatch):

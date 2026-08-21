@@ -74,13 +74,19 @@ def warm_once() -> None:
 
 def warm_inbox_once() -> None:
     """Force-refresh the inbox top-nav sub-caches (assignments-todo +
-    late-report). ``build_summary()`` renders these into the Inbox badge on
+    late-report) and publish the Auto-Lunch settings guard. ``build_summary()``
+    renders these into the Inbox badge on
     EVERY page via _topnav.html; their 30 s in-process TTL doesn't slide on
     hits, so without this a human repeatedly pays the cold Zira/Odoo cascade
     just to draw the nav. Run on a cadence below the 30 s TTL (see _tick_inbox)
     so the badge is always served warm. Each source refreshes independently;
     a failure must never bubble (the warmer loop must never die)."""
+    from . import auto_lunch_guard
     from .routes.staffing import assignments_todo_payload, late_report_payload
+    try:
+        auto_lunch_guard.refresh()
+    except Exception as e:  # noqa: BLE001 — warmer must never bubble
+        _log.warning("page_warmer: auto-lunch guard refresh failed: %s", e)
     try:
         assignments_todo_payload(force=True)
     except Exception as e:  # noqa: BLE001 — warmer must never bubble

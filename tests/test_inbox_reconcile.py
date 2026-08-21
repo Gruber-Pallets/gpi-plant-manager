@@ -99,6 +99,24 @@ def test_complete_kinds_includes_healthy_roster_sync_alert():
     assert "odoo_roster_sync" in inbox_reconcile._complete_kinds(snapshot)
 
 
+def test_complete_kinds_includes_healthy_auto_lunch_but_skips_source_error():
+    live_snapshot = {
+        "source_errors": [],
+        "sections": [
+            {
+                "id": "auto_lunch",
+                "count": 0,
+                "rows": [],
+            },
+        ],
+    }
+
+    assert "auto_lunch" in inbox_reconcile._complete_kinds(live_snapshot)
+
+    live_snapshot["source_errors"] = [{"source": "Auto-Lunch"}]
+    assert "auto_lunch" not in inbox_reconcile._complete_kinds(live_snapshot)
+
+
 def _mirror_row(**over):
     base = {
         "item_key": "missing_wc:1", "item_kind": "missing_wc",
@@ -134,6 +152,71 @@ def test_run_once_logs_auto_resolved_for_silent_departure(monkeypatch):
     assert logged[0]["action"] == "auto_resolved"
     assert logged[0]["item_key"] == "missing_wc:1"
     assert logged[0]["actor_upn"] is None
+
+
+def test_run_once_auto_resolves_live_auto_lunch_after_grace(monkeypatch):
+    from zira_dashboard import exception_inbox, inbox_log
+
+    snapshot = {
+        "queue": [],
+        "source_errors": [],
+        "sections": [{"id": "auto_lunch", "count": 0, "rows": []}],
+    }
+    item_key = "auto_lunch:setting"
+    mirror_row = _mirror_row(
+        item_key=item_key,
+        item_kind="auto_lunch",
+        person_name="Auto-Lunch",
+        category_label="Auto-Lunch",
+        priority="urgent",
+    )
+    monkeypatch.setattr(exception_inbox, "build_snapshot", lambda: snapshot)
+    monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {item_key: mirror_row})
+    monkeypatch.setattr(inbox_reconcile, "_upsert", lambda key, info: None)
+    deleted, logged = [], []
+    monkeypatch.setattr(inbox_reconcile, "_delete", deleted.append)
+    monkeypatch.setattr(inbox_log, "has_human_event_since", lambda key, since: False)
+    monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 1)
+
+    inbox_reconcile.run_once()
+
+    assert deleted == [item_key]
+    assert len(logged) == 1
+    assert logged[0] == {
+        "item_kind": "auto_lunch",
+        "item_key": item_key,
+        "person_name": "Auto-Lunch",
+        "category_label": "Auto-Lunch",
+        "action": "auto_resolved",
+        "outcome": "Auto-resolved",
+        "actor_upn": None,
+        "actor_name": None,
+        "source": "auto",
+    }
+
+
+def test_run_once_keeps_live_auto_lunch_when_source_errored(monkeypatch):
+    from zira_dashboard import exception_inbox, inbox_log
+
+    snapshot = {
+        "queue": [],
+        "source_errors": [{"source": "Auto-Lunch"}],
+        "sections": [{"id": "auto_lunch", "count": 0, "rows": []}],
+    }
+    item_key = "auto_lunch:setting"
+    mirror_row = _mirror_row(item_key=item_key, item_kind="auto_lunch")
+    monkeypatch.setattr(exception_inbox, "build_snapshot", lambda: snapshot)
+    monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {item_key: mirror_row})
+    monkeypatch.setattr(inbox_reconcile, "_upsert", lambda key, info: None)
+    deleted, logged = [], []
+    monkeypatch.setattr(inbox_reconcile, "_delete", deleted.append)
+    monkeypatch.setattr(inbox_log, "has_human_event_since", lambda key, since: False)
+    monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 1)
+
+    inbox_reconcile.run_once()
+
+    assert deleted == []
+    assert logged == []
 
 
 def test_run_once_skips_auto_when_human_resolved(monkeypatch):

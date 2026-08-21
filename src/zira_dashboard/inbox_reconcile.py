@@ -25,6 +25,7 @@ _AUTO_RESOLVE_GRACE_SECONDS = 90
 # Snapshot section id -> canonical item_kind.
 _SECTION_KIND = {
     "odoo_roster_sync": "odoo_roster_sync",
+    "auto_lunch": "auto_lunch",
     "assignments": "assignment",
     "plant_schedule": "plant_schedule",
     "late": "late",
@@ -38,6 +39,7 @@ _SECTION_KIND = {
 # used to tell whether a category's source errored this tick.
 _KIND_SOURCE = {
     "odoo_roster_sync": "Timeclock Roster",
+    "auto_lunch": "Auto-Lunch",
     "assignment": "Assignments To Do",
     "plant_schedule": "Plant Schedule",
     "late": "Late / Absence",

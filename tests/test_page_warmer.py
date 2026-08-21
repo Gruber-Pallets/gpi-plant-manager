@@ -213,6 +213,67 @@ def test_warm_inbox_once_force_refreshes_both_payloads(monkeypatch):
     assert ("late", True) in calls
 
 
+def test_warm_inbox_once_refreshes_auto_lunch_guard_once(monkeypatch):
+    from zira_dashboard import auto_lunch_guard, page_warmer
+
+    calls = []
+    monkeypatch.setattr(
+        "zira_dashboard.routes.staffing.assignments_todo_payload",
+        lambda force=False: None,
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.routes.staffing.late_report_payload",
+        lambda force=False: None,
+    )
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "refresh",
+        lambda: calls.append("auto_lunch"),
+        raising=False,
+    )
+
+    page_warmer.warm_inbox_once()
+
+    assert calls == ["auto_lunch"]
+
+
+def test_next_inbox_warm_tick_publishes_external_auto_lunch_change(monkeypatch):
+    from zira_dashboard import auto_lunch_guard, page_warmer
+    from zira_dashboard.auto_lunch_settings import Settings
+
+    observed = iter([
+        Settings(False, True, 5.0, 30),
+        Settings(True, False, 5.0, 30),
+    ])
+    calls = []
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "_published_alert",
+        getattr(auto_lunch_guard, "_UNSET", object()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "observe",
+        lambda: calls.append("observe") or next(observed),
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.routes.staffing.assignments_todo_payload",
+        lambda force=False: None,
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.routes.staffing.late_report_payload",
+        lambda force=False: None,
+    )
+
+    page_warmer.warm_inbox_once()
+    assert auto_lunch_guard.current_alert()["label"] == "Off"
+
+    page_warmer.warm_inbox_once()
+    assert auto_lunch_guard.current_alert() is None
+    assert calls == ["observe", "observe"]
+
+
 def test_warm_inbox_once_swallows_a_failing_source(monkeypatch):
     called = []
 

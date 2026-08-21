@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+from threading import RLock
 
 from . import auto_lunch_settings, inbox_keys
 from .auto_lunch_settings import Settings
 
 _log = logging.getLogger(__name__)
 _DETAIL = "Lunch deductions are not being written. Restore Live mode."
+_UNSET = object()
+_publish_lock = RLock()
+_published_alert: object = _UNSET
 
 
 def observe() -> Settings:
@@ -34,8 +38,7 @@ def mode_label(settings: Settings) -> str:
     return "Live"
 
 
-def current_alert() -> dict | None:
-    current = observe()
+def _alert_for(current: Settings) -> dict | None:
     label = mode_label(current)
     if label == "Live":
         return None
@@ -50,3 +53,24 @@ def current_alert() -> dict | None:
         "row_key": item_key,
         "item_key": item_key,
     }
+
+
+def _copy_alert(alert: object) -> dict | None:
+    return dict(alert) if isinstance(alert, dict) else None
+
+
+def refresh() -> dict | None:
+    """Observe persisted settings and atomically publish the resulting alert."""
+    global _published_alert
+    with _publish_lock:
+        _published_alert = _alert_for(observe())
+        return _copy_alert(_published_alert)
+
+
+def current_alert() -> dict | None:
+    """Return the warmed alert, observing once if this process is still cold."""
+    global _published_alert
+    with _publish_lock:
+        if _published_alert is _UNSET:
+            _published_alert = _alert_for(observe())
+        return _copy_alert(_published_alert)
