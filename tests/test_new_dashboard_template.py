@@ -57,6 +57,7 @@ def _render_new(*, customs=None, new_bars=None, configured_new_meter_count=1,
         today="2026-07-10",
         goat_alerts_active=[],
         goat_contenders=[],
+        goat_holders=lambda: {},
     )
 
 
@@ -108,6 +109,23 @@ def _segmented_bar():
             },
         ],
     }
+
+
+def _legacy_worker_bar():
+    bar = _segmented_bar()
+    bar.update(
+        name="Dismantler 1",
+        who="Jesus G.",
+        units=567,
+        expected=520,
+        pct=90.0,
+        target_pct=80.0,
+        has_segments=False,
+        has_worker_history=True,
+        uses_split_format=False,
+        no_one_here_now=False,
+    )
+    return bar
 
 
 def test_new_has_full_recycling_range_toolbar():
@@ -247,6 +265,31 @@ def test_new_unsegmented_bar_keeps_legacy_fill_and_target():
     html = _render_new(new_bars=[bar])
     assert 'class="bar-fill"' in html
     assert 'class="bar-target-line"' in html
+
+
+def test_new_uninterrupted_worker_uses_legacy_horizontal_bar():
+    html = _render_new(new_bars=[_legacy_worker_bar()])
+    assert 'class="bar-fill"' in html
+    assert 'class="bar-target-line"' in html
+    assert 'class="worker-segment-fill' not in html
+    assert "Jesus G." in html
+
+
+def test_new_uninterrupted_worker_uses_legacy_vertical_bar():
+    html = _render_new(
+        customs={"new-bars": {"orientation": "vertical"}},
+        new_bars=[_legacy_worker_bar()],
+    )
+    assert 'class="vbar-fill"' in html
+    assert 'class="vbar-target-line"' in html
+    assert 'class="vworker-segment-fill' not in html
+
+
+def test_new_tv_uninterrupted_worker_keeps_legacy_bar():
+    html = _render_new(tv_mode=True, new_bars=[_legacy_worker_bar()])
+    assert 'class="bar-fill"' in html
+    assert 'class="worker-segment-fill' not in html
+    assert "Jesus G." in html
 
 
 def test_new_tv_keeps_full_worker_text_visible_in_shared_markup():

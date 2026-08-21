@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-20
 
+### Lunch stays one shift
+
+#### Fixes
+
+- **Lunch no longer splits one person's work into two bars.** If the same person comes back to the same work center after a planned break, the normal bar stays on screen. A real move to another work center still shows each person's part.
+
 ### Safer shared feedback build
 
 #### Improvements

@@ -108,6 +108,11 @@ def build_bars(
         })
 
     agg_segments = agg_segments or {}
+    agg_segment_display = agg_segment_display or {}
+    for row in out:
+        row["uses_split_format"] = bool(
+            not is_range and agg_segment_display.get(row["name"], False)
+        )
     spans = {
         row["name"]: sum(
             float(segment.get("runway_units", 0.0) or 0.0)
@@ -118,7 +123,7 @@ def build_bars(
     base = (
         max(
             spans[row["name"]]
-            if not is_range and spans[row["name"]] > 0
+            if row["uses_split_format"] and spans[row["name"]] > 0
             else max(float(row["units"]), float(row["expected"]))
             for row in out
         )
@@ -155,20 +160,20 @@ def build_bars(
             geometry.append(item)
             cursor += runway
         row["segments"] = geometry
-        row["has_segments"] = bool(geometry)
+        row["has_segments"] = bool(row["uses_split_format"] and geometry)
         row["has_worker_history"] = any(
             segment.get("person_name") for segment in geometry
         )
         row["no_one_here_now"] = bool(
             is_live
-            and geometry
+            and row["has_segments"]
             and not row["who"]
             and row["has_worker_history"]
         )
         row["pct"] = float(row["units"]) / scale * 100.0
         row["target_pct"] = (
             float(row["expected"]) / scale * 100.0
-            if scale and has_target_line and not geometry
+            if scale and has_target_line and not row["has_segments"]
             else None
         )
     return out

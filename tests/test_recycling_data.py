@@ -191,6 +191,7 @@ def test_build_bars_places_independent_runways_on_one_scale():
         is_range=False,
         agg_downtime={},
         agg_segments=segments,
+        agg_segment_display={"Repair 4": True},
         is_live=True,
     )
     (bar,) = bars
@@ -231,8 +232,12 @@ def test_build_bars_marks_live_station_empty_when_history_remains():
                 },
             )
         },
+        agg_segment_display={"Repair 4": True},
         is_live=True,
     )
+    assert bars[0]["uses_split_format"] is True
+    assert bars[0]["has_segments"] is True
+    assert bars[0]["target_pct"] is None
     assert bars[0]["no_one_here_now"] is True
 
 
@@ -278,12 +283,47 @@ def test_completed_shift_hides_worker_from_left_but_keeps_segment_history():
                 },
             )
         },
+        agg_segment_display={"Repair 4": True},
         is_live=False,
     )
     assert bars[0]["who"] is None
     assert bars[0]["no_one_here_now"] is False
     assert bars[0]["has_worker_history"] is True
     assert bars[0]["segments"][0]["person_name"] == "Humberto S."
+
+
+def test_build_bars_uses_legacy_geometry_for_uninterrupted_worker():
+    bars = rd.build_bars(
+        "Dismantler",
+        agg_active_names={"Dismantler 1"},
+        agg_category={"Dismantler 1": "Dismantler"},
+        agg_units={"Dismantler 1": 567},
+        agg_expected={"Dismantler 1": 520.0},
+        agg_who_today={"Dismantler 1": "Jesus G."},
+        is_range=False,
+        agg_downtime={},
+        agg_segments={
+            "Dismantler 1": ({
+                "person_name": "Jesus G.",
+                "person_label": "Jesus G.",
+                "actual_units": 567.0,
+                "goal_units": 520.0,
+                "runway_units": 567.0,
+                "is_active": True,
+                "result": "ahead",
+                "result_label": "47 ahead",
+            },),
+        },
+        agg_segment_display={"Dismantler 1": False},
+        is_live=True,
+    )
+
+    (bar,) = bars
+    assert bar["uses_split_format"] is False
+    assert bar["has_segments"] is False
+    assert bar["who"] == "Jesus G."
+    assert bar["target_pct"] is not None
+    assert bar["no_one_here_now"] is False
 
 
 def test_sort_bars_honors_widget_preference():

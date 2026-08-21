@@ -151,6 +151,7 @@ def test_recycling_transferred_worker_moves_into_bar_and_left_says_no_one_here_n
     assert "No one here now" in html
     assert "Humberto S." in html
     assert "worker-segment-fill" in html
+    assert "worker-segment-goal completed" in html
 
 
 def test_recycling_bar_row_no_assignment_fallback(monkeypatch):
