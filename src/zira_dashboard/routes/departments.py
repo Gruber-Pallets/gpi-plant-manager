@@ -752,6 +752,7 @@ def _render_recycling(
             agg_downtime=agg_downtime,
             agg_segments=aggregate.single_day_segments,
             agg_segment_display=aggregate.single_day_segment_display,
+            agg_producers=aggregate.single_day_producers,
             is_live=aggregate.single_day_is_live,
         )
 
@@ -1001,6 +1002,7 @@ def _render_new_dept(
         agg_downtime=aggregate.agg_downtime,
         agg_segments=aggregate.single_day_segments,
         agg_segment_display=aggregate.single_day_segment_display,
+        agg_producers=aggregate.single_day_producers,
         is_live=aggregate.single_day_is_live,
     )
     new_bars = sort_bars(new_bars, "new-bars", customs_all=customs_all)
