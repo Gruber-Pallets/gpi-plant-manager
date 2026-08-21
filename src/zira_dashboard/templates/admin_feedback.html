@@ -1,15 +1,11 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Feedback progress — GPI Plant Manager</title>
-  <link rel="icon" type="image/png" href="/static/gpi-logo.png">
-  <link rel="stylesheet" href="/static/tokens.css">
-  <link rel="stylesheet" href="/static/admin_feedback.css">
-</head>
-<body>
-  <main class="feedback-admin">
+{% extends "_base_app.html" %}
+{% block title %}Feedback progress{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/admin_feedback.css?v={{ static_v('admin_feedback.css') }}">
+{% endblock %}
+{% block topnav %}{% set active_nav = 'settings' %}{% include "_topnav.html" %}{% endblock %}
+{% block main_attrs %} class="feedback-admin"{% endblock %}
+{% block content %}
     <header class="feedback-admin__header">
       <div>
         <p class="eyebrow">Super-admin</p>
@@ -105,6 +101,4 @@
     {% else %}
       <p class="empty-state">No local feedback is waiting.</p>
     {% endif %}
-  </main>
-</body>
-</html>
+{% endblock %}

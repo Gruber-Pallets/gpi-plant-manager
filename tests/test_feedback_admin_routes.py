@@ -45,6 +45,7 @@ class ReturningCursor:
     def fetchone(self):
         return self.rows.pop(0) if self.rows else None
 
+
 def normalized_image() -> NormalizedImage:
     return NormalizedImage(
         jpeg_bytes=b"jpeg",
@@ -203,6 +204,16 @@ def test_admin_list_queries_local_and_sync_state(monkeypatch):
 
 def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
     monkeypatch.setenv("SUPER_ADMIN_UPNS", "dale@gruberpallets.com")
+    monkeypatch.setitem(
+        feedback_admin.templates.env.globals,
+        "nav_inbox_summary",
+        lambda: {"total": 0, "urgent_total": 0, "source_errors": []},
+    )
+    monkeypatch.setitem(
+        feedback_admin.templates.env.globals,
+        "static_v",
+        lambda _name: "test",
+    )
     rows = [
         {
             "id": 1,
