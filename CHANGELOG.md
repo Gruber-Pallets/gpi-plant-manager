@@ -49,6 +49,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **The new Odoo connection now checks every door before it can change feedback.** It keeps sign-ins private, requires the right feedback name and number, and refuses unsafe links or employee fields.
 - **The Odoo connection now remembers exactly what it is allowed to change.** It stops if any name, number, or detail is different.
 - **Plant Manager now knows exactly how feedback will fit the shared improvements list.** Each app gets its own name and number so records do not mix.
+- **Feedback sharing work can safely wait and continue after a restart.** The app remembers each step without putting private pictures in its work notes.
 
 ### Auto-Lunch stays visible
 

@@ -4,8 +4,14 @@ from zira_dashboard._schema import SCHEMA_DDL
 def test_schema_defines_feedback_table():
     assert "CREATE TABLE IF NOT EXISTS feedback" in SCHEMA_DDL
     for col in (
-        "id", "created_at", "submitter", "page_url", "category", "message",
-        "task_type", "odoo_task_id",
+        "id",
+        "created_at",
+        "submitter",
+        "page_url",
+        "category",
+        "message",
+        "task_type",
+        "odoo_task_id",
     ):
         assert col in SCHEMA_DDL, f"missing column {col}"
 
@@ -44,12 +50,32 @@ def test_feedback_schema_has_durable_odoo_outbox_and_immutable_manifest():
     assert "CREATE TABLE IF NOT EXISTS feedback_odoo_backfill_state" in ddl
 
 
+def test_feedback_remote_ids_use_signed_64_bit_columns_and_idempotent_migration():
+    ddl = " ".join(SCHEMA_DDL.split())
+    migration = ddl.split("DO $feedback_remote_ids_bigint$", 1)[1].split(
+        "$feedback_remote_ids_bigint$;", 1
+    )[0]
+    assert "odoo_improvement_id BIGINT" in ddl
+    assert "remote_id BIGINT" in ddl
+    assert (
+        "ALTER TABLE feedback_odoo_sync ALTER COLUMN odoo_improvement_id "
+        "TYPE BIGINT USING odoo_improvement_id::BIGINT"
+    ) in ddl
+    assert (
+        "ALTER TABLE feedback_odoo_attempts ALTER COLUMN remote_id "
+        "TYPE BIGINT USING remote_id::BIGINT"
+    ) in ddl
+    assert "attrelid = 'feedback_odoo_sync'::regclass" in ddl
+    assert "attrelid = 'feedback_odoo_attempts'::regclass" in ddl
+    assert ddl.count("atttypid = 'integer'::regtype") >= 2
+    assert migration.count("ALTER TABLE") == 2
+    assert "attempt_count" not in migration
+    assert "before_byte_length" not in migration
+
+
 def test_feedback_local_origin_requires_non_null_status():
     ddl = " ".join(SCHEMA_DDL.split())
-    assert (
-        "lifecycle_origin IS DISTINCT FROM 'local' OR ( status IS NOT NULL"
-        in ddl
-    )
+    assert "lifecycle_origin IS DISTINCT FROM 'local' OR ( status IS NOT NULL" in ddl
 
 
 def test_feedback_active_attempt_belongs_to_same_feedback():
@@ -57,8 +83,7 @@ def test_feedback_active_attempt_belongs_to_same_feedback():
     assert "UNIQUE (feedback_id, attempt_id)" in ddl
     assert (
         "FOREIGN KEY (feedback_id, active_attempt_id) REFERENCES "
-        "feedback_odoo_attempts(feedback_id, attempt_id)"
-        in ddl
+        "feedback_odoo_attempts(feedback_id, attempt_id)" in ddl
     )
 
 

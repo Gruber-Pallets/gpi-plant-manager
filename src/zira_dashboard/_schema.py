@@ -1552,7 +1552,7 @@ CREATE TABLE IF NOT EXISTS feedback_odoo_sync (
   feedback_id BIGINT PRIMARY KEY REFERENCES feedback(id),
   desired_version BIGINT NOT NULL CHECK (desired_version > 0),
   last_synced_version BIGINT NOT NULL DEFAULT 0 CHECK (last_synced_version >= 0),
-  odoo_improvement_id INTEGER,
+  odoo_improvement_id BIGINT,
   due_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   state TEXT NOT NULL DEFAULT 'idle' CHECK (state IN ('idle', 'in_flight', 'quarantined')),
@@ -1573,7 +1573,7 @@ CREATE TABLE IF NOT EXISTS feedback_odoo_attempts (
   feedback_id BIGINT NOT NULL REFERENCES feedback(id),
   projection_version BIGINT NOT NULL CHECK (projection_version > 0),
   mutation_kind TEXT NOT NULL CHECK (mutation_kind IN ('create', 'update')),
-  remote_id INTEGER,
+  remote_id BIGINT,
   manifest JSONB NOT NULL,
   manifest_digest TEXT NOT NULL CHECK (manifest_digest ~ '^[0-9a-f]{64}$'),
   before_sha256 TEXT,
@@ -1594,6 +1594,36 @@ CREATE TABLE IF NOT EXISTS feedback_odoo_attempts (
   UNIQUE (feedback_id, projection_version, attempt_id),
   UNIQUE (feedback_id, attempt_id)
 );
+
+DO $feedback_remote_ids_bigint$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_attribute
+    WHERE attrelid = 'feedback_odoo_sync'::regclass
+      AND attname = 'odoo_improvement_id'
+      AND atttypid = 'integer'::regtype
+      AND NOT attisdropped
+  ) THEN
+    ALTER TABLE feedback_odoo_sync
+      ALTER COLUMN odoo_improvement_id
+      TYPE BIGINT USING odoo_improvement_id::BIGINT;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_attribute
+    WHERE attrelid = 'feedback_odoo_attempts'::regclass
+      AND attname = 'remote_id'
+      AND atttypid = 'integer'::regtype
+      AND NOT attisdropped
+  ) THEN
+    ALTER TABLE feedback_odoo_attempts
+      ALTER COLUMN remote_id
+      TYPE BIGINT USING remote_id::BIGINT;
+  END IF;
+END
+$feedback_remote_ids_bigint$;
 
 DO $feedback_sync_fk$
 BEGIN
