@@ -1,16 +1,16 @@
-"""User feedback submission → Odoo task, and a per-user status list."""
+"""Local-first user feedback submission and a per-user status list."""
 
 from __future__ import annotations
 
 import html
 import logging
-from datetime import date
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from .. import feedback_store, odoo_client
+from ..feedback_image import ImageRejected, MAX_INPUT_BYTES, normalize_image
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -22,6 +22,11 @@ _MAX_FILE_BYTES = 10 * 1024 * 1024
 _ALLOWED_PREFIXES = ("image/",)
 _ALLOWED_TYPES = ("application/pdf",)
 _SOURCE_APP = "GPI Plant Manager (plant)"
+_LEGACY_STATUS = {
+    "open": "requested",
+    "done": "completed",
+    "rejected": "declined",
+}
 
 
 def _optional_text(value: str | None) -> str | None:
@@ -80,7 +85,7 @@ async def submit_feedback(
     type: str = Form("bug"),
     description: str = Form(...),
     page_url: str | None = Form(None),
-    files: list[UploadFile] = File(default=[]),
+    screenshot: UploadFile | None = File(default=None),
 ) -> JSONResponse:
     kind = "feature" if type == "feature" else "bug"
     text = (description or "").strip()
@@ -89,79 +94,65 @@ async def submit_feedback(
                             status_code=400)
 
     submitter = getattr(request.state, "user_upn", None)
-    name = getattr(request.state, "user_name", None)
     safe_url = _safe_page_url(page_url)
 
-    blobs: list[tuple[str, str | None, bytes]] = []
-    for upload in files or []:
-        if not upload.filename or not _allowed_upload(upload):
-            continue
-        raw = await upload.read()
-        if not raw or len(raw) > _MAX_FILE_BYTES:
-            continue
-        blobs.append((upload.filename, upload.content_type, raw))
-
-    try:
-        project_id = odoo_client.ensure_feedback_project()
-        tag_id = odoo_client.ensure_feedback_tag(_TYPE_TAG[kind])
-        task_id = odoo_client.create_feedback_task(
-            project_id=project_id,
-            name=_title_from(kind, text),
-            description_html=_description_html(text, submitter, name, safe_url),
-            assignee_uid=odoo_client.authenticate(),
-            tag_id=tag_id,
-            deadline=date.today().isoformat(),
-        )
-    except Exception:
-        log.exception("feedback: failed to create Odoo task")
-        return JSONResponse(
-            {"ok": False, "error": "Couldn't reach Odoo — please try again."},
-            status_code=502,
-        )
-
-    for filename, mimetype, raw in blobs:
+    before_image = None
+    if screenshot is not None:
+        raw = await screenshot.read(MAX_INPUT_BYTES + 1)
         try:
-            odoo_client.add_task_attachment(
-                task_id=task_id, filename=filename, mimetype=mimetype, raw_bytes=raw,
+            before_image = normalize_image(raw)
+        except ImageRejected as error:
+            return JSONResponse(
+                {"ok": False, "error": str(error)},
+                status_code=400,
             )
-        except Exception:
-            log.exception("feedback: attachment upload failed for task %s", task_id)
 
-    new_id = feedback_store.insert(
+    new_id = feedback_store.create_submission(
         message=text,
         submitter=submitter,
         page_url=safe_url,
         task_type=kind,
-        odoo_task_id=task_id,
+        status="requested",
+        before_image=before_image,
     )
-    return JSONResponse({"ok": True, "id": new_id, "task_id": task_id})
+    return JSONResponse({"ok": True, "id": new_id})
 
 
 @router.get("/api/feedback/mine")
 def my_feedback(request: Request) -> JSONResponse:
     submitter = getattr(request.state, "user_upn", None)
     rows = feedback_store.for_submitter(submitter)
-    task_ids = [r["odoo_task_id"] for r in rows if r.get("odoo_task_id")]
+    task_ids = [
+        row["odoo_task_id"]
+        for row in rows
+        if row.get("status") is None and row.get("odoo_task_id")
+    ]
     status_available = True
     try:
         stages = odoo_client.fetch_task_stage_names(task_ids) if task_ids else {}
     except Exception:
-        log.exception("feedback: could not read task stages")
+        log.exception("feedback: could not read legacy task stages")
         stages = {}
         status_available = False
 
     items = []
-    for r in rows:
-        message = (r.get("message") or "").strip()
+    for row in rows:
+        message = (row.get("message") or "").strip()
         title = message.splitlines()[0] if message else "(no description)"
         if len(title) > _TITLE_MAX:
             title = title[: _TITLE_MAX - 1].rstrip() + "…"
+        status = row.get("status")
+        if status is None:
+            legacy_bucket = odoo_client.feedback_status_bucket(
+                stages.get(row.get("odoo_task_id"))
+            )
+            status = _LEGACY_STATUS[legacy_bucket]
         items.append({
-            "type": r.get("task_type") or "bug",
+            "type": row.get("task_type") or "bug",
             "title": title,
-            "created_at": str(r.get("created_at") or ""),
-            "page_url": r.get("page_url"),
-            "status": odoo_client.feedback_status_bucket(stages.get(r.get("odoo_task_id"))),
+            "created_at": str(row.get("created_at") or ""),
+            "page_url": row.get("page_url"),
+            "status": status,
         })
 
     return JSONResponse({"ok": True, "items": items, "status_available": status_available})

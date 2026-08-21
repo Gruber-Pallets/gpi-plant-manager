@@ -116,6 +116,27 @@ def test_shared_feedback_assets_keep_submit_and_screenshot_support():
     assert "gpi:feedback-closed" in js
 
 
+def test_shared_feedback_holds_one_image_screenshot_and_local_statuses():
+    html = FEEDBACK_TEMPLATE.read_text(encoding="utf-8")
+    js = FEEDBACK_JS.read_text(encoding="utf-8")
+
+    assert 'id="fb-upload-btn" class="fb-upload">Add screenshot</button>' in html
+    assert 'accept="image/jpeg,image/png,image/webp"' in html
+    assert "multiple" not in html
+    assert "application/pdf" not in html
+    assert "var screenshot = null" in js
+    assert "var attachments = []" not in js
+    assert "form.append('screenshot', screenshot.file, screenshot.name)" in js
+    assert "form.append('files'" not in js
+    for status, label in (
+        ("requested", "Requested"),
+        ("in_progress", "In Progress"),
+        ("completed", "Completed"),
+        ("declined", "Declined"),
+    ):
+        assert f"{status}: '{label}'" in js
+
+
 def test_footer_js_skips_tv_mode_documents():
     js = JS.read_text(encoding="utf-8")
 

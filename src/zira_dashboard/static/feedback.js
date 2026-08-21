@@ -34,7 +34,7 @@
     bug: 'What broke, and what did you expect?',
     feature: 'What would you like to see, and why?',
   };
-  var attachments = [];   // {file, name, url}
+  var screenshot = null;   // {file, name, url}
   var currentType = 'bug';
   var activeModal = null;
   var activeOpener = null;
@@ -93,13 +93,13 @@
   }
 
   function resetSendForm() {
-    revokeAttachmentUrls();
-    attachments = [];
+    revokeScreenshotUrl();
+    screenshot = null;
     currentType = 'bug';
     var desc = $('fb-desc');
     if (desc) { desc.value = ''; desc.placeholder = PLACEHOLDERS.bug; }
     setType('bug');
-    renderAttachments();
+    renderScreenshot();
     var status = $('fb-status');
     if (status) { status.hidden = true; status.textContent = ''; }
   }
@@ -115,53 +115,46 @@
     if (desc) desc.placeholder = PLACEHOLDERS[currentType];
   }
 
-  function addFiles(fileList) {
-    Array.prototype.forEach.call(fileList || [], function (file) {
-      if (!file) return;
-      var isImage = /^image\//.test(file.type);
-      attachments.push({
-        file: file,
-        name: file.name || (isImage ? 'screenshot.png' : 'file'),
-        url: isImage ? URL.createObjectURL(file) : null,
-      });
-    });
-    renderAttachments();
+  function setScreenshot(file) {
+    if (!file || !/^image\/(jpeg|png|webp)$/.test(file.type)) return;
+    revokeScreenshotUrl();
+    screenshot = {
+      file: file,
+      name: file.name || 'screenshot.jpg',
+      url: URL.createObjectURL(file),
+    };
+    renderScreenshot();
   }
 
-  function revokeAttachmentUrls() {
-    attachments.forEach(function (att) {
-      if (att.url) URL.revokeObjectURL(att.url);
-    });
+  function revokeScreenshotUrl() {
+    if (screenshot && screenshot.url) URL.revokeObjectURL(screenshot.url);
   }
 
-  function renderAttachments() {
+  function renderScreenshot() {
     var box = $('fb-attachments');
     if (!box) return;
     box.innerHTML = '';
-    attachments.forEach(function (att, idx) {
-      var chip = document.createElement('span');
-      chip.className = 'fb-attachment-chip';
-      if (att.url) {
-        var img = document.createElement('img');
-        img.src = att.url; img.alt = '';
-        chip.appendChild(img);
-      }
-      var label = document.createElement('span');
-      label.textContent = att.name;
-      chip.appendChild(label);
-      var rm = document.createElement('button');
-      rm.type = 'button';
-      rm.className = 'fb-attachment-remove';
-      rm.setAttribute('aria-label', 'Remove attachment');
-      rm.textContent = '×';
-      rm.addEventListener('click', function () {
-        if (att.url) URL.revokeObjectURL(att.url);
-        attachments.splice(idx, 1);
-        renderAttachments();
-      });
-      chip.appendChild(rm);
-      box.appendChild(chip);
+    if (!screenshot) return;
+    var chip = document.createElement('span');
+    chip.className = 'fb-attachment-chip';
+    var img = document.createElement('img');
+    img.src = screenshot.url; img.alt = '';
+    chip.appendChild(img);
+    var label = document.createElement('span');
+    label.textContent = screenshot.name;
+    chip.appendChild(label);
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'fb-attachment-remove';
+    remove.setAttribute('aria-label', 'Remove screenshot');
+    remove.textContent = '×';
+    remove.addEventListener('click', function () {
+      revokeScreenshotUrl();
+      screenshot = null;
+      renderScreenshot();
     });
+    chip.appendChild(remove);
+    box.appendChild(chip);
   }
 
   function submitFeedback() {
@@ -178,7 +171,7 @@
     form.append('type', currentType);
     form.append('description', message);
     form.append('page_url', window.location.href);
-    attachments.forEach(function (att) { form.append('files', att.file, att.name); });
+    if (screenshot) form.append('screenshot', screenshot.file, screenshot.name);
 
     window.gpiFetch('/feedback', { method: 'POST', body: form })
       .then(function (r) { return r.json(); })
@@ -197,8 +190,13 @@
       });
   }
 
-  function statusLabel(s) {
-    return { open: 'Open', done: 'Done', rejected: 'Rejected' }[s] || 'Open';
+  function statusLabel(status) {
+    return {
+      requested: 'Requested',
+      in_progress: 'In Progress',
+      completed: 'Completed',
+      declined: 'Declined'
+    }[status] || 'Requested';
   }
 
   function renderMyFeedback(data) {
@@ -224,7 +222,7 @@
       meta.textContent = typeLabel + ' · ' + (it.created_at || '').slice(0, 10);
       main.appendChild(title); main.appendChild(meta);
       var pill = document.createElement('span');
-      pill.className = 'fb-status-pill is-' + (it.status || 'open');
+      pill.className = 'fb-status-pill is-' + (it.status || 'requested');
       pill.textContent = statusLabel(it.status);
       row.appendChild(main); row.appendChild(pill);
       body.appendChild(row);
@@ -282,21 +280,23 @@
     var uploadBtn = $('fb-upload-btn'), fileInput = $('fb-file-input');
     if (uploadBtn && fileInput) {
       uploadBtn.addEventListener('click', function () { fileInput.click(); });
-      fileInput.addEventListener('change', function () { addFiles(fileInput.files); fileInput.value = ''; });
+      fileInput.addEventListener('change', function () {
+        setScreenshot(fileInput.files && fileInput.files[0]);
+        fileInput.value = '';
+      });
     }
 
     var desc = $('fb-desc');
     if (desc) {
       desc.addEventListener('paste', function (event) {
         var items = (event.clipboardData && event.clipboardData.items) || [];
-        var imgs = [];
+        var image = null;
         Array.prototype.forEach.call(items, function (it) {
-          if (it.kind === 'file' && /^image\//.test(it.type)) {
-            var f = it.getAsFile();
-            if (f) imgs.push(f);
+          if (!image && it.kind === 'file' && /^image\/(jpeg|png|webp)$/.test(it.type)) {
+            image = it.getAsFile();
           }
         });
-        if (imgs.length) { event.preventDefault(); addFiles(imgs); }
+        if (image) { event.preventDefault(); setScreenshot(image); }
       });
     }
 

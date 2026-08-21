@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-20
 
+### Feedback stays safe
+
+#### Fixes
+
+- **Feedback is now saved before it is shared.** If Odoo is down, your message and screenshot still reach Plant Manager and can be handled later.
+
 ### Lunch stays one shift
 
 #### Fixes
