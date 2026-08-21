@@ -1,5 +1,8 @@
 """inbox_reconcile: pure diff + complete-kinds guard + run_once + degraded wiring."""
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from threading import Barrier, Lock
 
 from zira_dashboard import inbox_reconcile
 
@@ -141,7 +144,11 @@ def test_run_once_logs_auto_resolved_for_silent_departure(monkeypatch):
     monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {"missing_wc:1": _mirror_row()})
     deleted, logged = [], []
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda k, i: None)
-    monkeypatch.setattr(inbox_reconcile, "_delete", lambda k: deleted.append(k))
+    monkeypatch.setattr(
+        inbox_reconcile,
+        "_delete",
+        lambda key, last_seen: deleted.append(key) or _mirror_row(),
+    )
     monkeypatch.setattr(inbox_log, "has_human_event_since", lambda k, s: False)
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 1)
 
@@ -152,6 +159,127 @@ def test_run_once_logs_auto_resolved_for_silent_departure(monkeypatch):
     assert logged[0]["action"] == "auto_resolved"
     assert logged[0]["item_key"] == "missing_wc:1"
     assert logged[0]["actor_upn"] is None
+
+
+def test_concurrent_departure_is_claimed_and_logged_exactly_once(monkeypatch):
+    from zira_dashboard import exception_inbox, inbox_log
+
+    row = _mirror_row()
+    token = row["last_seen"]
+    mirror = {row["item_key"]: row}
+    claim_barrier = Barrier(2)
+    state_lock = Lock()
+    logged = []
+
+    monkeypatch.setattr(exception_inbox, "build_snapshot", _snap_complete_missing_wc)
+    monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: dict(mirror))
+    monkeypatch.setattr(inbox_reconcile, "_upsert", lambda key, info: None)
+    monkeypatch.setattr(inbox_log, "has_human_event_since", lambda key, since: False)
+
+    def claim(key, *tokens):
+        claim_barrier.wait(timeout=2)
+        with state_lock:
+            current = mirror.get(key)
+            expected = tokens[0] if tokens else token
+            if current is None or current["last_seen"] != expected:
+                return None
+            return mirror.pop(key)
+
+    monkeypatch.setattr(inbox_reconcile, "_delete", claim)
+    monkeypatch.setattr(
+        inbox_log,
+        "log_event_safe",
+        lambda **event: logged.append(event) or 1,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        passes = [pool.submit(inbox_reconcile.run_once) for _ in range(2)]
+        for reconcile_pass in passes:
+            reconcile_pass.result(timeout=2)
+
+    assert mirror == {}
+    assert [event["item_key"] for event in logged] == ["missing_wc:1"]
+
+
+def test_departure_does_not_log_or_delete_after_concurrent_last_seen_refresh(
+    monkeypatch,
+):
+    from zira_dashboard import exception_inbox, inbox_log
+
+    stale_row = _mirror_row()
+    refreshed_last_seen = datetime(2026, 6, 2, tzinfo=timezone.utc)
+    mirror = {
+        stale_row["item_key"]: {
+            **stale_row,
+            "last_seen": refreshed_last_seen,
+        }
+    }
+    claim_calls = []
+    logged = []
+
+    monkeypatch.setattr(exception_inbox, "build_snapshot", _snap_complete_missing_wc)
+    monkeypatch.setattr(
+        inbox_reconcile,
+        "_read_mirror",
+        lambda: {stale_row["item_key"]: stale_row},
+    )
+    monkeypatch.setattr(inbox_reconcile, "_upsert", lambda key, info: None)
+    monkeypatch.setattr(inbox_log, "has_human_event_since", lambda key, since: False)
+
+    def claim(key, *tokens):
+        expected = tokens[0] if tokens else stale_row["last_seen"]
+        claim_calls.append((key, expected))
+        current = mirror.get(key)
+        if current is None or current["last_seen"] != expected:
+            return None
+        return mirror.pop(key)
+
+    monkeypatch.setattr(inbox_reconcile, "_delete", claim)
+    monkeypatch.setattr(
+        inbox_log,
+        "log_event_safe",
+        lambda **event: logged.append(event) or 1,
+    )
+
+    inbox_reconcile.run_once()
+
+    assert claim_calls == [("missing_wc:1", stale_row["last_seen"])]
+    assert mirror["missing_wc:1"]["last_seen"] == refreshed_last_seen
+    assert logged == []
+
+
+def test_delete_claim_is_conditional_on_exact_last_seen_and_returns_dict(
+    monkeypatch,
+):
+    class Cursor:
+        def __init__(self):
+            self.sql = None
+            self.params = None
+
+        def execute(self, sql, params=None):
+            self.sql = " ".join(sql.split())
+            self.params = params
+
+        def fetchone(self):
+            return {"item_key": "missing_wc:1"}
+
+    cursor = Cursor()
+
+    @contextmanager
+    def opened_cursor():
+        yield cursor
+
+    monkeypatch.setattr(inbox_reconcile.db, "cursor", opened_cursor)
+    token = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    claimed = inbox_reconcile._delete("missing_wc:1", token)
+
+    assert claimed == {"item_key": "missing_wc:1"}
+    assert cursor.sql == (
+        "DELETE FROM inbox_open_items WHERE item_key = %s AND last_seen = %s "
+        "RETURNING item_key"
+    )
+    assert cursor.params == ("missing_wc:1", token)
 
 
 def test_run_once_auto_resolves_live_auto_lunch_after_grace(monkeypatch):
@@ -174,7 +302,11 @@ def test_run_once_auto_resolves_live_auto_lunch_after_grace(monkeypatch):
     monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {item_key: mirror_row})
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda key, info: None)
     deleted, logged = [], []
-    monkeypatch.setattr(inbox_reconcile, "_delete", deleted.append)
+    monkeypatch.setattr(
+        inbox_reconcile,
+        "_delete",
+        lambda key, last_seen: deleted.append(key) or mirror_row,
+    )
     monkeypatch.setattr(inbox_log, "has_human_event_since", lambda key, since: False)
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 1)
 
@@ -209,7 +341,11 @@ def test_run_once_keeps_live_auto_lunch_when_source_errored(monkeypatch):
     monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {item_key: mirror_row})
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda key, info: None)
     deleted, logged = [], []
-    monkeypatch.setattr(inbox_reconcile, "_delete", deleted.append)
+    monkeypatch.setattr(
+        inbox_reconcile,
+        "_delete",
+        lambda key, last_seen: deleted.append(key) or mirror_row,
+    )
     monkeypatch.setattr(inbox_log, "has_human_event_since", lambda key, since: False)
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 1)
 
@@ -226,7 +362,11 @@ def test_run_once_skips_auto_when_human_resolved(monkeypatch):
     monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {"missing_wc:1": _mirror_row()})
     deleted, logged = [], []
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda k, i: None)
-    monkeypatch.setattr(inbox_reconcile, "_delete", lambda k: deleted.append(k))
+    monkeypatch.setattr(
+        inbox_reconcile,
+        "_delete",
+        lambda key, last_seen: deleted.append(key) or _mirror_row(),
+    )
     monkeypatch.setattr(inbox_log, "has_human_event_since", lambda k, s: True)
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 1)
 
@@ -245,7 +385,11 @@ def test_run_once_respects_grace_period(monkeypatch):
                         lambda: {"missing_wc:1": _mirror_row(last_seen=plant_day.now())})
     deleted, logged = [], []
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda k, i: None)
-    monkeypatch.setattr(inbox_reconcile, "_delete", lambda k: deleted.append(k))
+    monkeypatch.setattr(
+        inbox_reconcile,
+        "_delete",
+        lambda key, last_seen: deleted.append(key) or _mirror_row(),
+    )
     monkeypatch.setattr(inbox_log, "has_human_event_since", lambda k, s: False)
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 1)
 
@@ -301,7 +445,11 @@ def test_run_once_auto_resolves_departed_breakdown_row(monkeypatch):
     })
     deleted, logged = [], []
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda k, i: None)
-    monkeypatch.setattr(inbox_reconcile, "_delete", lambda k: deleted.append(k))
+    monkeypatch.setattr(
+        inbox_reconcile,
+        "_delete",
+        lambda key, last_seen: deleted.append(key) or _mirror_row(),
+    )
     monkeypatch.setattr(inbox_log, "has_human_event_since", lambda k, s: False)
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 1)
 

@@ -128,8 +128,16 @@ def _upsert(key: str, info: dict) -> None:
     )
 
 
-def _delete(key: str) -> None:
-    db.execute("DELETE FROM inbox_open_items WHERE item_key = %s", (key,))
+def _delete(key: str, last_seen: Any) -> dict | None:
+    """Claim a departure only if its mirror row has not been refreshed."""
+    with db.cursor() as cur:
+        cur.execute(
+            "DELETE FROM inbox_open_items "
+            "WHERE item_key = %s AND last_seen = %s "
+            "RETURNING item_key",
+            (key, last_seen),
+        )
+        return cur.fetchone()
 
 
 def run_once() -> None:
@@ -152,7 +160,9 @@ def run_once() -> None:
         if last_seen is not None and (now - last_seen).total_seconds() < _AUTO_RESOLVE_GRACE_SECONDS:
             continue  # departed too recently; re-check next tick (resolve/log race guard)
         try:
-            if not inbox_log.has_human_event_since(key, row["first_seen"]):
+            has_human_event = inbox_log.has_human_event_since(key, row["first_seen"])
+            claimed = _delete(key, last_seen)
+            if claimed is not None and not has_human_event:
                 inbox_log.log_event_safe(
                     item_kind=row["item_kind"],
                     item_key=key,
@@ -164,6 +174,5 @@ def run_once() -> None:
                     actor_name=None,
                     source="auto",
                 )
-            _delete(key)
         except Exception as e:  # noqa: BLE001 -- one bad item never aborts the sweep
             _log.warning("inbox reconcile failed for %s: %s", key, e)

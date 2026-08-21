@@ -105,6 +105,33 @@ def test_refresh_publishes_latest_alert_without_consumer_reobservation(monkeypat
     assert calls == ["observe", "observe"]
 
 
+def test_current_alert_returns_prior_publication_while_refresh_observes(monkeypatch):
+    off = Settings(False, True, 5.0, 30)
+    live = Settings(True, False, 5.0, 30)
+    monkeypatch.setattr(guard, "observe", lambda: off)
+    assert guard.refresh()["label"] == "Off"
+
+    refresh_started = Event()
+    release_refresh = Event()
+
+    def blocked_observe():
+        refresh_started.set()
+        assert release_refresh.wait(timeout=2)
+        return live
+
+    monkeypatch.setattr(guard, "observe", blocked_observe)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        refresh = pool.submit(guard.refresh)
+        assert refresh_started.wait(timeout=2)
+        read = pool.submit(guard.current_alert)
+        try:
+            prior = read.result(timeout=0.2)
+        finally:
+            release_refresh.set()
+        assert prior["label"] == "Off"
+        assert refresh.result(timeout=2) is None
+
+
 def test_off_mode_returns_stable_urgent_inbox_row(monkeypatch):
     monkeypatch.setattr(guard, "observe", lambda: Settings(False, True, 5.0, 30))
     assert guard.current_alert() == {

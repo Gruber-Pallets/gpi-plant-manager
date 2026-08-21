@@ -11,7 +11,8 @@ from .auto_lunch_settings import Settings
 _log = logging.getLogger(__name__)
 _DETAIL = "Lunch deductions are not being written. Restore Live mode."
 _UNSET = object()
-_publish_lock = RLock()
+_refresh_lock = RLock()
+_state_lock = RLock()
 _published_alert: object = _UNSET
 
 
@@ -62,15 +63,25 @@ def _copy_alert(alert: object) -> dict | None:
 def refresh() -> dict | None:
     """Observe persisted settings and atomically publish the resulting alert."""
     global _published_alert
-    with _publish_lock:
-        _published_alert = _alert_for(observe())
-        return _copy_alert(_published_alert)
+    with _refresh_lock:
+        observed_alert = _alert_for(observe())
+        with _state_lock:
+            _published_alert = observed_alert
+            return _copy_alert(_published_alert)
 
 
 def current_alert() -> dict | None:
     """Return the warmed alert, observing once if this process is still cold."""
     global _published_alert
-    with _publish_lock:
-        if _published_alert is _UNSET:
-            _published_alert = _alert_for(observe())
-        return _copy_alert(_published_alert)
+    with _state_lock:
+        if _published_alert is not _UNSET:
+            return _copy_alert(_published_alert)
+
+    with _refresh_lock:
+        with _state_lock:
+            if _published_alert is not _UNSET:
+                return _copy_alert(_published_alert)
+        observed_alert = _alert_for(observe())
+        with _state_lock:
+            _published_alert = observed_alert
+            return _copy_alert(_published_alert)
