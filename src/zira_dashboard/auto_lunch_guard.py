@@ -24,11 +24,8 @@ def observe() -> Settings:
         try:
             return auto_lunch_settings.reload()
         except Exception:
-            _log.error(
-                "Auto-Lunch settings reload failed; using safe defaults",
-                exc_info=True,
-            )
-            return auto_lunch_settings.DEFAULT
+            _log.error("Auto-Lunch settings reload failed", exc_info=True)
+            raise
 
 
 def mode_label(settings: Settings) -> str:
@@ -57,6 +54,8 @@ def _alert_for(current: Settings) -> dict | None:
 
 
 def _copy_alert(alert: object) -> dict | None:
+    if isinstance(alert, Exception):
+        raise alert
     return dict(alert) if isinstance(alert, dict) else None
 
 
@@ -64,7 +63,12 @@ def refresh() -> dict | None:
     """Observe persisted settings and atomically publish the resulting alert."""
     global _published_alert
     with _refresh_lock:
-        observed_alert = _alert_for(observe())
+        try:
+            observed_alert = _alert_for(observe())
+        except Exception as exc:
+            with _state_lock:
+                _published_alert = exc
+            raise
         with _state_lock:
             _published_alert = observed_alert
             return _copy_alert(_published_alert)

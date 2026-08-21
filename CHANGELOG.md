@@ -33,12 +33,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **Feedback pictures are cleaned and resized before they are saved.** This removes hidden picture details and avoids very large files.
 - **Feedback picture safety checks now cover more file kinds and size limits.** They make sure hidden details are removed, turned pictures face the right way, and clear backgrounds turn white.
 
-### Auto-Lunch safety plan
+### Auto-Lunch stays visible
 
-#### Improvements
+#### Features
 
-- **A safety plan is ready for Auto-Lunch.** The app will warn in the Inbox if lunch deductions are not Live and remember who changed the setting. Nothing in the app has changed yet.
-- **The build steps for the Auto-Lunch warning are ready.** Each small step checks the history, the Inbox warning, and the Live setting before the app is changed.
+- **The Inbox now warns when Auto-Lunch is not Live.** The warning stays until lunch deductions are turned back on.
+- **Auto-Lunch now remembers setting changes.** The Settings page shows what changed, when it changed, and who changed it when the app knows their name.
 
 ### Safer shared feedback plan
 

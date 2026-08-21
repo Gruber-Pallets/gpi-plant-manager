@@ -105,6 +105,26 @@ def test_refresh_publishes_latest_alert_without_consumer_reobservation(monkeypat
     assert calls == ["observe", "observe"]
 
 
+def test_failed_refresh_replaces_stale_alert_with_source_failure(monkeypatch):
+    monkeypatch.setattr(
+        guard,
+        "observe",
+        lambda: Settings(False, True, 5.0, 30),
+    )
+    assert guard.refresh()["label"] == "Off"
+
+    monkeypatch.setattr(
+        guard,
+        "observe",
+        lambda: (_ for _ in ()).throw(RuntimeError("settings unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="settings unavailable"):
+        guard.refresh()
+    with pytest.raises(RuntimeError, match="settings unavailable"):
+        guard.current_alert()
+
+
 def test_current_alert_returns_prior_publication_while_refresh_observes(monkeypatch):
     off = Settings(False, True, 5.0, 30)
     live = Settings(True, False, 5.0, 30)
@@ -209,7 +229,7 @@ def test_safe_to_unsafe_change_survives_audit_append_failure(
     assert "external change audit failed" in caplog.text
 
 
-def test_observe_fails_closed_when_reconciliation_and_reload_fail(
+def test_observe_propagates_when_reconciliation_and_reload_fail(
     monkeypatch, caplog,
 ):
     monkeypatch.setattr(
@@ -223,5 +243,7 @@ def test_observe_fails_closed_when_reconciliation_and_reload_fail(
         lambda: (_ for _ in ()).throw(RuntimeError("reload failed")),
     )
 
-    assert guard.current_alert()["label"] == "Off"
+    with pytest.raises(RuntimeError, match="reload failed"):
+        guard.current_alert()
+
     assert "settings reload failed" in caplog.text
