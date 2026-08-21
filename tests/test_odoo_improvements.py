@@ -136,6 +136,22 @@ def mutation_client(monkeypatch, response, *, calls=None, fields=None):
     return client_with(monkeypatch, executor, uid=4)
 
 
+def authorization_client(monkeypatch):
+    calls = []
+    responses = iter(identity_responses())
+
+    def executor(model, method, *args, **kwargs):
+        calls.append((model, method, args, kwargs))
+        try:
+            return next(responses)
+        except StopIteration:
+            pytest.fail("mutation executor called")
+
+    client = client_with(monkeypatch, executor, uid=4)
+    open_gates(monkeypatch)
+    return client, calls
+
+
 def test_config_uses_only_dedicated_settings_and_redacts_every_value(monkeypatch):
     monkeypatch.setenv("ODOO_URL", "https://generic.invalid")
     monkeypatch.setenv("ODOO_DB", "generic-database")
@@ -151,6 +167,15 @@ def test_config_uses_only_dedicated_settings_and_redacts_every_value(monkeypatch
     assert dataclasses.is_dataclass(config)
     for secret in ENV.values():
         assert secret not in repr(config)
+
+
+def test_client_does_not_expose_raw_executor_on_ordinary_attribute(monkeypatch):
+    raw_executor = lambda *args, **kwargs: None
+    client = client_with(monkeypatch, raw_executor, uid=4)
+
+    assert "_executor" not in vars(client)
+    with pytest.raises(AttributeError):
+        _ = client._executor
 
 
 def test_config_error_names_missing_settings_without_exposing_values(monkeypatch):
@@ -471,6 +496,169 @@ def test_raw_execute_cannot_bypass_target_mutation_wrappers(monkeypatch, method)
             method,
             create_fields(),
             authorization=object(),
+        )
+
+    assert executor_calls == []
+
+
+def test_raw_execute_rejects_legitimately_minted_mutation_authorization(monkeypatch):
+    client, calls = authorization_client(monkeypatch)
+    authorization = client._authorize_mutation(
+        "write",
+        feedback_id=17,
+        remote_id=9,
+        fields={"x_name": "Safe"},
+        expected_contract=EXPECTED_CONTRACT,
+    )
+
+    with pytest.raises(ContractError):
+        client._execute(
+            TARGET_MODEL,
+            "write",
+            [9],
+            {"x_name": "Safe"},
+            authorization=authorization,
+        )
+
+    assert not any(method == "write" for _model, method, _args, _kwargs in calls)
+
+
+@pytest.mark.parametrize(
+    ("method", "feedback_id", "remote_id", "fields"),
+    [
+        ([], 17, 9, {"x_name": "Safe"}),
+        ("create", 17, None, create_fields()),
+        ("write", 18, 9, {"x_name": "Safe"}),
+        ("write", 17, 10, {"x_name": "Safe"}),
+        ("write", 17, 9, {"x_name": "Changed but valid"}),
+        ("write", 17, 9, {"active": False}),
+        ("write", 17, 9, {"x_studio_unapproved": "value"}),
+        ("write", 17, 9, {"x_studio_type": "Physical"}),
+        ("create", 17, None, {"x_name": "Missing identity"}),
+    ],
+)
+def test_mutation_authorization_rejects_every_changed_operation_and_is_one_use(
+    monkeypatch,
+    method,
+    feedback_id,
+    remote_id,
+    fields,
+):
+    client, calls = authorization_client(monkeypatch)
+    authorization = client._authorize_mutation(
+        "write",
+        feedback_id=17,
+        remote_id=9,
+        fields={"x_name": "Safe"},
+        expected_contract=EXPECTED_CONTRACT,
+    )
+
+    with pytest.raises(ContractError):
+        client._consume_mutation_authorization(
+            authorization,
+            method,
+            feedback_id=feedback_id,
+            remote_id=remote_id,
+            fields=fields,
+        )
+    with pytest.raises(ContractError):
+        client._consume_mutation_authorization(
+            authorization,
+            "write",
+            feedback_id=17,
+            remote_id=9,
+            fields={"x_name": "Safe"},
+        )
+
+    assert not any(
+        called_method in {"create", "write"} for _model, called_method, _args, _kwargs in calls
+    )
+
+
+def test_mutation_authorization_defensively_copies_validated_payload(monkeypatch):
+    client, calls = authorization_client(monkeypatch)
+    fields = {"x_name": "Safe"}
+    authorization = client._authorize_mutation(
+        "write",
+        feedback_id=17,
+        remote_id=9,
+        fields=fields,
+        expected_contract=EXPECTED_CONTRACT,
+    )
+    fields["x_name"] = "Changed after minting"
+
+    with pytest.raises(ContractError):
+        client._consume_mutation_authorization(
+            authorization,
+            "write",
+            feedback_id=17,
+            remote_id=9,
+            fields=fields,
+        )
+
+    assert not any(method == "write" for _model, method, _args, _kwargs in calls)
+
+
+def test_authorization_rejects_non_string_value_that_claims_to_equal_source(monkeypatch):
+    class PretendSource:
+        def __ne__(self, other):
+            return False
+
+    executor_calls = []
+    client = client_with(
+        monkeypatch,
+        lambda *args, **kwargs: executor_calls.append((args, kwargs)),
+        uid=4,
+    )
+    open_gates(monkeypatch)
+
+    with pytest.raises(ContractError):
+        client._authorize_mutation(
+            "write",
+            feedback_id=17,
+            remote_id=9,
+            fields={"x_studio_source": PretendSource()},
+            expected_contract=EXPECTED_CONTRACT,
+        )
+
+    assert executor_calls == []
+
+
+@pytest.mark.parametrize(
+    ("method", "feedback_id", "remote_id", "fields"),
+    [
+        ([], 17, 9, {"x_name": "Safe"}),
+        ("unlink", 17, 9, {"x_name": "Safe"}),
+        ("create", 17, 9, create_fields()),
+        ("write", 17, None, {"x_name": "Safe"}),
+        ("create", 17, None, {"x_name": "Missing identity"}),
+        ("write", 17, 9, {"active": False}),
+        ("write", 17, 9, {"x_studio_unapproved": "value"}),
+        ("write", 17, 9, {"x_studio_type": "Physical"}),
+    ],
+)
+def test_authorization_helper_cannot_mint_for_invalid_complete_operation(
+    monkeypatch,
+    method,
+    feedback_id,
+    remote_id,
+    fields,
+):
+    executor_calls = []
+    client = client_with(
+        monkeypatch,
+        lambda *args, **kwargs: executor_calls.append((args, kwargs)),
+        uid=4,
+    )
+    open_gates(monkeypatch)
+
+    with pytest.raises(ContractError):
+        client._authorize_mutation(
+            method,
+            feedback_id=feedback_id,
+            remote_id=remote_id,
+            fields=fields,
+            expected_contract=EXPECTED_CONTRACT,
         )
 
     assert executor_calls == []

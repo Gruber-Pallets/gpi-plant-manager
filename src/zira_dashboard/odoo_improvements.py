@@ -166,6 +166,17 @@ class ImprovementContract:
     stop_type: str
 
 
+@dataclass(frozen=True, repr=False)
+class _MutationBinding:
+    method: str
+    feedback_id: int
+    remote_id: int | None
+    fields: tuple[tuple[str, Any], ...]
+
+    def __repr__(self) -> str:
+        return "_MutationBinding(<redacted>)"
+
+
 class _TimeoutTransport(xmlrpc.client.Transport):
     def make_connection(self, host):
         connection = super().make_connection(host)
@@ -340,7 +351,7 @@ def _validate_field_value(field_name: str, value: object, feedback_id: int) -> N
         if type(value) is not str or value not in _WRITABLE_STATUS_VALUES:
             raise ContractError("x_studio_status is outside the writable selection")
     elif field_name == "x_studio_source":
-        if value != SOURCE_VALUE:
+        if type(value) is not str or value != SOURCE_VALUE:
             raise ContractError("x_studio_source is outside this app's namespace")
 
 
@@ -380,9 +391,9 @@ class ImprovementsClient:
         if uid is not None:
             _positive_integer(uid, "user id")
         self._config = config
-        self._executor = executor
+        self.__executor = executor
         self._uid = uid
-        self.__mutation_authorizations: dict[object, str] = {}
+        self.__mutation_authorizations: dict[object, _MutationBinding] = {}
 
     def __repr__(self) -> str:
         return "ImprovementsClient(<redacted>)"
@@ -402,7 +413,7 @@ class ImprovementsClient:
     def authenticate(self) -> int:
         if self._uid is not None:
             return self._uid
-        authenticate = getattr(self._executor, "authenticate", None)
+        authenticate = getattr(self.__executor, "authenticate", None)
         if not callable(authenticate):
             raise ContractError("injected executor requires an explicit user id")
         uid = _call_safely(authenticate)
@@ -414,18 +425,11 @@ class ImprovementsClient:
             raise ContractError("Odoo model and method are not allowlisted")
         if (model, method) not in ALLOWED:
             raise ContractError("Odoo model and method are not allowlisted")
-        authorization = kwargs.pop("authorization", None)
         if model == TARGET_MODEL and method in {"create", "write"}:
-            authorized_method = None
-            try:
-                authorized_method = self.__mutation_authorizations.pop(authorization, None)
-            except TypeError:
-                pass
-            if authorized_method != method:
-                raise ContractError("target mutation requires internal authorization")
-        elif authorization is not None:
+            raise ContractError("target mutations require the internal consumer")
+        if "authorization" in kwargs:
             raise ContractError("internal mutation authorization is not valid here")
-        return _call_safely(lambda: self._executor(model, method, *args, **kwargs))
+        return _call_safely(lambda: self.__executor(model, method, *args, **kwargs))
 
     def assert_mutation_allowed(self, feedback_id: int) -> None:
         if not _is_positive_identifier(feedback_id):
@@ -475,27 +479,94 @@ class ImprovementsClient:
             raise ContractError("create payload requires exact compound identity")
         return dict(fields)
 
+    def _validate_mutation_operation(
+        self,
+        method: str,
+        *,
+        feedback_id: int,
+        remote_id: object,
+        fields: object,
+    ) -> _MutationBinding:
+        if type(method) is not str or method not in {"create", "write"}:
+            raise ContractError("target mutation requires internal authorization")
+        safe_feedback_id = _positive_integer(feedback_id, "feedback id")
+        if method == "create":
+            if remote_id is not None:
+                raise ContractError("create must not include a remote id")
+            safe_remote_id = None
+        else:
+            safe_remote_id = _positive_integer(remote_id, "remote id")
+        safe_fields = self._validate_target_fields(
+            fields,
+            feedback_id=safe_feedback_id,
+            require_identity=method == "create",
+        )
+        return _MutationBinding(
+            method=method,
+            feedback_id=safe_feedback_id,
+            remote_id=safe_remote_id,
+            fields=tuple(sorted(safe_fields.items(), key=lambda item: item[0])),
+        )
+
     def _authorize_mutation(
         self,
         method: str,
+        *,
         feedback_id: int,
+        remote_id: object,
+        fields: object,
         expected_contract: ImprovementContract,
     ) -> object:
-        if method not in {"create", "write"}:
-            raise ContractError("target mutation requires internal authorization")
+        binding = self._validate_mutation_operation(
+            method,
+            feedback_id=feedback_id,
+            remote_id=remote_id,
+            fields=fields,
+        )
         if type(expected_contract) is not ImprovementContract:
             raise ContractError("expected contract must be immutable contract metadata")
-        self.assert_mutation_allowed(feedback_id)
+        self.assert_mutation_allowed(binding.feedback_id)
         fresh_contract = self.verify_target_identity()
         if fresh_contract != expected_contract:
             raise TargetIdentityError("target contract changed before mutation")
-        self.assert_mutation_allowed(feedback_id)
+        self.assert_mutation_allowed(binding.feedback_id)
         authorization = object()
-        self.__mutation_authorizations[authorization] = method
+        self.__mutation_authorizations[authorization] = binding
         return authorization
 
-    def _revoke_mutation_authorization(self, authorization: object) -> None:
-        self.__mutation_authorizations.pop(authorization, None)
+    def _consume_mutation_authorization(
+        self,
+        authorization: object,
+        method: str,
+        *,
+        feedback_id: int,
+        remote_id: object,
+        fields: object,
+    ) -> Any:
+        expected_binding = None
+        try:
+            expected_binding = self.__mutation_authorizations.pop(authorization, None)
+        except TypeError:
+            pass
+        if expected_binding is None:
+            raise ContractError("target mutation requires internal authorization")
+
+        supplied_binding = self._validate_mutation_operation(
+            method,
+            feedback_id=feedback_id,
+            remote_id=remote_id,
+            fields=fields,
+        )
+        if supplied_binding != expected_binding:
+            raise ContractError("target mutation authorization does not match operation")
+
+        safe_fields = dict(supplied_binding.fields)
+        if method == "create":
+            rpc_args = (safe_fields,)
+        else:
+            rpc_args = ([supplied_binding.remote_id], safe_fields)
+        self.assert_mutation_allowed(supplied_binding.feedback_id)
+        return _call_safely(lambda: self.__executor(TARGET_MODEL, method, *rpc_args))
 
     def find_exact(self, source_id: str) -> list[dict[str, Any]]:
         canonical, _feedback_id = _canonical_source_id(source_id)
@@ -526,22 +597,26 @@ class ImprovementsClient:
         feedback_id: int,
         expected_contract: ImprovementContract,
     ) -> int:
-        safe_fields = self._validate_target_fields(
-            fields,
-            feedback_id=feedback_id,
-            require_identity=True,
-        )
-        authorization = self._authorize_mutation("create", feedback_id, expected_contract)
-        try:
-            self.assert_mutation_allowed(feedback_id)
-        except GateClosed:
-            self._revoke_mutation_authorization(authorization)
-            raise
-        result = self._execute(
-            TARGET_MODEL,
+        operation = self._validate_mutation_operation(
             "create",
-            safe_fields,
-            authorization=authorization,
+            feedback_id=feedback_id,
+            remote_id=None,
+            fields=fields,
+        )
+        safe_fields = dict(operation.fields)
+        authorization = self._authorize_mutation(
+            "create",
+            feedback_id=operation.feedback_id,
+            remote_id=None,
+            fields=safe_fields,
+            expected_contract=expected_contract,
+        )
+        result = self._consume_mutation_authorization(
+            authorization,
+            "create",
+            feedback_id=operation.feedback_id,
+            remote_id=None,
+            fields=safe_fields,
         )
         if not _is_positive_identifier(result):
             raise MalformedMutationResponse("create response was not a positive integer")
@@ -555,20 +630,26 @@ class ImprovementsClient:
         feedback_id: int,
         expected_contract: ImprovementContract,
     ) -> None:
-        safe_remote_id = _positive_integer(remote_id, "remote id")
-        safe_fields = self._validate_target_fields(fields, feedback_id=feedback_id)
-        authorization = self._authorize_mutation("write", feedback_id, expected_contract)
-        try:
-            self.assert_mutation_allowed(feedback_id)
-        except GateClosed:
-            self._revoke_mutation_authorization(authorization)
-            raise
-        result = self._execute(
-            TARGET_MODEL,
+        operation = self._validate_mutation_operation(
             "write",
-            [safe_remote_id],
-            safe_fields,
-            authorization=authorization,
+            feedback_id=feedback_id,
+            remote_id=remote_id,
+            fields=fields,
+        )
+        safe_fields = dict(operation.fields)
+        authorization = self._authorize_mutation(
+            "write",
+            feedback_id=operation.feedback_id,
+            remote_id=operation.remote_id,
+            fields=safe_fields,
+            expected_contract=expected_contract,
+        )
+        result = self._consume_mutation_authorization(
+            authorization,
+            "write",
+            feedback_id=operation.feedback_id,
+            remote_id=operation.remote_id,
+            fields=safe_fields,
         )
         if result is not True:
             raise MalformedMutationResponse("write response was not exactly true")
