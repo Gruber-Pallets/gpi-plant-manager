@@ -5,6 +5,7 @@ from zira_dashboard.production_segments import (
     SegmentScore,
     coalesce_display_scores,
     credit_work_segments,
+    distinct_named_producers,
     score_work_segments,
     worker_coverage_is_split,
 )
@@ -47,6 +48,32 @@ def _score(
             else "ahead" if actual >= goal else "behind"
         ),
     )
+
+
+def test_distinct_named_producers_counts_people_not_segments_or_unassigned():
+    humberto_morning = _score(
+        "Humberto S.", t(12), t(15), actual=200, goal=240, segment_id=0
+    )
+    unassigned = _score(
+        None, t(15), t(15), actual=3, goal=0, segment_id=1
+    )
+    empty_name = _score(
+        "", t(15), t(15), actual=0, goal=0, segment_id=4
+    )
+    humberto_afternoon = _score(
+        "Humberto S.", t(16), t(18), actual=316, goal=460, segment_id=2
+    )
+    ana = _score(
+        "Ana M.", t(18), t(19), actual=40, goal=50, segment_id=3
+    )
+
+    assert distinct_named_producers(
+        (humberto_morning, unassigned, empty_name, humberto_afternoon)
+    ) == ("Humberto S.",)
+    assert distinct_named_producers(
+        (ana, humberto_afternoon, unassigned, humberto_morning)
+    ) == ("Humberto S.", "Ana M.")
+    assert distinct_named_producers((unassigned, empty_name)) == ()
 
 
 def test_display_scores_join_same_worker_across_scheduled_lunch():
