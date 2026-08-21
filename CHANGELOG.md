@@ -18,6 +18,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Feedback now has a safe place to keep its progress.** This storage is ready before anything can be shared with Odoo.
 - **Feedback progress cannot lose its step or mix with another message.** Each saved step now stays with the right feedback.
+- **Feedback pictures are cleaned and resized before they are saved.** This removes hidden picture details and avoids very large files.
 
 ### Auto-Lunch safety plan
 
