@@ -646,6 +646,26 @@
       </p>
     </form>
 
+    <div id="auto-lunch-history" style="margin-top:1rem">
+      <h4 class="rounding-subhead">Recent Auto-Lunch changes</h4>
+      {% if auto_lunch_history %}
+        <ul style="font-size:.88rem;line-height:1.5;margin:.35rem 0 0 1.2rem">
+          {% for event in auto_lunch_history %}
+          <li>
+            <strong>{{ event.time_label }}</strong> · {{ event.actor_label }}<br>
+            {% if event.is_baseline %}
+              {{ event.after_label }}
+            {% else %}
+              {{ event.before_label }} → {{ event.after_label }}
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="help">No changes recorded yet.</p>
+      {% endif %}
+    </div>
+
     </div><!-- /tc-tab-rules -->
 
     <div id="tc-tab-activity" class="tc-panel" role="tabpanel" aria-label="Activity" style="display:none">

@@ -234,3 +234,39 @@ def auto_lunch_context(settings) -> dict:
         "flex_after_hours": settings.flex_after_hours,
         "flex_minutes": settings.flex_minutes,
     }
+
+
+def _auto_lunch_mode(enabled, observe_only) -> str:
+    if not enabled:
+        return "Off"
+    return "Observe only" if observe_only else "Live"
+
+
+def _auto_lunch_value_label(row: dict, prefix: str) -> str:
+    mode = _auto_lunch_mode(row[f"{prefix}_enabled"], row[f"{prefix}_observe_only"])
+    hours = float(row[f"{prefix}_flex_after_hours"])
+    hours_label = f"{hours:g} hours"
+    return f"{mode} · {hours_label} · {int(row[f'{prefix}_flex_minutes'])} minutes"
+
+
+def auto_lunch_history_context(events: list[dict]) -> list[dict]:
+    from . import shift_config
+    shaped = []
+    for row in events:
+        source = row.get("source")
+        baseline = source == "baseline"
+        if baseline:
+            actor_label = "Monitoring started"
+        elif source == "external":
+            actor_label = "Outside app / detected automatically"
+        else:
+            actor_label = row.get("actor_name") or row.get("actor_upn") or "Unknown manager"
+        changed_at = row["changed_at"].astimezone(shift_config.SITE_TZ)
+        shaped.append({
+            "time_label": changed_at.strftime("%-m/%-d/%Y %-I:%M %p"),
+            "before_label": None if baseline else _auto_lunch_value_label(row, "before"),
+            "after_label": _auto_lunch_value_label(row, "after"),
+            "actor_label": actor_label,
+            "is_baseline": baseline,
+        })
+    return shaped

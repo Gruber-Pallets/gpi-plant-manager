@@ -427,6 +427,13 @@ def settings_page(
     from .. import auto_lunch_settings
     _al = auto_lunch_settings.current()
     auto_lunch_ctx = settings_context.auto_lunch_context(_al)
+    try:
+        auto_lunch_history_ctx = settings_context.auto_lunch_history_context(
+            auto_lunch_settings.recent_events(20)
+        )
+    except Exception:
+        logging.warning("Auto-Lunch history unavailable", exc_info=True)
+        auto_lunch_history_ctx = []
     # Forklift demand-advisor settings + a live forecast summary for the next
     # working day. Wrapped so the settings page never 500s if the forklift data
     # source (or DB) is unavailable.
@@ -485,6 +492,7 @@ def settings_page(
             "rounding_systems": rounding_systems_ctx,
             "department_rounding": department_rounding_ctx,
             "auto_lunch": auto_lunch_ctx,
+            "auto_lunch_history": auto_lunch_history_ctx,
             "work_schedules": work_schedules_ctx,
             "available_schedules": available_schedules,
             "integration_status": integration_status,
@@ -724,8 +732,9 @@ async def settings_save_auto_lunch(request: Request):
     immediately (the store updates its in-process cache), so no restart is
     needed. Unparseable / out-of-range flex values fall back to the current
     value rather than rejecting the submission."""
-    from .. import auto_lunch_settings
+    from .. import auto_lunch_settings, inbox_log
     form = await request.form()
+    actor_upn, actor_name = inbox_log.actor_from(request)
 
     def _num(raw, lo, hi, fallback, *, integer):
         try:
@@ -739,14 +748,17 @@ async def settings_save_auto_lunch(request: Request):
         current = auto_lunch_settings.current()
         enabled, observe_only = _auto_lunch_mode_flags(
             form.get("mode"), current.enabled, current.observe_only)
-        auto_lunch_settings.save(auto_lunch_settings.Settings(
+        updated = auto_lunch_settings.Settings(
             enabled=enabled,
             observe_only=observe_only,
             flex_after_hours=_num(form.get("flex_after_hours"), 0.0, 24.0,
                                   current.flex_after_hours, integer=False),
             flex_minutes=_num(form.get("flex_minutes"), 0, 120,
                               current.flex_minutes, integer=True),
-        ))
+        )
+        auto_lunch_settings.save(
+            updated, actor_upn=actor_upn, actor_name=actor_name
+        )
         if (request.headers.get("accept") or "").startswith("application/json"):
             return JSONResponse({"ok": True})
         return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
