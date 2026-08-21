@@ -2,8 +2,11 @@ from datetime import datetime, timezone
 
 from zira_dashboard.assignment_windows import WorkSegment
 from zira_dashboard.production_segments import (
+    SegmentScore,
+    coalesce_display_scores,
     credit_work_segments,
     score_work_segments,
+    worker_coverage_is_split,
 )
 
 
@@ -12,6 +15,142 @@ UTC = timezone.utc
 
 def t(hour, minute=0):
     return datetime(2026, 8, 20, hour, minute, tzinfo=UTC)
+
+
+def _score(
+    person,
+    start,
+    end,
+    *,
+    actual,
+    goal,
+    active=False,
+    minutes=60,
+    wc="Dismantler 1",
+    segment_id=0,
+):
+    return SegmentScore(
+        segment_id=segment_id,
+        wc_name=wc,
+        person_name=person,
+        start_utc=start,
+        end_utc=end,
+        source="punch" if person else "unassigned",
+        productive_minutes=minutes,
+        actual_units=actual,
+        goal_units=goal,
+        runway_units=max(actual, goal),
+        is_active=active,
+        result=(
+            "neutral"
+            if person is None or goal <= 0
+            else "ahead" if actual >= goal else "behind"
+        ),
+    )
+
+
+def test_display_scores_join_same_worker_across_scheduled_lunch():
+    morning = _score(
+        "Jesus G.", t(12), t(16), actual=311, goal=260, minutes=210
+    )
+    afternoon = _score(
+        "Jesus G.",
+        t(16, 30),
+        t(19, 30),
+        actual=256,
+        goal=260,
+        active=True,
+        minutes=210,
+        segment_id=1,
+    )
+
+    (joined,) = coalesce_display_scores(
+        (morning, afternoon), ignored_gaps=((t(16), t(16, 30)),)
+    )
+
+    assert (joined.start_utc, joined.end_utc) == (t(12), t(19, 30))
+    assert (joined.actual_units, joined.goal_units) == (567, 520)
+    assert joined.productive_minutes == 420
+    assert (joined.result, joined.runway_units, joined.is_active) == (
+        "ahead",
+        567,
+        True,
+    )
+
+
+def test_display_scores_keep_productive_gap_and_lunch_transfer_split():
+    productive_gap = coalesce_display_scores(
+        (
+            _score("Jesus G.", t(12), t(15), actual=100, goal=100),
+            _score("Jesus G.", t(16), t(17), actual=40, goal=50, segment_id=1),
+        ),
+        ignored_gaps=((t(15, 15), t(15, 30)),),
+    )
+    lunch_transfer = coalesce_display_scores(
+        (
+            _score("Jesus G.", t(12), t(16), actual=100, goal=100),
+            _score("Ana M.", t(16, 30), t(17), actual=40, goal=50, segment_id=1),
+        ),
+        ignored_gaps=((t(16), t(16, 30)),),
+    )
+
+    assert len(productive_gap) == 2
+    assert worker_coverage_is_split(
+        productive_gap, window_start_utc=t(12), window_end_utc=t(17)
+    ) is True
+    assert [row.person_name for row in lunch_transfer] == ["Jesus G.", "Ana M."]
+
+
+def test_worker_coverage_split_policy_ignores_scheduled_break_boundaries():
+    full = _score("Jesus G.", t(12), t(19), actual=500, goal=480, active=True)
+    lunch_now = _score("Jesus G.", t(12), t(16), actual=300, goal=260)
+    left_early = _score("Humberto S.", t(12), t(18), actual=516, goal=700)
+    late_start = _score("Ana M.", t(13), t(19), actual=400, goal=360, active=True)
+    second_worker = _score(
+        "Ana M.",
+        t(16, 30),
+        t(19),
+        actual=200,
+        goal=180,
+        active=True,
+        segment_id=1,
+    )
+    overlapping_worker = _score(
+        "Ana M.", t(14), t(15), actual=50, goal=60, segment_id=3
+    )
+    unassigned = _score(
+        None, t(16, 10), t(16, 10), actual=3, goal=0, segment_id=2
+    )
+
+    assert worker_coverage_is_split(
+        (full,), window_start_utc=t(12), window_end_utc=t(19)
+    ) is False
+    assert worker_coverage_is_split(
+        (lunch_now,),
+        window_start_utc=t(12),
+        window_end_utc=t(16, 15),
+        ignored_gaps=((t(16), t(16, 30)),),
+    ) is False
+    assert worker_coverage_is_split(
+        (left_early,), window_start_utc=t(12), window_end_utc=t(19)
+    ) is True
+    assert worker_coverage_is_split(
+        (late_start,), window_start_utc=t(12), window_end_utc=t(19)
+    ) is True
+    assert worker_coverage_is_split(
+        (lunch_now, second_worker),
+        window_start_utc=t(12),
+        window_end_utc=t(19),
+        ignored_gaps=((t(16), t(16, 30)),),
+    ) is True
+    assert worker_coverage_is_split(
+        (full, overlapping_worker),
+        window_start_utc=t(12),
+        window_end_utc=t(19),
+    ) is True
+    assert worker_coverage_is_split(
+        (full, unassigned), window_start_utc=t(12), window_end_utc=t(19)
+    ) is False
 
 
 def test_transfer_segments_keep_independent_actual_goal_and_runway():

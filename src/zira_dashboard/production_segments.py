@@ -42,6 +42,120 @@ class SegmentScore:
     result: SegmentResult
 
 
+def _segment_result(
+    person_name: str | None, actual_units: float, goal_units: float
+) -> SegmentResult:
+    if person_name is None or goal_units <= 0:
+        return "neutral"
+    return "ahead" if actual_units >= goal_units else "behind"
+
+
+def _score_order(row: SegmentScore) -> tuple[bool, float, int]:
+    return (
+        row.start_utc is None,
+        row.start_utc.timestamp() if row.start_utc is not None else float("inf"),
+        row.segment_id,
+    )
+
+
+def _gap_is_ignored(
+    start_utc: datetime,
+    end_utc: datetime,
+    ignored_gaps: Sequence[tuple[datetime, datetime]],
+) -> bool:
+    if end_utc <= start_utc:
+        return True
+    return any(
+        gap_start <= start_utc and end_utc <= gap_end
+        for gap_start, gap_end in ignored_gaps
+    )
+
+
+def _can_join_display_scores(
+    left: SegmentScore,
+    right: SegmentScore,
+    ignored_gaps: Sequence[tuple[datetime, datetime]],
+) -> bool:
+    return bool(
+        left.person_name is not None
+        and left.person_name == right.person_name
+        and left.wc_name == right.wc_name
+        and left.end_utc is not None
+        and right.start_utc is not None
+        and _gap_is_ignored(left.end_utc, right.start_utc, ignored_gaps)
+    )
+
+
+def _join_display_scores(left: SegmentScore, right: SegmentScore) -> SegmentScore:
+    actual = left.actual_units + right.actual_units
+    goal = left.goal_units + right.goal_units
+    return SegmentScore(
+        segment_id=min(left.segment_id, right.segment_id),
+        wc_name=left.wc_name,
+        person_name=left.person_name,
+        start_utc=min(
+            value
+            for value in (left.start_utc, right.start_utc)
+            if value is not None
+        ),
+        end_utc=max(
+            value for value in (left.end_utc, right.end_utc) if value is not None
+        ),
+        source=left.source if left.source == right.source else "mixed",
+        productive_minutes=left.productive_minutes + right.productive_minutes,
+        actual_units=actual,
+        goal_units=goal,
+        runway_units=max(actual, goal),
+        is_active=left.is_active or right.is_active,
+        result=_segment_result(left.person_name, actual, goal),
+    )
+
+
+def coalesce_display_scores(
+    scores: Sequence[SegmentScore],
+    *,
+    ignored_gaps: Sequence[tuple[datetime, datetime]] = (),
+) -> tuple[SegmentScore, ...]:
+    """Join administrative break splits without changing sample credit."""
+    named = sorted(
+        (score for score in scores if score.person_name is not None),
+        key=_score_order,
+    )
+    unassigned = [score for score in scores if score.person_name is None]
+    merged: list[SegmentScore] = []
+    for score in named:
+        if merged and _can_join_display_scores(merged[-1], score, ignored_gaps):
+            merged[-1] = _join_display_scores(merged[-1], score)
+        else:
+            merged.append(score)
+    return tuple(sorted([*merged, *unassigned], key=_score_order))
+
+
+def worker_coverage_is_split(
+    scores: Sequence[SegmentScore],
+    *,
+    window_start_utc: datetime,
+    window_end_utc: datetime,
+    ignored_gaps: Sequence[tuple[datetime, datetime]] = (),
+) -> bool:
+    """Whether named-worker coverage needs independent runway presentation."""
+    named = [score for score in scores if score.person_name is not None]
+    if not named:
+        return False
+    if len(named) != 1:
+        return True
+    score = named[0]
+    if score.start_utc is None or score.end_utc is None:
+        return True
+    starts_in_time = score.start_utc <= window_start_utc or _gap_is_ignored(
+        window_start_utc, score.start_utc, ignored_gaps
+    )
+    ends_in_time = score.end_utc >= window_end_utc or _gap_is_ignored(
+        score.end_utc, window_end_utc, ignored_gaps
+    )
+    return not (starts_in_time and ends_in_time)
+
+
 def _ordered_segments(segments: Sequence[WorkSegment]) -> list[WorkSegment]:
     return sorted(
         segments,
@@ -197,12 +311,7 @@ def score_work_segments(
                 if credit.person_name is not None and target > 0
                 else 0.0
             )
-            if credit.person_name is None or goal <= 0:
-                result: SegmentResult = "neutral"
-            elif credit.actual_units >= goal:
-                result = "ahead"
-            else:
-                result = "behind"
+            result = _segment_result(credit.person_name, credit.actual_units, goal)
             scored.append(
                 SegmentScore(
                     segment_id=credit.segment_id,
