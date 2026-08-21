@@ -43,6 +43,12 @@ def test_api_settings_section_renders_keys_and_create_form():
     assert 'name="scope_admin"' in rendered
 
 
+def test_feedback_admin_link_is_inside_super_admin_api_section():
+    rendered = _extract_api_section()
+
+    assert 'href="/admin/feedback"' in rendered
+
+
 def _session_cookie(upn: str, name: str = "User") -> dict[str, str]:
     return {
         auth.SESSION_COOKIE_NAME: auth.mint_session(sub="test-user", upn=upn, name=name)
@@ -71,8 +77,10 @@ def _stub_settings_page_context(monkeypatch):
         work_centers_store,
         work_schedule_store,
     )
+    from zira_dashboard.routes import settings
 
     monkeypatch.setattr(odoo_sync, "sync", lambda force=False: None)
+    monkeypatch.setattr(settings, "_settings_default_auto_work_centers", lambda: [])
     monkeypatch.setattr(shift_config, "productive_minutes_per_day", lambda: 480)
     monkeypatch.setattr(staffing, "load_roster", lambda: [])
     monkeypatch.setattr(
@@ -152,6 +160,7 @@ def test_non_super_admin_cannot_render_api_settings(monkeypatch):
 
     assert response.status_code == 403
     assert "API Keys" not in response.text
+    assert 'href="/admin/feedback"' not in response.text
 
 
 def test_auth_disabled_does_not_expose_api_settings(monkeypatch):
@@ -161,6 +170,7 @@ def test_auth_disabled_does_not_expose_api_settings(monkeypatch):
 
     assert response.status_code == 403
     assert "API Keys" not in response.text
+    assert 'href="/admin/feedback"' not in response.text
 
 
 def test_non_super_admin_cannot_create_or_revoke_api_keys(monkeypatch):

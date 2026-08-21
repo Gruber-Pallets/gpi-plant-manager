@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-20
 
+### Feedback progress
+
+#### Features
+
+- **Feedback can now be worked on and finished inside Plant Manager.** The person handling it can mark progress, explain the result, and add an after picture.
+
 ### Feedback stays safe
 
 #### Fixes

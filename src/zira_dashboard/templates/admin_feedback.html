@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feedback progress — GPI Plant Manager</title>
+  <link rel="icon" type="image/png" href="/static/gpi-logo.png">
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/admin_feedback.css">
+</head>
+<body>
+  <main class="feedback-admin">
+    <header class="feedback-admin__header">
+      <div>
+        <p class="eyebrow">Super-admin</p>
+        <h1>Feedback progress</h1>
+        <p class="muted">Work local feedback through to a final result.</p>
+      </div>
+      <a href="/settings?section=api">Back to Settings</a>
+    </header>
+
+    {% if items %}
+      <div class="feedback-list">
+        {% for item in items %}
+          {% set status_labels = {
+            'requested': 'Requested',
+            'in_progress': 'In Progress',
+            'completed': 'Completed',
+            'declined': 'Declined'
+          } %}
+          <article class="feedback-card status-{{ item.status }}" id="feedback-{{ item.id }}">
+            <div class="feedback-card__summary">
+              <div>
+                <span class="status-pill">{{ status_labels.get(item.status, item.status or 'Unknown') }}</span>
+                <span class="type-pill">{{ 'Feature' if item.task_type == 'feature' else 'Bug' }}</span>
+              </div>
+              <span class="muted">#{{ item.id }} · {{ item.created_at }}</span>
+            </div>
+
+            <p class="feedback-message">{{ item.message }}</p>
+            <dl class="feedback-meta">
+              <div><dt>From</dt><dd>{{ item.submitter or 'Unknown' }}</dd></div>
+              <div><dt>Page</dt><dd>{{ item.page_url or '—' }}</dd></div>
+              <div>
+                <dt>Pictures</dt>
+                <dd>
+                  {{ 'Before saved' if item.has_before_image else 'No before picture' }} ·
+                  {{ 'After saved' if item.has_after_image else 'No after picture' }}
+                </dd>
+              </div>
+              <div>
+                <dt>Sync</dt>
+                <dd>
+                  {{ item.sync_state or 'missing' }} · desired {{ item.desired_version or '—' }} ·
+                  shared {{ item.last_synced_version or 0 }}
+                </dd>
+              </div>
+            </dl>
+
+            {% if item.status == 'requested' %}
+              <form method="post" action="/admin/feedback/{{ item.id }}/status" class="progress-form">
+                <input type="hidden" name="status" value="in_progress">
+                <button type="submit" class="button-secondary">Mark In Progress</button>
+              </form>
+            {% endif %}
+
+            {% if item.status in ['requested', 'in_progress'] %}
+              <div class="terminal-actions">
+                <form method="post" action="/admin/feedback/{{ item.id }}/status" enctype="multipart/form-data">
+                  <input type="hidden" name="status" value="completed">
+                  <label>
+                    Result note
+                    <textarea name="resolution_note" rows="3" required></textarea>
+                  </label>
+                  <label>
+                    After picture <span class="muted">(optional)</span>
+                    <input type="file" name="after_image" accept="image/jpeg,image/png,image/webp">
+                  </label>
+                  <button type="submit" class="button-complete">Complete</button>
+                </form>
+
+                <form method="post" action="/admin/feedback/{{ item.id }}/status" enctype="multipart/form-data">
+                  <input type="hidden" name="status" value="declined">
+                  <label>
+                    Result note
+                    <textarea name="resolution_note" rows="3" required></textarea>
+                  </label>
+                  <label>
+                    After picture <span class="muted">(optional)</span>
+                    <input type="file" name="after_image" accept="image/jpeg,image/png,image/webp">
+                  </label>
+                  <button type="submit" class="button-decline">Decline</button>
+                </form>
+              </div>
+            {% else %}
+              <section class="resolution">
+                <h2>Final result</h2>
+                <p>{{ item.resolution_note }}</p>
+                <p class="muted">Finished by {{ item.finished_by }} · {{ item.finished_at }}</p>
+              </section>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No local feedback is waiting.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

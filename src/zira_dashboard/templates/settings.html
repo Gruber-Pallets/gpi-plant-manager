@@ -325,6 +325,11 @@
   {% if can_manage_api_keys %}
     <section class="panel" id="api-panel"
              {% if active_section != 'api' %}style="display:none"{% endif %}>
+      <h2>Admin tools</h2>
+      <p class="help">
+        <a href="/admin/feedback">Open feedback progress</a> to work on and finish
+        feedback saved in Plant Manager.
+      </p>
       <h2>API Keys</h2>
       {% if new_api_key %}
         <div class="api-token-once">
