@@ -17,6 +17,7 @@ Usage:
 The module never auto-initializes — importing it has no side effects. The
 caller (app startup, tests, scripts) is responsible for calling init_pool().
 """
+
 from __future__ import annotations
 
 import os
@@ -25,7 +26,7 @@ from contextlib import contextmanager
 from typing import Any
 from collections.abc import Iterable, Sequence
 
-from psycopg2.extras import RealDictCursor, execute_values
+from psycopg2.extras import RealDictCursor, execute_values, register_uuid
 from psycopg2.pool import PoolError, ThreadedConnectionPool
 
 from ._schema import SCHEMA_DDL
@@ -49,9 +50,8 @@ def init_pool(minconn: int = 10, maxconn: int = 30) -> None:
         return
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
-        raise RuntimeError(
-            "DATABASE_URL is not set. Postgres connection cannot be initialized."
-        )
+        raise RuntimeError("DATABASE_URL is not set. Postgres connection cannot be initialized.")
+    register_uuid()
     _pool = ThreadedConnectionPool(minconn, maxconn, dsn)
 
 

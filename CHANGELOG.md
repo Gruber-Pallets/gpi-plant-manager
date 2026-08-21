@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-21
 
+### Feedback sharing starts safely
+
+#### Fixes
+
+- **Feedback sharing now understands its saved tracking numbers.** The safety helper can pick up the right message without mixing it with another one.
+
 ### Shared improvements connection is safely off
 
 #### Improvements

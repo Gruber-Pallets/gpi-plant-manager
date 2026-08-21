@@ -11,11 +11,14 @@ as its "upstream error" page.
 returned before giving up. These tests inject a fake pool, so no Postgres is
 required — they run everywhere, including CI without ``DATABASE_URL``.
 """
+
 from __future__ import annotations
 
 import time
+from uuid import UUID
 
 import pytest
+from psycopg2.extensions import adapt
 from psycopg2.pool import PoolError
 
 from zira_dashboard import db
@@ -40,6 +43,27 @@ class _PoolFreesAfter:
 class _AlwaysExhausted:
     def getconn(self):
         raise PoolError("connection pool exhausted")
+
+
+class _FakePool:
+    def closeall(self):
+        pass
+
+
+def test_init_pool_registers_uuid_support_before_opening_connections(monkeypatch):
+    db.shutdown_pool()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/zira_test")
+
+    def open_pool(*_args):
+        token = UUID("11111111-1111-1111-1111-111111111111")
+        assert adapt(token).getquoted() == b"'11111111-1111-1111-1111-111111111111'::uuid"
+        return _FakePool()
+
+    monkeypatch.setattr(db, "ThreadedConnectionPool", open_pool)
+    try:
+        db.init_pool(minconn=1, maxconn=1)
+    finally:
+        db.shutdown_pool()
 
 
 def test_getconn_blocking_waits_then_returns_when_pool_frees():
