@@ -2,14 +2,34 @@
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
+from typing import Mapping
 
 from . import db
-from .feedback_image import NormalizedImage
+from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
+
+
+_MAX_SIGNED_64 = 9_223_372_036_854_775_807
+_WARNING_CLASSES = frozenset({"employee_missing", "employee_ambiguous"})
 
 
 class InvalidTransition(ValueError):
     pass
+
+
+class ProjectionSnapshotUnavailable(ValueError):
+    """The exact safe local feedback version could not be snapshotted."""
+
+
+@dataclass(frozen=True)
+class ProjectionSnapshot:
+    """One immutable local feedback version and its bounded images."""
+
+    feedback: Mapping[str, object]
+    images: Mapping[str, NormalizedImage]
 
 
 _TRANSITIONS = {
@@ -26,6 +46,121 @@ def _clamp_limit(limit, default: int = 100) -> int:
     except (TypeError, ValueError):
         value = default
     return max(1, min(value, 500))
+
+
+def _positive_signed_64(value: object, label: str) -> int:
+    if type(value) is not int or not 0 < value <= _MAX_SIGNED_64:
+        raise ValueError(f"{label} must be a positive signed-64-bit integer")
+    return value
+
+
+def _snapshot_image(row: Mapping[str, object], feedback_id: int) -> NormalizedImage:
+    if type(row.get("feedback_id")) is not int or row.get("feedback_id") != feedback_id:
+        raise ProjectionSnapshotUnavailable("image belongs to another feedback record")
+    raw_value = row.get("jpeg_bytes")
+    if not isinstance(raw_value, (bytes, bytearray, memoryview)):
+        raise ProjectionSnapshotUnavailable("image bytes are malformed")
+    raw = bytes(raw_value)
+    if not raw or len(raw) > MAX_OUTPUT_BYTES:
+        raise ProjectionSnapshotUnavailable("image bytes are malformed")
+
+    byte_length = row.get("byte_length")
+    if (
+        type(byte_length) is not int
+        or byte_length != len(raw)
+        or not 0 < byte_length <= MAX_OUTPUT_BYTES
+    ):
+        raise ProjectionSnapshotUnavailable("image length is malformed")
+    digest = row.get("sha256")
+    if type(digest) is not str or digest != hashlib.sha256(raw).hexdigest():
+        raise ProjectionSnapshotUnavailable("image hash is malformed")
+    width = row.get("width")
+    height = row.get("height")
+    if (
+        type(width) is not int
+        or type(height) is not int
+        or not 0 < width <= OUTPUT_LONG_SIDE
+        or not 0 < height <= OUTPUT_LONG_SIDE
+    ):
+        raise ProjectionSnapshotUnavailable("image dimensions are malformed")
+    return NormalizedImage(
+        jpeg_bytes=raw,
+        sha256=digest,
+        byte_length=byte_length,
+        width=width,
+        height=height,
+    )
+
+
+def projection_snapshot(feedback_id: int, projection_version: int) -> ProjectionSnapshot:
+    """Read one exact local version and its images in one short transaction."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    safe_version = _positive_signed_64(projection_version, "projection version")
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, message, task_type, created_at, submitter, status, "
+            "finished_at, finished_by, resolution_note, projection_version, "
+            "lifecycle_origin FROM feedback "
+            "WHERE id = %s AND projection_version = %s "
+            "AND lifecycle_origin = 'local' FOR SHARE",
+            (safe_feedback_id, safe_version),
+        )
+        row = cur.fetchone()
+        cur.execute(
+            "SELECT feedback_id, role, jpeg_bytes, sha256, byte_length, width, height "
+            "FROM feedback_images WHERE feedback_id = %s ORDER BY role LIMIT 3",
+            (safe_feedback_id,),
+        )
+        image_rows = cur.fetchall()
+
+    if not isinstance(row, Mapping):
+        raise ProjectionSnapshotUnavailable("exact local feedback version is unavailable")
+    feedback = dict(row)
+    if (
+        type(feedback.get("id")) is not int
+        or feedback.get("id") != safe_feedback_id
+        or type(feedback.get("projection_version")) is not int
+        or feedback.get("projection_version") != safe_version
+        or feedback.get("lifecycle_origin") != "local"
+    ):
+        raise ProjectionSnapshotUnavailable("exact local feedback version is unavailable")
+    if type(image_rows) is not list or len(image_rows) > 2:
+        raise ProjectionSnapshotUnavailable("feedback image rows are malformed")
+
+    images: dict[str, NormalizedImage] = {}
+    for image_row in image_rows:
+        if not isinstance(image_row, Mapping):
+            raise ProjectionSnapshotUnavailable("feedback image row is malformed")
+        role = image_row.get("role")
+        if type(role) is not str or role not in {"before", "after"}:
+            raise ProjectionSnapshotUnavailable("feedback image role is malformed")
+        if role in images:
+            raise ProjectionSnapshotUnavailable("duplicate image role")
+        images[role] = _snapshot_image(image_row, safe_feedback_id)
+
+    return ProjectionSnapshot(
+        feedback=MappingProxyType(feedback),
+        images=MappingProxyType(images),
+    )
+
+
+def record_sync_warning(
+    feedback_id: int,
+    projection_version: int,
+    warning_class: str,
+) -> None:
+    """Persist one safe warning without an email or remote payload."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    safe_version = _positive_signed_64(projection_version, "projection version")
+    if type(warning_class) is not str or warning_class not in _WARNING_CLASSES:
+        raise ValueError("unsupported feedback sync warning")
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO feedback_odoo_warnings "
+            "(feedback_id, projection_version, warning_class) VALUES (%s, %s, %s) "
+            "ON CONFLICT (feedback_id, projection_version, warning_class) DO NOTHING",
+            (safe_feedback_id, safe_version, warning_class),
+        )
 
 
 def insert(
@@ -147,9 +282,7 @@ def transition(
 
         terminal = status in {"completed", "declined"}
         if terminal and (not clean_actor or not clean_note):
-            raise InvalidTransition(
-                "terminal feedback requires an actor and resolution note"
-            )
+            raise InvalidTransition("terminal feedback requires an actor and resolution note")
         if after_image is not None and not terminal:
             raise InvalidTransition("after image is allowed only for terminal feedback")
 
