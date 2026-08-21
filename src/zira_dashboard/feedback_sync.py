@@ -597,11 +597,20 @@ def process_claim(
     )
 
 
+def worker_write_enabled() -> bool:
+    return (
+        os.environ.get("ODOO_SHARED_REPORTING_WRITE_ENABLED") == "true"
+        and os.environ.get("ODOO_IMPROVEMENTS_WRITE_ENABLED") == "true"
+    )
+
+
 def run_batch(
     now: datetime | None = None,
     worker_id: str | None = None,
     limit: int = 10,
 ) -> BatchResult:
+    if not worker_write_enabled():
+        return BatchResult(skipped="write_gates_closed")
     current = now or datetime.now(UTC)
     identity = worker_id or f"{socket.gethostname()}:{os.getpid()}"
     if type(limit) is not int:
@@ -609,12 +618,13 @@ def run_batch(
     capped = max(1, min(limit, 10))
     client = ImprovementsClient.from_env()
     client.assert_worker_enabled()
+    canary = client.canary_feedback_id()
     sync_store.recover_expired_claims(current)
     claims = sync_store.claim_due(
         now=current,
         worker_id=identity,
         limit=capped,
-        canary_feedback_id=client.canary_feedback_id(),
+        canary_feedback_id=canary,
     )
     outcomes: list[str] = []
     for item in claims:
@@ -625,4 +635,4 @@ def run_batch(
     return BatchResult.from_outcomes(outcomes)
 
 
-__all__ = ["BatchResult", "process_claim", "run_batch"]
+__all__ = ["BatchResult", "process_claim", "run_batch", "worker_write_enabled"]

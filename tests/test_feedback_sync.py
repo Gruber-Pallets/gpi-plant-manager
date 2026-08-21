@@ -58,6 +58,13 @@ def aware_now():
     return datetime(2026, 8, 20, 18, 0, tzinfo=UTC)
 
 
+def set_or_delete(monkeypatch, name, value):
+    if value is None:
+        monkeypatch.delenv(name, raising=False)
+    else:
+        monkeypatch.setenv(name, value)
+
+
 def claim(
     remote_id=None,
     version=1,
@@ -1164,6 +1171,8 @@ def test_batch_result_rejects_unknown_or_nonlist_outcomes(outcomes):
 
 @pytest.mark.parametrize(("requested", "expected"), [(0, 1), (1, 1), (9, 9), (11, 10)])
 def test_run_batch_is_bounded_sequential_and_uses_canary(monkeypatch, requested, expected):
+    monkeypatch.setenv("ODOO_SHARED_REPORTING_WRITE_ENABLED", "true")
+    monkeypatch.setenv("ODOO_IMPROVEMENTS_WRITE_ENABLED", "true")
     client = FakeClient()
     client.canary = 17
     claims = [claim(), claim(remote_id=901)]
@@ -1197,6 +1206,8 @@ def test_run_batch_is_bounded_sequential_and_uses_canary(monkeypatch, requested,
 
 
 def test_run_batch_isolates_one_claim_exception_and_continues_sequentially(monkeypatch):
+    monkeypatch.setenv("ODOO_SHARED_REPORTING_WRITE_ENABLED", "true")
+    monkeypatch.setenv("ODOO_IMPROVEMENTS_WRITE_ENABLED", "true")
     client = FakeClient()
     claims = [claim(), claim(remote_id=901)]
     calls = []
@@ -1234,6 +1245,8 @@ def test_run_batch_isolates_one_claim_exception_and_continues_sequentially(monke
     [True, False, 1.0, 2.5, "1", None, float("nan"), float("inf")],
 )
 def test_run_batch_rejects_noninteger_limit_before_client_creation(monkeypatch, invalid_limit):
+    monkeypatch.setenv("ODOO_SHARED_REPORTING_WRITE_ENABLED", "true")
+    monkeypatch.setenv("ODOO_IMPROVEMENTS_WRITE_ENABLED", "true")
     from_env = MagicMock(side_effect=AssertionError("client must not be created"))
     monkeypatch.setattr(feedback_sync.ImprovementsClient, "from_env", from_env)
 
@@ -1241,6 +1254,50 @@ def test_run_batch_rejects_noninteger_limit_before_client_creation(monkeypatch, 
         run_batch(now=aware_now(), worker_id="worker-a", limit=invalid_limit)
 
     from_env.assert_not_called()
+
+
+class PoisonBatchArgument:
+    def __bool__(self):
+        raise AssertionError("batch arguments must not be read")
+
+
+@pytest.mark.parametrize(
+    ("master", "improvements"),
+    [
+        (None, None),
+        (None, "true"),
+        ("", "true"),
+        ("false", "true"),
+        ("0", "true"),
+        ("TRUE", "true"),
+        ("true ", "true"),
+        ("true", None),
+        ("true", ""),
+        ("true", "false"),
+        ("true", "0"),
+        ("true", "TRUE"),
+        ("true", "true "),
+    ],
+)
+def test_closed_gates_stop_before_arguments_config_database_or_odoo(
+    monkeypatch, master, improvements
+):
+    set_or_delete(monkeypatch, "ODOO_SHARED_REPORTING_WRITE_ENABLED", master)
+    set_or_delete(monkeypatch, "ODOO_IMPROVEMENTS_WRITE_ENABLED", improvements)
+    poison = MagicMock(side_effect=AssertionError("downstream boundary must not run"))
+    monkeypatch.setattr(feedback_sync.socket, "gethostname", poison)
+    monkeypatch.setattr(feedback_sync.os, "getpid", poison)
+    monkeypatch.setattr(feedback_sync.ImprovementsClient, "from_env", poison)
+    monkeypatch.setattr(feedback_sync.ImprovementsClient, "default_executor", poison)
+    monkeypatch.setattr(sync_store, "recover_expired_claims", poison)
+    monkeypatch.setattr(sync_store, "claim_due", poison)
+    monkeypatch.setattr(feedback_sync, "process_claim", poison)
+    argument = PoisonBatchArgument()
+
+    result = run_batch(now=argument, worker_id=argument, limit=argument)
+
+    assert result == BatchResult(skipped="write_gates_closed")
+    poison.assert_not_called()
 
 
 def dedicated_client(executor=None):
