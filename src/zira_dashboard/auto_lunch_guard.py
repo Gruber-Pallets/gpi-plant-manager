@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from . import auto_lunch_settings
+from . import auto_lunch_settings, inbox_keys
 from .auto_lunch_settings import Settings
 
 _log = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ def observe() -> Settings:
     try:
         return auto_lunch_settings.reconcile_external_change()
     except Exception:
-        _log.warning("Auto-Lunch external change audit failed", exc_info=True)
+        _log.warning("Auto-Lunch settings reconciliation failed", exc_info=True)
         try:
             return auto_lunch_settings.reload()
         except Exception:
@@ -39,6 +39,7 @@ def current_alert() -> dict | None:
     label = mode_label(current)
     if label == "Live":
         return None
+    item_key = inbox_keys.auto_lunch_setting()
     return {
         "name": "Auto-Lunch",
         "label": label,
@@ -46,6 +47,6 @@ def current_alert() -> dict | None:
         "priority": "urgent",
         "badge": "Timeclock",
         "href": "/settings?section=timeclock#auto-lunch-form",
-        "row_key": "auto_lunch:setting",
-        "item_key": "auto_lunch:setting",
+        "row_key": item_key,
+        "item_key": item_key,
     }

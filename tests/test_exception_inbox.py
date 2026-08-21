@@ -3,9 +3,11 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from zira_dashboard import (
+    auto_lunch_guard,
     db,
     exception_inbox,
     machine_breakdown,
@@ -21,6 +23,11 @@ from zira_dashboard.routes import exceptions as exceptions_route
 from zira_dashboard.routes import staffing as staffing_routes
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "zira_dashboard" / "static"
+
+
+@pytest.fixture(autouse=True)
+def _live_auto_lunch(monkeypatch):
+    monkeypatch.setattr(auto_lunch_guard, "current_alert", lambda: None)
 
 
 def _snapshot():
@@ -123,6 +130,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
     counts = {s["id"]: s["count"] for s in snap["sections"]}
     assert counts == {
         "odoo_roster_sync": 0,
+        "auto_lunch": 0,
         "assignments": 1,
         "plant_schedule": 0,
         "saturday_recruiting": 0,
@@ -310,6 +318,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     assert summary["source_errors"] == []
     assert summary["sections"] == {
         "odoo_roster_sync": 0,
+        "auto_lunch": 0,
         "assignments": 2,
         "plant_schedule": 0,
         "saturday_recruiting": 0,
@@ -459,6 +468,7 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     assert snap["source_errors"] == [{"source": "Assignments To Do"}]
     assert [s["id"] for s in snap["sections"]] == [
         "odoo_roster_sync",
+        "auto_lunch",
         "assignments",
         "plant_schedule",
         "saturday_recruiting",
@@ -495,6 +505,89 @@ def _empty_inbox_sources(monkeypatch):
     monkeypatch.setattr(exception_inbox, "_pending_time_off_counts", lambda today: (0, 0))
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
     monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _today: (0, []))
+
+
+def test_auto_lunch_off_is_one_urgent_inbox_item(monkeypatch):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    row = {
+        "name": "Auto-Lunch",
+        "label": "Off",
+        "detail": "Lunch deductions are not being written. Restore Live mode.",
+        "priority": "urgent",
+        "badge": "Timeclock",
+        "href": "/settings?section=timeclock#auto-lunch-form",
+        "row_key": "auto_lunch:setting",
+        "item_key": "auto_lunch:setting",
+    }
+    monkeypatch.setattr(auto_lunch_guard, "current_alert", lambda: row)
+
+    snapshot = exception_inbox.build_snapshot()
+
+    section = next(s for s in snapshot["sections"] if s["id"] == "auto_lunch")
+    assert section["count"] == 1
+    assert section["rows"] == [row]
+    assert section["href"] == "/settings?section=timeclock#auto-lunch-form"
+    assert section["action_key"] is None
+    assert section["action_label"] is None
+    assert "action" not in section["rows"][0]
+    assert snapshot["total"] == 1
+    assert snapshot["urgent_total"] == 1
+    assert snapshot["queue"][0]["item_key"] == "auto_lunch:setting"
+    assert snapshot["queue"][0]["priority"] == "urgent"
+
+
+def test_auto_lunch_off_is_counted_in_summary(monkeypatch):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "current_alert",
+        lambda: {"priority": "urgent", "item_key": "auto_lunch:setting"},
+    )
+
+    summary = exception_inbox.build_summary()
+
+    assert summary["sections"]["auto_lunch"] == 1
+    assert summary["total"] == 1
+    assert summary["urgent_total"] == 1
+
+
+def test_auto_lunch_alert_clears_when_guard_returns_none(monkeypatch):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    monkeypatch.setattr(auto_lunch_guard, "current_alert", lambda: None)
+
+    snapshot = exception_inbox.build_snapshot()
+
+    section = next(s for s in snapshot["sections"] if s["id"] == "auto_lunch")
+    assert section["count"] == 0
+    assert section["rows"] == []
+
+
+def test_auto_lunch_guard_failure_degrades_without_breaking_inbox(monkeypatch):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+
+    def fail_guard():
+        raise RuntimeError("settings unavailable")
+
+    monkeypatch.setattr(auto_lunch_guard, "current_alert", fail_guard)
+
+    snapshot = exception_inbox.build_snapshot()
+
+    section = next(s for s in snapshot["sections"] if s["id"] == "auto_lunch")
+    assert section["count"] == 0
+    assert section["rows"] == []
+    assert {"source": "Auto-Lunch"} in snapshot["source_errors"]
 
 
 def test_build_snapshot_surfaces_an_unsafe_roster_sync_as_urgent(monkeypatch):

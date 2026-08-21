@@ -57,3 +57,8 @@ def breakdown(wc_name, stop_iso, person_name=None) -> str:
 def odoo_roster_sync() -> str:
     """Identity for an Odoo payload rejected before it can hide the roster."""
     return "odoo_roster_sync:active_status"
+
+
+def auto_lunch_setting() -> str:
+    """Identity for the singleton Auto-Lunch non-Live warning."""
+    return "auto_lunch:setting"

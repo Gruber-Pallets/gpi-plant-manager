@@ -2,6 +2,7 @@ from contextlib import contextmanager
 
 from zira_dashboard import auto_lunch_guard as guard
 from zira_dashboard import db
+from zira_dashboard import inbox_keys
 from zira_dashboard.auto_lunch_settings import Settings
 
 
@@ -43,6 +44,25 @@ def test_off_mode_returns_stable_urgent_inbox_row(monkeypatch):
     }
 
 
+def test_auto_lunch_setting_key_is_stable():
+    assert inbox_keys.auto_lunch_setting() == "auto_lunch:setting"
+
+
+def test_alert_uses_canonical_inbox_key(monkeypatch):
+    monkeypatch.setattr(guard, "observe", lambda: Settings(False, True, 5.0, 30))
+    monkeypatch.setattr(
+        inbox_keys,
+        "auto_lunch_setting",
+        lambda: "auto_lunch:canonical-test",
+        raising=False,
+    )
+
+    alert = guard.current_alert()
+
+    assert alert["row_key"] == "auto_lunch:canonical-test"
+    assert alert["item_key"] == "auto_lunch:canonical-test"
+
+
 def test_observe_only_uses_plain_label(monkeypatch):
     monkeypatch.setattr(guard, "observe", lambda: Settings(True, True, 5.0, 30))
     assert guard.current_alert()["label"] == "Observe only"
@@ -58,7 +78,7 @@ def test_reconciliation_failure_reloads_before_falling_back(monkeypatch, caplog)
     )
 
     assert guard.current_alert()["label"] == "Off"
-    assert "external change audit failed" in caplog.text
+    assert "settings reconciliation failed" in caplog.text
 
 
 def test_safe_to_unsafe_change_survives_audit_append_failure(

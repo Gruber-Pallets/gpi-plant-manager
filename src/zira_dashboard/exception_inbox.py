@@ -250,7 +250,14 @@ def _queue_from_sections(sections: list[dict]) -> list[dict]:
 
 
 def build_summary() -> dict:
-    from . import missing_wc, missed_punch_out, machine_breakdown, odoo_sync, unexpected_worker
+    from . import (
+        auto_lunch_guard,
+        machine_breakdown,
+        missed_punch_out,
+        missing_wc,
+        odoo_sync,
+        unexpected_worker,
+    )
     from .routes import staffing as staffing_routes
 
     today = plant_day.today()
@@ -268,6 +275,9 @@ def build_summary() -> dict:
     roster_sync_alert = _capture(
         source_errors, "Timeclock Roster", odoo_sync.roster_sync_alert, None
     )
+    auto_lunch_alert = _capture(
+        source_errors, "Auto-Lunch", auto_lunch_guard.current_alert, None
+    )
     schedule_count = _capture(
         source_errors, "Plant Schedule", lambda: _plant_schedule_reminder()[0], 0
     )
@@ -284,6 +294,7 @@ def build_summary() -> dict:
     missed_count = len(missed_rows)
     breakdown_count = len(breakdown_rows)
     roster_sync_count = int(roster_sync_alert is not None)
+    auto_lunch_count = int(auto_lunch_alert is not None)
     urgent_total = (
         len(late.get("scheduled_late") or [])
         + len(late.get("unscheduled_late") or [])
@@ -293,6 +304,7 @@ def build_summary() -> dict:
         + pending_urgent_count
         + sum(1 for r in breakdown_rows if r.get("priority") == "urgent")
         + roster_sync_count
+        + auto_lunch_count
     )
     total = (
         assignment_count
@@ -305,6 +317,7 @@ def build_summary() -> dict:
         + pending_count
         + breakdown_count
         + roster_sync_count
+        + auto_lunch_count
     )
     return {
         "today": today.isoformat(),
@@ -326,12 +339,20 @@ def build_summary() -> dict:
             "time_off": pending_count,
             "breakdown": breakdown_count,
             "odoo_roster_sync": roster_sync_count,
+            "auto_lunch": auto_lunch_count,
         },
     }
 
 
 def build_snapshot() -> dict:
-    from . import missing_wc, missed_punch_out, machine_breakdown, odoo_sync, unexpected_worker
+    from . import (
+        auto_lunch_guard,
+        machine_breakdown,
+        missed_punch_out,
+        missing_wc,
+        odoo_sync,
+        unexpected_worker,
+    )
     from .routes import staffing as staffing_routes
 
     today = plant_day.today()
@@ -352,6 +373,10 @@ def build_snapshot() -> dict:
     roster_sync_alert = _capture(
         source_errors, "Timeclock Roster", odoo_sync.roster_sync_alert, None
     )
+    auto_lunch_alert = _capture(
+        source_errors, "Auto-Lunch", auto_lunch_guard.current_alert, None
+    )
+    auto_lunch_count = int(auto_lunch_alert is not None)
     schedule_count, schedule_rows = _capture(
         source_errors, "Plant Schedule", _plant_schedule_reminder, (0, [])
     )
@@ -469,6 +494,18 @@ def build_snapshot() -> dict:
                     "item_key": inbox_keys.odoo_roster_sync(),
                 }
             ] if roster_sync_alert else [],
+        },
+        {
+            "id": "auto_lunch",
+            "title": "Auto-Lunch",
+            "count": auto_lunch_count,
+            "tone": "bad",
+            "action_key": None,
+            "action_label": None,
+            "href": "/settings?section=timeclock#auto-lunch-form",
+            "empty": "Live",
+            "context": {},
+            "rows": [auto_lunch_alert] if auto_lunch_alert else [],
         },
         {
             "id": "assignments",
