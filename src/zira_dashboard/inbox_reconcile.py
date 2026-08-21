@@ -128,8 +128,13 @@ def _upsert(key: str, info: dict) -> None:
     )
 
 
-def _delete(key: str, last_seen: Any) -> dict | None:
-    """Claim a departure only if its mirror row has not been refreshed."""
+def _delete(
+    key: str,
+    last_seen: Any,
+    *,
+    auto_event: dict[str, Any] | None = None,
+) -> dict | None:
+    """Claim a departure and atomically record its automatic audit event."""
     with db.cursor() as cur:
         cur.execute(
             "DELETE FROM inbox_open_items "
@@ -137,7 +142,10 @@ def _delete(key: str, last_seen: Any) -> dict | None:
             "RETURNING item_key",
             (key, last_seen),
         )
-        return cur.fetchone()
+        claimed = cur.fetchone()
+        if claimed is not None and auto_event is not None:
+            inbox_log.record_event_with_cursor(cur, **auto_event)
+        return claimed
 
 
 def run_once() -> None:
@@ -161,18 +169,23 @@ def run_once() -> None:
             continue  # departed too recently; re-check next tick (resolve/log race guard)
         try:
             has_human_event = inbox_log.has_human_event_since(key, row["first_seen"])
-            claimed = _delete(key, last_seen)
-            if claimed is not None and not has_human_event:
-                inbox_log.log_event_safe(
-                    item_kind=row["item_kind"],
-                    item_key=key,
-                    person_name=row.get("person_name"),
-                    category_label=row.get("category_label"),
-                    action="auto_resolved",
-                    outcome="Auto-resolved",
-                    actor_upn=None,
-                    actor_name=None,
-                    source="auto",
-                )
+            auto_event = None
+            if not has_human_event:
+                auto_event = {
+                    "item_kind": row["item_kind"],
+                    "item_key": key,
+                    "person_name": row.get("person_name"),
+                    "category_label": row.get("category_label"),
+                    "action": "auto_resolved",
+                    "outcome": "Auto-resolved",
+                    "actor_upn": None,
+                    "actor_name": None,
+                    "source": "auto",
+                }
+            _delete(
+                key,
+                last_seen,
+                auto_event=auto_event,
+            )
         except Exception as e:  # noqa: BLE001 -- one bad item never aborts the sweep
             _log.warning("inbox reconcile failed for %s: %s", key, e)

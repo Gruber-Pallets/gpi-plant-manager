@@ -1,4 +1,6 @@
 """inbox_log: write/read the Exception Inbox activity log + best-effort wrapper."""
+from contextlib import contextmanager
+import json
 import os
 from datetime import date, datetime, UTC
 
@@ -19,6 +21,87 @@ def _clean():
     yield
     if os.environ.get("DATABASE_URL"):
         db.execute("DELETE FROM inbox_events WHERE item_key = %s", (KEY,))
+
+
+def test_record_event_with_cursor_returns_real_dict_id_and_serializes_detail():
+    class Cursor:
+        def execute(self, sql, params=None):
+            self.sql = " ".join(sql.split())
+            self.params = params
+
+        def fetchone(self):
+            return {"id": 41}
+
+    cursor = Cursor()
+
+    event_id = inbox_log.record_event_with_cursor(
+        cursor,
+        item_kind="breakdown",
+        item_key=KEY,
+        person_name="Maria",
+        category_label="Machine Breakdown",
+        action="auto_resolved",
+        source="auto",
+        detail={"day": date(2026, 8, 20)},
+    )
+
+    assert event_id == 41
+    assert cursor.sql.startswith("INSERT INTO inbox_events")
+    assert cursor.params[0:5] == (
+        "breakdown",
+        KEY,
+        "Maria",
+        "Machine Breakdown",
+        "auto_resolved",
+    )
+    assert json.loads(cursor.params[-1]) == {"day": "2026-08-20"}
+
+
+def test_record_event_delegates_to_cursor_aware_insert(monkeypatch):
+    sentinel_cursor = object()
+    calls = []
+
+    @contextmanager
+    def opened_cursor():
+        yield sentinel_cursor
+
+    def insert(cursor, **event):
+        calls.append((cursor, event))
+        return 42
+
+    monkeypatch.setattr(inbox_log.db, "cursor", opened_cursor)
+    monkeypatch.setattr(inbox_log, "record_event_with_cursor", insert)
+
+    event_id = inbox_log.record_event(
+        item_kind="missing_wc",
+        item_key=KEY,
+        person_name="Maria",
+        category_label="Missing WC",
+        action="assign",
+    )
+
+    assert event_id == 42
+    assert calls == [
+        (
+            sentinel_cursor,
+            {
+                "item_kind": "missing_wc",
+                "item_key": KEY,
+                "person_name": "Maria",
+                "category_label": "Missing WC",
+                "action": "assign",
+                "outcome": None,
+                "before_value": None,
+                "after_value": None,
+                "reason": None,
+                "actor_upn": None,
+                "actor_name": None,
+                "source": "inbox",
+                "reversible": False,
+                "detail": None,
+            },
+        )
+    ]
 
 
 @_db

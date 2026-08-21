@@ -30,6 +30,39 @@ def actor_from(request) -> tuple[str | None, str | None]:
     )
 
 
+def record_event_with_cursor(
+    cursor,
+    *,
+    item_kind: str,
+    item_key: str,
+    person_name: str | None,
+    category_label: str | None,
+    action: str,
+    outcome: str | None = None,
+    before_value: str | None = None,
+    after_value: str | None = None,
+    reason: str | None = None,
+    actor_upn: str | None = None,
+    actor_name: str | None = None,
+    source: str | None = "inbox",
+    reversible: bool = False,
+    detail: Any | None = None,
+) -> int:
+    """Insert one event with an existing transaction cursor and return its id."""
+    cursor.execute(
+        "INSERT INTO inbox_events "
+        "(item_kind, item_key, person_name, category_label, action, outcome, "
+        " before_value, after_value, reason, actor_upn, actor_name, source, "
+        " reversible, detail) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb) "
+        "RETURNING id",
+        (item_kind, item_key, person_name, category_label, action, outcome,
+         before_value, after_value, reason, actor_upn, actor_name, source,
+         reversible, json.dumps(detail, default=str) if detail is not None else None),
+    )
+    return int(cursor.fetchone()["id"])
+
+
 def record_event(
     *,
     item_kind: str,
@@ -48,18 +81,24 @@ def record_event(
     detail: Any | None = None,
 ) -> int:
     """Insert one event row and return its id (for later undo correlation)."""
-    rows = db.query(
-        "INSERT INTO inbox_events "
-        "(item_kind, item_key, person_name, category_label, action, outcome, "
-        " before_value, after_value, reason, actor_upn, actor_name, source, "
-        " reversible, detail) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb) "
-        "RETURNING id",
-        (item_kind, item_key, person_name, category_label, action, outcome,
-         before_value, after_value, reason, actor_upn, actor_name, source,
-         reversible, json.dumps(detail, default=str) if detail is not None else None),
-    )
-    return int(rows[0]["id"])
+    with db.cursor() as cursor:
+        return record_event_with_cursor(
+            cursor,
+            item_kind=item_kind,
+            item_key=item_key,
+            person_name=person_name,
+            category_label=category_label,
+            action=action,
+            outcome=outcome,
+            before_value=before_value,
+            after_value=after_value,
+            reason=reason,
+            actor_upn=actor_upn,
+            actor_name=actor_name,
+            source=source,
+            reversible=reversible,
+            detail=detail,
+        )
 
 
 def log_event_safe(**kwargs) -> int | None:
