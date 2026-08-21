@@ -19,6 +19,8 @@ class Settings:
 
 DEFAULT = Settings()
 
+_FIELDS = "enabled, observe_only, flex_after_hours, flex_minutes"
+
 
 def _row_to_settings(row: dict) -> Settings:
     return Settings(
@@ -32,8 +34,7 @@ def _row_to_settings(row: dict) -> Settings:
 def _load_from_db() -> Settings:
     from . import db
     rows = db.query(
-        "SELECT enabled, observe_only, flex_after_hours, flex_minutes "
-        "FROM auto_lunch_settings WHERE id = 1"
+        f"SELECT {_FIELDS} FROM auto_lunch_settings WHERE id = 1"
     )
     return _row_to_settings(rows[0]) if rows else DEFAULT
 
@@ -47,21 +48,65 @@ def current() -> Settings:
     return _store.current()
 
 
-def save(s: Settings) -> None:
-    """Persist the settings (UPSERT id=1) and update the in-process cache so
-    the next current() returns the saved value without a re-read."""
-    from . import db
-    db.execute(
-        "INSERT INTO auto_lunch_settings "
-        "(id, enabled, observe_only, flex_after_hours, flex_minutes) "
-        "VALUES (1, %s, %s, %s, %s) "
-        "ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, "
-        "observe_only = EXCLUDED.observe_only, "
-        "flex_after_hours = EXCLUDED.flex_after_hours, "
-        "flex_minutes = EXCLUDED.flex_minutes",
-        (s.enabled, s.observe_only, s.flex_after_hours, s.flex_minutes),
+def _insert_event(cur, before: Settings | None, after: Settings,
+                  actor_upn: str | None, actor_name: str | None,
+                  source: str) -> None:
+    before_values = (
+        (before.enabled, before.observe_only, before.flex_after_hours,
+         before.flex_minutes) if before is not None else (None, None, None, None)
     )
-    _store.set(s)
+    cur.execute(
+        "INSERT INTO auto_lunch_setting_events "
+        "(before_enabled, before_observe_only, before_flex_after_hours, "
+        " before_flex_minutes, after_enabled, after_observe_only, "
+        " after_flex_after_hours, after_flex_minutes, actor_upn, actor_name, source) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (*before_values, after.enabled, after.observe_only,
+         after.flex_after_hours, after.flex_minutes,
+         actor_upn, actor_name, source),
+    )
+
+
+def save(s: Settings, *, actor_upn: str | None = None,
+         actor_name: str | None = None, source: str = "settings") -> bool:
+    from . import db
+    if source not in {"settings", "external", "baseline"}:
+        raise ValueError(f"invalid Auto-Lunch audit source: {source}")
+    changed = False
+    persisted = s
+    with db.cursor() as cur:
+        cur.execute(f"SELECT {_FIELDS} FROM auto_lunch_settings WHERE id = 1 FOR UPDATE")
+        row = cur.fetchone()
+        before = _row_to_settings(row) if row else None
+        if before != s:
+            cur.execute(
+                "INSERT INTO auto_lunch_settings "
+                "(id, enabled, observe_only, flex_after_hours, flex_minutes) "
+                "VALUES (1, %s, %s, %s, %s) "
+                "ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, "
+                "observe_only = EXCLUDED.observe_only, "
+                "flex_after_hours = EXCLUDED.flex_after_hours, "
+                "flex_minutes = EXCLUDED.flex_minutes",
+                (s.enabled, s.observe_only, s.flex_after_hours, s.flex_minutes),
+            )
+            _insert_event(cur, before, s, actor_upn, actor_name, source)
+            changed = True
+        elif before is not None:
+            persisted = before
+    _store.set(persisted)
+    return changed
+
+
+def recent_events(limit: int = 20) -> list[dict]:
+    from . import db
+    return db.query(
+        "SELECT id, before_enabled, before_observe_only, "
+        "before_flex_after_hours, before_flex_minutes, after_enabled, "
+        "after_observe_only, after_flex_after_hours, after_flex_minutes, "
+        "actor_upn, actor_name, source, changed_at "
+        "FROM auto_lunch_setting_events ORDER BY changed_at DESC, id DESC LIMIT %s",
+        (max(1, min(int(limit), 100)),),
+    )
 
 
 def reload() -> Settings:

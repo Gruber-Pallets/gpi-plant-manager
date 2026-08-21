@@ -1321,6 +1321,27 @@ CREATE TABLE IF NOT EXISTS auto_lunch_settings (
 );
 INSERT INTO auto_lunch_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
+-- Append-only Auto-Lunch setting history. A NULL before-value marks the first
+-- observed baseline; settings/external rows snapshot both sides of a change.
+CREATE TABLE IF NOT EXISTS auto_lunch_setting_events (
+  id                         BIGSERIAL PRIMARY KEY,
+  before_enabled             BOOLEAN,
+  before_observe_only        BOOLEAN,
+  before_flex_after_hours    NUMERIC,
+  before_flex_minutes        INTEGER,
+  after_enabled              BOOLEAN NOT NULL,
+  after_observe_only         BOOLEAN NOT NULL,
+  after_flex_after_hours     NUMERIC NOT NULL,
+  after_flex_minutes         INTEGER NOT NULL,
+  actor_upn                  TEXT,
+  actor_name                 TEXT,
+  source                     TEXT NOT NULL
+                             CHECK (source IN ('settings','external','baseline')),
+  changed_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS auto_lunch_setting_events_changed_at_idx
+  ON auto_lunch_setting_events (changed_at DESC, id DESC);
+
 -- Forklift demand-advisor settings (2026-06-27). Singleton row (id=1). Tunes
 -- the scheduler's forklift-driver recommendation: enabled toggle, per-driver
 -- throughput (calls_per_hour) trimmed by target_utilization to an effective
