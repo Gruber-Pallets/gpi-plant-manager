@@ -5,6 +5,7 @@ same pattern as schedule_store.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import Lock
 
 from ._singleton import CachedSingleton
 
@@ -23,11 +24,18 @@ _FIELDS = "enabled, observe_only, flex_after_hours, flex_minutes"
 
 
 def _row_to_settings(row: dict) -> Settings:
+    flex_after_hours = row.get("flex_after_hours")
+    flex_minutes = row.get("flex_minutes")
     return Settings(
         enabled=bool(row.get("enabled", False)),
         observe_only=bool(row.get("observe_only", True)),
-        flex_after_hours=float(row.get("flex_after_hours") or 5.0),
-        flex_minutes=int(row.get("flex_minutes") or 30),
+        flex_after_hours=float(
+            DEFAULT.flex_after_hours if flex_after_hours is None
+            else flex_after_hours
+        ),
+        flex_minutes=int(
+            DEFAULT.flex_minutes if flex_minutes is None else flex_minutes
+        ),
     )
 
 
@@ -40,6 +48,7 @@ def _load_from_db() -> Settings:
 
 
 _store: CachedSingleton[Settings] = CachedSingleton(_load_from_db)
+_save_lock = Lock()
 
 
 def current() -> Settings:
@@ -72,29 +81,32 @@ def save(s: Settings, *, actor_upn: str | None = None,
     from . import db
     if source not in {"settings", "external", "baseline"}:
         raise ValueError(f"invalid Auto-Lunch audit source: {source}")
-    changed = False
-    persisted = s
-    with db.cursor() as cur:
-        cur.execute(f"SELECT {_FIELDS} FROM auto_lunch_settings WHERE id = 1 FOR UPDATE")
-        row = cur.fetchone()
-        before = _row_to_settings(row) if row else None
-        if before != s:
+    with _save_lock:
+        changed = False
+        persisted = s
+        with db.cursor() as cur:
             cur.execute(
-                "INSERT INTO auto_lunch_settings "
-                "(id, enabled, observe_only, flex_after_hours, flex_minutes) "
-                "VALUES (1, %s, %s, %s, %s) "
-                "ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, "
-                "observe_only = EXCLUDED.observe_only, "
-                "flex_after_hours = EXCLUDED.flex_after_hours, "
-                "flex_minutes = EXCLUDED.flex_minutes",
-                (s.enabled, s.observe_only, s.flex_after_hours, s.flex_minutes),
+                f"SELECT {_FIELDS} FROM auto_lunch_settings WHERE id = 1 FOR UPDATE"
             )
-            _insert_event(cur, before, s, actor_upn, actor_name, source)
-            changed = True
-        elif before is not None:
-            persisted = before
-    _store.set(persisted)
-    return changed
+            row = cur.fetchone()
+            before = _row_to_settings(row) if row else None
+            if before != s:
+                cur.execute(
+                    "INSERT INTO auto_lunch_settings "
+                    "(id, enabled, observe_only, flex_after_hours, flex_minutes) "
+                    "VALUES (1, %s, %s, %s, %s) "
+                    "ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, "
+                    "observe_only = EXCLUDED.observe_only, "
+                    "flex_after_hours = EXCLUDED.flex_after_hours, "
+                    "flex_minutes = EXCLUDED.flex_minutes",
+                    (s.enabled, s.observe_only, s.flex_after_hours, s.flex_minutes),
+                )
+                _insert_event(cur, before, s, actor_upn, actor_name, source)
+                changed = True
+            elif before is not None:
+                persisted = before
+        _store.set(persisted)
+        return changed
 
 
 def recent_events(limit: int = 20) -> list[dict]:
