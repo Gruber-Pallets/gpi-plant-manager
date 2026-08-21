@@ -17,6 +17,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 #### Improvements
 
 - **The feedback-sharing helper is installed but starts turned off.** Closed safety switches stop it before it can claim work or call Odoo.
+- **Old feedback can be checked in small groups before it is shared.** Missing details stay blank instead of being guessed.
 
 ## 2026-08-20
 

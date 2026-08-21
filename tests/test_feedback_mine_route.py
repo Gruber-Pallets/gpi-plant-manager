@@ -34,9 +34,7 @@ def _legacy_rows():
 
 
 def test_mine_maps_batched_legacy_odoo_statuses_to_local_names(monkeypatch):
-    monkeypatch.setattr(
-        feedback_store, "for_submitter", lambda upn, limit=100: _legacy_rows()
-    )
+    monkeypatch.setattr(feedback_store, "for_submitter", lambda upn, limit=100: _legacy_rows())
     seen = []
     monkeypatch.setattr(
         odoo_client,
@@ -72,6 +70,7 @@ def test_mine_uses_local_status_without_odoo_for_migrated_rows(monkeypatch):
                 "created_at": "2026-08-20",
                 "page_url": None,
                 "status": "completed",
+                "lifecycle_origin": "legacy_project_task",
                 "odoo_task_id": 999,
             }
         ],
@@ -122,9 +121,7 @@ def test_mine_only_fetches_status_null_legacy_task_ids(monkeypatch):
 
 
 def test_mine_defaults_legacy_status_to_requested_when_odoo_unavailable(monkeypatch):
-    monkeypatch.setattr(
-        feedback_store, "for_submitter", lambda upn, limit=100: _legacy_rows()
-    )
+    monkeypatch.setattr(feedback_store, "for_submitter", lambda upn, limit=100: _legacy_rows())
 
     def unavailable(ids):
         raise RuntimeError("odoo down")

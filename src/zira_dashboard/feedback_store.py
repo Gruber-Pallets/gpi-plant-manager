@@ -6,6 +6,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Mapping
 
@@ -38,6 +39,14 @@ class ProjectionSnapshot:
     images: Mapping[str, NormalizedImage]
 
 
+@dataclass(frozen=True)
+class RolloutSnapshot:
+    """One exact rollout row and bounded images captured under one lock."""
+
+    feedback: Mapping[str, object]
+    images: Mapping[str, NormalizedImage]
+
+
 _TRANSITIONS = {
     "requested": {"in_progress", "completed", "declined"},
     "in_progress": {"completed", "declined"},
@@ -57,6 +66,37 @@ def _clamp_limit(limit, default: int = 100) -> int:
 def _positive_signed_64(value: object, label: str) -> int:
     if type(value) is not int or not 0 < value <= _MAX_SIGNED_64:
         raise ValueError(f"{label} must be a positive signed-64-bit integer")
+    return value
+
+
+def _nonnegative_signed_64(value: object, label: str) -> int:
+    if type(value) is not int or not 0 <= value <= _MAX_SIGNED_64:
+        raise ValueError(f"{label} must be a nonnegative signed-64-bit integer")
+    return value
+
+
+def _nonnegative_numeric_aggregate(value: object, label: str) -> int:
+    """Convert only PostgreSQL's finite integral numeric aggregate shape."""
+    if type(value) is Decimal:
+        if (
+            not value.is_finite()
+            or value != value.to_integral_value()
+            or not Decimal(0) <= value <= Decimal(_MAX_SIGNED_64)
+        ):
+            raise ValueError(f"{label} must be an integral database count")
+        value = int(value)
+    return _nonnegative_signed_64(value, label)
+
+
+def _aware_datetime(value: object, label: str) -> datetime:
+    if type(value) is not datetime or value.tzinfo is None:
+        raise ValueError(f"{label} must be timezone-aware")
+    try:
+        offset = value.utcoffset()
+    except (OverflowError, ValueError):
+        offset = None
+    if offset is None:
+        raise ValueError(f"{label} must be timezone-aware")
     return value
 
 
@@ -108,7 +148,8 @@ def projection_snapshot(feedback_id: int, projection_version: int) -> Projection
             "finished_at, finished_by, resolution_note, projection_version, "
             "lifecycle_origin FROM feedback "
             "WHERE id = %s AND projection_version = %s "
-            "AND lifecycle_origin = 'local' FOR SHARE",
+            "AND lifecycle_origin IN ('local', 'legacy_project_task') "
+            "AND status IS NOT NULL FOR SHARE",
             (safe_feedback_id, safe_version),
         )
         row = cur.fetchone()
@@ -127,7 +168,8 @@ def projection_snapshot(feedback_id: int, projection_version: int) -> Projection
         or feedback.get("id") != safe_feedback_id
         or type(feedback.get("projection_version")) is not int
         or feedback.get("projection_version") != safe_version
-        or feedback.get("lifecycle_origin") != "local"
+        or feedback.get("lifecycle_origin") not in {"local", "legacy_project_task"}
+        or feedback.get("status") not in _TRANSITIONS
     ):
         raise ProjectionSnapshotUnavailable("exact local feedback version is unavailable")
     if type(image_rows) is not list or len(image_rows) > 2:
@@ -332,6 +374,489 @@ def for_admin(limit: int = 200) -> list[dict]:
         "WHERE f.lifecycle_origin = 'local' ORDER BY f.id DESC LIMIT %s",
         (_clamp_limit(limit, default=200),),
     )
+
+
+def feedback_after(after_id: int, limit: int) -> list[dict]:
+    """Return one validated, detached rollout page ordered by local feedback ID."""
+    safe_after_id = _nonnegative_signed_64(after_id, "after id")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("feedback rollout limit must be an integer from 1 through 100")
+    rows = db.query(
+        "SELECT id, message, task_type, created_at, submitter, status, finished_at, "
+        "finished_by, resolution_note, projection_version, lifecycle_origin, "
+        "legacy_lifecycle_migrated_at, updated_at, odoo_task_id, "
+        "(SELECT s.odoo_improvement_id FROM feedback_odoo_sync s "
+        "WHERE s.feedback_id = feedback.id) AS odoo_improvement_id "
+        "FROM feedback WHERE id > %s ORDER BY id LIMIT %s",
+        (safe_after_id, limit),
+    )
+    if type(rows) is not list or len(rows) > limit:
+        raise ProjectionSnapshotUnavailable("feedback rollout rows are malformed")
+
+    detached: list[dict] = []
+    previous = safe_after_id
+    required = {
+        "id",
+        "message",
+        "task_type",
+        "created_at",
+        "submitter",
+        "status",
+        "finished_at",
+        "finished_by",
+        "resolution_note",
+        "projection_version",
+        "lifecycle_origin",
+        "legacy_lifecycle_migrated_at",
+        "updated_at",
+        "odoo_task_id",
+        "odoo_improvement_id",
+    }
+    for row in rows:
+        if not isinstance(row, Mapping) or not required <= set(row):
+            raise ProjectionSnapshotUnavailable("feedback rollout row is malformed")
+        item = dict(row)
+        feedback_id = item.get("id")
+        if type(feedback_id) is not int or not previous < feedback_id <= _MAX_SIGNED_64:
+            raise ProjectionSnapshotUnavailable("feedback rollout rows are unordered or malformed")
+        _positive_signed_64(item.get("projection_version"), "projection version")
+        task_id = item.get("odoo_task_id")
+        if task_id is not None:
+            _positive_signed_64(task_id, "legacy task id")
+        remote_id = item.get("odoo_improvement_id")
+        if remote_id is not None:
+            _positive_signed_64(remote_id, "remote id")
+        status = item.get("status")
+        origin = item.get("lifecycle_origin")
+        if status is not None and status not in _TRANSITIONS:
+            raise ProjectionSnapshotUnavailable("feedback rollout status is malformed")
+        if origin not in {None, "local", "legacy_project_task"}:
+            raise ProjectionSnapshotUnavailable("feedback rollout origin is malformed")
+        if (origin is None) is not (status is None):
+            raise ProjectionSnapshotUnavailable("feedback rollout authority is malformed")
+        previous = feedback_id
+        detached.append(item)
+    return detached
+
+
+def rollout_snapshot(
+    *,
+    feedback_id: int,
+    expected_projection_version: int,
+    expected_odoo_task_id: int | None,
+) -> RolloutSnapshot:
+    """Lock and detach one exact rollout row plus validated bounded images."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    safe_version = _positive_signed_64(
+        expected_projection_version,
+        "projection version",
+    )
+    if expected_odoo_task_id is None:
+        safe_task_id = None
+    else:
+        safe_task_id = _positive_signed_64(expected_odoo_task_id, "legacy task id")
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT f.id, f.message, f.task_type, f.created_at, f.submitter, "
+            "f.status, f.finished_at, f.finished_by, f.resolution_note, "
+            "f.projection_version, f.lifecycle_origin, "
+            "f.legacy_lifecycle_migrated_at, f.updated_at, f.odoo_task_id, "
+            "s.odoo_improvement_id FROM feedback f "
+            "LEFT JOIN feedback_odoo_sync s ON s.feedback_id = f.id "
+            "WHERE f.id = %s AND f.projection_version = %s "
+            "AND f.odoo_task_id IS NOT DISTINCT FROM %s FOR SHARE OF f",
+            (safe_feedback_id, safe_version, safe_task_id),
+        )
+        row = cur.fetchone()
+        feedback = _detach_rollout_feedback(
+            row,
+            feedback_id=safe_feedback_id,
+            projection_version=safe_version,
+            odoo_task_id=safe_task_id,
+        )
+
+        cur.execute(
+            "SELECT role, byte_length, width, height, "
+            "octet_length(jpeg_bytes) AS stored_byte_length "
+            "FROM feedback_images WHERE feedback_id = %s "
+            "ORDER BY role LIMIT 3",
+            (safe_feedback_id,),
+        )
+        metadata_rows = cur.fetchall()
+        image_metadata = _validated_rollout_image_metadata(metadata_rows)
+
+        images: dict[str, NormalizedImage] = {}
+        roles = list(image_metadata)
+        if roles:
+            cur.execute(
+                "SELECT feedback_id, role, jpeg_bytes, sha256, byte_length, width, height "
+                "FROM feedback_images WHERE feedback_id = %s AND role = ANY(%s) "
+                "AND byte_length > 0 AND byte_length <= %s "
+                "AND octet_length(jpeg_bytes) > 0 "
+                "AND octet_length(jpeg_bytes) <= %s "
+                "AND octet_length(jpeg_bytes) = byte_length "
+                "ORDER BY role LIMIT 2",
+                (
+                    safe_feedback_id,
+                    roles,
+                    MAX_OUTPUT_BYTES,
+                    MAX_OUTPUT_BYTES,
+                ),
+            )
+            image_rows = cur.fetchall()
+            if type(image_rows) is not list or len(image_rows) != len(roles):
+                raise ProjectionSnapshotUnavailable("feedback image rows are malformed")
+            for expected_role, image_row in zip(roles, image_rows, strict=True):
+                if not isinstance(image_row, Mapping) or image_row.get("role") != expected_role:
+                    raise ProjectionSnapshotUnavailable("feedback image rows are malformed")
+                image = _snapshot_image(image_row, safe_feedback_id)
+                expected_length, expected_width, expected_height = image_metadata[expected_role]
+                if (
+                    image.byte_length != expected_length
+                    or image.width != expected_width
+                    or image.height != expected_height
+                ):
+                    raise ProjectionSnapshotUnavailable("feedback image metadata changed")
+                images[expected_role] = image
+
+    return RolloutSnapshot(
+        feedback=MappingProxyType(feedback),
+        images=MappingProxyType(images),
+    )
+
+
+def _detach_rollout_feedback(
+    row: object,
+    *,
+    feedback_id: int,
+    projection_version: int,
+    odoo_task_id: int | None,
+) -> dict[str, object]:
+    required = {
+        "id",
+        "message",
+        "task_type",
+        "created_at",
+        "submitter",
+        "status",
+        "finished_at",
+        "finished_by",
+        "resolution_note",
+        "projection_version",
+        "lifecycle_origin",
+        "legacy_lifecycle_migrated_at",
+        "updated_at",
+        "odoo_task_id",
+        "odoo_improvement_id",
+    }
+    if not isinstance(row, Mapping) or not required <= set(row):
+        raise ProjectionSnapshotUnavailable("exact rollout feedback version is unavailable")
+    detached = dict(row)
+    if (
+        type(detached.get("id")) is not int
+        or detached.get("id") != feedback_id
+        or type(detached.get("projection_version")) is not int
+        or detached.get("projection_version") != projection_version
+        or detached.get("odoo_task_id") != odoo_task_id
+    ):
+        raise ProjectionSnapshotUnavailable("exact rollout feedback version is unavailable")
+    if odoo_task_id is not None:
+        try:
+            _positive_signed_64(detached.get("odoo_task_id"), "legacy task id")
+        except ValueError as exc:
+            raise ProjectionSnapshotUnavailable(
+                "exact rollout feedback version is unavailable"
+            ) from exc
+    remote_id = detached.get("odoo_improvement_id")
+    if remote_id is not None:
+        try:
+            _positive_signed_64(remote_id, "remote id")
+        except ValueError as exc:
+            raise ProjectionSnapshotUnavailable(
+                "exact rollout feedback version is unavailable"
+            ) from exc
+    status = detached.get("status")
+    origin = detached.get("lifecycle_origin")
+    if (
+        (status is not None and status not in _TRANSITIONS)
+        or origin not in {None, "local", "legacy_project_task"}
+        or ((origin is None) is not (status is None))
+    ):
+        raise ProjectionSnapshotUnavailable("exact rollout feedback version is unavailable")
+    return detached
+
+
+def _validated_rollout_image_metadata(
+    rows: object,
+) -> dict[str, tuple[int, int, int]]:
+    if type(rows) is not list or len(rows) > 2:
+        raise ProjectionSnapshotUnavailable("feedback image metadata is malformed")
+    metadata: dict[str, tuple[int, int, int]] = {}
+    previous_role = ""
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ProjectionSnapshotUnavailable("feedback image metadata is malformed")
+        role = row.get("role")
+        byte_length = row.get("byte_length")
+        stored_byte_length = row.get("stored_byte_length")
+        width = row.get("width")
+        height = row.get("height")
+        if (
+            type(role) is not str
+            or role not in {"before", "after"}
+            or role in metadata
+            or role <= previous_role
+            or type(byte_length) is not int
+            or type(stored_byte_length) is not int
+            or byte_length != stored_byte_length
+            or not 0 < byte_length <= MAX_OUTPUT_BYTES
+            or type(width) is not int
+            or type(height) is not int
+            or not 0 < width <= OUTPUT_LONG_SIDE
+            or not 0 < height <= OUTPUT_LONG_SIDE
+        ):
+            raise ProjectionSnapshotUnavailable("feedback image metadata is malformed")
+        metadata[role] = (byte_length, width, height)
+        previous_role = role
+    return metadata
+
+
+def apply_legacy_status(
+    *,
+    feedback_id: int,
+    expected_odoo_task_id: int,
+    expected_projection_version: int,
+    status: str,
+    now: datetime,
+) -> bool:
+    """Persist one exact legacy stage and its sync intent atomically."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    safe_task_id = _positive_signed_64(expected_odoo_task_id, "legacy task id")
+    safe_version = _positive_signed_64(
+        expected_projection_version,
+        "projection version",
+    )
+    resulting_version = _positive_signed_64(
+        safe_version + 1,
+        "resulting projection version",
+    )
+    if type(status) is not str or status not in _TRANSITIONS:
+        raise ValueError("unsupported legacy feedback status")
+    current = _aware_datetime(now, "legacy migration time")
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE feedback SET status = %s, "
+            "lifecycle_origin = 'legacy_project_task', "
+            "legacy_lifecycle_migrated_at = %s, "
+            "projection_version = projection_version + 1, updated_at = %s "
+            "WHERE id = %s AND status IS NULL AND lifecycle_origin IS NULL "
+            "AND odoo_task_id = %s AND projection_version = %s "
+            "AND finished_at IS NULL "
+            "AND finished_by IS NULL AND resolution_note IS NULL "
+            "RETURNING projection_version",
+            (
+                status,
+                current,
+                current,
+                safe_feedback_id,
+                safe_task_id,
+                safe_version,
+            ),
+        )
+        updated = cur.fetchone()
+        if updated is None:
+            cur.execute(
+                "SELECT f.odoo_task_id, f.status, f.lifecycle_origin, "
+                "f.legacy_lifecycle_migrated_at, f.updated_at, f.projection_version, "
+                "f.finished_at, f.finished_by, f.resolution_note, "
+                "s.feedback_id AS sync_feedback_id, s.desired_version "
+                "FROM feedback f LEFT JOIN feedback_odoo_sync s "
+                "ON s.feedback_id = f.id WHERE f.id = %s FOR SHARE OF f",
+                (safe_feedback_id,),
+            )
+            existing = cur.fetchone()
+            exact_existing = (
+                isinstance(existing, Mapping)
+                and existing.get("odoo_task_id") == safe_task_id
+                and existing.get("status") == status
+                and existing.get("lifecycle_origin") == "legacy_project_task"
+                and existing.get("sync_feedback_id") == safe_feedback_id
+                and existing.get("finished_at") is None
+                and existing.get("finished_by") is None
+                and existing.get("resolution_note") is None
+            )
+            if exact_existing:
+                try:
+                    migrated_at = _aware_datetime(
+                        existing.get("legacy_lifecycle_migrated_at"),
+                        "legacy migration time",
+                    )
+                    updated_at = _aware_datetime(
+                        existing.get("updated_at"),
+                        "feedback update time",
+                    )
+                    stored_version = _positive_signed_64(
+                        existing.get("projection_version"),
+                        "projection version",
+                    )
+                    desired_version = _positive_signed_64(
+                        existing.get("desired_version"),
+                        "desired version",
+                    )
+                    if (
+                        migrated_at != updated_at
+                        or stored_version != resulting_version
+                        or desired_version != resulting_version
+                    ):
+                        exact_existing = False
+                except ValueError:
+                    exact_existing = False
+            if exact_existing:
+                return False
+            raise InvalidTransition("legacy feedback migration conflicted with local state")
+        if not isinstance(updated, Mapping):
+            raise InvalidTransition("legacy feedback migration returned malformed state")
+        try:
+            version = _positive_signed_64(
+                updated.get("projection_version"),
+                "projection version",
+            )
+        except ValueError as exc:
+            raise InvalidTransition("legacy feedback migration returned malformed state") from exc
+        if version != resulting_version:
+            raise InvalidTransition("legacy feedback migration returned malformed state")
+        cur.execute(
+            "INSERT INTO feedback_odoo_sync "
+            "(feedback_id, desired_version, last_synced_version, due_at, state) "
+            "VALUES (%s, %s, 0, %s, 'idle') "
+            "ON CONFLICT (feedback_id) DO UPDATE SET desired_version = "
+            "GREATEST(feedback_odoo_sync.desired_version, EXCLUDED.desired_version) "
+            "RETURNING feedback_id, desired_version",
+            (safe_feedback_id, version, current),
+        )
+        sync_rows = cur.fetchall()
+        if (
+            type(sync_rows) is not list
+            or len(sync_rows) != 1
+            or not isinstance(sync_rows[0], Mapping)
+            or sync_rows[0].get("feedback_id") != safe_feedback_id
+        ):
+            raise InvalidTransition("legacy feedback sync state was malformed")
+        try:
+            desired_version = _positive_signed_64(
+                sync_rows[0].get("desired_version"),
+                "desired version",
+            )
+        except ValueError as exc:
+            raise InvalidTransition("legacy feedback sync state was malformed") from exc
+        if desired_version != version:
+            raise InvalidTransition("legacy feedback sync state was malformed")
+        return True
+
+
+def enqueue_history_batch(*, batch_size: int, now: datetime) -> dict[str, object]:
+    """Advance the singleton history cursor and upsert bounded local sync intent."""
+    if type(batch_size) is not int:
+        raise ValueError("history batch size must be an exact integer")
+    limit = max(1, min(batch_size, 100))
+    current = _aware_datetime(now, "history enqueue time")
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT last_feedback_id FROM feedback_odoo_backfill_state WHERE id = 1 FOR UPDATE",
+            (),
+        )
+        state = cur.fetchone()
+        if not isinstance(state, Mapping):
+            raise ProjectionSnapshotUnavailable("feedback history cursor is unavailable")
+        cursor_id = _nonnegative_signed_64(state.get("last_feedback_id"), "history cursor")
+        cur.execute(
+            "SELECT id, projection_version FROM feedback "
+            "WHERE id > %s AND lifecycle_origin IN ('local', 'legacy_project_task') "
+            "AND status IS NOT NULL ORDER BY id LIMIT %s",
+            (cursor_id, limit),
+        )
+        selected = cur.fetchall()
+        if type(selected) is not list or len(selected) > limit:
+            raise ProjectionSnapshotUnavailable("feedback history rows are malformed")
+        feedback_ids: list[int] = []
+        previous = cursor_id
+        versions: list[tuple[int, int]] = []
+        for row in selected:
+            if not isinstance(row, Mapping):
+                raise ProjectionSnapshotUnavailable("feedback history row is malformed")
+            feedback_id = _positive_signed_64(row.get("id"), "feedback id")
+            version = _positive_signed_64(row.get("projection_version"), "projection version")
+            if feedback_id <= previous:
+                raise ProjectionSnapshotUnavailable(
+                    "feedback history rows are unordered or duplicated"
+                )
+            feedback_ids.append(feedback_id)
+            versions.append((feedback_id, version))
+            previous = feedback_id
+        for feedback_id, version in versions:
+            cur.execute(
+                "INSERT INTO feedback_odoo_sync "
+                "(feedback_id, desired_version, last_synced_version, due_at, state) "
+                "VALUES (%s, %s, 0, %s, 'idle') "
+                "ON CONFLICT (feedback_id) DO UPDATE SET desired_version = "
+                "GREATEST(feedback_odoo_sync.desired_version, EXCLUDED.desired_version)",
+                (feedback_id, version, current),
+            )
+        if not feedback_ids:
+            return {"feedback_ids": (), "next_cursor": cursor_id}
+        next_cursor = feedback_ids[-1]
+        cur.execute(
+            "UPDATE feedback_odoo_backfill_state SET last_feedback_id = %s, "
+            "updated_at = %s WHERE id = 1 AND last_feedback_id = %s "
+            "RETURNING last_feedback_id",
+            (next_cursor, current, cursor_id),
+        )
+        advanced = cur.fetchone()
+        if not isinstance(advanced, Mapping) or advanced.get("last_feedback_id") != next_cursor:
+            raise ProjectionSnapshotUnavailable("feedback history cursor did not advance")
+        return {"feedback_ids": tuple(feedback_ids), "next_cursor": next_cursor}
+
+
+def reconciliation_counts(gates_open: bool) -> dict[str, int]:
+    """Return one local-only aggregate of mutually explainable sync states."""
+    if type(gates_open) is not bool:
+        raise ValueError("gate state must be a boolean")
+    with db.cursor() as cur:
+        cur.execute(
+            "WITH gate AS (SELECT %s::boolean AS gates_open) "
+            "SELECT "
+            "COUNT(*) FILTER (WHERE last_synced_version >= desired_version) AS synchronized, "
+            "COUNT(*) FILTER (WHERE last_synced_version < desired_version "
+            "AND state = 'quarantined') AS quarantined, "
+            "COUNT(*) FILTER (WHERE last_synced_version < desired_version "
+            "AND state = 'in_flight') AS in_flight, "
+            "COUNT(*) FILTER (WHERE last_synced_version < desired_version "
+            "AND state = 'idle' AND gate.gates_open AND due_at <= now()) AS due, "
+            "COUNT(*) FILTER (WHERE last_synced_version < desired_version "
+            "AND state = 'idle' AND NOT (gate.gates_open AND due_at <= now())) AS deferred, "
+            "COALESCE(SUM(GREATEST(desired_version - last_synced_version, 0)), 0) "
+            "AS version_lag FROM feedback_odoo_sync CROSS JOIN gate",
+            (gates_open,),
+        )
+        row = cur.fetchone()
+    keys = {
+        "synchronized",
+        "due",
+        "deferred",
+        "in_flight",
+        "quarantined",
+        "version_lag",
+    }
+    if not isinstance(row, Mapping) or set(row) != keys:
+        raise ProjectionSnapshotUnavailable("feedback reconciliation row is malformed")
+    result: dict[str, int] = {}
+    for key in keys:
+        if key == "version_lag":
+            result[key] = _nonnegative_numeric_aggregate(row.get(key), f"{key} count")
+        else:
+            result[key] = _nonnegative_signed_64(row.get(key), f"{key} count")
+    return result
 
 
 def transition(

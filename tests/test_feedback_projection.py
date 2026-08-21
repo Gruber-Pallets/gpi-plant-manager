@@ -686,9 +686,10 @@ def image_row(**changes):
     return row
 
 
-def test_projection_snapshot_reads_exact_local_version_and_images_once(monkeypatch):
+@pytest.mark.parametrize("origin", ["local", "legacy_project_task"])
+def test_projection_snapshot_reads_exact_supported_version_and_images_once(monkeypatch, origin):
     cursor, transactions = install_snapshot_cursor(
-        monkeypatch, feedback(lifecycle_origin="local"), [image_row()]
+        monkeypatch, feedback(lifecycle_origin=origin), [image_row()]
     )
 
     snapshot = feedback_store.projection_snapshot(12345, 1)
@@ -699,7 +700,8 @@ def test_projection_snapshot_reads_exact_local_version_and_images_once(monkeypat
     image_sql, image_params = cursor.calls[1]
     assert "id = %s" in feedback_sql
     assert "projection_version = %s" in feedback_sql
-    assert "lifecycle_origin = 'local'" in feedback_sql
+    assert "lifecycle_origin IN ('local', 'legacy_project_task')" in feedback_sql
+    assert "status IS NOT NULL" in feedback_sql
     assert "FOR SHARE" in feedback_sql
     assert feedback_params == (12345, 1)
     assert "FROM feedback_images" in image_sql
@@ -718,7 +720,10 @@ def test_projection_snapshot_reads_exact_local_version_and_images_once(monkeypat
     [
         None,
         feedback(projection_version=2, lifecycle_origin="local"),
-        feedback(lifecycle_origin="legacy_project_task"),
+        feedback(lifecycle_origin=None),
+        feedback(lifecycle_origin="foreign"),
+        feedback(status=None, lifecycle_origin="local"),
+        feedback(status=None, lifecycle_origin="legacy_project_task"),
         feedback(id=12346, lifecycle_origin="local"),
     ],
 )

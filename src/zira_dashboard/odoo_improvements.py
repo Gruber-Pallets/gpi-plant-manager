@@ -166,6 +166,55 @@ class ImprovementContract:
     stop_type: str
 
 
+@dataclass(frozen=True)
+class TargetInspection:
+    """Sanitized preflight facts containing only fixed contract names and booleans."""
+
+    database_uuid_matches: bool
+    company_matches: bool
+    missing_fields: tuple[str, ...]
+    wrong_types: tuple[str, ...]
+    wrong_relations: tuple[str, ...]
+    readonly_fields: tuple[str, ...]
+    missing_selections: tuple[str, ...]
+    wrong_selections: tuple[str, ...]
+    source_value_present: bool
+    start_type: str | None
+    stop_type: str | None
+
+    def __post_init__(self) -> None:
+        if type(self.database_uuid_matches) is not bool:
+            raise ValueError("database match flag must be a boolean")
+        if type(self.company_matches) is not bool:
+            raise ValueError("company match flag must be a boolean")
+        if type(self.source_value_present) is not bool:
+            raise ValueError("source selection flag must be a boolean")
+        allowed_diagnostics = {
+            *TARGET_FIELDS,
+            *(f"x_studio_status:{value}" for value in _EXPECTED_STATUS_VALUES),
+            *(f"x_studio_type:{value}" for value in _EXPECTED_TYPE_VALUES),
+        }
+        for value in (
+            self.missing_fields,
+            self.wrong_types,
+            self.wrong_relations,
+            self.readonly_fields,
+            self.missing_selections,
+            self.wrong_selections,
+        ):
+            if (
+                type(value) is not tuple
+                or len(value) > len(TARGET_FIELDS) + len(_EXPECTED_STATUS_VALUES)
+                or any(type(item) is not str or item not in allowed_diagnostics for item in value)
+                or tuple(sorted(set(value))) != value
+            ):
+                raise ValueError("target inspection diagnostics are malformed")
+        if self.start_type not in {None, "date", "datetime"}:
+            raise ValueError("start field type is malformed")
+        if self.stop_type not in {None, "date", "datetime"}:
+            raise ValueError("stop field type is malformed")
+
+
 @dataclass(frozen=True, repr=False)
 class _MutationBinding:
     method: str
@@ -760,6 +809,138 @@ class ImprovementsClient:
                 raise ContractError("legacy task stage response was malformed")
             seen.add(task_id)
         return rows
+
+    def inspect_target(self) -> TargetInspection:
+        """Freshly inspect identity and metadata without returning remote values."""
+        uid = self.authenticate()
+        database_uuid = self._execute("ir.config_parameter", "get_param", "database.uuid")
+        if type(database_uuid) is not str:
+            raise TargetIdentityError("dedicated Odoo database identity was malformed")
+        database_uuid_matches = database_uuid == self._config.expected_database_uuid
+
+        user_rows = _row_list(
+            self._execute("res.users", "read", [uid], fields=["id", "company_id"]),
+            label="current user",
+            maximum=1,
+        )
+        if (
+            len(user_rows) != 1
+            or type(user_rows[0].get("id")) is not int
+            or user_rows[0].get("id") != uid
+        ):
+            raise TargetIdentityError("dedicated Odoo current user was malformed")
+        company_value = user_rows[0].get("company_id")
+        if (
+            type(company_value) is not list
+            or len(company_value) != 2
+            or not _is_positive_identifier(company_value[0])
+            or type(company_value[1]) is not str
+        ):
+            raise TargetIdentityError("dedicated Odoo current company was malformed")
+        company_id = company_value[0]
+        company_rows = _row_list(
+            self._execute("res.company", "read", [company_id], fields=["id", "name"]),
+            label="current company",
+            maximum=1,
+        )
+        if (
+            len(company_rows) != 1
+            or type(company_rows[0].get("id")) is not int
+            or company_rows[0].get("id") != company_id
+            or type(company_rows[0].get("name")) is not str
+        ):
+            raise TargetIdentityError("dedicated Odoo current company was malformed")
+        company_matches = (
+            company_value[1] == self._config.expected_company
+            and company_rows[0]["name"] == self._config.expected_company
+        )
+
+        result = self._execute(
+            TARGET_MODEL,
+            "fields_get",
+            sorted(TARGET_FIELDS),
+            attributes=list(_CONTRACT_ATTRIBUTES),
+        )
+        if type(result) is not dict or any(type(name) is not str for name in result):
+            raise ContractError("target fields metadata was malformed")
+        missing_fields = tuple(sorted(TARGET_FIELDS - set(result)))
+        wrong_types: set[str] = set()
+        wrong_relations: set[str] = set()
+        readonly_fields: set[str] = set()
+        missing_selections: set[str] = set()
+        wrong_selections: set[str] = set()
+        source_value_present = False
+        start_type: str | None = None
+        stop_type: str | None = None
+
+        for field_name in sorted(TARGET_FIELDS & set(result)):
+            metadata = result[field_name]
+            if type(metadata) is not dict:
+                raise ContractError("target field metadata was malformed")
+            readonly = metadata.get("readonly")
+            if type(readonly) is not bool:
+                raise ContractError("target field readonly metadata was malformed")
+            if readonly:
+                readonly_fields.add(field_name)
+            field_type = metadata.get("type")
+            if type(field_type) is not str:
+                raise ContractError("target field type metadata was malformed")
+            if field_name == "x_studio_date_start":
+                if field_type in {"date", "datetime"}:
+                    start_type = field_type
+                else:
+                    wrong_types.add(field_name)
+            elif field_name == "x_studio_date_stop":
+                if field_type in {"date", "datetime"}:
+                    stop_type = field_type
+                else:
+                    wrong_types.add(field_name)
+            elif field_name in _EXPECTED_TYPES and field_type != _EXPECTED_TYPES[field_name]:
+                wrong_types.add(field_name)
+            if (
+                field_name in {"x_studio_submitted_by", "x_studio_completed_by"}
+                and field_type == "many2one"
+            ):
+                relation = metadata.get("relation")
+                if relation != "hr.employee":
+                    wrong_relations.add(field_name)
+
+        selection_fields = {
+            "x_studio_source",
+            "x_studio_status",
+            "x_studio_type",
+        }
+        selections: dict[str, frozenset[str]] = {}
+        for field_name in sorted(selection_fields - set(missing_fields)):
+            if result[field_name].get("type") == "selection":
+                selections[field_name] = _normalize_selection(result[field_name], field_name)
+        if "x_studio_source" in selections:
+            source_value_present = SOURCE_VALUE in selections["x_studio_source"]
+        expected_selections = {
+            "x_studio_status": _EXPECTED_STATUS_VALUES,
+            "x_studio_type": _EXPECTED_TYPE_VALUES,
+        }
+        for field_name, expected in expected_selections.items():
+            actual = selections.get(field_name)
+            if actual is None:
+                continue
+            missing_selections.update(f"{field_name}:{value}" for value in expected - actual)
+            if actual - expected:
+                wrong_selections.add(field_name)
+
+        return TargetInspection(
+            database_uuid_matches=database_uuid_matches,
+            company_matches=company_matches,
+            missing_fields=missing_fields,
+            wrong_types=tuple(sorted(wrong_types)),
+            wrong_relations=tuple(sorted(wrong_relations)),
+            readonly_fields=tuple(sorted(readonly_fields)),
+            missing_selections=tuple(sorted(missing_selections)),
+            wrong_selections=tuple(sorted(wrong_selections)),
+            source_value_present=source_value_present,
+            start_type=start_type,
+            stop_type=stop_type,
+        )
 
     def _read_contract(self) -> ImprovementContract:
         result = self._execute(
