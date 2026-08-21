@@ -40,6 +40,13 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **The Inbox now warns when Auto-Lunch is not Live.** The warning stays until lunch deductions are turned back on.
 - **Auto-Lunch now remembers setting changes.** The Settings page shows what changed, when it changed, and who changed it when the app knows their name.
 
+### Auto-Lunch safety plan
+
+#### Improvements
+
+- **A safety plan is ready for Auto-Lunch.** The app will warn in the Inbox if lunch deductions are not Live and remember who changed the setting. Nothing in the app has changed yet.
+- **The build steps for the Auto-Lunch warning are ready.** Each small step checks the history, the Inbox warning, and the Live setting before the app is changed.
+
 ### Safer shared feedback plan
 
 #### Improvements
