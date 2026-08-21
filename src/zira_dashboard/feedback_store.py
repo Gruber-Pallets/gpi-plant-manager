@@ -131,12 +131,15 @@ def transition(
     clean_note = (resolution_note or "").strip()
     with db.cursor() as cur:
         cur.execute(
-            "SELECT status, projection_version FROM feedback WHERE id = %s FOR UPDATE",
+            "SELECT status, lifecycle_origin, projection_version "
+            "FROM feedback WHERE id = %s FOR UPDATE",
             (feedback_id,),
         )
         row = cur.fetchone()
         if row is None:
             raise KeyError(feedback_id)
+        if row["lifecycle_origin"] != "local":
+            raise InvalidTransition("feedback is not locally managed")
 
         current = row["status"]
         if status not in _TRANSITIONS.get(current, set()):
@@ -185,8 +188,11 @@ def transition(
             )
         cur.execute(
             "UPDATE feedback_odoo_sync SET desired_version = %s, due_at = %s, "
-            "state = CASE WHEN state = 'quarantined' THEN state ELSE 'idle' END, "
-            "updated_at = %s WHERE feedback_id = %s",
+            "state = CASE WHEN state IN ('in_flight', 'quarantined') "
+            "THEN state ELSE 'idle' END, "
+            "updated_at = %s WHERE feedback_id = %s RETURNING feedback_id",
             (version, now, now, feedback_id),
         )
+        if cur.fetchone() is None:
+            raise InvalidTransition("feedback sync state is missing")
         return version

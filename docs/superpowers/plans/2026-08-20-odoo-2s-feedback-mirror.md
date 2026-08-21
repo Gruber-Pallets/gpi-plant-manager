@@ -44,6 +44,7 @@
 - If a write gate closes after dispatch is marked but before the allowlisted wrapper calls Odoo, record a definitive failure and report `retry_scheduled`; do not classify that state as deferred or ambiguous.
 - Task 1 review governs three plan-provided SQL defects: a local-origin row must have a non-null valid status; an active attempt must belong to the same feedback record as its sync row; and idempotence guards must scope constraint-name checks to the intended table.
 - `tests/test_feedback_sync_store.py` begins in Task 7, where it receives meaningful state-machine tests. Task 1 does not create a meaningless empty test file.
+- Task 4 review governs lifecycle/sync integrity: the locked row must already have `lifecycle_origin = 'local'`; a missing sync row fails and rolls back the entire transition; and advancing desired truth preserves both `in_flight` and `quarantined` states so no overlapping claim can start.
 
 ## File and Responsibility Map
 
@@ -911,12 +912,15 @@ def transition(
     clean_note = (resolution_note or "").strip()
     with db.cursor() as cur:
         cur.execute(
-            "SELECT status, projection_version FROM feedback WHERE id = %s FOR UPDATE",
+            "SELECT status, lifecycle_origin, projection_version "
+            "FROM feedback WHERE id = %s FOR UPDATE",
             (feedback_id,),
         )
         row = cur.fetchone()
         if row is None:
             raise KeyError(feedback_id)
+        if row["lifecycle_origin"] != "local":
+            raise InvalidTransition("feedback is not locally managed")
         current = row["status"]
         if status not in _TRANSITIONS.get(current, set()):
             raise InvalidTransition("feedback is terminal or transition is invalid")
@@ -960,10 +964,13 @@ def transition(
             )
         cur.execute(
             "UPDATE feedback_odoo_sync SET desired_version = %s, due_at = %s, "
-            "state = CASE WHEN state = 'quarantined' THEN state ELSE 'idle' END, "
-            "updated_at = %s WHERE feedback_id = %s",
+            "state = CASE WHEN state IN ('in_flight', 'quarantined') "
+            "THEN state ELSE 'idle' END, "
+            "updated_at = %s WHERE feedback_id = %s RETURNING feedback_id",
             (version, now, now, feedback_id),
         )
+        if cur.fetchone() is None:
+            raise InvalidTransition("feedback sync state is missing")
         return version
 ```
 

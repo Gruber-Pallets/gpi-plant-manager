@@ -17,6 +17,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 #### Features
 
 - **Feedback can now be worked on and finished inside Plant Manager.** The person handling it can mark progress, explain the result, and add an after picture.
+- **Feedback now stops safely if its sharing step is missing or busy.** Old feedback stays separate, and two helpers cannot share the same message at the same time.
 
 ### Feedback stays safe
 

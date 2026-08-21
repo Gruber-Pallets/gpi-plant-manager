@@ -35,21 +35,15 @@ def admin_client(upn: str) -> TestClient:
 
 
 class ReturningCursor:
-    def __init__(self, row):
-        self.row = row
+    def __init__(self, *rows):
+        self.rows = list(rows)
         self.executions = []
 
     def execute(self, sql, params=None):
         self.executions.append((" ".join(sql.split()), params))
 
     def fetchone(self):
-        return self.row
-
-
-@contextmanager
-def cursor_returning(row):
-    yield ReturningCursor(row)
-
+        return self.rows.pop(0) if self.rows else None
 
 def normalized_image() -> NormalizedImage:
     return NormalizedImage(
@@ -59,6 +53,18 @@ def normalized_image() -> NormalizedImage:
         width=8,
         height=6,
     )
+
+
+def feedback_row(
+    status: str | None,
+    projection_version: int = 2,
+    lifecycle_origin: str | None = "local",
+) -> dict:
+    return {
+        "status": status,
+        "lifecycle_origin": lifecycle_origin,
+        "projection_version": projection_version,
+    }
 
 
 def test_non_super_admin_cannot_view_or_change_feedback_before_work(monkeypatch):
@@ -191,6 +197,7 @@ def test_admin_list_queries_local_and_sync_state(monkeypatch):
     assert "s.state AS sync_state" in captured["sql"]
     assert "s.desired_version" in captured["sql"]
     assert "s.last_synced_version" in captured["sql"]
+    assert "WHERE f.lifecycle_origin = 'local'" in captured["sql"]
     assert captured["params"] == (25,)
 
 
@@ -296,8 +303,13 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
 
 
 def test_transition_rejects_reopening_terminal_feedback(monkeypatch):
-    cursor = ReturningCursor({"status": "completed", "projection_version": 2})
-    monkeypatch.setattr(feedback_store.db, "cursor", lambda: cursor_returning(cursor.row))
+    cursor = ReturningCursor(feedback_row("completed"))
+
+    @contextmanager
+    def fake_cursor():
+        yield cursor
+
+    monkeypatch.setattr(feedback_store.db, "cursor", fake_cursor)
 
     with pytest.raises(feedback_store.InvalidTransition, match="terminal"):
         feedback_store.transition(
@@ -309,10 +321,36 @@ def test_transition_rejects_reopening_terminal_feedback(monkeypatch):
             now=datetime(2026, 8, 20, 18, 0, tzinfo=UTC),
         )
 
+    assert len(cursor.executions) == 1
+
+
+@pytest.mark.parametrize("origin", [None, "legacy_project_task"])
+def test_transition_rejects_nonlocal_locked_rows_before_writes(monkeypatch, origin):
+    cursor = ReturningCursor(feedback_row("requested", lifecycle_origin=origin))
+
+    @contextmanager
+    def fake_cursor():
+        yield cursor
+
+    monkeypatch.setattr(feedback_store.db, "cursor", fake_cursor)
+
+    with pytest.raises(feedback_store.InvalidTransition, match="not locally managed"):
+        feedback_store.transition(
+            feedback_id=7,
+            status="in_progress",
+            actor="dale@gruberpallets.com",
+            resolution_note=None,
+            after_image=None,
+            now=datetime(2026, 8, 20, 18, 0, tzinfo=UTC),
+        )
+
+    assert len(cursor.executions) == 1
+    assert "status, lifecycle_origin, projection_version" in cursor.executions[0][0]
+
 
 @pytest.mark.parametrize("current", ["completed", "declined", None, "unknown"])
 def test_transition_rejects_invalid_current_states_without_updates(monkeypatch, current):
-    cursor = ReturningCursor({"status": current, "projection_version": 2})
+    cursor = ReturningCursor(feedback_row(current))
 
     @contextmanager
     def fake_cursor():
@@ -334,8 +372,50 @@ def test_transition_rejects_invalid_current_states_without_updates(monkeypatch, 
     assert cursor.executions[0][0].startswith("SELECT")
 
 
+def test_valid_current_state_rejects_bogus_target_without_updates(monkeypatch):
+    cursor = ReturningCursor(feedback_row("requested"))
+
+    @contextmanager
+    def fake_cursor():
+        yield cursor
+
+    monkeypatch.setattr(feedback_store.db, "cursor", fake_cursor)
+
+    with pytest.raises(feedback_store.InvalidTransition, match="transition is invalid"):
+        feedback_store.transition(
+            feedback_id=7,
+            status="bogus",
+            actor="dale@gruberpallets.com",
+            resolution_note=None,
+            after_image=None,
+            now=datetime(2026, 8, 20, 18, 0, tzinfo=UTC),
+        )
+
+    assert len(cursor.executions) == 1
+
+
+def test_route_maps_bogus_target_to_422_without_writes(monkeypatch):
+    monkeypatch.setenv("SUPER_ADMIN_UPNS", "dale@gruberpallets.com")
+    cursor = ReturningCursor(feedback_row("requested"))
+
+    @contextmanager
+    def fake_cursor():
+        yield cursor
+
+    monkeypatch.setattr(feedback_store.db, "cursor", fake_cursor)
+
+    with admin_client("dale@gruberpallets.com") as client:
+        response = client.post(
+            "/admin/feedback/7/status",
+            data={"status": "bogus"},
+        )
+
+    assert response.status_code == 422
+    assert len(cursor.executions) == 1
+
+
 def test_transition_requires_terminal_actor_and_note_before_updates(monkeypatch):
-    cursor = ReturningCursor({"status": "requested", "projection_version": 2})
+    cursor = ReturningCursor(feedback_row("requested"))
 
     @contextmanager
     def fake_cursor():
@@ -357,7 +437,7 @@ def test_transition_requires_terminal_actor_and_note_before_updates(monkeypatch)
 
 
 def test_transition_rejects_nonterminal_after_image_before_persistent_sql(monkeypatch):
-    cursor = ReturningCursor({"status": "requested", "projection_version": 2})
+    cursor = ReturningCursor(feedback_row("requested"))
 
     @contextmanager
     def fake_cursor():
@@ -380,7 +460,10 @@ def test_transition_rejects_nonterminal_after_image_before_persistent_sql(monkey
 
 
 def test_transition_marks_in_progress_and_new_projection_due_atomically(monkeypatch):
-    cursor = ReturningCursor({"status": "requested", "projection_version": 4})
+    cursor = ReturningCursor(
+        feedback_row("requested", projection_version=4),
+        {"feedback_id": 7},
+    )
     transactions = []
 
     @contextmanager
@@ -408,7 +491,13 @@ def test_transition_marks_in_progress_and_new_projection_due_atomically(monkeypa
     assert update_sql.startswith("UPDATE feedback SET")
     assert update_params == ("in_progress", None, None, None, 5, now, 7)
     assert "UPDATE feedback_odoo_sync" in sync_sql
-    assert "state = CASE WHEN state = 'quarantined' THEN state ELSE 'idle' END" in sync_sql
+    assert (
+        "state = CASE WHEN state IN ('in_flight', 'quarantined') "
+        "THEN state ELSE 'idle' END" in sync_sql
+    )
+    assert "RETURNING feedback_id" in sync_sql
+    assert "claim_" not in sync_sql
+    assert "active_attempt" not in sync_sql
     assert sync_params == (5, now, now, 7)
     assert all("feedback_images" not in sql for sql, _ in cursor.executions)
 
@@ -425,7 +514,7 @@ def test_transition_marks_in_progress_and_new_projection_due_atomically(monkeypa
 def test_terminal_transition_saves_authoritative_finish_image_and_due_version(
     monkeypatch, current, target
 ):
-    cursor = ReturningCursor({"status": current, "projection_version": 2})
+    cursor = ReturningCursor(feedback_row(current), {"feedback_id": 7})
 
     @contextmanager
     def fake_cursor():
@@ -464,8 +553,40 @@ def test_terminal_transition_saves_authoritative_finish_image_and_due_version(
     assert "ON CONFLICT (feedback_id, role) DO UPDATE" in image_sql
     assert image_params == (7, b"jpeg", "a" * 64, 4, 8, 6)
     assert "UPDATE feedback_odoo_sync" in sync_sql
-    assert "state = CASE WHEN state = 'quarantined' THEN state ELSE 'idle' END" in sync_sql
+    assert (
+        "state = CASE WHEN state IN ('in_flight', 'quarantined') "
+        "THEN state ELSE 'idle' END" in sync_sql
+    )
+    assert "RETURNING feedback_id" in sync_sql
+    assert "claim_" not in sync_sql
+    assert "active_attempt" not in sync_sql
     assert sync_params == (3, now, now, 7)
+
+
+def test_transition_missing_sync_state_raises_after_returning_check(monkeypatch):
+    cursor = ReturningCursor(feedback_row("requested"), None)
+
+    @contextmanager
+    def fake_cursor():
+        yield cursor
+
+    monkeypatch.setattr(feedback_store.db, "cursor", fake_cursor)
+    now = datetime(2026, 8, 20, 18, 0, tzinfo=UTC)
+
+    with pytest.raises(feedback_store.InvalidTransition, match="sync state is missing"):
+        feedback_store.transition(
+            feedback_id=7,
+            status="in_progress",
+            actor="dale@gruberpallets.com",
+            resolution_note=None,
+            after_image=None,
+            now=now,
+        )
+
+    assert len(cursor.executions) == 3
+    assert cursor.executions[1][0].startswith("UPDATE feedback SET")
+    assert "UPDATE feedback_odoo_sync" in cursor.executions[2][0]
+    assert "RETURNING feedback_id" in cursor.executions[2][0]
 
 
 def test_transition_missing_feedback_raises_key_error_without_update(monkeypatch):
