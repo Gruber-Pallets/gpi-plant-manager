@@ -77,6 +77,7 @@ def build_bars(
     is_range: bool,
     agg_downtime: dict,
     agg_segments: dict | None = None,
+    agg_segment_display: dict | None = None,
     is_live: bool = True,
 ) -> list[dict]:
     """Per-WC bar rows for a category, with progress color + scaled bar widths.

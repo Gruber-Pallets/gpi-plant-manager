@@ -155,6 +155,10 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         "Repair 2": 3.0,
         "Dismantler 2": 415.0,
     }
+    assert live["per_wc_segment_display"] == {
+        "Repair 2": True,
+        "Dismantler 2": True,
+    }
 
     after_shift = departments._department_day_data(
         day,
@@ -185,6 +189,60 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     )
     assert fallback["per_wc_segments"] == {}
     assert fallback["per_wc_units"] == {"Repair 2": 34, "Dismantler 2": 384}
+
+
+def test_department_segment_display_keeps_scheduled_lunch_continuous():
+    from zira_dashboard.production_segments import SegmentScore
+    from zira_dashboard.routes import departments
+
+    def score(segment_id, start, end, actual, goal, *, active=False):
+        return SegmentScore(
+            segment_id=segment_id,
+            wc_name="Dismantler 1",
+            person_name="Jesus G.",
+            start_utc=start,
+            end_utc=end,
+            source="punch",
+            productive_minutes=goal,
+            actual_units=actual,
+            goal_units=goal,
+            runway_units=max(actual, goal),
+            is_active=active,
+            result="ahead" if actual >= goal else "behind",
+        )
+
+    morning = score(
+        0,
+        datetime(2026, 6, 2, 12, tzinfo=timezone.utc),
+        datetime(2026, 6, 2, 16, tzinfo=timezone.utc),
+        311,
+        260,
+    )
+    afternoon = score(
+        1,
+        datetime(2026, 6, 2, 16, 30, tzinfo=timezone.utc),
+        datetime(2026, 6, 2, 19, 30, tzinfo=timezone.utc),
+        256,
+        260,
+        active=True,
+    )
+
+    views, decisions, live_workers = departments._prepare_segment_display(
+        {"Dismantler 1": (morning, afternoon)},
+        break_windows=((
+            datetime(2026, 6, 2, 16, tzinfo=timezone.utc),
+            datetime(2026, 6, 2, 16, 30, tzinfo=timezone.utc),
+        ),),
+        window_start_utc=datetime(2026, 6, 2, 12, tzinfo=timezone.utc),
+        window_end_utc=datetime(2026, 6, 2, 19, 30, tzinfo=timezone.utc),
+        is_live=True,
+    )
+
+    assert len(views["Dismantler 1"]) == 1
+    assert views["Dismantler 1"][0]["time_label"] == "since 7a"
+    assert views["Dismantler 1"][0]["goal_units"] == 520
+    assert decisions == {"Dismantler 1": False}
+    assert live_workers == {"Dismantler 1": "Jesus G."}
 
 
 def test_department_day_data_uses_latest_open_odoo_work_center(monkeypatch):

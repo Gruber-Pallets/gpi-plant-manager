@@ -93,6 +93,47 @@ def _segment_view(score) -> dict:
     }
 
 
+def _prepare_segment_display(
+    scored_by_wc,
+    *,
+    break_windows,
+    window_start_utc,
+    window_end_utc,
+    is_live,
+):
+    display_scored = {
+        wc_name: production_segments.coalesce_display_scores(
+            scores, ignored_gaps=break_windows
+        )
+        for wc_name, scores in scored_by_wc.items()
+    }
+    decisions = {
+        wc_name: production_segments.worker_coverage_is_split(
+            scores,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            ignored_gaps=break_windows,
+        )
+        for wc_name, scores in display_scored.items()
+    }
+    views = {
+        wc_name: tuple(_segment_view(score) for score in scores)
+        for wc_name, scores in display_scored.items()
+    }
+    continuous_live_workers = {
+        wc_name: next(
+            score.person_name
+            for score in scores
+            if score.person_name is not None
+        )
+        for wc_name, scores in display_scored.items()
+        if is_live
+        and not decisions.get(wc_name, False)
+        and any(score.person_name is not None for score in scores)
+    }
+    return views, decisions, continuous_live_workers
+
+
 def _present_assignments(
     assignments: dict[str, list[str]],
     absent_names: set[str] | None,
@@ -474,14 +515,24 @@ def _department_day_data(
             credits,
             target_per_hour=target_per_hour,
         )
-        per_wc_segments = {
-            wc_name: tuple(_segment_view(score) for score in scores)
-            for wc_name, scores in scored.items()
-        }
+        per_wc_segments, per_wc_segment_display, continuous_live_workers = (
+            _prepare_segment_display(
+                scored,
+                break_windows=breaks_utc,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+                is_live=is_live_dashboard,
+            )
+        )
     except Exception:
         per_wc_segments = {}
+        per_wc_segment_display = {}
+        continuous_live_workers = {}
     per_wc_state = {r.station.name: _state(r, now, is_today_d) for r in active_results}
     per_wc_who = {r.station.name: who_by_wc.get(r.station.name) for r in active_results}
+    for wc_name, person_name in continuous_live_workers.items():
+        if not per_wc_who.get(wc_name):
+            per_wc_who[wc_name] = person_name
     per_wc_category = {r.station.name: r.station.category for r in active_results}
     per_wc_station_obj = {r.station.name: r.station for r in active_results}
 
@@ -497,6 +548,7 @@ def _department_day_data(
         "per_wc_downtime": per_wc_downtime,
         "per_wc_expected": per_wc_expected,
         "per_wc_segments": per_wc_segments,
+        "per_wc_segment_display": per_wc_segment_display,
         "is_live_dashboard": is_live_dashboard,
         "per_wc_state": per_wc_state,
         "per_wc_who": per_wc_who,
@@ -690,6 +742,7 @@ def _render_recycling(
             is_range=is_range,
             agg_downtime=agg_downtime,
             agg_segments=aggregate.single_day_segments,
+            agg_segment_display=aggregate.single_day_segment_display,
             is_live=aggregate.single_day_is_live,
         )
 
@@ -938,6 +991,7 @@ def _render_new_dept(
         is_range=is_range,
         agg_downtime=aggregate.agg_downtime,
         agg_segments=aggregate.single_day_segments,
+        agg_segment_display=aggregate.single_day_segment_display,
         is_live=aggregate.single_day_is_live,
     )
     new_bars = sort_bars(new_bars, "new-bars", customs_all=customs_all)

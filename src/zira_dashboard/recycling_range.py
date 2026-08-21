@@ -20,6 +20,7 @@ class RangeAggregate:
     agg_active_names: set[str]
     schedule_today_assignments: dict[str, list[str]]
     single_day_segments: dict[str, tuple[dict, ...]]
+    single_day_segment_display: dict[str, bool]
     single_day_is_live: bool
 
 
@@ -42,6 +43,7 @@ def aggregate_range(
     agg_active_names: set[str] = set()
     schedule_today_assignments: dict[str, list[str]] = {}
     single_day_segments: dict[str, tuple[dict, ...]] = {}
+    single_day_segment_display: dict[str, bool] = {}
     single_day_is_live = False
 
     for item, day in zip(per_day, days, strict=True):
@@ -59,6 +61,7 @@ def aggregate_range(
             agg_who_today = item["per_wc_who"]
             schedule_today_assignments = item["schedule_assignments"]
             single_day_segments = item.get("per_wc_segments", {})
+            single_day_segment_display = item.get("per_wc_segment_display", {})
             single_day_is_live = bool(item.get("is_live_dashboard", False))
 
     return RangeAggregate(
@@ -77,5 +80,6 @@ def aggregate_range(
         agg_active_names=agg_active_names,
         schedule_today_assignments=schedule_today_assignments,
         single_day_segments=single_day_segments,
+        single_day_segment_display=single_day_segment_display,
         single_day_is_live=single_day_is_live,
     )

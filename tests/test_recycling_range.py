@@ -24,6 +24,7 @@ def _day(units, who, *, station_obj=None):
         "per_wc_segments": {
             "Dismantler 1": ({"person_name": who, "actual_units": units},)
         },
+        "per_wc_segment_display": {"Dismantler 1": False},
         "is_live_dashboard": True,
     }
 
@@ -37,6 +38,7 @@ def test_single_day_keeps_who_and_assignments():
     assert result.agg_who_today is item["per_wc_who"]
     assert result.schedule_today_assignments is item["schedule_assignments"]
     assert result.single_day_segments is item["per_wc_segments"]
+    assert result.single_day_segment_display is item["per_wc_segment_display"]
     assert result.single_day_is_live is True
 
 
@@ -59,6 +61,7 @@ def test_multi_day_sums_work_center_metrics_without_single_day_labels():
     assert result.agg_who_today == {}
     assert result.schedule_today_assignments == {}
     assert result.single_day_segments == {}
+    assert result.single_day_segment_display == {}
     assert result.single_day_is_live is False
 
 
