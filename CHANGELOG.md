@@ -39,6 +39,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **Feedback progress cannot lose its step or mix with another message.** Each saved step now stays with the right feedback.
 - **Feedback pictures are cleaned and resized before they are saved.** This removes hidden picture details and avoids very large files.
 - **Feedback picture safety checks now cover more file kinds and size limits.** They make sure hidden details are removed, turned pictures face the right way, and clear backgrounds turn white.
+- **The new Odoo connection has its own locked door.** It cannot change other kinds of Odoo records, and it is still turned off.
 
 ### Auto-Lunch safety plan
 
