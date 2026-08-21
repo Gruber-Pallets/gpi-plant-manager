@@ -1469,35 +1469,46 @@ ALTER TABLE feedback ADD COLUMN IF NOT EXISTS legacy_lifecycle_migrated_at TIMES
 DO $feedback_checks$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'feedback_status_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'feedback_status_check'
+      AND conrelid = 'feedback'::regclass
   ) THEN
     ALTER TABLE feedback ADD CONSTRAINT feedback_status_check CHECK (
       status IS NULL OR status IN ('requested', 'in_progress', 'completed', 'declined')
     );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'feedback_lifecycle_origin_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'feedback_lifecycle_origin_check'
+      AND conrelid = 'feedback'::regclass
   ) THEN
     ALTER TABLE feedback ADD CONSTRAINT feedback_lifecycle_origin_check CHECK (
       lifecycle_origin IS NULL OR lifecycle_origin IN ('local', 'legacy_project_task')
     );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'feedback_local_terminal_fields_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'feedback_local_terminal_fields_check'
+      AND conrelid = 'feedback'::regclass
   ) THEN
     ALTER TABLE feedback ADD CONSTRAINT feedback_local_terminal_fields_check CHECK (
-      lifecycle_origin <> 'local'
+      lifecycle_origin IS DISTINCT FROM 'local'
       OR (
-        status IN ('completed', 'declined')
-        AND finished_at IS NOT NULL
-        AND btrim(COALESCE(finished_by, '')) <> ''
-        AND btrim(COALESCE(resolution_note, '')) <> ''
-      )
-      OR (
-        status IN ('requested', 'in_progress')
-        AND finished_at IS NULL
-        AND finished_by IS NULL
-        AND resolution_note IS NULL
+        status IS NOT NULL
+        AND (
+          (
+            status IN ('completed', 'declined')
+            AND finished_at IS NOT NULL
+            AND btrim(COALESCE(finished_by, '')) <> ''
+            AND btrim(COALESCE(resolution_note, '')) <> ''
+          )
+          OR (
+            status IN ('requested', 'in_progress')
+            AND finished_at IS NULL
+            AND finished_by IS NULL
+            AND resolution_note IS NULL
+          )
+        )
       )
     );
   END IF;
@@ -1559,7 +1570,8 @@ CREATE TABLE IF NOT EXISTS feedback_odoo_attempts (
   outcome_detail TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (feedback_id, projection_version, attempt_id)
+  UNIQUE (feedback_id, projection_version, attempt_id),
+  UNIQUE (feedback_id, attempt_id)
 );
 
 DO $feedback_sync_fk$
@@ -1567,10 +1579,12 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'feedback_odoo_sync_active_attempt_fk'
+      AND conrelid = 'feedback_odoo_sync'::regclass
   ) THEN
     ALTER TABLE feedback_odoo_sync
       ADD CONSTRAINT feedback_odoo_sync_active_attempt_fk
-      FOREIGN KEY (active_attempt_id) REFERENCES feedback_odoo_attempts(attempt_id)
+      FOREIGN KEY (feedback_id, active_attempt_id)
+      REFERENCES feedback_odoo_attempts(feedback_id, attempt_id)
       DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END

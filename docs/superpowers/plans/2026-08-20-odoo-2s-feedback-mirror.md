@@ -42,6 +42,8 @@
 - Employee-resolution warnings are persisted against the exact immutable projection version being processed, not a later version read from the feedback row.
 - Task 11 may add the narrow quarantine-disposition persistence functions to `feedback_sync_store.py`; operator actions belong in the sync store rather than the CLI.
 - If a write gate closes after dispatch is marked but before the allowlisted wrapper calls Odoo, record a definitive failure and report `retry_scheduled`; do not classify that state as deferred or ambiguous.
+- Task 1 review governs three plan-provided SQL defects: a local-origin row must have a non-null valid status; an active attempt must belong to the same feedback record as its sync row; and idempotence guards must scope constraint-name checks to the intended table.
+- `tests/test_feedback_sync_store.py` begins in Task 7, where it receives meaningful state-machine tests. Task 1 does not create a meaningless empty test file.
 
 ## File and Responsibility Map
 
@@ -106,7 +108,6 @@ exact bullet under a current-date `### Safer shared feedback build` section with
 
 - Modify: `src/zira_dashboard/_schema.py:1448`
 - Modify: `tests/test_feedback_schema.py`
-- Create: `tests/test_feedback_sync_store.py`
 
 **Interfaces:**
 
@@ -177,35 +178,46 @@ ALTER TABLE feedback ADD COLUMN IF NOT EXISTS legacy_lifecycle_migrated_at TIMES
 DO $feedback_checks$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'feedback_status_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'feedback_status_check'
+      AND conrelid = 'feedback'::regclass
   ) THEN
     ALTER TABLE feedback ADD CONSTRAINT feedback_status_check CHECK (
       status IS NULL OR status IN ('requested', 'in_progress', 'completed', 'declined')
     );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'feedback_lifecycle_origin_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'feedback_lifecycle_origin_check'
+      AND conrelid = 'feedback'::regclass
   ) THEN
     ALTER TABLE feedback ADD CONSTRAINT feedback_lifecycle_origin_check CHECK (
       lifecycle_origin IS NULL OR lifecycle_origin IN ('local', 'legacy_project_task')
     );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'feedback_local_terminal_fields_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'feedback_local_terminal_fields_check'
+      AND conrelid = 'feedback'::regclass
   ) THEN
     ALTER TABLE feedback ADD CONSTRAINT feedback_local_terminal_fields_check CHECK (
-      lifecycle_origin <> 'local'
+      lifecycle_origin IS DISTINCT FROM 'local'
       OR (
-        status IN ('completed', 'declined')
-        AND finished_at IS NOT NULL
-        AND btrim(COALESCE(finished_by, '')) <> ''
-        AND btrim(COALESCE(resolution_note, '')) <> ''
-      )
-      OR (
-        status IN ('requested', 'in_progress')
-        AND finished_at IS NULL
-        AND finished_by IS NULL
-        AND resolution_note IS NULL
+        status IS NOT NULL
+        AND (
+          (
+            status IN ('completed', 'declined')
+            AND finished_at IS NOT NULL
+            AND btrim(COALESCE(finished_by, '')) <> ''
+            AND btrim(COALESCE(resolution_note, '')) <> ''
+          )
+          OR (
+            status IN ('requested', 'in_progress')
+            AND finished_at IS NULL
+            AND finished_by IS NULL
+            AND resolution_note IS NULL
+          )
+        )
       )
     );
   END IF;
@@ -267,7 +279,8 @@ CREATE TABLE IF NOT EXISTS feedback_odoo_attempts (
   outcome_detail TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (feedback_id, projection_version, attempt_id)
+  UNIQUE (feedback_id, projection_version, attempt_id),
+  UNIQUE (feedback_id, attempt_id)
 );
 
 DO $feedback_sync_fk$
@@ -275,10 +288,12 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'feedback_odoo_sync_active_attempt_fk'
+      AND conrelid = 'feedback_odoo_sync'::regclass
   ) THEN
     ALTER TABLE feedback_odoo_sync
       ADD CONSTRAINT feedback_odoo_sync_active_attempt_fk
-      FOREIGN KEY (active_attempt_id) REFERENCES feedback_odoo_attempts(attempt_id)
+      FOREIGN KEY (feedback_id, active_attempt_id)
+      REFERENCES feedback_odoo_attempts(feedback_id, attempt_id)
       DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END
@@ -370,7 +385,7 @@ Expected: all selected tests pass; no schema string or bootstrap regression.
 - [ ] **Step 5: Commit and push the schema foundation**
 
 ```bash
-git add CHANGELOG.md src/zira_dashboard/_schema.py tests/test_feedback_schema.py tests/test_feedback_sync_store.py
+git add CHANGELOG.md src/zira_dashboard/_schema.py tests/test_feedback_schema.py docs/superpowers/plans/2026-08-20-odoo-2s-feedback-mirror.md
 git commit -m "feat(feedback): add durable lifecycle and sync schema"
 git push origin main
 ```

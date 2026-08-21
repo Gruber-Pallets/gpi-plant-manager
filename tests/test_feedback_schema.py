@@ -42,3 +42,27 @@ def test_feedback_schema_has_durable_odoo_outbox_and_immutable_manifest():
     assert "CREATE TABLE IF NOT EXISTS feedback_odoo_warnings" in ddl
     assert "CREATE TABLE IF NOT EXISTS feedback_odoo_operator_actions" in ddl
     assert "CREATE TABLE IF NOT EXISTS feedback_odoo_backfill_state" in ddl
+
+
+def test_feedback_local_origin_requires_non_null_status():
+    ddl = " ".join(SCHEMA_DDL.split())
+    assert (
+        "lifecycle_origin IS DISTINCT FROM 'local' OR ( status IS NOT NULL"
+        in ddl
+    )
+
+
+def test_feedback_active_attempt_belongs_to_same_feedback():
+    ddl = " ".join(SCHEMA_DDL.split())
+    assert "UNIQUE (feedback_id, attempt_id)" in ddl
+    assert (
+        "FOREIGN KEY (feedback_id, active_attempt_id) REFERENCES "
+        "feedback_odoo_attempts(feedback_id, attempt_id)"
+        in ddl
+    )
+
+
+def test_feedback_constraint_guards_are_table_scoped():
+    ddl = " ".join(SCHEMA_DDL.split())
+    assert ddl.count("AND conrelid = 'feedback'::regclass") == 3
+    assert "AND conrelid = 'feedback_odoo_sync'::regclass" in ddl
