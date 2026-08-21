@@ -16,6 +16,7 @@ _UNSET = getattr(guard, "_UNSET", object())
 @pytest.fixture(autouse=True)
 def _reset_published_alert(monkeypatch):
     monkeypatch.setattr(guard, "_published_alert", _UNSET, raising=False)
+    monkeypatch.setattr(guard, "_published_failure", None, raising=False)
 
 
 class FailingAuditCursor:
@@ -153,7 +154,7 @@ def test_refresh_publishes_latest_alert_without_consumer_reobservation(monkeypat
     assert calls == ["observe", "observe"]
 
 
-def test_failed_refresh_replaces_stale_alert_with_source_failure(monkeypatch):
+def test_failed_refresh_preserves_stale_alert_and_marks_snapshot_degraded(monkeypatch):
     monkeypatch.setattr(
         guard,
         "observe",
@@ -169,8 +170,35 @@ def test_failed_refresh_replaces_stale_alert_with_source_failure(monkeypatch):
 
     with pytest.raises(RuntimeError, match="settings unavailable"):
         guard.refresh()
+
+    snapshot = guard.current_snapshot()
+    assert snapshot.alert["label"] == "Off"
+    assert snapshot.degraded is True
     with pytest.raises(RuntimeError, match="settings unavailable"):
         guard.current_alert()
+
+
+def test_failed_refresh_after_live_keeps_no_alert_and_marks_snapshot_degraded(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        guard,
+        "observe",
+        lambda: Settings(True, False, 5.0, 30),
+    )
+    assert guard.refresh() is None
+
+    monkeypatch.setattr(
+        guard,
+        "observe",
+        lambda: (_ for _ in ()).throw(RuntimeError("settings unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="settings unavailable"):
+        guard.refresh()
+
+    assert guard.current_snapshot().alert is None
+    assert guard.current_snapshot().degraded is True
 
 
 def test_published_failure_raises_fresh_bounded_exceptions_until_recovery(monkeypatch):
@@ -185,8 +213,9 @@ def test_published_failure_raises_fresh_bounded_exceptions_until_recovery(monkey
         guard.refresh()
 
     assert initiating.value is original
-    assert guard._published_alert is not original
-    assert not isinstance(guard._published_alert, BaseException)
+    assert guard._published_alert is _UNSET
+    assert guard._published_failure is not original
+    assert not isinstance(guard._published_failure, BaseException)
 
     published_failures = []
     traceback_lengths = []

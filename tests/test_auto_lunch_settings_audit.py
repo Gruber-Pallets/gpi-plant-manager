@@ -115,6 +115,74 @@ class FailingAuditCursor(RecordingCursor):
             raise RuntimeError("audit unavailable")
 
 
+class NoopProcessLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+class MissingRowReconcileCursor:
+    def __init__(self, database):
+        self.database = database
+        self.results = []
+        self.pending_event = None
+        self.advisory_locked = False
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(sql.split())
+        if "pg_advisory_xact_lock" in normalized:
+            self.database.advisory_lock.acquire()
+            self.advisory_locked = True
+        elif "FROM auto_lunch_settings" in normalized:
+            self.results.append(None)
+        elif "FROM auto_lunch_setting_events" in normalized:
+            with self.database.state_lock:
+                latest = dict(self.database.latest) if self.database.latest else None
+                if latest is None and not self.advisory_locked:
+                    self.database.history_reads += 1
+                    if self.database.history_reads == 2:
+                        self.database.concurrent_history_reads.set()
+            if latest is None and not self.advisory_locked:
+                assert self.database.concurrent_history_reads.wait(2)
+            self.results.append(latest)
+        elif "INSERT INTO auto_lunch_setting_events" in normalized:
+            self.pending_event = {
+                "after_enabled": params[4],
+                "after_observe_only": params[5],
+                "after_flex_after_hours": params[6],
+                "after_flex_minutes": params[7],
+                "source": params[-1],
+            }
+
+    def fetchone(self):
+        return self.results.pop(0)
+
+
+class MissingRowReconcileDatabase:
+    def __init__(self):
+        self.advisory_lock = Lock()
+        self.state_lock = Lock()
+        self.concurrent_history_reads = Event()
+        self.history_reads = 0
+        self.latest = None
+        self.events = []
+
+    @contextmanager
+    def cursor(self):
+        cursor = MissingRowReconcileCursor(self)
+        try:
+            yield cursor
+            if cursor.pending_event is not None:
+                with self.state_lock:
+                    self.events.append(cursor.pending_event)
+                    self.latest = cursor.pending_event
+        finally:
+            if cursor.advisory_locked:
+                cursor.database.advisory_lock.release()
+
+
 def cursor_context(cursor, *, fail_after_yield=False):
     @contextmanager
     def opened():
@@ -122,6 +190,64 @@ def cursor_context(cursor, *, fail_after_yield=False):
         if fail_after_yield:
             raise RuntimeError("commit failed")
     return opened
+
+
+def test_save_and_reconcile_take_same_advisory_lock_before_singleton_row(
+    monkeypatch,
+):
+    save_cursor = RecordingCursor([OFF])
+    monkeypatch.setattr(db, "cursor", cursor_context(save_cursor))
+    assert settings.save(settings.Settings()) is False
+
+    reconcile_cursor = RecordingCursor([
+        OFF,
+        {
+            "after_enabled": False,
+            "after_observe_only": True,
+            "after_flex_after_hours": 5.0,
+            "after_flex_minutes": 30,
+        },
+    ])
+    monkeypatch.setattr(db, "cursor", cursor_context(reconcile_cursor))
+    settings.reconcile_external_change()
+
+    save_lock_sql, save_lock_params = save_cursor.executed[0]
+    reconcile_lock_sql, reconcile_lock_params = reconcile_cursor.executed[0]
+    assert "pg_advisory_xact_lock" in save_lock_sql
+    assert "pg_advisory_xact_lock" in reconcile_lock_sql
+    assert save_lock_params == reconcile_lock_params
+    assert "auto_lunch_settings" in save_cursor.executed[1][0]
+    assert "FOR UPDATE" in save_cursor.executed[1][0]
+    assert "auto_lunch_settings" in reconcile_cursor.executed[1][0]
+    assert "FOR UPDATE" in reconcile_cursor.executed[1][0]
+
+
+def test_missing_singleton_concurrent_reconcilers_write_one_baseline(monkeypatch):
+    database = MissingRowReconcileDatabase()
+    monkeypatch.setattr(db, "cursor", database.cursor)
+    monkeypatch.setattr(settings, "_save_lock", NoopProcessLock())
+    monkeypatch.setattr(settings._store, "set", lambda _value: None)
+    results = []
+    errors = []
+
+    def reconcile():
+        try:
+            results.append(settings.reconcile_external_change())
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    first = Thread(target=reconcile)
+    second = Thread(target=reconcile)
+    first.start()
+    second.start()
+    first.join(3)
+    second.join(3)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert results == [settings.DEFAULT, settings.DEFAULT]
+    assert [event["source"] for event in database.events] == ["baseline"]
 
 
 def test_save_writes_setting_and_actor_audit_in_one_cursor(monkeypatch):
@@ -135,11 +261,12 @@ def test_save_writes_setting_and_actor_audit_in_one_cursor(monkeypatch):
         live, actor_upn="dale@gruberpallets.com", actor_name="Dale"
     ) is True
 
-    assert len(cursor.executed) == 3
-    assert "FOR UPDATE" in cursor.executed[0][0]
-    assert "INSERT INTO auto_lunch_settings" in cursor.executed[1][0]
-    assert "INSERT INTO auto_lunch_setting_events" in cursor.executed[2][0]
-    assert cursor.executed[2][1] == (
+    assert len(cursor.executed) == 4
+    assert "pg_advisory_xact_lock" in cursor.executed[0][0]
+    assert "FOR UPDATE" in cursor.executed[1][0]
+    assert "INSERT INTO auto_lunch_settings" in cursor.executed[2][0]
+    assert "INSERT INTO auto_lunch_setting_events" in cursor.executed[3][0]
+    assert cursor.executed[3][1] == (
         False, True, 5.0, 30,
         True, False, 5.0, 30,
         "dale@gruberpallets.com", "Dale", "settings",
@@ -153,7 +280,7 @@ def test_save_of_identical_values_is_silent(monkeypatch):
 
     assert settings.save(settings.Settings()) is False
 
-    assert len(cursor.executed) == 1
+    assert len(cursor.executed) == 2
 
 
 def test_save_of_identical_zero_flex_values_is_silent(monkeypatch):
@@ -163,7 +290,7 @@ def test_save_of_identical_zero_flex_values_is_silent(monkeypatch):
 
     assert settings.save(zero_flex) is False
 
-    assert len(cursor.executed) == 1
+    assert len(cursor.executed) == 2
 
 
 def test_cache_is_not_changed_when_transaction_commit_fails(monkeypatch):
@@ -321,7 +448,8 @@ def test_reconcile_seeds_one_baseline_when_history_is_empty(monkeypatch):
     monkeypatch.setattr(db, "cursor", cursor_context(cursor))
 
     assert settings.reconcile_external_change() == settings.Settings()
-    assert "FOR UPDATE" in cursor.executed[0][0]
+    assert "pg_advisory_xact_lock" in cursor.executed[0][0]
+    assert "FOR UPDATE" in cursor.executed[1][0]
     event_inserts = [
         call for call in cursor.executed
         if "INSERT INTO auto_lunch_setting_events" in call[0]

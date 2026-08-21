@@ -25,6 +25,8 @@ class Settings:
 DEFAULT = Settings()
 
 _FIELDS = "enabled, observe_only, flex_after_hours, flex_minutes"
+# Stable signed-safe 64-bit key (ASCII "AUTOLUNC"); never use process-random hash().
+_TRANSACTION_LOCK_KEY = 0x4155544F4C554E43
 
 
 def _row_to_settings(row: dict) -> Settings:
@@ -61,6 +63,13 @@ def current() -> Settings:
     return _store.current()
 
 
+def _lock_singleton_transaction(cur) -> None:
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(%s)",
+        (_TRANSACTION_LOCK_KEY,),
+    )
+
+
 def _insert_event(cur, before: Settings | None, after: Settings,
                   actor_upn: str | None, actor_name: str | None,
                   source: str) -> None:
@@ -89,6 +98,7 @@ def save(s: Settings, *, actor_upn: str | None = None,
         changed = False
         persisted = s
         with db.cursor() as cur:
+            _lock_singleton_transaction(cur)
             cur.execute(
                 f"SELECT {_FIELDS} FROM auto_lunch_settings WHERE id = 1 FOR UPDATE"
             )
@@ -138,6 +148,7 @@ def reconcile_external_change() -> Settings:
     from . import db
     with _save_lock:
         with db.cursor() as cur:
+            _lock_singleton_transaction(cur)
             cur.execute(
                 f"SELECT {_FIELDS} FROM auto_lunch_settings "
                 "WHERE id = 1 FOR UPDATE"

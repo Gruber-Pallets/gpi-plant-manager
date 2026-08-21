@@ -26,6 +26,17 @@ class _FailureSnapshot:
     message: str = "Auto-Lunch settings unavailable."
 
 
+_published_failure: _FailureSnapshot | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GuardSnapshot:
+    """One atomic read of the last successful alert and source health."""
+
+    alert: dict | None
+    degraded: bool
+
+
 def observe() -> Settings:
     try:
         return auto_lunch_settings.reconcile_external_change()
@@ -64,25 +75,42 @@ def _alert_for(current: Settings) -> dict | None:
 
 
 def _copy_alert(alert: object) -> dict | None:
-    if isinstance(alert, _FailureSnapshot):
-        raise AutoLunchSourceError(alert.message) from None
     return dict(alert) if isinstance(alert, dict) else None
 
 
-def _publish(alert: object) -> None:
-    global _published_alert
+def _publish_success(alert: object) -> None:
+    global _published_alert, _published_failure
 
     with _state_lock:
         _published_alert = alert
+        _published_failure = None
+
+
+def _publish_failure() -> None:
+    global _published_failure
+
+    with _state_lock:
+        _published_failure = _FailureSnapshot()
+
+
+def _snapshot(alert: object, failure: _FailureSnapshot | None) -> GuardSnapshot:
+    return GuardSnapshot(
+        alert=_copy_alert(alert),
+        degraded=failure is not None,
+    )
+
+
+def _raise_failure(failure: _FailureSnapshot) -> None:
+    raise AutoLunchSourceError(failure.message) from None
 
 
 def _observe_and_publish() -> dict | None:
     try:
         observed_alert = _alert_for(observe())
     except Exception:
-        _publish(_FailureSnapshot())
+        _publish_failure()
         raise
-    _publish(observed_alert)
+    _publish_success(observed_alert)
     return _copy_alert(observed_alert)
 
 
@@ -96,12 +124,41 @@ def current_alert() -> dict | None:
     """Return the warmed alert, observing once if this process is still cold."""
     with _state_lock:
         published = _published_alert
+        failure = _published_failure
+    if failure is not None:
+        _raise_failure(failure)
     if published is not _UNSET:
         return _copy_alert(published)
 
     with _refresh_lock:
         with _state_lock:
             published = _published_alert
+            failure = _published_failure
+        if failure is not None:
+            _raise_failure(failure)
         if published is not _UNSET:
             return _copy_alert(published)
         return _observe_and_publish()
+
+
+def current_snapshot() -> GuardSnapshot:
+    """Return alert and source health from the same published-state read."""
+    with _state_lock:
+        published = _published_alert
+        failure = _published_failure
+    if published is not _UNSET or failure is not None:
+        return _snapshot(published, failure)
+
+    with _refresh_lock:
+        with _state_lock:
+            published = _published_alert
+            failure = _published_failure
+        if published is _UNSET and failure is None:
+            try:
+                _observe_and_publish()
+            except Exception:
+                pass
+            with _state_lock:
+                published = _published_alert
+                failure = _published_failure
+        return _snapshot(published, failure)

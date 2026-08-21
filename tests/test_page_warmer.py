@@ -254,6 +254,12 @@ def test_next_inbox_warm_tick_publishes_external_auto_lunch_change(monkeypatch):
     )
     monkeypatch.setattr(
         auto_lunch_guard,
+        "_published_failure",
+        None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        auto_lunch_guard,
         "observe",
         lambda: calls.append("observe") or next(observed),
     )

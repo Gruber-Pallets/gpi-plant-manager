@@ -26,6 +26,20 @@ def _capture(errors: list[dict], source: str, call, fallback):
         return fallback
 
 
+def _auto_lunch_alert(errors: list[dict], current_snapshot):
+    snapshot = _capture(
+        errors,
+        "Auto-Lunch",
+        current_snapshot,
+        None,
+    )
+    if snapshot is None:
+        return None
+    if snapshot.degraded:
+        errors.append({"source": "Auto-Lunch"})
+    return snapshot.alert
+
+
 def _plural(n: int, singular: str, plural: str | None = None) -> str:
     word = singular if n == 1 else (plural or f"{singular}s")
     return f"{n} {word}"
@@ -275,8 +289,9 @@ def build_summary() -> dict:
     roster_sync_alert = _capture(
         source_errors, "Timeclock Roster", odoo_sync.roster_sync_alert, None
     )
-    auto_lunch_alert = _capture(
-        source_errors, "Auto-Lunch", auto_lunch_guard.current_alert, None
+    auto_lunch_alert = _auto_lunch_alert(
+        source_errors,
+        auto_lunch_guard.current_snapshot,
     )
     schedule_count = _capture(
         source_errors, "Plant Schedule", lambda: _plant_schedule_reminder()[0], 0
@@ -373,8 +388,9 @@ def build_snapshot() -> dict:
     roster_sync_alert = _capture(
         source_errors, "Timeclock Roster", odoo_sync.roster_sync_alert, None
     )
-    auto_lunch_alert = _capture(
-        source_errors, "Auto-Lunch", auto_lunch_guard.current_alert, None
+    auto_lunch_alert = _auto_lunch_alert(
+        source_errors,
+        auto_lunch_guard.current_snapshot,
     )
     auto_lunch_count = int(auto_lunch_alert is not None)
     schedule_count, schedule_rows = _capture(

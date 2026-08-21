@@ -23,12 +23,27 @@ from zira_dashboard.routes import exceptions as exceptions_route
 from zira_dashboard.routes import staffing as staffing_routes
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "zira_dashboard" / "static"
-_REAL_AUTO_LUNCH_CURRENT_ALERT = auto_lunch_guard.current_alert
+_REAL_AUTO_LUNCH_CURRENT_SNAPSHOT = getattr(
+    auto_lunch_guard,
+    "current_snapshot",
+    None,
+)
+
+
+def _auto_lunch_snapshot(alert=None, *, degraded=False):
+    return SimpleNamespace(alert=alert, degraded=degraded)
 
 
 @pytest.fixture(autouse=True)
 def _live_auto_lunch(monkeypatch):
-    monkeypatch.setattr(auto_lunch_guard, "current_alert", lambda: None)
+    if _REAL_AUTO_LUNCH_CURRENT_SNAPSHOT is None:
+        monkeypatch.setattr(auto_lunch_guard, "current_alert", lambda: None)
+    else:
+        monkeypatch.setattr(
+            auto_lunch_guard,
+            "current_snapshot",
+            lambda: _auto_lunch_snapshot(),
+        )
 
 
 def _snapshot():
@@ -523,7 +538,12 @@ def test_auto_lunch_off_is_one_urgent_inbox_item(monkeypatch):
         "row_key": "auto_lunch:setting",
         "item_key": "auto_lunch:setting",
     }
-    monkeypatch.setattr(auto_lunch_guard, "current_alert", lambda: row)
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "current_snapshot",
+        lambda: _auto_lunch_snapshot(row),
+        raising=False,
+    )
 
     snapshot = exception_inbox.build_snapshot()
 
@@ -547,8 +567,11 @@ def test_auto_lunch_off_is_counted_in_summary(monkeypatch):
     monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(
         auto_lunch_guard,
-        "current_alert",
-        lambda: {"priority": "urgent", "item_key": "auto_lunch:setting"},
+        "current_snapshot",
+        lambda: _auto_lunch_snapshot(
+            {"priority": "urgent", "item_key": "auto_lunch:setting"}
+        ),
+        raising=False,
     )
 
     summary = exception_inbox.build_summary()
@@ -563,7 +586,12 @@ def test_auto_lunch_alert_clears_when_guard_returns_none(monkeypatch):
     monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
     monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
     monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
-    monkeypatch.setattr(auto_lunch_guard, "current_alert", lambda: None)
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "current_snapshot",
+        lambda: _auto_lunch_snapshot(),
+        raising=False,
+    )
 
     snapshot = exception_inbox.build_snapshot()
 
@@ -581,7 +609,12 @@ def test_auto_lunch_guard_failure_degrades_without_breaking_inbox(monkeypatch):
     def fail_guard():
         raise RuntimeError("settings unavailable")
 
-    monkeypatch.setattr(auto_lunch_guard, "current_alert", fail_guard)
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "current_snapshot",
+        fail_guard,
+        raising=False,
+    )
 
     snapshot = exception_inbox.build_snapshot()
 
@@ -591,40 +624,38 @@ def test_auto_lunch_guard_failure_degrades_without_breaking_inbox(monkeypatch):
     assert {"source": "Auto-Lunch"} in snapshot["source_errors"]
 
 
-def test_published_auto_lunch_failure_flows_through_inbox_and_recovers(monkeypatch):
+def test_cold_and_known_live_failures_degrade_without_inventing_a_mode_row(
+    monkeypatch,
+):
     _empty_inbox_sources(monkeypatch)
     monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
     monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
     monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    assert _REAL_AUTO_LUNCH_CURRENT_SNAPSHOT is not None
     monkeypatch.setattr(
         auto_lunch_guard,
-        "current_alert",
-        _REAL_AUTO_LUNCH_CURRENT_ALERT,
+        "current_snapshot",
+        _REAL_AUTO_LUNCH_CURRENT_SNAPSHOT,
     )
     monkeypatch.setattr(
         auto_lunch_guard,
         "_published_alert",
         auto_lunch_guard._UNSET,
     )
+    monkeypatch.setattr(auto_lunch_guard, "_published_failure", None, raising=False)
     monkeypatch.setattr(
         auto_lunch_guard,
         "observe",
         lambda: (_ for _ in ()).throw(RuntimeError("settings unavailable")),
     )
 
-    with pytest.raises(RuntimeError, match="settings unavailable"):
-        auto_lunch_guard.refresh()
-    try:
-        auto_lunch_guard.current_alert()
-    except Exception as exc:  # noqa: BLE001 -- verify the cached failure boundary
-        assert isinstance(exc, auto_lunch_guard.AutoLunchSourceError)
-    else:
-        pytest.fail("published failure did not raise")
-
-    failed = exception_inbox.build_snapshot()
-    failed_section = next(s for s in failed["sections"] if s["id"] == "auto_lunch")
-    assert failed_section["rows"] == []
-    assert failed["source_errors"] == [{"source": "Auto-Lunch"}]
+    cold_failure = exception_inbox.build_snapshot()
+    cold_section = next(
+        s for s in cold_failure["sections"] if s["id"] == "auto_lunch"
+    )
+    assert cold_section["count"] == 0
+    assert cold_section["rows"] == []
+    assert cold_failure["source_errors"] == [{"source": "Auto-Lunch"}]
 
     monkeypatch.setattr(
         auto_lunch_guard,
@@ -632,10 +663,141 @@ def test_published_auto_lunch_failure_flows_through_inbox_and_recovers(monkeypat
         lambda: auto_lunch_guard.Settings(True, False, 5.0, 30),
     )
     assert auto_lunch_guard.refresh() is None
-    live = exception_inbox.build_snapshot()
-    live_section = next(s for s in live["sections"] if s["id"] == "auto_lunch")
+
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "observe",
+        lambda: (_ for _ in ()).throw(RuntimeError("settings unavailable")),
+    )
+    with pytest.raises(RuntimeError, match="settings unavailable"):
+        auto_lunch_guard.refresh()
+
+    known_live_failure = exception_inbox.build_snapshot()
+    live_section = next(
+        s for s in known_live_failure["sections"] if s["id"] == "auto_lunch"
+    )
+    assert live_section["count"] == 0
     assert live_section["rows"] == []
-    assert {"source": "Auto-Lunch"} not in live["source_errors"]
+    assert known_live_failure["source_errors"] == [{"source": "Auto-Lunch"}]
+
+
+def test_unsafe_alert_survives_repeated_failures_until_successful_live(
+    monkeypatch,
+):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    assert _REAL_AUTO_LUNCH_CURRENT_SNAPSHOT is not None
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "current_snapshot",
+        _REAL_AUTO_LUNCH_CURRENT_SNAPSHOT,
+    )
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "_published_alert",
+        auto_lunch_guard._UNSET,
+    )
+    monkeypatch.setattr(auto_lunch_guard, "_published_failure", None, raising=False)
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "observe",
+        lambda: auto_lunch_guard.Settings(False, True, 5.0, 30),
+    )
+    assert auto_lunch_guard.refresh()["label"] == "Off"
+    healthy_off = exception_inbox.build_snapshot()
+    healthy_section = next(
+        s for s in healthy_off["sections"] if s["id"] == "auto_lunch"
+    )
+    expected_row = dict(healthy_section["rows"][0])
+
+    failures = []
+
+    def fail_observation():
+        failure = RuntimeError("settings unavailable")
+        failures.append(failure)
+        raise failure
+
+    monkeypatch.setattr(auto_lunch_guard, "observe", fail_observation)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="settings unavailable"):
+            auto_lunch_guard.refresh()
+
+    degraded_off = exception_inbox.build_snapshot()
+    degraded_section = next(
+        s for s in degraded_off["sections"] if s["id"] == "auto_lunch"
+    )
+    assert degraded_section["count"] == 1
+    assert degraded_section["rows"] == [expected_row]
+    assert set(degraded_section["rows"][0]) == {
+        "name",
+        "label",
+        "detail",
+        "priority",
+        "badge",
+        "href",
+        "row_key",
+        "item_key",
+    }
+    assert degraded_off["total"] == 1
+    assert degraded_off["urgent_total"] == 1
+    assert degraded_off["source_errors"] == [{"source": "Auto-Lunch"}]
+    assert len(failures) == 2
+    assert all(failure is not auto_lunch_guard._published_failure for failure in failures)
+
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "observe",
+        lambda: auto_lunch_guard.Settings(True, False, 5.0, 30),
+    )
+    assert auto_lunch_guard.refresh() is None
+    healthy_live = exception_inbox.build_snapshot()
+    live_section = next(
+        s for s in healthy_live["sections"] if s["id"] == "auto_lunch"
+    )
+    assert live_section["count"] == 0
+    assert live_section["rows"] == []
+    assert healthy_live["source_errors"] == []
+
+
+def test_successful_off_refresh_replaces_degraded_observe_alert(monkeypatch):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    assert _REAL_AUTO_LUNCH_CURRENT_SNAPSHOT is not None
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "current_snapshot",
+        _REAL_AUTO_LUNCH_CURRENT_SNAPSHOT,
+    )
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "_published_alert",
+        auto_lunch_guard._UNSET,
+    )
+    monkeypatch.setattr(auto_lunch_guard, "_published_failure", None, raising=False)
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "observe",
+        lambda: auto_lunch_guard.Settings(True, True, 5.0, 30),
+    )
+    assert auto_lunch_guard.refresh()["label"] == "Observe only"
+    monkeypatch.setattr(
+        auto_lunch_guard,
+        "observe",
+        lambda: (_ for _ in ()).throw(RuntimeError("settings unavailable")),
+    )
+    with pytest.raises(RuntimeError, match="settings unavailable"):
+        auto_lunch_guard.refresh()
+
+    degraded = exception_inbox.build_snapshot()
+    degraded_section = next(
+        s for s in degraded["sections"] if s["id"] == "auto_lunch"
+    )
+    assert [row["label"] for row in degraded_section["rows"]] == ["Observe only"]
+    assert degraded["source_errors"] == [{"source": "Auto-Lunch"}]
 
     monkeypatch.setattr(
         auto_lunch_guard,
@@ -643,10 +805,12 @@ def test_published_auto_lunch_failure_flows_through_inbox_and_recovers(monkeypat
         lambda: auto_lunch_guard.Settings(False, True, 5.0, 30),
     )
     assert auto_lunch_guard.refresh()["label"] == "Off"
-    off = exception_inbox.build_snapshot()
-    off_section = next(s for s in off["sections"] if s["id"] == "auto_lunch")
-    assert [row["label"] for row in off_section["rows"]] == ["Off"]
-    assert {"source": "Auto-Lunch"} not in off["source_errors"]
+    recovered = exception_inbox.build_snapshot()
+    recovered_section = next(
+        s for s in recovered["sections"] if s["id"] == "auto_lunch"
+    )
+    assert [row["label"] for row in recovered_section["rows"]] == ["Off"]
+    assert recovered["source_errors"] == []
 
 
 def test_build_snapshot_surfaces_an_unsafe_roster_sync_as_urgent(monkeypatch):
