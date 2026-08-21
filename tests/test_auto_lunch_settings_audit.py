@@ -201,3 +201,53 @@ def test_recent_events_reads_newest_first_with_a_bounded_limit(monkeypatch):
     sql, params = query.call_args.args
     assert "ORDER BY changed_at DESC, id DESC LIMIT %s" in sql
     assert params == (100,)
+
+
+def test_reconcile_seeds_one_baseline_when_history_is_empty(monkeypatch):
+    cursor = RecordingCursor([OFF, None])
+    monkeypatch.setattr(db, "cursor", cursor_context(cursor))
+
+    assert settings.reconcile_external_change() == settings.Settings()
+    assert "FOR UPDATE" in cursor.executed[0][0]
+    assert cursor.executed[-1][1][-1] == "baseline"
+
+
+def test_reconcile_records_one_external_change(monkeypatch):
+    latest = {
+        "after_enabled": True, "after_observe_only": False,
+        "after_flex_after_hours": 5.0, "after_flex_minutes": 30,
+    }
+    cursor = RecordingCursor([OFF, latest])
+    monkeypatch.setattr(db, "cursor", cursor_context(cursor))
+
+    settings.reconcile_external_change()
+
+    assert cursor.executed[-1][1][-3:] == (None, None, "external")
+
+
+def test_reconcile_does_not_duplicate_matching_signature(monkeypatch):
+    latest = {
+        "after_enabled": False, "after_observe_only": True,
+        "after_flex_after_hours": 5.0, "after_flex_minutes": 30,
+    }
+    cursor = RecordingCursor([OFF, latest])
+    monkeypatch.setattr(db, "cursor", cursor_context(cursor))
+
+    settings.reconcile_external_change()
+
+    assert len(cursor.executed) == 2
+
+
+def test_reconcile_refreshes_the_shared_cache(monkeypatch):
+    latest = {
+        "after_enabled": False, "after_observe_only": True,
+        "after_flex_after_hours": 5.0, "after_flex_minutes": 30,
+    }
+    cursor = RecordingCursor([OFF, latest])
+    monkeypatch.setattr(db, "cursor", cursor_context(cursor))
+    cache_set = Mock()
+    monkeypatch.setattr(settings._store, "set", cache_set)
+
+    settings.reconcile_external_change()
+
+    cache_set.assert_called_once_with(settings.Settings())

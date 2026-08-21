@@ -121,6 +121,39 @@ def recent_events(limit: int = 20) -> list[dict]:
     )
 
 
+def _event_after_settings(row: dict) -> Settings:
+    return Settings(
+        enabled=bool(row["after_enabled"]),
+        observe_only=bool(row["after_observe_only"]),
+        flex_after_hours=float(row["after_flex_after_hours"]),
+        flex_minutes=int(row["after_flex_minutes"]),
+    )
+
+
+def reconcile_external_change() -> Settings:
+    from . import db
+    with db.cursor() as cur:
+        cur.execute(
+            f"SELECT {_FIELDS} FROM auto_lunch_settings WHERE id = 1 FOR UPDATE"
+        )
+        row = cur.fetchone()
+        persisted = _row_to_settings(row) if row else DEFAULT
+        cur.execute(
+            "SELECT after_enabled, after_observe_only, after_flex_after_hours, "
+            "after_flex_minutes FROM auto_lunch_setting_events "
+            "ORDER BY changed_at DESC, id DESC LIMIT 1"
+        )
+        latest = cur.fetchone()
+        if latest is None:
+            _insert_event(cur, None, persisted, None, None, "baseline")
+        else:
+            audited = _event_after_settings(latest)
+            if audited != persisted:
+                _insert_event(cur, audited, persisted, None, None, "external")
+    _store.set(persisted)
+    return persisted
+
+
 def reload() -> Settings:
     """Force a fresh read from Postgres, bypassing the cache."""
     return _store.reload()
