@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import os
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from types import MappingProxyType
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
+from uuid import UUID, uuid4
 
 import pytest
 
+from scripts import feedback_odoo_rollout as cli
 from zira_dashboard import feedback_store
+from zira_dashboard import feedback_sync_store as sync_store
 from zira_dashboard.feedback_image import MAX_OUTPUT_BYTES, NormalizedImage
+from zira_dashboard.feedback_projection import ReadbackMismatch
 from zira_dashboard.feedback_rollout import (
     DryRunReport,
     EnqueueReport,
@@ -31,6 +37,7 @@ from zira_dashboard.feedback_rollout import (
 )
 from zira_dashboard.odoo_improvements import (
     ContractError,
+    ImprovementContract,
     ImprovementsClient,
     ImprovementsConfig,
     SOURCE_VALUE,
@@ -72,6 +79,35 @@ def disable_real_services(monkeypatch):
 
 def aware_now() -> datetime:
     return datetime(2026, 8, 20, 18, 0, tzinfo=UTC)
+
+
+def verified_attempt(
+    *,
+    manifest: dict[str, object],
+    manifest_digest: str,
+    binaries: dict[str, object],
+    projection_version: int = 3,
+    remote_id: int = 901,
+    attempt_id: UUID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+) -> sync_store.Attempt:
+    settled = aware_now()
+    return sync_store.Attempt(
+        attempt_id=attempt_id,
+        feedback_id=17,
+        projection_version=projection_version,
+        mutation_kind="update",
+        remote_id=remote_id,
+        manifest=manifest,
+        manifest_digest=manifest_digest,
+        binaries=binaries,
+        state="verified",
+        dispatch_marked_at=settled - timedelta(seconds=3),
+        rpc_succeeded_at=settled - timedelta(seconds=2),
+        readback_at=settled,
+        settled_at=settled,
+        created_at=settled - timedelta(seconds=4),
+        updated_at=settled,
+    )
 
 
 def normalized(role: str = "before") -> NormalizedImage:
@@ -2001,3 +2037,834 @@ def test_no_rollout_test_accidentally_inherits_a_live_service_setting():
     assert os.environ.get("FEEDBACK_SYNC_TEST_DATABASE") == ""
     assert os.environ.get("ODOO_SHARED_REPORTING_WRITE_ENABLED") == "false"
     assert os.environ.get("ODOO_IMPROVEMENTS_WRITE_ENABLED") == "false"
+
+
+def test_rollout_cli_exposes_only_the_exact_planned_subcommands():
+    parser = cli.build_parser()
+    subparser_action = next(
+        action for action in parser._actions if getattr(action, "choices", None)
+    )
+
+    assert set(subparser_action.choices) == {
+        "preflight",
+        "dry-run",
+        "migrate-legacy",
+        "enqueue-history",
+        "reconcile",
+        "canary-report",
+        "quarantine-list",
+        "quarantine-disposition",
+    }
+
+    help_text = parser.format_help().casefold()
+    for forbidden in (
+        "api-key",
+        "password",
+        "write-enabled",
+        "database-url",
+        "expected-company",
+        "source-value",
+        "remote-id",
+    ):
+        assert forbidden not in help_text
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["preflight"],
+        ["dry-run", "--after-id", "0", "--batch-size", "10"],
+        [
+            "migrate-legacy",
+            "--confirm-local-migration",
+            "--after-id",
+            "0",
+            "--batch-size",
+            "10",
+        ],
+        [
+            "migrate-legacy",
+            "--confirm-read-only",
+            "--after-id",
+            "0",
+            "--batch-size",
+            "10",
+        ],
+        ["enqueue-history", "--batch-size", "10"],
+        ["canary-report", "--feedback-id", "17"],
+    ],
+)
+def test_cli_acknowledgements_fail_before_time_client_database_or_helper(monkeypatch, argv):
+    bomb = MagicMock(side_effect=AssertionError("dependency reached before guard"))
+    monkeypatch.setattr(cli, "utc_now", bomb)
+    monkeypatch.setattr(cli.ImprovementsClient, "from_env", bomb)
+    monkeypatch.setattr(cli.rollout, "preflight", bomb)
+    monkeypatch.setattr(cli.rollout, "dry_run_batch", bomb)
+    monkeypatch.setattr(cli.rollout, "migrate_legacy_batch", bomb)
+    monkeypatch.setattr(cli.rollout, "enqueue_history_batch", bomb)
+    monkeypatch.setattr(cli.rollout, "canary_report", bomb)
+
+    with pytest.raises(SystemExit):
+        cli.main(argv)
+
+    bomb.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("subcommand", "option", "values"),
+    [
+        (
+            "dry-run",
+            "--after-id",
+            ["-1", "+1", " 1", "1 ", "1.0", "true", str(MAX_SIGNED_64 + 1)],
+        ),
+        (
+            "dry-run",
+            "--batch-size",
+            ["0", "101", "-1", "+1", " 1", "1.0", "true", "9" * 5000],
+        ),
+        (
+            "canary-report",
+            "--feedback-id",
+            ["0", "-1", "+1", " 1", "1.0", "true", str(MAX_SIGNED_64 + 1)],
+        ),
+    ],
+)
+def test_cli_rejects_nonexact_or_out_of_range_numbers_before_dependencies(
+    monkeypatch, subcommand, option, values
+):
+    bomb = MagicMock(side_effect=AssertionError("dependency called"))
+    monkeypatch.setattr(cli.ImprovementsClient, "from_env", bomb)
+    monkeypatch.setattr(cli.rollout, "dry_run_batch", bomb)
+    monkeypatch.setattr(cli.rollout, "canary_report", bomb)
+    fixed = {
+        "dry-run": ["--confirm-read-only", "--after-id", "0", "--batch-size", "10"],
+        "canary-report": ["--confirm-read-only", "--feedback-id", "17"],
+    }
+
+    for value in values:
+        argv = [subcommand, *fixed[subcommand]]
+        option_index = argv.index(option)
+        argv[option_index + 1] = value
+        with pytest.raises(SystemExit):
+            cli.main(argv)
+
+    bomb.assert_not_called()
+
+
+def test_cli_rejects_unplanned_aliases_overrides_and_auto_clear_paths():
+    parser = cli.build_parser()
+    rejected = (
+        ["quarantine", "clear-if-matching", "--attempt-id", str(uuid4())],
+        ["preflight", "--confirm-read-only", "--url", "https://example.invalid"],
+        ["reconcile", "--database", "other"],
+        ["dryrun", "--confirm-read-only", "--after-id", "0", "--batch-size", "10"],
+        ["preflight", "--confirm-read"],
+        [
+            "quarantine-disposition",
+            "--attempt-id",
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "--disposition",
+            "keep",
+            "--reviewer",
+            "Human Operator",
+            "--confirm-human",
+        ],
+    )
+
+    for argv in rejected:
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
+
+
+def test_cli_parser_failures_never_echo_attacker_controlled_argument_values(capsys):
+    attacker_value = "https://private.invalid/api-key-value"
+
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "preflight",
+                "--confirm-read-only",
+                "--api-key",
+                attacker_value,
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert attacker_value not in captured.out
+    assert attacker_value not in captured.err
+    assert "api-key-value" not in captured.out
+    assert "api-key-value" not in captured.err
+
+
+def _install_cli_fakes(monkeypatch):
+    client = MagicMock(name="dedicated_client")
+    monkeypatch.setattr(cli.ImprovementsClient, "from_env", MagicMock(return_value=client))
+    monkeypatch.setattr(cli, "utc_now", MagicMock(return_value=aware_now()))
+    monkeypatch.setattr(cli.rollout, "preflight", MagicMock())
+    monkeypatch.setattr(cli.rollout, "dry_run_batch", MagicMock())
+    monkeypatch.setattr(cli.rollout, "migrate_legacy_batch", MagicMock())
+    monkeypatch.setattr(cli.rollout, "enqueue_history_batch", MagicMock())
+    monkeypatch.setattr(cli.rollout, "reconciliation_counts", MagicMock())
+    monkeypatch.setattr(cli.rollout, "canary_report", MagicMock())
+    monkeypatch.setattr(cli.sync_store, "list_quarantined", MagicMock())
+    monkeypatch.setattr(cli.sync_store, "apply_quarantine_disposition", MagicMock())
+    return client
+
+
+def test_cli_dispatches_all_bounded_commands_through_fakes_and_emits_safe_json(monkeypatch, capsys):
+    client = _install_cli_fakes(monkeypatch)
+    cli.rollout.preflight.return_value = PreflightReport(
+        database_uuid_matches=True,
+        company_matches=True,
+        fields_ok=True,
+        missing_fields=(),
+        wrong_types=(),
+        missing_selections=(),
+        source_value_present=True,
+    )
+    cli.rollout.dry_run_batch.return_value = DryRunReport(
+        requested_batch_size=10,
+        feedback_ids=(17,),
+        projected_ids=(17,),
+        skipped_ids=(),
+        create_ids=(17,),
+        adopt_ids=(),
+        update_ids=(),
+        duplicate_ids=(),
+        ownership_conflict_ids=(),
+        employee_missing_count=0,
+        employee_ambiguous_count=0,
+        before_image_count=0,
+        after_image_count=0,
+        next_after_id=17,
+    )
+    cli.rollout.migrate_legacy_batch.return_value = LegacyMigrationReport(
+        selected_ids=(17,),
+        applied_ids=(17,),
+        idempotent_ids=(),
+        skipped_ids=(),
+        next_after_id=17,
+    )
+    cli.rollout.enqueue_history_batch.return_value = EnqueueReport(
+        feedback_ids=(17,), next_cursor=17
+    )
+    cli.rollout.reconciliation_counts.return_value = {
+        "synchronized": 1,
+        "due": 0,
+        "deferred": 0,
+        "in_flight": 0,
+        "quarantined": 0,
+        "version_lag": 0,
+    }
+    cli.rollout.canary_report.return_value = cli.rollout.CanaryReport(
+        feedback_id=17,
+        projection_version=3,
+        target_identity_ok=True,
+        synchronized=True,
+        verified_attempt=True,
+        compound_match_count=1,
+        compound_matches_saved=True,
+        readback_matches=True,
+    )
+    client.canary_feedback_id.return_value = 17
+    cli.sync_store.list_quarantined.return_value = ()
+    cli.sync_store.apply_quarantine_disposition.return_value = (
+        sync_store.QuarantineDispositionResult(
+            feedback_id=17,
+            attempt_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            disposition="keep",
+            state="quarantined",
+            desired_version=3,
+            warning=None,
+        )
+    )
+
+    commands = (
+        ["preflight", "--confirm-read-only"],
+        ["dry-run", "--confirm-read-only", "--after-id", "0", "--batch-size", "10"],
+        [
+            "migrate-legacy",
+            "--confirm-read-only",
+            "--confirm-local-migration",
+            "--after-id",
+            "0",
+            "--batch-size",
+            "10",
+        ],
+        ["enqueue-history", "--confirm-local-backfill", "--batch-size", "10"],
+        ["reconcile"],
+        ["canary-report", "--confirm-read-only", "--feedback-id", "17"],
+        ["quarantine-list"],
+        [
+            "quarantine-disposition",
+            "--attempt-id",
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "--disposition",
+            "keep",
+            "--reviewer",
+            "  Human Operator  ",
+        ],
+    )
+    payloads = []
+    for argv in commands:
+        assert cli.main(argv) == 0
+        payloads.append(json.loads(capsys.readouterr().out))
+
+    assert [payload["command"] for payload in payloads] == [item[0] for item in commands]
+    cli.rollout.dry_run_batch.assert_called_once_with(after_id=0, batch_size=10, client=client)
+    cli.rollout.migrate_legacy_batch.assert_called_once_with(
+        after_id=0, batch_size=10, client=client, now=aware_now()
+    )
+    cli.rollout.enqueue_history_batch.assert_called_once_with(batch_size=10, now=aware_now())
+    cli.sync_store.apply_quarantine_disposition.assert_called_once_with(
+        attempt_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        disposition="keep",
+        reviewer="  Human Operator  ",
+        human_review_confirmed=False,
+        now=aware_now(),
+    )
+    serialized = "\n".join(json.dumps(payload, sort_keys=True) for payload in payloads)
+    for forbidden in (
+        "Human Operator",
+        "private feedback",
+        "https://",
+        "api_key",
+        "remote_id",
+        "manifest",
+    ):
+        assert forbidden not in serialized
+
+
+def test_canary_cli_rejects_absent_malformed_or_mismatched_fence_before_reads(monkeypatch):
+    client = _install_cli_fakes(monkeypatch)
+    cli.rollout.canary_report.side_effect = AssertionError("canary read attempted")
+
+    for configured in (None, 18):
+        client.canary_feedback_id.return_value = configured
+        with pytest.raises(SystemExit):
+            cli.main(["canary-report", "--confirm-read-only", "--feedback-id", "17"])
+
+    cli.rollout.canary_report.assert_not_called()
+
+
+def test_supersede_confirmation_is_checked_before_time_or_store(monkeypatch):
+    _install_cli_fakes(monkeypatch)
+    cli.utc_now.side_effect = AssertionError("time read before confirmation")
+    cli.sync_store.apply_quarantine_disposition.side_effect = AssertionError(
+        "store called before confirmation"
+    )
+
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "quarantine-disposition",
+                "--attempt-id",
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "--disposition",
+                "supersede-and-retry",
+                "--reviewer",
+                "Human Operator",
+            ]
+        )
+
+
+def test_cli_outer_boundary_never_prints_operational_exception_text(monkeypatch, capsys):
+    client = _install_cli_fakes(monkeypatch)
+    client.inspect_target.side_effect = RuntimeError(
+        "https://secret.invalid private-message api-key-value"
+    )
+    cli.rollout.preflight.side_effect = client.inspect_target.side_effect
+
+    with pytest.raises(SystemExit) as caught:
+        cli.main(["preflight", "--confirm-read-only"])
+
+    assert str(caught.value) == "feedback rollout command failed safely"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    captured = capsys.readouterr()
+    assert "secret" not in captured.out
+    assert "secret" not in captured.err
+
+
+def test_cli_serializer_rejects_unapproved_dataclasses_and_mapping_keys():
+    manifest = {
+        "fields": {
+            "x_name": "private feedback",
+            "x_studio_source_id": "GPI-PM-FB-17",
+            "x_studio_source": SOURCE_VALUE,
+            "x_studio_date_start": "2026-08-20",
+            "x_studio_type": "Digital",
+            "x_studio_status": "Requested",
+        },
+        "binary_evidence": {},
+    }
+    digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    attempt = verified_attempt(
+        manifest=manifest,
+        manifest_digest=digest,
+        binaries={},
+    )
+    evidence = sync_store.VerifiedCanaryEvidence(
+        feedback_id=17,
+        projection_version=3,
+        remote_id=901,
+        attempt=attempt,
+    )
+
+    for unsafe in (attempt, evidence, {"private_key": "private feedback"}):
+        with pytest.raises(ValueError, match="unsafe"):
+            cli._json_value(unsafe)
+
+
+def test_canary_report_uses_only_exact_verified_saved_projection_evidence(monkeypatch):
+    manifest, digest, binaries = (
+        {
+            "fields": {
+                "x_name": "private feedback",
+                "x_studio_source_id": "GPI-PM-FB-17",
+                "x_studio_source": SOURCE_VALUE,
+                "x_studio_date_start": "2026-08-20",
+                "x_studio_type": "Digital",
+                "x_studio_status": "Requested",
+            },
+            "binary_evidence": {},
+        },
+        None,
+        {},
+    )
+    encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    digest = hashlib.sha256(encoded.encode()).hexdigest()
+    saved_attempt = verified_attempt(
+        manifest=manifest,
+        manifest_digest=digest,
+        binaries=binaries,
+    )
+    evidence = sync_store.VerifiedCanaryEvidence(
+        feedback_id=17,
+        projection_version=3,
+        remote_id=901,
+        attempt=saved_attempt,
+    )
+    events = []
+
+    class CanaryClient:
+        def verify_target_identity(self):
+            events.append("target")
+            return ImprovementContract(start_type="date", stop_type="date")
+
+        def find_exact(self, source_id):
+            events.append(("compound", source_id))
+            return [
+                {
+                    "id": 901,
+                    "x_studio_source": SOURCE_VALUE,
+                    "x_studio_source_id": "GPI-PM-FB-17",
+                }
+            ]
+
+        def read_improvement(self, remote_id, fields, *, full_binary):
+            events.append(("readback", remote_id, tuple(fields), full_binary))
+            return {"id": 901, **manifest["fields"]}
+
+    monkeypatch.setattr(
+        sync_store,
+        "load_verified_canary_evidence",
+        lambda feedback_id: events.append(("local", feedback_id)) or evidence,
+    )
+    image_read = MagicMock(return_value=MappingProxyType({}))
+    monkeypatch.setattr(feedback_store, "attempt_image_snapshot", image_read)
+
+    report = cli.rollout.canary_report(feedback_id=17, client=CanaryClient())
+
+    assert report == cli.rollout.CanaryReport(
+        feedback_id=17,
+        projection_version=3,
+        target_identity_ok=True,
+        synchronized=True,
+        verified_attempt=True,
+        compound_match_count=1,
+        compound_matches_saved=True,
+        readback_matches=True,
+    )
+    assert events[0] == "target"
+    assert events[1] == ("local", 17)
+    assert events[2] == ("compound", "GPI-PM-FB-17")
+    assert events[3][0] == "readback"
+    assert events[3][1] == 901
+    assert set(events[3][2]) == set(manifest["fields"])
+    assert events[3][3] is True
+    assert events[4] == ("local", 17)
+    image_read.assert_not_called()
+    assert "private feedback" not in repr(report)
+    assert "901" not in repr(report)
+
+
+@pytest.mark.parametrize(
+    "invalid_contract",
+    [
+        object(),
+        ImprovementContract(start_type="text", stop_type="date"),
+        ImprovementContract(start_type="date", stop_type="text"),
+    ],
+)
+def test_canary_report_requires_exact_fresh_improvement_contract_before_local_read(
+    monkeypatch, invalid_contract
+):
+    local_read = MagicMock(side_effect=AssertionError("local evidence read attempted"))
+    monkeypatch.setattr(sync_store, "load_verified_canary_evidence", local_read)
+    client = MagicMock()
+    client.verify_target_identity.return_value = invalid_contract
+
+    with pytest.raises(ContractError, match="contract"):
+        cli.rollout.canary_report(feedback_id=17, client=client)
+
+    local_read.assert_not_called()
+
+
+def test_canary_report_validates_saved_dates_against_fresh_contract_before_remote_reads(
+    monkeypatch,
+):
+    manifest = {
+        "fields": {
+            "x_name": "private feedback",
+            "x_studio_source_id": "GPI-PM-FB-17",
+            "x_studio_source": SOURCE_VALUE,
+            "x_studio_date_start": "2026-08-20",
+            "x_studio_type": "Digital",
+            "x_studio_status": "Requested",
+        },
+        "binary_evidence": {},
+    }
+    digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    evidence = sync_store.VerifiedCanaryEvidence(
+        feedback_id=17,
+        projection_version=3,
+        remote_id=901,
+        attempt=verified_attempt(manifest=manifest, manifest_digest=digest, binaries={}),
+    )
+    monkeypatch.setattr(sync_store, "load_verified_canary_evidence", lambda _value: evidence)
+    client = MagicMock()
+    client.verify_target_identity.return_value = ImprovementContract(
+        start_type="datetime", stop_type="date"
+    )
+    client.find_exact.side_effect = AssertionError("compound read attempted")
+
+    with pytest.raises(ContractError, match="date"):
+        cli.rollout.canary_report(feedback_id=17, client=client)
+
+    client.find_exact.assert_not_called()
+    client.read_improvement.assert_not_called()
+
+
+def test_canary_report_rechecks_exact_local_authority_after_remote_readback(monkeypatch):
+    manifest = {
+        "fields": {
+            "x_name": "private feedback",
+            "x_studio_source_id": "GPI-PM-FB-17",
+            "x_studio_source": SOURCE_VALUE,
+            "x_studio_date_start": "2026-08-20",
+            "x_studio_type": "Digital",
+            "x_studio_status": "Requested",
+        },
+        "binary_evidence": {},
+    }
+    digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    first = sync_store.VerifiedCanaryEvidence(
+        feedback_id=17,
+        projection_version=3,
+        remote_id=901,
+        attempt=verified_attempt(manifest=manifest, manifest_digest=digest, binaries={}),
+    )
+    advanced = sync_store.VerifiedCanaryEvidence(
+        feedback_id=17,
+        projection_version=4,
+        remote_id=901,
+        attempt=verified_attempt(
+            manifest=manifest,
+            manifest_digest=digest,
+            binaries={},
+            projection_version=4,
+            attempt_id=UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+        ),
+    )
+    local_read = MagicMock(side_effect=[first, advanced])
+    monkeypatch.setattr(sync_store, "load_verified_canary_evidence", local_read)
+    client = MagicMock()
+    client.verify_target_identity.return_value = ImprovementContract(
+        start_type="date", stop_type="date"
+    )
+    client.find_exact.return_value = [
+        {
+            "id": 901,
+            "x_studio_source": SOURCE_VALUE,
+            "x_studio_source_id": "GPI-PM-FB-17",
+        }
+    ]
+    client.read_improvement.return_value = {"id": 901, **manifest["fields"]}
+
+    with pytest.raises(sync_store.StateTransitionError, match="changed"):
+        cli.rollout.canary_report(feedback_id=17, client=client)
+
+    assert local_read.call_args_list == [call(17), call(17)]
+
+
+def test_canary_report_rejects_boolean_compound_count():
+    with pytest.raises(ValueError, match="compound match count"):
+        cli.rollout.CanaryReport(
+            feedback_id=17,
+            projection_version=3,
+            target_identity_ok=True,
+            synchronized=True,
+            verified_attempt=True,
+            compound_match_count=True,
+            compound_matches_saved=True,
+            readback_matches=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "matches",
+    [
+        [],
+        [
+            {
+                "id": 901,
+                "x_studio_source": SOURCE_VALUE,
+                "x_studio_source_id": "GPI-PM-FB-17",
+            },
+            {
+                "id": 902,
+                "x_studio_source": SOURCE_VALUE,
+                "x_studio_source_id": "GPI-PM-FB-17",
+            },
+        ],
+        [
+            {
+                "id": 902,
+                "x_studio_source": SOURCE_VALUE,
+                "x_studio_source_id": "GPI-PM-FB-17",
+            }
+        ],
+    ],
+)
+def test_canary_report_fails_closed_on_missing_duplicate_or_wrong_saved_association(
+    monkeypatch, matches
+):
+    manifest, digest, binaries = (
+        {
+            "fields": {
+                "x_name": "private",
+                "x_studio_source_id": "GPI-PM-FB-17",
+                "x_studio_source": SOURCE_VALUE,
+                "x_studio_date_start": "2026-08-20",
+                "x_studio_type": "Digital",
+                "x_studio_status": "Requested",
+            },
+            "binary_evidence": {},
+        },
+        "",
+        {},
+    )
+    digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    attempt = verified_attempt(
+        manifest=manifest,
+        manifest_digest=digest,
+        binaries=binaries,
+    )
+    monkeypatch.setattr(
+        sync_store,
+        "load_verified_canary_evidence",
+        lambda _feedback_id: sync_store.VerifiedCanaryEvidence(
+            feedback_id=17,
+            projection_version=3,
+            remote_id=901,
+            attempt=attempt,
+        ),
+    )
+    readback = MagicMock(side_effect=AssertionError("readback attempted"))
+    client = MagicMock()
+    client.verify_target_identity.return_value = ImprovementContract(
+        start_type="date", stop_type="date"
+    )
+    client.find_exact.return_value = matches
+    client.read_improvement = readback
+
+    with pytest.raises((ContractError, TargetIdentityError)):
+        cli.rollout.canary_report(feedback_id=17, client=client)
+
+    readback.assert_not_called()
+
+
+def test_canary_report_fails_before_local_read_when_fresh_target_identity_fails(
+    monkeypatch,
+):
+    local_read = MagicMock(side_effect=AssertionError("local evidence read attempted"))
+    monkeypatch.setattr(sync_store, "load_verified_canary_evidence", local_read)
+    client = MagicMock()
+    client.verify_target_identity.side_effect = TargetIdentityError("fixed mismatch")
+
+    with pytest.raises(TargetIdentityError):
+        cli.rollout.canary_report(feedback_id=17, client=client)
+
+    local_read.assert_not_called()
+
+
+def test_canary_report_rejects_fresh_readback_mismatch_from_saved_manifest(monkeypatch):
+    manifest = {
+        "fields": {
+            "x_name": "saved private value",
+            "x_studio_source_id": "GPI-PM-FB-17",
+            "x_studio_source": SOURCE_VALUE,
+            "x_studio_date_start": "2026-08-20",
+            "x_studio_type": "Digital",
+            "x_studio_status": "Requested",
+        },
+        "binary_evidence": {},
+    }
+    digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    attempt = verified_attempt(
+        manifest=manifest,
+        manifest_digest=digest,
+        binaries={},
+    )
+    monkeypatch.setattr(
+        sync_store,
+        "load_verified_canary_evidence",
+        lambda _feedback_id: sync_store.VerifiedCanaryEvidence(
+            feedback_id=17,
+            projection_version=3,
+            remote_id=901,
+            attempt=attempt,
+        ),
+    )
+    client = MagicMock()
+    client.verify_target_identity.return_value = ImprovementContract(
+        start_type="date", stop_type="date"
+    )
+    client.find_exact.return_value = [
+        {
+            "id": 901,
+            "x_studio_source": SOURCE_VALUE,
+            "x_studio_source_id": "GPI-PM-FB-17",
+        }
+    ]
+    client.read_improvement.return_value = {
+        "id": 901,
+        **manifest["fields"],
+        "x_name": "different private value",
+    }
+
+    with pytest.raises(ReadbackMismatch):
+        cli.rollout.canary_report(feedback_id=17, client=client)
+
+
+def test_canary_report_rejects_changed_saved_binary_before_remote_reads(monkeypatch):
+    raw = b"saved-image"
+    digest_value = hashlib.sha256(raw).hexdigest()
+    manifest = {
+        "fields": {
+            "x_name": "saved private value",
+            "x_studio_source_id": "GPI-PM-FB-17",
+            "x_studio_source": SOURCE_VALUE,
+            "x_studio_date_start": "2026-08-20",
+            "x_studio_type": "Digital",
+            "x_studio_status": "Requested",
+        },
+        "binary_evidence": {
+            "x_studio_image": {
+                "sha256": digest_value,
+                "byte_length": len(raw),
+            }
+        },
+    }
+    digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    attempt = verified_attempt(
+        manifest=manifest,
+        manifest_digest=digest,
+        binaries=manifest["binary_evidence"],
+    )
+    monkeypatch.setattr(
+        sync_store,
+        "load_verified_canary_evidence",
+        lambda _feedback_id: sync_store.VerifiedCanaryEvidence(
+            feedback_id=17,
+            projection_version=3,
+            remote_id=901,
+            attempt=attempt,
+        ),
+    )
+    monkeypatch.setattr(
+        feedback_store,
+        "attempt_image_snapshot",
+        MagicMock(side_effect=feedback_store.ProjectionSnapshotUnavailable("changed")),
+    )
+    client = MagicMock()
+    client.verify_target_identity.return_value = ImprovementContract(
+        start_type="date", stop_type="date"
+    )
+
+    with pytest.raises(ContractError, match="binary evidence"):
+        cli.rollout.canary_report(feedback_id=17, client=client)
+
+    client.find_exact.assert_not_called()
+    client.read_improvement.assert_not_called()
+
+
+def test_task_11_runbook_environment_readme_and_patch_note_are_complete_and_dark():
+    root = Path(__file__).resolve().parents[1]
+    runbook = (root / "docs/odoo-2s-feedback-operations.md").read_text()
+    env_example = (root / ".env.example").read_text()
+    readme = (root / "README.md").read_text()
+    changelog = (root / "CHANGELOG.md").read_text()
+
+    numbered_sections = [line for line in runbook.splitlines() if line.startswith("## ")]
+    assert len(numbered_sections) == 16
+    assert "fresh retry budget" in runbook
+    assert "`keep` does not reset that budget" in runbook
+    required_phrases = (
+        "GPI Plant Manager",
+        "preflight --confirm-read-only",
+        "dry-run --confirm-read-only",
+        "ODOO_IMPROVEMENTS_CANARY_FEEDBACK_ID",
+        "migrate-legacy",
+        "enqueue-history",
+        "version lag",
+        "matching values",
+        "never delete or archive",
+        "unproven",
+    )
+    for phrase in required_phrases:
+        assert phrase.casefold() in runbook.casefold()
+    for name in (
+        "ODOO_IMPROVEMENTS_URL",
+        "ODOO_IMPROVEMENTS_DB",
+        "ODOO_IMPROVEMENTS_LOGIN",
+        "ODOO_IMPROVEMENTS_API_KEY",
+        "ODOO_IMPROVEMENTS_EXPECTED_DATABASE_UUID",
+        "ODOO_IMPROVEMENTS_EXPECTED_COMPANY",
+        "ODOO_SHARED_REPORTING_WRITE_ENABLED",
+        "ODOO_IMPROVEMENTS_WRITE_ENABLED",
+        "ODOO_IMPROVEMENTS_CANARY_FEEDBACK_ID",
+    ):
+        assert f"{name}=" in env_example
+    assert "docs/odoo-2s-feedback-operations.md" in readme
+    assert "### Shared improvements connection is safely off" in changelog
+    assert (
+        "Plant Manager is ready to share feedback with the improvements list, "
+        "but the connection starts off."
+    ) in changelog
+    assert "ODOO_SHARED_REPORTING_WRITE_ENABLED=true" not in runbook
+    assert "ODOO_IMPROVEMENTS_WRITE_ENABLED=true" not in runbook

@@ -62,6 +62,8 @@ Spanish skill level is 3 see personalized Timeclock screens Spanish-first.
 - `src/zira_probe/` — standalone Zira API capability-probe CLI; its
   `client.py` is also the dashboard's Zira client.
 - `docs/object-api.md` — server-to-server Odoo-like API for internal apps.
+- `docs/odoo-2s-feedback-operations.md` — approval and safety runbook for the
+  one-way shared feedback mirror.
 - `docs/superpowers/` — design specs and implementation plans.
 
 ## Automatic schedule rotations

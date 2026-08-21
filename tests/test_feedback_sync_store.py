@@ -221,6 +221,35 @@ def attempt_row(**changes) -> dict[str, object]:
     return row
 
 
+def verified_canary_row(**changes) -> dict[str, object]:
+    settled = aware_now()
+    row = attempt_row(
+        state="verified",
+        projection_version=3,
+        remote_id=901,
+        dispatch_marked_at=settled - timedelta(seconds=3),
+        rpc_succeeded_at=settled - timedelta(seconds=2),
+        readback_at=settled,
+        settled_at=settled,
+        sync_desired_version=3,
+        sync_last_synced_version=3,
+        sync_remote_id=901,
+        sync_state="idle",
+        sync_claim_owner=None,
+        sync_claim_token=None,
+        sync_claim_expires_at=None,
+        sync_active_attempt_id=None,
+        sync_attempt_count=0,
+        sync_quarantine_reason=None,
+        sync_quarantined_at=None,
+        sync_last_error_class=None,
+        sync_last_error_summary=None,
+        feedback_projection_version=3,
+    )
+    row.update(changes)
+    return row
+
+
 def owned_attempt_row(*, state: str, desired_version: int = 1, **changes):
     row = attempt_row(state=state)
     row.update(
@@ -1349,6 +1378,620 @@ def test_recover_expired_rpc_succeeded_requires_exact_attempt_remote_identity(
     with pytest.raises(store.StateTransitionError):
         store.recover_expired_claims(aware_now(), limit=1)
     assert len(cursor.executions) == 1
+    assert_rollback(cursor)
+
+
+def quarantined_operator_row(**changes) -> dict[str, object]:
+    row = {
+        "feedback_id": 17,
+        "desired_version": 3,
+        "last_synced_version": 2,
+        "odoo_improvement_id": 77,
+        "due_at": aware_now() + timedelta(minutes=10),
+        "attempt_count": 2,
+        "sync_state": "quarantined",
+        "claim_owner": None,
+        "claim_token": None,
+        "claim_expires_at": None,
+        "active_attempt_id": ATTEMPT_ID,
+        "quarantine_reason": "ambiguous_mutation",
+        "quarantined_at": aware_now(),
+        "attempt_id": ATTEMPT_ID,
+        "attempt_feedback_id": 17,
+        "attempt_projection_version": 3,
+        "attempt_state": "ambiguous",
+        "attempt_remote_id": 77,
+        "feedback_projection_version": 3,
+        "feedback_status": "requested",
+        "feedback_lifecycle_origin": "local",
+    }
+    row.update(changes)
+    return row
+
+
+def test_quarantine_listing_is_frozen_bounded_ordered_and_privacy_safe(monkeypatch):
+    rows = [
+        {
+            "feedback_id": 17,
+            "attempt_id": ATTEMPT_ID,
+            "quarantine_reason": "ambiguous_mutation",
+            "sync_state": "quarantined",
+            "quarantined_at": aware_now(),
+            "attempt_count": 2,
+        },
+        {
+            "feedback_id": 18,
+            "attempt_id": None,
+            "quarantine_reason": "duplicate_compound_identity",
+            "sync_state": "quarantined",
+            "quarantined_at": aware_now() + timedelta(seconds=1),
+            "attempt_count": 0,
+        },
+    ]
+    cursor = use_cursor(monkeypatch, rows)
+
+    result = store.list_quarantined(limit=100)
+
+    assert result == (
+        store.QuarantineItem(
+            feedback_id=17,
+            attempt_id=ATTEMPT_ID,
+            reason="ambiguous_mutation",
+            state="quarantined",
+            quarantined_at=aware_now(),
+            attempt_count=2,
+        ),
+        store.QuarantineItem(
+            feedback_id=18,
+            attempt_id=None,
+            reason="duplicate_compound_identity",
+            state="quarantined",
+            quarantined_at=aware_now() + timedelta(seconds=1),
+            attempt_count=0,
+        ),
+    )
+    sql_text = normalized_sql(cursor, 0)
+    assert "ORDER BY quarantined_at, feedback_id" in sql_text
+    assert "LIMIT %s" in sql_text
+    assert cursor.executions[0][1] == (100,)
+    selected = sql_text.split("FROM", 1)[0].casefold()
+    for forbidden in (
+        "reviewer",
+        "manifest",
+        "message",
+        "submitter",
+        "odoo_improvement_id",
+        "claim_owner",
+        "claim_token",
+        "last_error",
+    ):
+        assert forbidden not in selected
+    with pytest.raises(FrozenInstanceError):
+        result[0].state = "idle"
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [
+            {
+                "feedback_id": 18,
+                "attempt_id": None,
+                "quarantine_reason": "duplicate_compound_identity",
+                "sync_state": "quarantined",
+                "quarantined_at": aware_now(),
+                "attempt_count": 0,
+            },
+            {
+                "feedback_id": 17,
+                "attempt_id": None,
+                "quarantine_reason": "duplicate_compound_identity",
+                "sync_state": "quarantined",
+                "quarantined_at": aware_now(),
+                "attempt_count": 0,
+            },
+        ],
+        [
+            {
+                "feedback_id": 17,
+                "attempt_id": None,
+                "quarantine_reason": "caller supplied reason",
+                "sync_state": "quarantined",
+                "quarantined_at": aware_now(),
+                "attempt_count": 0,
+            }
+        ],
+        [quarantined_operator_row(sync_state="idle")],
+    ],
+)
+def test_quarantine_listing_rejects_unordered_or_malformed_database_rows(monkeypatch, rows):
+    use_cursor(monkeypatch, rows)
+    with pytest.raises(store.StateTransitionError):
+        store.list_quarantined(limit=100)
+
+
+@pytest.mark.parametrize("limit", [None, True, 0, 101, 1.0, "10"])
+def test_quarantine_listing_rejects_nonexact_limits_before_database(monkeypatch, limit):
+    database = MagicMock(side_effect=AssertionError("database opened"))
+    monkeypatch.setattr(store.db, "cursor", database)
+    with pytest.raises(ValueError):
+        store.list_quarantined(limit=limit)
+    database.assert_not_called()
+
+
+def test_keep_quarantine_appends_one_audit_without_changing_sync_or_attempt(monkeypatch):
+    cursor = use_cursor(
+        monkeypatch,
+        [quarantined_operator_row()],
+        [{"id": 1, "attempt_id": ATTEMPT_ID, "action": "keep"}],
+    )
+
+    result = store.apply_quarantine_disposition(
+        attempt_id=ATTEMPT_ID,
+        disposition="keep",
+        reviewer="  Human Operator  ",
+        human_review_confirmed=False,
+        now=aware_now(),
+    )
+
+    assert result == store.QuarantineDispositionResult(
+        feedback_id=17,
+        attempt_id=ATTEMPT_ID,
+        disposition="keep",
+        state="quarantined",
+        desired_version=3,
+        warning=None,
+    )
+    assert len(cursor.executions) == 2
+    assert "FOR UPDATE OF f, s, a" in normalized_sql(cursor, 0)
+    assert "INSERT INTO feedback_odoo_operator_actions" in normalized_sql(cursor, 1)
+    assert cursor.executions[1][1][2] == "Human Operator"
+    assert "Human Operator" not in repr(result)
+
+
+@pytest.mark.parametrize("attempt_state", ["prepared", "definitive_failed"])
+def test_release_definitive_retains_attempt_and_leaves_same_version_idle_due(
+    monkeypatch, attempt_state
+):
+    locked = quarantined_operator_row(
+        attempt_state=attempt_state,
+        quarantine_reason="retry_exhausted",
+        attempt_count=store.MAX_MUTATION_ATTEMPTS,
+    )
+    cursor = use_cursor(
+        monkeypatch,
+        [locked],
+        [
+            {
+                "id": 1,
+                "attempt_id": ATTEMPT_ID,
+                "action": "release_definitive",
+            }
+        ],
+        [
+            {
+                "feedback_id": 17,
+                "desired_version": 3,
+                "last_synced_version": 2,
+                "state": "idle",
+                "active_attempt_id": None,
+                "due_at": aware_now(),
+                "attempt_count": 0,
+            }
+        ],
+    )
+
+    result = store.apply_quarantine_disposition(
+        attempt_id=ATTEMPT_ID,
+        disposition="release-definitive",
+        reviewer="Human Operator",
+        human_review_confirmed=False,
+        now=aware_now(),
+    )
+
+    assert result.state == "idle"
+    assert result.desired_version == 3
+    statements = [normalized_sql(cursor, index) for index in range(len(cursor.executions))]
+    assert all("UPDATE feedback_odoo_attempts" not in sql for sql in statements)
+    assert all("DELETE" not in sql for sql in statements)
+    update = statements[2]
+    set_clause = update.split("SET", 1)[1].split("WHERE", 1)[0]
+    assert "state = 'idle'" in set_clause
+    assert "active_attempt_id = NULL" in set_clause
+    assert "due_at = %s" in set_clause
+    assert "attempt_count = 0" in set_clause
+    for preserved in ("desired_version", "last_synced_version", "odoo_improvement_id"):
+        assert preserved not in set_clause
+    assert "attempt_count" in update.split("RETURNING", 1)[1]
+
+
+@pytest.mark.parametrize(
+    "attempt_state",
+    ["dispatch_marked", "rpc_succeeded", "ambiguous", "verified"],
+)
+def test_release_definitive_rejects_unsafe_attempt_states_and_rolls_back(
+    monkeypatch, attempt_state
+):
+    cursor = use_cursor(monkeypatch, [quarantined_operator_row(attempt_state=attempt_state)])
+    with pytest.raises(store.StateTransitionError):
+        store.apply_quarantine_disposition(
+            attempt_id=ATTEMPT_ID,
+            disposition="release-definitive",
+            reviewer="Human Operator",
+            human_review_confirmed=False,
+            now=aware_now(),
+        )
+    assert len(cursor.executions) == 1
+    assert_rollback(cursor)
+
+
+def test_supersede_ambiguous_advances_feedback_and_desire_exactly_once(monkeypatch):
+    cursor = use_cursor(
+        monkeypatch,
+        [quarantined_operator_row(attempt_state="ambiguous")],
+        [
+            {
+                "id": 1,
+                "attempt_id": ATTEMPT_ID,
+                "action": "supersede_and_retry",
+            }
+        ],
+        [{"id": 17, "projection_version": 4}],
+        [
+            {
+                "feedback_id": 17,
+                "desired_version": 4,
+                "last_synced_version": 2,
+                "state": "idle",
+                "active_attempt_id": None,
+                "due_at": aware_now(),
+                "attempt_count": 0,
+            }
+        ],
+    )
+
+    result = store.apply_quarantine_disposition(
+        attempt_id=ATTEMPT_ID,
+        disposition="supersede-and-retry",
+        reviewer="Human Operator",
+        human_review_confirmed=True,
+        now=aware_now(),
+    )
+
+    assert result == store.QuarantineDispositionResult(
+        feedback_id=17,
+        attempt_id=ATTEMPT_ID,
+        disposition="supersede-and-retry",
+        state="idle",
+        desired_version=4,
+        warning=store.DUPLICATE_RISK_WARNING,
+    )
+    statements = [normalized_sql(cursor, index) for index in range(len(cursor.executions))]
+    assert "projection_version = projection_version + 1" in statements[2]
+    assert "desired_version = desired_version + 1" in statements[3]
+    assert all("UPDATE feedback_odoo_attempts" not in sql for sql in statements)
+    assert all("DELETE" not in sql for sql in statements)
+    sync_set = statements[3].split("SET", 1)[1].split("WHERE", 1)[0]
+    assert "odoo_improvement_id" not in sync_set
+    assert "last_synced_version" not in sync_set
+    assert "active_attempt_id = NULL" in sync_set
+    assert "attempt_count = 0" in sync_set
+    assert "attempt_count" in statements[3].split("RETURNING", 1)[1]
+
+
+@pytest.mark.parametrize(
+    ("disposition", "attempt_state", "confirmed"),
+    [
+        ("release-definitive", "definitive_failed", False),
+        ("supersede-and-retry", "ambiguous", True),
+    ],
+)
+def test_retry_disposition_requires_exact_returned_sync_fence_and_fresh_budget(
+    monkeypatch, disposition, attempt_state, confirmed
+):
+    locked = quarantined_operator_row(
+        attempt_state=attempt_state,
+        quarantine_reason=(
+            "retry_exhausted" if disposition == "release-definitive" else "ambiguous_mutation"
+        ),
+        attempt_count=store.MAX_MUTATION_ATTEMPTS,
+    )
+    desired = 4 if disposition == "supersede-and-retry" else 3
+    results = [
+        [locked],
+        [{"id": 1, "attempt_id": ATTEMPT_ID, "action": disposition.replace("-", "_")}],
+    ]
+    if disposition == "supersede-and-retry":
+        results.append([{"id": 17, "projection_version": desired}])
+    results.append(
+        [
+            {
+                "feedback_id": 17,
+                "desired_version": desired,
+                "last_synced_version": 1,
+                "state": "idle",
+                "active_attempt_id": None,
+                "due_at": aware_now(),
+                "attempt_count": 0,
+            }
+        ]
+    )
+    cursor = use_cursor(monkeypatch, *results)
+
+    with pytest.raises(store.StateTransitionError, match="different state"):
+        store.apply_quarantine_disposition(
+            attempt_id=ATTEMPT_ID,
+            disposition=disposition,
+            reviewer="Human Operator",
+            human_review_confirmed=confirmed,
+            now=aware_now(),
+        )
+
+    assert_rollback(cursor)
+
+
+@pytest.mark.parametrize(
+    ("disposition", "attempt_state", "confirmed"),
+    [
+        ("release-definitive", "definitive_failed", False),
+        ("supersede-and-retry", "ambiguous", True),
+    ],
+)
+def test_retry_disposition_rejects_nonzero_returned_retry_budget(
+    monkeypatch, disposition, attempt_state, confirmed
+):
+    locked = quarantined_operator_row(
+        attempt_state=attempt_state,
+        quarantine_reason=(
+            "retry_exhausted" if disposition == "release-definitive" else "ambiguous_mutation"
+        ),
+        attempt_count=store.MAX_MUTATION_ATTEMPTS,
+    )
+    desired = 4 if disposition == "supersede-and-retry" else 3
+    results = [
+        [locked],
+        [{"id": 1, "attempt_id": ATTEMPT_ID, "action": disposition.replace("-", "_")}],
+    ]
+    if disposition == "supersede-and-retry":
+        results.append([{"id": 17, "projection_version": desired}])
+    results.append(
+        [
+            {
+                "feedback_id": 17,
+                "desired_version": desired,
+                "last_synced_version": 2,
+                "state": "idle",
+                "active_attempt_id": None,
+                "due_at": aware_now(),
+                "attempt_count": 1,
+            }
+        ]
+    )
+    cursor = use_cursor(monkeypatch, *results)
+
+    with pytest.raises(store.StateTransitionError, match="different state"):
+        store.apply_quarantine_disposition(
+            attempt_id=ATTEMPT_ID,
+            disposition=disposition,
+            reviewer="Human Operator",
+            human_review_confirmed=confirmed,
+            now=aware_now(),
+        )
+
+    assert_rollback(cursor)
+
+
+def test_supersede_confirmation_is_authoritative_in_store_before_database(monkeypatch):
+    database = MagicMock(side_effect=AssertionError("database opened"))
+    monkeypatch.setattr(store.db, "cursor", database)
+
+    with pytest.raises(ValueError, match="human review"):
+        store.apply_quarantine_disposition(
+            attempt_id=ATTEMPT_ID,
+            disposition="supersede-and-retry",
+            reviewer="Human Operator",
+            human_review_confirmed=False,
+            now=aware_now(),
+        )
+
+    database.assert_not_called()
+
+
+def test_supersede_signed_64_max_fails_after_lock_but_before_audit(monkeypatch):
+    cursor = use_cursor(
+        monkeypatch,
+        [
+            quarantined_operator_row(
+                desired_version=MAX_SIGNED_64,
+                last_synced_version=MAX_SIGNED_64 - 1,
+                attempt_projection_version=MAX_SIGNED_64,
+                feedback_projection_version=MAX_SIGNED_64,
+            )
+        ],
+    )
+
+    with pytest.raises(store.StateTransitionError, match="cannot advance"):
+        store.apply_quarantine_disposition(
+            attempt_id=ATTEMPT_ID,
+            disposition="supersede-and-retry",
+            reviewer="Human Operator",
+            human_review_confirmed=True,
+            now=aware_now(),
+        )
+
+    assert len(cursor.executions) == 1
+    assert "INSERT INTO feedback_odoo_operator_actions" not in normalized_sql(cursor, 0)
+    assert_rollback(cursor)
+
+
+@pytest.mark.parametrize(
+    "reviewer",
+    ["", "   ", "name\nnext", "name\tvalue", "x" * 129, 17, None],
+)
+def test_disposition_rejects_hostile_reviewer_before_database(monkeypatch, reviewer):
+    database = MagicMock(side_effect=AssertionError("database opened"))
+    monkeypatch.setattr(store.db, "cursor", database)
+
+    with pytest.raises(ValueError, match="reviewer"):
+        store.apply_quarantine_disposition(
+            attempt_id=ATTEMPT_ID,
+            disposition="keep",
+            reviewer=reviewer,
+            human_review_confirmed=False,
+            now=aware_now(),
+        )
+
+    database.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"active_attempt_id": UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")},
+        {"attempt_feedback_id": 18},
+        {"sync_state": "idle"},
+        {"claim_owner": "worker-a"},
+        {"feedback_projection_version": 2},
+        {"desired_version": MAX_SIGNED_64},
+    ],
+)
+def test_disposition_rejects_malformed_or_changed_locked_authority(monkeypatch, changes):
+    cursor = use_cursor(monkeypatch, [quarantined_operator_row(**changes)])
+    with pytest.raises(store.StateTransitionError):
+        store.apply_quarantine_disposition(
+            attempt_id=ATTEMPT_ID,
+            disposition="supersede-and-retry",
+            reviewer="Human Operator",
+            human_review_confirmed=True,
+            now=aware_now(),
+        )
+    assert len(cursor.executions) == 1
+    assert_rollback(cursor)
+
+
+def test_disposition_rolls_back_audit_when_state_update_cardinality_fails(monkeypatch):
+    cursor = use_cursor(
+        monkeypatch,
+        [quarantined_operator_row(attempt_state="definitive_failed")],
+        [
+            {
+                "id": 1,
+                "attempt_id": ATTEMPT_ID,
+                "action": "release_definitive",
+            }
+        ],
+        [],
+    )
+
+    with pytest.raises(store.StateTransitionError):
+        store.apply_quarantine_disposition(
+            attempt_id=ATTEMPT_ID,
+            disposition="release-definitive",
+            reviewer="Human Operator",
+            human_review_confirmed=False,
+            now=aware_now(),
+        )
+
+    assert_rollback(cursor)
+
+
+def test_verified_canary_evidence_uses_one_bounded_exact_join(monkeypatch):
+    row = verified_canary_row()
+    cursor = use_cursor(monkeypatch, [row])
+
+    evidence = store.load_verified_canary_evidence(17)
+
+    assert evidence.feedback_id == 17
+    assert evidence.projection_version == 3
+    assert evidence.remote_id == 901
+    assert evidence.attempt.state == "verified"
+    sql_text = normalized_sql(cursor, 0)
+    assert "s.desired_version = s.last_synced_version" in sql_text
+    assert "f.projection_version = s.last_synced_version" in sql_text
+    assert "a.projection_version = s.last_synced_version" in sql_text
+    assert "a.remote_id = s.odoo_improvement_id" in sql_text
+    assert "a.state = 'verified'" in sql_text
+    for exact_idle_fence in (
+        "s.claim_owner IS NULL",
+        "s.claim_token IS NULL",
+        "s.claim_expires_at IS NULL",
+        "s.active_attempt_id IS NULL",
+        "s.attempt_count = 0",
+        "s.quarantine_reason IS NULL",
+        "s.quarantined_at IS NULL",
+        "s.last_error_class IS NULL",
+        "s.last_error_summary IS NULL",
+        "a.dispatch_marked_at IS NOT NULL",
+        "a.rpc_succeeded_at IS NOT NULL",
+        "a.readback_at IS NOT NULL",
+        "a.settled_at IS NOT NULL",
+        "a.dispatch_marked_at <= a.rpc_succeeded_at",
+        "a.rpc_succeeded_at <= a.readback_at",
+        "a.readback_at = a.settled_at",
+    ):
+        assert exact_idle_fence in sql_text
+    assert "LIMIT 2" in sql_text
+    assert "private" not in repr(evidence)
+    assert "901" not in repr(evidence)
+
+
+@pytest.mark.parametrize("rows", [[], [attempt_row(state="verified")] * 2])
+def test_verified_canary_evidence_rejects_missing_or_duplicate_rows(monkeypatch, rows):
+    cursor = use_cursor(monkeypatch, rows)
+    with pytest.raises(store.StateTransitionError):
+        store.load_verified_canary_evidence(17)
+    assert_rollback(cursor)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"dispatch_marked_at": None},
+        {"rpc_succeeded_at": None},
+        {"readback_at": None},
+        {"settled_at": None},
+        {"dispatch_marked_at": datetime(2026, 8, 20, 17, 59, 57)},
+        {
+            "dispatch_marked_at": aware_now() - timedelta(seconds=1),
+            "rpc_succeeded_at": aware_now() - timedelta(seconds=2),
+        },
+        {
+            "readback_at": aware_now() - timedelta(seconds=1),
+            "settled_at": aware_now(),
+        },
+    ],
+)
+def test_verified_canary_evidence_rejects_incomplete_or_impossible_transition_times(
+    monkeypatch, changes
+):
+    cursor = use_cursor(monkeypatch, [verified_canary_row(**changes)])
+
+    with pytest.raises(store.StateTransitionError):
+        store.load_verified_canary_evidence(17)
+
+    assert_rollback(cursor)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"sync_claim_owner": "worker-a"},
+        {"sync_claim_token": CLAIM_TOKEN},
+        {"sync_claim_expires_at": aware_now() + timedelta(minutes=5)},
+        {"sync_active_attempt_id": ATTEMPT_ID},
+        {"sync_attempt_count": 1},
+        {"sync_quarantine_reason": "retry_exhausted"},
+        {"sync_quarantined_at": aware_now()},
+        {"sync_last_error_class": "odoo_fault"},
+        {"sync_last_error_summary": "fixed safe summary"},
+    ],
+)
+def test_verified_canary_evidence_rejects_nonsettled_idle_authority(monkeypatch, changes):
+    cursor = use_cursor(monkeypatch, [verified_canary_row(**changes)])
+
+    with pytest.raises(store.StateTransitionError):
+        store.load_verified_canary_evidence(17)
+
     assert_rollback(cursor)
 
 

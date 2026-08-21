@@ -8,15 +8,21 @@ from datetime import datetime
 from typing import Mapping
 
 from . import feedback_store
+from . import feedback_sync_store as sync_store
+from .feedback_sync import _saved_dates_match_contract
 from .feedback_projection import (
+    BinaryEvidence,
+    Projection,
     build_projection,
     resolve_employee_id,
     source_id_for,
+    verify_readback,
 )
 from .odoo_improvements import (
     SOURCE_VALUE,
     TARGET_FIELDS,
     ContractError,
+    ImprovementContract,
     TargetIdentityError,
     TargetInspection,
 )
@@ -290,6 +296,35 @@ class EnqueueReport:
         next_cursor = _nonnegative_signed_64(self.next_cursor, "history cursor")
         if feedback_ids and next_cursor != feedback_ids[-1]:
             raise ValueError("history cursor must equal the last selected feedback id")
+
+
+@dataclass(frozen=True)
+class CanaryReport:
+    """Privacy-safe proof of one exact verified canary version."""
+
+    feedback_id: int
+    projection_version: int
+    target_identity_ok: bool
+    synchronized: bool
+    verified_attempt: bool
+    compound_match_count: int
+    compound_matches_saved: bool
+    readback_matches: bool
+
+    def __post_init__(self) -> None:
+        _positive_signed_64(self.feedback_id, "feedback id")
+        _positive_signed_64(self.projection_version, "projection version")
+        for value in (
+            self.target_identity_ok,
+            self.synchronized,
+            self.verified_attempt,
+            self.compound_matches_saved,
+            self.readback_matches,
+        ):
+            if value is not True:
+                raise ValueError("canary proof flags must be exactly true")
+        if type(self.compound_match_count) is not int or self.compound_match_count != 1:
+            raise ValueError("canary compound match count must be exactly one")
 
 
 def propose_legacy_status(stage: object) -> str | None:
@@ -739,6 +774,97 @@ def enqueue_history_batch(*, batch_size: int, now: datetime) -> EnqueueReport:
     )
 
 
+def _saved_canary_projection(evidence: sync_store.VerifiedCanaryEvidence) -> Projection:
+    attempt = evidence.attempt
+    manifest = attempt.manifest
+    fields = manifest.get("fields")
+    if type(fields) is not dict:
+        raise ContractError("saved canary projection was malformed")
+    source_id = fields.get("x_studio_source_id")
+    if source_id != source_id_for(evidence.feedback_id):
+        raise ContractError("saved canary source identity was malformed")
+    saved_binaries = attempt.binaries
+    binaries: dict[str, BinaryEvidence] = {}
+    if saved_binaries:
+        try:
+            images = feedback_store.attempt_image_snapshot(
+                evidence.feedback_id,
+                saved_binaries,
+            )
+        except feedback_store.ProjectionSnapshotUnavailable:
+            raise ContractError("saved canary binary evidence was unavailable") from None
+        if set(images) != set(saved_binaries):
+            raise ContractError("saved canary binary evidence was malformed")
+        for field_name, saved in saved_binaries.items():
+            image = images.get(field_name)
+            if (
+                image is None
+                or image.sha256 != saved.get("sha256")
+                or image.byte_length != saved.get("byte_length")
+                or len(image.jpeg_bytes) != image.byte_length
+            ):
+                raise ContractError("saved canary binary evidence changed")
+            binaries[field_name] = BinaryEvidence(
+                jpeg_bytes=bytes(image.jpeg_bytes),
+                sha256=image.sha256,
+                byte_length=image.byte_length,
+            )
+    try:
+        return Projection(
+            source_id=source_id,
+            fields=fields,
+            binaries=binaries,
+            manifest=manifest,
+            manifest_digest=attempt.manifest_digest,
+        )
+    except (TypeError, ValueError):
+        raise ContractError("saved canary projection was malformed") from None
+
+
+def canary_report(*, feedback_id: int, client) -> CanaryReport:
+    """Read back one exact saved verified canary without any mutation path."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    verify_identity = getattr(client, "verify_target_identity", None)
+    if not callable(verify_identity):
+        raise ContractError("client does not support target identity verification")
+    contract = verify_identity()
+    if (
+        type(contract) is not ImprovementContract
+        or contract.start_type not in {"date", "datetime"}
+        or contract.stop_type not in {"date", "datetime"}
+    ):
+        raise ContractError("target identity verification returned a malformed contract")
+    evidence = sync_store.load_verified_canary_evidence(safe_feedback_id)
+    if type(evidence) is not sync_store.VerifiedCanaryEvidence:
+        raise ContractError("verified canary evidence was malformed")
+    projection = _saved_canary_projection(evidence)
+    if not _saved_dates_match_contract(projection, contract):
+        raise ContractError("saved canary dates do not match the current contract")
+    matches = _compound_rows(client.find_exact(projection.source_id), projection.source_id)
+    if len(matches) != 1 or matches[0]["id"] != evidence.remote_id:
+        raise TargetIdentityError("canary compound identity did not match saved authority")
+    read_fields = sorted(set(projection.fields) | set(projection.binaries))
+    remote = client.read_improvement(
+        evidence.remote_id,
+        read_fields,
+        full_binary=True,
+    )
+    verify_readback(projection, remote)
+    refreshed = sync_store.load_verified_canary_evidence(safe_feedback_id)
+    if type(refreshed) is not sync_store.VerifiedCanaryEvidence or refreshed != evidence:
+        raise sync_store.StateTransitionError("verified canary authority changed during readback")
+    return CanaryReport(
+        feedback_id=evidence.feedback_id,
+        projection_version=evidence.projection_version,
+        target_identity_ok=True,
+        synchronized=True,
+        verified_attempt=True,
+        compound_match_count=1,
+        compound_matches_saved=True,
+        readback_matches=True,
+    )
+
+
 def reconciliation_counts() -> dict[str, int]:
     """Return validated local-only counts using only the two exact gate names."""
     gates_open = (
@@ -754,12 +880,14 @@ def reconciliation_counts() -> dict[str, int]:
 
 
 __all__ = [
+    "CanaryReport",
     "DryRunReport",
     "EnqueueReport",
     "LegacyApplyReport",
     "LegacyMigrationReport",
     "PreflightReport",
     "apply_legacy_batch",
+    "canary_report",
     "dry_run_batch",
     "enqueue_history_batch",
     "migrate_legacy_batch",

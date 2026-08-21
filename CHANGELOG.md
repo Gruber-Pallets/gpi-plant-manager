@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-21
 
+### Shared improvements connection is safely off
+
+#### Improvements
+
+- **Plant Manager is ready to share feedback with the improvements list, but the connection starts off.** It will stay off until its safety checks and one test item are approved.
+
 ### Safer shared feedback build
 
 #### Improvements

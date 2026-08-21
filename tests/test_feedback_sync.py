@@ -1412,6 +1412,84 @@ def normalized_sql(cursor, index):
     return " ".join(cursor.executions[index][0].split())
 
 
+def test_released_retry_budget_survives_worker_post_dispatch_gate_failure(monkeypatch, flow):
+    attempt_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    cursor = RecordingCursor(
+        [
+            {
+                "feedback_id": 17,
+                "desired_version": 3,
+                "last_synced_version": 2,
+                "odoo_improvement_id": 77,
+                "due_at": aware_now() + timedelta(minutes=10),
+                "attempt_count": sync_store.MAX_MUTATION_ATTEMPTS,
+                "sync_state": "quarantined",
+                "claim_owner": None,
+                "claim_token": None,
+                "claim_expires_at": None,
+                "active_attempt_id": attempt_id,
+                "quarantine_reason": "retry_exhausted",
+                "quarantined_at": aware_now(),
+                "attempt_id": attempt_id,
+                "attempt_feedback_id": 17,
+                "attempt_projection_version": 3,
+                "attempt_state": "definitive_failed",
+                "attempt_remote_id": 77,
+                "feedback_projection_version": 3,
+                "feedback_status": "requested",
+                "feedback_lifecycle_origin": "local",
+            }
+        ],
+        [{"id": 1, "attempt_id": attempt_id, "action": "release_definitive"}],
+        [
+            {
+                "feedback_id": 17,
+                "desired_version": 3,
+                "last_synced_version": 2,
+                "state": "idle",
+                "active_attempt_id": None,
+                "due_at": aware_now(),
+                "attempt_count": 0,
+            }
+        ],
+    )
+    monkeypatch.setattr(sync_store.db, "cursor", lambda: cursor)
+
+    released = sync_store.apply_quarantine_disposition(
+        attempt_id=attempt_id,
+        disposition="release-definitive",
+        reviewer="Human Operator",
+        human_review_confirmed=False,
+        now=aware_now(),
+    )
+
+    update_set = normalized_sql(cursor, 2).split("SET", 1)[1].split("WHERE", 1)[0]
+    assert "attempt_count = 0" in update_set
+    assert released.state == "idle"
+    released_claim = claim(remote_id=77, version=3, last_synced_version=2, attempt_count=0)
+    update_prepared = attempt(
+        "prepared", mutation_kind="update", remote_id=77, projection_version=3
+    )
+    update_dispatched = attempt(
+        "dispatch_marked", mutation_kind="update", remote_id=77, projection_version=3
+    )
+    flow.prepare.return_value = update_prepared
+    flow.mark_dispatch.return_value = update_dispatched
+
+    def record_fresh_failure(owned, dispatched, error_class, now):
+        assert owned.attempt_count == 0
+        assert error_class == "gate_closed_before_rpc"
+        assert dispatched.state == "dispatch_marked"
+        assert now == aware_now()
+        return "retry_scheduled"
+
+    flow.definitive.side_effect = record_fresh_failure
+    client = FakeClient(write_error=GateClosed("closed after dispatch"), exact_rows=[{"id": 77}])
+
+    assert process_claim(released_claim, client=client, now=aware_now()) == "retry_scheduled"
+    flow.quarantine.assert_not_called()
+
+
 def test_attempt_image_snapshot_is_bounded_detached_and_returns_only_saved_evidence(
     monkeypatch,
 ):

@@ -25,7 +25,9 @@ MAX_MUTATION_ATTEMPTS = 8
 MAX_WORKER_ID_LENGTH = 128
 MAX_SAFE_CLASS_LENGTH = 64
 MAX_SAFE_SUMMARY_LENGTH = 256
+MAX_REVIEWER_LENGTH = 128
 CLAIM_LEASE = timedelta(minutes=5)
+DUPLICATE_RISK_WARNING = "duplicate_risk_requires_remote_review"
 RETRY_DELAYS = (
     timedelta(minutes=1),
     timedelta(minutes=2),
@@ -74,6 +76,11 @@ _QUARANTINE_SUMMARIES = {
     "saved_id_ownership_conflict": "The saved Odoo record no longer matches this feedback.",
     "target_identity_or_contract_mismatch": "The Odoo target or fields changed.",
 }
+_QUARANTINE_REASONS = frozenset({*_QUARANTINE_SUMMARIES, "retry_exhausted"})
+_OPERATOR_ATTEMPT_STATES = frozenset(
+    {"prepared", "dispatch_marked", "rpc_succeeded", "definitive_failed", "ambiguous"}
+)
+_DISPOSITIONS = frozenset({"keep", "release-definitive", "supersede-and-retry"})
 _BINARY_FIELDS = {
     "x_studio_image": ("before_sha256", "before_byte_length"),
     "x_studio_after_image": ("after_sha256", "after_byte_length"),
@@ -441,6 +448,93 @@ class Attempt:
     def binaries(self) -> dict[str, dict[str, object]]:
         """Return detached hash/length evidence; raw image bytes are never stored."""
         return json.loads(self._binaries_json)
+
+
+@dataclass(frozen=True)
+class QuarantineItem:
+    """One privacy-safe bounded operator-list row."""
+
+    feedback_id: int
+    attempt_id: UUID | None
+    reason: str
+    state: str
+    quarantined_at: datetime
+    attempt_count: int
+
+    def __post_init__(self) -> None:
+        _positive_signed_64(self.feedback_id, "feedback id")
+        _optional_uuid(self.attempt_id, "attempt id")
+        if type(self.reason) is not str or self.reason not in _QUARANTINE_REASONS:
+            raise ValueError("quarantine reason is malformed")
+        if self.state != "quarantined":
+            raise ValueError("quarantine state is malformed")
+        _aware_datetime(self.quarantined_at, "quarantine time")
+        _attempt_count(self.attempt_count)
+
+
+@dataclass(frozen=True)
+class QuarantineDispositionResult:
+    """Sanitized result of one local-only reviewed disposition."""
+
+    feedback_id: int
+    attempt_id: UUID
+    disposition: str
+    state: str
+    desired_version: int
+    warning: str | None
+
+    def __post_init__(self) -> None:
+        _positive_signed_64(self.feedback_id, "feedback id")
+        _uuid(self.attempt_id, "attempt id")
+        if type(self.disposition) is not str or self.disposition not in _DISPOSITIONS:
+            raise ValueError("quarantine disposition is malformed")
+        expected_state = "quarantined" if self.disposition == "keep" else "idle"
+        if self.state != expected_state:
+            raise ValueError("quarantine disposition state is malformed")
+        _positive_signed_64(self.desired_version, "desired version")
+        expected_warning = (
+            DUPLICATE_RISK_WARNING if self.disposition == "supersede-and-retry" else None
+        )
+        if self.warning != expected_warning:
+            raise ValueError("quarantine disposition warning is malformed")
+
+
+@dataclass(frozen=True, repr=False)
+class VerifiedCanaryEvidence:
+    """Exact local synchronized authority and its immutable verified attempt."""
+
+    feedback_id: int
+    projection_version: int
+    remote_id: int
+    attempt: Attempt
+
+    def __post_init__(self) -> None:
+        _positive_signed_64(self.feedback_id, "feedback id")
+        _positive_signed_64(self.projection_version, "projection version")
+        _positive_signed_64(self.remote_id, "remote id")
+        if (
+            type(self.attempt) is not Attempt
+            or self.attempt.feedback_id != self.feedback_id
+            or self.attempt.projection_version != self.projection_version
+            or self.attempt.remote_id != self.remote_id
+            or self.attempt.state != "verified"
+        ):
+            raise ValueError("verified canary attempt is malformed")
+        try:
+            dispatch = _aware_datetime(self.attempt.dispatch_marked_at, "dispatch time")
+            rpc_succeeded = _aware_datetime(
+                self.attempt.rpc_succeeded_at,
+                "RPC success time",
+            )
+            readback = _aware_datetime(self.attempt.readback_at, "readback time")
+            settled = _aware_datetime(self.attempt.settled_at, "settlement time")
+        except ValueError:
+            raise ValueError("verified canary transition times are malformed") from None
+        if not dispatch <= rpc_succeeded <= readback or readback != settled:
+            raise ValueError("verified canary transition chronology is malformed")
+
+    def __repr__(self) -> str:
+        return "VerifiedCanaryEvidence(<redacted>)"
 
 
 def _rows(cursor) -> list[Mapping[str, object]]:
@@ -1849,16 +1943,526 @@ def recover_expired_claims(now: datetime, limit: int = 10) -> int:
     return len(expired)
 
 
+def list_quarantined(*, limit: int = 100) -> tuple[QuarantineItem, ...]:
+    """Return at most 100 ordered privacy-safe local quarantine rows."""
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("quarantine list limit must be an integer from 1 through 100")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT feedback_id, active_attempt_id AS attempt_id,
+                   quarantine_reason, state AS sync_state,
+                   quarantined_at, attempt_count
+            FROM feedback_odoo_sync
+            WHERE state = 'quarantined'
+            ORDER BY quarantined_at, feedback_id
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        rows = _rows(cursor)
+    if len(rows) > limit:
+        raise StateTransitionError("database exceeded the quarantine list bound")
+    items: list[QuarantineItem] = []
+    previous: tuple[datetime, int] | None = None
+    for row in rows:
+        try:
+            item = QuarantineItem(
+                feedback_id=row.get("feedback_id"),
+                attempt_id=row.get("attempt_id"),
+                reason=row.get("quarantine_reason"),
+                state=row.get("sync_state"),
+                quarantined_at=row.get("quarantined_at"),
+                attempt_count=row.get("attempt_count"),
+            )
+        except (TypeError, ValueError):
+            raise StateTransitionError("database returned malformed quarantine state") from None
+        order = (item.quarantined_at, item.feedback_id)
+        if previous is not None and order <= previous:
+            raise StateTransitionError("database returned unordered quarantine state")
+        previous = order
+        items.append(item)
+    return tuple(items)
+
+
+def _reviewer(value: object) -> str:
+    if type(value) is not str:
+        raise ValueError("reviewer is malformed")
+    cleaned = value.strip()
+    if (
+        not cleaned
+        or len(cleaned) > MAX_REVIEWER_LENGTH
+        or not cleaned.isprintable()
+        or any(character in cleaned for character in "\r\n\t")
+    ):
+        raise ValueError("reviewer is malformed")
+    return cleaned
+
+
+def _lock_quarantined_operator_attempt(cursor, attempt_id: UUID) -> dict[str, object]:
+    cursor.execute(
+        """
+        SELECT s.feedback_id, s.desired_version, s.last_synced_version,
+               s.odoo_improvement_id, s.due_at, s.attempt_count,
+               s.state AS sync_state, s.claim_owner, s.claim_token,
+               s.claim_expires_at, s.active_attempt_id,
+               s.quarantine_reason, s.quarantined_at,
+               a.attempt_id, a.feedback_id AS attempt_feedback_id,
+               a.projection_version AS attempt_projection_version,
+               a.state AS attempt_state, a.remote_id AS attempt_remote_id,
+               f.projection_version AS feedback_projection_version,
+               f.status AS feedback_status,
+               f.lifecycle_origin AS feedback_lifecycle_origin
+        FROM feedback_odoo_sync s
+        JOIN feedback_odoo_attempts a
+          ON a.feedback_id = s.feedback_id
+         AND a.attempt_id = s.active_attempt_id
+        JOIN feedback f ON f.id = s.feedback_id
+        WHERE s.state = 'quarantined'
+          AND s.active_attempt_id = %s
+          AND a.attempt_id = %s
+        FOR UPDATE OF f, s, a
+        """,
+        (attempt_id, attempt_id),
+    )
+    row = _one_row(cursor, "quarantine disposition lock")
+    try:
+        feedback_id = _positive_signed_64(row.get("feedback_id"), "feedback id")
+        desired = _positive_signed_64(row.get("desired_version"), "desired version")
+        last_synced = _nonnegative_signed_64(
+            row.get("last_synced_version"),
+            "last synchronized version",
+        )
+        if last_synced >= desired:
+            raise ValueError("quarantined feedback is not due")
+        remote_id = row.get("odoo_improvement_id")
+        if remote_id is not None:
+            _positive_signed_64(remote_id, "remote id")
+        _aware_datetime(row.get("due_at"), "due time")
+        count = _attempt_count(row.get("attempt_count"))
+        if row.get("sync_state") != "quarantined":
+            raise ValueError("sync row is not quarantined")
+        if any(
+            row.get(name) is not None for name in ("claim_owner", "claim_token", "claim_expires_at")
+        ):
+            raise ValueError("quarantined sync row retained claim ownership")
+        active_attempt = _uuid(row.get("active_attempt_id"), "active attempt id")
+        if active_attempt != attempt_id or row.get("attempt_id") != attempt_id:
+            raise ValueError("active attempt association changed")
+        if row.get("attempt_feedback_id") != feedback_id:
+            raise ValueError("attempt belongs to another feedback row")
+        reason = row.get("quarantine_reason")
+        if type(reason) is not str or reason not in _QUARANTINE_REASONS:
+            raise ValueError("quarantine reason is malformed")
+        _aware_datetime(row.get("quarantined_at"), "quarantine time")
+        attempt_version = _positive_signed_64(
+            row.get("attempt_projection_version"),
+            "attempt projection version",
+        )
+        if not last_synced < attempt_version <= desired:
+            raise ValueError("attempt version is outside the due window")
+        attempt_state = _attempt_state(row.get("attempt_state"))
+        if attempt_state not in _OPERATOR_ATTEMPT_STATES:
+            raise ValueError("attempt state is not operator-reviewable")
+        attempt_remote_id = row.get("attempt_remote_id")
+        if attempt_remote_id is not None:
+            _positive_signed_64(attempt_remote_id, "attempt remote id")
+        if attempt_remote_id != remote_id:
+            raise ValueError("attempt remote association changed")
+        feedback_version = _positive_signed_64(
+            row.get("feedback_projection_version"),
+            "feedback projection version",
+        )
+        if feedback_version != desired:
+            raise ValueError("feedback projection and desired version differ")
+        if row.get("feedback_status") not in {
+            "requested",
+            "in_progress",
+            "completed",
+            "declined",
+        } or row.get("feedback_lifecycle_origin") not in {
+            "local",
+            "legacy_project_task",
+        }:
+            raise ValueError("feedback lifecycle authority is malformed")
+    except (TypeError, ValueError):
+        raise StateTransitionError("database returned malformed quarantine authority") from None
+    return {
+        "feedback_id": feedback_id,
+        "desired_version": desired,
+        "last_synced_version": last_synced,
+        "odoo_improvement_id": remote_id,
+        "due_at": row["due_at"],
+        "attempt_count": count,
+        "attempt_id": attempt_id,
+        "attempt_state": attempt_state,
+        "attempt_projection_version": attempt_version,
+        "quarantine_reason": reason,
+        "quarantined_at": row["quarantined_at"],
+        "feedback_status": row["feedback_status"],
+        "feedback_lifecycle_origin": row["feedback_lifecycle_origin"],
+    }
+
+
+def _append_operator_audit(
+    cursor,
+    *,
+    attempt_id: UUID,
+    action: str,
+    reviewer: str,
+    now: datetime,
+) -> None:
+    cursor.execute(
+        """
+        INSERT INTO feedback_odoo_operator_actions
+            (attempt_id, action, reviewer, created_at)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id, attempt_id, action
+        """,
+        (attempt_id, action, reviewer, now),
+    )
+    row = _one_row(cursor, "operator audit insert")
+    try:
+        _positive_signed_64(row.get("id"), "operator action id")
+    except ValueError:
+        raise StateTransitionError("operator audit returned malformed state") from None
+    if row.get("attempt_id") != attempt_id or row.get("action") != action:
+        raise StateTransitionError("operator audit returned different authority")
+
+
+def _validate_disposition_result(
+    row: Mapping[str, object],
+    *,
+    feedback_id: int,
+    desired_version: int,
+    last_synced_version: int,
+    attempt_count: int,
+    now: datetime,
+) -> None:
+    try:
+        returned_feedback_id = _positive_signed_64(row.get("feedback_id"), "feedback id")
+        returned_desired = _positive_signed_64(
+            row.get("desired_version"),
+            "desired version",
+        )
+        last_synced = _nonnegative_signed_64(
+            row.get("last_synced_version"),
+            "last synchronized version",
+        )
+        returned_attempt_count = _attempt_count(row.get("attempt_count"))
+        due_at = _aware_datetime(row.get("due_at"), "due time")
+    except (TypeError, ValueError):
+        raise StateTransitionError("disposition returned malformed state") from None
+    if (
+        returned_feedback_id != feedback_id
+        or returned_desired != desired_version
+        or last_synced != last_synced_version
+        or returned_attempt_count != attempt_count
+        or row.get("state") != "idle"
+        or row.get("active_attempt_id") is not None
+        or due_at != now
+    ):
+        raise StateTransitionError("disposition returned different state")
+
+
+def apply_quarantine_disposition(
+    *,
+    attempt_id: UUID,
+    disposition: str,
+    reviewer: str,
+    human_review_confirmed: bool,
+    now: datetime,
+) -> QuarantineDispositionResult:
+    """Apply one exact local operator disposition in a short transaction."""
+    safe_attempt_id = _uuid(attempt_id, "attempt id")
+    if type(disposition) is not str or disposition not in _DISPOSITIONS:
+        raise ValueError("quarantine disposition is malformed")
+    clean_reviewer = _reviewer(reviewer)
+    if type(human_review_confirmed) is not bool:
+        raise ValueError("human review confirmation must be a boolean")
+    if disposition == "supersede-and-retry" and human_review_confirmed is not True:
+        raise ValueError("supersede and retry requires human review confirmation")
+    current = _aware_datetime(now, "operator action time")
+    action = disposition.replace("-", "_")
+    with db.cursor() as cursor:
+        locked = _lock_quarantined_operator_attempt(cursor, safe_attempt_id)
+        attempt_state = locked["attempt_state"]
+        if disposition == "supersede-and-retry" and locked["desired_version"] >= MAX_SIGNED_64:
+            raise StateTransitionError("feedback projection version cannot advance")
+        if disposition == "release-definitive" and attempt_state not in {
+            "prepared",
+            "definitive_failed",
+        }:
+            raise StateTransitionError("attempt is not definitively releasable")
+        if disposition == "supersede-and-retry" and attempt_state != "ambiguous":
+            raise StateTransitionError("attempt is not an ambiguous review candidate")
+        _append_operator_audit(
+            cursor,
+            attempt_id=safe_attempt_id,
+            action=action,
+            reviewer=clean_reviewer,
+            now=current,
+        )
+        feedback_id = locked["feedback_id"]
+        desired = locked["desired_version"]
+        if disposition == "keep":
+            return QuarantineDispositionResult(
+                feedback_id=feedback_id,
+                attempt_id=safe_attempt_id,
+                disposition=disposition,
+                state="quarantined",
+                desired_version=desired,
+                warning=None,
+            )
+
+        if disposition == "supersede-and-retry":
+            next_version = desired + 1
+            cursor.execute(
+                """
+                UPDATE feedback
+                SET projection_version = projection_version + 1, updated_at = %s
+                WHERE id = %s AND projection_version = %s
+                  AND status = %s AND lifecycle_origin = %s
+                RETURNING id, projection_version
+                """,
+                (
+                    current,
+                    feedback_id,
+                    desired,
+                    locked["feedback_status"],
+                    locked["feedback_lifecycle_origin"],
+                ),
+            )
+            feedback_row = _one_row(cursor, "feedback supersede update")
+            if (
+                feedback_row.get("id") != feedback_id
+                or feedback_row.get("projection_version") != next_version
+            ):
+                raise StateTransitionError("feedback supersede returned different version")
+            update_sync_sql = """
+                UPDATE feedback_odoo_sync
+                SET desired_version = desired_version + 1,
+                    state = 'idle', claim_owner = NULL, claim_token = NULL,
+                    claim_expires_at = NULL, active_attempt_id = NULL,
+                    attempt_count = 0,
+                    quarantine_reason = NULL, quarantined_at = NULL,
+                    last_error_class = NULL, last_error_summary = NULL,
+                    due_at = %s, updated_at = %s
+                WHERE feedback_id = %s AND state = 'quarantined'
+                  AND desired_version = %s AND last_synced_version = %s
+                  AND odoo_improvement_id IS NOT DISTINCT FROM %s
+                  AND due_at = %s AND attempt_count = %s
+                  AND claim_owner IS NULL AND claim_token IS NULL
+                  AND claim_expires_at IS NULL
+                  AND active_attempt_id = %s
+                  AND quarantine_reason = %s AND quarantined_at = %s
+                  AND EXISTS (
+                      SELECT 1 FROM feedback_odoo_attempts a
+                      WHERE a.feedback_id = feedback_odoo_sync.feedback_id
+                        AND a.attempt_id = %s
+                        AND a.projection_version = %s
+                        AND a.state = %s
+                  )
+                RETURNING feedback_id, desired_version, last_synced_version,
+                          state, active_attempt_id, due_at, attempt_count
+            """
+        else:
+            next_version = desired
+            update_sync_sql = """
+                UPDATE feedback_odoo_sync
+                SET state = 'idle', claim_owner = NULL, claim_token = NULL,
+                    claim_expires_at = NULL, active_attempt_id = NULL,
+                    attempt_count = 0,
+                    quarantine_reason = NULL, quarantined_at = NULL,
+                    last_error_class = NULL, last_error_summary = NULL,
+                    due_at = %s, updated_at = %s
+                WHERE feedback_id = %s AND state = 'quarantined'
+                  AND desired_version = %s AND last_synced_version = %s
+                  AND odoo_improvement_id IS NOT DISTINCT FROM %s
+                  AND due_at = %s AND attempt_count = %s
+                  AND claim_owner IS NULL AND claim_token IS NULL
+                  AND claim_expires_at IS NULL
+                  AND active_attempt_id = %s
+                  AND quarantine_reason = %s AND quarantined_at = %s
+                  AND EXISTS (
+                      SELECT 1 FROM feedback_odoo_attempts a
+                      WHERE a.feedback_id = feedback_odoo_sync.feedback_id
+                        AND a.attempt_id = %s
+                        AND a.projection_version = %s
+                        AND a.state = %s
+                  )
+                RETURNING feedback_id, desired_version, last_synced_version,
+                          state, active_attempt_id, due_at, attempt_count
+            """
+
+        cursor.execute(
+            update_sync_sql,
+            (
+                current,
+                current,
+                feedback_id,
+                desired,
+                locked["last_synced_version"],
+                locked["odoo_improvement_id"],
+                locked["due_at"],
+                locked["attempt_count"],
+                safe_attempt_id,
+                locked["quarantine_reason"],
+                locked["quarantined_at"],
+                safe_attempt_id,
+                locked["attempt_projection_version"],
+                attempt_state,
+            ),
+        )
+        updated = _one_row(cursor, "quarantine disposition update")
+        _validate_disposition_result(
+            updated,
+            feedback_id=feedback_id,
+            desired_version=next_version,
+            last_synced_version=locked["last_synced_version"],
+            attempt_count=0,
+            now=current,
+        )
+    return QuarantineDispositionResult(
+        feedback_id=feedback_id,
+        attempt_id=safe_attempt_id,
+        disposition=disposition,
+        state="idle",
+        desired_version=next_version,
+        warning=(DUPLICATE_RISK_WARNING if disposition == "supersede-and-retry" else None),
+    )
+
+
+def load_verified_canary_evidence(feedback_id: int) -> VerifiedCanaryEvidence:
+    """Load one exact synchronized version and its immutable verified attempt."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT a.attempt_id, a.feedback_id, a.projection_version,
+                   a.mutation_kind, a.remote_id, a.manifest, a.manifest_digest,
+                   a.before_sha256, a.before_byte_length,
+                   a.after_sha256, a.after_byte_length, a.state,
+                   a.dispatch_marked_at, a.rpc_succeeded_at, a.readback_at,
+                   a.settled_at, a.outcome_detail, a.created_at, a.updated_at,
+                   s.desired_version AS sync_desired_version,
+                   s.last_synced_version AS sync_last_synced_version,
+                   s.odoo_improvement_id AS sync_remote_id,
+                   s.state AS sync_state,
+                   s.claim_owner AS sync_claim_owner,
+                   s.claim_token AS sync_claim_token,
+                   s.claim_expires_at AS sync_claim_expires_at,
+                   s.active_attempt_id AS sync_active_attempt_id,
+                   s.attempt_count AS sync_attempt_count,
+                   s.quarantine_reason AS sync_quarantine_reason,
+                   s.quarantined_at AS sync_quarantined_at,
+                   s.last_error_class AS sync_last_error_class,
+                   s.last_error_summary AS sync_last_error_summary,
+                   f.projection_version AS feedback_projection_version
+            FROM feedback_odoo_sync s
+            JOIN feedback f ON f.id = s.feedback_id
+            JOIN feedback_odoo_attempts a
+              ON a.feedback_id = s.feedback_id
+             AND a.projection_version = s.last_synced_version
+             AND a.remote_id = s.odoo_improvement_id
+             AND a.state = 'verified'
+            WHERE s.feedback_id = %s
+              AND s.state = 'idle'
+              AND s.claim_owner IS NULL
+              AND s.claim_token IS NULL
+              AND s.claim_expires_at IS NULL
+              AND s.active_attempt_id IS NULL
+              AND s.attempt_count = 0
+              AND s.quarantine_reason IS NULL
+              AND s.quarantined_at IS NULL
+              AND s.last_error_class IS NULL
+              AND s.last_error_summary IS NULL
+              AND s.desired_version = s.last_synced_version
+              AND f.projection_version = s.last_synced_version
+              AND a.dispatch_marked_at IS NOT NULL
+              AND a.rpc_succeeded_at IS NOT NULL
+              AND a.readback_at IS NOT NULL
+              AND a.settled_at IS NOT NULL
+              AND a.dispatch_marked_at <= a.rpc_succeeded_at
+              AND a.rpc_succeeded_at <= a.readback_at
+              AND a.readback_at = a.settled_at
+            ORDER BY a.settled_at DESC, a.attempt_id
+            LIMIT 2
+            """,
+            (safe_feedback_id,),
+        )
+        rows = _rows(cursor)
+        if len(rows) != 1:
+            raise StateTransitionError("verified canary evidence is not exact")
+        row = rows[0]
+        attempt = _attempt_from_row(row)
+        try:
+            desired = _positive_signed_64(
+                row.get("sync_desired_version"),
+                "desired version",
+            )
+            synchronized = _positive_signed_64(
+                row.get("sync_last_synced_version"),
+                "last synchronized version",
+            )
+            remote_id = _positive_signed_64(row.get("sync_remote_id"), "remote id")
+            feedback_version = _positive_signed_64(
+                row.get("feedback_projection_version"),
+                "feedback projection version",
+            )
+            count = _attempt_count(row.get("sync_attempt_count"))
+        except (TypeError, ValueError):
+            raise StateTransitionError("verified canary evidence is malformed") from None
+        if (
+            attempt.feedback_id != safe_feedback_id
+            or attempt.state != "verified"
+            or not desired == synchronized == feedback_version == attempt.projection_version
+            or attempt.remote_id != remote_id
+            or row.get("sync_state") != "idle"
+            or count != 0
+            or any(
+                row.get(name) is not None
+                for name in (
+                    "sync_claim_owner",
+                    "sync_claim_token",
+                    "sync_claim_expires_at",
+                    "sync_active_attempt_id",
+                    "sync_quarantine_reason",
+                    "sync_quarantined_at",
+                    "sync_last_error_class",
+                    "sync_last_error_summary",
+                )
+            )
+        ):
+            raise StateTransitionError("verified canary evidence changed")
+        try:
+            return VerifiedCanaryEvidence(
+                feedback_id=safe_feedback_id,
+                projection_version=synchronized,
+                remote_id=remote_id,
+                attempt=attempt,
+            )
+        except (TypeError, ValueError):
+            raise StateTransitionError("verified canary evidence is malformed") from None
+
+
 __all__ = [
     "Attempt",
     "Claim",
+    "DUPLICATE_RISK_WARNING",
     "MAX_MUTATION_ATTEMPTS",
+    "QuarantineDispositionResult",
+    "QuarantineItem",
     "RETRY_DELAYS",
     "StateTransitionError",
+    "VerifiedCanaryEvidence",
+    "apply_quarantine_disposition",
     "claim_due",
     "defer_unprepared_read_failure",
     "defer_prepared_for_closed_gate",
     "load_active_attempt",
+    "load_verified_canary_evidence",
+    "list_quarantined",
     "mark_dispatch",
     "mark_rpc_succeeded",
     "prepare_attempt",
