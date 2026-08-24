@@ -23,6 +23,27 @@ os.environ.setdefault("ZIRA_API_KEY", "test-dummy-zira-key")
 
 import pytest
 
+# Load .env exactly like the app does (zira_dashboard.deps calls load_dotenv()
+# at import time), so the guard below sees the same DATABASE_URL the tests
+# will — a prod DSN hiding in .env must not slip in after this check.
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from tests._prod_db_guard import forbidden_database_host
+
+_forbidden_host = forbidden_database_host(os.environ.get("DATABASE_URL"))
+if _forbidden_host:
+    pytest.exit(
+        "REFUSING to run: DATABASE_URL points at the Railway host "
+        f"'{_forbidden_host}'. DB-backed tests DELETE production data "
+        "(forklift tables wiped 2026-07-20; Auto-Lunch flipped Off "
+        "2026-08-24). Unset DATABASE_URL (DB tests skip) or point it at a "
+        "local Postgres / embedded pgserver — and check the repo-root .env, "
+        "which load_dotenv() injects into every run.",
+        returncode=2,
+    )
+
 
 @pytest.fixture(autouse=True)
 def _reset_response_cache():

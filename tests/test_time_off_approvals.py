@@ -1,9 +1,16 @@
+import os
 from datetime import date, datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from zira_dashboard.app import app
 from zira_dashboard.routes import time_off_approvals as page
+
+# The merged /staffing/time-off page reads Postgres beyond what these tests
+# monkeypatch, so the two route tests need a real database (they run in CI).
+_needs_db = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"), reason="needs Postgres")
 
 
 def test_pending_payload_attaches_balance_and_coverage(monkeypatch):
@@ -118,6 +125,7 @@ def test_recent_payload_formats_decision_time_in_plant_timezone(monkeypatch):
     assert rows[0]["date_label"] == "2026-06-25 - 8:30 AM to 12:15 PM"
 
 
+@_needs_db
 def test_approvals_url_redirects_to_merged_time_off_page(monkeypatch):
     # The standalone approvals page merged into /staffing/time-off
     # (2026-07-22); the old URL 301s so bookmarks keep working.
@@ -136,6 +144,7 @@ def test_approvals_url_redirects_to_merged_time_off_page(monkeypatch):
     assert 'data-recent-empty' in resp.text
 
 
+@_needs_db
 def test_approvals_page_renders_pending_context_and_recent_decisions(monkeypatch):
     monkeypatch.setattr(page, "_pending_payload", lambda today: [{
         "id": 55,
