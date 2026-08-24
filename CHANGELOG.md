@@ -12,18 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-24
 
-### Late and absence tracking plan
+### Late timing is more exact
 
 #### Improvements
 
-- **The next late and absence update is clearly planned.** It will let supervisors mark an absence or a one-hour running-late wait without writing a reason. It will also save how many minutes late someone was after they clock in.
-
-### Exact late timing
-
-#### Improvements
-
-- **Late records can now save the exact minutes someone was late.** This helps reports show what happened.
-- **The late alert now starts after five minutes.** This helps supervisors see it sooner.
+- **Late records now save the exact minutes someone was late.** This helps reports show what happened.
+- **A clock-in more than five minutes after start now counts as late.** This keeps records consistent.
 
 ## 2026-08-21
 

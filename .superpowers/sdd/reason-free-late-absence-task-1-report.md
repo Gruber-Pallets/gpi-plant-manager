@@ -34,3 +34,13 @@ An independent review found that removing `reason` from the history helpers woul
 ## Scope
 
 No automatic payload recording or UI changes were made. The only additional changed file is `CHANGELOG.md`, required for a push to `main` by the repository instructions.
+
+## Changelog correction (2026-08-24)
+
+Removed the stale planned late-and-absence wording and the incorrect claim that the missing-clock-in alert starts after five minutes. The release note now covers only the completed Task 1 work: exact late-minute storage and clock-ins more than five minutes after start counting as late. It makes no claim about the upcoming reason-free UI or automatic recording.
+
+### Test evidence
+
+- Requested commands: `pytest tests/test_attendance.py tests/test_late_report.py -q` and `ruff check ...` could not start because `pytest` and `ruff` are not on the shell PATH.
+- Project-environment focused suite: `uv run pytest tests/test_attendance.py tests/test_late_report.py -q` — 22 passed, 6 skipped.
+- Project-environment requested lint scope: `uv run ruff check src/zira_dashboard/attendance.py src/zira_dashboard/_schema.py src/zira_dashboard/late_report.py tests/test_attendance.py tests/test_late_report.py` — passed.
