@@ -58,14 +58,16 @@ def test_late_report_payload_excludes_unscheduled_no_punch(monkeypatch):
         staffing_routes.staffing,
         "load_roster",
         lambda: [
-            SimpleNamespace(name="Ana", active=True, reserve=False),
-            SimpleNamespace(name="Bob", active=True, reserve=False),
+            SimpleNamespace(
+                name="Ana", active=True, reserve=False, wage_type="hourly", is_flexible=False
+            ),
+            SimpleNamespace(
+                name="Bob", active=True, reserve=False, wage_type="hourly", is_flexible=False
+            ),
         ],
     )
     monkeypatch.setattr(late_report, "report_eligible_emp_ids", lambda roster, n2i: {"1", "2"})
     monkeypatch.setattr(late_report, "absent_emp_ids_for_day", lambda day: set())
-    monkeypatch.setattr(late_report, "active_expected_arrivals", lambda day: [])
-    monkeypatch.setattr(late_report, "expected_arrivals_for_day", lambda day: [])
     monkeypatch.setattr(late_report, "active_snoozes", lambda day: [])
     monkeypatch.setattr(late_report, "late_arrivals_for_day", lambda day: set())
     monkeypatch.setattr(
@@ -80,5 +82,7 @@ def test_late_report_payload_excludes_unscheduled_no_punch(monkeypatch):
     assert out["scheduled_late"][0]["scheduled_start_time"] == "06:00"
     # ...but the unscheduled person is NOT flagged at all.
     assert out["unscheduled_late"] == []
+    assert "needs_reason" not in out
+    assert "running_late" not in out
     # Badge count reflects only the scheduled person.
     assert out["count"] == 1

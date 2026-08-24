@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Collection, Mapping, Sequence
@@ -3086,21 +3085,37 @@ def _bust_assignments_todo_cache() -> None:
 _LATE_REPORT_CACHE: dict = {"value": None, "expires_at": 0.0}
 
 
+def _record_confirmed_late_arrivals(
+    day, scheduled_ids, eligible_ids, attendance_by_id, absent_ids,
+    already_recorded_ids, id_to_name,
+) -> set[str]:
+    recorded: set[str] = set()
+    for raw_emp_id in scheduled_ids:
+        emp_id = str(raw_emp_id)
+        if emp_id not in eligible_ids or emp_id in absent_ids or emp_id in already_recorded_ids:
+            continue
+        minutes_late = int((attendance_by_id.get(emp_id) or {}).get("minutes_late") or 0)
+        if minutes_late <= late_report.AUTO_RECORD_LATE_AFTER_MINUTES:
+            continue
+        late_report.record_late_arrival(
+            day, emp_id, id_to_name.get(emp_id) or f"Unknown ({emp_id})", minutes_late
+        )
+        recorded.add(emp_id)
+    return recorded
+
+
 def late_report_payload(force: bool = False) -> dict:
     """Snapshot for the global Late/Absence Report badge + modal.
 
     Always for today. Covers people who were on today's schedule only —
     people not assigned today are never flagged for a missing punch. Returns
-    five sections:
+    four sections:
       scheduled_late:   scheduled people who haven't punched in past threshold
       unscheduled_late: always empty (kept for the JSON/UI contract)
-      needs_reason:     scheduled people who punched in past threshold + no
-                        late_arrivals record yet — manager fills in reason
       snoozed:          silenced rows (no reason field; transient)
-      running_late:     expected arrivals (informational; no action required)
 
     `late` is an alias for `scheduled_late` for legacy clients.
-    `count` is the badge number = sum of the three actionable sections.
+    `count` is the badge number = sum of the actionable sections.
 
     Cached in-process for 30 s. Polled by every page footer every 60 s.
     ``force=True`` skips the cache read and recomputes, resetting the TTL —
@@ -3117,34 +3132,29 @@ def late_report_payload(force: bool = False) -> dict:
         "today": today.isoformat(),
         "scheduled_late": [],
         "unscheduled_late": [],
-        "needs_reason": [],
         "late": [],  # alias for scheduled_late
         "snoozed": [],
-        "running_late": [],
     }
     try:
         sched = staffing.load_schedule(today)
         attendance_pkg = _safe_attendance(today, sched, today)
         by_id = attendance_pkg.get("by_id") or {}
+        active_snoozes = late_report.active_snoozes(today)
+        visible_snoozes = active_snoozes
         if by_id:
             now_local = plant_now()
             shift_start_local = datetime.combine(
                 today, shift_config.shift_start_for(today), tzinfo=shift_config.SITE_TZ
             )
             absent_ids = late_report.absent_emp_ids_for_day(today)
-            for row in late_report.expected_arrivals_for_day(today):
-                emp_id = str(row["emp_id"])
-                if (by_id.get(emp_id) or {}).get("status") != "no_punch":
-                    late_report.clear_expected_arrival(today, emp_id)
-            expected_arrivals = [
-                row
-                for row in late_report.active_expected_arrivals(today)
-                if (by_id.get(str(row["emp_id"])) or {}).get("status") == "no_punch"
-            ]
-            expected_ids = {str(row["emp_id"]) for row in expected_arrivals}
-            snoozed_ids = {
-                str(s["emp_id"]) for s in late_report.active_snoozes(today)
-            } | expected_ids
+            visible_snoozes = []
+            for snooze in active_snoozes:
+                emp_id = str(snooze["emp_id"])
+                if (by_id.get(emp_id) or {}).get("status") == "no_punch":
+                    visible_snoozes.append(snooze)
+                else:
+                    late_report.clear_snooze(today, emp_id)
+            snoozed_ids = {str(s["emp_id"]) for s in visible_snoozes}
             already_recorded_late_ids = late_report.late_arrivals_for_day(today)
 
             # Eligibility filter: the report applies only to hourly people on
@@ -3159,12 +3169,21 @@ def late_report_payload(force: bool = False) -> dict:
             scheduled_ids = [
                 e for e in (attendance_pkg.get("scheduled_ids") or []) if e in eligible_emp_ids
             ]
+            id_to_name = attendance.person_id_to_name(attendance_pkg.get("name_to_id") or {})
+            already_recorded_late_ids |= _record_confirmed_late_arrivals(
+                today,
+                scheduled_ids,
+                eligible_emp_ids,
+                by_id,
+                absent_ids,
+                already_recorded_late_ids,
+                id_to_name,
+            )
             # The report covers people who were on today's schedule only.
             # "Unscheduled" people (active non-reserve roster members who simply
             # weren't assigned today) are NOT flagged for a missing punch — they
             # weren't expected in, so a no-punch isn't an exception. Passing an
-            # empty unscheduled set keeps both the unscheduled_late section and
-            # the unscheduled half of needs_reason empty. (Product decision
+            # empty unscheduled set keeps that section empty. (Product decision
             # 2026-06-27: not on the schedule → not flagged.)
 
             sections = late_report.late_people_for_day_v2(
@@ -3176,10 +3195,8 @@ def late_report_payload(force: bool = False) -> dict:
                 shift_start_local=shift_start_local,
                 absent_ids=absent_ids,
                 snoozed_ids=snoozed_ids,
-                already_recorded_late_ids=already_recorded_late_ids,
             )
 
-            id_to_name = attendance.person_id_to_name(attendance_pkg.get("name_to_id") or {})
             scheduled_wc_by_name = {}
             for wc_name, names in (sched.assignments or {}).items():
                 for person_name in names or []:
@@ -3207,36 +3224,11 @@ def late_report_payload(force: bool = False) -> dict:
                         "name": _resolve(r["emp_id"]),
                     }
                 )
-            for r in sections["needs_reason"]:
-                out["needs_reason"].append(
-                    {
-                        "emp_id": r["emp_id"],
-                        "name": _resolve(r["emp_id"]),
-                        "minutes_late": r["minutes_late"],
-                    }
-                )
             out["late"] = list(out["scheduled_late"])  # legacy alias
-
-            now_utc = datetime.now(UTC)
-            for row in expected_arrivals:
-                emp_id = str(row["emp_id"])
-                expected_local = row["expected_at_utc"].astimezone(shift_config.SITE_TZ)
-                fmt = "%#I:%M %p" if os.name == "nt" else "%-I:%M %p"
-                out["running_late"].append(
-                    {
-                        "emp_id": emp_id,
-                        "name": row["name"],
-                        "until_iso": row["expected_at_utc"].isoformat(),
-                        "expected_label": expected_local.strftime(fmt),
-                        "mins_remaining": max(
-                            0, int((row["expected_at_utc"] - now_utc).total_seconds() // 60)
-                        ),
-                    }
-                )
 
         # Snoozed list (independent of attendance).
         now_utc = datetime.now(UTC)
-        for s in late_report.active_snoozes(today):
+        for s in visible_snoozes:
             until = s["until_utc"]
             mins_remaining = max(0, int((until - now_utc).total_seconds() // 60))
             out["snoozed"].append(
@@ -3247,9 +3239,7 @@ def late_report_payload(force: bool = False) -> dict:
                     "mins_remaining": mins_remaining,
                 }
             )
-        out["count"] = (
-            len(out["scheduled_late"]) + len(out["unscheduled_late"]) + len(out["needs_reason"])
-        )
+        out["count"] = len(out["scheduled_late"]) + len(out["unscheduled_late"])
     except Exception:
         out["degraded"] = True
     _LATE_REPORT_CACHE["value"] = out

@@ -26,7 +26,7 @@ def test_declare_absent_sync_clears_saved_schedule_after_local_absence(monkeypat
     monkeypatch.setattr(late_report_routes, "_bust_caches", lambda: None)
 
     response = late_report_routes._declare_absent_sync({
-        "emp_id": "5", "name": "Test Person", "reason": "No call no show",
+        "emp_id": "5", "name": "Test Person",
     })
 
     assert response.status_code == 200
@@ -51,10 +51,12 @@ def test_declare_absent_sync_posts_absence_to_odoo_before_local_write(monkeypatc
     monkeypatch.setattr(late_report_routes.db, "execute", db_execute)
     monkeypatch.setattr(late_report_routes, "_bust_caches", lambda: None)
 
+    log_event = MagicMock(return_value=123)
+    monkeypatch.setattr(late_report_routes.inbox_log, "log_event_safe", log_event)
+
     response = late_report_routes._declare_absent_sync({
         "emp_id": "5",
         "name": "Test Person",
-        "reason": "No call no show",
     })
 
     assert response.status_code == 200
@@ -62,17 +64,18 @@ def test_declare_absent_sync_posts_absence_to_odoo_before_local_write(monkeypatc
         employee_odoo_id=5,
         employee_name="Test Person",
         day=FIXED_DAY,
-        reason="No call no show",
+        reason="",
     )
     declare_absent.assert_called_once_with(
         FIXED_DAY,
         "5",
         "Test Person",
-        reason="No call no show",
+        reason=None,
         odoo_leave_id=777,
     )
     mirror_absence.assert_called_once()
     db_execute.assert_called_once()
+    assert log_event.call_args.kwargs["reason"] is None
 
 
 def test_declare_absent_sync_mirrors_approved_absence_locally(monkeypatch):
@@ -96,7 +99,6 @@ def test_declare_absent_sync_mirrors_approved_absence_locally(monkeypatch):
     response = late_report_routes._declare_absent_sync({
         "emp_id": "5",
         "name": "Test Person",
-        "reason": "No call no show",
     })
 
     assert response.status_code == 200
@@ -112,7 +114,7 @@ def test_declare_absent_sync_mirrors_approved_absence_locally(monkeypatch):
         42,
         FIXED_DAY,
         FIXED_DAY,
-        "Absent - Test Person: No call no show",
+        "Absent - Test Person",
         "validate",
         777,
     )
@@ -152,7 +154,6 @@ def test_declare_absent_sync_records_locally_when_odoo_rejects(monkeypatch):
     response = late_report_routes._declare_absent_sync({
         "emp_id": "9",
         "name": "Gerardo Vergara",
-        "reason": "No call no show",
     })
 
     assert response.status_code == 200
@@ -165,7 +166,7 @@ def test_declare_absent_sync_records_locally_when_odoo_rejects(monkeypatch):
         FIXED_DAY,
         "9",
         "Gerardo Vergara",
-        reason="No call no show",
+        reason=None,
         odoo_leave_id=None,
     )
     mirror_absence.assert_not_called()
@@ -179,7 +180,6 @@ def test_declare_absent_sync_rejects_non_numeric_employee_id(monkeypatch):
     response = late_report_routes._declare_absent_sync({
         "emp_id": "not-odoo-id",
         "name": "Test Person",
-        "reason": "No call no show",
     })
 
     assert response.status_code == 400

@@ -245,9 +245,8 @@ def test_history_for_name_returns_absent_and_late_rows():
     db.execute("DELETE FROM late_arrivals WHERE name = %s", (name,))
 
 
-def test_late_people_for_day_three_sections():
-    """The expanded helper returns dict with scheduled_late, unscheduled_late,
-    needs_reason — derived from the same attendance dict."""
+def test_late_people_for_day_two_sections():
+    """The helper returns scheduled and unscheduled no-punch rows only."""
     from datetime import date, datetime
     from zira_dashboard import shift_config, late_report
 
@@ -258,13 +257,13 @@ def test_late_people_for_day_three_sections():
     attendance = {
         # Scheduled, no_punch — counts as scheduled_late
         "111": {"status": "no_punch", "minutes_late": 0},
-        # Scheduled, late punch — counts as needs_reason
+        # Scheduled, late punch — is recorded separately by the route.
         "222": {"status": "late", "minutes_late": 31},
         # Scheduled, on time — appears nowhere
         "333": {"status": "on_time", "minutes_late": 0},
         # Unscheduled, no_punch — counts as unscheduled_late
         "444": {"status": "no_punch", "minutes_late": 0},
-        # Unscheduled, late — counts as needs_reason
+        # Unscheduled, late — is ignored by this no-punch helper.
         "555": {"status": "late", "minutes_late": 18},
     }
     out = late_report.late_people_for_day_v2(
@@ -276,17 +275,15 @@ def test_late_people_for_day_three_sections():
         shift_start_local=shift_start_local,
         absent_ids=set(),
         snoozed_ids=set(),
-        already_recorded_late_ids=set(),
     )
 
     assert {r["emp_id"] for r in out["scheduled_late"]} == {"111"}
     assert {r["emp_id"] for r in out["unscheduled_late"]} == {"444"}
-    assert {r["emp_id"] for r in out["needs_reason"]} == {"222", "555"}
+    assert "needs_reason" not in out
 
 
-def test_late_people_for_day_v2_suppresses_already_recorded():
-    """Once a late_arrivals row exists for an emp_id, that emp_id no
-    longer appears in needs_reason."""
+def test_late_people_for_day_v2_excludes_late_punches():
+    """Confirmed late punches do not create a report section."""
     from datetime import date, datetime
     from zira_dashboard import shift_config, late_report
 
@@ -304,9 +301,8 @@ def test_late_people_for_day_v2_suppresses_already_recorded():
         shift_start_local=shift_start_local,
         absent_ids=set(),
         snoozed_ids=set(),
-        already_recorded_late_ids={"222"},
     )
-    assert out["needs_reason"] == []
+    assert out == {"scheduled_late": [], "unscheduled_late": []}
 
 
 def test_late_people_for_day_v2_skips_absent_and_snoozed():
@@ -330,7 +326,6 @@ def test_late_people_for_day_v2_skips_absent_and_snoozed():
         shift_start_local=shift_start_local,
         absent_ids={"111"},
         snoozed_ids={"222"},
-        already_recorded_late_ids=set(),
     )
     assert out["scheduled_late"] == []
 

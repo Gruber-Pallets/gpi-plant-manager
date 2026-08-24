@@ -16,8 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-from datetime import UTC, datetime, time as dt_time
+from datetime import datetime, time as dt_time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -32,7 +31,7 @@ from .. import (
     staffing,
     timeclock_sync,
 )
-from ..plant_day import now as plant_now, today as plant_today
+from ..plant_day import today as plant_today
 
 _log = logging.getLogger(__name__)
 
@@ -52,15 +51,8 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
     cache busting); runs in a worker thread via asyncio.to_thread."""
     emp_id = str(body.get("emp_id") or "").strip()
     name = str(body.get("name") or "").strip()
-    reason_raw = body.get("reason")
-    reason = str(reason_raw).strip() if reason_raw is not None else ""
     if not emp_id or not name:
         return JSONResponse({"ok": False, "error": "emp_id and name required"}, status_code=400)
-    if not reason:
-        return JSONResponse(
-            {"ok": False, "error": "reason required — no record posts until a reason is given"},
-            status_code=400,
-        )
     try:
         employee_odoo_id = int(emp_id)
     except ValueError:
@@ -83,7 +75,7 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
             employee_odoo_id=employee_odoo_id,
             employee_name=name,
             day=today,
-            reason=reason,
+            reason="",
         )
         odoo_leave_id = absence["leave_id"]
     except Exception as e:  # noqa: BLE001 -- sync is best-effort; record locally regardless
@@ -97,7 +89,7 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
                 leave_id=odoo_leave_id,
                 day=today,
                 employee_name=name,
-                reason=reason,
+                reason="",
             )
         except Exception as e:  # noqa: BLE001 -- manual absence remains authoritative
             odoo_warning = (
@@ -114,7 +106,7 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
             today,
             emp_id,
             name,
-            reason=reason,
+            reason=None,
             odoo_leave_id=odoo_leave_id,
         )
         staffing.remove_person_from_schedule(today, name)
@@ -131,7 +123,7 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
         category_label="Late",
         action="absent",
         outcome="Marked absent",
-        reason=reason,
+        reason=None,
         actor_upn=actor_upn,
         actor_name=actor_name,
         source="inbox",
@@ -149,11 +141,10 @@ def _declare_absent_sync(body: dict, actor_upn=None, actor_name=None) -> JSONRes
 async def late_report_declare_absent(request: Request):
     """Mark a person as Absent for today.
 
-    Body (JSON): {emp_id, name, reason}
+    Body (JSON): {emp_id, name}
 
-    Reason is REQUIRED — no manual_absences row gets written until
-    a non-empty reason is captured. Side effects: writes to
-    manual_absences; clears any pending snooze; busts caches.
+    Side effects: writes to manual_absences; clears any pending snooze;
+    busts caches.
     """
     body = await request.json()
     actor_upn, actor_name = inbox_log.actor_from(request)
@@ -250,59 +241,6 @@ async def late_report_forgot_punch_in(request: Request):
     return await asyncio.to_thread(_forgot_punch_in_sync, body, actor_upn, actor_name)
 
 
-def _save_late_arrival_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
-    """Blocking half of /api/late-report/save-late-arrival (Postgres write +
-    cache busting); runs in a worker thread via asyncio.to_thread."""
-    from .. import late_report
-    emp_id = str(body.get("emp_id") or "").strip()
-    name = str(body.get("name") or "").strip()
-    reason_raw = body.get("reason")
-    reason = str(reason_raw).strip() if reason_raw is not None else ""
-    if not emp_id or not name:
-        return JSONResponse({"ok": False, "error": "emp_id and name required"}, status_code=400)
-    if not reason:
-        return JSONResponse(
-            {"ok": False, "error": "reason required — no record posts until a reason is given"},
-            status_code=400,
-        )
-    today = plant_today()
-    try:
-        late_report.save_late_arrival(today, emp_id, name, reason=reason)
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    eid = inbox_log.log_event_safe(
-        item_kind="late",
-        item_key=inbox_keys.late(emp_id, today.isoformat()),
-        person_name=name,
-        category_label="Late",
-        action="reason",
-        outcome="Late reason recorded",
-        reason=reason,
-        actor_upn=actor_upn,
-        actor_name=actor_name,
-        source="inbox",
-        reversible=True,
-    )
-    _bust_caches()
-    return JSONResponse({"ok": True, "event_id": eid})
-
-
-@router.post("/api/late-report/save-late-arrival")
-async def late_report_save_late_arrival(request: Request):
-    """Record a late-arrival event for today.
-
-    Body (JSON): {emp_id, name, reason}
-
-    Reason is REQUIRED — no late_arrivals row gets written until a
-    non-empty reason is captured. Side effects: writes to
-    late_arrivals; busts the report cache so the row drops out of
-    needs_reason on the next poll.
-    """
-    body = await request.json()
-    actor_upn, actor_name = inbox_log.actor_from(request)
-    return await asyncio.to_thread(_save_late_arrival_sync, body, actor_upn, actor_name)
-
-
 def _snooze_sync(body: dict) -> JSONResponse:
     """Blocking half of /api/late-report/snooze (Postgres write + cache
     busting); runs in a worker thread via asyncio.to_thread."""
@@ -335,61 +273,24 @@ async def late_report_snooze(request: Request):
     return await asyncio.to_thread(_snooze_sync, body)
 
 
-def _parse_running_late_time(value) -> dt_time | None:
-    """Accept only the exact ``HH:MM`` form used by Running Late."""
-    if not isinstance(value, str) or re.fullmatch(r"[0-9]{2}:[0-9]{2}", value) is None:
-        return None
-    return _parse_clock_time(value)
-
-
-def _unambiguous_plant_local_datetime(day, selected: dt_time) -> datetime | None:
-    """Return the local datetime only when its wall time has one UTC instant."""
-    naive = datetime.combine(day, selected)
-    candidates: set[datetime] = set()
-    for fold in (0, 1):
-        local = naive.replace(tzinfo=shift_config.SITE_TZ, fold=fold)
-        round_trip = local.astimezone(UTC).astimezone(shift_config.SITE_TZ)
-        if round_trip.replace(tzinfo=None) == naive:
-            candidates.add(local.astimezone(UTC))
-    if len(candidates) != 1:
-        return None
-    return next(iter(candidates)).astimezone(shift_config.SITE_TZ)
-
-
 def _running_late_sync(body: dict) -> JSONResponse:
-    """Record a manager-confirmed expected arrival for a late employee."""
+    """Snooze a no-punch employee for one hour."""
     emp_id = str(body.get("emp_id") or "").strip()
     name = str(body.get("name") or "").strip()
-    selected = _parse_running_late_time(body.get("expected_time"))
     if not emp_id or not name:
         return JSONResponse({"ok": False, "error": "emp_id and name required"}, status_code=400)
-    if selected is None:
-        return JSONResponse({"ok": False, "error": "expected_time must be HH:MM"}, status_code=400)
-
     today = plant_today()
-    expected_local = _unambiguous_plant_local_datetime(today, selected)
-    if expected_local is None:
-        return JSONResponse(
-            {"ok": False, "error": "expected time is ambiguous or does not exist in plant local time"},
-            status_code=400,
-        )
-    if expected_local <= plant_now():
-        return JSONResponse(
-            {"ok": False, "error": "expected time must be later than now"}, status_code=400
-        )
     try:
-        late_report.set_expected_arrival(
-            today, emp_id, name, expected_local.astimezone(UTC)
-        )
+        late_report.snooze(today, emp_id, name, 60)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     _bust_caches()
-    return JSONResponse({"ok": True, "expected_at": expected_local.isoformat()})
+    return JSONResponse({"ok": True, "minutes": 60})
 
 
 @router.post("/api/late-report/running-late")
 async def late_report_running_late(request: Request):
-    """Record when a no-punch employee is expected to arrive today."""
+    """Snooze a no-punch employee for one hour."""
     return await asyncio.to_thread(_running_late_sync, await request.json())
 
 
