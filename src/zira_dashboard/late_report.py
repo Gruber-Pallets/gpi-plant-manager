@@ -18,7 +18,8 @@ from . import db
 
 
 LATE_THRESHOLD_MINUTES = 15
-DEFAULT_SNOOZE_MINUTES = 30
+DEFAULT_SNOOZE_MINUTES = 60
+AUTO_RECORD_LATE_AFTER_MINUTES = 5
 
 # monotonic() of the last expired-snooze cleanup; 0.0 means run on the
 # first report read after boot.
@@ -108,6 +109,13 @@ def snooze(day, emp_id: str, name: str, minutes: int = DEFAULT_SNOOZE_MINUTES) -
           created_at = now()
         """,
         (day, str(emp_id), name, until),
+    )
+
+
+def clear_snooze(day, emp_id: str) -> None:
+    db.execute(
+        "DELETE FROM late_snoozes WHERE day = %s AND emp_id = %s",
+        (day, str(emp_id)),
     )
 
 
@@ -493,6 +501,19 @@ def save_late_arrival(day, emp_id: str, name: str, reason: str | None = None) ->
     )
 
 
+def record_late_arrival(day, emp_id: str, name: str, minutes_late: int) -> None:
+    if minutes_late <= AUTO_RECORD_LATE_AFTER_MINUTES:
+        return
+    db.execute(
+        """
+        INSERT INTO late_arrivals (day, emp_id, name, reason, minutes_late)
+        VALUES (%s, %s, %s, NULL, %s)
+        ON CONFLICT (day, emp_id) DO NOTHING
+        """,
+        (day, str(emp_id), name, minutes_late),
+    )
+
+
 def late_arrivals_for_day(day) -> set[str]:
     """Set of emp_ids that already have a late-arrival record for `day`.
     Used by /api/late-report to suppress 'needs reason' rows once
@@ -526,14 +547,17 @@ def absences_history_for_name(name: str, start_d, end_d) -> list[dict]:
 
 def late_arrivals_history_for_name(name: str, start_d, end_d) -> list[dict]:
     """Per-day late-arrival history for `name` within [start_d, end_d].
-    Newest first. Each row: {day, reason}."""
+    Newest first. Each row: {day, reason, minutes_late}."""
     rows = db.query(
         """
-        SELECT day, reason
+        SELECT day, reason, minutes_late
         FROM late_arrivals
         WHERE name = %s AND day BETWEEN %s AND %s
         ORDER BY day DESC
         """,
         (name, start_d, end_d),
     )
-    return [{"day": r["day"], "reason": r["reason"]} for r in rows]
+    return [
+        {"day": r["day"], "reason": r["reason"], "minutes_late": r["minutes_late"]}
+        for r in rows
+    ]

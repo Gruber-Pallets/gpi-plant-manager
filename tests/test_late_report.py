@@ -193,6 +193,23 @@ def test_save_late_arrival_upserts():
 
 
 @requires_db
+def test_record_late_arrival_keeps_the_first_exact_minutes():
+    from datetime import date
+    from zira_dashboard import db, late_report
+
+    d = date(2026, 5, 7)
+    db.execute("DELETE FROM late_arrivals WHERE day = %s AND emp_id = %s", (d, "777"))
+    late_report.record_late_arrival(d, "777", "Late Person", 14)
+    late_report.record_late_arrival(d, "777", "Late Person", 19)
+
+    rows = db.query(
+        "SELECT name, reason, minutes_late FROM late_arrivals WHERE day = %s AND emp_id = %s",
+        (d, "777"),
+    )
+    assert rows == [{"name": "Late Person", "reason": None, "minutes_late": 14}]
+
+
+@requires_db
 def test_late_arrivals_for_day_returns_emp_id_set():
     from datetime import date
     from zira_dashboard import db, late_report
@@ -217,12 +234,12 @@ def test_history_for_name_returns_absent_and_late_rows():
     db.execute("DELETE FROM manual_absences WHERE name = %s", (name,))
     db.execute("DELETE FROM late_arrivals WHERE name = %s", (name,))
     late_report.declare_absent(d1, "555", name, reason="sick")
-    late_report.save_late_arrival(d2, "555", name, reason="overslept")
+    late_report.record_late_arrival(d2, "555", name, 18)
 
     abs_rows = late_report.absences_history_for_name(name, d1, d2)
     late_rows = late_report.late_arrivals_history_for_name(name, d1, d2)
     assert abs_rows == [{"day": d1, "reason": "sick"}]
-    assert late_rows == [{"day": d2, "reason": "overslept"}]
+    assert late_rows == [{"day": d2, "reason": None, "minutes_late": 18}]
 
     db.execute("DELETE FROM manual_absences WHERE name = %s", (name,))
     db.execute("DELETE FROM late_arrivals WHERE name = %s", (name,))

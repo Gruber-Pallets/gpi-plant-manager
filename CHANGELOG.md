@@ -18,6 +18,13 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **The next late and absence update is clearly planned.** It will let supervisors mark an absence or a one-hour running-late wait without writing a reason. It will also save how many minutes late someone was after they clock in.
 
+### Exact late timing
+
+#### Improvements
+
+- **Late records can now save the exact minutes someone was late.** This helps reports show what happened.
+- **The late alert now starts after five minutes.** This helps supervisors see it sooner.
+
 ## 2026-08-21
 
 ### Feedback sharing starts safely

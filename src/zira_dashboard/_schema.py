@@ -356,6 +356,10 @@ CREATE TABLE IF NOT EXISTS late_arrivals (
 );
 CREATE INDEX IF NOT EXISTS late_arrivals_day_idx ON late_arrivals(day);
 
+ALTER TABLE late_arrivals
+  ADD COLUMN IF NOT EXISTS minutes_late INTEGER
+  CHECK (minutes_late IS NULL OR minutes_late > 0);
+
 -- late_snoozes: silences a person from the Late/Absence Report until
 -- `until_utc`. After expiry the report re-checks them automatically.
 CREATE TABLE IF NOT EXISTS late_snoozes (

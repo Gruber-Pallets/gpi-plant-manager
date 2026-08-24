@@ -26,6 +26,21 @@ def test_compute_status_classifies_punches():
     assert out["13"]["status"] == "no_punch"
 
 
+def test_compute_status_marks_six_minutes_late_by_default():
+    shift_start = _shift_start()
+    punches = {
+        "6": {
+            "first_check_in": _utc_iso(shift_start + timedelta(minutes=6)),
+            "currently_open": True,
+        }
+    }
+
+    out = attendance.compute_status(punches, ["6"], shift_start, shift_start)
+
+    assert out["6"]["status"] == "late"
+    assert out["6"]["minutes_late"] == 6
+
+
 def test_punches_for_day_keys_by_str_id(monkeypatch):
     from zira_dashboard import odoo_client
     monkeypatch.setattr(odoo_client, "fetch_attendances_for_day", lambda d: [

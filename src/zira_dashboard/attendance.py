@@ -10,10 +10,10 @@ Odoo-era stack and the string-keyed late_report helpers.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, UTC
 from collections.abc import Iterable
 
-GRACE_MINUTES = 7
+GRACE_MINUTES = 5
 ABSENT_BUFFER_MINUTES = 30
 
 
@@ -33,7 +33,6 @@ def compute_status(
     is clocked_out; a currently-open person is on_time/late vs shift_start+grace.
     """
     from . import shift_config
-    cutoff = shift_start_local + timedelta(minutes=grace_minutes)
     out: dict = {}
     for raw in ids:
         sid = str(raw)
@@ -44,13 +43,14 @@ def compute_status(
             ci_local = datetime.fromisoformat(ci).astimezone(shift_config.SITE_TZ)
             entry["clocked_in_at"] = ci_local.strftime("%I:%M %p").lstrip("0")
             entry["currently_open"] = bool(p.get("currently_open"))
+            minutes_late = max(0, int((ci_local - shift_start_local).total_seconds() // 60))
+            entry["minutes_late"] = minutes_late
             if not entry["currently_open"]:
                 entry["status"] = "clocked_out"
-            elif ci_local <= cutoff:
-                entry["status"] = "on_time"
-            else:
+            elif minutes_late > grace_minutes:
                 entry["status"] = "late"
-                entry["minutes_late"] = max(0, int((ci_local - shift_start_local).total_seconds() // 60))
+            else:
+                entry["status"] = "on_time"
         out[sid] = entry
     return out
 
