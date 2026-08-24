@@ -512,25 +512,25 @@ def late_arrivals_for_day(day) -> set[str]:
 
 def absences_history_for_name(name: str, start_d, end_d) -> list[dict]:
     """Per-day absence history for `name` within [start_d, end_d].
-    Newest first. Each row: {day, reason}."""
+    Newest first. Each row: {day}."""
     rows = db.query(
         """
-        SELECT day, reason
+        SELECT day
         FROM manual_absences
         WHERE name = %s AND day BETWEEN %s AND %s
         ORDER BY day DESC
         """,
         (name, start_d, end_d),
     )
-    return [{"day": r["day"], "reason": r["reason"]} for r in rows]
+    return [{"day": r["day"]} for r in rows]
 
 
 def late_arrivals_history_for_name(name: str, start_d, end_d) -> list[dict]:
     """Per-day late-arrival history for `name` within [start_d, end_d].
-    Newest first. Each row: {day, reason, minutes_late}."""
+    Newest first. Each row: {day, minutes_late}."""
     rows = db.query(
         """
-        SELECT day, reason, minutes_late
+        SELECT day, minutes_late
         FROM late_arrivals
         WHERE name = %s AND day BETWEEN %s AND %s
         ORDER BY day DESC
@@ -538,6 +538,6 @@ def late_arrivals_history_for_name(name: str, start_d, end_d) -> list[dict]:
         (name, start_d, end_d),
     )
     return [
-        {"day": r["day"], "reason": r["reason"], "minutes_late": r["minutes_late"]}
+        {"day": r["day"], "minutes_late": r["minutes_late"]}
         for r in rows
     ]

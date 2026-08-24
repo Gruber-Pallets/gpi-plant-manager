@@ -59,10 +59,11 @@ def test_player_card_renders_reason_free_attendance_history():
     from fastapi.testclient import TestClient
     from zira_dashboard.app import app
 
-    # The history helpers may continue carrying legacy `reason` values while
-    # old records exist. The player card must not expose those values.
-    abs_rows = [{"day": date(2026, 5, 6), "reason": "sick"}]
-    late_rows = [{"day": date(2026, 5, 7), "minutes_late": 17, "reason": "car issues"}]
+    abs_rows = [{"day": date(2026, 5, 6)}]
+    late_rows = [
+        {"day": date(2026, 5, 7), "minutes_late": 17},
+        {"day": date(2026, 5, 8), "minutes_late": None},
+    ]
 
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=[]), \
          patch("zira_dashboard.production_history.daily_records", return_value=[]), \
@@ -80,17 +81,20 @@ def test_player_card_renders_reason_free_attendance_history():
     assert "Attendance" in html
     assert "Days Absent" in html and "Days Late" in html
     assert '<div class="lab">Days Absent</div><div class="v">1</div>' in html
-    assert '<div class="lab">Days Late</div><div class="v">1</div>' in html
+    assert '<div class="lab">Days Late</div><div class="v">2</div>' in html
     assert "Minutes Late" in html
     assert "17 min" in html
     assert "Reason" not in html
-    assert "sick" not in html
-    assert "car issues" not in html
     assert "contenteditable" not in html
     assert "/attendance/reason" not in html
     # Date hyperlinks point to the recycling day-view.
     assert 'href="/recycling?start=2026-05-06&end=2026-05-06"' in html
     assert 'href="/recycling?start=2026-05-07&end=2026-05-07"' in html
+    assert (
+        '<a href="/recycling?start=2026-05-08&end=2026-05-08">2026-05-08</a></td>\n'
+        '      <td>Late</td>\n'
+        '      <td class="num">—</td>'
+    ) in html
 
     old_endpoint = client.post(
         "/api/staffing/people/Carlos/attendance/reason",

@@ -224,6 +224,29 @@ def test_record_late_arrival_keeps_the_first_exact_minutes():
     assert rows == [{"name": "Late Person", "reason": None, "minutes_late": 14}]
 
 
+def test_history_helpers_return_reason_free_rows(monkeypatch):
+    """History boundaries never expose or fetch legacy attendance reasons."""
+    d1 = date(2026, 5, 5)
+    d2 = date(2026, 5, 6)
+    rows = iter([
+        [{"day": d1, "reason": "sick"}],
+        [{"day": d2, "reason": "car issues", "minutes_late": 18}],
+    ])
+    queries = []
+
+    def query(sql, _params):
+        queries.append(sql)
+        return next(rows)
+
+    monkeypatch.setattr(late_report.db, "query", query)
+
+    assert late_report.absences_history_for_name("Test History", d1, d2) == [{"day": d1}]
+    assert late_report.late_arrivals_history_for_name("Test History", d1, d2) == [
+        {"day": d2, "minutes_late": 18}
+    ]
+    assert all("reason" not in sql.lower() for sql in queries)
+
+
 @requires_db
 def test_late_arrivals_for_day_returns_emp_id_set():
     from datetime import date
@@ -253,8 +276,8 @@ def test_history_for_name_returns_absent_and_late_rows():
 
     abs_rows = late_report.absences_history_for_name(name, d1, d2)
     late_rows = late_report.late_arrivals_history_for_name(name, d1, d2)
-    assert abs_rows == [{"day": d1, "reason": "sick"}]
-    assert late_rows == [{"day": d2, "reason": None, "minutes_late": 18}]
+    assert abs_rows == [{"day": d1}]
+    assert late_rows == [{"day": d2, "minutes_late": 18}]
 
     db.execute("DELETE FROM manual_absences WHERE name = %s", (name,))
     db.execute("DELETE FROM late_arrivals WHERE name = %s", (name,))
