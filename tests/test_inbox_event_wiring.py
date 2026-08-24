@@ -153,8 +153,11 @@ def test_late_declare_absent_records_inbox_event(monkeypatch):
 
     events = _capture_events(monkeypatch)
     monkeypatch.setattr(absence_sync, "create_absence_for_day",
-                        lambda **kw: {"leave_id": 123})
+                        lambda **kw: {"holiday_status_id": 1, "leave_id": 123})
+    monkeypatch.setattr(absence_sync, "mirror_approved_absence", lambda **kw: None)
     monkeypatch.setattr(late_report, "declare_absent", lambda *a, **k: None)
+    monkeypatch.setattr(late_route.staffing, "remove_person_from_schedule",
+                        lambda *a, **k: None)
     monkeypatch.setattr(db, "execute", lambda *a, **k: None)
     monkeypatch.setattr(late_route, "_bust_caches", lambda: None)
 
