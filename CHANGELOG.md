@@ -20,6 +20,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **You can mark an absence without writing a reason.** The app still saves the absence and lets the schedule update.
 - **Running Late now hides the late alert for one hour.** This gives the person time to arrive without repeated alerts.
 
+### Late alerts stay simple
+
+#### Fixes
+
+- **You can still mark an absence without writing a reason.** The app keeps that choice simple and clear.
+
 ### Late timing is more exact
 
 #### Improvements
