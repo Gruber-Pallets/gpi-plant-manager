@@ -10,6 +10,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-24
+
+### Late and absence tracking plan
+
+#### Improvements
+
+- **The next late and absence update is clearly planned.** It will let supervisors mark an absence or a one-hour running-late wait without writing a reason. It will also save how many minutes late someone was after they clock in.
+
 ## 2026-08-21
 
 ### Feedback sharing starts safely
