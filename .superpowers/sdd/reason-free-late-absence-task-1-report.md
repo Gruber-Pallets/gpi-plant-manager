@@ -44,3 +44,12 @@ Removed the stale planned late-and-absence wording and the incorrect claim that 
 - Requested commands: `pytest tests/test_attendance.py tests/test_late_report.py -q` and `ruff check ...` could not start because `pytest` and `ruff` are not on the shell PATH.
 - Project-environment focused suite: `uv run pytest tests/test_attendance.py tests/test_late_report.py -q` — 22 passed, 6 skipped.
 - Project-environment requested lint scope: `uv run ruff check src/zira_dashboard/attendance.py src/zira_dashboard/_schema.py src/zira_dashboard/late_report.py tests/test_attendance.py tests/test_late_report.py` — passed.
+
+## Final release-note correction (2026-08-24)
+
+- Removed the claim that late records save exact minutes from the 2026-08-24 What's New entry. Automatic persistence belongs to Task 2 and has not shipped.
+- The entry now states only that clock-ins more than five minutes after start count as late.
+
+### Command result
+
+- `uv run pytest tests/test_attendance.py tests/test_late_report.py -q` — 22 passed, 6 skipped in 0.07s.

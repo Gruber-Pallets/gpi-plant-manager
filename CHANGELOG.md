@@ -16,7 +16,6 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 #### Improvements
 
-- **Late records now save the exact minutes someone was late.** This helps reports show what happened.
 - **A clock-in more than five minutes after start now counts as late.** This keeps records consistent.
 
 ## 2026-08-21
