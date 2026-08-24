@@ -47,7 +47,10 @@ def test_late_report_payload_excludes_unscheduled_no_punch(monkeypatch):
         staffing_routes,
         "_safe_attendance",
         lambda today, sched, t: {
-            "by_id": {"1": {"status": "no_punch"}, "2": {"status": "no_punch"}},
+            "by_id": {
+                "1": {"status": "no_punch", "arrived_after_grace": False},
+                "2": {"status": "no_punch", "arrived_after_grace": False},
+            },
             "by_name": {},
             "name_to_id": {"Ana": "1", "Bob": "2"},
             "scheduled_ids": ["1"],

@@ -3094,9 +3094,10 @@ def _record_confirmed_late_arrivals(
         emp_id = str(raw_emp_id)
         if emp_id not in eligible_ids or emp_id in absent_ids or emp_id in already_recorded_ids:
             continue
-        minutes_late = int((attendance_by_id.get(emp_id) or {}).get("minutes_late") or 0)
-        if minutes_late <= late_report.AUTO_RECORD_LATE_AFTER_MINUTES:
+        info = attendance_by_id.get(emp_id) or {}
+        if not info.get("arrived_after_grace"):
             continue
+        minutes_late = int(info.get("minutes_late") or 0)
         late_report.record_late_arrival(
             day, emp_id, id_to_name.get(emp_id) or f"Unknown ({emp_id})", minutes_late
         )

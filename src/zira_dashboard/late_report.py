@@ -482,7 +482,7 @@ def save_late_arrival(day, emp_id: str, name: str, reason: str | None = None) ->
 
 
 def record_late_arrival(day, emp_id: str, name: str, minutes_late: int) -> None:
-    if minutes_late <= AUTO_RECORD_LATE_AFTER_MINUTES:
+    if not isinstance(minutes_late, int) or isinstance(minutes_late, bool) or minutes_late <= 0:
         return
     db.execute(
         """

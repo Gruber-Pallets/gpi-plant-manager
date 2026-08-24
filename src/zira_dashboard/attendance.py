@@ -10,7 +10,7 @@ Odoo-era stack and the string-keyed late_report helpers.
 """
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from collections.abc import Iterable
 
 GRACE_MINUTES = 5
@@ -26,7 +26,7 @@ def compute_status(
 ) -> dict:
     """Per-id attendance status. ``punches`` is {str_id: {first_check_in(iso UTC),
     currently_open(bool)}}. Returns {str_id: {status, minutes_late,
-    clocked_in_at, currently_open}} for every id in ``ids``.
+    clocked_in_at, currently_open, arrived_after_grace}} for every id in ``ids``.
 
     status: no_punch | on_time | late | clocked_out. Judged on the FIRST
     check-in of the day (actual arrival). A punched-but-currently-out person
@@ -37,17 +37,26 @@ def compute_status(
     for raw in ids:
         sid = str(raw)
         p = punches.get(sid)
-        entry = {"status": "no_punch", "minutes_late": 0, "clocked_in_at": None, "currently_open": False}
+        entry = {
+            "status": "no_punch",
+            "minutes_late": 0,
+            "clocked_in_at": None,
+            "currently_open": False,
+            "arrived_after_grace": False,
+        }
         ci = (p or {}).get("first_check_in")
         if p and ci:
             ci_local = datetime.fromisoformat(ci).astimezone(shift_config.SITE_TZ)
             entry["clocked_in_at"] = ci_local.strftime("%I:%M %p").lstrip("0")
             entry["currently_open"] = bool(p.get("currently_open"))
+            entry["arrived_after_grace"] = ci_local > (
+                shift_start_local + timedelta(minutes=grace_minutes)
+            )
             minutes_late = max(0, int((ci_local - shift_start_local).total_seconds() // 60))
             entry["minutes_late"] = minutes_late
             if not entry["currently_open"]:
                 entry["status"] = "clocked_out"
-            elif minutes_late > grace_minutes:
+            elif entry["arrived_after_grace"]:
                 entry["status"] = "late"
             else:
                 entry["status"] = "on_time"

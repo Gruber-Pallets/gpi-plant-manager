@@ -24,6 +24,7 @@ def test_compute_status_classifies_punches():
     assert out["11"]["status"] == "late" and out["11"]["minutes_late"] == 25
     assert out["12"]["status"] == "clocked_out"
     assert out["13"]["status"] == "no_punch"
+    assert out["13"]["arrived_after_grace"] is False
 
 
 def test_compute_status_marks_six_minutes_late_by_default():
@@ -39,6 +40,45 @@ def test_compute_status_marks_six_minutes_late_by_default():
 
     assert out["6"]["status"] == "late"
     assert out["6"]["minutes_late"] == 6
+    assert out["6"]["arrived_after_grace"] is True
+
+
+def test_compute_status_uses_raw_arrival_time_at_the_grace_boundary():
+    shift_start = _shift_start()
+    punches = {
+        "exactly_five": {
+            "first_check_in": _utc_iso(shift_start + timedelta(minutes=5)),
+            "currently_open": True,
+        },
+        "five_minutes_one_second": {
+            "first_check_in": _utc_iso(shift_start + timedelta(minutes=5, seconds=1)),
+            "currently_open": True,
+        },
+        "closed_after_grace": {
+            "first_check_in": _utc_iso(shift_start + timedelta(minutes=5, seconds=1)),
+            "currently_open": False,
+        },
+    }
+
+    out = attendance.compute_status(punches, punches, shift_start, shift_start)
+
+    assert out["exactly_five"] == {
+        "status": "on_time",
+        "minutes_late": 5,
+        "clocked_in_at": "8:05 AM",
+        "currently_open": True,
+        "arrived_after_grace": False,
+    }
+    assert out["five_minutes_one_second"] == {
+        "status": "late",
+        "minutes_late": 5,
+        "clocked_in_at": "8:05 AM",
+        "currently_open": True,
+        "arrived_after_grace": True,
+    }
+    assert out["closed_after_grace"]["status"] == "clocked_out"
+    assert out["closed_after_grace"]["minutes_late"] == 5
+    assert out["closed_after_grace"]["arrived_after_grace"] is True
 
 
 def test_punches_for_day_keys_by_str_id(monkeypatch):

@@ -16,6 +16,7 @@ def _late_payload(
     *,
     status="late",
     minutes_late=6,
+    arrived_after_grace=True,
     absent_ids=None,
     snoozes=None,
 ):
@@ -37,7 +38,13 @@ def _late_payload(
         staffing_routes,
         "_safe_attendance",
         lambda *args: {
-            "by_id": {"7": {"status": status, "minutes_late": minutes_late}},
+            "by_id": {
+                "7": {
+                    "status": status,
+                    "minutes_late": minutes_late,
+                    "arrived_after_grace": arrived_after_grace,
+                }
+            },
             "scheduled_ids": ["7"],
             "name_to_id": {"Jesus Galindo": "7"},
         },
@@ -81,13 +88,69 @@ def test_late_payload_records_scheduled_punch_over_five_minutes(monkeypatch):
     assert "running_late" not in payload
 
 
-def test_late_payload_does_not_record_scheduled_punch_at_five_minutes(monkeypatch):
+def test_late_payload_records_scheduled_punch_just_after_five_minutes(monkeypatch):
     record = MagicMock()
     monkeypatch.setattr(staffing_routes.late_report, "record_late_arrival", record)
 
-    _late_payload(monkeypatch, status="late", minutes_late=5)
+    _late_payload(
+        monkeypatch,
+        status="late",
+        minutes_late=5,
+        arrived_after_grace=True,
+    )
+
+    record.assert_called_once_with(FIXED_DAY, "7", "Jesus Galindo", 5)
+
+
+def test_late_payload_records_closed_punch_just_after_five_minutes(monkeypatch):
+    record = MagicMock()
+    monkeypatch.setattr(staffing_routes.late_report, "record_late_arrival", record)
+
+    _late_payload(
+        monkeypatch,
+        status="clocked_out",
+        minutes_late=5,
+        arrived_after_grace=True,
+    )
+
+    record.assert_called_once_with(FIXED_DAY, "7", "Jesus Galindo", 5)
+
+
+def test_late_payload_does_not_record_punch_exactly_at_five_minutes(monkeypatch):
+    record = MagicMock()
+    monkeypatch.setattr(staffing_routes.late_report, "record_late_arrival", record)
+
+    _late_payload(
+        monkeypatch,
+        status="on_time",
+        minutes_late=5,
+        arrived_after_grace=False,
+    )
 
     record.assert_not_called()
+
+
+def test_record_late_arrival_keeps_a_positive_five_minute_display(monkeypatch):
+    execute = MagicMock()
+    monkeypatch.setattr(staffing_routes.late_report.db, "execute", execute)
+
+    staffing_routes.late_report.record_late_arrival(
+        FIXED_DAY, "7", "Jesus Galindo", 5
+    )
+
+    execute.assert_called_once()
+    assert execute.call_args.args[1] == (FIXED_DAY, "7", "Jesus Galindo", 5)
+
+
+def test_record_late_arrival_rejects_nonpositive_minutes(monkeypatch):
+    execute = MagicMock()
+    monkeypatch.setattr(staffing_routes.late_report.db, "execute", execute)
+
+    staffing_routes.late_report.record_late_arrival(
+        FIXED_DAY, "7", "Jesus Galindo", 0
+    )
+
+    execute.assert_not_called()
 
 
 def test_late_payload_does_not_record_absent_employee_punch(monkeypatch):
@@ -98,6 +161,7 @@ def test_late_payload_does_not_record_absent_employee_punch(monkeypatch):
         monkeypatch,
         status="late",
         minutes_late=6,
+        arrived_after_grace=True,
         absent_ids={"7"},
     )
 
@@ -112,6 +176,7 @@ def test_late_payload_clears_active_snooze_when_employee_has_punched(monkeypatch
     _late_payload(
         monkeypatch,
         status="late",
+        arrived_after_grace=True,
         snoozes=[
             {
                 "emp_id": "7",

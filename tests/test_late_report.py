@@ -24,7 +24,13 @@ def _attendance(no_punch_ids=(), other=None):
     """Build an attendance dict with given no_punch ids."""
     out = {}
     for eid in no_punch_ids:
-        out[eid] = {"status": "no_punch", "clocked_in_at": None, "minutes_late": 0, "transaction_type": ""}
+        out[eid] = {
+            "status": "no_punch",
+            "clocked_in_at": None,
+            "minutes_late": 0,
+            "transaction_type": "",
+            "arrived_after_grace": False,
+        }
     if other:
         out.update(other)
     return out
@@ -62,9 +68,18 @@ def test_skips_already_clocked_in(patch_db_empty):
     d = date(2026, 5, 1)
     now, start = _times(d, 30)
     att = _attendance(other={
-        "100": {"status": "on_time", "clocked_in_at": "06:05 AM", "minutes_late": 0, "transaction_type": "Clock In"},
-        "200": {"status": "late", "clocked_in_at": "06:25 AM", "minutes_late": 25, "transaction_type": "Clock In"},
-        "300": {"status": "clocked_out", "clocked_in_at": None, "minutes_late": 0, "transaction_type": "Clock Out"},
+        "100": {
+            "status": "on_time", "clocked_in_at": "06:05 AM", "minutes_late": 0,
+            "transaction_type": "Clock In", "arrived_after_grace": False,
+        },
+        "200": {
+            "status": "late", "clocked_in_at": "06:25 AM", "minutes_late": 25,
+            "transaction_type": "Clock In", "arrived_after_grace": True,
+        },
+        "300": {
+            "status": "clocked_out", "clocked_in_at": None, "minutes_late": 0,
+            "transaction_type": "Clock Out", "arrived_after_grace": False,
+        },
     })
     out = late_report.late_people_for_day(d, ["100", "200", "300"], att, now, start)
     assert out == []
@@ -256,15 +271,15 @@ def test_late_people_for_day_two_sections():
 
     attendance = {
         # Scheduled, no_punch — counts as scheduled_late
-        "111": {"status": "no_punch", "minutes_late": 0},
+        "111": {"status": "no_punch", "minutes_late": 0, "arrived_after_grace": False},
         # Scheduled, late punch — is recorded separately by the route.
-        "222": {"status": "late", "minutes_late": 31},
+        "222": {"status": "late", "minutes_late": 31, "arrived_after_grace": True},
         # Scheduled, on time — appears nowhere
-        "333": {"status": "on_time", "minutes_late": 0},
+        "333": {"status": "on_time", "minutes_late": 0, "arrived_after_grace": False},
         # Unscheduled, no_punch — counts as unscheduled_late
-        "444": {"status": "no_punch", "minutes_late": 0},
+        "444": {"status": "no_punch", "minutes_late": 0, "arrived_after_grace": False},
         # Unscheduled, late — is ignored by this no-punch helper.
-        "555": {"status": "late", "minutes_late": 18},
+        "555": {"status": "late", "minutes_late": 18, "arrived_after_grace": True},
     }
     out = late_report.late_people_for_day_v2(
         day=d,
@@ -291,7 +306,7 @@ def test_late_people_for_day_v2_excludes_late_punches():
     shift_start_local = datetime(2026, 5, 7, 7, 0, tzinfo=shift_config.SITE_TZ)
     now_local = datetime(2026, 5, 7, 9, 0, tzinfo=shift_config.SITE_TZ)
 
-    attendance = {"222": {"status": "late", "minutes_late": 31}}
+    attendance = {"222": {"status": "late", "minutes_late": 31, "arrived_after_grace": True}}
     out = late_report.late_people_for_day_v2(
         day=d,
         scheduled_emp_ids=["222"],
@@ -314,8 +329,8 @@ def test_late_people_for_day_v2_skips_absent_and_snoozed():
     now_local = datetime(2026, 5, 7, 9, 0, tzinfo=shift_config.SITE_TZ)
 
     attendance = {
-        "111": {"status": "no_punch", "minutes_late": 0},
-        "222": {"status": "no_punch", "minutes_late": 0},
+        "111": {"status": "no_punch", "minutes_late": 0, "arrived_after_grace": False},
+        "222": {"status": "no_punch", "minutes_late": 0, "arrived_after_grace": False},
     }
     out = late_report.late_people_for_day_v2(
         day=d,
