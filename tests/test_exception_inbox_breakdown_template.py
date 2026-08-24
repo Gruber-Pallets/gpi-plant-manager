@@ -82,6 +82,8 @@ def test_late_absence_row_renders_running_late_controls(monkeypatch):
     monkeypatch.setattr(exceptions_route.exception_inbox, "build_snapshot", _late_snapshot)
     response = TestClient(app).get("/exceptions")
 
-    assert "js-running-late-open" in response.text
-    assert "js-running-late-time" in response.text
-    assert "js-running-late-save" in response.text
+    assert ">Absent</button>" in response.text
+    assert ">Running Late — 60 min</button>" in response.text
+    assert "js-reason-input" not in response.text
+    assert "js-running-late-time" not in response.text
+    assert "js-running-late-save" not in response.text

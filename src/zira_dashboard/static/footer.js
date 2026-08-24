@@ -637,42 +637,17 @@
   function renderLateBody(body, d, api) {
     var html = '';
 
-    // Quick-pick reason editor (Sick / Car issues / Overslept / Other +
-    // free-text input + gated Save). Shared by the needs_reason rows
-    // (always visible, saves a late-arrival reason) and the Declare Absent
-    // editor (hidden until toggled, saves an absence).
-    function reasonRow(extraClass, hidden, saveClass) {
-      return ''
-        + '<div class="late-reason-row' + (extraClass ? ' ' + extraClass : '') + '"' + (hidden ? ' hidden' : '') + '>'
-        + '  <button type="button" class="late-quickpick" data-pick="Sick">Sick</button>'
-        + '  <button type="button" class="late-quickpick" data-pick="Car issues">Car issues</button>'
-        + '  <button type="button" class="late-quickpick" data-pick="Overslept">Overslept</button>'
-        + '  <button type="button" class="late-quickpick" data-pick="">Other</button>'
-        + '  <input type="text" class="late-reason-input" placeholder="Reason required">'
-        + '  <button type="button" class="' + saveClass + '" disabled>Save</button>'
-        + '</div>';
-    }
-
     function renderActionableRow(item, sectionKind) {
-      // sectionKind: 'scheduled' | 'unscheduled' | 'needs_reason'
       var rowClass = 'late-item late-item-' + sectionKind;
       var minsHtml = '';
       if (sectionKind === 'scheduled') {
         minsHtml = '<span class="late-item-mins">' + item.minutes_late + ' min late</span>';
-      } else if (sectionKind === 'needs_reason') {
-        minsHtml = '<span class="late-item-mins">clocked in ' + item.minutes_late + ' min late</span>';
       }
-      var actionsHtml;
-      if (sectionKind === 'needs_reason') {
-        actionsHtml = reasonRow('', false, 'late-save-late');
-      } else {
-        actionsHtml = ''
-          + '<span class="late-item-actions">'
-          + '  <button type="button" class="late-snooze">Snooze 30 min</button>'
-          + '  <button type="button" class="late-declare">Declare Absent</button>'
-          + '</span>'
-          + reasonRow('late-declare-reason', true, 'late-save-absent');
-      }
+      var actionsHtml = ''
+        + '<span class="late-item-actions">'
+        + '  <button type="button" class="late-declare">Mark Absent</button>'
+        + '  <button type="button" class="late-running-late">Running Late — 60 min</button>'
+        + '</span>';
       return ''
         + '<li class="' + rowClass + '" data-emp-id="' + escapeHtml(item.emp_id)
         +    '" data-name="' + escapeHtml(item.name) + '">'
@@ -705,18 +680,8 @@
       html += '</ul>';
     }
 
-    if (d.needs_reason && d.needs_reason.length) {
-      anyActionable = true;
-      html += '<h4 class="late-section-title">Late arrivals — reason needed</h4>';
-      html += '<ul class="late-list">';
-      d.needs_reason.forEach(function (item) {
-        html += renderActionableRow(item, 'needs_reason');
-      });
-      html += '</ul>';
-    }
-
     if (!anyActionable) {
-      html += '<p class="late-help">No one is currently flagged. Anyone scheduled today who hasn\'t clocked in by 15 min past shift-start, or who clocked in late without a recorded reason, will appear here.</p>';
+      html += '<p class="late-help">No one is currently flagged. A scheduled employee who has not clocked in 15 minutes after start will appear here.</p>';
     }
 
     if (d.snoozed && d.snoozed.length) {
@@ -736,94 +701,23 @@
   }
 
   function wireLateHandlers(body, api) {
-    // Save button is gated on the reason input having content. Empty
-    // input → button disabled. Each row gets its own listener.
-    function refreshSaveDisabled(input) {
-      var row = input.closest('.late-reason-row');
-      if (!row) return;
-      var save = row.querySelector('.late-save-late, .late-save-absent');
-      if (!save) return;
-      save.disabled = (input.value || '').trim().length === 0;
-    }
-
-    body.querySelectorAll('.late-reason-input').forEach(function (input) {
-      refreshSaveDisabled(input);
-      input.addEventListener('input', function () { refreshSaveDisabled(input); });
-    });
-
-    // Quick-pick buttons populate the adjacent text input. Sick / Car
-    // issues / Overslept have a non-empty data-pick — those auto-save
-    // (one click, done). "Other" has an empty data-pick — that clears
-    // the input and waits for the user to type, then Save fires the
-    // record manually.
-    body.querySelectorAll('.late-quickpick').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var input = btn.parentElement.querySelector('.late-reason-input');
-        if (!input) return;
-        var pick = btn.dataset.pick || '';
-        input.value = pick;
-        refreshSaveDisabled(input);
-        if (pick) {
-          var save = btn.parentElement.querySelector('.late-save-late, .late-save-absent');
-          if (save) save.click();
-        } else {
-          input.focus();
-        }
-      });
-    });
-
-    // Snooze. Always closes the modal immediately on success — Snooze
-    // means "out of my face for 30 min", and forcing the user to also
-    // dismiss the modal defeats the purpose. Other actions (Save / Declare
-    // Absent) keep the modal open so the user can deal with remaining
-    // people in one sitting.
-    body.querySelectorAll('.late-snooze').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var li = btn.closest('.late-item');
-        doLateAction(li, '/api/late-report/snooze', {
-          emp_id: li.dataset.empId,
-          name: li.dataset.name,
-          minutes: 30,
-        }, { alwaysClose: true }, api);
-      });
-    });
-
-    // Declare Absent — toggles the inline reason editor.
     body.querySelectorAll('.late-declare').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var li = btn.closest('.late-item');
-        var editor = li.querySelector('.late-declare-reason');
-        if (editor) {
-          editor.hidden = false;
-          var input = editor.querySelector('.late-reason-input');
-          if (input) input.focus();
-        }
-      });
-    });
-
-    // Save (Declare Absent).
-    body.querySelectorAll('.late-save-absent').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var li = btn.closest('.late-item');
-        var input = li.querySelector('.late-reason-input');
         doLateAction(li, '/api/late-report/declare-absent', {
           emp_id: li.dataset.empId,
           name: li.dataset.name,
-          reason: input ? input.value : '',
         }, null, api);
       });
     });
 
-    // Save (Late Arrival reason).
-    body.querySelectorAll('.late-save-late').forEach(function (btn) {
+    body.querySelectorAll('.late-running-late').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var li = btn.closest('.late-item');
-        var input = li.querySelector('.late-reason-input');
-        doLateAction(li, '/api/late-report/save-late-arrival', {
+        doLateAction(li, '/api/late-report/running-late', {
           emp_id: li.dataset.empId,
           name: li.dataset.name,
-          reason: input ? input.value : '',
-        }, null, api);
+        }, { alwaysClose: true }, api);
       });
     });
   }
@@ -834,16 +728,13 @@
     if (status) { status.hidden = false; status.textContent = 'Saving…'; }
     postJson(url, payload).then(function (resp) {
       if (resp && resp.ok) {
-        // Re-pull the report so the saved row drops out. If nothing's
-        // actionable left OR the caller set `alwaysClose: true` (Snooze),
-        // close the modal — otherwise re-render so the user can keep
-        // working without "Saving…" lingering on the saved row.
+        // Re-pull the report so the saved row drops out. If nothing is
+        // actionable left, or Running Late was selected, close the modal.
         window.gpiFetch(LATE_ENDPOINT).then(function (r) { return r.json(); }).then(function (d) {
           api.setData(d);
           api.injectOrUpdateBadge();
           var anyActionable = (d.scheduled_late && d.scheduled_late.length)
-              || (d.unscheduled_late && d.unscheduled_late.length)
-              || (d.needs_reason && d.needs_reason.length);
+              || (d.unscheduled_late && d.unscheduled_late.length);
           if (opts.alwaysClose || !anyActionable) {
             api.closeModal();
           } else if (api.isModalOpen()) {

@@ -484,7 +484,7 @@ def test_build_snapshot_flags_degraded_source_into_source_errors(monkeypatch):
                         lambda: {"degraded": True, "count": 0, "items": [], "people": []})
     monkeypatch.setattr(staffing_routes, "late_report_payload",
                         lambda: {"count": 0, "scheduled_late": [], "unscheduled_late": [],
-                                 "needs_reason": [], "snoozed": []})
+                                 "snoozed": []})
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))

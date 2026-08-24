@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-24
 
+### Late alerts take less time
+
+#### Improvements
+
+- **Late alerts now have two quick buttons.** Mark someone absent or ask the app to check again in one hour. You do not need to write a reason.
+
 ### Late alerts are easier to handle
 
 #### Improvements

@@ -113,7 +113,6 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
             }
         ],
         "unscheduled_late": [{"emp_id": 2, "name": "Ben"}],
-        "needs_reason": [],
         "snoozed": [{"emp_id": 3, "name": "Cal", "mins_remaining": 18}],
     })
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [
@@ -176,7 +175,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
     assert sections["time_off"]["rows"][0]["action"]["request_id"] == 20
 
 
-def test_build_snapshot_maps_running_late_to_muted_follow_up(monkeypatch):
+def test_build_snapshot_maps_snoozed_employee_to_only_muted_late_follow_up(monkeypatch):
     monkeypatch.setattr(exception_inbox.plant_day, "today", lambda: date(2026, 7, 13))
     # The publish-tomorrow reminder fires from the REAL clock after its
     # afternoon cutoff and would pollute the totals when the suite runs
@@ -187,10 +186,9 @@ def test_build_snapshot_maps_running_late_to_muted_follow_up(monkeypatch):
     monkeypatch.setattr(staffing_routes, "assignments_todo_payload", lambda: {"count": 0})
     monkeypatch.setattr(staffing_routes, "late_report_payload", lambda: {
         "count": 0, "scheduled_late": [], "unscheduled_late": [],
-        "needs_reason": [], "snoozed": [],
-        "running_late": [{
+        "snoozed": [{
             "emp_id": "7", "name": "Jesus Galindo",
-            "until_iso": "2026-07-13T14:15:00+00:00", "expected_label": "9:15 AM",
+            "until_iso": "2026-07-13T14:15:00+00:00", "mins_remaining": 45,
         }],
     })
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
@@ -202,10 +200,10 @@ def test_build_snapshot_maps_running_late_to_muted_follow_up(monkeypatch):
     snap = exception_inbox.build_snapshot()
     late = next(section for section in snap["sections"] if section["id"] == "late")
 
-    assert late["rows"][-1]["label"] == "Running Late"
-    assert late["rows"][-1]["detail"] == "Expected by 9:15 AM"
+    assert late["rows"][-1]["label"] == "Snoozed"
+    assert late["rows"][-1]["detail"] == "Re-checks in 45 mins"
     assert late["rows"][-1]["priority"] == "muted"
-    assert late["rows"][-1]["action"] is None
+    assert "action" not in late["rows"][-1]
     assert snap["total"] == 0
     assert snap["urgent_total"] == 0
     assert snap["follow_up_total"] == 1
@@ -313,9 +311,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
         "count": 3,
         "scheduled_late": [{"emp_id": 1}],
         "unscheduled_late": [{"emp_id": 2}],
-        "needs_reason": [{"emp_id": 3}],
         "snoozed": [{"emp_id": 4}],
-        "running_late": [{"emp_id": 5}],
     })
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [{"attendance_id": 10}])
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [{"attendance_id": 11}])
@@ -330,7 +326,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     assert summary["generated_at"] == "8:10 AM"
     assert summary["total"] == 11
     assert summary["urgent_total"] == 6
-    assert summary["follow_up_total"] == 2
+    assert summary["follow_up_total"] == 1
     assert summary["source_errors"] == []
     assert summary["sections"] == {
         "odoo_roster_sync": 0,
@@ -1413,7 +1409,8 @@ def test_exceptions_js_refreshes_shared_badges_after_inline_resolution():
 
     assert "function refreshSharedBadge(row)" in js
     assert "actionType === 'assignment'" in js
-    assert "actionType === 'late_absence' || actionType === 'late_reason'" in js
+    assert "actionType === 'late_absence'" in js
+    assert "late_reason" not in js
     assert "actionType === 'missing_wc'" in js
     assert "actionType === 'missed_punch_out'" in js
     assert "api.refreshCount()" in js
@@ -1472,7 +1469,7 @@ def test_inbox_template_has_inline_time_off_deny_reason():
     assert "js-time-off-reason" in html
     assert "js-time-off-refuse" in html
     assert 'aria-label="Person to assign"' in html
-    assert 'aria-label="Late or absence reason"' in html
+    assert 'aria-label="Late or absence reason"' not in html
     assert 'aria-label="Work center to assign"' in html
     assert 'aria-label="Reason to deny time off"' in html
     assert 'aria-label="Forgotten punch-in time"' in html
@@ -1480,6 +1477,11 @@ def test_inbox_template_has_inline_time_off_deny_reason():
     assert "js-forgot-punch-open" in html
     assert ">Missed Punch</button>" in html
     assert "row-btn warn js-absent" in html
+    assert ">Absent</button>" in html
+    assert ">Running Late — 60 min</button>" in html
+    assert "js-reason-input" not in html
+    assert "js-running-late-time" not in html
+    assert "js-running-late-save" not in html
 
 
 def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
@@ -1492,8 +1494,15 @@ def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
     assert "event.key !== 'Enter'" in js
     assert ".js-time-off-refuse" in js
     assert "function submitRowInput" in js
-    assert ".js-reason-input" in js
-    assert ".js-absent, .js-save-late" in js
+    assert ".js-reason-input" not in js
+    assert "requireReason" not in js
+    assert "reason: absentReason" not in js
+    assert "/api/late-report/save-late-arrival" not in js
+    assert "js-running-late-time" not in js
+    assert "js-running-late-save" not in js
+    assert "postJson('/api/late-report/declare-absent', {" in js
+    assert "postJson('/api/late-report/running-late', {" in js
+    assert "Re-checks in 60 min" in js
     assert ".js-punch-time" in js
     assert ".js-punch-save" in js
     assert "/api/late-report/forgot-punch-in" in js
@@ -1502,6 +1511,30 @@ def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
     assert ".js-forgot-punch-save" in js
     assert "Missed punch: enter time and work center." in js
     assert "btn.click()" in js
+
+
+def test_late_report_footer_uses_direct_reason_free_actions():
+    js = (STATIC_DIR / "footer.js").read_text(encoding="utf-8")
+    late_report_js = js.split('  // ---------- "Late/Absence Report" ----------', 1)[1].split(
+        '  // ---------- "Missing Work Center" ----------', 1
+    )[0]
+
+    assert ">Mark Absent</button>" in late_report_js
+    assert ">Running Late — 60 min</button>" in late_report_js
+    assert "needs_reason" not in late_report_js
+    assert "reasonRow" not in late_report_js
+    assert "late-reason-input" not in late_report_js
+    assert "'/api/late-report/save-late-arrival'" not in late_report_js
+    assert "'/api/late-report/snooze'" not in late_report_js
+    assert "doLateAction(li, '/api/late-report/declare-absent', {" in late_report_js
+    assert "doLateAction(li, '/api/late-report/running-late', {" in late_report_js
+    assert "reason:" not in late_report_js
+    assert "minutes:" not in late_report_js
+    assert "{ alwaysClose: true }" in late_report_js
+    assert (
+        "A scheduled employee who has not clocked in 15 minutes after start will appear here."
+        in late_report_js
+    )
 
 
 def test_inbox_css_styles_absent_button_orange():

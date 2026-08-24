@@ -339,9 +339,7 @@ def build_summary() -> dict:
         "generated_at": plant_day.now().strftime("%-I:%M %p"),
         "total": total,
         "urgent_total": urgent_total,
-        "follow_up_total": (
-            len(late.get("snoozed") or []) + len(late.get("running_late") or [])
-        ),
+        "follow_up_total": len(late.get("snoozed") or []),
         "source_errors": source_errors,
         "sections": {
             "assignments": assignment_count,
@@ -446,21 +444,6 @@ def build_snapshot() -> dict:
                 "name": item.get("name"),
             },
         })
-    for item in late.get("needs_reason") or []:
-        late_rows.append({
-            "name": item.get("name"),
-            "label": "Reason needed",
-            "detail": _plural(int(item.get("minutes_late") or 0), "min") + " late",
-            "priority": "warn",
-            "badge": "Reason",
-            "row_key": _row_key("late_reason", item.get("emp_id")),
-            "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
-            "action": {
-                "type": "late_reason",
-                "emp_id": item.get("emp_id"),
-                "name": item.get("name"),
-            },
-        })
     for item in late.get("snoozed") or []:
         mins = int(item.get("mins_remaining") or 0)
         late_rows.append({
@@ -472,18 +455,6 @@ def build_snapshot() -> dict:
             "row_key": _row_key("late_snoozed", item.get("emp_id"), item.get("until_iso")),
             "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
         })
-    for item in late.get("running_late") or []:
-        late_rows.append({
-            "name": item.get("name"),
-            "label": "Running Late",
-            "detail": f"Expected by {item.get('expected_label')}",
-            "priority": "muted",
-            "badge": "Follow-up",
-            "row_key": _row_key("running_late", item.get("emp_id"), item.get("until_iso")),
-            "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
-            "action": None,
-        })
-
     sections = [
         {
             "id": "odoo_roster_sync",

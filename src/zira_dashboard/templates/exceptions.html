@@ -74,7 +74,7 @@
              data-wc-name="{{ action.wc_name or '' }}"
              data-start-utc="{{ action.start_utc or '' }}"
              data-end-utc="{{ action.end_utc or '' }}"
-           {% elif action and action.type in ('late_absence', 'late_reason') %}
+           {% elif action and action.type == 'late_absence' %}
              data-emp-id="{{ action.emp_id or '' }}"
            {% elif action and action.type in ('missing_wc', 'missed_punch_out') %}
              data-attendance-id="{{ action.attendance_id or '' }}"
@@ -108,14 +108,6 @@
             <button type="button" class="row-btn primary js-assign">Save</button>
             <button type="button" class="row-btn" data-alert-open="assignments">Testing</button>
           {% elif action and action.type == 'late_absence' %}
-            <select class="inline-select js-reason-preset" aria-label="Reason preset">
-              <option value="">Reason...</option>
-              <option value="Sick">Sick</option>
-              <option value="Car issues">Car issues</option>
-              <option value="Overslept">Overslept</option>
-              <option value="">Other</option>
-            </select>
-            <input type="text" class="inline-input js-reason-input" aria-label="Late or absence reason" placeholder="Reason required">
             <input type="time" class="inline-input time js-forgot-punch-time" aria-label="Forgotten punch-in time" value="{{ action.scheduled_start_time or '' }}" hidden>
             <select class="inline-select js-forgot-wc" aria-label="Forgotten punch-in work center" hidden>
               <option value="">Work center...</option>
@@ -126,21 +118,7 @@
             <button type="button" class="row-btn primary js-forgot-punch-save" hidden>Clock in</button>
             <button type="button" class="row-btn primary js-forgot-punch-open">Missed Punch</button>
             <button type="button" class="row-btn warn js-absent">Absent</button>
-            <button type="button" class="row-btn js-running-late-open">Running Late</button>
-            <input type="time" class="inline-input time js-running-late-time"
-                   aria-label="Expected arrival time" hidden>
-            <button type="button" class="row-btn primary js-running-late-save" hidden>Confirm</button>
-            <button type="button" class="row-btn js-snooze">Snooze</button>
-          {% elif action and action.type == 'late_reason' %}
-            <select class="inline-select js-reason-preset" aria-label="Reason preset">
-              <option value="">Reason...</option>
-              <option value="Sick">Sick</option>
-              <option value="Car issues">Car issues</option>
-              <option value="Overslept">Overslept</option>
-              <option value="">Other</option>
-            </select>
-            <input type="text" class="inline-input js-reason-input" aria-label="Late or absence reason" placeholder="Reason required">
-            <button type="button" class="row-btn primary js-save-late">Save</button>
+            <button type="button" class="row-btn js-running-late">Running Late — 60 min</button>
           {% elif action and action.type == 'missing_wc' %}
             <select class="inline-select js-wc" aria-label="Work center to assign">
               <option value="">Work center...</option>

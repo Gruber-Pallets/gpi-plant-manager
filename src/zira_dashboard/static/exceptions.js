@@ -97,7 +97,7 @@
     var actionType = row && row.dataset.actionType;
     var badgeKey = null;
     if (actionType === 'assignment') badgeKey = 'assignments';
-    else if (actionType === 'late_absence' || actionType === 'late_reason') badgeKey = 'late';
+    else if (actionType === 'late_absence') badgeKey = 'late';
     else if (actionType === 'missing_wc') badgeKey = 'missing_wc';
     else if (actionType === 'missed_punch_out') badgeKey = 'missed_punch_out';
     else if (actionType === 'breakdown' || actionType === 'breakdown_header') badgeKey = 'breakdown';
@@ -176,17 +176,6 @@
   function failRow(row, label) {
     rowStatus(row, label || 'Error', true);
     setBusy(row, false);
-  }
-
-  function requireReason(row) {
-    var input = row.querySelector('.js-reason-input');
-    var reason = input ? input.value.trim() : '';
-    if (!reason) {
-      if (input) input.focus();
-      failRow(row, 'Reason required.');
-      return null;
-    }
-    return reason;
   }
 
   function setForgotPunchMode(row, enabled) {
@@ -568,79 +557,38 @@
       return;
     }
 
-    if (rowBtn.classList.contains('js-running-late-open')) {
-      row.querySelector('.js-running-late-time').hidden = false;
-      row.querySelector('.js-running-late-save').hidden = false;
-      row.querySelector('.js-running-late-time').focus();
-      return;
-    }
-
-    if (rowBtn.classList.contains('js-running-late-save')) {
-      var expectedTime = row.querySelector('.js-running-late-time').value;
-      if (!empId || !personName || !expectedTime) {
-        failRow(row, expectedTime ? 'Missing employee id.' : 'Choose an expected arrival time.');
-        return;
-      }
-      setBusy(row, true);
-      rowStatus(row, 'Saving expected arrival...', false);
-      postJson('/api/late-report/running-late', {
-        emp_id: empId, name: personName, expected_time: expectedTime
-      }).then(function (resp) {
-        if (resp && resp.ok) resolveRow(row, 'Running late');
-        else failRow(row, (resp && resp.error) || 'Could not save expected arrival.');
-      }).catch(function () { failRow(row, 'Network error.'); });
-      return;
-    }
-
-    if (rowBtn.classList.contains('js-snooze')) {
+    if (rowBtn.classList.contains('js-running-late')) {
       if (!empId || !personName) {
         failRow(row, 'Missing employee id.');
         return;
       }
       setBusy(row, true);
-      rowStatus(row, 'Snoozing...', false);
-      postJson('/api/late-report/snooze', {
+      rowStatus(row, 'Saving running late...', false);
+      postJson('/api/late-report/running-late', {
         emp_id: empId,
         name: personName,
-        minutes: 30,
       }).then(function (resp) {
-        if (resp && resp.ok) resolveRow(row, 'Snoozed');
-        else failRow(row, (resp && resp.error) || 'Snooze failed.');
+        if (resp && resp.ok) resolveRow(row, 'Re-checks in 60 min', resp.event_id);
+        else failRow(row, (resp && resp.error) || 'Save failed.');
       }).catch(function () { failRow(row, 'Network error.'); });
       return;
     }
 
     if (rowBtn.classList.contains('js-absent')) {
-      var absentReason = requireReason(row);
-      if (!absentReason) return;
+      if (!empId || !personName) {
+        failRow(row, 'Missing employee id.');
+        return;
+      }
       setBusy(row, true);
       rowStatus(row, 'Saving absence...', false);
       postJson('/api/late-report/declare-absent', {
         emp_id: empId,
         name: personName,
-        reason: absentReason,
       }).then(function (resp) {
-        if (resp && resp.ok) {
-          resolveRow(row, resp.warning ? 'Marked absent — Odoo Time Off not updated' : 'Marked absent', resp.event_id);
-        } else {
+        if (resp && resp.ok) resolveRow(row, 'Marked absent', resp.event_id);
+        else {
           failRow(row, (resp && resp.error) || 'Save failed.');
         }
-      }).catch(function () { failRow(row, 'Network error.'); });
-      return;
-    }
-
-    if (rowBtn.classList.contains('js-save-late')) {
-      var lateReason = requireReason(row);
-      if (!lateReason) return;
-      setBusy(row, true);
-      rowStatus(row, 'Saving reason...', false);
-      postJson('/api/late-report/save-late-arrival', {
-        emp_id: empId,
-        name: personName,
-        reason: lateReason,
-      }).then(function (resp) {
-        if (resp && resp.ok) resolveRow(row, 'Reason saved', resp.event_id);
-        else failRow(row, (resp && resp.error) || 'Save failed.');
       }).catch(function () { failRow(row, 'Network error.'); });
       return;
     }
@@ -840,11 +788,6 @@
       event.preventDefault();
       return;
     }
-    input = event.target.closest('.js-reason-input');
-    if (submitRowInput(input, '.js-absent, .js-save-late')) {
-      event.preventDefault();
-      return;
-    }
     input = event.target.closest('.js-forgot-punch-time');
     if (submitRowInput(input, '.js-forgot-punch-save')) {
       event.preventDefault();
@@ -855,17 +798,6 @@
   });
 
   document.addEventListener('change', function (event) {
-    var preset = event.target.closest('.js-reason-preset');
-    if (preset) {
-      var row = preset.closest('.exception-row');
-      var input = row && row.querySelector('.js-reason-input');
-      if (!input) return;
-      setForgotPunchMode(row, false);
-      if (preset.value) input.value = preset.value;
-      input.focus();
-      return;
-    }
-
     if (event.target.closest('[data-archive-actor]') || event.target.closest('[data-archive-hide-auto]')) {
       reloadArchive();
     }
