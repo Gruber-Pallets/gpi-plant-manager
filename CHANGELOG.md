@@ -12,32 +12,11 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-24
 
-### Late alerts take less time
+### Late and absence reports are quicker
 
 #### Improvements
 
-- **Late alerts now have two quick buttons.** Mark someone absent or ask the app to check again in one hour. You do not need to write a reason.
-
-### Late alerts are easier to handle
-
-#### Improvements
-
-- **Late clock-ins now save by themselves after five minutes.** Supervisors do not need to write a reason.
-- **You can mark an absence without writing a reason.** The app still saves the absence and lets the schedule update.
-- **Running Late now hides the late alert for one hour.** This gives the person time to arrive without repeated alerts.
-
-### Late alerts stay simple
-
-#### Fixes
-
-- **You can still mark an absence without writing a reason.** The app keeps that choice simple and clear.
-
-### Late timing is more exact
-
-#### Improvements
-
-- **A clock-in more than five minutes after start now counts as late.** This keeps records consistent.
-- **A clock-in just after five minutes now saves the right late record.** The screen can still show five full minutes, while the record stays correct.
+- **Late and absence reports are now quicker.** Mark an absence or tell Plant Manager to check again in one hour without writing a reason. When someone clocks in more than five minutes late, their page saves the date and how many minutes late they were.
 
 ## 2026-08-21
 

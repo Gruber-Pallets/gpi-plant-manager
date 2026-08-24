@@ -52,16 +52,17 @@ def test_player_card_renders_per_day_breakdown_table():
     assert "Repair-1" in html and "Repair-2" in html
 
 
-def test_player_card_renders_attendance_section_with_reasons():
-    """The player card shows an Attendance section with absent/late
-    rows and reasons when history exists in the range."""
+def test_player_card_renders_reason_free_attendance_history():
+    """The player card shows absent/late dates and late minutes only."""
     from datetime import date
     from unittest.mock import patch
     from fastapi.testclient import TestClient
     from zira_dashboard.app import app
 
+    # The history helpers may continue carrying legacy `reason` values while
+    # old records exist. The player card must not expose those values.
     abs_rows = [{"day": date(2026, 5, 6), "reason": "sick"}]
-    late_rows = [{"day": date(2026, 5, 7), "reason": "car issues"}]
+    late_rows = [{"day": date(2026, 5, 7), "minutes_late": 17, "reason": "car issues"}]
 
     with patch("zira_dashboard.production_history.attribution_per_day", return_value=[]), \
          patch("zira_dashboard.production_history.daily_records", return_value=[]), \
@@ -77,13 +78,25 @@ def test_player_card_renders_attendance_section_with_reasons():
         html = client.get("/staffing/people/Carlos?start=2026-05-01&end=2026-05-07").text
 
     assert "Attendance" in html
-    assert "Days Absent" in html
-    assert "Days Late" in html
-    assert "sick" in html
-    assert "car issues" in html
+    assert "Days Absent" in html and "Days Late" in html
+    assert '<div class="lab">Days Absent</div><div class="v">1</div>' in html
+    assert '<div class="lab">Days Late</div><div class="v">1</div>' in html
+    assert "Minutes Late" in html
+    assert "17 min" in html
+    assert "Reason" not in html
+    assert "sick" not in html
+    assert "car issues" not in html
+    assert "contenteditable" not in html
+    assert "/attendance/reason" not in html
     # Date hyperlinks point to the recycling day-view.
     assert 'href="/recycling?start=2026-05-06&end=2026-05-06"' in html
     assert 'href="/recycling?start=2026-05-07&end=2026-05-07"' in html
+
+    old_endpoint = client.post(
+        "/api/staffing/people/Carlos/attendance/reason",
+        json={"date": "2026-05-06", "type": "absent", "reason": "sick"},
+    )
+    assert old_endpoint.status_code == 404
 
 
 def test_player_card_attendance_section_hidden_when_empty():
