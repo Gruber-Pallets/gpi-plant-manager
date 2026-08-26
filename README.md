@@ -37,6 +37,9 @@ maintenance hours are trackable — see
 - Requires `ODOO_KIOSK_DEPARTMENT_FIELD` for department tagging and an Odoo
   `hr.department` whose name contains "Sustaining".
 - "Needs a human" flags: `/auto-salaried/flags`.
+- Flip modes (dry-run ↔ live) outside plant hours (before 6:00 AM or after
+  3:30 PM Central); mid-day flips can strand an open attendance or produce
+  noise flags.
 
 ## Running
 

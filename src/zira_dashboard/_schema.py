@@ -1353,8 +1353,8 @@ CREATE TABLE IF NOT EXISTS auto_salaried_flags (
 
 -- 2026-08-26 auto-salaried: widen the punch source tag so this worker's
 -- writes are recognizable too (mirrors auto_lunch's 2026-06-02 addition).
--- 'kiosk' is included alongside 'employee' as another human-originated
--- value the auto-salaried worker treats as a "foreign" (non-robot) punch.
+-- Allowed sources: 'employee' (kiosk-originated human punches),
+-- 'auto_lunch', 'auto_salaried'.
 ALTER TABLE timeclock_punches_log DROP CONSTRAINT IF EXISTS timeclock_punches_log_source_check;
 ALTER TABLE timeclock_punches_log ADD CONSTRAINT timeclock_punches_log_source_check
   CHECK (source IN ('employee', 'auto_lunch', 'auto_salaried'));
