@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from . import company_holidays, db, shift_config, timeclock_sync
 
@@ -163,17 +163,29 @@ def _ensure_run(person_odoo_id: int, day: date) -> None:
 
 
 def _record_punch(person_odoo_id: int, day: date, slot: str, punch_id: int, *, cur=None) -> None:
+    """Claim `slot` for this run row. Guarded against a concurrent reconciler
+    sweep: if the row was skipped/reverted/flagged out from under us between
+    the caller's read and this write, the UPDATE affects zero rows and we
+    raise — inside the caller's open cursor that rolls back the punch insert
+    too, so we never leave an orphan punch the reconciler already gave up on."""
     if slot not in SLOT_ORDER:  # guards the f-string column name
         raise ValueError(f"unknown slot {slot!r}")
     sql = (
         f"UPDATE auto_salaried_runs SET {slot}_punch_id = %s, updated_at = now() "
-        f"WHERE person_odoo_id = %s AND day = %s AND {slot}_punch_id IS NULL"
+        f"WHERE person_odoo_id = %s AND day = %s AND {slot}_punch_id IS NULL "
+        f"AND skipped = FALSE AND reverted = FALSE AND flagged = FALSE"
     )
     params = (punch_id, person_odoo_id, day)
     if cur is not None:
         cur.execute(sql, params)
+        rowcount = cur.rowcount
     else:
-        db.execute(sql, params)
+        with db.cursor() as own_cur:
+            own_cur.execute(sql, params)
+            rowcount = own_cur.rowcount
+    if rowcount == 0:
+        raise RuntimeError(
+            f"auto-salaried: run row for person {person_odoo_id} {day} refused slot {slot}")
 
 
 def _write_auto_punch(person_odoo_id: int, action: str, wc_name: str | None,
@@ -190,21 +202,28 @@ def _write_auto_punch(person_odoo_id: int, action: str, wc_name: str | None,
     return cur.fetchone()["id"]
 
 
-def _capture_lunch_department(person_odoo_id: int, day: date, *, cur) -> None:
-    """At lunch-out, read the department off the person's OPEN Odoo record —
-    Odoo is the referee because outside apps transfer salaried people without
-    telling this app's log. Unreadable → default Sustaining after lunch and
-    flag the day (spec: missing 30 minutes is worse than a wrong department)."""
-    dept_id = dept_name = None
+def _read_pre_lunch_department(person_odoo_id: int) -> tuple[int | None, str | None]:
+    """Read the department off the person's OPEN Odoo record — Odoo is the
+    referee because outside apps transfer salaried people without telling
+    this app's log. Pure I/O, no DB write: called BEFORE opening the
+    transaction that records it, so the XML-RPC round trip never holds a
+    Postgres transaction open."""
     try:
         from . import odoo_client
         current = odoo_client.get_current_attendance(person_odoo_id)
         if current:
-            dept_id = current.get("department_id")
-            dept_name = current.get("department_name")
+            return current.get("department_id"), current.get("department_name")
     except Exception as e:  # noqa: BLE001 — flag and carry on
         _log.warning("auto-salaried: dept read failed for person %s: %s",
                      person_odoo_id, e)
+    return None, None
+
+
+def _capture_lunch_department(person_odoo_id: int, day: date,
+                              dept_id: int | None, dept_name: str | None, *, cur) -> None:
+    """At lunch-out, record the department read by `_read_pre_lunch_department`.
+    Unreadable → default Sustaining after lunch and flag the day (spec:
+    missing 30 minutes is worse than a wrong department)."""
     if dept_id is None:
         _flag(person_odoo_id, day, "lunch_dept_unread",
               "Could not read pre-lunch department from Odoo; "
@@ -248,6 +267,24 @@ def _patch_departments() -> None:
         )
 
 
+def _has_unsynced_prior_slot(run: dict, slot: str, person_odoo_id: int) -> bool:
+    """True when an earlier slot in SLOT_ORDER was punched (a real log id,
+    not the dry-run sentinel) but hasn't synced to Odoo yet. Live mode only
+    calls this: dry-run has no real sync to wait on."""
+    for prev_slot in SLOT_ORDER[:SLOT_ORDER.index(slot)]:
+        prev_id = run.get(f"{prev_slot}_punch_id")
+        if prev_id is None or prev_id == SIMULATED_PUNCH_ID:
+            continue
+        rows = db.query(
+            "SELECT synced_to_odoo FROM timeclock_punches_log WHERE id = %s",
+            (prev_id,))
+        if rows and not rows[0]["synced_to_odoo"]:
+            _log.info("auto-salaried: waiting for slot %s to sync before %s "
+                      "(person %s)", prev_slot, slot, person_odoo_id)
+            return True
+    return False
+
+
 def _advance_person(person_odoo_id: int, day: date, now: datetime,
                     run: dict | None, is_holiday: bool, has_leave: bool,
                     worker_mode: str) -> None:
@@ -276,15 +313,46 @@ def _advance_person(person_odoo_id: int, day: date, now: datetime,
             _record_punch(person_odoo_id, day, slot, SIMULATED_PUNCH_ID)
             run = dict(run, **{f"{slot}_punch_id": SIMULATED_PUNCH_ID})
             continue
+        # Don't advance to the next slot while an earlier one is still
+        # unsynced: an interleaved sync failure during catch-up could merge
+        # the day into one lunch-less attendance. The 60s retry sweep lands
+        # the stuck slot; a later tick resumes from here.
+        if _has_unsynced_prior_slot(run, slot, person_odoo_id):
+            break
         _log.info("auto-salaried LIVE: person %s %s (%s) @ %s",
                   person_odoo_id, action, slot, at)
+        dept_id = dept_name = None
+        if slot == "lunch_out":
+            dept_id, dept_name = _read_pre_lunch_department(person_odoo_id)
         with db.cursor() as cur:
             if slot == "lunch_out":
-                _capture_lunch_department(person_odoo_id, day, cur=cur)
+                _capture_lunch_department(person_odoo_id, day, dept_id, dept_name, cur=cur)
             punch_id = _write_auto_punch(person_odoo_id, action, wc_name, at, cur=cur)
             _record_punch(person_odoo_id, day, slot, punch_id, cur=cur)
         timeclock_sync.sync_one_by_id(punch_id)
         run = dict(run, **{f"{slot}_punch_id": punch_id})
+
+
+def _check_sustaining_department(today: date) -> None:
+    """Loud, once-a-day signal when Odoo department tagging is on but the
+    'Sustaining' department can't be resolved — punches would otherwise land
+    department-less with no obvious sign why."""
+    if not os.environ.get("ODOO_KIOSK_DEPARTMENT_FIELD"):
+        return
+    try:
+        from . import odoo_client
+        dept_id = odoo_client._department_id_for_wc(SUSTAINING_WC)
+    except Exception as e:  # noqa: BLE001 — Odoo unreachable; try again next tick
+        _log.info("auto-salaried: could not verify Sustaining department "
+                  "(Odoo unreachable?): %s", e)
+        return
+    if dept_id is None:
+        _log.warning("auto-salaried: no Odoo 'Sustaining' hr.department found; "
+                     "auto-salaried punches are landing without a department")
+        _flag(0, today, "sustaining_dept_missing",
+              "Odoo department tagging is on (ODOO_KIOSK_DEPARTMENT_FIELD set) "
+              "but no 'Sustaining' hr.department could be resolved; "
+              "auto-salaried punches are landing department-less.")
 
 
 def run_tick(now: datetime | None = None) -> None:
@@ -304,6 +372,8 @@ def run_tick(now: datetime | None = None) -> None:
     person_ids = _fixed_wage_ids()
     if not person_ids:
         return
+    if worker_mode == "live":
+        _check_sustaining_department(today)
     runs = _get_runs_bulk(today, person_ids)
     is_holiday = company_holidays.for_day(today) is not None
     leave_ids = _approved_leave_ids(today, person_ids)
@@ -342,6 +412,32 @@ def _mark_flagged(person_odoo_id: int, day: date) -> None:
         "WHERE person_odoo_id = %s AND day = %s", (person_odoo_id, day))
 
 
+_SCHEDULED_CLOCK_IN_SLOTS: tuple[str, ...] = ("morning_in", "lunch_in")
+_SCHEDULE_TOLERANCE_SECONDS = 60
+
+
+def _matches_scheduled_clock_in(check_in: str | None, day: date) -> bool:
+    """True when `check_in` (an ISO-8601 string, as returned by
+    odoo_client.fetch_employee_attendances_for_day) lands within tolerance of
+    one of the robot's own scheduled clock-in times for `day`, compared in
+    UTC. Used to tell a robot-owned attendance from one the sync merely
+    adopted from an already-open manual record."""
+    if not check_in:
+        return False
+    try:
+        parsed = datetime.fromisoformat(check_in)
+    except (TypeError, ValueError):
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed_utc = parsed.astimezone(timezone.utc)
+    for slot in _SCHEDULED_CLOCK_IN_SLOTS:
+        scheduled_utc = scheduled_at(day, slot).astimezone(timezone.utc)
+        if abs((parsed_utc - scheduled_utc).total_seconds()) <= _SCHEDULE_TOLERANCE_SECONDS:
+            return True
+    return False
+
+
 def _revert_day(run: dict) -> None:
     """Delete the robot's punches for a leave-conflicted day — only when the
     day is clean (nothing but auto_salaried punches locally AND in Odoo)."""
@@ -364,6 +460,15 @@ def _revert_day(run: dict) -> None:
               "non-robot punches (transfer or manual). Clean up in Odoo.")
         _mark_flagged(pid, day)
         return
+    log_ids = [int(r["id"]) for r in log_rows]
+    # Neutralize the local rows FIRST, before any Odoo I/O — closes a race
+    # with the worker's retry-sync sweep: once these rows are marked synced,
+    # nothing can resurrect them in Odoo while we're deciding (below) whether
+    # it's even safe to delete.
+    db.execute(
+        "UPDATE timeclock_punches_log SET synced_to_odoo = TRUE, "
+        "sync_error = 'reverted: approved leave', synced_at = now() "
+        "WHERE id = ANY(%s)", (log_ids,))
     own_ids = sorted({int(r["odoo_attendance_id"]) for r in log_rows
                       if r["odoo_attendance_id"]})
     from . import odoo_client
@@ -376,15 +481,19 @@ def _revert_day(run: dict) -> None:
               f"create (outside-app transfer or manual entry). Clean up in Odoo.")
         _mark_flagged(pid, day)
         return
+    # timeclock_sync adopts an already-open MANUAL Odoo attendance when
+    # syncing a robot clock_in, so an "own" id can actually be a human
+    # record. Verify each owned attendance's check-in matches one of the
+    # robot's scheduled clock-in times before trusting it enough to delete.
+    unscheduled = [a for a in odoo_atts if int(a["id"]) in own_ids
+                  and not _matches_scheduled_clock_in(a.get("check_in"), day)]
+    if unscheduled:
+        _flag(pid, day, "leave_conflict",
+              "Approved leave arrived after punches, but an owned attendance "
+              "was adopted from a manual record; clean up in Odoo.")
+        _mark_flagged(pid, day)
+        return
     odoo_client.delete_attendances(own_ids)
-    log_ids = [int(r["id"]) for r in log_rows]
-    if log_ids:
-        # Also neutralize any not-yet-synced rows so the retry sweep can't
-        # resurrect the deleted day.
-        db.execute(
-            "UPDATE timeclock_punches_log SET synced_to_odoo = TRUE, "
-            "sync_error = 'reverted: approved leave', synced_at = now() "
-            "WHERE id = ANY(%s)", (log_ids,))
     db.execute(
         "UPDATE auto_salaried_runs SET reverted = TRUE, updated_at = now() "
         "WHERE person_odoo_id = %s AND day = %s", (pid, day))

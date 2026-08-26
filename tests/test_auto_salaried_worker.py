@@ -23,6 +23,8 @@ def _at(hh, mm, day=TUE):
 def _cleanup():
     db.execute("DELETE FROM auto_salaried_runs WHERE person_odoo_id = %s", (PID,))
     db.execute("DELETE FROM auto_salaried_flags WHERE person_odoo_id = %s", (PID,))
+    db.execute(
+        "DELETE FROM auto_salaried_flags WHERE person_odoo_id = 0 AND day = %s", (TUE,))
     db.execute("DELETE FROM timeclock_punches_log WHERE person_odoo_id = %s", (PID,))
     db.execute("DELETE FROM time_off_requests WHERE person_odoo_id = %s", (PID,))
     db.execute("DELETE FROM people WHERE odoo_id = %s", (PID,))
@@ -60,10 +62,20 @@ def _run_row():
     return rows[0] if rows else None
 
 
+def _mark_synced(punch_id):
+    """Stub for timeclock_sync.sync_one_by_id that marks the log row synced
+    (as a real sync would), so tests progressing across multiple slots/ticks
+    don't block on the Fix-3 unsynced-prior-slot guard."""
+    db.execute(
+        "UPDATE timeclock_punches_log SET synced_to_odoo = TRUE WHERE id = %s",
+        (punch_id,))
+
+
 def test_full_day_four_punches(monkeypatch):
     monkeypatch.setattr(
         "zira_dashboard.odoo_client.get_current_attendance",
         lambda pid: {"id": 42, "department_id": 9, "department_name": "05 Sustaining"})
+    monkeypatch.setattr("zira_dashboard.timeclock_sync.sync_one_by_id", _mark_synced)
     for hh, mm in ((6, 0), (11, 0), (11, 30), (15, 30)):
         asal.run_tick(_at(hh, mm))
     rows = _punches()
@@ -83,7 +95,8 @@ def test_no_double_punch_on_repeat_ticks():
     assert len(_punches()) == 1
 
 
-def test_catch_up_backdates():
+def test_catch_up_backdates(monkeypatch):
+    monkeypatch.setattr("zira_dashboard.timeclock_sync.sync_one_by_id", _mark_synced)
     asal.run_tick(_at(12, 10))  # app "down" until 12:10
     rows = _punches()
     assert [r["action"] for r in rows] == ["clock_in", "clock_out", "clock_in"]
@@ -147,6 +160,7 @@ def test_dept_capture_pending_patch(monkeypatch):
     monkeypatch.setattr(
         "zira_dashboard.odoo_client.get_current_attendance",
         lambda pid: {"id": 42, "department_id": 31, "department_name": "Maintenance"})
+    monkeypatch.setattr("zira_dashboard.timeclock_sync.sync_one_by_id", _mark_synced)
     patched = []
     monkeypatch.setattr(
         "zira_dashboard.odoo_client.set_attendance_department",
@@ -179,3 +193,35 @@ def test_off_mode_no_op(monkeypatch):
     monkeypatch.delenv("AUTO_SALARIED_ENABLED", raising=False)
     asal.run_tick(_at(6, 0))
     assert _punches() == []
+
+
+def test_waits_for_unsynced_slot_before_advancing():
+    """Regression: interleaved sync failure during catch-up must not let the
+    worker punch ahead of an unsynced slot — that can merge the day into one
+    lunch-less attendance. The default fixture stub (lambda _id: None) leaves
+    synced_to_odoo FALSE, simulating a stuck sync."""
+    asal.run_tick(_at(6, 0))  # morning_in written, sync stubbed to no-op
+    asal.run_tick(_at(11, 0))  # due for lunch_out, but morning_in unsynced
+    assert [r["action"] for r in _punches()] == ["clock_in"]
+    run = _run_row()
+    assert run["morning_in_punch_id"] is not None
+    assert run["lunch_out_punch_id"] is None
+
+    db.execute(
+        "UPDATE timeclock_punches_log SET synced_to_odoo = TRUE WHERE id = %s",
+        (run["morning_in_punch_id"],))
+    asal.run_tick(_at(11, 1))
+    assert [r["action"] for r in _punches()] == ["clock_in", "clock_out"]
+    assert _run_row()["lunch_out_punch_id"] is not None
+
+
+def test_missing_sustaining_department_flags_once(monkeypatch):
+    monkeypatch.setenv("ODOO_KIOSK_DEPARTMENT_FIELD", "x_kiosk_department")
+    monkeypatch.setattr(
+        "zira_dashboard.odoo_client._department_id_for_wc", lambda wc: None)
+    asal.run_tick(_at(6, 0))
+    asal.run_tick(_at(6, 1))
+    flags = db.query(
+        "SELECT reason FROM auto_salaried_flags WHERE person_odoo_id = 0 "
+        "AND reason = 'sustaining_dept_missing'")
+    assert len(flags) == 1

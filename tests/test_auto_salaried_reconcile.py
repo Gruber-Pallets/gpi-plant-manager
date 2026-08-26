@@ -73,9 +73,11 @@ def test_clean_day_reverted(monkeypatch):
     _seed_punched_morning(odoo_att_id=501)
     _approve_leave()
     deleted = []
+    # check_in matches the robot's scheduled morning_in slot (6:00 plant
+    # time, converted to UTC) so the schedule-match guard lets it through.
     monkeypatch.setattr(
         "zira_dashboard.odoo_client.fetch_employee_attendances_for_day",
-        lambda pid, day: [{"id": 501}])
+        lambda pid, day: [{"id": 501, "check_in": "2026-09-01T11:00:00+00:00"}])
     monkeypatch.setattr(
         "zira_dashboard.odoo_client.delete_attendances",
         lambda ids: deleted.append(ids))
@@ -85,6 +87,25 @@ def test_clean_day_reverted(monkeypatch):
     log = db.query(
         "SELECT sync_error FROM timeclock_punches_log WHERE person_odoo_id = %s", (PID,))
     assert log[0]["sync_error"] == "reverted: approved leave"
+
+
+def test_adopted_manual_attendance_flags_instead(monkeypatch):
+    """Regression: timeclock_sync can adopt an already-open MANUAL Odoo
+    attendance when syncing a robot clock_in, so own_ids can contain a
+    human-created record. A check-in that doesn't match any scheduled
+    clock-in slot (e.g. 05:47 plant time) must be flagged, not deleted."""
+    _seed_punched_morning(odoo_att_id=501)
+    _approve_leave()
+    monkeypatch.setattr(
+        "zira_dashboard.odoo_client.fetch_employee_attendances_for_day",
+        lambda pid, day: [{"id": 501, "check_in": "2026-09-01T05:47:00+00:00"}])
+    monkeypatch.setattr(
+        "zira_dashboard.odoo_client.delete_attendances",
+        lambda ids: pytest.fail("must not delete an adopted manual attendance"))
+    asal.run_reconcile(_now())
+    assert _run()["flagged"] is True
+    assert _run()["reverted"] is False
+    assert "leave_conflict" in _flags()
 
 
 def test_stranger_odoo_record_flags_instead(monkeypatch):
