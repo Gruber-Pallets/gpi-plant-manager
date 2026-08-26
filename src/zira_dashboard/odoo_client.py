@@ -377,6 +377,14 @@ def _kiosk_department_field() -> str | None:
 # cheap (Railway redeploy).
 _wc_dept_id_cache: dict[str, int | None] = {}
 
+# Virtual work centers: names the auto-salaried punch worker uses that are
+# NOT real staffing locations. They exist only to route a department to
+# _department_id_for_wc (and through _attendance_create_payload) without
+# adding fake rows to staffing.LOCATIONS (which drives the scheduler UI).
+# Keys are lowercase wc_name; values are the Odoo hr.department name to
+# ilike-match (so "Sustaining" matches e.g. "05 Sustaining").
+_VIRTUAL_WC_DEPARTMENTS: dict[str, str] = {"sustaining": "Sustaining"}
+
 
 def _department_id_for_wc(wc_name: str | None) -> int | None:
     """Resolve a kiosk WC name (e.g. "Repair 1") to an Odoo
@@ -397,6 +405,8 @@ def _department_id_for_wc(wc_name: str | None) -> int | None:
         if loc.name == wc_name:
             dept_name = loc.department
             break
+    if not dept_name:
+        dept_name = _VIRTUAL_WC_DEPARTMENTS.get(wc_name.strip().lower())
     if not dept_name:
         _wc_dept_id_cache[wc_name] = None
         return None
@@ -502,6 +512,25 @@ def clear_attendance_wc(attendance_id: int) -> None:
     if dept_field:
         payload[dept_field] = False
     execute("hr.attendance", "write", [attendance_id], payload)
+
+
+def set_attendance_department(attendance_id: int, dept_id: int) -> bool:
+    """Write a department directly onto an hr.attendance (auto-salaried
+    lunch-return patch: the pipeline derives departments from WC names, but
+    the pre-lunch department read off Odoo has no app WC to route through).
+    Returns False when the department field isn't configured."""
+    dept_field = _kiosk_department_field()
+    if not dept_field or not dept_id:
+        return False
+    return bool(execute("hr.attendance", "write", [attendance_id], {dept_field: dept_id}))
+
+
+def delete_attendances(attendance_ids: list[int]) -> None:
+    """Unlink hr.attendance records. Only the auto-salaried reconciler calls
+    this, and only with ids of records the robot itself created."""
+    if not attendance_ids:
+        return
+    execute("hr.attendance", "unlink", list(attendance_ids))
 
 
 def _overtime_status_for_attendance(attendance_id: int) -> str:
