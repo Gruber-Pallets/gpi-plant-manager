@@ -354,6 +354,10 @@ def _revert_day(run: dict) -> None:
         "AND COALESCE(rounded_at, occurred_at) < %s",
         (pid, start, end),
     )
+    if not log_rows:
+        # Dry-run rows (sentinel punch ids) have no real punches — nothing to
+        # revert, and marking them reverted would misrepresent what happened.
+        return
     if any(r["source"] != "auto_salaried" for r in log_rows):
         _flag(pid, day, "leave_conflict",
               "Approved leave arrived after punches, but the day has "
@@ -400,10 +404,14 @@ def _flag_incomplete_days(start: date, end_exclusive: date) -> None:
     )
     for r in rows:
         pid, day = int(r["person_odoo_id"]), r["day"]
-        _flag(pid, day, "incomplete_day",
-              "The day ended without all four auto punches (extended app "
-              "downtime?). Check the person's attendance in Odoo.")
-        _mark_flagged(pid, day)
+        try:
+            _flag(pid, day, "incomplete_day",
+                  "The day ended without all four auto punches (extended app "
+                  "downtime?). Check the person's attendance in Odoo.")
+            _mark_flagged(pid, day)
+        except Exception as e:  # noqa: BLE001 — one row never kills the sweep
+            _log.warning("auto-salaried reconcile: flag failed for person %s %s: %s",
+                         pid, day, e)
 
 
 def run_reconcile(now: datetime | None = None) -> None:

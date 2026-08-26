@@ -150,3 +150,15 @@ def test_today_incomplete_not_flagged():
     _seed_punched_morning()  # today, mid-day: naturally incomplete
     asal.run_reconcile(_now())
     assert _flags() == []
+
+
+def test_dry_run_sentinel_row_not_reverted(monkeypatch):
+    db.execute(
+        "INSERT INTO auto_salaried_runs (person_odoo_id, day, morning_in_punch_id) "
+        "VALUES (%s, %s, %s)", (PID, TUE, asal.SIMULATED_PUNCH_ID))
+    _approve_leave()
+    monkeypatch.setattr(
+        "zira_dashboard.odoo_client.delete_attendances",
+        lambda ids: pytest.fail("nothing real to delete"))
+    asal.run_reconcile(_now())
+    assert _run()["reverted"] is False
