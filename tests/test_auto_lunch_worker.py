@@ -12,6 +12,7 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"), reason="needs Postgres")
 
 PID = 990777  # test person odoo_id unlikely to collide
+SALARIED_PID = 990778  # test salaried person odoo_id unlikely to collide
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +20,7 @@ def _setup(monkeypatch):
     db.bootstrap_schema()
     db.execute("DELETE FROM auto_lunch_runs WHERE person_odoo_id = %s", (PID,))
     db.execute("DELETE FROM timeclock_punches_log WHERE person_odoo_id = %s", (PID,))
+    db.execute("DELETE FROM people WHERE odoo_id = %s", (SALARIED_PID,))
     als.save(als.Settings(enabled=True, observe_only=False,
                           flex_after_hours=5.0, flex_minutes=30))
     # Stub the Odoo sync so no XML-RPC happens; the punch row is enough.
@@ -26,6 +28,9 @@ def _setup(monkeypatch):
     yield
     db.execute("DELETE FROM auto_lunch_runs WHERE person_odoo_id = %s", (PID,))
     db.execute("DELETE FROM timeclock_punches_log WHERE person_odoo_id = %s", (PID,))
+    db.execute("DELETE FROM auto_lunch_runs WHERE person_odoo_id = %s", (SALARIED_PID,))
+    db.execute("DELETE FROM timeclock_punches_log WHERE person_odoo_id = %s", (SALARIED_PID,))
+    db.execute("DELETE FROM people WHERE odoo_id = %s", (SALARIED_PID,))
     als.save(als.Settings())  # back to defaults (off)
 
 
@@ -70,6 +75,43 @@ def test_scheduled_auto_out_then_auto_in(monkeypatch):
     ]
     assert db.query("SELECT state FROM auto_lunch_runs WHERE person_odoo_id=%s",
                     (PID,))[0]["state"] == "done"
+
+
+def test_salaried_person_excluded_from_candidates(monkeypatch):
+    """Regression: once the salaried robot's morning punch syncs, a salaried
+    person shows up clocked-in in the open-attendance snapshot just like an
+    hourly employee. auto_lunch must not also lunch-punch them — that's
+    auto_salaried's job, and doing it twice would duplicate punches / fight
+    over the calendar window."""
+    day = datetime.now(shift_config.SITE_TZ).date()
+    lunch_out = datetime.combine(day, time(11, 0), tzinfo=shift_config.SITE_TZ)
+    from zira_dashboard.schedule_store import Break
+    monkeypatch.setattr(shift_config, "is_workday", lambda d: True)
+    monkeypatch.setattr(shift_config, "breaks_for",
+                        lambda d: (Break(time(11, 0), time(11, 30), "Lunch"),))
+    db.execute(
+        "INSERT INTO people (odoo_id, name, active, wage_type) "
+        "VALUES (%s, 'Test Salaried', TRUE, 'monthly')", (SALARIED_PID,))
+    now_ref = datetime.now(timezone.utc)
+    # Cache shows BOTH the hourly and the salaried person clocked in.
+    monkeypatch.setattr(live_cache, "read_open_attendance",
+                        lambda: ({str(PID): {"att_id": 1, "check_in": None,
+                                             "wc_name": "Bay 3"},
+                                 str(SALARIED_PID): {"att_id": 2, "check_in": None,
+                                                     "wc_name": "Sustaining"}}, now_ref))
+    monkeypatch.setattr(live_cache, "is_stale", lambda _r: False)
+
+    al.run_tick(now=lunch_out)
+
+    outs = db.query("SELECT action, source FROM timeclock_punches_log "
+                    "WHERE person_odoo_id = %s", (PID,))
+    assert [(r["action"], r["source"]) for r in outs] == [("clock_out", "auto_lunch")]
+    salaried_punches = db.query(
+        "SELECT * FROM timeclock_punches_log WHERE person_odoo_id = %s", (SALARIED_PID,))
+    assert salaried_punches == []
+    salaried_runs = db.query(
+        "SELECT * FROM auto_lunch_runs WHERE person_odoo_id = %s", (SALARIED_PID,))
+    assert salaried_runs == []
 
 
 def test_clocked_out_at_lunch_is_skipped(monkeypatch):

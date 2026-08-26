@@ -399,6 +399,9 @@ def run_tick(now: datetime | None = None) -> None:
         "SELECT person_odoo_id FROM auto_lunch_runs WHERE day = %s "
         "AND state NOT IN ('done','skipped','ended_by_employee')", (today,))}
     candidates = clocked_in | open_runs
+    salaried = {int(r["odoo_id"]) for r in db.query(
+        "SELECT odoo_id FROM people WHERE wage_type = 'monthly' AND odoo_id IS NOT NULL")}
+    candidates -= salaried  # auto-salaried punch owns their lunch (see auto_salaried.py)
     # Batch the per-person reads (run rows + latest punches) into one query
     # each, and reuse the snapshot read above — a sweep used to re-read all
     # three sources per person.

@@ -130,7 +130,7 @@ day is flagged rather than guessed.
 | Failure | Behavior |
 |---|---|
 | Odoo down at punch time | Local log row persists; existing retry loop re-sends until it lands. |
-| App down over a punch time | Next tick writes the missed punch, backdated. |
+| App down over a punch time | Next tick writes the missed punch, backdated (same plant day only; downtime crossing midnight leaves the day incomplete → flagged by the reconciler). |
 | App down over a whole inconsistent stretch | Flag the day for a human. |
 | Can't read department off the closed lunch record | Punch back in at 11:30 anyway, default Sustaining, flag the day. |
 | "Sustaining" department not found in Odoo | Loud warning + flag; punches proceed department-less (matches kiosk behavior with the field unset). |

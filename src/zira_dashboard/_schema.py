@@ -1314,6 +1314,51 @@ CREATE TABLE IF NOT EXISTS auto_lunch_runs (
   UNIQUE (person_odoo_id, day)
 );
 
+-- Auto salaried punch scoreboard: one row per fixed-wage person per plant day.
+-- Each *_punch_id column is the timeclock_punches_log id of that slot's punch
+-- (0 = simulated punch written in dry-run mode; NULL = not yet punched).
+-- See docs/superpowers/specs/2026-08-26-auto-salaried-punch-design.md.
+CREATE TABLE IF NOT EXISTS auto_salaried_runs (
+  person_odoo_id       INTEGER NOT NULL,
+  day                  DATE NOT NULL,
+  skipped              BOOLEAN NOT NULL DEFAULT FALSE,
+  skip_reason          TEXT,
+  morning_in_punch_id  BIGINT,
+  lunch_out_punch_id   BIGINT,
+  lunch_in_punch_id    BIGINT,
+  day_out_punch_id     BIGINT,
+  lunch_dept_id        INTEGER,
+  lunch_dept_name      TEXT,
+  dept_patch_state     TEXT NOT NULL DEFAULT 'none'
+                       CHECK (dept_patch_state IN ('none','pending','done','failed')),
+  reverted             BOOLEAN NOT NULL DEFAULT FALSE,
+  flagged              BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (person_odoo_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_auto_salaried_runs_day ON auto_salaried_runs (day);
+
+-- Days the auto-salaried robot could not handle safely ("needs a human").
+CREATE TABLE IF NOT EXISTS auto_salaried_flags (
+  id              BIGSERIAL PRIMARY KEY,
+  person_odoo_id  INTEGER NOT NULL,
+  day             DATE NOT NULL,
+  reason          TEXT NOT NULL,
+  details         TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at     TIMESTAMPTZ,
+  UNIQUE (person_odoo_id, day, reason)
+);
+
+-- 2026-08-26 auto-salaried: widen the punch source tag so this worker's
+-- writes are recognizable too (mirrors auto_lunch's 2026-06-02 addition).
+-- Allowed sources: 'employee' (kiosk-originated human punches),
+-- 'auto_lunch', 'auto_salaried'.
+ALTER TABLE timeclock_punches_log DROP CONSTRAINT IF EXISTS timeclock_punches_log_source_check;
+ALTER TABLE timeclock_punches_log ADD CONSTRAINT timeclock_punches_log_source_check
+  CHECK (source IN ('employee', 'auto_lunch', 'auto_salaried'));
+
 -- Singleton settings row (id=1). Defaults: OFF, and the first enable runs
 -- observe-only. flex rule defaults to 5h -> 30min.
 CREATE TABLE IF NOT EXISTS auto_lunch_settings (

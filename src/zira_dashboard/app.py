@@ -26,6 +26,7 @@ from .routes import (
     admin,
     api_layout,
     auth as auth_routes,
+    auto_salaried_admin,
     changelog,
     dashboard,
     exceptions,
@@ -130,6 +131,20 @@ async def _tick_auto_lunch():
     from . import auto_lunch
 
     await asyncio.to_thread(auto_lunch.run_tick)
+
+
+async def _tick_auto_salaried():
+    """Auto-salaried punch worker (see auto_salaried.py). Off unless
+    AUTO_SALARIED_ENABLED=1 or AUTO_SALARIED_DRY_RUN=1."""
+    from . import auto_salaried
+
+    await asyncio.to_thread(auto_salaried.run_tick)
+
+
+async def _tick_auto_salaried_reconcile():
+    from . import auto_salaried
+
+    await asyncio.to_thread(auto_salaried.run_reconcile)
 
 
 async def _tick_time_off_sync():
@@ -392,6 +407,8 @@ _WARMERS = [
     ("kiosk sync", _tick_timeclock_sync, 60),
     ("Odoo open-attendance", _tick_odoo_attendance, 30),
     ("auto-lunch", _tick_auto_lunch, 60),
+    ("auto-salaried punch", _tick_auto_salaried, 60),
+    ("auto-salaried reconcile", _tick_auto_salaried_reconcile, 600),
     ("time-off sync", _tick_time_off_sync, 60),
     ("time-off poll", _tick_time_off_poll, 60),
     ("time-off balance", _tick_time_off_balance, 600),
@@ -622,6 +639,7 @@ app.include_router(changelog.router)
 app.include_router(feedback.router)
 app.include_router(feedback_admin.router)
 app.include_router(admin.router)
+app.include_router(auto_salaried_admin.router)
 app.include_router(goat_watch.router)
 app.include_router(timeclock.router)
 app.include_router(timeclock_saturday.router)
