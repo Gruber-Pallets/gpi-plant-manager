@@ -288,7 +288,8 @@ def _has_unsynced_prior_slot(run: dict, slot: str, person_odoo_id: int) -> bool:
 def _advance_person(person_odoo_id: int, day: date, now: datetime,
                     run: dict | None, is_holiday: bool, has_leave: bool,
                     worker_mode: str) -> None:
-    if run is not None and (run.get("skipped") or run.get("reverted")):
+    if run is not None and (run.get("skipped") or run.get("reverted")
+                            or run.get("flagged")):
         return
     if run is None:
         reason = skip_reason(day, is_company_holiday=is_holiday,
@@ -467,7 +468,7 @@ def _revert_day(run: dict) -> None:
     # it's even safe to delete.
     db.execute(
         "UPDATE timeclock_punches_log SET synced_to_odoo = TRUE, "
-        "sync_error = 'reverted: approved leave', synced_at = now() "
+        "sync_error = 'suppressed: approved leave', synced_at = now() "
         "WHERE id = ANY(%s)", (log_ids,))
     own_ids = sorted({int(r["odoo_attendance_id"]) for r in log_rows
                       if r["odoo_attendance_id"]})
@@ -479,6 +480,20 @@ def _revert_day(run: dict) -> None:
               f"Approved leave arrived after punches, but Odoo has "
               f"{len(strangers)} attendance record(s) the robot didn't "
               f"create (outside-app transfer or manual entry). Clean up in Odoo.")
+        _mark_flagged(pid, day)
+        return
+    # A robot-owned id might not show up in fetch_employee_attendances_for_day
+    # at all — e.g. the sync adopted a record opened the previous evening (so
+    # its check_in falls outside this day's window), or the record was
+    # deleted manually in Odoo. Either way we can't verify it's safe to
+    # delete, so bail out rather than deleting unguarded or looping forever.
+    odoo_att_ids = {int(a["id"]) for a in odoo_atts}
+    missing = [oid for oid in own_ids if oid not in odoo_att_ids]
+    if missing:
+        _flag(pid, day, "leave_conflict",
+              "Robot-owned attendance not found in the day's Odoo records "
+              "(adopted from a prior-day record, or deleted manually); "
+              "clean up in Odoo.")
         _mark_flagged(pid, day)
         return
     # timeclock_sync adopts an already-open MANUAL Odoo attendance when

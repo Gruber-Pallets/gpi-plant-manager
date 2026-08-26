@@ -40,6 +40,9 @@ maintenance hours are trackable — see
 - Flip modes (dry-run ↔ live) outside plant hours (before 6:00 AM or after
   3:30 PM Central); mid-day flips can strand an open attendance or produce
   noise flags.
+- If the Sustaining department was missing in Odoo and you create it,
+  restart/redeploy the app — the department lookup caches misses for the
+  process lifetime.
 
 ## Running
 

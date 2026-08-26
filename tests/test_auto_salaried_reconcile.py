@@ -86,7 +86,7 @@ def test_clean_day_reverted(monkeypatch):
     assert _run()["reverted"] is True
     log = db.query(
         "SELECT sync_error FROM timeclock_punches_log WHERE person_odoo_id = %s", (PID,))
-    assert log[0]["sync_error"] == "reverted: approved leave"
+    assert log[0]["sync_error"] == "suppressed: approved leave"
 
 
 def test_adopted_manual_attendance_flags_instead(monkeypatch):
@@ -102,6 +102,24 @@ def test_adopted_manual_attendance_flags_instead(monkeypatch):
     monkeypatch.setattr(
         "zira_dashboard.odoo_client.delete_attendances",
         lambda ids: pytest.fail("must not delete an adopted manual attendance"))
+    asal.run_reconcile(_now())
+    assert _run()["flagged"] is True
+    assert _run()["reverted"] is False
+    assert "leave_conflict" in _flags()
+
+
+def test_own_id_missing_from_day_flags_instead(monkeypatch):
+    """Regression: an own_id (from the robot's log row) that isn't in the
+    day's Odoo attendances at all — adopted from a prior-day record, or
+    deleted manually in Odoo — must be flagged, not deleted or looped on."""
+    _seed_punched_morning(odoo_att_id=501)
+    _approve_leave()
+    monkeypatch.setattr(
+        "zira_dashboard.odoo_client.fetch_employee_attendances_for_day",
+        lambda pid, day: [])
+    monkeypatch.setattr(
+        "zira_dashboard.odoo_client.delete_attendances",
+        lambda ids: pytest.fail("must not delete"))
     asal.run_reconcile(_now())
     assert _run()["flagged"] is True
     assert _run()["reverted"] is False
