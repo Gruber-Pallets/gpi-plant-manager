@@ -1,0 +1,34 @@
+{# src/zira_dashboard/templates/auto_salaried_flags.html #}
+{% extends "_base_app.html" %}
+{% block title %}Auto-Salaried Flags{% endblock %}
+{% block content %}
+<div style="max-width: 960px; margin: 0 auto; padding: 1rem;">
+  <h1>Auto-Salaried Punch — Needs a Human</h1>
+  <p>Days the auto-punch robot could not handle safely. Fix the day in Odoo
+     if needed, then resolve the flag.</p>
+  {% if not flags %}
+    <p><em>No open flags. All clear.</em></p>
+  {% else %}
+  <table>
+    <thead>
+      <tr><th>Day</th><th>Person</th><th>Reason</th><th>Details</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for f in flags %}
+      <tr>
+        <td>{{ f.day }}</td>
+        <td>{{ f.person_name }}</td>
+        <td><code>{{ f.reason }}</code></td>
+        <td>{{ f.details or "" }}</td>
+        <td>
+          <form method="post" action="/auto-salaried/flags/{{ f.id }}/resolve">
+            <button type="submit">Resolve</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

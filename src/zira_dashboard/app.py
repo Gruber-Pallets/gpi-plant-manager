@@ -26,6 +26,7 @@ from .routes import (
     admin,
     api_layout,
     auth as auth_routes,
+    auto_salaried_admin,
     changelog,
     dashboard,
     exceptions,
@@ -638,6 +639,7 @@ app.include_router(changelog.router)
 app.include_router(feedback.router)
 app.include_router(feedback_admin.router)
 app.include_router(admin.router)
+app.include_router(auto_salaried_admin.router)
 app.include_router(goat_watch.router)
 app.include_router(timeclock.router)
 app.include_router(timeclock_saturday.router)
