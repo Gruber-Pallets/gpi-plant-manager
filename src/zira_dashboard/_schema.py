@@ -1357,7 +1357,7 @@ CREATE TABLE IF NOT EXISTS auto_salaried_flags (
 -- value the auto-salaried worker treats as a "foreign" (non-robot) punch.
 ALTER TABLE timeclock_punches_log DROP CONSTRAINT IF EXISTS timeclock_punches_log_source_check;
 ALTER TABLE timeclock_punches_log ADD CONSTRAINT timeclock_punches_log_source_check
-  CHECK (source IN ('employee', 'kiosk', 'auto_lunch', 'auto_salaried'));
+  CHECK (source IN ('employee', 'auto_lunch', 'auto_salaried'));
 
 -- Singleton settings row (id=1). Defaults: OFF, and the first enable runs
 -- observe-only. flex rule defaults to 5h -> 30min.

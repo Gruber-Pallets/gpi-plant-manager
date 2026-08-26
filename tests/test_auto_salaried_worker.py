@@ -133,7 +133,7 @@ def test_hourly_person_untouched():
 def test_foreign_punches_skip_and_flag():
     db.execute(
         "INSERT INTO timeclock_punches_log (person_odoo_id, action, occurred_at, source) "
-        "VALUES (%s, 'clock_in', %s, 'kiosk')", (PID, _at(6, 30)))
+        "VALUES (%s, 'clock_in', %s, 'employee')", (PID, _at(6, 30)))
     asal.run_tick(_at(7, 0))
     own = [r for r in _punches() if r["source"] == "auto_salaried"]
     assert own == []

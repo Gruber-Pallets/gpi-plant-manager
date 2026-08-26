@@ -314,4 +314,7 @@ def run_tick(now: datetime | None = None) -> None:
         except Exception as e:  # noqa: BLE001 — one person never kills the tick
             _log.warning("auto-salaried: failed for person %s: %s", pid, e)
     if worker_mode == "live":
-        _patch_departments()
+        try:
+            _patch_departments()
+        except Exception as e:  # noqa: BLE001 — patching resumes next tick
+            _log.warning("auto-salaried: department patch sweep failed: %s", e)
