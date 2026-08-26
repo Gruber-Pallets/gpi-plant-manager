@@ -25,6 +25,19 @@ Copy `.env.example` to `.env` and fill in the values (Postgres `DATABASE_URL`,
 Odoo + Zira credentials, auth secrets, etc.). The schema is created
 automatically on startup by `db.bootstrap_schema()`.
 
+### Auto salaried punch
+
+Salaried (Fixed Wage) employees get automatic attendance punches
+(6:00–11:00 and 11:30–15:30, department "Sustaining") so their sustaining/
+maintenance hours are trackable — see
+`docs/superpowers/specs/2026-08-26-auto-salaried-punch-design.md`.
+
+- `AUTO_SALARIED_DRY_RUN=1` — simulate: log intended punches, write nothing.
+- `AUTO_SALARIED_ENABLED=1` — live. Dry-run wins if both are set.
+- Requires `ODOO_KIOSK_DEPARTMENT_FIELD` for department tagging and an Odoo
+  `hr.department` whose name contains "Sustaining".
+- "Needs a human" flags: `/auto-salaried/flags`.
+
 ## Running
 
 ```bash
