@@ -1351,6 +1351,14 @@ CREATE TABLE IF NOT EXISTS auto_salaried_flags (
   UNIQUE (person_odoo_id, day, reason)
 );
 
+-- 2026-08-26 auto-salaried: widen the punch source tag so this worker's
+-- writes are recognizable too (mirrors auto_lunch's 2026-06-02 addition).
+-- 'kiosk' is included alongside 'employee' as another human-originated
+-- value the auto-salaried worker treats as a "foreign" (non-robot) punch.
+ALTER TABLE timeclock_punches_log DROP CONSTRAINT IF EXISTS timeclock_punches_log_source_check;
+ALTER TABLE timeclock_punches_log ADD CONSTRAINT timeclock_punches_log_source_check
+  CHECK (source IN ('employee', 'kiosk', 'auto_lunch', 'auto_salaried'));
+
 -- Singleton settings row (id=1). Defaults: OFF, and the first enable runs
 -- observe-only. flex rule defaults to 5h -> 30min.
 CREATE TABLE IF NOT EXISTS auto_lunch_settings (
