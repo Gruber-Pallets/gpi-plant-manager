@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import html
 import logging
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from .. import feedback_store, odoo_client
+from ..feedback_content import safe_page_url
 from ..feedback_image import ImageRejected, MAX_INPUT_BYTES, normalize_image
 
 router = APIRouter()
@@ -27,23 +27,6 @@ _LEGACY_STATUS = {
     "done": "completed",
     "rejected": "declined",
 }
-
-
-def _optional_text(value: str | None) -> str | None:
-    value = (value or "").strip()
-    return value or None
-
-
-def _safe_page_url(value: str | None) -> str | None:
-    value = _optional_text(value)
-    if not value:
-        return None
-    parsed = urlparse(value)
-    if parsed.scheme in ("http", "https"):
-        return value
-    if not parsed.scheme and value.startswith("/") and not value.startswith("//"):
-        return value
-    return None
 
 
 def _title_from(kind: str, description: str) -> str:
@@ -94,7 +77,7 @@ async def submit_feedback(
                             status_code=400)
 
     submitter = getattr(request.state, "user_upn", None)
-    safe_url = _safe_page_url(page_url)
+    safe_url = safe_page_url(page_url)
 
     before_image = None
     if screenshot is not None:

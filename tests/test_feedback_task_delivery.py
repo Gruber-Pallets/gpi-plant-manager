@@ -145,18 +145,31 @@ def test_mark_delivered_requires_current_claim_token(monkeypatch):
     assert_current_claim_predicate(statement)
 
 
-def test_block_does_not_schedule_another_attempt(monkeypatch):
+def test_block_records_an_allowlisted_owner_reason_without_another_attempt(monkeypatch):
     cursor = use_cursor(monkeypatch, [{"feedback_id": 42}])
 
-    delivery.block(claim(task_id=900), now=NOW)
+    delivery.block(
+        claim(task_id=900),
+        "More than one matching owner task exists.",
+        now=NOW,
+    )
 
     statement = normalized_sql(cursor, 0)
     set_clause = statement.split(" SET ", 1)[1].split(" WHERE ", 1)[0]
     assert "state = 'blocked'" in set_clause
     assert "claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL" in set_clause
     assert "due_at" not in set_clause
-    assert "Task delivery needs owner review." in cursor.calls[0][1]
+    assert "More than one matching owner task exists." in cursor.calls[0][1]
     assert_current_claim_predicate(statement)
+
+
+def test_block_rejects_untrusted_reason_before_database_work(monkeypatch):
+    cursor = use_cursor(monkeypatch)
+
+    with pytest.raises(ValueError, match="block reason is not supported"):
+        delivery.block(claim(task_id=900), "remote details are unsafe", now=NOW)
+
+    assert cursor.calls == []
 
 
 @pytest.mark.parametrize(

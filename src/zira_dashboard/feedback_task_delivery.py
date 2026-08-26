@@ -22,6 +22,12 @@ _MAX_WORKER_ID_LENGTH = 128
 _CLAIM_LEASE = timedelta(minutes=2)
 _RETRY_SUMMARY = "Odoo task delivery needs attention and will retry."
 _BLOCKED_REASON = "Task delivery needs owner review."
+_BLOCK_REASONS = frozenset(
+    {
+        "More than one matching owner task exists.",
+        "More than one matching owner screenshot exists.",
+    }
+)
 _MISSING_SUMMARY = "Task delivery record is missing."
 
 
@@ -484,10 +490,17 @@ def schedule_retry(claim: TaskDeliveryClaim, *, now: datetime) -> None:
         raise StateTransitionError("retry scheduling returned a different delivery record")
 
 
-def block(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> None:
-    """Stop a current claim for owner review without scheduling a new attempt."""
+def block(
+    claim: TaskDeliveryClaim,
+    reason: str,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Stop a current claim for one safe, exact owner-review reason."""
     if type(claim) is not TaskDeliveryClaim:
         raise ValueError("claim is malformed")
+    if type(reason) is not str or reason not in _BLOCK_REASONS:
+        raise ValueError("block reason is not supported")
     current = _optional_now(now, "block time")
     with db.cursor() as cursor:
         cursor.execute(
@@ -500,7 +513,7 @@ def block(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> None:
               AND state = 'in_flight'
             RETURNING feedback_id
             """,
-            (_BLOCKED_REASON, current, claim.feedback_id, claim.claim_token),
+            (reason, current, claim.feedback_id, claim.claim_token),
         )
         row = _one_row(cursor, "delivery block")
     if row.get("feedback_id") != claim.feedback_id:
