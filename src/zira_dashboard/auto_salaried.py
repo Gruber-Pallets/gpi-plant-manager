@@ -318,3 +318,107 @@ def run_tick(now: datetime | None = None) -> None:
             _patch_departments()
         except Exception as e:  # noqa: BLE001 — patching resumes next tick
             _log.warning("auto-salaried: department patch sweep failed: %s", e)
+
+
+# ---------- Reconciler ----------
+
+def _runs_with_late_leave(start: date, end: date) -> list[dict]:
+    """Punched, unhandled runs in [start, end] whose person now has approved
+    leave overlapping that day (leave arrived AFTER the 6:00 skip check)."""
+    return db.query(
+        "SELECT r.* FROM auto_salaried_runs r WHERE r.day BETWEEN %s AND %s "
+        "AND r.skipped = FALSE AND r.reverted = FALSE AND r.flagged = FALSE "
+        "AND r.morning_in_punch_id IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM time_off_requests t "
+        "  WHERE t.person_odoo_id = r.person_odoo_id AND t.state = 'validate' "
+        "  AND t.date_from <= r.day AND t.date_to >= r.day)",
+        (start, end),
+    )
+
+
+def _mark_flagged(person_odoo_id: int, day: date) -> None:
+    db.execute(
+        "UPDATE auto_salaried_runs SET flagged = TRUE, updated_at = now() "
+        "WHERE person_odoo_id = %s AND day = %s", (person_odoo_id, day))
+
+
+def _revert_day(run: dict) -> None:
+    """Delete the robot's punches for a leave-conflicted day — only when the
+    day is clean (nothing but auto_salaried punches locally AND in Odoo)."""
+    pid, day = int(run["person_odoo_id"]), run["day"]
+    start, end = _day_bounds(day)
+    log_rows = db.query(
+        "SELECT id, source, synced_to_odoo, odoo_attendance_id "
+        "FROM timeclock_punches_log WHERE person_odoo_id = %s "
+        "AND COALESCE(rounded_at, occurred_at) >= %s "
+        "AND COALESCE(rounded_at, occurred_at) < %s",
+        (pid, start, end),
+    )
+    if any(r["source"] != "auto_salaried" for r in log_rows):
+        _flag(pid, day, "leave_conflict",
+              "Approved leave arrived after punches, but the day has "
+              "non-robot punches (transfer or manual). Clean up in Odoo.")
+        _mark_flagged(pid, day)
+        return
+    own_ids = sorted({int(r["odoo_attendance_id"]) for r in log_rows
+                      if r["odoo_attendance_id"]})
+    from . import odoo_client
+    odoo_atts = odoo_client.fetch_employee_attendances_for_day(pid, day)
+    strangers = [a for a in odoo_atts if int(a["id"]) not in own_ids]
+    if strangers:
+        _flag(pid, day, "leave_conflict",
+              f"Approved leave arrived after punches, but Odoo has "
+              f"{len(strangers)} attendance record(s) the robot didn't "
+              f"create (outside-app transfer or manual entry). Clean up in Odoo.")
+        _mark_flagged(pid, day)
+        return
+    odoo_client.delete_attendances(own_ids)
+    log_ids = [int(r["id"]) for r in log_rows]
+    if log_ids:
+        # Also neutralize any not-yet-synced rows so the retry sweep can't
+        # resurrect the deleted day.
+        db.execute(
+            "UPDATE timeclock_punches_log SET synced_to_odoo = TRUE, "
+            "sync_error = 'reverted: approved leave', synced_at = now() "
+            "WHERE id = ANY(%s)", (log_ids,))
+    db.execute(
+        "UPDATE auto_salaried_runs SET reverted = TRUE, updated_at = now() "
+        "WHERE person_odoo_id = %s AND day = %s", (pid, day))
+    _log.info("auto-salaried: reverted %s punches for person %s on %s "
+              "(approved leave)", len(own_ids), pid, day)
+
+
+def _flag_incomplete_days(start: date, end_exclusive: date) -> None:
+    """Past days where the robot started but never finished all four slots."""
+    rows = db.query(
+        "SELECT person_odoo_id, day FROM auto_salaried_runs "
+        "WHERE day >= %s AND day < %s AND skipped = FALSE AND reverted = FALSE "
+        "AND flagged = FALSE AND (morning_in_punch_id IS NULL "
+        "OR lunch_out_punch_id IS NULL OR lunch_in_punch_id IS NULL "
+        "OR day_out_punch_id IS NULL)",
+        (start, end_exclusive),
+    )
+    for r in rows:
+        pid, day = int(r["person_odoo_id"]), r["day"]
+        _flag(pid, day, "incomplete_day",
+              "The day ended without all four auto punches (extended app "
+              "downtime?). Check the person's attendance in Odoo.")
+        _mark_flagged(pid, day)
+
+
+def run_reconcile(now: datetime | None = None) -> None:
+    """Slow sweep (~600s): late-approved-leave cleanup + incomplete-day flags.
+    Live mode only — dry-run wrote no real punches, so there is nothing to
+    revert, and 'incomplete' days are expected while simulating."""
+    if mode() != "live":
+        return
+    now = (now or datetime.now(shift_config.SITE_TZ)).astimezone(shift_config.SITE_TZ)
+    today = now.date()
+    start = today - timedelta(days=RECONCILE_LOOKBACK_DAYS)
+    for run in _runs_with_late_leave(start, today):
+        try:
+            _revert_day(run)
+        except Exception as e:  # noqa: BLE001 — one day never kills the sweep
+            _log.warning("auto-salaried reconcile: failed for person %s %s: %s",
+                         run["person_odoo_id"], run["day"], e)
+    _flag_incomplete_days(start, today)
