@@ -86,6 +86,40 @@ def find_feedback_task(
     return int(rows[0]["id"]) if rows else None
 
 
+def find_feedback_task_ids(
+    execute_fn: Callable[..., Any], project_id: int, name: str
+) -> list[int]:
+    rows = execute_fn(
+        "project.task",
+        "search_read",
+        [("project_id", "=", project_id), ("name", "=", name)],
+        fields=["id"],
+        order="id asc",
+        limit=2,
+        context={"active_test": False},
+    ) or []
+    return [int(row["id"]) for row in rows]
+
+
+def find_feedback_attachment_ids(
+    execute_fn: Callable[..., Any], task_id: int, name: str
+) -> list[int]:
+    rows = execute_fn(
+        "ir.attachment",
+        "search_read",
+        [
+            ("res_model", "=", "project.task"),
+            ("res_id", "=", task_id),
+            ("name", "=", name),
+        ],
+        fields=["id"],
+        order="id asc",
+        limit=2,
+        context={"active_test": False},
+    ) or []
+    return [int(row["id"]) for row in rows]
+
+
 def create_feedback_task(
     execute_fn: Callable[..., Any],
     project_id: int,

@@ -144,6 +144,59 @@ def test_find_feedback_task_returns_none_when_exact_active_task_is_absent(monkey
     assert len(calls) == 1
 
 
+def test_find_feedback_task_ids_uses_bounded_archived_inclusive_identity_lookup(
+    monkeypatch,
+):
+    calls, responses = _stub(monkeypatch)
+    responses.append([{"id": 901}])
+
+    assert odoo_client.find_feedback_task_ids(
+        7, "[GPI-PM-FB-42] [Bug] Save fails"
+    ) == [901]
+
+    model, method, args, kwargs = calls[0]
+    assert (model, method) == ("project.task", "search_read")
+    assert args == (
+        [
+            ("project_id", "=", 7),
+            ("name", "=", "[GPI-PM-FB-42] [Bug] Save fails"),
+        ],
+    )
+    assert kwargs == {
+        "fields": ["id"],
+        "order": "id asc",
+        "limit": 2,
+        "context": {"active_test": False},
+    }
+
+
+def test_find_feedback_attachment_ids_uses_bounded_archived_inclusive_identity_lookup(
+    monkeypatch,
+):
+    calls, responses = _stub(monkeypatch)
+    responses.append([{"id": 18}, {"id": 19}])
+
+    assert odoo_client.find_feedback_attachment_ids(
+        901, "GPI-PM-FB-42-before.jpg"
+    ) == [18, 19]
+
+    model, method, args, kwargs = calls[0]
+    assert (model, method) == ("ir.attachment", "search_read")
+    assert args == (
+        [
+            ("res_model", "=", "project.task"),
+            ("res_id", "=", 901),
+            ("name", "=", "GPI-PM-FB-42-before.jpg"),
+        ],
+    )
+    assert kwargs == {
+        "fields": ["id"],
+        "order": "id asc",
+        "limit": 2,
+        "context": {"active_test": False},
+    }
+
+
 def test_create_feedback_task_uses_user_ids_and_tag_and_deadline(monkeypatch):
     calls, responses = _stub(monkeypatch)
     responses.append(900)  # create → task id
