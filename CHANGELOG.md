@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-26
+
+### Feedback task plan
+
+- **A clear plan is ready to send new feedback to the app owner's task list.** This is planning work only, so feedback does not make a task yet.
+
 ## 2026-08-24
 
 ### Late and absence reports are quicker
