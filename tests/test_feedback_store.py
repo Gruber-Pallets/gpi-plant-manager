@@ -54,10 +54,11 @@ def test_create_submission_inserts_feedback_image_and_sync_intent_atomically(mon
 
     assert feedback_id == 42
     assert transactions == [cursor]
-    assert len(cursor.calls) == 3
+    assert len(cursor.calls) == 4
     feedback_sql, feedback_params = cursor.calls[0]
     image_sql, image_params = cursor.calls[1]
     sync_sql, sync_params = cursor.calls[2]
+    delivery_sql, delivery_params = cursor.calls[3]
     assert "INSERT INTO feedback" in feedback_sql
     assert "status, lifecycle_origin, projection_version, updated_at" in feedback_sql
     assert "'requested', 'local', 1, now()" in feedback_sql
@@ -73,6 +74,8 @@ def test_create_submission_inserts_feedback_image_and_sync_intent_atomically(mon
     assert "INSERT INTO feedback_odoo_sync" in sync_sql
     assert "VALUES (%s, 1, 0, now(), 'idle')" in sync_sql
     assert sync_params == (42,)
+    assert "INSERT INTO feedback_task_delivery" in delivery_sql
+    assert delivery_params == (42,)
 
 
 def test_create_submission_without_image_still_creates_sync_intent(monkeypatch):
@@ -87,9 +90,11 @@ def test_create_submission_without_image_still_creates_sync_intent(monkeypatch):
 
     assert feedback_id == 42
     assert transactions == [cursor]
-    assert len(cursor.calls) == 2
+    assert len(cursor.calls) == 3
     assert "INSERT INTO feedback" in cursor.calls[0][0]
     assert "INSERT INTO feedback_odoo_sync" in cursor.calls[1][0]
+    assert "INSERT INTO feedback_task_delivery" in cursor.calls[2][0]
+    assert cursor.calls[2][1] == (42,)
     assert all("feedback_images" not in sql for sql, _params in cursor.calls)
 
 

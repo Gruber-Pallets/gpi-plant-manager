@@ -1,0 +1,522 @@
+"""Durable local outbox for independent app-owner task delivery.
+
+This module owns only local persistence and safe presentation summaries. A
+separate worker performs remote task delivery after it has claimed a row.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Literal
+from uuid import UUID, uuid4
+
+from . import db
+from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
+
+
+_MAX_SIGNED_64 = 9_223_372_036_854_775_807
+_MAX_WORKER_ID_LENGTH = 128
+_CLAIM_LEASE = timedelta(minutes=2)
+_RETRY_SUMMARY = "Odoo task delivery needs attention and will retry."
+_BLOCKED_REASON = "Task delivery needs owner review."
+_MISSING_SUMMARY = "Task delivery record is missing."
+
+
+class StateTransitionError(RuntimeError):
+    """A task-delivery claim no longer has the expected authority."""
+
+
+class SnapshotValidationError(ValueError):
+    """The task worker could not obtain one safe local feedback snapshot."""
+
+
+@dataclass(frozen=True)
+class TaskDeliveryClaim:
+    feedback_id: int
+    claim_token: UUID
+    task_id: int | None
+    before_attachment_id: int | None
+
+    def __post_init__(self) -> None:
+        _positive_signed_64(self.feedback_id, "feedback id")
+        _uuid(self.claim_token, "claim token")
+        if self.task_id is not None:
+            _positive_signed_64(self.task_id, "task id")
+        if self.before_attachment_id is not None:
+            _positive_signed_64(self.before_attachment_id, "before attachment id")
+
+
+@dataclass(frozen=True)
+class FeedbackTaskSnapshot:
+    feedback_id: int
+    task_type: Literal["bug", "feature"]
+    message: str
+    submitter: str | None
+    page_url: str | None
+    before_image: NormalizedImage | None
+
+
+def _positive_signed_64(value: object, label: str) -> int:
+    if type(value) is not int or not 0 < value <= _MAX_SIGNED_64:
+        raise ValueError(f"{label} must be a positive signed-64-bit integer")
+    return value
+
+
+def _nonnegative_signed_64(value: object, label: str) -> int:
+    if type(value) is not int or not 0 <= value <= _MAX_SIGNED_64:
+        raise ValueError(f"{label} must be a nonnegative signed-64-bit integer")
+    return value
+
+
+def _uuid(value: object, label: str) -> UUID:
+    if type(value) is not UUID:
+        raise ValueError(f"{label} must be a UUID")
+    return value
+
+
+def _aware_datetime(value: object, label: str) -> datetime:
+    if type(value) is not datetime or value.tzinfo is None:
+        raise ValueError(f"{label} must be timezone-aware")
+    try:
+        offset = value.utcoffset()
+    except (OverflowError, ValueError):
+        offset = None
+    if offset is None:
+        raise ValueError(f"{label} must be timezone-aware")
+    return value
+
+
+def _worker_id(value: object) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > _MAX_WORKER_ID_LENGTH
+        or value != value.strip()
+        or not value.isprintable()
+    ):
+        raise ValueError("worker id is malformed")
+    return value
+
+
+def _one_row(cursor, operation: str) -> Mapping[str, object]:
+    row = cursor.fetchone()
+    if not isinstance(row, Mapping):
+        raise StateTransitionError(f"{operation} no longer has claim authority")
+    return row
+
+
+def _claim_from_row(row: Mapping[str, object]) -> TaskDeliveryClaim:
+    try:
+        return TaskDeliveryClaim(
+            feedback_id=row.get("feedback_id"),
+            claim_token=row.get("claim_token"),
+            task_id=row.get("odoo_task_id"),
+            before_attachment_id=row.get("before_attachment_id"),
+        )
+    except ValueError:
+        raise StateTransitionError("database returned a malformed task delivery claim") from None
+
+
+def _updated_claim(
+    cursor,
+    operation: str,
+    claim: TaskDeliveryClaim,
+) -> TaskDeliveryClaim:
+    result = _claim_from_row(_one_row(cursor, operation))
+    if result.feedback_id != claim.feedback_id or result.claim_token != claim.claim_token:
+        raise StateTransitionError(f"{operation} returned different claim authority")
+    return result
+
+
+def _optional_now(now: datetime | None, label: str) -> datetime:
+    if now is None:
+        return datetime.now(UTC)
+    return _aware_datetime(now, label)
+
+
+def _snapshot_image(row: Mapping[str, object], feedback_id: int) -> NormalizedImage | None:
+    image_columns = (
+        "before_feedback_id",
+        "jpeg_bytes",
+        "sha256",
+        "byte_length",
+        "width",
+        "height",
+    )
+    if all(row.get(column) is None for column in image_columns):
+        return None
+    if row.get("before_feedback_id") != feedback_id:
+        raise SnapshotValidationError("before image belongs to another feedback record")
+    raw_value = row.get("jpeg_bytes")
+    if not isinstance(raw_value, (bytes, bytearray, memoryview)):
+        raise SnapshotValidationError("before image bytes are malformed")
+    raw = bytes(raw_value)
+    if not raw or len(raw) > MAX_OUTPUT_BYTES:
+        raise SnapshotValidationError("before image bytes are malformed")
+    byte_length = row.get("byte_length")
+    if (
+        type(byte_length) is not int
+        or byte_length != len(raw)
+        or not 0 < byte_length <= MAX_OUTPUT_BYTES
+    ):
+        raise SnapshotValidationError("before image length is malformed")
+    digest = row.get("sha256")
+    if type(digest) is not str or digest != hashlib.sha256(raw).hexdigest():
+        raise SnapshotValidationError("before image hash is malformed")
+    width = row.get("width")
+    height = row.get("height")
+    if (
+        type(width) is not int
+        or type(height) is not int
+        or not 0 < width <= OUTPUT_LONG_SIDE
+        or not 0 < height <= OUTPUT_LONG_SIDE
+    ):
+        raise SnapshotValidationError("before image dimensions are malformed")
+    return NormalizedImage(
+        jpeg_bytes=raw,
+        sha256=digest,
+        byte_length=byte_length,
+        width=width,
+        height=height,
+    )
+
+
+def enqueue_submission(cur, feedback_id: int) -> None:
+    """Add a newly saved local feedback record to the owner-task outbox."""
+    cur.execute(
+        "INSERT INTO feedback_task_delivery (feedback_id, state, due_at) "
+        "VALUES (%s, 'pending', now())",
+        (feedback_id,),
+    )
+
+
+def claim_due(
+    *,
+    now: datetime,
+    worker_id: str,
+    limit: int = 10,
+) -> list[TaskDeliveryClaim]:
+    """Claim at most ten due or expired rows for a two-minute lease."""
+    current = _aware_datetime(now, "claim time")
+    owner = _worker_id(worker_id)
+    if type(limit) is not int or limit < 1:
+        raise ValueError("claim limit must be a positive integer")
+    limit = min(limit, 10)
+    claims: list[TaskDeliveryClaim] = []
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT feedback_id, odoo_task_id, before_attachment_id
+            FROM feedback_task_delivery
+            WHERE (
+                state IN ('pending', 'attention') AND due_at <= %s
+            ) OR (
+                state = 'in_flight' AND claim_expires_at <= %s
+            )
+            ORDER BY due_at, feedback_id
+            FOR UPDATE SKIP LOCKED
+            LIMIT %s
+            """,
+            (current, current, limit),
+        )
+        rows = cursor.fetchall()
+        if not isinstance(rows, list) or len(rows) > limit:
+            raise StateTransitionError("database returned an invalid due-claim result")
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise StateTransitionError("database returned a malformed due-claim row")
+            try:
+                feedback_id = _positive_signed_64(row.get("feedback_id"), "feedback id")
+                task_id = row.get("odoo_task_id")
+                attachment_id = row.get("before_attachment_id")
+                if task_id is not None:
+                    _positive_signed_64(task_id, "task id")
+                if attachment_id is not None:
+                    _positive_signed_64(attachment_id, "before attachment id")
+            except ValueError:
+                raise StateTransitionError("database returned a malformed due-claim row") from None
+            token = uuid4()
+            expires = current + _CLAIM_LEASE
+            cursor.execute(
+                """
+                UPDATE feedback_task_delivery
+                SET state = 'in_flight', claim_owner = %s, claim_token = %s,
+                    claim_expires_at = %s, attempt_count = attempt_count + 1,
+                    last_error_summary = NULL, updated_at = %s
+                WHERE feedback_id = %s
+                  AND (
+                    (state IN ('pending', 'attention') AND due_at <= %s)
+                    OR (state = 'in_flight' AND claim_expires_at <= %s)
+                  )
+                  AND odoo_task_id IS NOT DISTINCT FROM %s
+                  AND before_attachment_id IS NOT DISTINCT FROM %s
+                RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id
+                """,
+                (
+                    owner,
+                    token,
+                    expires,
+                    current,
+                    feedback_id,
+                    current,
+                    current,
+                    task_id,
+                    attachment_id,
+                ),
+            )
+            result = _updated_claim(
+                cursor,
+                "due claim update",
+                TaskDeliveryClaim(feedback_id, token, task_id, attachment_id),
+            )
+            claims.append(result)
+    return claims
+
+
+def load_snapshot(feedback_id: int) -> FeedbackTaskSnapshot:
+    """Read and detach the only local fields a task-delivery worker needs."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT f.id AS feedback_id, f.task_type, f.message, f.submitter,
+                   f.page_url, f.lifecycle_origin,
+                   bi.feedback_id AS before_feedback_id, bi.jpeg_bytes,
+                   bi.sha256, bi.byte_length, bi.width, bi.height
+            FROM feedback f
+            LEFT JOIN feedback_images bi
+              ON bi.feedback_id = f.id AND bi.role = 'before'
+            WHERE f.id = %s
+              AND f.lifecycle_origin = 'local'
+              AND f.task_type IN ('bug', 'feature')
+            FOR SHARE
+            """,
+            (safe_feedback_id,),
+        )
+        row = cursor.fetchone()
+    if not isinstance(row, Mapping):
+        raise SnapshotValidationError("local feedback snapshot is unavailable")
+    try:
+        if (
+            row.get("feedback_id") != safe_feedback_id
+            or row.get("lifecycle_origin") != "local"
+            or row.get("task_type") not in {"bug", "feature"}
+            or type(row.get("message")) is not str
+            or row.get("submitter") is not None and type(row.get("submitter")) is not str
+            or row.get("page_url") is not None and type(row.get("page_url")) is not str
+        ):
+            raise SnapshotValidationError("local feedback snapshot is malformed")
+        before_image = _snapshot_image(row, safe_feedback_id)
+    except SnapshotValidationError:
+        raise
+    except (TypeError, ValueError):
+        raise SnapshotValidationError("local feedback snapshot is malformed") from None
+    return FeedbackTaskSnapshot(
+        feedback_id=safe_feedback_id,
+        task_type=row["task_type"],
+        message=row["message"],
+        submitter=row["submitter"],
+        page_url=row["page_url"],
+        before_image=before_image,
+    )
+
+
+def record_task_id(
+    claim: TaskDeliveryClaim,
+    *,
+    task_id: int,
+    now: datetime | None = None,
+) -> TaskDeliveryClaim:
+    """Persist the remote task identity for exactly one current claim."""
+    if type(claim) is not TaskDeliveryClaim:
+        raise ValueError("claim is malformed")
+    saved_task_id = _positive_signed_64(task_id, "task id")
+    current = _optional_now(now, "task identity time")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE feedback_task_delivery
+            SET odoo_task_id = %s, updated_at = %s
+            WHERE feedback_id = %s
+              AND claim_token = %s
+              AND state = 'in_flight'
+              AND odoo_task_id IS NOT DISTINCT FROM %s
+              AND before_attachment_id IS NOT DISTINCT FROM %s
+            RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id
+            """,
+            (
+                saved_task_id,
+                current,
+                claim.feedback_id,
+                claim.claim_token,
+                claim.task_id,
+                claim.before_attachment_id,
+            ),
+        )
+        updated = _updated_claim(cursor, "task identity update", claim)
+    if updated.task_id != saved_task_id:
+        raise StateTransitionError("task identity update returned a different task")
+    return updated
+
+
+def record_before_attachment(
+    claim: TaskDeliveryClaim,
+    *,
+    attachment_id: int,
+    now: datetime | None = None,
+) -> TaskDeliveryClaim:
+    """Persist the optional before-image attachment for one current claim."""
+    if type(claim) is not TaskDeliveryClaim or claim.task_id is None:
+        raise ValueError("claim has no saved task identity")
+    saved_attachment_id = _positive_signed_64(attachment_id, "before attachment id")
+    current = _optional_now(now, "before attachment time")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE feedback_task_delivery
+            SET before_attachment_id = %s, updated_at = %s
+            WHERE feedback_id = %s
+              AND claim_token = %s
+              AND state = 'in_flight'
+              AND odoo_task_id = %s
+              AND before_attachment_id IS NOT DISTINCT FROM %s
+            RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id
+            """,
+            (
+                saved_attachment_id,
+                current,
+                claim.feedback_id,
+                claim.claim_token,
+                claim.task_id,
+                claim.before_attachment_id,
+            ),
+        )
+        updated = _updated_claim(cursor, "before attachment update", claim)
+    if updated.before_attachment_id != saved_attachment_id:
+        raise StateTransitionError("before attachment update returned a different attachment")
+    return updated
+
+
+def mark_delivered(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> None:
+    """Finish a claim only when its saved task and required image are present."""
+    if type(claim) is not TaskDeliveryClaim or claim.task_id is None:
+        raise ValueError("claim has no saved task identity")
+    current = _optional_now(now, "delivery completion time")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE feedback_task_delivery
+            SET state = 'delivered', claim_owner = NULL, claim_token = NULL,
+                claim_expires_at = NULL, last_error_summary = NULL, updated_at = %s
+            WHERE feedback_id = %s
+              AND claim_token = %s
+              AND state = 'in_flight'
+              AND odoo_task_id = %s
+              AND before_attachment_id IS NOT DISTINCT FROM %s
+              AND (
+                NOT EXISTS (
+                    SELECT 1 FROM feedback_images
+                    WHERE feedback_id = feedback_task_delivery.feedback_id
+                      AND role = 'before'
+                )
+                OR before_attachment_id IS NOT NULL
+              )
+            RETURNING feedback_id
+            """,
+            (
+                current,
+                claim.feedback_id,
+                claim.claim_token,
+                claim.task_id,
+                claim.before_attachment_id,
+            ),
+        )
+        row = _one_row(cursor, "delivery completion")
+    if row.get("feedback_id") != claim.feedback_id:
+        raise StateTransitionError("delivery completion returned a different feedback record")
+
+
+def schedule_retry(claim: TaskDeliveryClaim, *, now: datetime) -> None:
+    """Release a current claim for its capped exponential retry delay."""
+    if type(claim) is not TaskDeliveryClaim:
+        raise ValueError("claim is malformed")
+    current = _aware_datetime(now, "retry time")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT feedback_id, attempt_count
+            FROM feedback_task_delivery
+            WHERE feedback_id = %s
+              AND claim_token = %s
+              AND state = 'in_flight'
+            FOR UPDATE
+            """,
+            (claim.feedback_id, claim.claim_token),
+        )
+        selected = _one_row(cursor, "retry claim lock")
+        if selected.get("feedback_id") != claim.feedback_id:
+            raise StateTransitionError("retry claim lock returned a different feedback record")
+        try:
+            attempt_count = _nonnegative_signed_64(selected.get("attempt_count"), "attempt count")
+        except ValueError:
+            raise StateTransitionError("retry claim lock returned a malformed attempt count") from None
+        if attempt_count < 1:
+            raise StateTransitionError("retry claim lock has no delivery attempt")
+        due = current + timedelta(seconds=min(60 * 2 ** min(attempt_count, 6), 3600))
+        cursor.execute(
+            """
+            UPDATE feedback_task_delivery
+            SET state = 'attention', claim_owner = NULL, claim_token = NULL,
+                claim_expires_at = NULL, due_at = %s, last_error_summary = %s,
+                updated_at = %s
+            WHERE feedback_id = %s
+              AND claim_token = %s
+              AND state = 'in_flight'
+            RETURNING feedback_id, due_at
+            """,
+            (due, _RETRY_SUMMARY, current, claim.feedback_id, claim.claim_token),
+        )
+        updated = _one_row(cursor, "retry scheduling")
+    if updated.get("feedback_id") != claim.feedback_id or updated.get("due_at") != due:
+        raise StateTransitionError("retry scheduling returned a different delivery record")
+
+
+def block(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> None:
+    """Stop a current claim for owner review without scheduling a new attempt."""
+    if type(claim) is not TaskDeliveryClaim:
+        raise ValueError("claim is malformed")
+    current = _optional_now(now, "block time")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE feedback_task_delivery
+            SET state = 'blocked', claim_owner = NULL, claim_token = NULL,
+                claim_expires_at = NULL, blocked_reason = %s, updated_at = %s
+            WHERE feedback_id = %s
+              AND claim_token = %s
+              AND state = 'in_flight'
+            RETURNING feedback_id
+            """,
+            (_BLOCKED_REASON, current, claim.feedback_id, claim.claim_token),
+        )
+        row = _one_row(cursor, "delivery block")
+    if row.get("feedback_id") != claim.feedback_id:
+        raise StateTransitionError("delivery block returned a different feedback record")
+
+
+def admin_status_for(state: object) -> tuple[str, str | None]:
+    """Return owner-facing text from a closed state allowlist only."""
+    if type(state) is not str:
+        return "Needs attention", _MISSING_SUMMARY
+    if state in {"pending", "in_flight"}:
+        return "Queued for app owner", None
+    if state == "attention":
+        return "Needs attention", _RETRY_SUMMARY
+    if state == "delivered":
+        return "Assigned to app owner", None
+    if state == "blocked":
+        return "Needs attention", _BLOCKED_REASON
+    return "Needs attention", _MISSING_SUMMARY

@@ -50,6 +50,17 @@ def test_feedback_schema_has_durable_odoo_outbox_and_immutable_manifest():
     assert "CREATE TABLE IF NOT EXISTS feedback_odoo_backfill_state" in ddl
 
 
+def test_schema_has_owner_task_delivery_outbox():
+    ddl = " ".join(SCHEMA_DDL.split())
+    assert "CREATE TABLE IF NOT EXISTS feedback_task_delivery" in ddl
+    assert "feedback_id BIGINT PRIMARY KEY REFERENCES feedback(id)" in ddl
+    assert "state TEXT NOT NULL DEFAULT 'pending'" in ddl
+    assert "state IN ('pending', 'in_flight', 'attention', 'delivered', 'blocked')" in ddl
+    assert "claim_token UUID" in ddl
+    assert "odoo_task_id BIGINT" in ddl
+    assert "before_attachment_id BIGINT" in ddl
+
+
 def test_feedback_remote_ids_use_signed_64_bit_columns_and_idempotent_migration():
     ddl = " ".join(SCHEMA_DDL.split())
     migration = ddl.split("DO $feedback_remote_ids_bigint$", 1)[1].split(

@@ -1,0 +1,224 @@
+"""Focused tests for the independent owner-task delivery outbox."""
+
+from __future__ import annotations
+
+import hashlib
+from contextlib import AbstractContextManager
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
+
+import pytest
+
+from zira_dashboard import feedback_task_delivery as delivery
+
+
+NOW = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
+TOKEN = UUID("11111111-1111-1111-1111-111111111111")
+
+
+class RecordingCursor(AbstractContextManager):
+    """Cursor with one scripted fetch result for each statement."""
+
+    def __init__(self, *results: list[dict[str, object]]):
+        self._results = list(results)
+        self._current: list[dict[str, object]] = []
+        self.calls: list[tuple[str, object]] = []
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def execute(self, sql, params=None):
+        self.calls.append((str(sql), params))
+        index = len(self.calls) - 1
+        self._current = self._results[index] if index < len(self._results) else []
+
+    def fetchone(self):
+        return self._current[0] if self._current else None
+
+    def fetchall(self):
+        return list(self._current)
+
+
+def use_cursor(monkeypatch, *results: list[dict[str, object]]) -> RecordingCursor:
+    cursor = RecordingCursor(*results)
+    monkeypatch.setattr(delivery.db, "cursor", lambda: cursor)
+    return cursor
+
+
+def normalized_sql(cursor: RecordingCursor, index: int) -> str:
+    return " ".join(cursor.calls[index][0].split())
+
+
+def claim(*, task_id: int | None = None, attachment_id: int | None = None):
+    return delivery.TaskDeliveryClaim(
+        feedback_id=42,
+        claim_token=TOKEN,
+        task_id=task_id,
+        before_attachment_id=attachment_id,
+    )
+
+
+def valid_snapshot_row(**changes):
+    raw = b"saved-before"
+    row: dict[str, object] = {
+        "feedback_id": 42,
+        "task_type": "bug",
+        "message": "Guard rail is loose.",
+        "submitter": "operator@example.com",
+        "page_url": "/line/1",
+        "lifecycle_origin": "local",
+        "before_feedback_id": 42,
+        "jpeg_bytes": raw,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "byte_length": len(raw),
+        "width": 8,
+        "height": 8,
+    }
+    row.update(changes)
+    return row
+
+
+def assert_current_claim_predicate(statement: str) -> None:
+    assert "feedback_id = %s" in statement
+    assert "claim_token = %s" in statement
+
+
+def test_claim_due_uses_skip_locked_and_returns_two_minute_lease(monkeypatch):
+    monkeypatch.setattr(delivery, "uuid4", lambda: TOKEN)
+    cursor = use_cursor(
+        monkeypatch,
+        [{"feedback_id": 42, "odoo_task_id": None, "before_attachment_id": None}],
+        [
+            {
+                "feedback_id": 42,
+                "claim_token": TOKEN,
+                "odoo_task_id": None,
+                "before_attachment_id": None,
+            }
+        ],
+    )
+
+    claims = delivery.claim_due(now=NOW, worker_id="task-worker")
+
+    assert len(claims) == 1
+    assert claims[0].feedback_id == 42
+    assert "FOR UPDATE SKIP LOCKED" in normalized_sql(cursor, 0)
+    update_sql = normalized_sql(cursor, 1)
+    assert "state = 'in_flight'" in update_sql
+    assert NOW + timedelta(minutes=2) in cursor.calls[1][1]
+    assert any(type(value) is UUID for value in cursor.calls[1][1])
+
+
+def test_claim_due_caps_the_database_claim_batch_at_ten(monkeypatch):
+    cursor = use_cursor(monkeypatch, [])
+
+    assert delivery.claim_due(now=NOW, worker_id="task-worker", limit=99) == []
+
+    assert cursor.calls[0][1][-1] == 10
+
+
+def test_schedule_retry_clears_lease_and_caps_backoff_at_one_hour(monkeypatch):
+    due = NOW + timedelta(hours=1)
+    cursor = use_cursor(
+        monkeypatch,
+        [{"feedback_id": 42, "attempt_count": 8}],
+        [{"feedback_id": 42, "due_at": due}],
+    )
+
+    delivery.schedule_retry(claim(task_id=900), now=NOW)
+
+    update_sql = normalized_sql(cursor, 1)
+    assert "state = 'attention'" in update_sql
+    assert "claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL" in update_sql
+    assert "Odoo task delivery needs attention and will retry." in cursor.calls[1][1]
+    assert due in cursor.calls[1][1]
+    assert_current_claim_predicate(update_sql)
+
+
+def test_mark_delivered_requires_current_claim_token(monkeypatch):
+    cursor = use_cursor(monkeypatch, [])
+
+    with pytest.raises(delivery.StateTransitionError):
+        delivery.mark_delivered(claim(task_id=900))
+
+    statement = normalized_sql(cursor, 0)
+    assert_current_claim_predicate(statement)
+
+
+def test_block_does_not_schedule_another_attempt(monkeypatch):
+    cursor = use_cursor(monkeypatch, [{"feedback_id": 42}])
+
+    delivery.block(claim(task_id=900), now=NOW)
+
+    statement = normalized_sql(cursor, 0)
+    set_clause = statement.split(" SET ", 1)[1].split(" WHERE ", 1)[0]
+    assert "state = 'blocked'" in set_clause
+    assert "claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL" in set_clause
+    assert "due_at" not in set_clause
+    assert "Task delivery needs owner review." in cursor.calls[0][1]
+    assert_current_claim_predicate(statement)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        valid_snapshot_row(lifecycle_origin="legacy_project_task"),
+        valid_snapshot_row(byte_length=1),
+    ],
+)
+def test_load_snapshot_rejects_nonlocal_and_malformed_rows(monkeypatch, row):
+    use_cursor(monkeypatch, [row])
+
+    with pytest.raises(delivery.SnapshotValidationError):
+        delivery.load_snapshot(42)
+
+
+def test_recorded_remote_ids_are_guarded_by_the_current_claim_token(monkeypatch):
+    task_cursor = use_cursor(
+        monkeypatch,
+        [
+            {
+                "feedback_id": 42,
+                "claim_token": TOKEN,
+                "odoo_task_id": 900,
+                "before_attachment_id": None,
+            }
+        ],
+    )
+    saved_task = delivery.record_task_id(claim(), task_id=900)
+
+    assert saved_task.task_id == 900
+    assert_current_claim_predicate(normalized_sql(task_cursor, 0))
+
+    attachment_cursor = use_cursor(
+        monkeypatch,
+        [
+            {
+                "feedback_id": 42,
+                "claim_token": TOKEN,
+                "odoo_task_id": 900,
+                "before_attachment_id": 901,
+            }
+        ],
+    )
+    saved_attachment = delivery.record_before_attachment(saved_task, attachment_id=901)
+
+    assert saved_attachment.before_attachment_id == 901
+    assert_current_claim_predicate(normalized_sql(attachment_cursor, 0))
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("pending", ("Queued for app owner", None)),
+        ("in_flight", ("Queued for app owner", None)),
+        ("attention", ("Needs attention", "Odoo task delivery needs attention and will retry.")),
+        ("delivered", ("Assigned to app owner", None)),
+        ("blocked", ("Needs attention", "Task delivery needs owner review.")),
+        (None, ("Needs attention", "Task delivery record is missing.")),
+        ("untrusted database text", ("Needs attention", "Task delivery record is missing.")),
+        ([], ("Needs attention", "Task delivery record is missing.")),
+    ],
+)
+def test_admin_status_for_exposes_only_fixed_summaries(state, expected):
+    assert delivery.admin_status_for(state) == expected

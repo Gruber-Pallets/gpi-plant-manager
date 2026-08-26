@@ -1617,6 +1617,28 @@ CREATE TABLE IF NOT EXISTS feedback_odoo_sync (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS feedback_task_delivery (
+  feedback_id BIGINT PRIMARY KEY REFERENCES feedback(id),
+  state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'in_flight', 'attention', 'delivered', 'blocked')),
+  due_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  claim_owner TEXT,
+  claim_token UUID,
+  claim_expires_at TIMESTAMPTZ,
+  odoo_task_id BIGINT,
+  before_attachment_id BIGINT,
+  last_error_summary TEXT,
+  blocked_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((state = 'in_flight') = (claim_token IS NOT NULL AND claim_expires_at IS NOT NULL)),
+  CHECK (state <> 'delivered' OR odoo_task_id IS NOT NULL),
+  CHECK (state <> 'blocked' OR blocked_reason IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS feedback_task_delivery_due_idx
+  ON feedback_task_delivery (due_at, feedback_id)
+  WHERE state IN ('pending', 'attention');
+
 CREATE TABLE IF NOT EXISTS feedback_odoo_attempts (
   attempt_id UUID PRIMARY KEY,
   feedback_id BIGINT NOT NULL REFERENCES feedback(id),

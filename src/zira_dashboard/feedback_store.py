@@ -10,7 +10,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Mapping
 
-from . import db
+from . import db, feedback_task_delivery
 from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
 
 
@@ -347,6 +347,7 @@ def create_submission(
             "VALUES (%s, 1, 0, now(), 'idle')",
             (feedback_id,),
         )
+        feedback_task_delivery.enqueue_submission(cur, feedback_id)
         return feedback_id
 
 
