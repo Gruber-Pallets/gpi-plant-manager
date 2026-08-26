@@ -31,9 +31,14 @@ def test_scheduled_at_is_plant_local():
 
 
 def test_scheduled_at_survives_dst_days():
-    # 2026-03-08 and 2026-11-01 are US DST transitions; punch stays 6:00 local.
-    for day in (date(2026, 3, 9), date(2026, 11, 2)):  # Mondays after transitions
-        assert asal.scheduled_at(day, "morning_in").time() == time(6, 0)
+    # US DST: CDT (UTC-5) in summer, CST (UTC-6) in winter. The punch must
+    # stay 6:00 *local*, so the UTC offset must differ across the transition.
+    from datetime import timedelta, timezone
+    summer = asal.scheduled_at(date(2026, 7, 6), "morning_in")   # Monday, CDT
+    winter = asal.scheduled_at(date(2026, 12, 7), "morning_in")  # Monday, CST
+    assert summer.utcoffset() == timedelta(hours=-5)
+    assert winter.utcoffset() == timedelta(hours=-6)
+    assert summer.astimezone(timezone.utc).time() != winter.astimezone(timezone.utc).time()
 
 
 def test_skip_reasons():
