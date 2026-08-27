@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from . import db, object_api, staffing, work_centers_store
+from . import db, employee_celebrations, object_api, staffing, work_centers_store
 
 
 class PersonModel(object_api.ObjectModel):
@@ -47,10 +47,12 @@ class PersonModel(object_api.ObjectModel):
         if not ids or not clean:
             return True
         sets = ", ".join(f"{key} = %s" for key in clean.keys())
-        db.execute(
-            f"UPDATE people SET {sets}, local_dirty = TRUE WHERE id = ANY(%s)",
-            (*clean.values(), ids),
-        )
+        with db.cursor() as cursor:
+            employee_celebrations.lock_celebration_source_sync(cursor)
+            cursor.execute(
+                f"UPDATE people SET {sets}, local_dirty = TRUE WHERE id = ANY(%s)",
+                (*clean.values(), ids),
+            )
         staffing._invalidate_roster_cache()
         return True
 

@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import date
 
 import pytest
@@ -62,6 +63,44 @@ def test_person_model_keeps_odoo_active_status_read_only():
     assert status == 400
     assert body["error"]["code"] == "invalid_field"
     assert body["error"]["message"] == "Field is read-only: active"
+
+
+def test_person_model_bulk_write_locks_sources_before_updating_multiple_people(monkeypatch):
+    calls = []
+
+    class Cursor:
+        def execute(self, sql, params=None):
+            calls.append((" ".join(sql.split()), params))
+
+    @contextmanager
+    def cursor():
+        yield Cursor()
+
+    monkeypatch.setattr(object_models.db, "cursor", cursor)
+    monkeypatch.setattr(
+        object_models.db,
+        "execute",
+        lambda *_args, **_kwargs: pytest.fail("person bulk writes must use their transaction cursor"),
+    )
+    monkeypatch.setattr(
+        object_models.staffing,
+        "_invalidate_roster_cache",
+        lambda: calls.append(("cache", None)),
+    )
+
+    assert object_models.PersonModel().write_records(
+        [17, 9], {"reserve": True}, {}
+    ) is True
+
+    assert calls[0] == (
+        "SELECT pg_advisory_xact_lock(%s::bigint)",
+        (7_243_094_217,),
+    )
+    assert calls[1] == (
+        "UPDATE people SET reserve = %s, local_dirty = TRUE WHERE id = ANY(%s)",
+        (True, [17, 9]),
+    )
+    assert calls[2] == ("cache", None)
 
 
 def test_work_center_model_uses_effective_settings(monkeypatch):
