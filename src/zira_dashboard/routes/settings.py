@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from urllib.parse import urlencode
+from urllib.parse import quote_plus, urlencode
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -24,6 +24,7 @@ from .. import (
     settings_store,
     shift_config,
     staffing,
+    staffing_hours,
     work_centers_store,
 )
 from ..deps import templates
@@ -197,6 +198,7 @@ def settings_page(
     saved: int = Query(default=0),
     section: str = Query(default="work_centers"),
     defaults_error: str = Query(default=""),
+    error: str = Query(default=""),
 ):
     if section not in ("work_centers", "integrations", "api", "roster_filter", "tvs", "timeclock", "time_off", "forklift", "diagnostics"):
         section = "work_centers"
@@ -467,6 +469,7 @@ def settings_page(
         # Never 500 the whole settings page if the forklift data source / DB is
         # unreachable; the template guards on these keys being absent.
         forklift_ctx = {"enabled": True}
+    pay_period = staffing_hours.current_pay_period_config()
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -483,6 +486,7 @@ def settings_page(
             "active_people": active_people,
             "saved": bool(saved),
             "defaults_error": defaults_error,
+            "error": error,
             "active_section": section,
             "roster_filter_active": roster_filter_active,
             "roster_filter_inactive": roster_filter_inactive,
@@ -505,10 +509,30 @@ def settings_page(
             "kiosk_recent_punches": kiosk_recent_punches,
             "kiosk_recent_variances": kiosk_recent_variances,
             "timeclock_sync_status": timeclock_sync_status,
+            "staffing_hours_pay_period": {
+                "anchor": pay_period.anchor.isoformat(),
+                "cycle_days": pay_period.cycle_days,
+            },
             "time_off_settings": time_off_settings,
             "forklift": forklift_ctx,
         },
     )
+
+
+@router.post("/settings/staffing-hours-pay-period")
+async def settings_save_staffing_hours_pay_period(request: Request):
+    """Save the local Staffing Hours payroll schedule without touching Odoo."""
+    form = await request.form()
+    try:
+        staffing_hours.save_pay_period_config(
+            form.get("anchor", ""), form.get("cycle_days", "")
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/settings?section=timeclock&error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse("/settings?saved=1&section=timeclock", status_code=303)
 
 
 @router.post("/settings/api-keys")

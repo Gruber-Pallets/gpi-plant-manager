@@ -413,6 +413,29 @@
 
     <div id="tc-tab-schedules" class="tc-panel" role="tabpanel" aria-label="Schedules">
 
+    {% if error %}
+      <div class="defaults-error" role="alert" aria-live="assertive">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/settings/staffing-hours-pay-period">
+      <h3>Staffing Hours pay period</h3>
+      <p class="help">
+        Sets the anchor date and length used by the Staffing Hours pay-period
+        report. This only changes Plant Manager's report settings; it does not
+        change anything in Odoo.
+      </p>
+      <label>Pay-period anchor
+        <input type="date" name="anchor" value="{{ staffing_hours_pay_period.anchor }}" required>
+      </label>
+      <label>Cycle length (days)
+        <input type="number" name="cycle_days" min="1" max="31" step="1" value="{{ staffing_hours_pay_period.cycle_days }}" required>
+      </label>
+      <button type="submit">Save pay period</button>
+      {% if saved and active_section == 'timeclock' %}
+        <span class="saved-flash">Saved.</span>
+      {% endif %}
+    </form>
+
     <form method="post" action="/settings/schedule" id="schedule-form"
           data-section="schedule">
       <h3>Company Schedule</h3>
