@@ -22,6 +22,7 @@ import os
 import threading
 import time
 import xmlrpc.client
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -284,6 +285,48 @@ def fetch_employees() -> list[dict]:
         "hr.employee", "search_read",
         [("active", "=", True)],
         fields=["id", "name", "active", "work_email", "wage_type", "resource_calendar_id"],
+    )
+
+
+@dataclass(frozen=True)
+class EmployeeCelebrationSource:
+    """Optional Odoo celebration fields and their active-employee values."""
+
+    birthday_available: bool
+    first_contract_date_available: bool
+    rows_by_employee_id: dict[int, dict[str, object]]
+
+
+def fetch_employee_celebration_dates() -> EmployeeCelebrationSource:
+    """Read only celebration fields that this Odoo database exposes."""
+    metadata = execute("hr.employee", "fields_get", [], attributes=["type"])
+    if not isinstance(metadata, dict):
+        raise RuntimeError("Odoo employee field metadata was malformed")
+    available = {
+        name
+        for name in ("birthday", "first_contract_date")
+        if name in metadata
+    }
+    if not available:
+        return EmployeeCelebrationSource(False, False, {})
+    rows = execute(
+        "hr.employee",
+        "search_read",
+        [("active", "=", True)],
+        fields=["id", *sorted(available)],
+    )
+    if not isinstance(rows, list):
+        raise RuntimeError("Odoo employee celebration payload was malformed")
+    return EmployeeCelebrationSource(
+        birthday_available="birthday" in available,
+        first_contract_date_available="first_contract_date" in available,
+        rows_by_employee_id={
+            int(row["id"]): row
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("id"), int)
+            and not isinstance(row["id"], bool)
+        },
     )
 
 

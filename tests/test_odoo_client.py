@@ -4,6 +4,28 @@ from unittest.mock import patch, MagicMock
 from zira_dashboard import odoo_client
 
 
+def test_fetch_employee_celebration_dates_reads_only_available_fields(monkeypatch):
+    calls = []
+
+    def fake_execute(model, method, *args, **kwargs):
+        calls.append((model, method, args, kwargs))
+        if (model, method) == ("hr.employee", "fields_get"):
+            return {"birthday": {"type": "date"}}
+        if (model, method) == ("hr.employee", "search_read"):
+            return [{"id": 7, "birthday": "1991-07-04"}]
+        raise AssertionError((model, method))
+
+    monkeypatch.setattr(odoo_client, "execute", fake_execute)
+
+    source = odoo_client.fetch_employee_celebration_dates()
+
+    assert source.birthday_available is True
+    assert source.first_contract_date_available is False
+    assert source.rows_by_employee_id[7]["birthday"] == "1991-07-04"
+    assert calls[0][3]["attributes"] == ["type"]
+    assert calls[1][3]["fields"] == ["id", "birthday"]
+
+
 def test_authenticate_raises_when_env_vars_missing(monkeypatch):
     # authenticate() returns _uid_cache before it validates config, so a prior
     # test that authenticated successfully would otherwise mask this check.
@@ -29,6 +51,11 @@ def test_sync_rejects_inactive_employee_payload_before_any_write(monkeypatch):
         lambda: [{"id": 1, "name": "Unexpectedly Inactive", "active": False}],
     )
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employee_statuses", lambda: [])
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employee_celebration_dates",
+        lambda: pytest.fail("unsafe employee payload must stop before celebration-date reads"),
+    )
     monkeypatch.setattr(
         odoo_sync.odoo_client,
         "fetch_skills_for",

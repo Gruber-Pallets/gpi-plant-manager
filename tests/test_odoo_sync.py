@@ -7,7 +7,7 @@ fetch_* helpers on odoo_client and assert against the resulting rows.
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -84,6 +84,11 @@ def _stub_client(
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_level_buckets", lambda: buckets)
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_departments", lambda: [])
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_work_schedules", lambda: [])
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employee_celebration_dates",
+        lambda: odoo_sync.odoo_client.EmployeeCelebrationSource(True, True, {}),
+    )
 
 
 def test_sync_skips_when_within_ttl(monkeypatch):
@@ -396,6 +401,91 @@ def test_sync_returns_error_on_odoo_failure(monkeypatch):
     assert result.ok is False
     assert "nope" in (result.error or "")
     assert result.refreshed is False
+
+
+def test_celebration_date_read_failure_preserves_last_safe_local_dates(monkeypatch):
+    from zira_dashboard import db
+
+    _stub_client(monkeypatch, [{"id": 99002, "name": "TestBob", "active": True}], {}, [], {})
+    db.execute(
+        "INSERT INTO people "
+        "(odoo_id, name, active, birthday_month, birthday_day, first_contract_date) "
+        "VALUES (99002, 'TestBob', TRUE, 7, 4, '2021-08-20')"
+    )
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employee_celebration_dates",
+        lambda: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+
+    assert odoo_sync.sync(force=True).ok is True
+
+    row = db.query(
+        "SELECT birthday_month, birthday_day, first_contract_date "
+        "FROM people WHERE odoo_id = 99002"
+    )[0]
+    assert row == {
+        "birthday_month": 7,
+        "birthday_day": 4,
+        "first_contract_date": date(2021, 8, 20),
+    }
+
+
+def test_sync_clears_only_a_confirmed_unavailable_celebration_field(monkeypatch):
+    from zira_dashboard import db, odoo_client
+
+    _stub_client(monkeypatch, [{"id": 99002, "name": "TestBob", "active": True}], {}, [], {})
+    db.execute(
+        "INSERT INTO people "
+        "(odoo_id, name, active, birthday_month, birthday_day, first_contract_date) "
+        "VALUES (99002, 'TestBob', TRUE, 7, 4, '2020-08-20')"
+    )
+    source = odoo_client.EmployeeCelebrationSource(
+        False,
+        True,
+        {99002: {"first_contract_date": "2021-08-20"}},
+    )
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employee_celebration_dates",
+        lambda: source,
+    )
+
+    assert odoo_sync.sync(force=True).ok is True
+
+    row = db.query(
+        "SELECT birthday_month, birthday_day, first_contract_date "
+        "FROM people WHERE odoo_id = 99002"
+    )[0]
+    assert row == {
+        "birthday_month": None,
+        "birthday_day": None,
+        "first_contract_date": date(2021, 8, 20),
+    }
+
+
+def test_sync_isolates_celebration_queue_reconciliation_failure(monkeypatch):
+    from zira_dashboard import employee_celebrations, odoo_client
+
+    _stub_client(monkeypatch, [{"id": 99002, "name": "TestBob", "active": True}], {}, [], {})
+    source = odoo_client.EmployeeCelebrationSource(True, True, {})
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employee_celebration_dates",
+        lambda: source,
+    )
+    expected_today = date(2026, 8, 27)
+    seen = []
+
+    def fail_reconciliation(today):
+        seen.append(today)
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(odoo_sync, "plant_today", lambda: expected_today, raising=False)
+    monkeypatch.setattr(employee_celebrations, "reconcile_future", fail_reconciliation)
+
+    assert odoo_sync.sync(force=True).ok is True
+    assert seen == [expected_today]
 
 
 def test_sync_upsert_does_not_clear_excluded_flag():

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, UTC
 
 from . import odoo_client
+from .plant_day import today as plant_today
 
 log = logging.getLogger(__name__)
 
@@ -341,6 +342,11 @@ def sync(force: bool = False) -> SyncResult:
                 last_sync_at=last,
                 error=error,
             )
+        try:
+            celebration_source = odoo_client.fetch_employee_celebration_dates()
+        except Exception:
+            log.warning("employee celebration-date import failed")
+            celebration_source = None
         emp_ids = [e["id"] for e in employees]
         emp_skills = odoo_client.fetch_skills_for(emp_ids)
         spanish_level_ids = odoo_client.fetch_spanish_skill_level_ids()
@@ -440,6 +446,33 @@ def sync(force: bool = False) -> SyncResult:
                  wage_type, spanish_speaker, spanish_level,
                  _m2o_id(emp.get("resource_calendar_id")), is_flex, pulled_at),
             )
+        if celebration_source is not None:
+            for emp in employees:
+                celebration_row = celebration_source.rows_by_employee_id.get(emp["id"], {})
+                birthday = (
+                    employee_celebrations.normalize_birthday(
+                        celebration_row.get("birthday")
+                    )
+                    if celebration_source.birthday_available
+                    else None
+                )
+                first_contract_date = (
+                    employee_celebrations.normalize_first_contract_date(
+                        celebration_row.get("first_contract_date")
+                    )
+                    if celebration_source.first_contract_date_available
+                    else None
+                )
+                cur.execute(
+                    "UPDATE people SET birthday_month = %s, birthday_day = %s, "
+                    "first_contract_date = %s WHERE odoo_id = %s",
+                    (
+                        birthday[0] if birthday is not None else None,
+                        birthday[1] if birthday is not None else None,
+                        first_contract_date,
+                        emp["id"],
+                    ),
+                )
         # Only an explicit archived status can deactivate a local person.
         # Absence from either Odoo response is never treated as an instruction.
         inactive_ids = [
@@ -482,6 +515,12 @@ def sync(force: bool = False) -> SyncResult:
                     "  level = EXCLUDED.level, last_pulled_at = EXCLUDED.last_pulled_at",
                     (level, pulled_at, emp["id"], s["skill_name"]),
                 )
+
+    if celebration_source is not None:
+        try:
+            employee_celebrations.reconcile_future(plant_today())
+        except Exception:
+            log.warning("employee celebration queue reconciliation failed after roster sync")
 
     # Departments: upsert into the departments registry table (kept
     # under that name internally for backward compat — UI calls it

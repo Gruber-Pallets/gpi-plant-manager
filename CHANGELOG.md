@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-27
 
+### Private celebration dates are checked safely
+
+#### Improvements
+
+- **Birthday and work-anniversary dates now stay private and are checked safely.** Nothing has appeared at the clock yet.
+
 ### Timeclock updates are easier to find
 
 #### Improvements
