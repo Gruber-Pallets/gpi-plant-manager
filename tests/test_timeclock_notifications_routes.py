@@ -223,7 +223,7 @@ def test_notifications_level_two_is_english_only(monkeypatch):
     assert "Tiempo libre aprobado" not in response.text
 
 
-def test_notifications_screen_skips_to_dashboard_when_empty(monkeypatch):
+def test_notifications_screen_restarts_priority_flow_when_empty(monkeypatch):
     monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
     monkeypatch.setattr(employee_notifications, "list_unacknowledged", lambda oid: [])
     token = timeclock._mint_token(1)
@@ -231,7 +231,7 @@ def test_notifications_screen_skips_to_dashboard_when_empty(monkeypatch):
     resp = client.get(f"/timeclock/notifications/{token}", follow_redirects=False)
 
     assert resp.status_code == 303
-    assert "/timeclock/dashboard/" in resp.headers["location"]
+    assert resp.headers["location"] == "/timeclock/start/1"
 
 
 def test_notifications_ack_restarts_sign_in_priority_flow(monkeypatch):

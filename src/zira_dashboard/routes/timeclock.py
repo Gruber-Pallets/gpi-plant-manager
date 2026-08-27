@@ -8,12 +8,14 @@ mode; the templates use big-touch / no-scroll layout.
 
 Flow:
   1. GET  /timeclock                       — searchable / scrollable name list
-  2. GET  /timeclock/start/{person_id}     — mint a token, redirect to dashboard
-  3. GET  /timeclock/dashboard/{token}     — clocked-in state + actions
-  4. GET  /timeclock/pick-wc/{token}       — WC picker (for override / transfer)
-  5. POST /timeclock/clock-in/{token}      — open hr.attendance with WC
-  6. POST /timeclock/clock-out/{token}     — close hr.attendance
-  7. POST /timeclock/transfer/{token}      — close + reopen at new WC
+  2. GET  /timeclock/start/{person_id}     — apply sign-in priority, mint a token
+  3. GET  /timeclock/notifications/{token} — acknowledge important work updates
+  4. GET  /timeclock/celebration/{token}   — acknowledge one private special day
+  5. GET  /timeclock/dashboard/{token}     — clocked-in state + actions
+  6. GET  /timeclock/pick-wc/{token}       — WC picker (for override / transfer)
+  7. POST /timeclock/clock-in/{token}      — open hr.attendance with WC
+  8. POST /timeclock/clock-out/{token}     — close hr.attendance
+  9. POST /timeclock/transfer/{token}      — close + reopen at new WC
 
 Auth: name-pick only — no PIN, by design. Dale's call: PINs add friction
 without meaningfully reducing the trust assumption (anyone on the shop
@@ -681,10 +683,9 @@ def timeclock_notifications(request: Request, token: str):
         return RedirectResponse(url="/timeclock", status_code=303)
     notes = employee_notifications.list_unacknowledged(p["odoo_id"])
     if not notes:
-        # Raced/empty (acked elsewhere) — continue to the dashboard.
-        return RedirectResponse(
-            url=f"/timeclock/dashboard/{_mint_token(person_id)}", status_code=303
-        )
+        # Raced/empty (acked elsewhere) — re-check celebration and all later
+        # priority steps rather than bypassing a due private message.
+        return RedirectResponse(url=f"/timeclock/start/{person_id}", status_code=303)
     # The template renders each card's text via t() (keyed on kind) so it
     # localizes for Spanish-primary employees; it needs the formatted date span.
     for n in notes:
