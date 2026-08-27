@@ -43,3 +43,24 @@ Added the local-only foundation for private employee birthday and work-anniversa
 
 - The two reconciliation tests could not run here because `DATABASE_URL` is not configured. They are included and skip safely; run them against the approved local/integration Postgres database before release.
 - Odoo date import and Timeclock presentation are intentionally deferred to later scoped tasks.
+
+## Repair: atomic reconciliation source snapshot
+
+### Summary
+
+Independent review identified that `reconcile_future()` read `people` in one transaction and later cleaned/inserted queue rows in separate transactions. A concurrent roster sync could change a source row between those operations. Reconciliation now runs its source read, inactive cleanup, stale-future cleanup, and queue inserts through one `db.cursor()` transaction. It locks every locally mirrored Odoo source row with `FOR UPDATE`, then derives the active subset while those source rows remain locked. A concurrent source sync therefore either commits before reconciliation reads or waits until reconciliation has committed its queue state.
+
+### RED
+
+- `uv run --extra dev pytest tests/test_employee_celebrations.py -q` — failed as expected: `test_reconcile_future_locks_sources_and_mutates_the_queue_in_one_transaction` detected the old direct `db.query` call instead of using its transaction cursor.
+
+### GREEN
+
+- `uv run --extra dev pytest tests/test_employee_celebrations.py -q` — 9 passed, 2 skipped.
+- `uv run --extra dev pytest tests/test_schema_employee_celebrations.py tests/test_employee_celebrations.py tests/test_employee_notifications.py -q` — 33 passed, 2 skipped.
+- `uv run --extra dev ruff check src/zira_dashboard/employee_celebrations.py tests/test_schema_employee_celebrations.py tests/test_employee_celebrations.py` — passed.
+- `git diff --check` — passed.
+
+### Repair commit
+
+- `d0b413cc8807c3b8fa04668e79b6de0e78404cad fix: lock celebration queue reconciliation` (local only; not pushed).
