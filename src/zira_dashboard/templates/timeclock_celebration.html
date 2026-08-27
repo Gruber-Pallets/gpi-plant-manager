@@ -1,0 +1,28 @@
+{% extends "timeclock_base.html" %}
+
+{% block content %}
+<main class="k-main celebration-screen">
+  <section class="celebration-card" aria-labelledby="celebration-title">
+    <div class="celebration-confetti" aria-hidden="true">
+      <span style="--confetti-left: 6%; --confetti-color: #ef4444; --confetti-duration: 7s; --confetti-delay: -2s;"></span>
+      <span style="--confetti-left: 17%; --confetti-color: #f59e0b; --confetti-duration: 9s; --confetti-delay: -6s;"></span>
+      <span style="--confetti-left: 29%; --confetti-color: #10b981; --confetti-duration: 8s; --confetti-delay: -1s;"></span>
+      <span style="--confetti-left: 41%; --confetti-color: #3b82f6; --confetti-duration: 10s; --confetti-delay: -4s;"></span>
+      <span style="--confetti-left: 54%; --confetti-color: #8b5cf6; --confetti-duration: 7s; --confetti-delay: -5s;"></span>
+      <span style="--confetti-left: 68%; --confetti-color: #ec4899; --confetti-duration: 9s; --confetti-delay: -3s;"></span>
+      <span style="--confetti-left: 80%; --confetti-color: #14b8a6; --confetti-duration: 8s; --confetti-delay: -7s;"></span>
+      <span style="--confetti-left: 92%; --confetti-color: #f97316; --confetti-duration: 10s; --confetti-delay: -2s;"></span>
+    </div>
+    {% if celebration.kind == "birthday" %}
+      <h1 id="celebration-title">{{ t("Happy Birthday, {name}! 🎉", name=person.name.split(" ")[0]) }}</h1>
+    {% else %}
+      <h1 id="celebration-title">{{ t("Happy {years}-Year Work Anniversary, {name}! 🎉", years=celebration.completed_years, name=person.name.split(" ")[0]) }}</h1>
+    {% endif %}
+    <p>{{ t("We're glad you're on the team.") }}</p>
+    <form method="post" action="/timeclock/celebration/ack/{{ token }}">
+      <input type="hidden" name="celebration_id" value="{{ celebration.id }}">
+      <button type="submit" class="k-btn celebration-continue">{{ t("Continue") }}</button>
+    </form>
+  </section>
+</main>
+{% endblock %}

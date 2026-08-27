@@ -63,6 +63,11 @@ TRANSLATIONS: dict[str, str] = {
     "Saturday work was cancelled. Do not report to work.": "El trabajo del sábado fue cancelado. No te presentes a trabajar.",
     "Holiday work cancelled": "Trabajo del día festivo cancelado",
     "{name} work was cancelled. Do not report to work.": "El trabajo de {name} fue cancelado. No te presentes a trabajar.",
+    # --- private special-day celebration ---
+    "Happy Birthday, {name}! 🎉": "¡Feliz cumpleaños, {name}! 🎉",
+    "Happy {years}-Year Work Anniversary, {name}! 🎉": "¡Feliz aniversario de {years} años de trabajo, {name}! 🎉",
+    "We're glad you're on the team.": "Nos alegra que seas parte del equipo.",
+    "Continue": "Continuar",
     # --- clock-out day-before reminder ---
     "Time off reminder": "Recordatorio de tiempo libre",
     "Heads up — you have approved time off {day}. Enjoy!": "Atención — tienes tiempo libre aprobado {day}. ¡Que lo disfrutes!",

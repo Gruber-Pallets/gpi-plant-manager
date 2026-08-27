@@ -65,3 +65,39 @@ def test_home_with_people_does_not_show_the_roster_unavailable_alert():
     assert "The employee list is unavailable" not in html
     assert "Maria Garcia" in html
     assert 'id="filter"' in html
+
+
+def test_celebration_template_renders_birthday_with_first_name_and_hidden_event_id():
+    html = _env().get_template("timeclock_celebration.html").render(
+        person={"name": "Maria Garcia", "spanish_level": 0},
+        token="t",
+        celebration={"id": 8, "kind": "birthday", "completed_years": None},
+        timeclock_language="en",
+    )
+
+    assert "Happy Birthday, Maria!" in html
+    assert "Garcia" not in html
+    assert 'name="celebration_id" value="8"' in html
+    assert 'action="/timeclock/celebration/ack/t"' in html
+
+
+def test_celebration_template_renders_completed_anniversary_years():
+    html = _env().get_template("timeclock_celebration.html").render(
+        person={"name": "Maria Garcia", "spanish_level": 0},
+        token="t",
+        celebration={"id": 9, "kind": "work_anniversary", "completed_years": 5},
+        timeclock_language="en",
+    )
+
+    assert "Happy 5-Year Work Anniversary, Maria!" in html
+
+
+def test_celebration_template_is_spanish_primary_for_level_three():
+    html = _env().get_template("timeclock_celebration.html").render(
+        person={"name": "Maria Garcia", "spanish_level": 3},
+        token="t",
+        celebration={"id": 8, "kind": "birthday", "completed_years": None},
+        timeclock_language="es_primary",
+    )
+
+    assert html.index("¡Feliz cumpleaños") < html.index("Happy Birthday")

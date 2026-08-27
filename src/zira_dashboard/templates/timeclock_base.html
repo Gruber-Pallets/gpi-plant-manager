@@ -215,6 +215,75 @@
      legible. Secondary (white) buttons keep the gray, which reads fine. */
   .k-btn:not(.secondary) .k-secondary { color: rgba(255, 255, 255, 0.9); opacity: 1; }
 
+  /* One private special-day message for the person currently using the kiosk. */
+  .celebration-screen {
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    text-align: center;
+    background: linear-gradient(145deg, #eff6ff, #fdf4ff);
+  }
+  .celebration-card {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    width: min(100%, 720px);
+    padding: clamp(2.5rem, 8vw, 5rem) clamp(1.5rem, 7vw, 4rem);
+    border: 1px solid #bfdbfe;
+    border-radius: 1.5rem;
+    background: #ffffff;
+    box-shadow: 0 18px 45px rgba(30, 64, 175, 0.16);
+  }
+  .celebration-card > :not(.celebration-confetti) { position: relative; z-index: 1; }
+  .celebration-card h1 {
+    max-width: 18ch;
+    margin-right: auto;
+    margin-left: auto;
+    font-size: clamp(2.5rem, 7vw, 4.5rem);
+  }
+  .celebration-card p {
+    margin: 0 auto 2rem;
+    max-width: 34ch;
+    font-size: clamp(1.35rem, 3.5vw, 1.9rem);
+    line-height: 1.35;
+    color: #334155;
+  }
+  .celebration-card form { margin: 0; }
+  .celebration-continue { width: min(100%, 360px); }
+  .celebration-confetti {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: -1;
+  }
+  .celebration-confetti span {
+    position: absolute;
+    top: -1.5rem;
+    left: var(--confetti-left);
+    width: 0.8rem;
+    height: 1.4rem;
+    border-radius: 0.2rem;
+    background: var(--confetti-color);
+    opacity: 0.72;
+    animation: celebration-confetti-fall var(--confetti-duration) linear infinite;
+    animation-delay: var(--confetti-delay);
+  }
+  @keyframes celebration-confetti-fall {
+    from { transform: translateY(-1rem) rotate(0deg); }
+    to { transform: translateY(44rem) rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .celebration-confetti,
+    .celebration-confetti span,
+    .celebration-continue,
+    .celebration-continue:active {
+      animation: none !important;
+      transform: none !important;
+      transition: none !important;
+    }
+  }
+
 </style>
 <script src="/static/htmx-1.9.12.min.js?v={{ static_v('htmx-1.9.12.min.js') }}"
         integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2"
