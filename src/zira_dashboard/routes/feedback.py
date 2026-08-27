@@ -98,7 +98,7 @@ async def submit_feedback(
         status="requested",
         before_image=before_image,
     )
-    return JSONResponse({"ok": True, "id": new_id})
+    return JSONResponse({"ok": True, "id": new_id, "task_delivery": "queued"})
 
 
 @router.get("/api/feedback/mine")

@@ -49,7 +49,7 @@ def test_post_feedback_saves_locally_without_calling_odoo(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "id": 12}
+    assert response.json() == {"ok": True, "id": 12, "task_delivery": "queued"}
     assert captured == {
         "message": "It broke",
         "submitter": None,
@@ -75,7 +75,7 @@ def test_post_feedback_still_succeeds_when_odoo_is_unavailable(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "id": 44}
+    assert response.json() == {"ok": True, "id": 44, "task_delivery": "queued"}
 
 
 def test_post_feedback_normalizes_one_optional_image_from_decoded_content(monkeypatch):
@@ -95,7 +95,7 @@ def test_post_feedback_normalizes_one_optional_image_from_decoded_content(monkey
     )
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "id": 5}
+    assert response.json() == {"ok": True, "id": 5, "task_delivery": "queued"}
     assert captured["before_image"].jpeg_bytes.startswith(b"\xff\xd8")
 
 

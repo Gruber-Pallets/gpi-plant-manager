@@ -235,3 +235,16 @@ def test_recorded_remote_ids_are_guarded_by_the_current_claim_token(monkeypatch)
 )
 def test_admin_status_for_exposes_only_fixed_summaries(state, expected):
     assert delivery.admin_status_for(state) == expected
+
+
+def test_admin_status_for_reads_only_the_state_from_an_admin_row():
+    row = {
+        "task_delivery_state": "attention",
+        "task_delivery_error": "untrusted database error",
+        "task_delivery_block_reason": "untrusted database reason",
+    }
+
+    assert delivery.admin_status_for(row) == (
+        "Needs attention",
+        "Odoo task delivery needs attention and will retry.",
+    )

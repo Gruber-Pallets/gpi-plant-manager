@@ -45,6 +45,10 @@
                 </dd>
               </div>
               <div>
+                <dt>Owner task</dt>
+                <dd>{{ item.task_delivery_label }}{% if item.task_delivery_note %}<br><span class="muted">{{ item.task_delivery_note }}</span>{% endif %}</dd>
+              </div>
+              <div>
                 <dt>Sync</dt>
                 <dd>
                   {{ item.sync_state or 'missing' }} · desired {{ item.desired_version or '—' }} ·

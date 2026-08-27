@@ -520,8 +520,9 @@ def block(
         raise StateTransitionError("delivery block returned a different feedback record")
 
 
-def admin_status_for(state: object) -> tuple[str, str | None]:
+def admin_status_for(row: object) -> tuple[str, str | None]:
     """Return owner-facing text from a closed state allowlist only."""
+    state = row.get("task_delivery_state") if isinstance(row, Mapping) else row
     if type(state) is not str:
         return "Needs attention", _MISSING_SUMMARY
     if state in {"pending", "in_flight"}:

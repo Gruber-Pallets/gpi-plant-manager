@@ -194,12 +194,61 @@ def test_admin_list_queries_local_and_sync_state(monkeypatch):
 
     assert "FROM feedback f" in captured["sql"]
     assert "LEFT JOIN feedback_odoo_sync s" in captured["sql"]
+    assert "LEFT JOIN feedback_task_delivery td" in captured["sql"]
     assert "f.status" in captured["sql"]
     assert "s.state AS sync_state" in captured["sql"]
     assert "s.desired_version" in captured["sql"]
     assert "s.last_synced_version" in captured["sql"]
+    assert "td.state AS task_delivery_state" in captured["sql"]
+    assert "td.odoo_task_id AS task_delivery_task_id" in captured["sql"]
+    assert "td.before_attachment_id AS task_delivery_attachment_id" in captured["sql"]
+    assert "td.last_error_summary AS task_delivery_error" in captured["sql"]
+    assert "td.blocked_reason AS task_delivery_block_reason" in captured["sql"]
     assert "WHERE f.lifecycle_origin = 'local'" in captured["sql"]
     assert captured["params"] == (25,)
+
+
+def test_admin_list_maps_task_delivery_to_fixed_safe_template_fields(monkeypatch):
+    rows = [
+        {
+            "task_delivery_state": "pending",
+            "task_delivery_error": "untrusted database error",
+            "task_delivery_block_reason": "untrusted database reason",
+        },
+        {
+            "task_delivery_state": "delivered",
+            "task_delivery_error": None,
+            "task_delivery_block_reason": None,
+        },
+        {
+            "task_delivery_state": "attention",
+            "task_delivery_error": "untrusted database error",
+            "task_delivery_block_reason": "untrusted database reason",
+        },
+        {
+            "task_delivery_state": "blocked",
+            "task_delivery_error": "untrusted database error",
+            "task_delivery_block_reason": "untrusted database reason",
+        },
+    ]
+    monkeypatch.setattr(feedback_store.db, "query", lambda _sql, _params: rows)
+
+    items = feedback_store.for_admin()
+
+    assert [item["task_delivery_label"] for item in items] == [
+        "Queued for app owner",
+        "Assigned to app owner",
+        "Needs attention",
+        "Needs attention",
+    ]
+    assert [item["task_delivery_note"] for item in items] == [
+        None,
+        None,
+        "Odoo task delivery needs attention and will retry.",
+        "Task delivery needs owner review.",
+    ]
+    assert all("untrusted database error" not in str(item) for item in items)
+    assert all("untrusted database reason" not in str(item) for item in items)
 
 
 def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
@@ -230,6 +279,8 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
             "sync_state": "idle",
             "desired_version": 1,
             "last_synced_version": 0,
+            "task_delivery_label": "Queued for app owner",
+            "task_delivery_note": None,
             "has_before_image": True,
             "has_after_image": False,
         },
@@ -248,6 +299,8 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
             "sync_state": "quarantined",
             "desired_version": 2,
             "last_synced_version": 1,
+            "task_delivery_label": "Assigned to app owner",
+            "task_delivery_note": None,
             "has_before_image": False,
             "has_after_image": False,
         },
@@ -266,6 +319,8 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
             "sync_state": "idle",
             "desired_version": 3,
             "last_synced_version": 3,
+            "task_delivery_label": "Needs attention",
+            "task_delivery_note": "Odoo task delivery needs attention and will retry.",
             "has_before_image": False,
             "has_after_image": True,
         },
@@ -284,6 +339,8 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
             "sync_state": "idle",
             "desired_version": 2,
             "last_synced_version": 0,
+            "task_delivery_label": "Needs attention",
+            "task_delivery_note": "Task delivery needs owner review.",
             "has_before_image": False,
             "has_after_image": False,
         },
@@ -302,6 +359,10 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
     assert "Broken &lt;script&gt;alert(1)&lt;/script&gt;" in response.text
     assert "<script>alert(1)</script>" not in response.text
     assert "Fixed &lt;carefully&gt;" in response.text
+    assert "Queued for app owner" in response.text
+    assert "Assigned to app owner" in response.text
+    assert "Needs attention" in response.text
+    assert "Odoo task delivery needs attention and will retry." in response.text
     assert response.text.count('action="/admin/feedback/1/status"') == 3
     assert response.text.count('action="/admin/feedback/2/status"') == 2
     assert 'action="/admin/feedback/3/status"' not in response.text
@@ -311,6 +372,9 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
 
     source = Path("src/zira_dashboard/templates/admin_feedback.html").read_text()
     assert "|safe" not in source
+
+    feedback_js = Path("src/zira_dashboard/static/feedback.js").read_text()
+    assert "Thanks — saved and sending it to the app owner." in feedback_js
 
 
 def test_transition_rejects_reopening_terminal_feedback(monkeypatch):

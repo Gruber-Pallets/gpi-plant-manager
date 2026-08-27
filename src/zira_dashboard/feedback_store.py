@@ -362,19 +362,34 @@ def for_submitter(submitter: str | None, limit: int = 100) -> list[dict]:
 
 def for_admin(limit: int = 200) -> list[dict]:
     """Return local feedback with its current durable sync state."""
-    return db.query(
+    rows = db.query(
         "SELECT f.id, f.created_at, f.submitter, f.page_url, f.task_type, "
         "f.message, f.status, f.finished_at, f.finished_by, f.resolution_note, "
         "f.projection_version, s.state AS sync_state, s.desired_version, "
-        "s.last_synced_version, "
+        "s.last_synced_version, td.state AS task_delivery_state, "
+        "td.odoo_task_id AS task_delivery_task_id, "
+        "td.before_attachment_id AS task_delivery_attachment_id, "
+        "td.last_error_summary AS task_delivery_error, "
+        "td.blocked_reason AS task_delivery_block_reason, "
         "EXISTS (SELECT 1 FROM feedback_images bi "
         "WHERE bi.feedback_id = f.id AND bi.role = 'before') AS has_before_image, "
         "EXISTS (SELECT 1 FROM feedback_images ai "
         "WHERE ai.feedback_id = f.id AND ai.role = 'after') AS has_after_image "
         "FROM feedback f LEFT JOIN feedback_odoo_sync s ON s.feedback_id = f.id "
+        "LEFT JOIN feedback_task_delivery td ON td.feedback_id = f.id "
         "WHERE f.lifecycle_origin = 'local' ORDER BY f.id DESC LIMIT %s",
         (_clamp_limit(limit, default=200),),
     )
+    for row in rows:
+        row["task_delivery_label"], row["task_delivery_note"] = (
+            feedback_task_delivery.admin_status_for(row)
+        )
+        row.pop("task_delivery_state", None)
+        row.pop("task_delivery_task_id", None)
+        row.pop("task_delivery_attachment_id", None)
+        row.pop("task_delivery_error", None)
+        row.pop("task_delivery_block_reason", None)
+    return rows
 
 
 def feedback_after(after_id: int, limit: int) -> list[dict]:

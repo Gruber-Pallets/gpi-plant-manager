@@ -49,7 +49,7 @@
 - Produces `find_feedback_attachment_ids(task_id: int, name: str) -> list[int]`.
 - Leaves existing `find_feedback_task()` active-only for calendar/payroll callers.
 
-- [ ] **Step 1: Write failing lookup tests**
+- [x] **Step 1: Write failing lookup tests**
 
 Using the current `_stub(monkeypatch)` fixture in `tests/test_feedback_odoo.py`, assert task lookup calls `project.task.search_read` with an exact project/name domain, `fields=['id']`, `order='id asc'`, `limit=2`, and `context={'active_test': False}`. Assert an attachment lookup calls `ir.attachment.search_read` with exactly `res_model='project.task'`, `res_id=901`, and `name='GPI-PM-FB-42-before.jpg'`, using the same two-record bound.
 
@@ -62,13 +62,13 @@ assert odoo_client.find_feedback_attachment_ids(
 ) == [18, 19]
 ```
 
-- [ ] **Step 2: Confirm failure**
+- [x] **Step 2: Confirm failure**
 
 Run: `pytest tests/test_feedback_odoo.py -q`
 
 Expected: FAIL because the two facade functions do not exist.
 
-- [ ] **Step 3: Implement exact private helpers and facades**
+- [x] **Step 3: Implement exact private helpers and facades**
 
 Add this implementation to `_odoo_feedback.py`; preserve the current `find_feedback_task()` unchanged:
 
@@ -96,7 +96,7 @@ def find_feedback_attachment_ids(execute_fn, task_id: int, name: str) -> list[in
 
 Expose the same two signatures from `odoo_client.py` by delegating to the private functions with `execute`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run:
 
@@ -131,7 +131,7 @@ git commit -m "feat: add feedback task identity lookups"
 - Produces `enqueue_submission`, `claim_due`, `load_snapshot`, `record_task_id`, `record_before_attachment`, `mark_delivered`, `schedule_retry`, and `block`.
 - `create_submission()` consumes `enqueue_submission(cur, feedback_id)` in its current transaction.
 
-- [ ] **Step 1: Add failing schema and transaction tests**
+- [x] **Step 1: Add failing schema and transaction tests**
 
 Add this contract in `tests/test_feedback_schema.py`:
 
@@ -149,13 +149,13 @@ def test_schema_has_owner_task_delivery_outbox():
 
 Extend both existing `create_submission` recording-cursor tests. They must assert an `INSERT INTO feedback_task_delivery` appears in the same transaction after the existing `feedback_odoo_sync` intent, with `(42,)` parameters.
 
-- [ ] **Step 2: Confirm failure**
+- [x] **Step 2: Confirm failure**
 
 Run: `pytest tests/test_feedback_schema.py tests/test_feedback_store.py -q`
 
 Expected: FAIL because submission does not create a task-delivery row.
 
-- [ ] **Step 3: Add the idempotent schema**
+- [x] **Step 3: Add the idempotent schema**
 
 Add this DDL immediately after `feedback_odoo_sync`:
 
@@ -183,7 +183,7 @@ CREATE INDEX IF NOT EXISTS feedback_task_delivery_due_idx
   WHERE state IN ('pending', 'attention');
 ```
 
-- [ ] **Step 4: Implement the focused outbox module**
+- [x] **Step 4: Implement the focused outbox module**
 
 Create `feedback_task_delivery.py` with no FastAPI or Odoo import:
 
@@ -216,13 +216,13 @@ cur.execute(
 
 `claim_due(now, worker_id, limit=10)` caps at 10, selects due `pending`/`attention` plus expired `in_flight` rows using `FOR UPDATE SKIP LOCKED`, and sets a fresh UUID, worker ID, two-minute lease, incremented attempt count, and `in_flight` state. Every later mutation must predicate on both `feedback_id` and `claim_token`.
 
-`schedule_retry()` clears the lease, records only `Odoo task delivery needs attention and will retry.`, sets `attention`, and schedules `min(60 * 2 ** min(attempt_count, 5), 3600)` seconds later. `block()` clears the lease, sets `blocked`, writes its fixed reason, and sets no new due time. `mark_delivered()` requires a task ID and requires either no before image or a stored attachment ID.
+`schedule_retry()` clears the lease, records only `Odoo task delivery needs attention and will retry.`, sets `attention`, and schedules `min(60 * 2 ** min(attempt_count, 6), 3600)` seconds later. At attempt count 6 and above, the retry waits one hour. `block()` clears the lease, sets `blocked`, writes its fixed reason, and sets no new due time. `mark_delivered()` requires a task ID and requires either no before image or a stored attachment ID.
 
 `load_snapshot()` joins feedback to its `before` image, requires local lifecycle and task type `bug`/`feature`, validates all image metadata/bytes using the same validation policy as `feedback_store`, and returns detached immutable data. It must not read or mutate `feedback_odoo_sync`.
 
 Implement `admin_status_for()` with an exact allowlist: `pending`/`in_flight` return `("Queued for app owner", None)`; `attention` returns `("Needs attention", "Odoo task delivery needs attention and will retry.")`; `delivered` returns `("Assigned to app owner", None)`; `blocked` returns `("Needs attention", "Task delivery needs owner review.")`; and a missing or malformed state returns `("Needs attention", "Task delivery record is missing.")`. This prevents arbitrary database text from reaching the template.
 
-- [ ] **Step 5: Hook it into existing atomic submission**
+- [x] **Step 5: Hook it into existing atomic submission**
 
 In `feedback_store.create_submission()`, import the new module and call this directly after the existing `feedback_odoo_sync` insert:
 
@@ -232,7 +232,7 @@ feedback_task_delivery.enqueue_submission(cur, feedback_id)
 
 No Odoo client call belongs in `feedback_store` or the request path.
 
-- [ ] **Step 6: Write focused outbox tests**
+- [x] **Step 6: Write focused outbox tests**
 
 Create `tests/test_feedback_task_delivery.py` using the recording-cursor/context-manager pattern already in `tests/test_feedback_store.py`. Implement these concrete cases:
 
@@ -244,7 +244,7 @@ Create `tests/test_feedback_task_delivery.py` using the recording-cursor/context
 
 Every state-change SQL assertion must include both `feedback_id` and `claim_token`.
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 Run:
 
@@ -277,7 +277,7 @@ git commit -m "feat: queue owner feedback tasks locally"
 - Produces `run_batch(now=None, worker_id=None, limit=10) -> BatchResult`.
 - Produces pure `task_name(snapshot)`, `task_description(snapshot)`, and `before_attachment_name(feedback_id)` helpers.
 
-- [ ] **Step 1: Write failing worker tests**
+- [x] **Step 1: Write failing worker tests**
 
 Stub delivery functions and normal `odoo_client` methods—never call live Odoo. Add tests for creation, same-owner feature assignment, adoption of one matching task, blocking two matching tasks, creation/adoption/blocking of before-image attachments, a transport retry, and HTML escaping.
 
@@ -296,13 +296,13 @@ create.assert_called_once_with(
 
 The before-image assertion is `add_task_attachment(55, 'GPI-PM-FB-42-before.jpg', 'image/jpeg', b'jpeg')`.
 
-- [ ] **Step 2: Confirm failure**
+- [x] **Step 2: Confirm failure**
 
 Run: `pytest tests/test_feedback_task_worker.py -q`
 
 Expected: FAIL because the module does not exist.
 
-- [ ] **Step 3: Implement deterministic task content**
+- [x] **Step 3: Implement deterministic task content**
 
 Implement:
 
@@ -320,7 +320,7 @@ def before_attachment_name(feedback_id: int) -> str:
 
 Create `feedback_content.py` with `safe_page_url(value: str | None) -> str | None`, moving the current route validation unchanged: allow only `http`/`https` absolute URLs and single-slash relative paths, reject protocol-relative and all other schemes. Import it in both `routes/feedback.py` and the worker. `task_description()` must use `html.escape()`, `<br>` line breaks, source app, submitter, the helper-validated page link, and feedback ID; the worker must not import a route module.
 
-- [ ] **Step 4: Implement exact adoption/create behavior**
+- [x] **Step 4: Implement exact adoption/create behavior**
 
 `process_claim()` must first call `find_feedback_task_ids(project_id, task_name)`. For zero matches it calls `create_feedback_task()` using `ensure_feedback_project()`, owner `authenticate()`, the appropriate tag, and `_local_today().isoformat()`. For one match it adopts that ID; for two it calls `block(claim, 'More than one matching owner task exists.', now)` with no create.
 
@@ -328,7 +328,7 @@ Persist the task ID immediately. For a before image, repeat the same zero/one/tw
 
 For a create/attachment `TimeoutError`, `ConnectionError`, `OSError`, or `xmlrpc.client.Error`, repeat the exact lookup once before retrying. This adopts remote writes with lost responses. For expected Odoo configuration/auth/transport failures call `schedule_retry(claim, 'Odoo task delivery needs attention and will retry.', now)` and log detail only server-side. Isolate each claim and return `BatchResult(attempted, delivered, retried, blocked, isolated_errors)`.
 
-- [ ] **Step 5: Register a separate worker tick**
+- [x] **Step 5: Register a separate worker tick**
 
 Add this next to `_tick_feedback_sync()`:
 
@@ -341,7 +341,7 @@ async def _tick_feedback_task_delivery():
 
 Add `('feedback owner task delivery', _tick_feedback_task_delivery, 60)` to `_WARMERS`. Keep the existing `feedback Odoo mirror` entry unchanged.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run:
 
@@ -377,7 +377,7 @@ git commit -m "feat: deliver feedback tasks to app owner"
 - Produces `task_delivery_label` and `task_delivery_note` on every `for_admin()` row.
 - Produces a submission response `{ok: True, id: int, task_delivery: 'queued'}`.
 
-- [ ] **Step 1: Write failing response and template tests**
+- [x] **Step 1: Write failing response and template tests**
 
 In `tests/test_feedback_routes.py`, change the happy path to:
 
@@ -387,13 +387,13 @@ assert response.json() == {"ok": True, "id": 12, "task_delivery": "queued"}
 
 Keep `_fail_if_odoo_is_called(monkeypatch)`. In `tests/test_feedback_admin_routes.py`, add representative delivery fields and assert `Queued for app owner`, `Assigned to app owner`, `Needs attention`, and the fixed safe retry message are rendered. Add a source assertion that `feedback.js` says `Thanks — saved and sending it to the app owner.`.
 
-- [ ] **Step 2: Confirm failure**
+- [x] **Step 2: Confirm failure**
 
 Run: `pytest tests/test_feedback_routes.py tests/test_feedback_admin_routes.py -q`
 
 Expected: FAIL because delivery API/UI data and copy do not exist.
 
-- [ ] **Step 3: Add safe admin read data and template output**
+- [x] **Step 3: Add safe admin read data and template output**
 
 Extend `feedback_store.for_admin()` with a left join to `feedback_task_delivery td`, retaining the current Improvements join. Select task delivery state, task ID, attachment ID, safe error, and block reason, then pass those selected fields to `feedback_task_delivery.admin_status_for(row)`. Its Task 2 allowlist supplies `task_delivery_label` and `task_delivery_note`; do not render any selected error/reason field directly.
 
@@ -408,7 +408,7 @@ Add this autoescaped template block before the current shared-mirror Sync metada
 
 Do not add `|safe`.
 
-- [ ] **Step 4: Keep submitter flow local-only and update copy**
+- [x] **Step 4: Keep submitter flow local-only and update copy**
 
 Change only the successful route response:
 

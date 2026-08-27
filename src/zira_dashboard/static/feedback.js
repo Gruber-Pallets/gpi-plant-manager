@@ -177,7 +177,7 @@
       .then(function (r) { return r.json(); })
       .then(function (resp) {
         if (resp && resp.ok) {
-          if (status) status.textContent = 'Thanks — sent!';
+          if (status) status.textContent = 'Thanks — saved and sending it to the app owner.';
           setTimeout(function () { closeModal($('fb-modal')); resetSendForm(); }, 1200);
         } else if (status) {
           status.textContent = 'Failed: ' + ((resp && resp.error) || 'unknown');

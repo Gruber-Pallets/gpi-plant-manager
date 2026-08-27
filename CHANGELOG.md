@@ -14,7 +14,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Feedback task plan
 
-- **A clear plan and build checklist are ready to send new feedback to the app owner's task list.** This is planning work only, so feedback does not make a task yet.
+- **New bug reports and ideas now make a task for the app owner.** If Odoo is busy, Plant Manager saves the report and tries again, so the person who sent it does not have to start over.
 
 ## 2026-08-24
 
