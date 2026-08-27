@@ -1,0 +1,57 @@
+.hours-page { max-width: 1180px; margin: 0 auto; display: grid; gap: 0.9rem; }
+.hours-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.hours-eyebrow { margin: 0 0 0.2rem; color: var(--muted); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.hours-heading h2 { margin: 0; font-size: 1.25rem; }
+.hours-range { margin: 0.2rem 0 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hours-source-switch, .hours-ranges, .hours-summary-filters { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.hours-source, .hours-range-chip, .hours-summary-chip, .hours-filters button, .hours-custom-form button {
+  border: 1px solid var(--border); border-radius: 999px; color: var(--fg); background: var(--panel); text-decoration: none;
+  font: inherit; font-size: 0.84rem; padding: 0.4rem 0.65rem; cursor: pointer;
+}
+.hours-source.active, .hours-range-chip.active, .hours-summary-chip.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); font-weight: 700; }
+.hours-custom-range { position: relative; }
+.hours-custom-range summary { list-style: none; }
+.hours-custom-range summary::-webkit-details-marker { display: none; }
+.hours-custom-form { position: absolute; z-index: 3; right: 0; min-width: 16rem; display: grid; gap: 0.5rem; padding: 0.75rem; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); }
+.hours-custom-form label, .hours-filters label { display: grid; gap: 0.22rem; color: var(--muted); font-size: 0.75rem; font-weight: 700; }
+.hours-custom-form input, .hours-filters input, .hours-filters select { min-height: 2.15rem; border: 1px solid var(--border); border-radius: 5px; padding: 0.32rem 0.45rem; color: var(--fg); background: var(--bg); font: inherit; }
+.hours-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 0.65rem; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.hours-filters label:first-of-type { min-width: 14rem; flex: 1; }
+.hours-message, .hours-total { padding: 0.7rem 0.85rem; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); }
+.hours-error { color: var(--bad); border-color: var(--bad); background: var(--bad-dim); }
+.hours-notice { color: var(--warn); border-color: var(--warn); background: var(--warn-dim); }
+.hours-notice.override { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.hours-verified { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.hours-empty { color: var(--muted); text-align: center; }
+.hours-total { display: flex; justify-content: space-between; gap: 1rem; font-variant-numeric: tabular-nums; }
+.hours-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+.hours-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.hours-table th, .hours-table td { padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.hours-table thead th { color: var(--muted); background: var(--panel-2); font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.hours-table tbody tr:last-child th, .hours-table tbody tr:last-child td { border-bottom: 0; }
+.hours-number { text-align: right !important; white-space: nowrap; }
+.open-shift-badge, .hours-attention-badge { display: inline-block; margin-left: 0.4rem; padding: 0.12rem 0.36rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; }
+.open-shift-badge { color: var(--warn); background: var(--warn-dim); }
+.hours-attention-badge { color: var(--bad); background: var(--bad-dim); }
+details.hours-row-detail { margin-top: 0.45rem; font-weight: 400; }
+.hours-row-detail summary { width: fit-content; color: var(--accent); cursor: pointer; font-size: 0.82rem; font-weight: 600; }
+.hours-row-detail table { width: 100%; max-width: 28rem; margin-top: 0.45rem; border-collapse: collapse; background: var(--bg); font-size: 0.8rem; }
+.hours-row-detail caption { padding: 0.35rem; text-align: left; color: var(--muted); }
+.hours-row-detail th, .hours-row-detail td { padding: 0.35rem; border: 1px solid var(--border); font-weight: 400; }
+.hours-row-detail p { margin: 0.45rem 0 0; color: var(--muted); font-size: 0.82rem; }
+@media (max-width: 700px) {
+  .hours-heading { display: grid; }
+  .hours-source-switch { width: 100%; }
+  .hours-source { flex: 1; text-align: center; }
+  .hours-filters { display: grid; }
+  .hours-filters label:first-of-type { min-width: 0; }
+  .hours-filters button { width: 100%; }
+  .hours-table thead { display: none; }
+  .hours-table, .hours-table tbody, .hours-table tr, .hours-table th, .hours-table td { display: block; width: 100%; }
+  .hours-table tr { padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+  .hours-table tbody tr:last-child { border-bottom: 0; }
+  .hours-table th, .hours-table td { padding: 0.25rem 0.75rem; border: 0; }
+  .hours-table td:not(:empty)::before { content: attr(data-label); color: var(--muted); font-size: 0.72rem; text-transform: uppercase; }
+  .hours-number { text-align: left !important; }
+  .hours-custom-form { right: auto; left: 0; }
+}

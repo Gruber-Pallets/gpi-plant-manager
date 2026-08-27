@@ -1,0 +1,134 @@
+{% extends "_staffing_base.html" %}
+{% block title %}Staffing Hours{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/staffing_hours.css?v={{ static_v('staffing_hours.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="hours-page" aria-labelledby="hours-title">
+  <header class="hours-heading">
+    <div>
+      <p class="hours-eyebrow">Staffing hours</p>
+      <h2 id="hours-title">{{ source_label }}</h2>
+      {% if range_label %}<p class="hours-range">{{ range_label }}</p>{% endif %}
+    </div>
+    <div class="hours-source-switch" aria-label="Hours source">
+      {% for item in source_links %}
+      <a href="{{ item.url }}" class="hours-source {% if source == item.value %}active{% endif %}">{{ item.label }}</a>
+      {% endfor %}
+    </div>
+  </header>
+
+  <nav class="hours-ranges" aria-label="Date range">
+    {% for item in range_links %}
+    <a href="{{ item.url }}" class="hours-range-chip {% if selected_range == item.value %}active{% endif %}">{{ item.label }}</a>
+    {% endfor %}
+    <details class="hours-custom-range" {% if selected_range == 'custom' %}open{% endif %}>
+      <summary class="hours-range-chip {% if selected_range == 'custom' %}active{% endif %}">Custom range</summary>
+      <form method="get" action="/staffing/hours" class="hours-custom-form">
+        <input type="hidden" name="source" value="{{ source }}">
+        <input type="hidden" name="range" value="custom">
+        <input type="hidden" name="q" value="{{ query }}">
+        <input type="hidden" name="department" value="{{ department }}">
+        <input type="hidden" name="attention" value="{{ attention }}">
+        <label>Start <input type="date" name="start" value="{{ start }}" required></label>
+        <label>End <input type="date" name="end" value="{{ end }}" required></label>
+        <button type="submit">Apply</button>
+      </form>
+    </details>
+  </nav>
+
+  <form method="get" action="/staffing/hours" class="hours-filters">
+    <input type="hidden" name="source" value="{{ source }}">
+    <input type="hidden" name="range" value="{{ selected_range }}">
+    <input type="hidden" name="start" value="{{ start }}">
+    <input type="hidden" name="end" value="{{ end }}">
+    <label>Find a person
+      <input type="search" name="q" value="{{ query }}" placeholder="Search names">
+    </label>
+    <label>Department
+      <select name="department">
+        <option value="">All departments</option>
+        {% for item in available_departments %}<option value="{{ item }}" {% if department == item %}selected{% endif %}>{{ item }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Show
+      <select name="attention">
+        <option value="all" {% if attention == 'all' %}selected{% endif %}>Everyone</option>
+        <option value="approaching_40" {% if attention == 'approaching_40' %}selected{% endif %}>36–39.99 hours</option>
+        <option value="over_40" {% if attention == 'over_40' %}selected{% endif %}>40+ hours</option>
+        <option value="attention" {% if attention == 'attention' %}selected{% endif %}>Needs attention</option>
+      </select>
+    </label>
+    <button type="submit">Apply filters</button>
+  </form>
+
+  <div class="hours-summary-filters" aria-label="Quick filters">
+    {% for item in summary_filters %}
+    <a href="{{ item.url }}" class="hours-summary-chip {% if attention == item.value %}active{% endif %}">{{ item.label }}</a>
+    {% endfor %}
+  </div>
+
+  {% if error %}
+  <div class="hours-message hours-error" role="alert">{{ error }}</div>
+  {% else %}
+    {% if resolution.notice %}
+    <div class="hours-message hours-notice {% if resolution.verification == 'odoo_override' %}override{% endif %}" role="status">{{ resolution.notice }}</div>
+    {% elif resolution.verification == 'odoo_verified' %}
+    <div class="hours-message hours-verified" role="status">Odoo verified this pay period.</div>
+    {% endif %}
+
+    <div class="hours-total" aria-label="Team total"><span>Team total</span><strong>{{ "%.2f"|format(report.team_total_hours) }} hours</strong></div>
+    {% if report.rows %}
+    <div class="hours-table-wrap">
+      <table class="hours-table">
+        <thead>
+          <tr>
+            <th scope="col">Person</th>
+            <th scope="col">Department</th>
+            {% if source == 'payroll' %}<th scope="col" class="hours-number">Regular</th><th scope="col" class="hours-number">Overtime</th>{% endif %}
+            <th scope="col" class="hours-number">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in report.rows %}
+          <tr>
+            <th scope="row">
+              <span>{{ row.name }}</span>{% if row.open_shift %}<span class="open-shift-badge">Clocked in</span>{% endif %}{% if row.conflicting_record %}<span class="hours-attention-badge">Check record</span>{% endif %}
+              <details class="hours-row-detail">
+                <summary aria-label="Show daily hours for {{ row.name }}">Daily records</summary>
+                {% if row.records %}
+                <table>
+                  <caption>{{ row.name }} daily hours</caption>
+                  <tbody>
+                    {% for record in row.records %}
+                    <tr>
+                      <th scope="row">{{ record.day }}</th>
+                      <td>{{ record.label }}{% if record.is_open %} (clocked in){% endif %}</td>
+                      <td>{{ "%.2f"|format(record.hours) }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+                {% else %}<p>No recorded hours in this range.</p>{% endif %}
+              </details>
+            </th>
+            <td data-label="Department">{{ row.department or '—' }}</td>
+            {% if source == 'payroll' %}<td data-label="Regular" class="hours-number">{{ "%.2f"|format(row.regular_hours) }}</td><td data-label="Overtime" class="hours-number">{{ "%.2f"|format(row.overtime_hours) }}</td>{% endif %}
+            <td data-label="Total" class="hours-number"><strong>{{ "%.2f"|format(row.total_hours) }}</strong></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="hours-message hours-empty" role="status">No people match these filters.</div>
+    {% endif %}
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/staffing_hours.js?v={{ static_v('staffing_hours.js') }}"></script>
+{% endblock %}
