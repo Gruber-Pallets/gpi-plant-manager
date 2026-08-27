@@ -18,6 +18,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **The little light bulb is now at the top right of the time clock.** Tap it to see updates, send feedback, or view feedback in the same screen used by Plant Manager.
 
+### Private celebration preparation
+
+#### Improvements
+
+- **Plant Manager is getting ready for private birthday and work-anniversary celebrations.** It can safely remember each special day for the right worker. Nothing has appeared at the clock yet.
+
 ### Timeclock updates and feedback build plan
 
 #### Improvements

@@ -86,6 +86,10 @@ ALTER TABLE people ADD COLUMN IF NOT EXISTS resource_calendar_id INTEGER;
 -- Raw Odoo name, kept alongside the compact roster label in `name` so the
 -- leaderboards can display un-abbreviated names.
 ALTER TABLE people ADD COLUMN IF NOT EXISTS full_name TEXT;
+-- Celebration data is deliberately minimal: birthday month/day, never birth year.
+ALTER TABLE people ADD COLUMN IF NOT EXISTS birthday_month SMALLINT;
+ALTER TABLE people ADD COLUMN IF NOT EXISTS birthday_day SMALLINT;
+ALTER TABLE people ADD COLUMN IF NOT EXISTS first_contract_date DATE;
 
 CREATE TABLE IF NOT EXISTS skills (
   id              SERIAL PRIMARY KEY,
@@ -1146,6 +1150,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS employee_notifications_dedupe
 -- Sign-in hot path: "does this person have anything to show?"
 CREATE INDEX IF NOT EXISTS employee_notifications_unack
   ON employee_notifications (person_odoo_id) WHERE acknowledged_at IS NULL;
+
+-- Private, one-time employee celebrations. Source dates live on `people`, while
+-- this durable queue preserves due events until the owning employee acknowledges
+-- them.
+CREATE TABLE IF NOT EXISTS employee_celebrations (
+  id                   BIGSERIAL PRIMARY KEY,
+  person_odoo_id       INTEGER NOT NULL,
+  kind                 TEXT NOT NULL CHECK (kind IN ('birthday', 'work_anniversary')),
+  event_day            DATE NOT NULL,
+  completed_years      SMALLINT,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acknowledged_at      TIMESTAMPTZ,
+  UNIQUE (person_odoo_id, kind, event_day),
+  CHECK ((kind = 'birthday' AND completed_years IS NULL)
+      OR (kind = 'work_anniversary' AND completed_years > 0))
+);
+CREATE INDEX IF NOT EXISTS employee_celebrations_unack
+  ON employee_celebrations (person_odoo_id, event_day)
+  WHERE acknowledged_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS company_holidays (
   odoo_id          INTEGER PRIMARY KEY,
