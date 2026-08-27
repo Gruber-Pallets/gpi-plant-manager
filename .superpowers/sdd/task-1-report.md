@@ -120,3 +120,61 @@ The event insert now uses a guarded conflict update for `work_anniversary` rows.
 ### Repair commit
 
 - `3043525d5d68e65dabef6f7fd1a8e1be40ff54f3 fix: lock staffing roster source writes` (local only; not pushed).
+
+## Release repair: serialize Object API people updates
+
+### Summary
+
+`PersonModel.write_records()` can update an arbitrary list of local `people` IDs through Object API. It now performs the unchanged set-based update inside `db.cursor()` and obtains the existing transaction-scoped celebration source lock before that first `people` write. The update remains atomic, returns the same boolean result, propagates database errors as before, and invalidates the roster cache only after the transaction exits successfully.
+
+### Files changed
+
+- `src/zira_dashboard/object_models.py` — move the multi-ID people update into a cursor transaction and acquire the shared source lock before it.
+- `tests/test_object_api_models.py` — multi-ID Object API update contract covering lock, unchanged set-based SQL/parameters, and post-transaction cache invalidation.
+
+### Writer audit
+
+Searched production Python sources for direct and dynamic `people` inserts, updates, and deletes. The arbitrary/multi-row writers are now all covered by the same source lock: `employee_celebrations.reconcile_future()`, `odoo_sync.sync()`, `staffing.save_roster()`, and `PersonModel.write_records()`. The only remaining direct production writer is `routes.settings.roster_filter_toggle`, which updates one explicitly supplied Odoo employee ID; it is validated single-row settings behavior and was not changed. `db.py` contains only documentation text, not a runtime writer.
+
+### RED
+
+- `uv run --extra dev pytest tests/test_object_api_models.py -q` — 1 failed, 10 passed. The new multi-ID contract detected the old direct `db.execute()` path instead of a locked transaction cursor.
+
+### GREEN
+
+- `uv run --extra dev pytest tests/test_object_api_models.py -q` — 11 passed.
+- `uv run --extra dev pytest tests/test_object_api_core.py tests/test_object_api_models.py tests/test_object_api_routes.py tests/test_schema_employee_celebrations.py tests/test_employee_celebrations.py tests/test_employee_notifications.py tests/test_odoo_sync_celebration_locking.py tests/test_odoo_sync.py tests/test_staffing_roster_status_ownership.py -q` — 62 passed, 17 skipped.
+- `uv run --extra dev ruff check src/zira_dashboard/object_models.py src/zira_dashboard/employee_celebrations.py src/zira_dashboard/odoo_sync.py src/zira_dashboard/staffing.py tests/test_object_api_models.py tests/test_employee_celebrations.py tests/test_odoo_sync_celebration_locking.py tests/test_staffing_roster_status_ownership.py` — passed.
+- `git diff --check` — passed.
+
+### Repair commit
+
+- `54fec21535af3b55fabb5c00333179b6485634d5 fix: lock object API people updates` (local only; not pushed).
+
+## Integration rebase onto current main
+
+### Summary
+
+The complete Task 1 commit series was rebased onto `origin/main` at `1f730d6c`. The only conflict was in `CHANGELOG.md` while replaying the initial queue commit. The resolution retains every newly landed Timeclock entry and inserts the child-friendly private-celebration preparation entry immediately after the new Timeclock update. No historical note was removed or rewritten.
+
+### Commands and results
+
+- `git diff --check -- CHANGELOG.md && git diff -- CHANGELOG.md` — passed; confirmed that the resolved conflict included both sides' release notes.
+- `git add CHANGELOG.md && git status --short` — staged only the resolved changelog among conflict files.
+- `git rebase --continue` — stopped because this non-interactive terminal had no `EDITOR` configured; no commit was created.
+- `GIT_EDITOR=true git rebase --continue` — passed; replayed all nine Task 1 commits with no further conflicts and completed the rebase.
+- `git status --short && git status --branch --short && git log --oneline -10 && git diff --check` — passed; no unresolved rebase state and no whitespace errors; only the pre-existing untracked `uv.lock` remained.
+- `uv run --extra dev pytest tests/test_schema_employee_celebrations.py tests/test_employee_celebrations.py tests/test_employee_notifications.py tests/test_odoo_sync_celebration_locking.py tests/test_odoo_sync.py tests/test_staffing_roster_status_ownership.py tests/test_object_api_core.py tests/test_object_api_models.py tests/test_object_api_routes.py -q` — the sandboxed attempt could not open the existing user uv cache; the approved rerun passed: 62 passed, 17 skipped in 0.55s.
+- `git diff --check` after the final report update — passed.
+
+### Rewritten commits
+
+- `abbc462f feat: add employee celebration queue`
+- `2990ae05 fix: lock celebration queue reconciliation`
+- `649495f9 docs: record celebration queue repair`
+- `47e7e7c5 fix: serialize celebration source updates`
+- `cc367950 docs: record celebration queue serialization repair`
+- `3a685342 fix: lock staffing roster source writes`
+- `58110d8f docs: record staffing roster lock repair`
+- `7bc97108 fix: lock object API people updates`
+- `93bb5e97 docs: record object API lock repair` (rewritten HEAD before this report amendment; local only and not pushed).
