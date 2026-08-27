@@ -64,3 +64,33 @@ Independent review identified that `reconcile_future()` read `people` in one tra
 ### Repair commit
 
 - `d0b413cc8807c3b8fa04668e79b6de0e78404cad fix: lock celebration queue reconciliation` (local only; not pushed).
+
+## Second repair: shared source serialization and corrected anniversary years
+
+### Summary
+
+The source-row locks added in the first repair could deadlock with the roster writer because that writer upserts people in source-list order. Both the queue rebuild and the roster writer now acquire the same transaction-scoped PostgreSQL advisory lock before touching `people`, so those workflows cannot interleave their source locks. The queue keeps its row-level locks for its own consistent source snapshot.
+
+The event insert now uses a guarded conflict update for `work_anniversary` rows. If Odoo corrects only the year of a first-contract date, the existing unique `(person_odoo_id, kind, event_day)` row receives the new `completed_years` value only when it is future and unacknowledged. Birthday conflicts, due/past events, and acknowledged history remain unchanged.
+
+### Files changed
+
+- `src/zira_dashboard/employee_celebrations.py` — shared advisory-lock helper and guarded anniversary-year conflict update.
+- `src/zira_dashboard/odoo_sync.py` — roster write transaction acquires the same source lock.
+- `tests/test_employee_celebrations.py` — queue lock and safe conflict-update contract coverage.
+- `tests/test_odoo_sync_celebration_locking.py` — roster writer lock contract coverage without requiring Postgres.
+
+### RED
+
+- `uv run --extra dev pytest tests/test_employee_celebrations.py tests/test_odoo_sync_celebration_locking.py -q` — 3 failed, 8 passed, 2 skipped. The failures showed the queue did not acquire the shared advisory lock, the upsert used `DO NOTHING`, and the roster writer did not acquire the lock.
+
+### GREEN
+
+- `uv run --extra dev pytest tests/test_employee_celebrations.py tests/test_odoo_sync_celebration_locking.py -q` — 11 passed, 2 skipped. An intermediate run exposed a misplaced local import in `odoo_sync.sync()`; it was traced to `_read_last_sync()` and corrected before this green run.
+- `uv run --extra dev pytest tests/test_schema_employee_celebrations.py tests/test_employee_celebrations.py tests/test_employee_notifications.py tests/test_odoo_sync_celebration_locking.py tests/test_odoo_sync.py -q` — 35 passed, 17 skipped.
+- `uv run --extra dev ruff check src/zira_dashboard/employee_celebrations.py src/zira_dashboard/odoo_sync.py tests/test_schema_employee_celebrations.py tests/test_employee_celebrations.py tests/test_odoo_sync_celebration_locking.py` — passed.
+- `git diff --check` — passed.
+
+### Repair commit
+
+- `3b15ab1d919b5d3e25e48807fbbf5c5d98bcda05 fix: serialize celebration source updates` (local only; not pushed).
