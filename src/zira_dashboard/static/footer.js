@@ -66,7 +66,7 @@
 
   function injectButton() {
     if (isTvMode()) return;
-    var header = document.querySelector('header');
+    var header = document.querySelector('header, .k-header');
     if (!header || header.querySelector('.whatsnew-btn')) return;
     btn = document.createElement('button');
     btn.type = 'button';
@@ -93,7 +93,8 @@
       slot.appendChild(b);
     });
     slot.appendChild(btn);
-    header.appendChild(slot);
+    var slotParent = header.querySelector('.k-header-actions') || header;
+    slotParent.appendChild(slot);
     btn.addEventListener('click', openPanel);
   }
 
@@ -211,6 +212,12 @@
     injectButton();
     refreshDot();
   }
+
+  document.body.addEventListener('htmx:afterSwap', function (event) {
+    if (!event.target || event.target.id !== 'timeclock-screen') return;
+    injectButton();
+    refreshDot();
+  });
 })();
 
 // Global nav Inbox count + management modals — present on every page. Four

@@ -149,8 +149,19 @@ def test_footer_js_uses_dedicated_header_slot_for_trigger():
     js = JS.read_text(encoding="utf-8")
 
     assert "slot.className = 'whatsnew-slot'" in js
-    assert "header.appendChild(slot)" in js
+    assert "var slotParent = header.querySelector('.k-header-actions') || header;" in js
+    assert "slotParent.appendChild(slot)" in js
     assert "header.children[header.children.length - 1].appendChild(btn)" not in js
+
+
+def test_footer_js_mounts_timeclock_trigger_after_htmx_swaps():
+    js = JS.read_text(encoding="utf-8")
+
+    assert "document.querySelector('header, .k-header')" in js
+    assert "document.body.addEventListener('htmx:afterSwap'" in js
+    assert "event.target.id !== 'timeclock-screen'" in js
+    assert "injectButton();" in js
+    assert "refreshDot();" in js
 
 
 def test_whatsnew_uses_lucide_lightbulb_icon_button():
