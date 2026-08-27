@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-27
 
+### Bar totals stay lined up
+
+#### Fixes
+
+- **The number next to each work-center bar now stays next to its bar.** This makes it easier to see the work done and the goal together, even in a small box.
+
 ### Timeclock updates and feedback plan
 
 #### Improvements

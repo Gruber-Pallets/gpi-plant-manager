@@ -48,3 +48,18 @@ def test_recycling_bar_widgets_default_taller():
     # TV without colliding; default height was bumped to 8.
     assert "widget_attrs('dismantler-bars', 0, 2, 6, 8)" in RECYCLING_HTML
     assert "widget_attrs('repair-bars', 6, 2, 6, 8)" in RECYCLING_HTML
+
+
+def test_horizontal_bar_total_stays_beside_its_bar_when_narrow():
+    assert (
+        ".grid-stack-item-content .bar-row.numpos-widget {\n"
+        "    grid-template-columns: minmax(0, clamp(6rem, 22cqw, 11rem)) "
+        "minmax(0, 1fr) max-content;\n"
+        "  }"
+    ) in CSS
+    assert (
+        ".grid-stack-item-content .bar-row .val {\n"
+        "    min-width: max-content;\n"
+        "    white-space: nowrap;\n"
+        "  }"
+    ) in CSS

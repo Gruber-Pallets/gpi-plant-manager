@@ -262,10 +262,16 @@
   /* Number placement in horizontal bars. Name column scales with widget
      width so longer WC names ("Hand Build #1") fit cleanly on a wide
      widget but compress on a narrow one. */
-  .grid-stack-item-content .bar-row.numpos-widget { grid-template-columns: clamp(6rem, 22cqw, 11rem) 1fr 4rem; }
+  .grid-stack-item-content .bar-row.numpos-widget {
+    grid-template-columns: minmax(0, clamp(6rem, 22cqw, 11rem)) minmax(0, 1fr) max-content;
+  }
   .grid-stack-item-content .bar-row.numpos-bar,
   .grid-stack-item-content .bar-row.numpos-inside,
   .grid-stack-item-content .bar-row.numpos-hidden { grid-template-columns: clamp(6rem, 22cqw, 11rem) 1fr; }
+  .grid-stack-item-content .bar-row .val {
+    min-width: max-content;
+    white-space: nowrap;
+  }
   .grid-stack-item-content .bar-fill { position: relative; overflow: visible; display: flex; align-items: center; justify-content: flex-end; }
   .grid-stack-item-content .bar-fill .in {
     color: white; font-weight: 700; font-variant-numeric: tabular-nums;
