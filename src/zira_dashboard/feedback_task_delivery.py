@@ -340,7 +340,7 @@ def load_snapshot(feedback_id: int) -> FeedbackTaskSnapshot:
             WHERE f.id = %s
               AND f.lifecycle_origin = 'local'
               AND f.task_type IN ('bug', 'feature')
-            FOR SHARE
+            FOR SHARE OF f
             """,
             (safe_feedback_id,),
         )

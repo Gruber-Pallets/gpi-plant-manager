@@ -214,6 +214,14 @@ def test_load_snapshot_rejects_nonlocal_and_malformed_rows(monkeypatch, row):
         delivery.load_snapshot(42)
 
 
+def test_load_snapshot_locks_only_feedback_not_the_optional_image_join(monkeypatch):
+    cursor = use_cursor(monkeypatch, [valid_snapshot_row()])
+
+    delivery.load_snapshot(42)
+
+    assert "FOR SHARE OF f" in normalized_sql(cursor, 0)
+
+
 def test_recorded_remote_ids_are_guarded_by_the_current_claim_token(monkeypatch):
     task_cursor = use_cursor(
         monkeypatch,
