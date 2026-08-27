@@ -1,8 +1,12 @@
-from datetime import date
+from datetime import UTC, date, datetime, time
 
 from fastapi.testclient import TestClient
 
-from zira_dashboard import employee_celebrations, employee_notifications
+from zira_dashboard import (
+    employee_celebrations,
+    employee_notifications,
+    saturday_recruiting_store,
+)
 from zira_dashboard.app import app
 from zira_dashboard.routes import timeclock
 
@@ -39,6 +43,49 @@ def test_start_routes_due_celebration_before_dashboard(monkeypatch):
 
     assert response.status_code == 303
     assert "/timeclock/celebration/" in response.headers["location"]
+
+
+def test_start_routes_due_celebration_before_salaried_redirect(monkeypatch):
+    salaried_person = {**PERSON, "wage_type": "monthly"}
+    celebration = employee_celebrations.Celebration(11, 5, "birthday", date(2026, 8, 27), None)
+    monkeypatch.setenv("KIOSK_TIME_OFF_ENABLED", "1")
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda _person_id: salaried_person)
+    monkeypatch.setattr(employee_notifications, "notifications_enabled", lambda: True)
+    monkeypatch.setattr(employee_notifications, "has_unacknowledged", lambda _id: False)
+    monkeypatch.setattr(employee_celebrations, "next_due", lambda *_: celebration)
+
+    response = client.get("/timeclock/start/1", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "/timeclock/celebration/" in response.headers["location"]
+    assert "/timeclock/time-off/" not in response.headers["location"]
+
+
+def test_start_routes_due_celebration_before_real_saturday_offer(monkeypatch):
+    celebration = employee_celebrations.Celebration(11, 5, "birthday", date(2026, 8, 27), None)
+    offer = saturday_recruiting_store.Offer(
+        date(2026, 8, 29),
+        time(7),
+        time(12),
+        datetime(2026, 8, 28, 7, tzinfo=UTC),
+        frozenset({1}),
+    )
+    offer_checks = []
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda _person_id: PERSON)
+    monkeypatch.setattr(employee_notifications, "notifications_enabled", lambda: True)
+    monkeypatch.setattr(employee_notifications, "has_unacknowledged", lambda _id: False)
+    monkeypatch.setattr(employee_celebrations, "next_due", lambda *_: celebration)
+    monkeypatch.setattr(
+        saturday_recruiting_store,
+        "offer_for_person",
+        lambda person_id, now: offer_checks.append((person_id, now)) or offer,
+    )
+
+    response = client.get("/timeclock/start/1", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "/timeclock/celebration/" in response.headers["location"]
+    assert offer_checks == []
 
 
 def test_acknowledging_celebration_restarts_priority_flow(monkeypatch):

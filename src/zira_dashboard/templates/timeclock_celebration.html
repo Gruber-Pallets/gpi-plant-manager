@@ -13,10 +13,19 @@
       <span style="--confetti-left: 80%; --confetti-color: #14b8a6; --confetti-duration: 8s; --confetti-delay: -7s;"></span>
       <span style="--confetti-left: 92%; --confetti-color: #f97316; --confetti-duration: 10s; --confetti-delay: -2s;"></span>
     </div>
+    {% set first_name = (person.name if person.name is string else "").split()|first|default(none) %}
     {% if celebration.kind == "birthday" %}
-      <h1 id="celebration-title">{{ t("Happy Birthday, {name}! 🎉", name=person.name.split(" ")[0]) }}</h1>
+      {% if first_name %}
+        <h1 id="celebration-title">{{ t("Happy Birthday, {name}! 🎉", name=first_name) }}</h1>
+      {% else %}
+        <h1 id="celebration-title">{{ t("Happy Birthday! 🎉") }}</h1>
+      {% endif %}
     {% else %}
-      <h1 id="celebration-title">{{ t("Happy {years}-Year Work Anniversary, {name}! 🎉", years=celebration.completed_years, name=person.name.split(" ")[0]) }}</h1>
+      {% if first_name %}
+        <h1 id="celebration-title">{{ t("Happy {years}-Year Work Anniversary, {name}! 🎉", years=celebration.completed_years, name=first_name) }}</h1>
+      {% else %}
+        <h1 id="celebration-title">{{ t("Happy {years}-Year Work Anniversary! 🎉", years=celebration.completed_years) }}</h1>
+      {% endif %}
     {% endif %}
     <p>{{ t("We're glad you're on the team.") }}</p>
     <form method="post" action="/timeclock/celebration/ack/{{ token }}">

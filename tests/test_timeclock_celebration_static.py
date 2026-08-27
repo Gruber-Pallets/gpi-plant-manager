@@ -32,6 +32,11 @@ def test_celebration_styles_disable_confetti_and_transforms_for_reduced_motion()
     assert "transform: none" in reduced_motion
     assert ".celebration-continue:active" in reduced_motion
     assert "transition: none" in reduced_motion
+    assert (
+        "#timeclock-screen.htmx-swapping {\n"
+        "      opacity: 1 !important;\n"
+        "      transition: none !important;"
+    ) in reduced_motion
 
 
 def test_celebration_template_keeps_confetti_decorative_and_the_event_private():

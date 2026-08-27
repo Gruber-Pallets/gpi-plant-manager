@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
+import pytest
 
 from zira_dashboard import timeclock_i18n
 
@@ -79,6 +80,31 @@ def test_celebration_template_renders_birthday_with_first_name_and_hidden_event_
     assert "Garcia" not in html
     assert 'name="celebration_id" value="8"' in html
     assert 'action="/timeclock/celebration/ack/t"' in html
+
+
+@pytest.mark.parametrize("raw_name", ["Maria\tGarcia", "  Maria Garcia"])
+def test_celebration_template_normalizes_first_name_whitespace(raw_name):
+    html = _env().get_template("timeclock_celebration.html").render(
+        person={"name": raw_name, "spanish_level": 0},
+        token="t",
+        celebration={"id": 8, "kind": "birthday", "completed_years": None},
+        timeclock_language="en",
+    )
+
+    assert "Happy Birthday, Maria!" in html
+    assert "Garcia" not in html
+
+
+def test_celebration_template_uses_translated_nonblank_title_for_blank_name():
+    html = _env().get_template("timeclock_celebration.html").render(
+        person={"name": " \t", "spanish_level": 0},
+        token="t",
+        celebration={"id": 8, "kind": "birthday", "completed_years": None},
+        timeclock_language="en",
+    )
+
+    assert "Happy Birthday! 🎉" in html
+    assert "Happy Birthday, " not in html
 
 
 def test_celebration_template_renders_completed_anniversary_years():
