@@ -428,7 +428,7 @@ Replace the existing planning-only `2026-08-26` changelog bullet with:
 - **New bug reports and ideas now make a task for the app owner.** If Odoo is busy, Plant Manager saves the report and tries again, so the person who sent it does not have to start over.
 ```
 
-- [ ] **Step 5: Run final validation, update checkboxes, commit, and push**
+- [x] **Step 5: Run final validation and update checkboxes**
 
 Run:
 
@@ -441,12 +441,28 @@ git diff --check
 
 Expected: PASS with only documented skips. Never run DB-backed tests against a Railway database; `tests/conftest.py` aborts intentionally.
 
-Mark this plan's completed checkboxes. Preserve unrelated worktree changes. Then commit and push only the planned files:
+Mark this plan's completed checkboxes. Preserve unrelated worktree changes.
+
+Validation completed with the focused feedback suite, repository-wide Ruff,
+`git diff --check`, and an elevated full-suite run. The elevated run reported
+3,923 passed and 399 skipped.
+
+- [x] **Step 6: Commit the isolated feature branch**
+
+Commit the planned files on the isolated feature branch:
 
 ```bash
 git add CHANGELOG.md docs/superpowers/plans/2026-08-26-feedback-owner-task-delivery.md src/zira_dashboard/feedback_content.py src/zira_dashboard/feedback_store.py src/zira_dashboard/routes/feedback.py src/zira_dashboard/static/feedback.js src/zira_dashboard/templates/admin_feedback.html tests/test_feedback_routes.py tests/test_feedback_admin_routes.py
 git commit -m "feat: show feedback owner task delivery"
-git push origin main
 ```
 
-If `origin/main` advanced, fetch, rebase with `--autostash`, verify unrelated changes are restored, rerun `git diff --check`, and push without force.
+The implementation commit is `2ed2b673 feat: show feedback owner task delivery`.
+
+- [ ] **Step 7: Merge and push handoff**
+
+An integration owner must first merge the isolated feature branch into the
+current `main`, then push the resulting `main` commit. If `origin/main` has
+advanced, fetch, rebase with `--autostash`, verify unrelated changes are
+restored, rerun `git diff --check`, and push without force. This handoff is not
+complete merely because the feature-branch commit and its validation are
+complete.
