@@ -200,10 +200,23 @@ def _verify_pay_period_range(
             "Odoo has not verified this pay period yet. Using the configured pay-period anchor.",
             verification="anchor",
         )
+    non_exact_overlaps = {
+        bounds: batch
+        for bounds, batch in overlaps.items()
+        if bounds != (start, end)
+    }
+    if len(non_exact_overlaps) >= 2:
+        return PeriodResolution(
+            start,
+            end,
+            "conflict",
+            None,
+            "Multiple overlapping Odoo payroll ranges conflict. Choose a custom range or correct the payroll batches.",
+        )
     if (start, end) in overlaps:
         return PeriodResolution(start, end, "odoo_verified", None, None)
-    if len(overlaps) == 1:
-        override = next(iter(overlaps.values()))
+    if len(non_exact_overlaps) == 1:
+        override = next(iter(non_exact_overlaps.values()))
         return PeriodResolution(
             override.start,
             override.end,
@@ -212,13 +225,7 @@ def _verify_pay_period_range(
             f"using {override.start.isoformat()} through {override.end.isoformat()}.",
             None,
         )
-    return PeriodResolution(
-        start,
-        end,
-        "conflict",
-        None,
-        "Multiple overlapping Odoo payroll ranges conflict. Choose a custom range or correct the payroll batches.",
-    )
+    raise AssertionError("A non-empty set of payroll batches must resolve.")
 
 
 def resolve_hours_range(
@@ -357,7 +364,9 @@ def _add_clocked_interval(
             tzinfo=shift_config.SITE_TZ,
         )
         segment_end = min(clipped_end, next_midnight)
-        elapsed_hours = (segment_end - cursor).total_seconds() / 3600
+        elapsed_hours = (
+            segment_end.astimezone(UTC) - cursor.astimezone(UTC)
+        ).total_seconds() / 3600
         if elapsed_hours > 0:
             day = local_cursor.date()
             aggregate.add_daily(day, elapsed_hours)

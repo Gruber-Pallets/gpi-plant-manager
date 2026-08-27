@@ -141,6 +141,20 @@ def test_conflicting_odoo_batch_ranges_return_an_explicit_error():
     assert "multiple" in result.error.lower()
 
 
+def test_exact_odoo_batch_does_not_hide_two_other_ambiguous_ranges():
+    result = hours.resolve_hours_range(
+        "this_pay_period", None, None, TODAY,
+        lambda _start, _end: [
+            {"name": "Exact", "start": date(2026, 8, 16), "end": date(2026, 8, 29)},
+            {"name": "Run A", "start": date(2026, 8, 14), "end": date(2026, 8, 27)},
+            {"name": "Run B", "start": date(2026, 8, 15), "end": date(2026, 8, 28)},
+        ],
+    )
+
+    assert result.error is not None
+    assert "multiple" in result.error.lower()
+
+
 def test_duplicate_odoo_batch_ranges_are_not_ambiguous():
     result = hours.resolve_hours_range(
         "this_pay_period", None, None, TODAY,
@@ -255,6 +269,18 @@ def test_clocked_report_uses_elapsed_time_across_a_daylight_saving_boundary():
         start=date(2026, 11, 1), end=date(2026, 11, 1),
         now=datetime(2026, 11, 3, tzinfo=UTC),
         attendances=[_attendance(7, "2026-11-01T05:00:00+00:00", "2026-11-02T06:00:00+00:00")],
+        work_entries=[], departments={},
+    )
+
+    assert report.rows[0].daily == ((date(2026, 11, 1), 25.0),)
+
+
+def test_clocked_report_keeps_dst_elapsed_time_when_it_clips_both_endpoints():
+    report = hours.build_hours_report(
+        source="clocked", roster=[_person("Ana", 7)],
+        start=date(2026, 11, 1), end=date(2026, 11, 1),
+        now=datetime(2026, 11, 3, tzinfo=UTC),
+        attendances=[_attendance(7, "2026-11-01T04:00:00+00:00", "2026-11-02T07:00:00+00:00")],
         work_entries=[], departments={},
     )
 
