@@ -572,7 +572,11 @@ def kiosk_start(person_id: int):
         token = _mint_token(person_id)
         return RedirectResponse(url=f"/timeclock/notifications/{token}", status_code=303)
     if p.get("odoo_id"):
-        due = employee_celebrations.next_due(p["odoo_id"], plant_today())
+        try:
+            due = employee_celebrations.next_due(p["odoo_id"], plant_today())
+        except Exception:
+            _log.exception("Celebration queue lookup failed")
+            due = None
         if due is not None:
             return RedirectResponse(
                 url=f"/timeclock/celebration/{_mint_token(person_id)}", status_code=303
@@ -726,7 +730,11 @@ def timeclock_celebration(request: Request, token: str):
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/timeclock", status_code=303)
-    celebration = employee_celebrations.next_due(p["odoo_id"], plant_today())
+    try:
+        celebration = employee_celebrations.next_due(p["odoo_id"], plant_today())
+    except Exception:
+        _log.exception("Celebration queue lookup failed")
+        celebration = None
     if celebration is None:
         return RedirectResponse(url=f"/timeclock/start/{person_id}", status_code=303)
     return templates.TemplateResponse(
@@ -754,7 +762,10 @@ def timeclock_celebration_ack(
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/timeclock", status_code=303)
-    employee_celebrations.acknowledge(celebration_id, p["odoo_id"])
+    try:
+        employee_celebrations.acknowledge(celebration_id, p["odoo_id"])
+    except Exception:
+        _log.exception("Celebration queue acknowledgement failed")
     return RedirectResponse(url=f"/timeclock/start/{person_id}", status_code=303)
 
 

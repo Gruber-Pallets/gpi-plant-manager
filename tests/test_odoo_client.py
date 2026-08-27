@@ -185,6 +185,7 @@ def test_successful_fresh_sync_clears_roster_alert(monkeypatch):
 
     monkeypatch.setattr(odoo_sync, "_read_last_sync", lambda: None)
     monkeypatch.setattr(odoo_sync, "_write_last_sync", lambda _now: None)
+    monkeypatch.setattr(odoo_sync, "_claim_celebration_source_generation", lambda: 1)
     monkeypatch.setattr(odoo_sync, "refresh_work_schedule_hours", lambda: None)
     monkeypatch.setattr(db, "cursor", fake_cursor)
     monkeypatch.setattr(

@@ -68,8 +68,23 @@ def test_acknowledge_uses_event_and_owner_in_the_update(monkeypatch):
     )
 
     assert celebrations.acknowledge(2, 7) is True
-    assert seen[0][1] == (2, 7)
+    assert seen[0][1][:2] == (2, 7)
     assert "acknowledged_at IS NULL" in seen[0][0]
+
+
+def test_acknowledge_updates_only_due_events(monkeypatch):
+    seen = []
+    today = date(2026, 8, 27)
+    monkeypatch.setattr(celebrations, "plant_today", lambda: today)
+    monkeypatch.setattr(
+        celebrations.db,
+        "query",
+        lambda sql, params: seen.append((sql, params)) or [{"id": 2}],
+    )
+
+    assert celebrations.acknowledge(2, 7) is True
+    assert "event_day <= %s" in seen[0][0]
+    assert seen[0][1] == (2, 7, today)
 
 
 def test_reconcile_future_locks_sources_and_mutates_the_queue_in_one_transaction(monkeypatch):

@@ -234,11 +234,12 @@ def next_due(person_odoo_id: int, today: date | None = None) -> Celebration | No
 
 
 def acknowledge(celebration_id: int, person_odoo_id: int) -> bool:
-    """Atomically acknowledge a celebration only for its signed-in owner."""
+    """Atomically acknowledge a due celebration only for its signed-in owner."""
     rows = db.query(
         "UPDATE employee_celebrations SET acknowledged_at = now() "
         "WHERE id = %s AND person_odoo_id = %s AND acknowledged_at IS NULL "
+        "AND event_day <= %s "
         "RETURNING id",
-        (celebration_id, person_odoo_id),
+        (celebration_id, person_odoo_id, plant_today()),
     )
     return bool(rows)

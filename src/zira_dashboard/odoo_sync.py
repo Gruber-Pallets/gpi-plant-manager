@@ -15,6 +15,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, UTC
+from threading import Lock
 
 from . import odoo_client
 from .plant_day import today as plant_today
@@ -23,6 +24,42 @@ log = logging.getLogger(__name__)
 
 TTL = timedelta(hours=1)
 ROSTER_SYNC_ALERT_KEY = "odoo_roster_sync_alert"
+CELEBRATION_SOURCE_GENERATION_KEY = "employee_celebration_source_generation"
+
+# A forced Skills refresh and the background roster refresh can run in
+# different threads. Keep each Odoo snapshot and its dependent local writes
+# together in one process. The durable generation guard below also rejects an
+# older snapshot in another process. Neither guard holds a database transaction
+# through Odoo work; the existing transaction lock still serializes local
+# roster/queue writers.
+_SNAPSHOT_SYNC_LOCK = Lock()
+
+
+def _claim_celebration_source_generation() -> int:
+    """Reserve a durable order for one source snapshot without holding it open."""
+    from . import db
+
+    rows = db.query(
+        "INSERT INTO app_settings (key, value, updated_at) "
+        "VALUES (%s, '1'::jsonb, now()) "
+        "ON CONFLICT (key) DO UPDATE SET "
+        "value = to_jsonb((app_settings.value #>> '{}')::bigint + 1), "
+        "updated_at = now() "
+        "RETURNING (value #>> '{}')::bigint AS generation",
+        (CELEBRATION_SOURCE_GENERATION_KEY,),
+    )
+    return int(rows[0]["generation"])
+
+
+def _celebration_source_generation_is_current(cursor, generation: int) -> bool:
+    """Return whether no newer source snapshot has started since this one."""
+    cursor.execute(
+        "SELECT (value #>> '{}')::bigint = %s AS is_current "
+        "FROM app_settings WHERE key = %s",
+        (generation, CELEBRATION_SOURCE_GENERATION_KEY),
+    )
+    row = cursor.fetchone()
+    return bool(row and row["is_current"])
 
 
 def _m2o_id(val):
@@ -312,6 +349,12 @@ def _employee_snapshot_error(
 
 
 def sync(force: bool = False) -> SyncResult:
+    """Synchronize one complete Odoo snapshot without interleaving another."""
+    with _SNAPSHOT_SYNC_LOCK:
+        return _sync_locked(force)
+
+
+def _sync_locked(force: bool = False) -> SyncResult:
     last = _read_last_sync()
     now = datetime.now(UTC)
     if not force and last is not None and (now - last) < TTL:
@@ -343,10 +386,16 @@ def sync(force: bool = False) -> SyncResult:
                 error=error,
             )
         try:
-            celebration_source = odoo_client.fetch_employee_celebration_dates()
+            celebration_source_generation = _claim_celebration_source_generation()
         except Exception:
-            log.warning("employee celebration-date import failed")
+            log.warning("employee celebration source ordering guard failed")
             celebration_source = None
+        else:
+            try:
+                celebration_source = odoo_client.fetch_employee_celebration_dates()
+            except Exception:
+                log.warning("employee celebration-date import failed")
+                celebration_source = None
         emp_ids = [e["id"] for e in employees]
         emp_skills = odoo_client.fetch_skills_for(emp_ids)
         spanish_level_ids = odoo_client.fetch_spanish_skill_level_ids()
@@ -381,6 +430,14 @@ def sync(force: bool = False) -> SyncResult:
     roster_names = _roster_names(employees)
     with db.cursor() as cur:
         employee_celebrations.lock_celebration_source_sync(cur)
+        if (
+            celebration_source is not None
+            and not _celebration_source_generation_is_current(
+                cur, celebration_source_generation
+            )
+        ):
+            log.info("skipping superseded employee celebration source snapshot")
+            celebration_source = None
         # Skills first (employees + person_skills FK them).
         for i, m in enumerate(columns_meta):
             skill_odoo_id = m.get("id")
