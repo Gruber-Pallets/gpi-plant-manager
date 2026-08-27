@@ -106,8 +106,47 @@ def test_reconcile_future_locks_sources_and_mutates_the_queue_in_one_transaction
 
     celebrations.reconcile_future(date(2026, 8, 27))
 
-    assert "FOR UPDATE" in commands[0][0]
-    assert all("employee_celebrations" in sql for sql, _params in commands[1:])
+    assert commands[0] == (
+        "SELECT pg_advisory_xact_lock(%s::bigint)",
+        (7_243_094_217,),
+    )
+    assert "FOR UPDATE" in commands[1][0]
+    assert all("employee_celebrations" in sql for sql, _params in commands[2:])
+
+
+def test_reconcile_future_corrects_only_future_unacknowledged_anniversary_years(monkeypatch):
+    commands = []
+
+    class FakeCursor:
+        def execute(self, sql, params=None):
+            commands.append((sql, params))
+
+        def fetchall(self):
+            return [{
+                "odoo_id": 7,
+                "active": True,
+                "birthday_month": None,
+                "birthday_day": None,
+                "first_contract_date": date(2020, 7, 4),
+            }]
+
+    @contextmanager
+    def fake_cursor():
+        yield FakeCursor()
+
+    monkeypatch.setattr(celebrations.db, "cursor", fake_cursor)
+
+    today = date(2026, 8, 27)
+    celebrations.reconcile_future(today)
+
+    upsert_sql, upsert_params = next(
+        (sql, params) for sql, params in commands if "INSERT INTO employee_celebrations" in sql
+    )
+    assert "ON CONFLICT (person_odoo_id, kind, event_day) DO UPDATE" in upsert_sql
+    assert "SET completed_years = EXCLUDED.completed_years" in upsert_sql
+    assert "employee_celebrations.event_day > %s" in upsert_sql
+    assert "employee_celebrations.acknowledged_at IS NULL" in upsert_sql
+    assert upsert_params == (7, "work_anniversary", date(2027, 7, 4), 7, today)
 
 
 @pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs Postgres")

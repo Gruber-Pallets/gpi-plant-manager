@@ -13,6 +13,11 @@ from .plant_day import today as plant_today
 
 CelebrationKind = Literal["birthday", "work_anniversary"]
 
+# Serializes the local celebration queue rebuild with the roster writer. This
+# is intentionally transaction-scoped so an Odoo source snapshot and its
+# dependent queue changes cannot interleave or deadlock over `people` rows.
+CELEBRATION_SOURCE_SYNC_LOCK_KEY = 7_243_094_217
+
 
 @dataclass(frozen=True)
 class CelebrationEvent:
@@ -110,6 +115,14 @@ def _expected_days(events: tuple[CelebrationEvent, ...], kind: CelebrationKind) 
     return tuple(event.event_day for event in events if event.kind == kind)
 
 
+def lock_celebration_source_sync(cursor) -> None:
+    """Serialize celebration source reads with the local roster writer."""
+    cursor.execute(
+        "SELECT pg_advisory_xact_lock(%s::bigint)",
+        (CELEBRATION_SOURCE_SYNC_LOCK_KEY,),
+    )
+
+
 def _remove_unexpected_future_events(
     cursor,
     person_odoo_id: int,
@@ -140,6 +153,7 @@ def reconcile_future(today: date | None = None) -> None:
     today = today or plant_today()
     end_day = today + timedelta(days=370)
     with db.cursor() as cursor:
+        lock_celebration_source_sync(cursor)
         # Lock every locally mirrored Odoo source row, not just the active
         # subset. A concurrent roster sync must either finish before this read
         # or wait until this queue rebuild commits, so stale future events
@@ -182,12 +196,17 @@ def reconcile_future(today: date | None = None) -> None:
                     "INSERT INTO employee_celebrations "
                     "(person_odoo_id, kind, event_day, completed_years) "
                     "VALUES (%s, %s, %s, %s) "
-                    "ON CONFLICT (person_odoo_id, kind, event_day) DO NOTHING",
+                    "ON CONFLICT (person_odoo_id, kind, event_day) DO UPDATE "
+                    "SET completed_years = EXCLUDED.completed_years "
+                    "WHERE employee_celebrations.kind = 'work_anniversary' "
+                    "AND employee_celebrations.event_day > %s "
+                    "AND employee_celebrations.acknowledged_at IS NULL",
                     (
                         event.person_odoo_id,
                         event.kind,
                         event.event_day,
                         event.completed_years,
+                        today,
                     ),
                 )
 

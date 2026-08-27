@@ -368,12 +368,13 @@ def sync(force: bool = False) -> SyncResult:
         )
         flex_cal_ids = set()
 
-    from . import db
+    from . import db, employee_celebrations
     columns = [c["name"] for c in columns_meta]
     type_by_skill = {c["name"]: c.get("type", "") for c in columns_meta}
     pulled_at = now
     roster_names = _roster_names(employees)
     with db.cursor() as cur:
+        employee_celebrations.lock_celebration_source_sync(cur)
         # Skills first (employees + person_skills FK them).
         for i, m in enumerate(columns_meta):
             skill_odoo_id = m.get("id")
