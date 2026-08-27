@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from zira_dashboard import employee_notifications
+from zira_dashboard import employee_celebrations, employee_notifications
 from zira_dashboard.app import app
 from zira_dashboard.routes import timeclock
 
@@ -48,6 +48,7 @@ def test_start_goes_to_dashboard_when_none(monkeypatch):
     monkeypatch.delenv("KIOSK_TIME_OFF_NOTIFY_ENABLED", raising=False)
     monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
     monkeypatch.setattr(employee_notifications, "has_unacknowledged", lambda oid: False)
+    monkeypatch.setattr(employee_celebrations, "next_due", lambda *_: None)
     monkeypatch.setattr(timeclock, "_time_off_redirect_if_salaried", lambda p, pid: None)
 
     resp = client.get("/timeclock/start/1", follow_redirects=False)
@@ -233,7 +234,7 @@ def test_notifications_screen_skips_to_dashboard_when_empty(monkeypatch):
     assert "/timeclock/dashboard/" in resp.headers["location"]
 
 
-def test_ack_acknowledges_and_redirects(monkeypatch):
+def test_notifications_ack_restarts_sign_in_priority_flow(monkeypatch):
     monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
     seen = {}
     monkeypatch.setattr(
@@ -245,7 +246,7 @@ def test_ack_acknowledges_and_redirects(monkeypatch):
 
     assert resp.status_code == 303
     assert seen["oid"] == 5  # the signing-in person's odoo id
-    assert "/timeclock/dashboard/" in resp.headers["location"]
+    assert resp.headers["location"] == "/timeclock/start/1"
 
 
 def test_notifications_screen_rejects_bad_token():

@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-27
 
+### Private special-day messages at the time clock
+
+#### Improvements
+
+- **The time clock now keeps private special-day messages separate from important work updates.** This helps each worker see a birthday or work-anniversary message just for them before they clock in.
+
 ### Private celebration dates are checked safely
 
 #### Improvements

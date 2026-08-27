@@ -65,7 +65,12 @@ from .. import (
     odoo_client,
     odoo_sync,
 )
-from .. import employee_notifications, saturday_work_reminder, time_off_reminder
+from .. import (
+    employee_celebrations,
+    employee_notifications,
+    saturday_work_reminder,
+    time_off_reminder,
+)
 
 # Not called directly here, but the state-reconciliation tests patch
 # timeclock.live_cache.read_open_attendance through this module — keep it
@@ -564,6 +569,12 @@ def kiosk_start(person_id: int):
     ):
         token = _mint_token(person_id)
         return RedirectResponse(url=f"/timeclock/notifications/{token}", status_code=303)
+    if p.get("odoo_id"):
+        due = employee_celebrations.next_due(p["odoo_id"], plant_today())
+        if due is not None:
+            return RedirectResponse(
+                url=f"/timeclock/celebration/{_mint_token(person_id)}", status_code=303
+            )
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
@@ -693,8 +704,8 @@ def timeclock_notifications(request: Request, token: str):
 
 @router.post("/timeclock/notifications/ack/{token}", response_class=HTMLResponse)
 def timeclock_notifications_ack(request: Request, token: str):
-    """Mark all of this person's notifications acknowledged, then continue to
-    the dashboard (which itself bounces salaried staff to the time-off flow)."""
+    """Mark all of this person's notifications acknowledged, then re-check
+    the sign-in flow so a due celebration keeps its intended priority."""
     person_id = _verify_token(token)
     if person_id is None:
         return _expired_redirect(request)
@@ -702,7 +713,48 @@ def timeclock_notifications_ack(request: Request, token: str):
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/timeclock", status_code=303)
     employee_notifications.acknowledge_all(p["odoo_id"])
-    return RedirectResponse(url=f"/timeclock/dashboard/{_mint_token(person_id)}", status_code=303)
+    return RedirectResponse(url=f"/timeclock/start/{person_id}", status_code=303)
+
+
+@router.get("/timeclock/celebration/{token}", response_class=HTMLResponse)
+def timeclock_celebration(request: Request, token: str):
+    """Show one current employee-only celebration before the clock dashboard."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return _expired_redirect(request)
+    p = _person_by_id(person_id)
+    if not p or not p.get("odoo_id"):
+        return RedirectResponse(url="/timeclock", status_code=303)
+    celebration = employee_celebrations.next_due(p["odoo_id"], plant_today())
+    if celebration is None:
+        return RedirectResponse(url=f"/timeclock/start/{person_id}", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "timeclock_celebration.html",
+        {
+            "person": p,
+            "token": _mint_token(person_id),
+            "celebration": celebration,
+            **timeclock_i18n.context_for_person(p),
+        },
+    )
+
+
+@router.post("/timeclock/celebration/ack/{token}", response_class=HTMLResponse)
+def timeclock_celebration_ack(
+    request: Request,
+    token: str,
+    celebration_id: int = Form(...),
+):
+    """Acknowledge only the signing-in person's event, then restart priority."""
+    person_id = _verify_token(token)
+    if person_id is None:
+        return _expired_redirect(request)
+    p = _person_by_id(person_id)
+    if not p or not p.get("odoo_id"):
+        return RedirectResponse(url="/timeclock", status_code=303)
+    employee_celebrations.acknowledge(celebration_id, p["odoo_id"])
+    return RedirectResponse(url=f"/timeclock/start/{person_id}", status_code=303)
 
 
 @router.get("/timeclock/pick-wc/{token}", response_class=HTMLResponse)

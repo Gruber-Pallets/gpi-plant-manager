@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from zira_dashboard.app import app
 from zira_dashboard.routes import timeclock, timeclock_saturday
-from zira_dashboard import employee_notifications, staffing
+from zira_dashboard import employee_celebrations, employee_notifications, staffing
 from zira_dashboard.saturday_recruiting_store import CommitmentStatus, HomeBanner, Offer
 from zira_dashboard.shift_config import SITE_TZ
 
@@ -57,6 +57,7 @@ HOLIDAY_PLANNED_BANNER = HomeBanner(
 def _person(monkeypatch):
     monkeypatch.setattr(timeclock, "_person_by_id", lambda _pid: PERSON)
     monkeypatch.setattr(timeclock_saturday, "_person_by_id", lambda _pid: PERSON)
+    monkeypatch.setattr(employee_celebrations, "next_due", lambda *_: None)
 
 
 def test_person_lookup_queries_people_table(monkeypatch):
