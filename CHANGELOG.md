@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-27
 
+### See weekly work hours
+
+- **Staffing now has an Hours tab.** Pick this week, a pay period, a month, or your own dates to see how many hours each person worked. You can also switch between clocked time and payroll time, so it is easier to spot overtime or a missing clock-out.
+
 ### Timeclock updates and feedback plan
 
 #### Improvements

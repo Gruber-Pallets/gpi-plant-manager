@@ -34,6 +34,7 @@ def _stub_hours_dependencies(
     payroll_error=None,
     departments_error=None,
     batch_error=None,
+    batches=(),
 ):
     """Keep route tests focused on URL-backed rendering, not Odoo or Postgres."""
     from zira_dashboard import odoo_client, staffing, staffing_hours
@@ -54,7 +55,7 @@ def _stub_hours_dependencies(
     def fetch_batches(_start, _end):
         if batch_error:
             raise batch_error
-        return []
+        return batches
 
     def fetch_attendance(employee_ids, start, end):
         calls["attendance"].append((employee_ids, start, end))
@@ -174,6 +175,17 @@ def test_hours_route_renders_an_error_for_invalid_filters_without_rows(monkeypat
     assert response.status_code == 200
     assert "Choose a valid date range." in response.text
     assert "Ana" not in response.text
+
+
+def test_hours_route_uses_anchor_when_odoo_has_no_batch(monkeypatch):
+    assert _staffing_hours_route_is_registered(), "GET /staffing/hours must be registered"
+    _stub_hours_dependencies(monkeypatch, batches=[])
+
+    response = TestClient(app).get("/staffing/hours?range=this_pay_period")
+
+    assert response.status_code == 200
+    assert "Aug 16, 2026 – Aug 29, 2026" in response.text
+    assert "Odoo has not verified this pay period yet" in response.text
 
 
 @pytest.mark.parametrize(
