@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-27
 
+### Birthday and work-anniversary build plan
+
+#### Improvements
+
+- **A step-by-step build plan is ready for private birthday and work-anniversary messages at the time clock.** It will help the app remember a special day until the worker comes back. Nothing new is showing at the clock yet.
+
 ### Birthday and work-anniversary celebration plan
 
 #### Improvements
