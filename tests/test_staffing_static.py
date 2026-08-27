@@ -68,6 +68,7 @@ def test_staffing_hours_assets_support_responsive_and_keyboard_accessible_detail
     assert "font-variant-numeric: tabular-nums" in css
     assert "@media (max-width:" in css
     assert "details.hours-row-detail" in css
+    assert 'content: attr(data-label) ": ";' in css
     assert "e.key === 'Escape'" in js
     assert "summary.focus()" in js
 

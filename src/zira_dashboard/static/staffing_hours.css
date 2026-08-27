@@ -51,7 +51,7 @@ details.hours-row-detail { margin-top: 0.45rem; font-weight: 400; }
   .hours-table tr { padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
   .hours-table tbody tr:last-child { border-bottom: 0; }
   .hours-table th, .hours-table td { padding: 0.25rem 0.75rem; border: 0; }
-  .hours-table td:not(:empty)::before { content: attr(data-label); color: var(--muted); font-size: 0.72rem; text-transform: uppercase; }
+  .hours-table td:not(:empty)::before { content: attr(data-label) ": "; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; }
   .hours-number { text-align: left !important; }
   .hours-custom-form { right: auto; left: 0; }
 }
