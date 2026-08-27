@@ -183,6 +183,71 @@ def fetch_inputs(
     return work, attendance
 
 
+def fetch_work_entries_for_range(
+    execute_fn: Callable[..., Any],
+    employee_ids,
+    start_day: date,
+    end_day: date,
+) -> list[dict]:
+    """Return normalized payroll work entries for an inclusive date range."""
+    _by_code, codes_by_id = _type_maps(execute_fn)
+    rows = execute_fn(
+        "hr.work.entry",
+        "search_read",
+        [
+            ("active", "=", True),
+            ("employee_id", "in", sorted(set(employee_ids))),
+            ("date", ">=", start_day.isoformat()),
+            ("date", "<=", end_day.isoformat()),
+        ],
+        fields=_WORK_FIELDS,
+        order="employee_id,date,id",
+    )
+    return [_normalize_work(row, codes_by_id) for row in rows]
+
+
+def fetch_employee_departments(
+    execute_fn: Callable[..., Any], employee_ids
+) -> dict[int, str | None]:
+    """Return department names keyed by employee Odoo ID."""
+    rows = execute_fn(
+        "hr.employee",
+        "search_read",
+        [("id", "in", sorted(set(employee_ids)))],
+        fields=["id", "department_id"],
+    )
+    return {
+        int(row["id"]): _m2o_name(row.get("department_id")) or None
+        for row in rows
+        if row.get("id")
+    }
+
+
+def fetch_payslip_batches(
+    execute_fn: Callable[..., Any], start_day: date, end_day: date
+) -> list[dict]:
+    """Return payroll batches whose periods overlap the requested range."""
+    rows = execute_fn(
+        "hr.payslip.run",
+        "search_read",
+        [
+            ("date_start", "<=", end_day.isoformat()),
+            ("date_end", ">=", start_day.isoformat()),
+        ],
+        fields=["id", "name", "date_start", "date_end"],
+        order="date_start,id",
+    )
+    return [
+        {
+            "name": str(row.get("name") or ""),
+            "start": date.fromisoformat(row["date_start"]),
+            "end": date.fromisoformat(row["date_end"]),
+        }
+        for row in rows
+        if row.get("date_start") and row.get("date_end")
+    ]
+
+
 def read_work_entry(execute_fn: Callable[..., Any], entry_id: int) -> dict | None:
     _by_code, codes_by_id = _type_maps(execute_fn)
     rows = execute_fn(

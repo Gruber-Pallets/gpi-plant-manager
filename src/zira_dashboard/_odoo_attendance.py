@@ -231,6 +231,46 @@ def fetch_employee_attendances_for_day(
     ]
 
 
+def fetch_attendance_intervals_for_range(
+    execute_fn: Callable[..., Any],
+    employee_ids,
+    start_day: date,
+    end_day: date,
+) -> list[dict]:
+    """Return meaningful attendance intervals that overlap a local date range."""
+    start_local = datetime.combine(
+        start_day, _time.min, tzinfo=shift_config.SITE_TZ
+    )
+    stop_local = datetime.combine(
+        end_day + timedelta(days=1), _time.min, tzinfo=shift_config.SITE_TZ
+    )
+    domain = [
+        "&", "&",
+        ("employee_id", "in", sorted({int(i) for i in employee_ids})),
+        ("check_in", "<", to_odoo_dt(stop_local)),
+        "|", ("check_out", "=", False), ("check_out", ">", to_odoo_dt(start_local)),
+    ]
+    rows = execute_fn(
+        "hr.attendance",
+        "search_read",
+        domain,
+        fields=["id", "employee_id", "check_in", "check_out"],
+        order="employee_id,check_in,id",
+    )
+    return [
+        {
+            "id": int(row["id"]),
+            "employee_odoo_id": _unwrap_m2o(row["employee_id"]),
+            "check_in": odoo_dt_to_iso(row["check_in"]),
+            "check_out": odoo_dt_to_iso(row.get("check_out")),
+        }
+        for row in rows
+        if row.get("id") and _unwrap_m2o(row.get("employee_id"))
+        and odoo_dt_to_iso(row.get("check_in"))
+        and not is_zero_duration_attendance(row)
+    ]
+
+
 def fetch_attendance_intervals_for_day(
     execute_fn: Callable[..., Any],
     day: date,
