@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 from datetime import date
 
 import pytest
@@ -69,6 +70,44 @@ def test_acknowledge_uses_event_and_owner_in_the_update(monkeypatch):
     assert celebrations.acknowledge(2, 7) is True
     assert seen[0][1] == (2, 7)
     assert "acknowledged_at IS NULL" in seen[0][0]
+
+
+def test_reconcile_future_locks_sources_and_mutates_the_queue_in_one_transaction(monkeypatch):
+    commands = []
+
+    class FakeCursor:
+        def execute(self, sql, params=None):
+            commands.append((sql, params))
+
+        def fetchall(self):
+            return [{
+                "odoo_id": 7,
+                "active": True,
+                "birthday_month": 7,
+                "birthday_day": 4,
+                "first_contract_date": None,
+            }]
+
+    @contextmanager
+    def fake_cursor():
+        yield FakeCursor()
+
+    monkeypatch.setattr(celebrations.db, "cursor", fake_cursor)
+    monkeypatch.setattr(
+        celebrations.db,
+        "query",
+        lambda *_args, **_kwargs: pytest.fail("reconciliation must use its transaction cursor"),
+    )
+    monkeypatch.setattr(
+        celebrations.db,
+        "execute",
+        lambda *_args, **_kwargs: pytest.fail("reconciliation must use its transaction cursor"),
+    )
+
+    celebrations.reconcile_future(date(2026, 8, 27))
+
+    assert "FOR UPDATE" in commands[0][0]
+    assert all("employee_celebrations" in sql for sql, _params in commands[1:])
 
 
 @pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs Postgres")

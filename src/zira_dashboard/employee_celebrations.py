@@ -111,13 +111,14 @@ def _expected_days(events: tuple[CelebrationEvent, ...], kind: CelebrationKind) 
 
 
 def _remove_unexpected_future_events(
+    cursor,
     person_odoo_id: int,
     kind: CelebrationKind,
     expected_days: tuple[date, ...],
     today: date,
 ) -> None:
     if not expected_days:
-        db.execute(
+        cursor.execute(
             "DELETE FROM employee_celebrations "
             "WHERE person_odoo_id = %s AND kind = %s AND event_day > %s "
             "AND acknowledged_at IS NULL",
@@ -125,7 +126,7 @@ def _remove_unexpected_future_events(
         )
         return
     placeholders = ", ".join("%s" for _ in expected_days)
-    db.execute(
+    cursor.execute(
         "DELETE FROM employee_celebrations "
         "WHERE person_odoo_id = %s AND kind = %s AND event_day > %s "
         "AND acknowledged_at IS NULL "
@@ -135,50 +136,60 @@ def _remove_unexpected_future_events(
 
 
 def reconcile_future(today: date | None = None) -> None:
-    """Refresh only future, unacknowledged local celebrations from active people."""
+    """Refresh the future queue from source rows locked for this transaction."""
     today = today or plant_today()
     end_day = today + timedelta(days=370)
-    people = db.query(
-        "SELECT odoo_id, birthday_month, birthday_day, first_contract_date "
-        "FROM people WHERE active = TRUE AND odoo_id IS NOT NULL"
-    )
-
-    db.execute(
-        "DELETE FROM employee_celebrations "
-        "WHERE event_day > %s AND acknowledged_at IS NULL "
-        "AND NOT EXISTS ("
-        "SELECT 1 FROM people "
-        "WHERE people.odoo_id = employee_celebrations.person_odoo_id "
-        "AND people.active = TRUE)",
-        (today,),
-    )
-
-    for person in people:
-        person_odoo_id = person["odoo_id"]
-        events = future_events_for_person(
-            person_odoo_id,
-            _birthday_from_row(person),
-            person.get("first_contract_date"),
-            today,
-            end_day,
+    with db.cursor() as cursor:
+        # Lock every locally mirrored Odoo source row, not just the active
+        # subset. A concurrent roster sync must either finish before this read
+        # or wait until this queue rebuild commits, so stale future events
+        # cannot be recreated from a superseded source snapshot.
+        cursor.execute(
+            "SELECT odoo_id, active, birthday_month, birthday_day, first_contract_date "
+            "FROM people WHERE odoo_id IS NOT NULL FOR UPDATE"
         )
-        for kind in ("birthday", "work_anniversary"):
-            _remove_unexpected_future_events(
-                person_odoo_id, kind, _expected_days(events, kind), today
+        people = [person for person in cursor.fetchall() if person["active"]]
+
+        cursor.execute(
+            "DELETE FROM employee_celebrations "
+            "WHERE event_day > %s AND acknowledged_at IS NULL "
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM people "
+            "WHERE people.odoo_id = employee_celebrations.person_odoo_id "
+            "AND people.active = TRUE)",
+            (today,),
+        )
+
+        for person in people:
+            person_odoo_id = person["odoo_id"]
+            events = future_events_for_person(
+                person_odoo_id,
+                _birthday_from_row(person),
+                person.get("first_contract_date"),
+                today,
+                end_day,
             )
-        for event in events:
-            db.execute(
-                "INSERT INTO employee_celebrations "
-                "(person_odoo_id, kind, event_day, completed_years) "
-                "VALUES (%s, %s, %s, %s) "
-                "ON CONFLICT (person_odoo_id, kind, event_day) DO NOTHING",
-                (
-                    event.person_odoo_id,
-                    event.kind,
-                    event.event_day,
-                    event.completed_years,
-                ),
-            )
+            for kind in ("birthday", "work_anniversary"):
+                _remove_unexpected_future_events(
+                    cursor,
+                    person_odoo_id,
+                    kind,
+                    _expected_days(events, kind),
+                    today,
+                )
+            for event in events:
+                cursor.execute(
+                    "INSERT INTO employee_celebrations "
+                    "(person_odoo_id, kind, event_day, completed_years) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (person_odoo_id, kind, event_day) DO NOTHING",
+                    (
+                        event.person_odoo_id,
+                        event.kind,
+                        event.event_day,
+                        event.completed_years,
+                    ),
+                )
 
 
 def _to_celebration(row: dict) -> Celebration:
