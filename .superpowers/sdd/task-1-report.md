@@ -94,3 +94,29 @@ The event insert now uses a guarded conflict update for `work_anniversary` rows.
 ### Repair commit
 
 - `3b15ab1d919b5d3e25e48807fbbf5c5d98bcda05 fix: serialize celebration source updates` (local only; not pushed).
+
+## Final repair: serialize Skills roster writes
+
+### Summary
+
+`staffing.save_roster()` is a production `people` writer used by the Skills save route. It now acquires the existing transaction-scoped celebration source lock immediately after entering its already-existing database transaction and before the first `people` upsert. This uses the same lock as reconciliation and Odoo roster sync, preventing a Skills save from deadlocking with the queue's locked source snapshot. No roster values, write ordering, cache invalidation, or route behavior changed.
+
+### Files changed
+
+- `src/zira_dashboard/staffing.py` — acquire the shared celebration source lock inside `save_roster()` before writing `people`.
+- `tests/test_staffing_roster_status_ownership.py` — focused lock-before-people-write contract while retaining the active-status ownership assertion.
+
+### RED
+
+- `uv run --extra dev pytest tests/test_staffing_roster_status_ownership.py -q` — 1 failed, 1 passed. The new test showed that the first SQL statement was the `people` upsert instead of the shared advisory lock.
+
+### GREEN
+
+- `uv run --extra dev pytest tests/test_staffing_roster_status_ownership.py -q` — 2 passed.
+- `uv run --extra dev pytest tests/test_schema_employee_celebrations.py tests/test_employee_celebrations.py tests/test_employee_notifications.py tests/test_odoo_sync_celebration_locking.py tests/test_odoo_sync.py tests/test_staffing_roster_status_ownership.py tests/test_skills_cache.py -q` — 37 passed, 19 skipped.
+- `uv run --extra dev ruff check src/zira_dashboard/employee_celebrations.py src/zira_dashboard/odoo_sync.py src/zira_dashboard/staffing.py tests/test_employee_celebrations.py tests/test_odoo_sync_celebration_locking.py tests/test_staffing_roster_status_ownership.py` — passed.
+- `git diff --check` — passed.
+
+### Repair commit
+
+- `3043525d5d68e65dabef6f7fd1a8e1be40ff54f3 fix: lock staffing roster source writes` (local only; not pushed).
