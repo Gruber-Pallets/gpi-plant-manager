@@ -14,6 +14,7 @@ from zira_dashboard import feedback_task_delivery as delivery
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 TOKEN = UUID("11111111-1111-1111-1111-111111111111")
+EXPIRES = NOW + timedelta(minutes=2)
 
 
 class RecordingCursor(AbstractContextManager):
@@ -49,12 +50,18 @@ def normalized_sql(cursor: RecordingCursor, index: int) -> str:
     return " ".join(cursor.calls[index][0].split())
 
 
-def claim(*, task_id: int | None = None, attachment_id: int | None = None):
+def claim(
+    *,
+    task_id: int | None = None,
+    attachment_id: int | None = None,
+    expires_at: datetime = EXPIRES,
+):
     return delivery.TaskDeliveryClaim(
         feedback_id=42,
         claim_token=TOKEN,
         task_id=task_id,
         before_attachment_id=attachment_id,
+        expires_at=expires_at,
     )
 
 
@@ -94,6 +101,7 @@ def test_claim_due_uses_skip_locked_and_returns_two_minute_lease(monkeypatch):
                 "claim_token": TOKEN,
                 "odoo_task_id": None,
                 "before_attachment_id": None,
+                "claim_expires_at": EXPIRES,
             }
         ],
     )
@@ -105,7 +113,7 @@ def test_claim_due_uses_skip_locked_and_returns_two_minute_lease(monkeypatch):
     assert "FOR UPDATE SKIP LOCKED" in normalized_sql(cursor, 0)
     update_sql = normalized_sql(cursor, 1)
     assert "state = 'in_flight'" in update_sql
-    assert NOW + timedelta(minutes=2) in cursor.calls[1][1]
+    assert EXPIRES in cursor.calls[1][1]
     assert any(type(value) is UUID for value in cursor.calls[1][1])
 
 
@@ -115,6 +123,26 @@ def test_claim_due_caps_the_database_claim_batch_at_ten(monkeypatch):
     assert delivery.claim_due(now=NOW, worker_id="task-worker", limit=99) == []
 
     assert cursor.calls[0][1][-1] == 10
+
+
+def test_renew_claim_refuses_an_expired_or_reclaimed_lease(monkeypatch):
+    expires = NOW + timedelta(minutes=2)
+    active = delivery.TaskDeliveryClaim(
+        feedback_id=42,
+        claim_token=TOKEN,
+        task_id=None,
+        before_attachment_id=None,
+        expires_at=expires,
+    )
+    cursor = use_cursor(monkeypatch, [])
+
+    with pytest.raises(delivery.StateTransitionError):
+        delivery.renew_claim(active, now=expires)
+
+    statement = normalized_sql(cursor, 0)
+    assert "claim_expires_at = %s" in statement
+    assert "claim_expires_at > %s" in statement
+    assert_current_claim_predicate(statement)
 
 
 def test_schedule_retry_clears_lease_and_caps_backoff_at_one_hour(monkeypatch):
@@ -195,6 +223,7 @@ def test_recorded_remote_ids_are_guarded_by_the_current_claim_token(monkeypatch)
                 "claim_token": TOKEN,
                 "odoo_task_id": 900,
                 "before_attachment_id": None,
+                "claim_expires_at": EXPIRES,
             }
         ],
     )
@@ -211,6 +240,7 @@ def test_recorded_remote_ids_are_guarded_by_the_current_claim_token(monkeypatch)
                 "claim_token": TOKEN,
                 "odoo_task_id": 900,
                 "before_attachment_id": 901,
+                "claim_expires_at": EXPIRES,
             }
         ],
     )

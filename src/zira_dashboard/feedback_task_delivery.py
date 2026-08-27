@@ -45,6 +45,7 @@ class TaskDeliveryClaim:
     claim_token: UUID
     task_id: int | None
     before_attachment_id: int | None
+    expires_at: datetime
 
     def __post_init__(self) -> None:
         _positive_signed_64(self.feedback_id, "feedback id")
@@ -53,6 +54,7 @@ class TaskDeliveryClaim:
             _positive_signed_64(self.task_id, "task id")
         if self.before_attachment_id is not None:
             _positive_signed_64(self.before_attachment_id, "before attachment id")
+        _aware_datetime(self.expires_at, "claim expiration")
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,7 @@ def _claim_from_row(row: Mapping[str, object]) -> TaskDeliveryClaim:
             claim_token=row.get("claim_token"),
             task_id=row.get("odoo_task_id"),
             before_attachment_id=row.get("before_attachment_id"),
+            expires_at=row.get("claim_expires_at"),
         )
     except ValueError:
         raise StateTransitionError("database returned a malformed task delivery claim") from None
@@ -259,7 +262,8 @@ def claim_due(
                   )
                   AND odoo_task_id IS NOT DISTINCT FROM %s
                   AND before_attachment_id IS NOT DISTINCT FROM %s
-                RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id
+                RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
+                          claim_expires_at
                 """,
                 (
                     owner,
@@ -276,10 +280,48 @@ def claim_due(
             result = _updated_claim(
                 cursor,
                 "due claim update",
-                TaskDeliveryClaim(feedback_id, token, task_id, attachment_id),
+                TaskDeliveryClaim(feedback_id, token, task_id, attachment_id, expires),
             )
             claims.append(result)
     return claims
+
+
+def renew_claim(
+    claim: TaskDeliveryClaim,
+    *,
+    now: datetime | None = None,
+) -> TaskDeliveryClaim:
+    """Extend only the still-current lease before a remote write begins."""
+    if type(claim) is not TaskDeliveryClaim:
+        raise ValueError("claim is malformed")
+    current = _optional_now(now, "claim renewal time")
+    expires = current + _CLAIM_LEASE
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE feedback_task_delivery
+            SET claim_expires_at = %s, updated_at = %s
+            WHERE feedback_id = %s
+              AND claim_token = %s
+              AND state = 'in_flight'
+              AND claim_expires_at = %s
+              AND claim_expires_at > %s
+            RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
+                      claim_expires_at
+            """,
+            (
+                expires,
+                current,
+                claim.feedback_id,
+                claim.claim_token,
+                claim.expires_at,
+                current,
+            ),
+        )
+        renewed = _updated_claim(cursor, "claim renewal", claim)
+    if renewed.expires_at != expires:
+        raise StateTransitionError("claim renewal returned a different expiration")
+    return renewed
 
 
 def load_snapshot(feedback_id: int) -> FeedbackTaskSnapshot:
@@ -351,7 +393,8 @@ def record_task_id(
               AND state = 'in_flight'
               AND odoo_task_id IS NOT DISTINCT FROM %s
               AND before_attachment_id IS NOT DISTINCT FROM %s
-            RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id
+            RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
+                      claim_expires_at
             """,
             (
                 saved_task_id,
@@ -389,7 +432,8 @@ def record_before_attachment(
               AND state = 'in_flight'
               AND odoo_task_id = %s
               AND before_attachment_id IS NOT DISTINCT FROM %s
-            RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id
+            RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
+                      claim_expires_at
             """,
             (
                 saved_attachment_id,

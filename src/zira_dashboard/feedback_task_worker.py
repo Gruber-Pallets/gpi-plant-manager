@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import xmlrpc.client
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -35,6 +36,21 @@ _OUTCOMES = frozenset({"delivered", "retried", "blocked", "isolated_error"})
 _SOURCE_APP = "GPI Plant Manager (plant)"
 _DUPLICATE_TASK_REASON = "More than one matching owner task exists."
 _DUPLICATE_SCREENSHOT_REASON = "More than one matching owner screenshot exists."
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _time_source(
+    now: datetime | None,
+    clock: Callable[[], datetime] | None,
+) -> Callable[[], datetime]:
+    if clock is not None:
+        return clock
+    if now is not None:
+        return lambda: now
+    return _utc_now
 
 
 @dataclass(frozen=True)
@@ -87,38 +103,42 @@ def task_description(snapshot: task_delivery.FeedbackTaskSnapshot) -> str:
     return f"<p>{body}</p><p><small>{' · '.join(meta)}</small></p>"
 
 
-def _retry(claim: task_delivery.TaskDeliveryClaim, now: datetime) -> str:
-    task_delivery.schedule_retry(claim, now=now)
+def _retry(claim: task_delivery.TaskDeliveryClaim, clock: Callable[[], datetime]) -> str:
+    task_delivery.schedule_retry(claim, now=clock())
     return "retried"
 
 
-def _block(claim: task_delivery.TaskDeliveryClaim, reason: str, now: datetime) -> str:
-    task_delivery.block(claim, reason, now=now)
+def _block(
+    claim: task_delivery.TaskDeliveryClaim,
+    reason: str,
+    clock: Callable[[], datetime],
+) -> str:
+    task_delivery.block(claim, reason, now=clock())
     return "blocked"
 
 
 def _record_task_match(
     claim: task_delivery.TaskDeliveryClaim,
     task_ids: list[int],
-    now: datetime,
+    clock: Callable[[], datetime],
 ) -> task_delivery.TaskDeliveryClaim | str | None:
     if len(task_ids) > 1:
-        return _block(claim, _DUPLICATE_TASK_REASON, now)
+        return _block(claim, _DUPLICATE_TASK_REASON, clock)
     if task_ids:
-        return task_delivery.record_task_id(claim, task_id=task_ids[0], now=now)
+        return task_delivery.record_task_id(claim, task_id=task_ids[0], now=clock())
     return None
 
 
 def _record_attachment_match(
     claim: task_delivery.TaskDeliveryClaim,
     attachment_ids: list[int],
-    now: datetime,
+    clock: Callable[[], datetime],
 ) -> task_delivery.TaskDeliveryClaim | str | None:
     if len(attachment_ids) > 1:
-        return _block(claim, _DUPLICATE_SCREENSHOT_REASON, now)
+        return _block(claim, _DUPLICATE_SCREENSHOT_REASON, clock)
     if attachment_ids:
         return task_delivery.record_before_attachment(
-            claim, attachment_id=attachment_ids[0], now=now
+            claim, attachment_id=attachment_ids[0], now=clock()
         )
     return None
 
@@ -128,23 +148,23 @@ def _resolve_uncertain_task_create(
     *,
     project_id: int,
     name: str,
-    now: datetime,
+    clock: Callable[[], datetime],
 ) -> task_delivery.TaskDeliveryClaim | str:
     try:
         task_ids = odoo_client.find_feedback_task_ids(project_id, name)
-        matched = _record_task_match(claim, task_ids, now)
+        matched = _record_task_match(claim, task_ids, clock)
     except _RECOVERABLE_ODOO_ERRORS:
         _log.exception("could not recheck owner task after uncertain create")
-        return _retry(claim, now)
+        return _retry(claim, clock)
     if matched is None:
-        return _retry(claim, now)
+        return _retry(claim, clock)
     return matched
 
 
 def _deliver_task(
     claim: task_delivery.TaskDeliveryClaim,
     snapshot: task_delivery.FeedbackTaskSnapshot,
-    now: datetime,
+    clock: Callable[[], datetime],
 ) -> task_delivery.TaskDeliveryClaim | str:
     if claim.task_id is not None:
         return claim
@@ -155,8 +175,8 @@ def _deliver_task(
         task_ids = odoo_client.find_feedback_task_ids(project_id, name)
     except _RECOVERABLE_ODOO_ERRORS:
         _log.exception("could not look up owner task for feedback %s", claim.feedback_id)
-        return _retry(claim, now)
-    matched = _record_task_match(claim, task_ids, now)
+        return _retry(claim, clock)
+    matched = _record_task_match(claim, task_ids, clock)
     if matched is not None:
         return matched
 
@@ -167,8 +187,9 @@ def _deliver_task(
         )
     except _RECOVERABLE_ODOO_ERRORS:
         _log.exception("could not prepare owner task for feedback %s", claim.feedback_id)
-        return _retry(claim, now)
+        return _retry(claim, clock)
 
+    claim = task_delivery.renew_claim(claim, now=clock())
     try:
         task_id = odoo_client.create_feedback_task(
             project_id=project_id,
@@ -181,18 +202,18 @@ def _deliver_task(
     except _AMBIGUOUS_WRITE_ERRORS:
         _log.exception("uncertain owner task create for feedback %s", claim.feedback_id)
         return _resolve_uncertain_task_create(
-            claim, project_id=project_id, name=name, now=now
+            claim, project_id=project_id, name=name, clock=clock
         )
     except _RECOVERABLE_ODOO_ERRORS:
         _log.exception("could not deliver owner task for feedback %s", claim.feedback_id)
-        return _retry(claim, now)
-    return task_delivery.record_task_id(claim, task_id=task_id, now=now)
+        return _retry(claim, clock)
+    return task_delivery.record_task_id(claim, task_id=task_id, now=clock())
 
 
 def _deliver_before_attachment(
     claim: task_delivery.TaskDeliveryClaim,
     snapshot: task_delivery.FeedbackTaskSnapshot,
-    now: datetime,
+    clock: Callable[[], datetime],
 ) -> task_delivery.TaskDeliveryClaim | str:
     if snapshot.before_image is None or claim.before_attachment_id is not None:
         return claim
@@ -204,11 +225,12 @@ def _deliver_before_attachment(
         attachment_ids = odoo_client.find_feedback_attachment_ids(claim.task_id, filename)
     except _RECOVERABLE_ODOO_ERRORS:
         _log.exception("could not look up owner-task image attachment")
-        return _retry(claim, now)
-    matched = _record_attachment_match(claim, attachment_ids, now)
+        return _retry(claim, clock)
+    matched = _record_attachment_match(claim, attachment_ids, clock)
     if matched is not None:
         return matched
 
+    claim = task_delivery.renew_claim(claim, now=clock())
     try:
         attachment_id = odoo_client.add_task_attachment(
             claim.task_id, filename, "image/jpeg", snapshot.before_image.jpeg_bytes
@@ -217,34 +239,40 @@ def _deliver_before_attachment(
         _log.exception("uncertain owner-task image attachment for feedback %s", claim.feedback_id)
         try:
             attachment_ids = odoo_client.find_feedback_attachment_ids(claim.task_id, filename)
-            matched = _record_attachment_match(claim, attachment_ids, now)
+            matched = _record_attachment_match(claim, attachment_ids, clock)
         except _RECOVERABLE_ODOO_ERRORS:
             _log.exception("could not recheck owner-task image attachment")
-            return _retry(claim, now)
+            return _retry(claim, clock)
         if matched is None:
-            return _retry(claim, now)
+            return _retry(claim, clock)
         return matched
     except _RECOVERABLE_ODOO_ERRORS:
         _log.exception("could not deliver owner-task image attachment")
-        return _retry(claim, now)
-    return task_delivery.record_before_attachment(claim, attachment_id=attachment_id, now=now)
+        return _retry(claim, clock)
+    return task_delivery.record_before_attachment(claim, attachment_id=attachment_id, now=clock())
 
 
-def process_claim(claim: task_delivery.TaskDeliveryClaim, *, now: datetime) -> str:
+def process_claim(
+    claim: task_delivery.TaskDeliveryClaim,
+    *,
+    now: datetime | None = None,
+    clock: Callable[[], datetime] | None = None,
+) -> str:
     """Create or adopt one exact owner task and its optional before image."""
+    time_source = _time_source(now, clock)
     try:
         snapshot = task_delivery.load_snapshot(claim.feedback_id)
     except task_delivery.SnapshotValidationError:
         _log.exception("could not load local feedback snapshot for owner task")
-        return _retry(claim, now)
+        return _retry(claim, time_source)
 
-    task_or_outcome = _deliver_task(claim, snapshot, now)
+    task_or_outcome = _deliver_task(claim, snapshot, time_source)
     if type(task_or_outcome) is str:
         return task_or_outcome
-    attachment_or_outcome = _deliver_before_attachment(task_or_outcome, snapshot, now)
+    attachment_or_outcome = _deliver_before_attachment(task_or_outcome, snapshot, time_source)
     if type(attachment_or_outcome) is str:
         return attachment_or_outcome
-    task_delivery.mark_delivered(attachment_or_outcome, now=now)
+    task_delivery.mark_delivered(attachment_or_outcome, now=time_source())
     return "delivered"
 
 
@@ -252,18 +280,22 @@ def run_batch(
     now: datetime | None = None,
     worker_id: str | None = None,
     limit: int = 10,
+    clock: Callable[[], datetime] | None = None,
 ) -> BatchResult:
     """Claim and independently deliver at most ten local feedback records."""
     if type(limit) is not int:
         raise ValueError("batch limit must be an integer")
-    current = now or datetime.now(UTC)
+    time_source = _time_source(now, clock)
     identity = worker_id or f"{socket.gethostname()}:{os.getpid()}"
     capped = max(1, min(limit, 10))
-    claims = task_delivery.claim_due(now=current, worker_id=identity, limit=capped)
     outcomes: list[str] = []
-    for claim in claims:
+    for _ in range(capped):
+        claims = task_delivery.claim_due(now=time_source(), worker_id=identity, limit=1)
+        if not claims:
+            break
+        claim = claims[0]
         try:
-            outcomes.append(process_claim(claim, now=current))
+            outcomes.append(process_claim(claim, clock=time_source))
         except Exception:
             _log.exception("isolated owner task delivery failure for feedback %s", claim.feedback_id)
             outcomes.append("isolated_error")
