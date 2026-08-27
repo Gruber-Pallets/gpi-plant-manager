@@ -9,8 +9,8 @@ mode; the templates use big-touch / no-scroll layout.
 Flow:
   1. GET  /timeclock                       — searchable / scrollable name list
   2. GET  /timeclock/start/{person_id}     — apply sign-in priority, mint a token
-  3. GET  /timeclock/notifications/{token} — acknowledge important work updates
-  4. GET  /timeclock/celebration/{token}   — acknowledge one private special day
+  3. GET  /timeclock/notifications/{token} — show important work updates
+  4. GET  /timeclock/celebration/{token}   — show one private special day
   5. GET  /timeclock/dashboard/{token}     — clocked-in state + actions
   6. GET  /timeclock/pick-wc/{token}       — WC picker (for override / transfer)
   7. POST /timeclock/clock-in/{token}      — open hr.attendance with WC
