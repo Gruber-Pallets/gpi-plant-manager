@@ -328,9 +328,10 @@ def save_roster(people: list[Person]) -> None:
     deleted from person_skills. ``active`` applies only when inserting a new
     local person. Odoo sync exclusively owns that field on existing rows, so
     a stale cached roster can never replay an old employment status."""
-    from . import db
+    from . import db, employee_celebrations
 
     with db.cursor() as cur:
+        employee_celebrations.lock_celebration_source_sync(cur)
         for p in people:
             cur.execute(
                 "INSERT INTO people (name, active, reserve, odoo_id, local_dirty) "
