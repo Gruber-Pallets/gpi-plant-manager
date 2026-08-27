@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-27
 
+### Timeclock updates and feedback plan
+
+#### Improvements
+
+- **A plan is ready to put the light-bulb updates button at the top right of the time clock.** It will show the same updates and feedback screen used in Plant Manager. Nothing at the clock has changed yet.
+
 ### Birthday and work-anniversary build plan
 
 #### Improvements
