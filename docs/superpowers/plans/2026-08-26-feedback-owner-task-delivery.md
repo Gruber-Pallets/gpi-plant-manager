@@ -458,11 +458,10 @@ git commit -m "feat: show feedback owner task delivery"
 
 The implementation commit is `2ed2b673 feat: show feedback owner task delivery`.
 
-- [ ] **Step 7: Merge and push handoff**
+- [x] **Step 7: Merge and push handoff**
 
-An integration owner must first merge the isolated feature branch into the
-current `main`, then push the resulting `main` commit. If `origin/main` has
-advanced, fetch, rebase with `--autostash`, verify unrelated changes are
-restored, rerun `git diff --check`, and push without force. This handoff is not
-complete merely because the feature-branch commit and its validation are
-complete.
+The reviewed feature branch was fast-forwarded to `origin/main` at
+`1e2d2eea fix: harden feedback task delivery`. The integration ran from the
+isolated worktree, leaving unrelated changes in the existing main checkout
+untouched. The final full suite passed with 3,928 tests and 399 skips before
+the push.
