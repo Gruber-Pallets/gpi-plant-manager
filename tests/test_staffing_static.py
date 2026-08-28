@@ -23,6 +23,56 @@ def _print_css():
     return Path("src/zira_dashboard/static/staffing-print.css").read_text()
 
 
+def _hours_template():
+    return Path("src/zira_dashboard/templates/staffing_hours.html").read_text()
+
+
+def _hours_css():
+    return Path("src/zira_dashboard/static/staffing_hours.css").read_text()
+
+
+def _hours_js():
+    return Path("src/zira_dashboard/static/staffing_hours.js").read_text()
+
+
+def test_staffing_subnav_has_hours_tab():
+    html = Path("src/zira_dashboard/templates/_staffing_subnav.html").read_text()
+
+    assert 'href="/staffing/hours"' in html
+    assert "active == 'hours'" in html
+
+
+def test_staffing_hours_template_has_server_rendered_accessible_report_controls():
+    html = _hours_template()
+
+    assert '{% extends "_staffing_base.html" %}' in html
+    assert 'href="/static/staffing_hours.css?v={{ static_v(\'staffing_hours.css\') }}"' in html
+    assert '<form method="get" action="/staffing/hours"' in html
+    assert 'name="source"' in html and 'name="range"' in html
+    assert 'name="start"' in html and 'name="end"' in html
+    assert 'class="hours-row-detail"' in html
+    assert 'aria-label="Show daily hours for {{ row.name }}"' in html
+    assert '<caption>{{ row.name }} daily hours</caption>' in html
+    assert 'class="open-shift-badge"' in html
+    assert "hours-summary-chip" in html
+    assert 'value="approaching_40"' in html
+    assert 'value="over_40"' in html
+    assert 'value="attention"' in html
+
+
+def test_staffing_hours_assets_support_responsive_and_keyboard_accessible_details():
+    css = _hours_css()
+    js = _hours_js()
+
+    assert ".hours-table" in css
+    assert "font-variant-numeric: tabular-nums" in css
+    assert "@media (max-width:" in css
+    assert "details.hours-row-detail" in css
+    assert 'content: attr(data-label) ": ";' in css
+    assert "e.key === 'Escape'" in js
+    assert "summary.focus()" in js
+
+
 def test_printed_scheduler_hides_saturday_off_and_time_off_rails():
     css = _print_css()
 

@@ -5,6 +5,41 @@ import pytest
 from zira_dashboard import odoo_client
 
 
+OPEN_ROW = {
+    "id": 1,
+    "employee_id": [7, "Alex"],
+    "check_in": "2026-08-15 23:00:00",
+    "check_out": False,
+}
+_captured_queries = []
+
+
+def _capture_and_return(rows):
+    def capture(*args, **kwargs):
+        _captured_queries.append((args, kwargs))
+        return rows
+
+    return capture
+
+
+def _last_domain():
+    return _captured_queries[-1][0][2]
+
+
+def test_range_attendance_query_includes_open_shift_started_before_range(monkeypatch):
+    monkeypatch.setattr(odoo_client, "execute", _capture_and_return([OPEN_ROW]))
+
+    rows = odoo_client.fetch_attendance_intervals_for_range(
+        [7], date(2026, 8, 16), date(2026, 8, 29)
+    )
+
+    assert rows == [{
+        "id": 1, "employee_odoo_id": 7,
+        "check_in": "2026-08-15T23:00:00+00:00", "check_out": None,
+    }]
+    assert ("check_in", "<", "2026-08-30 05:00:00") in _last_domain()
+
+
 def test_fetch_employee_attendances_for_day_uses_employee_and_day_bounds(monkeypatch):
     calls = []
     monkeypatch.setattr(odoo_client, "execute", lambda *a, **kw: calls.append((a, kw)) or [

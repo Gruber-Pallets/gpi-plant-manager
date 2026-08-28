@@ -71,6 +71,76 @@ def raw_attendance():
     }
 
 
+def test_range_work_entries_query_returns_normalized_rows():
+    calls = []
+    execute = fake_execute(
+        {
+            ("hr.work.entry.type", "search_read"): [
+                {"id": 1, "code": "WORK100"},
+                {"id": 2, "code": "OVERTIME"},
+            ],
+            ("hr.work.entry", "search_read"): [raw_work(8.5)],
+        },
+        calls,
+    )
+
+    rows = payroll.fetch_work_entries_for_range(
+        execute, [6], date(2026, 8, 16), date(2026, 8, 29)
+    )
+
+    assert rows[0]["type_code"] == "WORK100"
+    assert rows[0]["date"] == date(2026, 7, 24)
+    assert calls[1] == (
+        "hr.work.entry",
+        "search_read",
+        (
+            [
+                ("active", "=", True),
+                ("employee_id", "in", [6]),
+                ("date", ">=", "2026-08-16"),
+                ("date", "<=", "2026-08-29"),
+            ],
+        ),
+        {"fields": WORK_FIELDS, "order": "employee_id,date,id"},
+    )
+
+
+def test_employee_departments_read_normalizes_many2one_names():
+    calls = []
+    execute = fake_execute(
+        {
+            ("hr.employee", "search_read"): [
+                {"id": 6, "department_id": [3, "Assembly"]},
+                {"id": 7, "department_id": False},
+            ],
+        },
+        calls,
+    )
+
+    departments = payroll.fetch_employee_departments(execute, [7, 6])
+
+    assert departments == {6: "Assembly", 7: None}
+    assert calls == [
+        (
+            "hr.employee",
+            "search_read",
+            ([('id', 'in', [6, 7])],),
+            {"fields": ["id", "department_id"]},
+        ),
+    ]
+
+
+def test_payslip_batch_read_normalizes_the_period(monkeypatch):
+    from zira_dashboard import odoo_client
+
+    monkeypatch.setattr(odoo_client, "execute", lambda *_args, **_kwargs: [
+        {"id": 8, "name": "Workers", "date_start": "2026-08-16", "date_end": "2026-08-29"},
+    ])
+
+    batch = odoo_client.fetch_payroll_batches(date(2026, 8, 16), date(2026, 8, 29))[0]
+    assert (batch["start"], batch["end"]) == (date(2026, 8, 16), date(2026, 8, 29))
+
+
 def test_recent_candidates_use_write_date_date_and_linked_work100():
     calls = []
     execute = fake_execute(
@@ -339,11 +409,21 @@ def test_remaining_public_odoo_client_wrappers_delegate(monkeypatch):
     start_day = date(2026, 7, 31)
     end_day = date(2026, 8, 1)
     inputs = MagicMock(return_value=([{"id": 2}], [{"id": 3}]))
+    range_entries = MagicMock(return_value=[{"id": 4}])
+    departments = MagicMock(return_value={9: "Assembly"})
+    batches = MagicMock(return_value=[{"name": "Workers"}])
     read = MagicMock(return_value={"id": 8502})
     write = MagicMock()
     delete = MagicMock()
     exists = MagicMock(return_value=True)
     monkeypatch.setattr(odoo_client._odoo_payroll, "fetch_inputs", inputs)
+    monkeypatch.setattr(
+        odoo_client._odoo_payroll, "fetch_work_entries_for_range", range_entries
+    )
+    monkeypatch.setattr(
+        odoo_client._odoo_payroll, "fetch_employee_departments", departments
+    )
+    monkeypatch.setattr(odoo_client._odoo_payroll, "fetch_payslip_batches", batches)
     monkeypatch.setattr(odoo_client._odoo_payroll, "read_work_entry", read)
     monkeypatch.setattr(odoo_client._odoo_payroll, "write_duration", write)
     monkeypatch.setattr(odoo_client._odoo_payroll, "delete_entry", delete)
@@ -353,6 +433,13 @@ def test_remaining_public_odoo_client_wrappers_delegate(monkeypatch):
         [{"id": 2}],
         [{"id": 3}],
     )
+    assert odoo_client.fetch_payroll_work_entries([9, 4], start_day, end_day) == [
+        {"id": 4}
+    ]
+    assert odoo_client.fetch_employee_departments([9, 4]) == {9: "Assembly"}
+    assert odoo_client.fetch_payroll_batches(start_day, end_day) == [
+        {"name": "Workers"}
+    ]
     assert odoo_client.fetch_payroll_work_entry(8502) == {"id": 8502}
     assert odoo_client.set_payroll_work_entry_duration(8502, 3.5) is None
     assert odoo_client.delete_payroll_work_entry(8508) is None
@@ -361,6 +448,11 @@ def test_remaining_public_odoo_client_wrappers_delegate(monkeypatch):
     inputs.assert_called_once_with(
         odoo_client.execute, [9, 4], start_day, end_day
     )
+    range_entries.assert_called_once_with(
+        odoo_client.execute, [9, 4], start_day, end_day
+    )
+    departments.assert_called_once_with(odoo_client.execute, [9, 4])
+    batches.assert_called_once_with(odoo_client.execute, start_day, end_day)
     read.assert_called_once_with(odoo_client.execute, 8502)
     write.assert_called_once_with(odoo_client.execute, 8502, 3.5)
     delete.assert_called_once_with(odoo_client.execute, 8508)

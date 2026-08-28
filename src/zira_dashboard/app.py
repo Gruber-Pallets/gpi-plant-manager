@@ -52,6 +52,7 @@ from .routes import (
     share,
     skills,
     staffing,
+    staffing_hours,
     time_off,
     time_off_approvals,
     trophies,
@@ -626,6 +627,7 @@ app.include_router(recycling_leaderboard.router)
 app.include_router(new_leaderboard.router)
 app.include_router(tv_displays.router)
 app.include_router(staffing.router)
+app.include_router(staffing_hours.router)
 app.include_router(saturday_recruiting.router)
 app.include_router(rotations.router)
 app.include_router(late_report.router)

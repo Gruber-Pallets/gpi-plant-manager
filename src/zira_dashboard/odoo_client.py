@@ -519,6 +519,12 @@ def fetch_attendance_intervals_for_day(day) -> list[dict]:
     )
 
 
+def fetch_attendance_intervals_for_range(employee_ids, start_day, end_day):
+    return _odoo_attendance.fetch_attendance_intervals_for_range(
+        execute, employee_ids, start_day, end_day
+    )
+
+
 def set_attendance_wc(attendance_id: int, wc_name: str | None) -> bool:
     """Write the kiosk WC (and resolved department) onto an existing
     hr.attendance. Returns False when the optional field is unavailable or
@@ -1118,6 +1124,20 @@ def fetch_recent_payroll_candidates(written_since: datetime) -> list[dict]:
 
 def fetch_payroll_inputs(employee_ids, start_day, end_day):
     return _odoo_payroll.fetch_inputs(execute, employee_ids, start_day, end_day)
+
+
+def fetch_payroll_work_entries(employee_ids, start_day, end_day):
+    return _odoo_payroll.fetch_work_entries_for_range(
+        execute, employee_ids, start_day, end_day
+    )
+
+
+def fetch_employee_departments(employee_ids):
+    return _odoo_payroll.fetch_employee_departments(execute, employee_ids)
+
+
+def fetch_payroll_batches(start_day, end_day):
+    return _odoo_payroll.fetch_payslip_batches(execute, start_day, end_day)
 
 
 def fetch_payroll_work_entry(entry_id: int) -> dict | None:
