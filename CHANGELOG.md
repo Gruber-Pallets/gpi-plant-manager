@@ -20,6 +20,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Production bars now keep each person's work time in one normal-size bar.** Point to, select, or tap a section to see the person's name, time, goal, and result without filling the screen with extra lines.
 
+### Odoo checks the exact PTO record
+
+- **Plant Manager can now read back the exact Odoo time-off record and find Wendy's Odoo account safely.** It still does not change a past absence yet.
+
 ### Missed-day PTO checks are ready
 
 - **Plant Manager can now tell which missed days may use PTO.** It checks the worker, pay period, PTO kind, and balance. The new choice is not on the time clock yet.

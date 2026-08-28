@@ -2,6 +2,8 @@
 
 import xmlrpc.client
 
+import pytest
+
 from zira_dashboard import odoo_client
 
 
@@ -28,6 +30,89 @@ def test_feedback_operations_live_in_private_module():
     assert callable(_odoo_feedback.find_or_create_feedback_project)
     assert callable(_odoo_feedback.find_feedback_task)
     assert callable(_odoo_feedback.ensure_feedback_stages)
+
+
+def test_find_active_users_by_login_is_exact_and_bounded(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append([{"id": 17, "login": "wendy@gruberpallets.com"}])
+
+    assert odoo_client.find_active_users_by_login(
+        "wendy@gruberpallets.com"
+    ) == [{"id": 17, "login": "wendy@gruberpallets.com"}]
+    assert calls == [
+        (
+            "res.users",
+            "search_read",
+            (
+                [
+                    ("active", "=", True),
+                    ("login", "=ilike", "wendy@gruberpallets.com"),
+                ],
+            ),
+            {"fields": ["id", "login"], "limit": 2},
+        )
+    ]
+
+
+def test_find_active_users_by_login_keeps_multiple_exact_matches(monkeypatch):
+    _calls, responses = _stub(monkeypatch)
+    responses.append(
+        [
+            {"id": 17, "login": "wendy@gruberpallets.com"},
+            {"id": 18, "login": "WENDY@GRUBERPALLETS.COM"},
+        ]
+    )
+
+    assert odoo_client.find_active_users_by_login(
+        "wendy@gruberpallets.com"
+    ) == [
+        {"id": 17, "login": "wendy@gruberpallets.com"},
+        {"id": 18, "login": "WENDY@GRUBERPALLETS.COM"},
+    ]
+
+
+def test_find_active_users_by_login_filters_wrong_echo(monkeypatch):
+    _calls, responses = _stub(monkeypatch)
+    responses.append([{"id": 17, "login": "other@gruberpallets.com"}])
+
+    assert odoo_client.find_active_users_by_login(
+        "wendy@gruberpallets.com"
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("login", "limit"),
+    [
+        (" Wendy@gruberpallets.com ", 2),
+        ("wendy", 2),
+        ("wendy@gruberpallets.com", 1),
+    ],
+)
+def test_find_active_users_by_login_requires_normalized_email_and_limit(
+    monkeypatch, login, limit
+):
+    calls, _responses = _stub(monkeypatch)
+
+    with pytest.raises(ValueError, match="normalized email"):
+        odoo_client.find_active_users_by_login(login, limit=limit)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"id": True, "login": "wendy@gruberpallets.com"}],
+        ["not-a-row"],
+    ],
+)
+def test_find_active_users_by_login_rejects_malformed_rows(
+    monkeypatch, rows
+):
+    _calls, responses = _stub(monkeypatch)
+    responses.append(rows)
+
+    with pytest.raises(RuntimeError, match="user payload"):
+        odoo_client.find_active_users_by_login("wendy@gruberpallets.com")
 
 
 def test_ensure_feedback_project_uses_facade_stage_helper(monkeypatch):

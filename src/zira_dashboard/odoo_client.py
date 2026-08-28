@@ -975,6 +975,23 @@ def fetch_leave_state(leave_id: int) -> str | None:
     return _odoo_time_off.fetch_leave_state(execute, leave_id)
 
 
+def fetch_leave_snapshot(leave_id: int) -> dict | None:
+    """Return one verified leave identity snapshot, including archived rows."""
+    return _odoo_time_off.fetch_leave_snapshot(execute, leave_id)
+
+
+def find_matching_leaves(
+    employee_id: int,
+    type_id: int,
+    day,
+    include_terminal: bool = True,
+) -> list[dict]:
+    """Return up to two exact employee/type/day leave snapshots."""
+    return _odoo_time_off.find_matching_leaves(
+        execute, employee_id, type_id, day, include_terminal
+    )
+
+
 def post_leave_message(leave_id: int, body: str) -> None:
     """Post a message to an hr.leave's chatter so the employee is notified.
 
@@ -1063,6 +1080,10 @@ def ensure_feedback_tag(name: str) -> int:
     return _odoo_feedback.ensure_feedback_tag(execute, name)
 
 
+def find_active_users_by_login(login: str, limit: int = 2) -> list[dict]:
+    return _odoo_feedback.find_active_users_by_login(execute, login, limit)
+
+
 def find_feedback_task(project_id: int, name: str) -> int | None:
     return _odoo_feedback.find_feedback_task(execute, project_id, name)
 
@@ -1096,6 +1117,10 @@ def create_feedback_task(
 
 def update_task(task_id: int, **fields: Any) -> None:
     _odoo_feedback.update_task(execute, task_id, **fields)
+
+
+def close_task(task_id: int) -> None:
+    _odoo_feedback.close_task(execute, task_id)
 
 
 def post_task_message(task_id: int, body: str) -> None:
