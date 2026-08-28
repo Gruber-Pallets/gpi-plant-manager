@@ -224,6 +224,59 @@ def test_active_live_rollback_rejects_a_past_clean_boundary(monkeypatch):
         )
 
 
+def test_active_live_cannot_be_saved_directly_as_off(monkeypatch):
+    activated_at = _cutover_utc(date(2026, 8, 31))
+    now = activated_at + timedelta(hours=1)
+    monkeypatch.setattr(
+        policy.app_settings,
+        "get_setting",
+        lambda _key: _stored_live_config(activated_at, activated_at),
+    )
+    monkeypatch.setattr(policy, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        policy.app_settings,
+        "set_setting",
+        lambda *_args, **_kwargs: pytest.fail("active live rollout was disabled"),
+    )
+
+    with pytest.raises(ValueError, match="^rollback_boundary_required$"):
+        policy.set_rollout_config(
+            policy.RolloutConfig(mode="off", cutover_at=None, live_gate=None)
+        )
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {
+            "mode": "shadow",
+            "cutover_at": None,
+            "live_gate": None,
+        },
+        _stored_live_config(datetime(2026, 9, 2, 12, tzinfo=UTC), None),
+    ],
+    ids=["non-live", "pending-live"],
+)
+def test_off_save_remains_allowed_when_live_is_not_active(monkeypatch, stored):
+    saved = {}
+    monkeypatch.setattr(policy.app_settings, "get_setting", lambda _key: stored)
+    monkeypatch.setattr(
+        policy.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: saved.update(key=key, value=value, cur=cur),
+    )
+
+    policy.set_rollout_config(
+        policy.RolloutConfig(mode="off", cutover_at=None, live_gate=None)
+    )
+
+    assert saved["value"] == {
+        "mode": "off",
+        "cutover_at": None,
+        "live_gate": None,
+    }
+
+
 def test_match_state_tracks_legacy_pending_and_strict(monkeypatch):
     cutover_day = date(2026, 8, 31)
     cutover = _cutover_utc(cutover_day)

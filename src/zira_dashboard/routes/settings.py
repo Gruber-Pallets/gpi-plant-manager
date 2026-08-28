@@ -219,6 +219,7 @@ def _attendance_location_context() -> dict:
     )
     return {
         "mode": config.mode,
+        "live_active": attendance_location_policy.live_is_active(),
         "cutover_at": cutover_local,
         "cutover_local_input": (
             cutover_local.strftime("%Y-%m-%dT%H:%M") if cutover_local else ""
@@ -589,6 +590,11 @@ async def settings_save_attendance_location(request: Request):
         return _attendance_location_error(
             request, "invalid_rollout_mode", status_code=422
         )
+    live_active = attendance_location_policy.live_is_active()
+    if mode == "off" and live_active:
+        return _attendance_location_error(
+            request, "rollback_boundary_required", status_code=422
+        )
 
     cutover_at = None
     raw_cutover = (form.get("cutover_at") or "").strip()
@@ -605,14 +611,13 @@ async def settings_save_attendance_location(request: Request):
                 request, "cutover_invalid", status_code=422
             )
 
-    current_config = attendance_location_policy.get_rollout_config()
     rollback_gate = None
-    if mode == "shadow" and attendance_location_policy.live_is_active():
+    if mode == "shadow" and live_active:
         if cutover_at is None:
             return _attendance_location_error(
                 request, "rollback_boundary_required", status_code=422
             )
-        rollback_gate = current_config.live_gate
+        rollback_gate = attendance_location_policy.get_rollout_config().live_gate
 
     config = attendance_location_policy.RolloutConfig(
         mode=mode,

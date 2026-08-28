@@ -526,11 +526,14 @@
       <form method="post" action="/settings/attendance-location" style="margin-top:1rem">
         <label>Rollout mode
           <select name="rollout_mode" {% if not can_manage_attendance_location %}disabled{% endif %}>
-            <option value="off" {% if attendance_location.mode == 'off' %}selected{% endif %}>Off</option>
+            <option value="off" {% if attendance_location.mode == 'off' %}selected{% endif %} {% if attendance_location.live_active %}disabled{% endif %}>Off</option>
             <option value="shadow" {% if attendance_location.mode == 'shadow' %}selected{% endif %}>Shadow</option>
             <option value="live" {% if attendance_location.mode == 'live' %}selected{% endif %} disabled>Live — readiness check required</option>
           </select>
         </label>
+        {% if attendance_location.live_active %}
+          <p class="help">Live rules are active. To turn them back safely, choose Shadow and set a future workday boundary. Off stays unavailable until then.</p>
+        {% endif %}
         <label>Cutover at the local workday boundary
           <input type="datetime-local" name="cutover_at"
                  value="{{ attendance_location.cutover_local_input }}"

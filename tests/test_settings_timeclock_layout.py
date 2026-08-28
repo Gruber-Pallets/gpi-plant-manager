@@ -211,6 +211,31 @@ def test_attendance_location_settings_section_has_health_and_policy_contract():
     assert "Last full sweep" in html
 
 
+def test_active_live_settings_ui_disables_off_and_explains_shadow_rollback(
+    monkeypatch,
+):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    monkeypatch.setattr(
+        policy,
+        "get_rollout_config",
+        lambda: policy.RolloutConfig(mode="live", cutover_at=None, live_gate=None),
+    )
+    monkeypatch.setattr(policy, "live_is_active", lambda: True)
+    monkeypatch.setattr(settings.db, "query", lambda *_args, **_kwargs: [])
+
+    context = settings._attendance_location_context()
+    html = Path("src/zira_dashboard/templates/settings.html").read_text()
+
+    assert context["live_active"] is True
+    assert (
+        'value="off" {% if attendance_location.mode == \'off\' %}selected{% endif %} '
+        "{% if attendance_location.live_active %}disabled{% endif %}"
+    ) in html
+    assert "choose Shadow and set a future workday boundary" in html
+
+
 def test_attendance_location_save_is_super_admin_only(monkeypatch):
     from zira_dashboard.routes import settings
 
@@ -339,6 +364,72 @@ def test_attendance_location_route_rejects_midday_rollback(monkeypatch):
 
     assert response.status_code == 422
     assert response.body == b'{"ok":false,"error":"cutover_boundary_required"}'
+
+
+def test_attendance_location_route_rejects_active_live_off_without_any_write(
+    monkeypatch,
+):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    activated_at = datetime(2026, 8, 31, 12, tzinfo=timezone.utc)
+    original = {
+        "mode": "live",
+        "cutover_at": activated_at.isoformat(),
+        "live_gate": {
+            "checked_at": (activated_at - timedelta(minutes=1)).isoformat(),
+            "report_digest": "b617a1c0" * 8,
+            "activated_at": activated_at.isoformat(),
+        },
+    }
+    stored = {"value": original}
+    cursor_entries = []
+    department_writes = []
+
+    @contextmanager
+    def cursor():
+        cursor_entries.append(True)
+        yield object()
+
+    monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
+    monkeypatch.setattr(settings.db, "cursor", cursor)
+    monkeypatch.setattr(policy.app_settings, "get_setting", lambda _key: stored["value"])
+    monkeypatch.setattr(
+        policy.app_settings,
+        "set_setting",
+        lambda _key, value, *, cur=None: stored.update(value=value),
+    )
+    monkeypatch.setattr(policy, "_utc_now", lambda: activated_at + timedelta(hours=1))
+    monkeypatch.setattr(
+        settings.work_centers_store,
+        "synced_departments",
+        lambda: ["Assembly"],
+    )
+    monkeypatch.setattr(
+        policy,
+        "set_department_requirement",
+        lambda name, required, *, cur=None: department_writes.append(
+            (name, required)
+        ),
+    )
+
+    response = asyncio.run(
+        settings.settings_save_attendance_location(
+            _FormRequest(
+                {
+                    "rollout_mode": "off",
+                    "departments_present": "1",
+                    "department_requires_work_center": ["Assembly"],
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.body == b'{"ok":false,"error":"rollback_boundary_required"}'
+    assert stored["value"] is original
+    assert cursor_entries == []
+    assert department_writes == []
 
 
 def test_attendance_location_save_updates_shadow_and_department_choices(monkeypatch):

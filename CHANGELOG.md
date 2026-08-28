@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Live rules wait for a new workday
+
+- **Live work-area rules cannot turn off in the middle of a workday.** Choose Shadow and a future workday start instead. This keeps today's work from changing halfway through the day.
+
 ### Work area settings stay safe
 
 - **Work-area settings now change all at once or not at all.** New maintenance and supervisor teams get the right choice, and a future switch away from live rules waits for a new workday. The new rules are still turned off.

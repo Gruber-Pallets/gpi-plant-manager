@@ -124,6 +124,8 @@ def set_rollout_config(config: RolloutConfig, *, cur=None) -> None:
     """
     if config.mode not in ("off", "shadow", "live"):
         raise ValueError("invalid_rollout_mode")
+    if config.mode == "off" and live_is_active():
+        raise ValueError("rollback_boundary_required")
     if config.cutover_at is not None:
         _validate_cutover(config.cutover_at)
     if config.mode == "live":
