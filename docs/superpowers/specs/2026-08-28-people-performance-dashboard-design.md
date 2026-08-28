@@ -1,7 +1,7 @@
 # People Performance Manager Dashboard Design
 
 **Date:** 2026-08-28
-**Status:** Approved through brainstorming; awaiting written-spec review
+**Status:** Approved; implementation plan ready
 
 ## Goal
 
