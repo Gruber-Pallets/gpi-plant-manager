@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Worker times fit in one short bar
+
+- **Production bars now keep each person's work time in one normal-size bar.** Point to, select, or tap a section to see the person's name, time, goal, and result without filling the screen with extra lines.
+
 ### Missed-day PTO checks are ready
 
 - **Plant Manager can now tell which missed days may use PTO.** It checks the worker, pay period, PTO kind, and balance. The new choice is not on the time clock yet.

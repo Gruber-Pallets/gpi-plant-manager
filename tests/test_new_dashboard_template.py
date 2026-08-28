@@ -197,6 +197,7 @@ def test_new_keeps_shared_dashboard_surfaces_and_refresh_behavior():
         'include "_performance_subnav.html"',
         'include "_goat_watch_banner.html"',
         '/static/assign-popover.js',
+        '/static/worker-stint-popover.js',
         '/static/tv-refresh.js',
         "include '_footer.html'",
     ):
@@ -251,18 +252,22 @@ def test_new_empty_state_distinguishes_unconfigured_meters_from_no_readings():
     assert "No readings received" in offline
 
 
-def test_new_horizontal_bar_renders_worker_segments_and_finish_states():
+def test_new_horizontal_bar_keeps_segments_and_moves_details_to_hitareas():
     html = _render_new(new_bars=[_segmented_bar()])
+
     assert 'class="worker-segment-fill result-behind"' in html
     assert 'class="worker-segment-shortfall"' in html
     assert 'class="worker-segment-goal completed"' in html
     assert 'class="worker-segment-goal live"' in html
-    assert "Humberto S." in html and "7a-2:33p" in html
-    assert "Ana M." in html and "since 2:35p" in html
-    assert "184 behind" in html and "7 ahead" in html
-    assert 'class="worker-segment-result"' in html
-    assert "516/700" in html and "32/25" in html
-    assert "No one here now" in html
+    assert html.count('type="button" class="worker-stint-hitarea') == 2
+    assert 'class="worker-stint-hitarea has-boundary"' in html
+    assert 'style="left:0.0%;width:80.0%"' in html
+    assert 'style="left:80.0%;width:15.0%"' in html
+    assert 'aria-label="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
+    assert 'title="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
+    assert 'aria-label="Ana M. · since 2:35p · 32/25 · 7 ahead"' in html
+    assert 'class="worker-segment-name"' not in html
+    assert 'class="worker-segment-labels"' not in html
     assert 'class="bar-target-line"' not in html
 
 
@@ -272,16 +277,17 @@ def test_stopped_sole_producer_name_is_left_while_finish_marker_stays_in_bar():
     assert '<span class="name-primary">Humberto S.</span>' in html
     assert '<span class="name-secondary">Repair 4</span>' in html
     assert 'class="worker-segment-goal completed"' in html
-    assert "7a-2:33p" in html and "516/700" in html and "184 behind" in html
+    assert 'aria-label="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
     assert '<span class="worker-segment-person">Humberto S.</span>' not in html
     assert "No one here now" not in html
 
 
-def test_multiple_producers_keep_each_name_inside_horizontal_bar():
+def test_multiple_producer_details_are_accessible_but_not_always_visible():
     html = _render_new(new_bars=[_segmented_bar()])
 
-    assert '<span class="worker-segment-person">Humberto S.</span>' in html
-    assert '<span class="worker-segment-person">Ana M.</span>' in html
+    assert 'aria-label="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
+    assert 'aria-label="Ana M. · since 2:35p · 32/25 · 7 ahead"' in html
+    assert '<span class="worker-segment-person">' not in html
     assert '<span class="name-primary">Humberto S.</span>' not in html
     assert '<span class="name-primary">Ana M.</span>' not in html
 
@@ -293,8 +299,8 @@ def test_active_multi_producer_row_identifies_work_center_on_left():
     html = _render_new(new_bars=[bar])
 
     assert '<span class="name-primary">Repair 4</span>' in html
-    assert '<span class="worker-segment-person">Humberto S.</span>' in html
-    assert '<span class="worker-segment-person">Ana M.</span>' in html
+    assert 'aria-label="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
+    assert 'aria-label="Ana M. · since 2:35p · 32/25 · 7 ahead"' in html
     assert '<span class="name-primary">Ana M.</span>' not in html
 
 
@@ -302,8 +308,26 @@ def test_vacant_multi_producer_row_keeps_empty_status_on_left():
     html = _render_new(new_bars=[_segmented_bar()])
 
     assert '<span class="name-primary current-empty">No one here now</span>' in html
-    assert '<span class="worker-segment-person">Humberto S.</span>' in html
-    assert '<span class="worker-segment-person">Ana M.</span>' in html
+    assert 'aria-label="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
+    assert 'aria-label="Ana M. · since 2:35p · 32/25 · 7 ahead"' in html
+
+
+def test_unassigned_stint_uses_a_neutral_accessible_name():
+    bar = _segmented_bar()
+    bar["segments"][1].update(
+        person_name=None,
+        person_label="Unassigned production",
+        result="neutral",
+        result_label="unassigned",
+    )
+
+    html = _render_new(new_bars=[bar])
+
+    assert (
+        'aria-label="Unassigned production · since 2:35p · 32/25 · unassigned"'
+        in html
+    )
+    assert '<span class="worker-segment-person">Unassigned production</span>' not in html
 
 
 def test_vertical_and_tv_views_keep_sole_producer_left_without_duplication():
@@ -316,8 +340,8 @@ def test_vertical_and_tv_views_keep_sole_producer_left_without_duplication():
     for html in (vertical, tv):
         assert '<span class="name-primary">Humberto S.</span>' in html
         assert '<span class="worker-segment-person">Humberto S.</span>' not in html
-        assert "7a-2:33p" in html and "516/700" in html
-        assert 'worker-segment-goal completed' in html
+        assert 'aria-label="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
+        assert "worker-segment-goal completed" in html
 
 
 def test_new_segmented_bar_keeps_widget_number_position():
@@ -367,25 +391,41 @@ def test_new_tv_uninterrupted_worker_keeps_legacy_bar():
     assert "Jesus G." in html
 
 
-def test_new_tv_keeps_full_worker_text_visible_in_shared_markup():
+def test_new_tv_keeps_worker_details_available_without_visible_detail_rows():
     html = _render_new(tv_mode=True, new_bars=[_segmented_bar()])
-    assert "Humberto S." in html and "7a-2:33p" in html
-    assert "516/700" in html and "184 behind" in html
-    assert "Ana M." in html and "32/25" in html and "7 ahead" in html
+
+    assert 'aria-label="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
+    assert 'aria-label="Ana M. · since 2:35p · 32/25 · 7 ahead"' in html
+    assert 'class="worker-segment-name"' not in html
+    assert 'class="worker-segment-labels"' not in html
 
 
-def test_new_vertical_bar_renders_segment_blocks_finish_markers_and_visible_list():
+def test_new_vertical_bar_keeps_geometry_without_visible_worker_list():
     html = _render_new(
         customs={"new-bars": {"orientation": "vertical"}},
         new_bars=[_segmented_bar()],
     )
+
     assert 'class="vworker-segment-fill result-behind"' in html
     assert 'class="vworker-segment-shortfall"' in html
     assert 'class="vworker-segment-goal completed"' in html
     assert 'class="vworker-segment-goal live"' in html
-    assert 'class="vworker-segment-list"' in html
-    assert "Humberto S." in html and "184 behind" in html
-    assert "Ana M." in html and "7 ahead" in html
+    assert html.count('type="button" class="vworker-stint-hitarea') == 2
+    assert 'class="vworker-stint-hitarea has-boundary"' in html
+    assert 'aria-label="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
+    assert 'aria-label="Ana M. · since 2:35p · 32/25 · 7 ahead"' in html
+    assert 'class="vworker-segment-list"' not in html
+
+
+def test_recycling_and_new_load_worker_stint_details_in_screen_and_tv_modes():
+    recycling = (
+        ROOT / "src/zira_dashboard/templates/recycling.html"
+    ).read_text(encoding="utf-8")
+    new_source = _html()
+    new_tv = _render_new(tv_mode=True, new_bars=[_segmented_bar()])
+
+    for html in (recycling, new_source, new_tv):
+        assert "/static/worker-stint-popover.js" in html
 
 
 def test_new_completed_shift_keeps_history_without_no_assignment_wording():

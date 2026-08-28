@@ -41,6 +41,14 @@
                        style="bottom:{{ s.finish_pct }}%"
                        title="{{ 'Goal now' if s.is_active else 'Finish goal' }} {{ s.goal_units|round|int }}"></div>
                 {% endif %}
+                {% set runway_pct = s.actual_pct + s.shortfall_pct %}
+                {% if runway_pct > 0 %}
+                  <button type="button" class="vworker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}"
+                          style="bottom:{{ s.start_pct }}%;height:{{ runway_pct }}%"
+                          data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                          aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                          title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
+                {% endif %}
               {% endfor %}
               {% if numpos == 'inside' %}<span class="vsegment-total in">{{ b.units }}</span>{% endif %}
               {% if numpos == 'bar' %}<span class="vsegment-total edge">{{ b.units }}</span>{% endif %}
@@ -80,18 +88,6 @@
               {% endif %}
             {% endif %}
           </div>
-          {% if b.has_segments %}
-            <div class="vworker-segment-list">
-              {% for s in b.segments %}
-                <span class="result-{{ s.result }}">
-                  {% if b.show_segment_worker_names or not s.person_name %}
-                    <span class="worker-segment-person">{{ s.person_label }}</span> ·
-                  {% endif %}
-                  {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
-                </span>
-              {% endfor %}
-            </div>
-          {% endif %}
         </div>
       {% endfor %}
     </div>
@@ -133,18 +129,7 @@
               {% if s.actual_pct > 0 %}
                 <div class="worker-segment-fill result-{{ s.result }}"
                      style="left:{{ s.start_pct }}%;width:{{ s.actual_pct }}%"
-                     title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }} / {{ s.goal_units|round|int }} · {{ s.result_label }}">
-                  {% if not s.label_below %}
-                    <span class="worker-segment-name">
-                      {% if b.show_segment_worker_names or not s.person_name %}
-                        <span class="worker-segment-person">{{ s.person_label }}</span>
-                      {% endif %}
-                      <small class="worker-segment-result">
-                        {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
-                      </small>
-                    </span>
-                  {% endif %}
-                </div>
+                     aria-hidden="true"></div>
               {% endif %}
               {% if s.shortfall_pct > 0 %}
                 <div class="worker-segment-shortfall"
@@ -155,6 +140,14 @@
                 <div class="worker-segment-goal {{ 'live' if s.is_active else 'completed' }}"
                      style="left:{{ s.finish_pct }}%"
                      title="{{ 'Goal now' if s.is_active else 'Finish goal' }} {{ s.goal_units|round|int }}"></div>
+              {% endif %}
+              {% set runway_pct = s.actual_pct + s.shortfall_pct %}
+              {% if runway_pct > 0 %}
+                <button type="button" class="worker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}"
+                        style="left:{{ s.start_pct }}%;width:{{ runway_pct }}%"
+                        data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                        aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                        title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
               {% endif %}
             {% endfor %}
             {% if numpos == 'inside' %}<span class="segment-total in">{{ b.units }}</span>{% endif %}
@@ -167,18 +160,6 @@
             {% if b.target_pct is not none %}<div class="bar-target-line" style="left: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
           {% endif %}
         </div>
-        {% if b.has_segments %}
-          <div class="worker-segment-labels">
-            {% for s in b.segments if s.label_below %}
-              <span class="worker-segment-callout result-{{ s.result }}">
-                {% if b.show_segment_worker_names or not s.person_name %}
-                  <span class="worker-segment-person">{{ s.person_label }}</span> ·
-                {% endif %}
-                {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}
-              </span>
-            {% endfor %}
-          </div>
-        {% endif %}
         {% if numpos == 'widget' %}<div class="val">{{ b.units }}{% if b.expected %}<span class="pct">/{{ b.expected }}</span>{% endif %}</div>{% endif %}
       </div>
     {% endfor %}
