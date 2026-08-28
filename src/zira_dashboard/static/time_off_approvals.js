@@ -118,13 +118,21 @@
     if (!row) return;
     var id = encodeURIComponent(row.dataset.requestId || '');
     if (!id) return;
+    var base = row.dataset.actionBase || ('/api/exceptions/time-off/' + id);
 
     if (btn.classList.contains('js-approve')) {
       busy(row, true);
       status(row, 'Approving...', false);
-      postJson('/api/exceptions/time-off/' + id + '/approve', {source: 'page'})
+      postJson(base + '/approve', {source: 'page'})
         .then(function (resp) {
-          if (resp && resp.ok && resp.approved === false) {
+          if (row.dataset.requestKind === 'absence_pto' && resp && resp.status === 'needs_review') {
+            busy(row, false);
+            status(row, resp.warning || resp.error || 'This needs payroll review.', false);
+            setTimeout(function () { window.location.reload(); }, 600);
+          } else if (row.dataset.requestKind === 'absence_pto' && resp && resp.status === 'pending') {
+            busy(row, false);
+            status(row, resp.warning || resp.error || 'Approval is still pending.', true);
+          } else if (resp && resp.ok && resp.approved === false) {
             status(row, 'Moved forward; refreshing...', false);
             setTimeout(function () { window.location.reload(); }, 600);
           } else if (resp && resp.ok) {
@@ -159,7 +167,7 @@
       }
       busy(row, true);
       status(row, 'Denying...', false);
-      postJson('/api/exceptions/time-off/' + id + '/refuse', {
+      postJson(base + (row.dataset.requestKind === 'absence_pto' ? '/deny' : '/refuse'), {
         reason: reason,
         source: 'page',
       }).then(function (resp) {
@@ -174,6 +182,37 @@
         busy(row, false);
         status(row, 'Network error.', true);
       });
+      return;
+    }
+
+    if (btn.classList.contains('js-handled')) {
+      var noteInput = row.querySelector('.js-handled-note');
+      if (noteInput && noteInput.hidden) {
+        noteInput.hidden = false;
+        noteInput.focus();
+        status(row, 'Add a note, then Mark handled again.', false);
+        return;
+      }
+      var note = noteInput ? noteInput.value.trim() : '';
+      if (!note) {
+        status(row, 'A note is required to mark this handled.', true);
+        if (noteInput) noteInput.focus();
+        return;
+      }
+      busy(row, true);
+      status(row, 'Saving...', false);
+      postJson(base + '/handled', {note: note, source: 'page'})
+        .then(function (resp) {
+          if (resp && resp.ok) {
+            done(row, resp.message || 'Marked handled');
+          } else {
+            busy(row, false);
+            status(row, (resp && (resp.warning || resp.error)) || 'Could not mark handled.', true);
+          }
+        }).catch(function () {
+          busy(row, false);
+          status(row, 'Network error.', true);
+        });
     }
   });
 
@@ -181,9 +220,14 @@
     if (event.key !== 'Enter') return;
     if (!event.target || !event.target.closest) return;
     var input = event.target.closest('.js-reason');
+    if (!input || input.hidden) {
+      input = event.target.closest('.js-handled-note');
+    }
     if (!input || input.hidden) return;
     var row = input.closest('.exception-row');
-    var btn = row && row.querySelector('.js-refuse');
+    var btn = row && row.querySelector(
+      input.classList.contains('js-handled-note') ? '.js-handled' : '.js-refuse'
+    );
     if (!btn || btn.disabled) return;
     event.preventDefault();
     btn.click();

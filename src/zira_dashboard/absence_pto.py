@@ -7,9 +7,11 @@ Employee submissions remain local until the separate manager workflow acts.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
+import logging
 from typing import Final
+from uuid import uuid4
 
 from psycopg2.errors import UniqueViolation
 
@@ -23,10 +25,19 @@ _ACTIVE_UNIQUE_INDEX: Final = "absence_pto_requests_active_uniq"
 _DUPLICATE_MESSAGE: Final = "A PTO request already exists for this absence."
 _TYPE_MESSAGE: Final = "Paid Time Off is not available right now."
 _BALANCE_MESSAGE: Final = "Your PTO balance is not available right now."
+_log = logging.getLogger(__name__)
+
+
+def _clock() -> datetime:
+    return datetime.now(UTC)
 
 
 class SubmissionError(ValueError):
     """The requested absence is not currently eligible for PTO."""
+
+
+class DecisionError(ValueError):
+    """A manager action cannot safely change this linked request."""
 
 
 @dataclass(frozen=True)
@@ -194,3 +205,59 @@ def employee_requests(
 ) -> list[absence_pto_store.AbsencePtoRequest]:
     """Return linked request history for the authenticated Odoo employee."""
     return absence_pto_store.list_for_person(str(person_odoo_id))
+
+
+def deny(
+    request_id: int,
+    actor_upn: str | None,
+    actor_name: str | None,
+    reason: str,
+    source: str | None = None,
+    now: datetime | None = None,
+) -> absence_pto_store.AbsencePtoRequest:
+    """Deny one pending pay-treatment request without touching Odoo."""
+    safe_reason = (reason or "").strip()
+    if not safe_reason:
+        raise DecisionError("A reason is required to deny.")
+    workflow_now = _clock() if now is None else now
+    if workflow_now.tzinfo is None or workflow_now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    owner = uuid4()
+    lease_now = _clock()
+    request = absence_pto_store.claim_request(
+        request_id, owner, lease_now, lease_seconds=120
+    )
+    if request is None:
+        raise DecisionError("This request is already being checked.")
+    try:
+        if request.state == "denied":
+            return request
+        if request.state != "pending":
+            raise DecisionError("Only a pending past PTO request can be denied.")
+        return absence_pto_store.finalize_denied(
+            request_id,
+            owner,
+            actor_upn=actor_upn,
+            actor_name=actor_name,
+            reason=safe_reason,
+            source=source,
+            workflow_now=workflow_now,
+            lease_now=_clock(),
+        )
+    finally:
+        try:
+            released = absence_pto_store.release_claim(
+                request_id, owner, now=_clock()
+            )
+            if not released:
+                _log.warning(
+                    "absence PTO denial could not confirm claim release for %s",
+                    request_id,
+                )
+        except Exception as error:  # noqa: BLE001 - preserve primary/committed result
+            _log.warning(
+                "absence PTO denial claim release failed for %s: %s",
+                request_id,
+                error,
+                exc_info=True,
+            )
