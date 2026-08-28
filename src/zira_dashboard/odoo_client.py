@@ -23,8 +23,8 @@ import threading
 import time
 import xmlrpc.client
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Mapping, Sequence
 
 from . import (
     _odoo_attendance,
@@ -503,6 +503,63 @@ def fetch_open_attendances() -> list[dict]:
     )
 
 
+def fetch_attendance_changes(
+    *,
+    after_write_date: datetime | None,
+    after_id: int | None,
+    overlap: timedelta = timedelta(minutes=2),
+    page_size: int = 250,
+) -> list[dict]:
+    return _odoo_attendance.fetch_attendance_changes(
+        execute,
+        _kiosk_wc_field(),
+        _kiosk_department_field(),
+        after_write_date=after_write_date,
+        after_id=after_id,
+        overlap=overlap,
+        page_size=page_size,
+    )
+
+
+def fetch_open_attendance_rows(*, page_size: int = 250) -> list[dict]:
+    return _odoo_attendance.fetch_open_attendance_rows(
+        execute,
+        _kiosk_wc_field(),
+        _kiosk_department_field(),
+        page_size=page_size,
+    )
+
+
+def fetch_all_attendance_ids(*, page_size: int = 500) -> list[int]:
+    return _odoo_attendance.fetch_all_attendance_ids(
+        execute, page_size=page_size
+    )
+
+
+def fetch_attendance_rows_by_ids(ids: Sequence[int]) -> list[dict]:
+    return _odoo_attendance.fetch_attendance_rows_by_ids(
+        execute,
+        _kiosk_wc_field(),
+        _kiosk_department_field(),
+        ids,
+    )
+
+
+def fetch_employee_attendance_rows(
+    employee_odoo_id: int,
+    start_utc: datetime,
+    end_utc: datetime | None,
+) -> list[dict]:
+    return _odoo_attendance.fetch_employee_attendance_rows(
+        execute,
+        _kiosk_wc_field(),
+        _kiosk_department_field(),
+        employee_odoo_id,
+        start_utc,
+        end_utc,
+    )
+
+
 def fetch_attendances_for_day(day) -> list[dict]:
     return _odoo_attendance.fetch_attendances_for_day(execute, day)
 
@@ -580,6 +637,176 @@ def delete_attendances(attendance_ids: list[int]) -> None:
     if not attendance_ids:
         return
     execute("hr.attendance", "unlink", list(attendance_ids))
+
+
+def _require_attendance_correction_wc_field() -> str:
+    wc_field = _kiosk_wc_field()
+    if not wc_field:
+        raise OdooConfigError(
+            "Odoo attendance correction requires a configured work-center field"
+        )
+    return wc_field
+
+
+def create_attendance_interval(
+    *,
+    employee_odoo_id: int,
+    check_in_utc: datetime,
+    check_out_utc: datetime | None,
+    odoo_work_center_id: int,
+    odoo_department_id: int | None,
+) -> int:
+    """Create one exact correction interval using configured Odoo fields."""
+    wc_field = _require_attendance_correction_wc_field()
+    payload: dict[str, object] = {
+        "employee_id": int(employee_odoo_id),
+        "check_in": _to_odoo_dt(check_in_utc),
+        wc_field: int(odoo_work_center_id),
+    }
+    if check_out_utc is not None:
+        payload["check_out"] = _to_odoo_dt(check_out_utc)
+    if odoo_department_id is not None:
+        department_field = _kiosk_department_field()
+        if not department_field:
+            raise OdooConfigError(
+                "Odoo attendance correction requires a configured department field"
+            )
+        payload[department_field] = int(odoo_department_id)
+    attendance_id = execute("hr.attendance", "create", payload)
+    if not attendance_id:
+        raise RuntimeError("Odoo did not create the attendance interval")
+    return int(attendance_id)
+
+
+def _attendance_update_payload(values: Mapping[str, object]) -> dict[str, object]:
+    wc_field = _require_attendance_correction_wc_field()
+    department_field = _kiosk_department_field()
+    payload: dict[str, object] = {}
+    for key, value in values.items():
+        if key in {"check_in", "check_in_utc"}:
+            payload["check_in"] = (
+                _to_odoo_dt(value) if isinstance(value, datetime) else value
+            )
+        elif key in {"check_out", "check_out_utc"}:
+            payload["check_out"] = (
+                _to_odoo_dt(value)
+                if isinstance(value, datetime)
+                else False if value is None else value
+            )
+        elif key == "employee_odoo_id":
+            payload["employee_id"] = int(value)
+        elif key == "odoo_work_center_id":
+            payload[wc_field] = int(value)
+        elif key == "odoo_department_id":
+            if not department_field:
+                raise OdooConfigError(
+                    "Odoo attendance correction requires a configured department field"
+                )
+            payload[department_field] = False if value is None else int(value)
+        else:
+            payload[key] = value
+    return payload
+
+
+def update_attendance_interval(
+    attendance_id: int, *, values: Mapping[str, object]
+) -> None:
+    """Update one correction interval, translating canonical field aliases."""
+    payload = _attendance_update_payload(values)
+    if not payload:
+        return
+    if not execute("hr.attendance", "write", [int(attendance_id)], payload):
+        raise RuntimeError(f"Odoo did not update attendance {attendance_id}")
+
+
+def delete_attendance_interval(attendance_id: int) -> None:
+    """Delete one attendance interval used by a correction workflow."""
+    _require_attendance_correction_wc_field()
+    if not execute("hr.attendance", "unlink", [int(attendance_id)]):
+        raise RuntimeError(f"Odoo did not delete attendance {attendance_id}")
+
+
+def set_attendance_department_id(attendance_id: int, department_id: int) -> None:
+    """Set the configured attendance department without exposing its name."""
+    _require_attendance_correction_wc_field()
+    department_field = _kiosk_department_field()
+    if not department_field:
+        raise OdooConfigError(
+            "Odoo attendance correction requires a configured department field"
+        )
+    if not execute(
+        "hr.attendance",
+        "write",
+        [int(attendance_id)],
+        {department_field: int(department_id)},
+    ):
+        raise RuntimeError(
+            f"Odoo did not update attendance department {attendance_id}"
+        )
+
+
+def close_all_open_attendance_rows(
+    employee_odoo_id: int, check_out_utc: datetime
+) -> tuple[int, ...]:
+    """Close and verify every open row, leaving partial work safe to retry."""
+    wc_field = _kiosk_wc_field()
+    department_field = _kiosk_department_field()
+    open_rows = _odoo_attendance.fetch_open_attendance_rows_for_employee(
+        execute,
+        wc_field,
+        department_field,
+        employee_odoo_id,
+    )
+    attendance_ids = tuple(
+        int(row["odoo_attendance_id"]) for row in open_rows
+    )
+    if not attendance_ids:
+        return ()
+    check_out_value = _to_odoo_dt(check_out_utc)
+    for attendance_id in attendance_ids:
+        if not execute(
+            "hr.attendance",
+            "write",
+            [attendance_id],
+            {"check_out": check_out_value, "out_mode": "kiosk"},
+        ):
+            raise RuntimeError(f"Odoo did not close attendance {attendance_id}")
+    verified = _odoo_attendance.fetch_attendance_rows_by_ids(
+        execute,
+        wc_field,
+        department_field,
+        attendance_ids,
+    )
+    expected_check_out = _odoo_attendance._parse_odoo_datetime(check_out_utc)
+    verified_by_id = {
+        int(row["odoo_attendance_id"]): row for row in verified
+    }
+    unverified = [
+        attendance_id
+        for attendance_id in attendance_ids
+        if verified_by_id.get(attendance_id, {}).get("check_out_utc")
+        != expected_check_out
+    ]
+    if unverified:
+        raise RuntimeError(
+            "Odoo attendance rows did not verify closed: "
+            + ", ".join(str(attendance_id) for attendance_id in unverified)
+        )
+    remaining_open = _odoo_attendance.fetch_open_attendance_rows_for_employee(
+        execute,
+        wc_field,
+        department_field,
+        employee_odoo_id,
+    )
+    if remaining_open:
+        remaining_ids = sorted(
+            int(row["odoo_attendance_id"]) for row in remaining_open
+        )
+        raise RuntimeError(
+            "Odoo employee still has open rows: "
+            + ", ".join(str(attendance_id) for attendance_id in remaining_ids)
+        )
+    return attendance_ids
 
 
 def _overtime_status_for_attendance(attendance_id: int) -> str:
