@@ -12,7 +12,7 @@ import xmlrpc.client
 
 from . import absence_pto_conversion as conversion
 from . import absence_pto_store as store
-from . import odoo_client, schedule_store, shift_config, staffing_hours
+from . import odoo_client, shift_config, staffing_hours
 from .plant_day import today as plant_today
 
 
@@ -24,6 +24,8 @@ _DUPLICATE_PROJECT_ERROR = "More than one active exact Plant Manager project exi
 _POLL_INTERVAL = timedelta(minutes=15)
 _RETRY_DELAYS = (60, 300, 900, 3600)
 _MAX_ATTEMPTS = 10
+# Two months is deliberately bounded while covering long planned shutdowns.
+_BUSINESS_DAY_SEARCH_DAYS = 62
 _log = logging.getLogger(__name__)
 
 
@@ -82,19 +84,19 @@ def _required_text(value: object, field: str) -> str:
 
 def _next_business_day(day: date) -> date:
     candidate = day + timedelta(days=1)
-    for _ in range(14):
+    for _ in range(_BUSINESS_DAY_SEARCH_DAYS):
         try:
             if shift_config.is_workday(candidate):
                 return candidate
-        except Exception:
-            try:
-                weekdays = schedule_store.current().work_weekdays
-            except Exception:
-                weekdays = frozenset()
-            if candidate.weekday() in (weekdays or frozenset({0, 1, 2, 3, 4})):
-                return candidate
+        except Exception as error:
+            raise ReviewDeliveryError(
+                "The configured plant calendar is unavailable."
+            ) from error
         candidate += timedelta(days=1)
-    return day + timedelta(days=1)
+    raise PermanentReviewDeliveryError(
+        f"No configured plant business day exists in the next "
+        f"{_BUSINESS_DAY_SEARCH_DAYS} days."
+    )
 
 
 def task_name(row: store.AbsencePtoRequest) -> str:
@@ -150,9 +152,10 @@ def _save_retry(
     owner: UUID,
     error: Exception,
     *,
+    workflow_now: datetime,
     permanent: bool = False,
 ) -> store.AbsencePtoRequest:
-    current = _lease_now()
+    current = _now(workflow_now)
     attempts = min(row.task_attempts + 1, _MAX_ATTEMPTS)
     if permanent or attempts >= _MAX_ATTEMPTS:
         next_at = datetime.max.replace(tzinfo=UTC)
@@ -166,14 +169,17 @@ def _save_retry(
         attempts=attempts,
         next_at=next_at,
         error=_delivery_error(row, error),
-        now=current,
+        now=_lease_now(),
     )
 
 
 def _save_task_id(
-    row: store.AbsencePtoRequest, owner: UUID, task_id: int
+    row: store.AbsencePtoRequest,
+    owner: UUID,
+    task_id: int,
+    workflow_now: datetime,
 ) -> store.AbsencePtoRequest:
-    current = _lease_now()
+    current = _now(workflow_now)
     return store.save_task_delivery(
         row.id,
         owner,
@@ -181,14 +187,14 @@ def _save_task_id(
         attempts=row.task_attempts,
         next_at=current + _POLL_INTERVAL,
         error=_stop_reason(row.sync_error),
-        now=current,
+        now=_lease_now(),
     )
 
 
 def _save_delivery_success(
-    row: store.AbsencePtoRequest, owner: UUID
+    row: store.AbsencePtoRequest, owner: UUID, workflow_now: datetime
 ) -> store.AbsencePtoRequest:
-    current = _lease_now()
+    current = _now(workflow_now)
     return store.save_task_delivery(
         row.id,
         owner,
@@ -196,7 +202,7 @@ def _save_delivery_success(
         attempts=0,
         next_at=current + _POLL_INTERVAL,
         error=_stop_reason(row.sync_error),
-        now=current,
+        now=_lease_now(),
     )
 
 
@@ -299,23 +305,27 @@ def _create_task(
 
 
 def _sync_claimed_task(
-    row: store.AbsencePtoRequest, owner: UUID
+    row: store.AbsencePtoRequest,
+    owner: UUID,
+    workflow_now: datetime | None = None,
 ) -> Literal["escalated", "failed"]:
     """Create/adopt/update one task while a caller owns the durable row lease."""
     if row.state != "needs_review":
         return "failed"
+    current = _now(workflow_now)
     if row.task_attempts >= _MAX_ATTEMPTS:
         if row.task_next_at != datetime.max.replace(tzinfo=UTC):
             _save_retry(
                 row,
                 owner,
                 PermanentReviewDeliveryError("Maximum task delivery attempts reached."),
+                workflow_now=current,
                 permanent=True,
             )
         return "escalated"
     try:
         wendy_uid = _wendy_uid()
-        deadline = _next_business_day(plant_today(_lease_now())).isoformat()
+        deadline = _next_business_day(plant_today(current)).isoformat()
         name = task_name(row)
         project_id = _exact_project_id()
         task_ids = _exact_task_ids(project_id, name)
@@ -344,7 +354,7 @@ def _sync_claimed_task(
                 deadline=deadline,
             )
         # Save immediately after verified creation/adoption, before any later call.
-        row = _save_task_id(row, owner, int(task_id))
+        row = _save_task_id(row, owner, int(task_id), current)
         _refresh_task(
             row,
             owner,
@@ -354,24 +364,24 @@ def _sync_claimed_task(
             project_id=project_id,
             name=name,
         )
-        _save_delivery_success(row, owner)
+        _save_delivery_success(row, owner, current)
         return "escalated"
     except PermanentReviewDeliveryError as error:
-        _save_retry(row, owner, error, permanent=True)
+        _save_retry(row, owner, error, workflow_now=current, permanent=True)
         return "escalated"
     except Exception as error:  # noqa: BLE001 - remote delivery is durably retried
-        _save_retry(row, owner, error)
+        _save_retry(row, owner, error, workflow_now=current)
         return "escalated"
 
 
 def sync_review_task(request_id: int, now: datetime | None = None) -> ReviewResult:
-    _now(now)
+    current = _now(now)
     owner = uuid4()
     row = store.claim_request(request_id, owner, _lease_now(), lease_seconds=120)
     if row is None:
         return ReviewResult("busy", None, None, "This review is already being checked.")
     try:
-        _sync_claimed_task(row, owner)
+        _sync_claimed_task(row, owner, current)
         saved = store.get_request(request_id)
         if saved is None:
             return ReviewResult("blocked", None, None, "The review request is missing.")
@@ -432,11 +442,22 @@ def _resolution_message(row: store.AbsencePtoRequest) -> str:
 
 
 def _save_resolution_retry(
-    row: store.AbsencePtoRequest, owner: UUID, error: Exception
+    row: store.AbsencePtoRequest,
+    owner: UUID,
+    error: Exception,
+    workflow_now: datetime,
+    *,
+    permanent: bool = False,
 ) -> store.AbsencePtoRequest:
-    current = _lease_now()
-    attempts = row.task_resolution_attempts + 1
-    delay = _RETRY_DELAYS[min(attempts - 1, len(_RETRY_DELAYS) - 1)]
+    current = _now(workflow_now)
+    attempts = (
+        _MAX_ATTEMPTS if permanent else row.task_resolution_attempts + 1
+    )
+    if permanent:
+        next_at = datetime.max.replace(tzinfo=UTC)
+    else:
+        delay = _RETRY_DELAYS[min(attempts - 1, len(_RETRY_DELAYS) - 1)]
+        next_at = current + timedelta(seconds=delay)
     message = " ".join((str(error) or type(error).__name__).split())[:300]
     return store.save_resolution_delivery(
         row.id,
@@ -444,9 +465,9 @@ def _save_resolution_retry(
         expected_step=row.task_resolution_step,
         new_step=row.task_resolution_step,
         attempts=attempts,
-        next_at=current + timedelta(seconds=delay),
+        next_at=next_at,
         error=message,
-        now=current,
+        now=_lease_now(),
     )
 
 
@@ -454,29 +475,36 @@ def _checkpoint_resolution(
     row: store.AbsencePtoRequest,
     owner: UUID,
     new_step: Literal["message_posted", "closed"],
+    workflow_now: datetime,
 ) -> store.AbsencePtoRequest:
+    current = _now(workflow_now)
     return store.save_resolution_delivery(
         row.id,
         owner,
         expected_step=row.task_resolution_step,
         new_step=new_step,
         attempts=0,
-        next_at=None if new_step == "closed" else _lease_now(),
+        next_at=None if new_step == "closed" else current,
         error=None,
         now=_lease_now(),
     )
 
 
 def _deliver_terminal_claimed(
-    row: store.AbsencePtoRequest, owner: UUID
+    row: store.AbsencePtoRequest,
+    owner: UUID,
+    workflow_now: datetime | None = None,
 ) -> Literal["closed", "retry"]:
     """Resume idempotent terminal message/archive delivery from a durable step."""
+    current = _now(workflow_now)
     if row.state not in {"approved", "resolved_manually"}:
         return "retry"
     if row.task_resolution_step == "closed":
         return "closed"
+    if row.task_resolution_next_at == datetime.max.replace(tzinfo=UTC):
+        return "retry"
     if row.odoo_task_id is None:
-        _checkpoint_resolution(row, owner, "closed")
+        _checkpoint_resolution(row, owner, "closed", current)
         return "closed"
 
     try:
@@ -509,10 +537,10 @@ def _deliver_terminal_claimed(
                     )
                     if not messages:
                         raise post_error
-            row = _checkpoint_resolution(row, owner, "message_posted")
+            row = _checkpoint_resolution(row, owner, "message_posted", current)
 
         if not identity["active"]:
-            _checkpoint_resolution(row, owner, "closed")
+            _checkpoint_resolution(row, owner, "closed", current)
             return "closed"
 
         store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
@@ -522,21 +550,32 @@ def _deliver_terminal_claimed(
             after = odoo_client.fetch_feedback_task_identity(row.odoo_task_id)
             if after is None or after.get("active") is not False:
                 raise close_error
-        _checkpoint_resolution(row, owner, "closed")
+        _checkpoint_resolution(row, owner, "closed", current)
         return "closed"
     except store.StaleTransition:
         return "retry"
+    except PermanentReviewDeliveryError as error:
+        try:
+            _save_resolution_retry(
+                row, owner, error, current, permanent=True
+            )
+        except store.StaleTransition:
+            pass
+        return "retry"
     except Exception as error:  # noqa: BLE001 - terminal truth is already committed
         try:
-            _save_resolution_retry(row, owner, error)
+            _save_resolution_retry(row, owner, error, current)
         except store.StaleTransition:
             pass
         return "retry"
 
 
 def _resolve_external_claimed(
-    row: store.AbsencePtoRequest, owner: UUID
+    row: store.AbsencePtoRequest,
+    owner: UUID,
+    workflow_now: datetime | None = None,
 ) -> store.AbsencePtoRequest | None:
+    current = _now(workflow_now)
     pto = _matching_validated_pto(row)
     if pto is None:
         return None
@@ -561,19 +600,19 @@ def _resolve_external_claimed(
         conversion._invalidate_after_commit(approved)
     except Exception:  # noqa: BLE001 - committed truth must not be rolled back
         _log.warning("absence PTO review cache invalidation failed", exc_info=True)
-    _deliver_terminal_claimed(approved, owner)
+    _deliver_terminal_claimed(approved, owner, current)
     return approved
 
 
 def resolve_external_pto(request_id: int, now: datetime | None = None) -> ReviewResult:
-    _now(now)
+    current = _now(now)
     owner = uuid4()
     row = store.claim_request(request_id, owner, _lease_now(), lease_seconds=120)
     if row is None:
         return ReviewResult("busy", None, None, "This review is already being checked.")
     try:
         if row.state == "approved":
-            _deliver_terminal_claimed(row, owner)
+            _deliver_terminal_claimed(row, owner, current)
             return ReviewResult(
                 "approved", row.odoo_task_id, row, "The external PTO was verified."
             )
@@ -581,7 +620,7 @@ def resolve_external_pto(request_id: int, now: datetime | None = None) -> Review
             return ReviewResult(
                 "needs_review", row.odoo_task_id, row, "This request is not awaiting review."
             )
-        approved = _resolve_external_claimed(row, owner)
+        approved = _resolve_external_claimed(row, owner, current)
         if approved is None:
             return ReviewResult(
                 "needs_review",
@@ -606,14 +645,14 @@ def resolve_manually(
     safe_note = _required_text(note, "note")
     safe_upn = _required_text(actor_upn, "actor_upn")
     safe_name = _required_text(actor_name, "actor_name")
-    _now(now)
+    current = _now(now)
     owner = uuid4()
     row = store.claim_request(request_id, owner, _lease_now(), lease_seconds=120)
     if row is None:
         return ReviewResult("busy", None, None, "This review is already being checked.")
     try:
         if row.state == "resolved_manually":
-            _deliver_terminal_claimed(row, owner)
+            _deliver_terminal_claimed(row, owner, current)
             return ReviewResult(
                 "resolved_manually",
                 row.odoo_task_id,
@@ -632,7 +671,7 @@ def resolve_manually(
             note=safe_note,
             now=_lease_now(),
         )
-        _deliver_terminal_claimed(resolved, owner)
+        _deliver_terminal_claimed(resolved, owner, current)
         return ReviewResult(
             "resolved_manually",
             resolved.odoo_task_id,
@@ -643,11 +682,16 @@ def resolve_manually(
         store.release_claim(request_id, owner, now=_lease_now())
 
 
-def _reconcile_claimed(request: store.AbsencePtoRequest, owner: UUID) -> str:
+def _reconcile_claimed(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+    workflow_now: datetime | None = None,
+) -> str:
+    current = _now(workflow_now)
     if request.state in {"approved", "resolved_manually"}:
         return (
             "resumed"
-            if _deliver_terminal_claimed(request, owner) == "closed"
+            if _deliver_terminal_claimed(request, owner, current) == "closed"
             else "escalated"
         )
     if request.state == "pending":
@@ -655,19 +699,19 @@ def _reconcile_claimed(request: store.AbsencePtoRequest, owner: UUID) -> str:
             request.id, owner, error=_ROLLOVER_ERROR, now=_lease_now()
         )
         if reviewed.state == "needs_review":
-            return _sync_claimed_task(reviewed, owner)
+            return _sync_claimed_task(reviewed, owner, current)
         return "escalated"
     if request.state == "needs_review":
-        approved = _resolve_external_claimed(request, owner)
+        approved = _resolve_external_claimed(request, owner, current)
         if approved is not None:
             return "resumed"
-        return _sync_claimed_task(request, owner)
+        return _sync_claimed_task(request, owner, current)
     if request.state != "converting":
         return "failed"
     result = conversion.resume_claimed(request, owner)
     if result.status == "needs_review":
         if result.request is not None and result.request.state == "needs_review":
-            return _sync_claimed_task(result.request, owner)
+            return _sync_claimed_task(result.request, owner, current)
         return "escalated"
     if result.status == "busy":
         return "failed"
@@ -704,7 +748,7 @@ def reconcile_once(now: datetime | None = None, limit: int = 25) -> ReconcileRes
     for request in requests:
         operation_error = None
         try:
-            outcome = _reconcile_claimed(request, owner)
+            outcome = _reconcile_claimed(request, owner, current)
         except Exception as error:  # noqa: BLE001 - isolate each recovery row
             operation_error = error
             outcome = "failed"

@@ -288,7 +288,9 @@ def wire_review(monkeypatch, fake, row, *, matching=None):
         ),
     )
     monkeypatch.setattr(
-        review, "_next_business_day", lambda day: date(2026, 8, 31), raising=False
+        review.shift_config,
+        "is_workday",
+        lambda candidate: candidate == date(2026, 8, 31),
     )
     return current
 
@@ -557,6 +559,130 @@ def test_review_task_has_deterministic_private_escaped_html_and_deadline(monkeyp
     assert "https://gpiplantmanager.com/staffing/time-off" in body
 
 
+def test_next_business_day_skips_configured_closed_weekdays(monkeypatch):
+    checked = []
+    open_day = date(2026, 9, 2)
+
+    def configured(candidate):
+        checked.append(candidate)
+        return candidate == open_day
+
+    monkeypatch.setattr(review.shift_config, "is_workday", configured)
+
+    assert review._next_business_day(date(2026, 8, 28)) == open_day
+    assert date(2026, 8, 31) in checked
+    assert date(2026, 9, 1) in checked
+
+
+def test_next_business_day_accepts_configured_weekend_workday(monkeypatch):
+    saturday = date(2026, 8, 29)
+    monkeypatch.setattr(
+        review.shift_config, "is_workday", lambda candidate: candidate == saturday
+    )
+
+    assert review._next_business_day(date(2026, 8, 28)) == saturday
+
+
+def test_configured_calendar_exception_retries_without_odoo_mutation(monkeypatch):
+    fake = ReviewFake()
+    current = wire_review(monkeypatch, fake, _needs_review())
+    monkeypatch.setattr(
+        review.shift_config,
+        "is_workday",
+        lambda candidate: (_ for _ in ()).throw(RuntimeError("calendar unavailable")),
+    )
+
+    result = review.sync_review_task(41, NOW)
+
+    assert result.status == "retry"
+    assert current["row"].task_next_at == NOW + timedelta(seconds=60)
+    assert fake.created == []
+    assert fake.updated == []
+
+
+def test_all_closed_calendar_horizon_blocks_without_odoo_mutation(monkeypatch):
+    fake = ReviewFake()
+    current = wire_review(monkeypatch, fake, _needs_review())
+    checked = []
+    monkeypatch.setattr(
+        review.shift_config,
+        "is_workday",
+        lambda candidate: checked.append(candidate) or False,
+    )
+
+    result = review.sync_review_task(41, NOW)
+
+    assert result.status == "blocked"
+    assert len(checked) == review._BUSINESS_DAY_SEARCH_DAYS
+    assert current["row"].task_next_at.year == 9999
+    assert fake.created == []
+    assert fake.updated == []
+
+
+def test_sync_now_determines_deadline_and_retry_timestamp(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    expected_deadline = date(2031, 4, 13)
+    fake = ReviewFake()
+    current = wire_review(monkeypatch, fake, _needs_review())
+    checked = []
+
+    def configured(candidate):
+        checked.append(candidate)
+        return candidate == expected_deadline
+
+    monkeypatch.setattr(review.shift_config, "is_workday", configured)
+    monkeypatch.setattr(
+        review.odoo_client,
+        "find_active_feedback_project_ids",
+        lambda name: [],
+    )
+
+    result = review.sync_review_task(41, workflow_now)
+
+    assert result.status == "retry"
+    assert checked[0] == date(2031, 4, 11)
+    assert current["row"].task_next_at == workflow_now + timedelta(seconds=60)
+
+
+def test_sync_now_sets_the_exact_odoo_deadline(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    expected_deadline = date(2031, 4, 13)
+    fake = ReviewFake()
+    wire_review(monkeypatch, fake, _needs_review())
+    monkeypatch.setattr(
+        review.shift_config,
+        "is_workday",
+        lambda candidate: candidate == expected_deadline,
+    )
+
+    result = review.sync_review_task(41, workflow_now)
+
+    assert result.status == "delivered"
+    assert fake.created[0]["deadline"] == expected_deadline.isoformat()
+
+
+def test_reconcile_now_determines_review_retry_timestamp(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    row = _needs_review()
+    fake = ReviewFake(users=[])
+    current = wire_review(monkeypatch, fake, row)
+    monkeypatch.setattr(
+        review.staffing_hours,
+        "current_pay_period_bounds",
+        lambda today: (date(2031, 3, 30), date(2031, 4, 12)),
+    )
+    monkeypatch.setattr(
+        review.store,
+        "claim_due",
+        lambda owner, now, **kwargs: [replace(row, lease_owner=owner)],
+    )
+
+    result = review.reconcile_once(workflow_now, limit=1)
+
+    assert result == review.ReconcileResult(1, 0, 1, 0)
+    assert current["row"].task_next_at == workflow_now + timedelta(seconds=60)
+
+
 def test_review_task_adopts_exact_task_after_ambiguous_create_timeout(monkeypatch):
     fake = ReviewFake(create_error=TimeoutError("response lost"))
     wire_review(monkeypatch, fake, _needs_review())
@@ -778,7 +904,10 @@ def test_marking_odoo_task_done_does_not_claim_pto_was_paid(monkeypatch):
     monkeypatch.setattr(review.store, "release_claim", lambda *args, **kwargs: True)
     monkeypatch.setattr(review.odoo_client, "find_matching_leaves", lambda *args, **kwargs: [])
     monkeypatch.setattr(
-        review, "_sync_claimed_task", lambda request, owner: "escalated", raising=False
+        review,
+        "_sync_claimed_task",
+        lambda request, owner, workflow_now=None: "escalated",
+        raising=False,
     )
     result = review.reconcile_once(NOW)
     assert result == review.ReconcileResult(1, 0, 1, 0)
@@ -1191,6 +1320,46 @@ def test_close_failure_preserves_message_checkpoint_for_retry(monkeypatch):
     assert fake.messages == []
 
 
+def test_permanent_terminal_identity_error_becomes_non_due_and_stops_odoo(
+    monkeypatch,
+):
+    fake = ReviewFake()
+    row = _needs_review(
+        state="approved",
+        odoo_task_id=501,
+        task_resolution_step="message_posted",
+        task_resolution_attempts=0,
+        task_resolution_next_at=NOW,
+    )
+    current = wire_review(monkeypatch, fake, row)
+    wire_resolution_progress(monkeypatch, current, fake)
+    identity_reads = []
+    monkeypatch.setattr(
+        review.odoo_client,
+        "fetch_feedback_task_identity",
+        lambda task_id: identity_reads.append(task_id)
+        or {
+            "id": task_id,
+            "name": "renamed by someone",
+            "project_id": 7,
+            "active": True,
+        },
+    )
+
+    first = review._deliver_terminal_claimed(current["row"], OWNER, NOW)
+    fake.events.clear()
+    second = review._deliver_terminal_claimed(current["row"], OWNER, NOW)
+
+    assert first == "retry"
+    assert second == "retry"
+    assert current["row"].state == "approved"
+    assert current["row"].task_resolution_attempts == review._MAX_ATTEMPTS
+    assert current["row"].task_resolution_next_at.year == 9999
+    assert identity_reads == [501]
+    assert fake.messages == []
+    assert fake.closed == []
+
+
 def test_terminal_reconcile_isolates_retry_and_continues_to_later_row(monkeypatch):
     first = _request(
         41,
@@ -1225,7 +1394,8 @@ def test_terminal_reconcile_isolates_retry_and_continues_to_later_row(monkeypatc
     monkeypatch.setattr(
         review,
         "_deliver_terminal_claimed",
-        lambda row, owner: processed.append(row.id) or ("retry" if row.id == 41 else "closed"),
+        lambda row, owner, workflow_now=None: processed.append(row.id)
+        or ("retry" if row.id == 41 else "closed"),
         raising=False,
     )
 
