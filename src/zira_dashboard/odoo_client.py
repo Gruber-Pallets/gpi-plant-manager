@@ -934,6 +934,11 @@ def confirm_leave(leave_id: int) -> None:
     _odoo_time_off.confirm_leave(execute, leave_id)
 
 
+def confirm_leave_once(leave_id: int) -> None:
+    """Confirm once without hiding a state read after an ownership fence."""
+    _odoo_time_off.confirm_leave_once(execute, leave_id)
+
+
 def approve_leave(leave_id: int) -> str | None:
     """Approve a pending hr.leave and return its final Odoo state.
 
@@ -943,6 +948,11 @@ def approve_leave(leave_id: int) -> str | None:
     on duplicates and retries.
     """
     return _odoo_time_off.approve_leave(execute, leave_id)
+
+
+def approve_leave_once(leave_id: int) -> None:
+    """Advance one approval state without hiding another mutation in a loop."""
+    _odoo_time_off.approve_leave_once(execute, leave_id)
 
 
 def write_leave(leave_id: int, **fields: Any) -> None:

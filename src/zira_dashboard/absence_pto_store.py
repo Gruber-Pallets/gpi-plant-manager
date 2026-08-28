@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Final
 from uuid import UUID
 
-from . import db
+from . import db, inbox_log, time_off_audit
 
 
 STATES: Final = frozenset(
@@ -558,12 +558,169 @@ def save_task_delivery(
     return _one_request(rows, "task delivery update")
 
 
+def finalize_approved(
+    request_id: int,
+    owner: UUID,
+    *,
+    original_absence_leave_id: int | None,
+    pto_leave_id: int,
+    actor_upn: str | None,
+    actor_name: str | None,
+    source: str | None,
+    now: datetime | None = None,
+) -> AbsencePtoRequest:
+    """Atomically settle local mirrors, links, request state, and audit."""
+    safe_id = _positive_int(request_id, "request_id")
+    safe_owner = _uuid(owner, "owner")
+    safe_original_id = _optional_positive_int(
+        original_absence_leave_id, "original_absence_leave_id"
+    )
+    safe_pto_id = _positive_int(pto_leave_id, "pto_leave_id")
+    current = _now(now)
+    with db.cursor() as cur:
+        cur.execute(
+            f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests "
+            "WHERE id = %s AND lease_owner = %s AND lease_until > %s "
+            "AND state = 'converting' AND conversion_step = 'pto_approved' FOR UPDATE",
+            (safe_id, safe_owner, current),
+        )
+        request = _one_request(list(cur.fetchall()), "approval finalization lock")
+        if (
+            request.original_absence_leave_id != safe_original_id
+            or request.pto_leave_id != safe_pto_id
+        ):
+            raise StaleTransition("approval finalization Odoo ids changed")
+
+        cur.execute(
+            "SELECT day, emp_id, odoo_leave_id FROM manual_absences "
+            "WHERE day = %s AND emp_id = %s FOR UPDATE",
+            (request.absence_day, request.emp_id),
+        )
+        absence_rows = list(cur.fetchall())
+        if len(absence_rows) != 1:
+            raise StaleTransition("approval finalization lost the attendance absence")
+        if absence_rows[0].get("odoo_leave_id") != safe_original_id:
+            raise StaleTransition("attendance absence Odoo link changed")
+
+        if safe_original_id is not None:
+            cur.execute(
+                "UPDATE time_off_requests SET state = 'refuse', "
+                "synced_to_odoo = TRUE, sync_error = NULL, local_record = FALSE, "
+                "last_pulled_at = %s, last_pushed_at = %s, updated_at = %s "
+                "WHERE odoo_leave_id = %s",
+                (current, current, current, safe_original_id),
+            )
+
+        cur.execute(
+            "INSERT INTO time_off_requests "
+            "(person_odoo_id, originating_kiosk_user, shape, holiday_status_id, "
+            "date_from, date_to, hour_from, hour_to, note, state, odoo_leave_id, "
+            "synced_to_odoo, sync_error, local_record, last_pulled_at, "
+            "last_pushed_at, updated_at) "
+            "VALUES (%s, FALSE, 'full_day', %s, %s, %s, NULL, NULL, %s, "
+            "'validate', %s, TRUE, NULL, FALSE, %s, %s, %s) "
+            "ON CONFLICT (odoo_leave_id) WHERE odoo_leave_id IS NOT NULL DO UPDATE SET "
+            "person_odoo_id = EXCLUDED.person_odoo_id, "
+            "originating_kiosk_user = FALSE, shape = 'full_day', "
+            "holiday_status_id = EXCLUDED.holiday_status_id, "
+            "date_from = EXCLUDED.date_from, date_to = EXCLUDED.date_to, "
+            "hour_from = NULL, hour_to = NULL, note = EXCLUDED.note, "
+            "state = 'validate', synced_to_odoo = TRUE, sync_error = NULL, "
+            "local_record = FALSE, last_pulled_at = EXCLUDED.last_pulled_at, "
+            "last_pushed_at = EXCLUDED.last_pushed_at, updated_at = EXCLUDED.updated_at",
+            (
+                request.person_odoo_id,
+                request.holiday_status_id,
+                request.absence_day,
+                request.absence_day,
+                "Paid Time Off for recorded absence",
+                safe_pto_id,
+                current,
+                current,
+                current,
+            ),
+        )
+        cur.execute(
+            "UPDATE manual_absences SET odoo_leave_id = %s "
+            "WHERE day = %s AND emp_id = %s "
+            "AND odoo_leave_id IS NOT DISTINCT FROM %s RETURNING day",
+            (safe_pto_id, request.absence_day, request.emp_id, safe_original_id),
+        )
+        if len(list(cur.fetchall())) != 1:
+            raise StaleTransition("attendance absence link update lost its row")
+
+        cur.execute(
+            "UPDATE absence_pto_requests SET state = 'approved', sync_error = NULL, "
+            "decided_by_upn = %s, decided_by_name = %s, decided_at = %s, "
+            "updated_at = %s WHERE id = %s AND lease_owner = %s "
+            "AND lease_until > %s AND state = 'converting' "
+            "AND conversion_step = 'pto_approved' AND pto_leave_id = %s "
+            f"RETURNING {REQUEST_COLUMNS}",
+            (
+                _optional_text(actor_upn, "actor_upn"),
+                _optional_text(actor_name, "actor_name"),
+                current,
+                current,
+                safe_id,
+                safe_owner,
+                current,
+                safe_pto_id,
+            ),
+        )
+        approved = _one_request(list(cur.fetchall()), "approval finalization")
+        request_key = f"absence_pto:{safe_id}"
+        detail = {
+            "original_absence_leave_id": safe_original_id,
+            "pto_leave_id": safe_pto_id,
+            "conversion_step": "pto_approved",
+        }
+        time_off_audit.record_decision_with_cursor(
+            cur,
+            request_id=safe_id,
+            odoo_leave_id=safe_pto_id,
+            person_odoo_id=request.person_odoo_id,
+            person_name=request.person_name,
+            leave_type=request.leave_type_name,
+            date_from=request.absence_day,
+            date_to=request.absence_day,
+            hour_from=None,
+            hour_to=None,
+            action="approve",
+            result_state="validate",
+            reason=None,
+            actor_upn=actor_upn,
+            actor_name=actor_name,
+            source=source,
+            request_kind="absence_pto",
+            request_key=request_key,
+            detail=detail,
+        )
+        inbox_log.record_event_with_cursor(
+            cur,
+            item_kind="absence_pto",
+            item_key=request_key,
+            person_name=request.person_name,
+            category_label="Past absence PTO",
+            action="approve",
+            outcome="Approved",
+            before_value="Absent · unpaid",
+            after_value="Absent · PTO",
+            actor_upn=actor_upn,
+            actor_name=actor_name,
+            source=source,
+            reversible=False,
+            detail=detail,
+        )
+    return approved
+
+
 __all__ = [
     "AbsencePtoRequest",
     "StaleTransition",
     "claim_request",
     "create_request",
     "get_request",
+    "finalize_approved",
     "list_due",
     "list_for_person",
     "list_pending",
