@@ -24,6 +24,9 @@ from .plant_day import today as plant_today
 
 _PENDING_BALANCE_MESSAGE = "The current PTO balance is below one day."
 _BUSY_MESSAGE = "This request is already being checked."
+_ROLLOVER_ERROR = "Configured pay period closed before approval."
+_RESTORED_MESSAGE = "PTO was not applied. The absence was restored."
+_REVIEW_MESSAGE = "This needs payroll review."
 _log = logging.getLogger(__name__)
 
 
@@ -89,15 +92,24 @@ def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
             return ConversionResult(
                 "pending", "This request is waiting for manager approval.", current
             )
-        return _resume_claim(
-            current,
-            owner,
-            current.decided_by_upn,
-            current.decided_by_name,
-            "reconciler",
-        )
+        return resume_claimed(current, owner)
     finally:
         store.release_claim(request_id, owner, now=_lease_now())
+
+
+def resume_claimed(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+) -> ConversionResult:
+    """Resume one row already leased by the bounded reconciler claim."""
+    current = store.renew_claim(request.id, owner, _lease_now(), lease_seconds=120)
+    return _resume_claim(
+        current,
+        owner,
+        current.decided_by_upn,
+        current.decided_by_name,
+        "reconciler",
+    )
 
 
 def _manual_absence(request: store.AbsencePtoRequest) -> dict:
@@ -134,7 +146,7 @@ def _preflight(
     today = plant_today(now)
     start, end = staffing_hours.current_pay_period_bounds(today)
     if request.absence_day >= today or not start <= request.absence_day <= end:
-        raise ConversionSafetyError("The absence is no longer in the current pay period.")
+        raise ConversionSafetyError(_ROLLOVER_ERROR)
     pto_type = absence_pto.resolve_paid_time_off_type()
     if (
         pto_type.holiday_status_id != request.holiday_status_id
@@ -198,7 +210,7 @@ def _matching_pto(request: store.AbsencePtoRequest) -> dict | None:
         request.person_odoo_id,
         request.holiday_status_id,
         request.absence_day,
-        include_terminal=True,
+        include_terminal=False,
     )
     if len(rows) > 1:
         raise ConversionSafetyError("More than one matching PTO leave exists in Odoo.")
@@ -206,8 +218,6 @@ def _matching_pto(request: store.AbsencePtoRequest) -> dict | None:
         return None
     row = rows[0]
     verified = _verified_snapshot(row["id"], request, request.holiday_status_id)
-    if verified["state"] in {"cancel", "refuse"}:
-        raise ConversionSafetyError("The matching PTO leave is already closed.")
     if request.pto_leave_id is not None and verified["id"] != request.pto_leave_id:
         raise ConversionSafetyError("The linked PTO leave changed identity.")
     return verified
@@ -273,6 +283,248 @@ def _needs_review(
     return ConversionResult("needs_review", message, request)
 
 
+def _friendly(*errors: Exception) -> str:
+    messages: list[str] = []
+    for error in errors:
+        message = " ".join((str(error) or type(error).__name__).split())
+        if message == _ROLLOVER_ERROR:
+            return _ROLLOVER_ERROR
+        if message and message not in messages:
+            messages.append(message)
+    return "; ".join(messages)[:500] or "Odoo recovery could not be verified."
+
+
+def _transition_to_pending(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+    error: Exception,
+) -> ConversionResult:
+    request = store.transition_to_pending(
+        request.id,
+        owner,
+        error=_friendly(error),
+        now=_lease_now(),
+    )
+    return ConversionResult("pending", _RESTORED_MESSAGE, request)
+
+
+def _recovery_view(
+    request: store.AbsencePtoRequest,
+    now: datetime,
+) -> tuple[dict | None, list[dict]]:
+    """Rebuild every identity and rollover fact relevant to compensation."""
+    absence = _manual_absence(request)
+    today = plant_today(now)
+    start, end = staffing_hours.current_pay_period_bounds(today)
+    if request.absence_day >= today or not start <= request.absence_day <= end:
+        raise ConversionSafetyError(_ROLLOVER_ERROR)
+    pto_type = absence_pto.resolve_paid_time_off_type()
+    if (
+        pto_type.holiday_status_id != request.holiday_status_id
+        or pto_type.name != request.leave_type_name
+    ):
+        raise ConversionSafetyError("The configured Paid Time Off type changed.")
+    if absence.get("odoo_leave_id") != request.original_absence_leave_id:
+        raise ConversionSafetyError("The attendance absence Odoo link changed.")
+
+    original = _verified_original(request)
+    rows = odoo_client.find_matching_leaves(
+        request.person_odoo_id,
+        request.holiday_status_id,
+        request.absence_day,
+        include_terminal=False,
+    )
+    if len(rows) > 1:
+        raise ConversionSafetyError("More than one active matching PTO leave exists in Odoo.")
+    active = [
+        _verified_snapshot(row["id"], request, request.holiday_status_id)
+        for row in rows
+    ]
+    if request.pto_leave_id is not None:
+        known = _verified_snapshot(
+            request.pto_leave_id,
+            request,
+            request.holiday_status_id,
+        )
+        if known["state"] not in {"cancel", "refuse"}:
+            if not active or active[0]["id"] != known["id"]:
+                raise ConversionSafetyError("The linked PTO leave could not be matched.")
+    return original, active
+
+
+def _renew_and_recovery_view(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+) -> tuple[store.AbsencePtoRequest, dict | None, list[dict]]:
+    request = store.renew_claim(request.id, owner, _lease_now(), lease_seconds=120)
+    original, active = _recovery_view(request, _lease_now())
+    return request, original, active
+
+
+def _recovery_step_fence(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+) -> store.AbsencePtoRequest:
+    return store.transition(
+        request.id,
+        owner,
+        expected_state="converting",
+        expected_step=request.conversion_step,
+        new_state="converting",
+        new_step=request.conversion_step,
+        pto_leave_id=request.pto_leave_id,
+        now=_lease_now(),
+    )
+
+
+def _adopt_recovery_pto(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+    pto: dict,
+) -> store.AbsencePtoRequest:
+    if request.pto_leave_id is not None:
+        if request.pto_leave_id != pto["id"]:
+            raise ConversionSafetyError("The linked PTO leave changed identity.")
+        return request
+    return store.transition(
+        request.id,
+        owner,
+        expected_state="converting",
+        expected_step=request.conversion_step,
+        new_state="converting",
+        new_step=request.conversion_step,
+        pto_leave_id=pto["id"],
+        now=_lease_now(),
+    )
+
+
+def _close_incomplete_pto(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+) -> store.AbsencePtoRequest:
+    original, active = _recovery_view(request, _lease_now())
+    del original
+    if not active:
+        return request
+    pto = active[0]
+    request = _adopt_recovery_pto(request, owner, pto)
+    if pto["state"] == "validate":
+        raise ConversionSafetyError("An approved matching PTO leave remains active in Odoo.")
+    if pto["state"] not in {"draft", "confirm", "validate1"}:
+        raise ConversionSafetyError("The matching PTO leave is in an unsafe Odoo state.")
+
+    expected_state = pto["state"]
+    request, _, active = _renew_and_recovery_view(request, owner)
+    if len(active) != 1 or active[0]["id"] != pto["id"]:
+        raise ConversionSafetyError("The matching PTO leave changed before closure.")
+    if active[0]["state"] != expected_state:
+        raise ConversionSafetyError("The matching PTO leave changed before closure.")
+    leave_id = pto["id"]
+    request = _fence_mutation(request, owner)
+    try:
+        odoo_client.refuse_leave(leave_id)
+    except Exception as error:
+        closed = _verified_snapshot(leave_id, request, request.holiday_status_id)
+        if closed["state"] not in {"cancel", "refuse"}:
+            raise ConversionSafetyError(_friendly(error, RuntimeError("PTO would not close")))
+    closed = _verified_snapshot(leave_id, request, request.holiday_status_id)
+    if closed["state"] not in {"cancel", "refuse"}:
+        raise ConversionSafetyError("Odoo did not verify the incomplete PTO closure.")
+    request = _recovery_step_fence(request, owner)
+    _, active = _recovery_view(request, _lease_now())
+    if active:
+        raise ConversionSafetyError("An active matching PTO leave remains after closure.")
+    return request
+
+
+def _restore_original_absence(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+) -> store.AbsencePtoRequest:
+    if request.original_absence_leave_id is None:
+        _, active = _recovery_view(request, _lease_now())
+        if active:
+            raise ConversionSafetyError("An active matching PTO leave remains in Odoo.")
+        return request
+
+    original, active = _recovery_view(request, _lease_now())
+    if active:
+        raise ConversionSafetyError("An active matching PTO leave remains in Odoo.")
+    if original is None:
+        raise ConversionSafetyError("The original Odoo Absence is missing.")
+    if original["state"] in {"refuse", "cancel"}:
+        expected_state = original["state"]
+        request, original, active = _renew_and_recovery_view(request, owner)
+        if active or original is None or original["state"] != expected_state:
+            raise ConversionSafetyError("The original Absence changed before reset.")
+        leave_id = original["id"]
+        request = _fence_mutation(request, owner)
+        try:
+            odoo_client.reset_leave_to_confirm(leave_id)
+        except Exception as error:
+            reset = _verified_original(request)
+            if reset is None or reset["state"] not in {"confirm", "validate1", "validate"}:
+                raise ConversionSafetyError(_friendly(error))
+        reset = _verified_original(request)
+        if reset is None or reset["state"] not in {"confirm", "validate1", "validate"}:
+            raise ConversionSafetyError("Odoo did not verify the Absence reset.")
+        request = _recovery_step_fence(request, owner)
+        original = reset
+
+    if original["state"] not in {"confirm", "validate1", "validate"}:
+        raise ConversionSafetyError("The original Absence is in an unsafe recovery state.")
+    while original["state"] in {"confirm", "validate1"}:
+        expected_state = original["state"]
+        request, original, active = _renew_and_recovery_view(request, owner)
+        if active or original is None or original["state"] != expected_state:
+            raise ConversionSafetyError("The original Absence changed before approval.")
+        leave_id = original["id"]
+        request = _fence_mutation(request, owner)
+        try:
+            odoo_client.approve_leave_once(leave_id)
+        except Exception as error:
+            advanced = _verified_original(request)
+            allowed = (
+                {"validate1", "validate"}
+                if expected_state == "confirm"
+                else {"validate"}
+            )
+            if advanced is None or advanced["state"] not in allowed:
+                raise ConversionSafetyError(_friendly(error))
+        advanced = _verified_original(request)
+        allowed = (
+            {"validate1", "validate"}
+            if expected_state == "confirm"
+            else {"validate"}
+        )
+        if advanced is None or advanced["state"] not in allowed:
+            raise ConversionSafetyError("Odoo did not verify one Absence approval transition.")
+        request = _recovery_step_fence(request, owner)
+        original = advanced
+
+    final_original, active = _recovery_view(request, _lease_now())
+    if active or final_original is None or final_original["state"] != "validate":
+        raise ConversionSafetyError("The original Absence restoration was not verified.")
+    return request
+
+
+def _compensate(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+    error: Exception,
+) -> ConversionResult:
+    try:
+        request = _close_incomplete_pto(request, owner)
+        request = _restore_original_absence(request, owner)
+        return _transition_to_pending(request, owner, error)
+    except store.StaleTransition:
+        return ConversionResult("busy", _BUSY_MESSAGE, None)
+    except Exception as compensation_error:  # noqa: BLE001 - fail closed to review
+        combined = ConversionSafetyError(_friendly(error, compensation_error))
+        result = _needs_review(request, owner, combined)
+        return ConversionResult(result.status, _REVIEW_MESSAGE, result.request)
+
+
 def _already_approved(request: store.AbsencePtoRequest) -> ConversionResult:
     if request.pto_leave_id is None:
         return ConversionResult("needs_review", "The approved request has no PTO leave.", request)
@@ -300,6 +552,7 @@ def _resume_claim(
     actor_name: str | None,
     source: str | None,
 ) -> ConversionResult:
+    post_refusal = request.conversion_step != "not_started"
     try:
         if request.state == "approved":
             return _already_approved(request)
@@ -309,6 +562,17 @@ def _resume_claim(
             )
         if request.state != "pending" and request.state != "converting":
             raise ConversionSafetyError("This request cannot be approved from its current state.")
+
+        if (
+            request.state == "converting"
+            and request.conversion_step == "not_started"
+            and request.original_absence_leave_id is not None
+        ):
+            original_before_preflight = _verified_original(request)
+            post_refusal = bool(
+                original_before_preflight
+                and original_before_preflight["state"] == "refuse"
+            )
 
         _preflight(request, _lease_now())
         if request.state == "pending":
@@ -335,12 +599,39 @@ def _resume_claim(
                     raise ConversionSafetyError("The original absence changed before refusal.")
                 leave_id = original["id"]
                 request = _fence_mutation(request, owner)
-                odoo_client.refuse_leave(leave_id)
+                post_refusal = True
+                try:
+                    odoo_client.refuse_leave(leave_id)
+                except Exception as error:
+                    after_refusal = _verified_original(request)
+                    if after_refusal is not None and after_refusal["state"] == "validate":
+                        pending = store.transition_to_pending(
+                            request.id,
+                            owner,
+                            error=_friendly(error),
+                            now=_lease_now(),
+                        )
+                        return ConversionResult("pending", _friendly(error), pending)
+                    if after_refusal is None or after_refusal["state"] != "refuse":
+                        raise ConversionSafetyError(_friendly(error))
                 original = _verified_original(request)
                 if original is None or original["state"] != "refuse":
+                    if original is not None and original["state"] == "validate":
+                        error = ConversionSafetyError(
+                            "Odoo did not verify the absence refusal."
+                        )
+                        pending = store.transition_to_pending(
+                            request.id,
+                            owner,
+                            error=_friendly(error),
+                            now=_lease_now(),
+                        )
+                        return ConversionResult("pending", _friendly(error), pending)
                     raise ConversionSafetyError("Odoo did not verify the absence refusal.")
             elif original is not None and original["state"] != "refuse":
                 raise ConversionSafetyError("The original absence is in an unsafe Odoo state.")
+            elif original is not None:
+                post_refusal = True
             request = store.transition(
                 request.id,
                 owner,
@@ -371,10 +662,22 @@ def _resume_claim(
                     "note": "Paid Time Off for recorded absence",
                 }
                 request = _fence_mutation(request, owner)
+                leave_id = None
                 try:
                     leave_id = odoo_client.create_leave(**create_args)
                     pto = _verified_snapshot(int(leave_id), request, request.holiday_status_id)
                 except Exception:
+                    if leave_id is not None and request.pto_leave_id is None:
+                        request = store.transition(
+                            request.id,
+                            owner,
+                            expected_state="converting",
+                            expected_step="absence_refused",
+                            new_state="converting",
+                            new_step="absence_refused",
+                            pto_leave_id=int(leave_id),
+                            now=_lease_now(),
+                        )
                     # A timeout can hide a successful create. Bounded exact
                     # lookup adopts that one record; zero/multiple fail closed.
                     pto = _matching_pto(request)
@@ -400,7 +703,16 @@ def _resume_claim(
                     raise ConversionSafetyError("The PTO leave changed before confirmation.")
                 leave_id = pto["id"]
                 request = _fence_mutation(request, owner)
-                odoo_client.confirm_leave_once(leave_id)
+                try:
+                    odoo_client.confirm_leave_once(leave_id)
+                except Exception as error:
+                    confirmed = _verified_snapshot(
+                        request.pto_leave_id,
+                        request,
+                        request.holiday_status_id,
+                    )
+                    if confirmed["state"] not in {"confirm", "validate1", "validate"}:
+                        raise ConversionSafetyError(_friendly(error))
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
                 if pto["state"] not in {"confirm", "validate1", "validate"}:
                     raise ConversionSafetyError("Odoo did not verify the PTO confirmation.")
@@ -421,11 +733,20 @@ def _resume_claim(
                     raise ConversionSafetyError("The PTO leave changed before approval.")
                 leave_id = pto["id"]
                 request = _fence_mutation(request, owner)
-                odoo_client.approve_leave_once(leave_id)
-                pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
                 allowed_states = (
                     {"validate1", "validate"} if expected_odoo_state == "confirm" else {"validate"}
                 )
+                try:
+                    odoo_client.approve_leave_once(leave_id)
+                except Exception as error:
+                    approved = _verified_snapshot(
+                        request.pto_leave_id,
+                        request,
+                        request.holiday_status_id,
+                    )
+                    if approved["state"] not in allowed_states:
+                        raise ConversionSafetyError(_friendly(error))
+                pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
                 if pto["state"] not in allowed_states:
                     raise ConversionSafetyError("Odoo did not verify one PTO approval transition.")
                 next_step = "pto_approved" if pto["state"] == "validate" else "pto_created"
@@ -480,10 +801,14 @@ def _resume_claim(
     except store.StaleTransition:
         return ConversionResult("busy", _BUSY_MESSAGE, None)
     except _LowBalance as error:
-        if request.conversion_step == "not_started":
+        if request.conversion_step == "not_started" and not post_refusal:
             return _pending_for_low_balance(request, owner)
-        return _needs_review(request, owner, error)
+        return _compensate(request, owner, error)
     except Exception as error:  # noqa: BLE001 - preserve safe durable status
+        if request.state == "converting" and (
+            request.conversion_step != "not_started" or post_refusal
+        ):
+            return _compensate(request, owner, error)
         return _needs_review(request, owner, error)
 
 
@@ -494,4 +819,4 @@ def _invalidate_after_commit(request: store.AbsencePtoRequest) -> None:
     _http_cache.invalidate_all_cache()
 
 
-__all__ = ["ConversionResult", "approve", "resume"]
+__all__ = ["ConversionResult", "approve", "resume", "resume_claimed"]

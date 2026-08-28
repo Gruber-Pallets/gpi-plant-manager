@@ -86,17 +86,23 @@ class FakeOdoo:
         self.on_mutation = None
         self.after_mutation = None
         self.timeline = []
+        self.fail_before = {}
+        self.fail_after = {}
 
     def _mutating(self, action, leave_id):
         if self.on_mutation:
             callback, self.on_mutation = self.on_mutation, None
             callback()
         self.timeline.append((action, leave_id))
+        if action in self.fail_before:
+            raise self.fail_before.pop(action)
 
     def _mutated(self, action, leave_id):
         if self.after_mutation:
             callback, self.after_mutation = self.after_mutation, None
             callback(action, leave_id, self)
+        if action in self.fail_after:
+            raise self.fail_after.pop(action)
 
     def fetch_leave_snapshot(self, leave_id):
         leave = self.leaves.get(leave_id)
@@ -158,6 +164,12 @@ class FakeOdoo:
                 else "validate"
             )
         self._mutated("approve", leave_id)
+
+    def reset_leave_to_confirm(self, leave_id):
+        self._mutating("reset", leave_id)
+        self.events.append(("reset", leave_id))
+        self.leaves[leave_id]["state"] = "confirm"
+        self._mutated("reset", leave_id)
 
 
 class FakeStore:
@@ -261,6 +273,20 @@ class FakeStore:
         )
         return self.request
 
+    def transition_to_pending(self, request_id, owner, *, error, now=None):
+        current = now or NOW
+        if self.owner != owner or self.request.lease_until <= current:
+            raise store.StaleTransition("pending transition lost its current lease")
+        self.request = replace(
+            self.request,
+            state="pending",
+            conversion_step="not_started",
+            pto_leave_id=None,
+            sync_error=error,
+            updated_at=current,
+        )
+        return self.request
+
     def finalize_approved(self, request_id, owner, **kwargs):
         if (
             self.owner != owner
@@ -291,6 +317,9 @@ def wire(monkeypatch, fake_odoo, request, *, balance=4.0, clock=None):
     monkeypatch.setattr(conversion.store, "renew_claim", fake_store.renew_claim)
     monkeypatch.setattr(conversion.store, "transition", fake_store.transition)
     monkeypatch.setattr(conversion.store, "mark_needs_review", fake_store.mark_needs_review)
+    monkeypatch.setattr(
+        conversion.store, "transition_to_pending", fake_store.transition_to_pending
+    )
     monkeypatch.setattr(conversion.store, "finalize_approved", fake_store.finalize_approved)
     monkeypatch.setattr(
         conversion.odoo_client, "fetch_leave_snapshot", fake_odoo.fetch_leave_snapshot
@@ -311,6 +340,9 @@ def wire(monkeypatch, fake_odoo, request, *, balance=4.0, clock=None):
         ),
     )
     monkeypatch.setattr(conversion.odoo_client, "approve_leave_once", fake_odoo.approve_leave_once)
+    monkeypatch.setattr(
+        conversion.odoo_client, "reset_leave_to_confirm", fake_odoo.reset_leave_to_confirm
+    )
     monkeypatch.setattr(conversion.absence_sync, "resolve_absence_leave_type_id", lambda: 9)
     monkeypatch.setattr(
         conversion.absence_pto,
@@ -450,6 +482,49 @@ def test_lost_create_response_adopts_one_exact_pto(monkeypatch):
     assert result.status == "approved"
     assert fake_store.request.pto_leave_id == 71
     assert [event[0] for event in fake.events].count("create") == 1
+
+
+def test_created_pto_with_unverifiable_identity_moves_to_review_with_known_id(
+    monkeypatch,
+):
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"))
+    fake_store = wire(monkeypatch, fake, _request())
+    ordinary_fetch = fake.fetch_leave_snapshot
+
+    def wrong_created_snapshot(leave_id):
+        snapshot = ordinary_fetch(leave_id)
+        if leave_id == 71 and snapshot is not None:
+            snapshot["employee_id"] = 999
+        return snapshot
+
+    monkeypatch.setattr(
+        conversion.odoo_client, "fetch_leave_snapshot", wrong_created_snapshot
+    )
+
+    result = conversion.approve(41, "dale@example.com", "Dale", "page", NOW)
+
+    assert result.status == "needs_review"
+    assert fake_store.request.state == "needs_review"
+    assert fake_store.request.pto_leave_id == 71
+    assert "wrong identity" in fake_store.request.sync_error
+    assert [event[0] for event in fake.events] == ["refuse", "create"]
+
+
+def test_ambiguous_refusal_timeout_adopts_verified_remote_refusal(monkeypatch):
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"))
+    fake.fail_after["refuse"] = TimeoutError("refusal response was lost")
+    wire(monkeypatch, fake, _request())
+
+    result = conversion.approve(41, "dale@example.com", "Dale", "page", NOW)
+
+    assert result.status == "approved"
+    assert [event[0] for event in fake.events] == [
+        "refuse",
+        "create",
+        "confirm",
+        "approve",
+    ]
+    assert [event[0] for event in fake.events].count("refuse") == 1
 
 
 def test_balance_below_one_returns_to_pending_without_odoo_mutation(monkeypatch):
@@ -610,6 +685,293 @@ def test_two_step_approval_renews_and_revalidates_between_approval_mutations(
     assert any(event[0] == "renew" for event in between)
     assert any(event[0] == "preflight_balance" for event in between)
     assert any(event[0] == "transition" for event in between)
+
+
+@pytest.mark.parametrize(
+    ("request_row", "absence_state", "pto_state", "expected_actions"),
+    [
+        (
+            _request(state="converting", conversion_step="not_started"),
+            "validate",
+            None,
+            ["refuse", "create", "confirm", "approve"],
+        ),
+        (
+            _request(state="converting", conversion_step="absence_refused"),
+            "refuse",
+            None,
+            ["create", "confirm", "approve"],
+        ),
+        (
+            _request(
+                state="converting", conversion_step="pto_created", pto_leave_id=71
+            ),
+            "refuse",
+            "confirm",
+            ["approve"],
+        ),
+        (
+            _request(
+                state="converting", conversion_step="pto_approved", pto_leave_id=71
+            ),
+            "refuse",
+            "validate",
+            [],
+        ),
+    ],
+    ids=["not_started", "absence_refused", "pto_created", "pto_approved"],
+)
+def test_resume_from_every_durable_step_runs_only_missing_operations(
+    monkeypatch, request_row, absence_state, pto_state, expected_actions
+):
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, absence_state),
+        pto=_leave(71, 44, 7, pto_state) if pto_state else None,
+    )
+    wire(monkeypatch, fake, request_row)
+
+    result = conversion.resume(41, NOW)
+
+    assert result.status == "approved"
+    assert [event[0] for event in fake.events] == expected_actions
+    assert len(
+        [
+            leave
+            for leave in fake.leaves.values()
+            if leave["holiday_status_id"] == 7
+            and leave["state"] not in {"cancel", "refuse"}
+        ]
+    ) == 1
+    assert [event[0] for event in fake.events].count("create") <= 1
+
+
+def test_refusal_error_proven_unchanged_returns_to_pending(monkeypatch):
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"))
+    fake.fail_before["refuse"] = RuntimeError("refusal unavailable")
+    fake_store = wire(monkeypatch, fake, _request())
+
+    result = conversion.approve(41, "dale@example.com", "Dale", "page", NOW)
+
+    assert result.status == "pending"
+    assert fake_store.request.state == "pending"
+    assert fake_store.request.sync_error == "refusal unavailable"
+    assert fake.leaves[70]["state"] == "validate"
+    assert not [leave for leave in fake.leaves.values() if leave["holiday_status_id"] == 7]
+
+
+def test_crash_after_refusal_before_step_fence_restores_before_pending(monkeypatch):
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "refuse"))
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="not_started"),
+        balance=0.5,
+    )
+
+    result = conversion.resume(41, NOW)
+
+    assert result.status == "pending"
+    assert fake_store.request.state == "pending"
+    assert fake.leaves[70]["state"] == "validate"
+    assert fake.events == [("reset", 70), ("approve", 70)]
+
+
+def test_failed_post_refusal_read_uses_the_single_compensation_path(monkeypatch):
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"))
+    fake_store = wire(monkeypatch, fake, _request())
+    ordinary_fetch = fake.fetch_leave_snapshot
+    fail_next_read = False
+
+    def after_refusal(action, leave_id, current_fake):
+        nonlocal fail_next_read
+        if (action, leave_id) == ("refuse", 70):
+            fail_next_read = True
+
+    def flaky_fetch(leave_id):
+        nonlocal fail_next_read
+        if fail_next_read:
+            fail_next_read = False
+            raise TimeoutError("refusal verification was lost")
+        return ordinary_fetch(leave_id)
+
+    fake.after_mutation = after_refusal
+    monkeypatch.setattr(conversion.odoo_client, "fetch_leave_snapshot", flaky_fetch)
+
+    result = conversion.approve(41, "dale@example.com", "Dale", "page", NOW)
+
+    assert result.status == "pending"
+    assert fake_store.request.state == "pending"
+    assert fake.leaves[70]["state"] == "validate"
+    assert fake.events == [("refuse", 70), ("reset", 70), ("approve", 70)]
+
+
+def test_approve_error_compensates_and_returns_to_pending(monkeypatch):
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, "refuse"),
+        pto=_leave(71, 44, 7, "confirm"),
+    )
+    fake.fail_before["approve"] = RuntimeError("approval unavailable")
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="pto_created", pto_leave_id=71),
+    )
+
+    result = conversion.resume(41, NOW)
+
+    assert result.status == "pending"
+    assert result.message == "PTO was not applied. The absence was restored."
+    assert fake_store.request.state == "pending"
+    assert fake_store.request.pto_leave_id is None
+    assert fake.leaves[71]["state"] == "refuse"
+    assert fake.leaves[70]["state"] == "validate"
+    assert fake.events == [
+        ("refuse", 71),
+        ("reset", 70),
+        ("approve", 70),
+    ]
+    for mutation in fake.events:
+        index = fake_store.timeline.index(mutation)
+        assert fake_store.timeline[index - 1][0] == "renew"
+
+
+def test_ambiguous_approve_timeout_adopts_verified_remote_approval(monkeypatch):
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, "refuse"),
+        pto=_leave(71, 44, 7, "confirm"),
+    )
+    fake.fail_after["approve"] = TimeoutError("approval response was lost")
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="pto_created", pto_leave_id=71),
+    )
+
+    result = conversion.resume(41, NOW)
+
+    assert result.status == "approved"
+    assert fake_store.request.state == "approved"
+    assert fake.events == [("approve", 71)]
+
+
+def test_incomplete_pto_close_failure_moves_to_review_with_known_id(monkeypatch):
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, "refuse"),
+        pto=_leave(71, 44, 7, "confirm"),
+    )
+    fake.fail_before["approve"] = RuntimeError("approval unavailable")
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="pto_created", pto_leave_id=71),
+    )
+    monkeypatch.setattr(
+        conversion.odoo_client,
+        "refuse_leave",
+        lambda leave_id: (_ for _ in ()).throw(RuntimeError("PTO would not close")),
+    )
+
+    result = conversion.resume(41, NOW)
+
+    assert result.status == "needs_review"
+    assert fake_store.request.state == "needs_review"
+    assert fake_store.request.pto_leave_id == 71
+    assert fake_store.request.sync_error == "approval unavailable; PTO would not close"
+    assert fake.leaves[71]["state"] == "confirm"
+    assert fake.leaves[70]["state"] == "refuse"
+
+
+def test_original_absence_restore_failure_moves_to_review(monkeypatch):
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, "refuse"),
+        pto=_leave(71, 44, 7, "confirm"),
+    )
+    fake.fail_before["approve"] = RuntimeError("approval unavailable")
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="pto_created", pto_leave_id=71),
+    )
+    monkeypatch.setattr(
+        conversion.odoo_client,
+        "reset_leave_to_confirm",
+        lambda leave_id: (_ for _ in ()).throw(RuntimeError("absence would not reset")),
+    )
+
+    result = conversion.resume(41, NOW)
+
+    assert result.status == "needs_review"
+    assert fake_store.request.state == "needs_review"
+    assert fake.leaves[71]["state"] == "refuse"
+    assert fake.leaves[70]["state"] == "refuse"
+    assert fake_store.request.sync_error == "approval unavailable; absence would not reset"
+
+
+def test_local_only_failure_closes_pto_without_restoring_an_odoo_absence(monkeypatch):
+    fake = FakeOdoo(pto=_leave(71, 44, 7, "confirm"))
+    fake.fail_before["approve"] = RuntimeError("approval unavailable")
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(
+            original_absence_leave_id=None,
+            state="converting",
+            conversion_step="pto_created",
+            pto_leave_id=71,
+        ),
+    )
+
+    result = conversion.resume(41, NOW)
+
+    assert result.status == "pending"
+    assert fake_store.request.state == "pending"
+    assert fake.events == [("refuse", 71)]
+    assert fake.leaves[71]["state"] == "refuse"
+
+
+def test_missing_source_absence_moves_to_review_without_odoo_mutation(monkeypatch):
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"))
+    fake_store = wire(monkeypatch, fake, _request())
+    monkeypatch.setattr(conversion.db, "query", lambda sql, params=None: [])
+
+    result = conversion.approve(41, "dale@example.com", "Dale", "page", NOW)
+
+    assert result.status == "needs_review"
+    assert fake_store.request.state == "needs_review"
+    assert fake.events == []
+
+
+def test_period_rollover_immediately_before_approval_blocks_recovery_mutations(
+    monkeypatch,
+):
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, "refuse"),
+        pto=_leave(71, 44, 7, "confirm"),
+    )
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="pto_created", pto_leave_id=71),
+    )
+    plant_days = iter([date(2026, 8, 28), date(2026, 8, 30)])
+    monkeypatch.setattr(conversion, "plant_today", lambda now: next(plant_days, date(2026, 8, 30)))
+    monkeypatch.setattr(
+        conversion.staffing_hours,
+        "current_pay_period_bounds",
+        lambda today: (
+            (date(2026, 8, 30), date(2026, 9, 12))
+            if today >= date(2026, 8, 30)
+            else (date(2026, 8, 16), date(2026, 8, 29))
+        ),
+    )
+
+    result = conversion.resume(41, NOW)
+
+    assert result.status == "needs_review"
+    assert fake_store.request.sync_error == "Configured pay period closed before approval."
+    assert fake.events == []
+    assert fake.leaves[71]["state"] == "confirm"
+    assert fake.leaves[70]["state"] == "refuse"
 
 
 @pytest.mark.parametrize(
