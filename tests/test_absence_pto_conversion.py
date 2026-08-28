@@ -168,6 +168,8 @@ class FakeStore:
         self.guard = Lock()
         self.finalizations = []
         self.timeline = []
+        self.renew_calls = 0
+        self.before_renew = None
 
     def claim_request(self, request_id, owner, now, lease_seconds=120):
         with self.guard:
@@ -183,6 +185,9 @@ class FakeStore:
             return self.request
 
     def renew_claim(self, request_id, owner, now, lease_seconds=120):
+        self.renew_calls += 1
+        if self.before_renew:
+            self.before_renew(self.renew_calls, owner)
         with self.guard:
             if (
                 self.owner != owner
@@ -365,6 +370,7 @@ def test_approve_refuses_absence_then_creates_and_approves_pto(monkeypatch):
         boundary = fake_store.timeline[previous_mutation + 1 : mutation_index]
         assert any(item[0] == "renew" for item in boundary)
         assert any(item[0] == "preflight_balance" for item in boundary)
+        assert boundary[-1][0] == "renew"
         previous_mutation = mutation_index
 
 
@@ -571,6 +577,71 @@ def test_two_step_approval_renews_and_revalidates_between_approval_mutations(
     assert any(event[0] == "renew" for event in between)
     assert any(event[0] == "preflight_balance" for event in between)
     assert any(event[0] == "transition" for event in between)
+
+
+@pytest.mark.parametrize(
+    ("boundary", "request_row", "absence", "pto"),
+    [
+        ("refuse", _request(), _leave(70, 44, 9, "validate"), None),
+        (
+            "create",
+            _request(state="converting", conversion_step="absence_refused"),
+            _leave(70, 44, 9, "refuse"),
+            None,
+        ),
+        (
+            "confirm",
+            _request(
+                state="converting", conversion_step="pto_created", pto_leave_id=71
+            ),
+            _leave(70, 44, 9, "refuse"),
+            _leave(71, 44, 7, "draft"),
+        ),
+        (
+            "approve-confirm",
+            _request(
+                state="converting", conversion_step="pto_created", pto_leave_id=71
+            ),
+            _leave(70, 44, 9, "refuse"),
+            _leave(71, 44, 7, "confirm"),
+        ),
+        (
+            "approve-validate1",
+            _request(
+                state="converting", conversion_step="pto_created", pto_leave_id=71
+            ),
+            _leave(70, 44, 9, "refuse"),
+            _leave(71, 44, 7, "validate1"),
+        ),
+    ],
+)
+def test_expiry_after_preflight_blocks_every_mutation_dispatch(
+    monkeypatch, boundary, request_row, absence, pto
+):
+    clock = MutableClock()
+    fake = FakeOdoo(absence=absence, pto=pto, two_step=True)
+    fake_store = wire(monkeypatch, fake, request_row, clock=clock)
+    competing_owner = UUID("bf28f5ce-f78f-45cd-af88-9939a1a3d930")
+
+    def transfer_before_final_fence(renew_number, stale_owner):
+        if renew_number != 2:
+            return
+        clock.advance(121)
+        claimed = fake_store.claim_request(41, competing_owner, clock.current)
+        assert claimed is not None
+        assert claimed.lease_owner == competing_owner
+        assert stale_owner != competing_owner
+
+    fake_store.before_renew = transfer_before_final_fence
+
+    result = conversion.approve(41, "one@example.com", "Manager One", "page", NOW)
+
+    assert result.status == "busy", boundary
+    assert fake.events == [], boundary
+    assert fake_store.owner == competing_owner, boundary
+    assert [leave for leave in fake.leaves.values() if leave["holiday_status_id"] == 7] == (
+        [] if pto is None else [pto]
+    )
 
 
 def test_expired_manager_stops_after_refusal_when_second_manager_takes_lease(

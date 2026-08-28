@@ -225,6 +225,14 @@ def _renew_and_preflight(
     return renewed
 
 
+def _fence_mutation(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+) -> store.AbsencePtoRequest:
+    """CAS-renew ownership at the live clock immediately before one mutation."""
+    return store.renew_claim(request.id, owner, _lease_now(), lease_seconds=120)
+
+
 def _pending_for_low_balance(
     request: store.AbsencePtoRequest,
     owner: UUID,
@@ -325,7 +333,9 @@ def _resume_claim(
                 original = _verified_original(request)
                 if original is None or original["state"] != "validate":
                     raise ConversionSafetyError("The original absence changed before refusal.")
-                odoo_client.refuse_leave(original["id"])
+                leave_id = original["id"]
+                request = _fence_mutation(request, owner)
+                odoo_client.refuse_leave(leave_id)
                 original = _verified_original(request)
                 if original is None or original["state"] != "refuse":
                     raise ConversionSafetyError("Odoo did not verify the absence refusal.")
@@ -351,16 +361,18 @@ def _resume_claim(
                 request = _renew_and_preflight(request, owner)
                 if _matching_pto(request) is not None:
                     raise ConversionSafetyError("A PTO leave appeared before creation.")
+                create_args = {
+                    "employee_odoo_id": request.person_odoo_id,
+                    "holiday_status_id": request.holiday_status_id,
+                    "date_from": request.absence_day,
+                    "date_to": request.absence_day,
+                    "hour_from": None,
+                    "hour_to": None,
+                    "note": "Paid Time Off for recorded absence",
+                }
+                request = _fence_mutation(request, owner)
                 try:
-                    leave_id = odoo_client.create_leave(
-                        employee_odoo_id=request.person_odoo_id,
-                        holiday_status_id=request.holiday_status_id,
-                        date_from=request.absence_day,
-                        date_to=request.absence_day,
-                        hour_from=None,
-                        hour_to=None,
-                        note="Paid Time Off for recorded absence",
-                    )
+                    leave_id = odoo_client.create_leave(**create_args)
                     pto = _verified_snapshot(int(leave_id), request, request.holiday_status_id)
                 except Exception:
                     # A timeout can hide a successful create. Bounded exact
@@ -386,7 +398,9 @@ def _resume_claim(
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
                 if pto["state"] != "draft":
                     raise ConversionSafetyError("The PTO leave changed before confirmation.")
-                odoo_client.confirm_leave(pto["id"])
+                leave_id = pto["id"]
+                request = _fence_mutation(request, owner)
+                odoo_client.confirm_leave(leave_id)
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
                 if pto["state"] not in {"confirm", "validate1", "validate"}:
                     raise ConversionSafetyError("Odoo did not verify the PTO confirmation.")
@@ -405,7 +419,9 @@ def _resume_claim(
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
                 if pto["state"] != expected_odoo_state:
                     raise ConversionSafetyError("The PTO leave changed before approval.")
-                odoo_client.approve_leave_once(pto["id"])
+                leave_id = pto["id"]
+                request = _fence_mutation(request, owner)
+                odoo_client.approve_leave_once(leave_id)
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
                 allowed_states = (
                     {"validate1", "validate"} if expected_odoo_state == "confirm" else {"validate"}
