@@ -1829,11 +1829,17 @@ CREATE TABLE IF NOT EXISTS time_off_decisions (
   actor_upn       TEXT,
   actor_name      TEXT,
   source          TEXT,
+  request_kind    TEXT NOT NULL DEFAULT 'time_off',
+  request_key     TEXT,
+  detail          JSONB,
   decided_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE time_off_decisions
   ADD COLUMN IF NOT EXISTS hour_from NUMERIC,
-  ADD COLUMN IF NOT EXISTS hour_to NUMERIC;
+  ADD COLUMN IF NOT EXISTS hour_to NUMERIC,
+  ADD COLUMN IF NOT EXISTS request_kind TEXT NOT NULL DEFAULT 'time_off',
+  ADD COLUMN IF NOT EXISTS request_key TEXT,
+  ADD COLUMN IF NOT EXISTS detail JSONB;
 CREATE INDEX IF NOT EXISTS time_off_decisions_decided_at_idx
   ON time_off_decisions (decided_at DESC);
 
