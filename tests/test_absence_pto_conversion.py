@@ -854,6 +854,28 @@ def test_ambiguous_approve_timeout_adopts_verified_remote_approval(monkeypatch):
     assert fake.events == [("approve", 71)]
 
 
+def test_crash_after_remote_approval_before_step_fence_finalizes_without_mutation(
+    monkeypatch,
+):
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, "refuse"),
+        pto=_leave(71, 44, 7, "validate"),
+    )
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="pto_created", pto_leave_id=71),
+    )
+
+    result = conversion.resume(41, NOW)
+
+    assert result.status == "approved"
+    assert fake_store.request.state == "approved"
+    assert fake_store.request.conversion_step == "pto_approved"
+    assert fake_store.finalizations[0]["pto_leave_id"] == 71
+    assert fake.events == []
+
+
 def test_incomplete_pto_close_failure_moves_to_review_with_known_id(monkeypatch):
     fake = FakeOdoo(
         absence=_leave(70, 44, 9, "refuse"),

@@ -141,6 +141,87 @@ def test_reconcile_rollover_and_resume_are_isolated_with_exact_counts(monkeypatc
     assert released == [41, 42, 43, 44]
 
 
+def test_reconcile_release_exception_keeps_operation_context_and_continues(
+    monkeypatch, caplog
+):
+    first = _request(41)
+    second = _request(42)
+    processed = []
+    monkeypatch.setattr(review, "_clock", lambda: NOW)
+    monkeypatch.setattr(
+        review.staffing_hours,
+        "current_pay_period_bounds",
+        lambda today: (date(2026, 8, 16), date(2026, 8, 29)),
+    )
+    monkeypatch.setattr(
+        review.store,
+        "claim_due",
+        lambda owner, now, **kwargs: [
+            replace(first, lease_owner=owner),
+            replace(second, lease_owner=owner),
+        ],
+    )
+
+    def resume_claimed(request, owner):
+        processed.append(request.id)
+        if request.id == 41:
+            raise RuntimeError("resume exploded")
+        return conversion.ConversionResult("approved", "approved", request)
+
+    def release_claim(request_id, owner, now):
+        if request_id == 41:
+            raise RuntimeError("release exploded")
+        return True
+
+    monkeypatch.setattr(review.conversion, "resume_claimed", resume_claimed)
+    monkeypatch.setattr(review.store, "release_claim", release_claim)
+
+    result = review.reconcile_once(NOW, limit=2)
+
+    assert result == review.ReconcileResult(2, 1, 0, 1)
+    assert processed == [41, 42]
+    assert "resume exploded" in caplog.text
+    assert "release exploded" in caplog.text
+
+
+def test_reconcile_unsuccessful_release_reclassifies_once_and_continues(monkeypatch):
+    first = _request(41)
+    second = _request(42)
+    processed = []
+    monkeypatch.setattr(review, "_clock", lambda: NOW)
+    monkeypatch.setattr(
+        review.staffing_hours,
+        "current_pay_period_bounds",
+        lambda today: (date(2026, 8, 16), date(2026, 8, 29)),
+    )
+    monkeypatch.setattr(
+        review.store,
+        "claim_due",
+        lambda owner, now, **kwargs: [
+            replace(first, lease_owner=owner),
+            replace(second, lease_owner=owner),
+        ],
+    )
+
+    def resume_claimed(request, owner):
+        processed.append(request.id)
+        status = "approved" if request.id == 41 else "needs_review"
+        return conversion.ConversionResult(status, status, request)
+
+    monkeypatch.setattr(review.conversion, "resume_claimed", resume_claimed)
+    monkeypatch.setattr(
+        review.store,
+        "release_claim",
+        lambda request_id, owner, now: request_id != 41,
+    )
+
+    result = review.reconcile_once(NOW, limit=2)
+
+    assert result == review.ReconcileResult(2, 0, 1, 1)
+    assert result.resumed + result.escalated + result.failed == result.scanned
+    assert processed == [41, 42]
+
+
 def test_reconcile_passes_a_new_owner_when_taking_over_an_expired_lease(monkeypatch):
     expired_owner = UUID("d796a59e-b4b6-4836-8daa-945ce57bb7f9")
     expired = _request(

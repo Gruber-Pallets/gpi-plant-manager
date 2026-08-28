@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import uuid4
+import logging
+from uuid import UUID, uuid4
 
 from . import absence_pto_conversion as conversion
 from . import absence_pto_store as store
@@ -13,6 +14,7 @@ from .plant_day import today as plant_today
 
 
 _ROLLOVER_ERROR = "Configured pay period closed before approval."
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,38 @@ def _now(value: datetime | None) -> datetime:
     return current
 
 
+def _reconcile_claimed(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+) -> str:
+    if request.state == "pending":
+        store.mark_needs_review(
+            request.id,
+            owner,
+            error=_ROLLOVER_ERROR,
+            now=_now(None),
+        )
+        return "escalated"
+    if request.state != "converting":
+        return "failed"
+    result = conversion.resume_claimed(request, owner)
+    if result.status == "needs_review":
+        return "escalated"
+    if result.status == "busy":
+        return "failed"
+    return "resumed"
+
+
+def _log_exception(request_id: int, phase: str, error: Exception) -> None:
+    _log.error(
+        "absence PTO reconcile %s failed for request %s: %s",
+        phase,
+        request_id,
+        error,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+
+
 def reconcile_once(now: datetime | None = None, limit: int = 25) -> ReconcileResult:
     """Claim and isolate a bounded batch of rollover and recovery work."""
     current = _now(now)
@@ -50,37 +84,34 @@ def reconcile_once(now: datetime | None = None, limit: int = 25) -> ReconcileRes
         period_end=period_end,
         limit=limit,
     )
-    resumed = escalated = failed = 0
+    counts = {"resumed": 0, "escalated": 0, "failed": 0}
     for request in requests:
+        operation_error = None
         try:
-            if request.state == "pending":
-                store.mark_needs_review(
-                    request.id,
-                    owner,
-                    error=_ROLLOVER_ERROR,
-                    now=_now(None),
-                )
-                escalated += 1
-                continue
-            if request.state != "converting":
-                failed += 1
-                continue
-            result = conversion.resume_claimed(request, owner)
-            if result.status == "needs_review":
-                escalated += 1
-            elif result.status == "busy":
-                failed += 1
-            else:
-                resumed += 1
-        except Exception:  # noqa: BLE001 - one recovery row cannot stop its batch
-            failed += 1
-        finally:
-            store.release_claim(request.id, owner, now=_now(None))
+            outcome = _reconcile_claimed(request, owner)
+        except Exception as error:  # noqa: BLE001 - isolate each recovery row
+            operation_error = error
+            outcome = "failed"
+
+        release_error = None
+        try:
+            released = store.release_claim(request.id, owner, now=_now(None))
+            if not released:
+                release_error = RuntimeError("lease release returned false")
+        except Exception as error:  # noqa: BLE001 - isolate lease cleanup too
+            release_error = error
+
+        if operation_error is not None:
+            _log_exception(request.id, "operation", operation_error)
+        if release_error is not None:
+            _log_exception(request.id, "release", release_error)
+            outcome = "failed"
+        counts[outcome] += 1
     return ReconcileResult(
         scanned=len(requests),
-        resumed=resumed,
-        escalated=escalated,
-        failed=failed,
+        resumed=counts["resumed"],
+        escalated=counts["escalated"],
+        failed=counts["failed"],
     )
 
 
