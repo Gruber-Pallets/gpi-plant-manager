@@ -52,6 +52,28 @@ def _parse_odoo_datetime(value: Any) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _require_aware_utc_datetime(value: Any, field_name: str) -> datetime:
+    if not isinstance(value, datetime) or value.utcoffset() is None:
+        raise TypeError(f"{field_name} must be an aware datetime")
+    return value.astimezone(UTC)
+
+
+def _require_response_fields(
+    row: dict, fields: Sequence[str], *, context: str
+) -> None:
+    missing = [field for field in fields if field not in row]
+    if missing:
+        raise RuntimeError(
+            f"Odoo {context} omitted requested field(s): {', '.join(missing)}"
+        )
+
+
+def _validated_attendance_id(value: Any, *, context: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise RuntimeError(f"Odoo {context} contained an invalid id")
+    return value
+
+
 def _m2o_parts(value: Any) -> tuple[int | None, str | None]:
     if isinstance(value, (list, tuple)) and value:
         raw_id = value[0]
@@ -82,24 +104,45 @@ def _raw_attendance_fields(
 def _normalize_raw_attendance(
     row: dict, wc_field: str | None, department_field: str | None
 ) -> dict:
-    employee_id, employee_name = _m2o_parts(row.get("employee_id"))
+    requested_fields = _raw_attendance_fields(wc_field, department_field)
+    _require_response_fields(
+        row, requested_fields, context="attendance row"
+    )
+    attendance_id = _validated_attendance_id(
+        row["id"], context="attendance row"
+    )
+    employee_id, employee_name = _m2o_parts(row["employee_id"])
+    if employee_id is None:
+        raise RuntimeError(
+            f"Odoo attendance row {attendance_id} contained an invalid employee_id"
+        )
+    check_in = _parse_odoo_datetime(row["check_in"])
+    if check_in is None:
+        raise RuntimeError(
+            f"Odoo attendance row {attendance_id} contained an invalid check_in"
+        )
+    write_date = _parse_odoo_datetime(row["write_date"])
+    if write_date is None:
+        raise RuntimeError(
+            f"Odoo attendance row {attendance_id} contained an invalid write_date"
+        )
     work_center_id, work_center_name = _m2o_parts(
-        row.get(wc_field) if wc_field else None
+        row[wc_field] if wc_field else None
     )
     department_id, department_name = _m2o_parts(
-        row.get(department_field) if department_field else None
+        row[department_field] if department_field else None
     )
     return {
-        "odoo_attendance_id": int(row["id"]),
+        "odoo_attendance_id": attendance_id,
         "employee_odoo_id": employee_id,
         "employee_name": employee_name,
-        "check_in_utc": _parse_odoo_datetime(row.get("check_in")),
-        "check_out_utc": _parse_odoo_datetime(row.get("check_out")),
+        "check_in_utc": check_in,
+        "check_out_utc": _parse_odoo_datetime(row["check_out"]),
         "odoo_work_center_id": work_center_id,
         "odoo_work_center_name": work_center_name,
         "odoo_department_id": department_id,
         "odoo_department_name": department_name,
-        "odoo_write_date": _parse_odoo_datetime(row.get("write_date")),
+        "odoo_write_date": write_date,
     }
 
 
@@ -114,7 +157,58 @@ def _write_date_boundary(cursor_date: datetime, cursor_id: int) -> list[Any]:
     ]
 
 
-def _fetch_raw_attendance_pages(
+def _write_date_upper_boundary(
+    watermark_date: datetime, watermark_id: int
+) -> list[Any]:
+    watermark_value = to_odoo_dt(watermark_date)
+    return [
+        "|",
+        ("write_date", "<", watermark_value),
+        "&",
+        ("write_date", "=", watermark_value),
+        ("id", "<=", watermark_id),
+    ]
+
+
+def _and_domain(*expressions: Any) -> list[Any]:
+    """Combine complete Odoo domain expressions with explicit prefix ANDs."""
+    parts: list[list[Any]] = []
+    for expression in expressions:
+        if expression == []:
+            continue
+        parts.append(expression if isinstance(expression, list) else [expression])
+    if not parts:
+        return []
+    return ["&"] * (len(parts) - 1) + [
+        token for part in parts for token in part
+    ]
+
+
+def _deduplicate_raw_attendance_rows(rows: list[dict]) -> list[dict]:
+    newest_by_id: dict[int, tuple[datetime, dict]] = {}
+    for row in rows:
+        _require_response_fields(
+            row, ["id", "write_date"], context="attendance page"
+        )
+        attendance_id = _validated_attendance_id(
+            row["id"], context="attendance page"
+        )
+        write_date = _parse_odoo_datetime(row["write_date"])
+        if write_date is None:
+            raise RuntimeError("Odoo attendance row omitted write_date")
+        current = newest_by_id.get(attendance_id)
+        if current is None or write_date >= current[0]:
+            newest_by_id[attendance_id] = (write_date, row)
+    return [
+        item[1]
+        for item in sorted(
+            newest_by_id.values(),
+            key=lambda item: (item[0], int(item[1]["id"])),
+        )
+    ]
+
+
+def _fetch_raw_attendance_change_pages(
     execute_fn: Callable[..., Any],
     wc_field: str | None,
     department_field: str | None,
@@ -127,6 +221,36 @@ def _fetch_raw_attendance_pages(
     if page_size <= 0:
         raise ValueError("page_size must be positive")
     fields = _raw_attendance_fields(wc_field, department_field)
+    initial_boundary = (
+        _write_date_boundary(cursor_date, cursor_id)
+        if cursor_date is not None
+        else []
+    )
+    watermark_rows = execute_fn(
+        "hr.attendance",
+        "search_read",
+        _and_domain(*base_domain, initial_boundary),
+        fields=["id", "write_date"],
+        order="write_date desc, id desc",
+        limit=1,
+    )
+    if not watermark_rows:
+        return []
+    watermark_row = watermark_rows[0]
+    _require_response_fields(
+        watermark_row,
+        ["id", "write_date"],
+        context="attendance watermark",
+    )
+    watermark_date = _parse_odoo_datetime(watermark_row["write_date"])
+    if watermark_date is None:
+        raise RuntimeError("Odoo attendance watermark omitted write_date")
+    watermark_id = _validated_attendance_id(
+        watermark_row["id"], context="attendance watermark"
+    )
+    upper_boundary = _write_date_upper_boundary(
+        watermark_date, watermark_id
+    )
     rows: list[dict] = []
     while True:
         boundary = (
@@ -137,7 +261,7 @@ def _fetch_raw_attendance_pages(
         page = execute_fn(
             "hr.attendance",
             "search_read",
-            [*base_domain, *boundary],
+            _and_domain(*base_domain, boundary, upper_boundary),
             fields=fields,
             order="write_date asc, id asc",
             limit=page_size,
@@ -146,16 +270,80 @@ def _fetch_raw_attendance_pages(
         if len(page) < page_size:
             break
         last = page[-1]
-        next_date = _parse_odoo_datetime(last.get("write_date"))
+        _require_response_fields(
+            last, ["id", "write_date"], context="attendance page"
+        )
+        next_date = _parse_odoo_datetime(last["write_date"])
         if next_date is None:
             raise RuntimeError("Odoo attendance page omitted write_date")
-        next_id = int(last["id"])
+        next_id = _validated_attendance_id(
+            last["id"], context="attendance page"
+        )
         if cursor_date is not None and (next_date, next_id) <= (
             cursor_date,
             cursor_id,
         ):
             raise RuntimeError("Odoo attendance keyset cursor did not advance")
         cursor_date, cursor_id = next_date, next_id
+    return [
+        _normalize_raw_attendance(row, wc_field, department_field)
+        for row in _deduplicate_raw_attendance_rows(rows)
+    ]
+
+
+def _fetch_raw_attendance_id_pages(
+    execute_fn: Callable[..., Any],
+    wc_field: str | None,
+    department_field: str | None,
+    *,
+    base_domain: list[Any],
+    page_size: int,
+) -> list[dict]:
+    if page_size <= 0:
+        raise ValueError("page_size must be positive")
+    watermark_rows = execute_fn(
+        "hr.attendance",
+        "search_read",
+        _and_domain(*base_domain),
+        fields=["id"],
+        order="id desc",
+        limit=1,
+    )
+    if not watermark_rows:
+        return []
+    _require_response_fields(
+        watermark_rows[0], ["id"], context="attendance ID watermark"
+    )
+    watermark_id = _validated_attendance_id(
+        watermark_rows[0]["id"], context="attendance ID watermark"
+    )
+    cursor_id = 0
+    rows: list[dict] = []
+    while True:
+        page = execute_fn(
+            "hr.attendance",
+            "search_read",
+            _and_domain(
+                *base_domain,
+                ("id", ">", cursor_id),
+                ("id", "<=", watermark_id),
+            ),
+            fields=_raw_attendance_fields(wc_field, department_field),
+            order="id asc",
+            limit=page_size,
+        )
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        _require_response_fields(
+            page[-1], ["id"], context="attendance ID page"
+        )
+        next_id = _validated_attendance_id(
+            page[-1]["id"], context="attendance ID page"
+        )
+        if next_id <= cursor_id:
+            raise RuntimeError("Odoo attendance ID cursor did not advance")
+        cursor_id = next_id
     return [
         _normalize_raw_attendance(row, wc_field, department_field)
         for row in rows
@@ -178,9 +366,11 @@ def fetch_attendance_changes(
     cursor_date = None
     cursor_id = 0
     if after_write_date is not None:
-        cursor_date = after_write_date - overlap
+        cursor_date = _require_aware_utc_datetime(
+            after_write_date, "after_write_date"
+        ) - overlap
         cursor_id = int(after_id or 0) if not overlap else 0
-    return _fetch_raw_attendance_pages(
+    return _fetch_raw_attendance_change_pages(
         execute_fn,
         wc_field,
         department_field,
@@ -199,13 +389,11 @@ def fetch_open_attendance_rows(
     page_size: int = 250,
 ) -> list[dict]:
     """Refresh all open rows independently of their last write date."""
-    return _fetch_raw_attendance_pages(
+    return _fetch_raw_attendance_id_pages(
         execute_fn,
         wc_field,
         department_field,
         base_domain=[("check_out", "=", False)],
-        cursor_date=None,
-        cursor_id=0,
         page_size=page_size,
     )
 
@@ -218,7 +406,7 @@ def fetch_open_attendance_rows_for_employee(
     *,
     page_size: int = 250,
 ) -> list[dict]:
-    return _fetch_raw_attendance_pages(
+    return _fetch_raw_attendance_id_pages(
         execute_fn,
         wc_field,
         department_field,
@@ -226,8 +414,6 @@ def fetch_open_attendance_rows_for_employee(
             ("employee_id", "=", int(employee_odoo_id)),
             ("check_out", "=", False),
         ],
-        cursor_date=None,
-        cursor_id=0,
         page_size=page_size,
     )
 
@@ -238,18 +424,46 @@ def fetch_all_attendance_ids(
     """Fetch a complete ID sweep without offset paging."""
     if page_size <= 0:
         raise ValueError("page_size must be positive")
+    watermark_rows = execute_fn(
+        "hr.attendance",
+        "search_read",
+        [],
+        fields=["id"],
+        order="id desc",
+        limit=1,
+    )
+    if not watermark_rows:
+        return []
+    _require_response_fields(
+        watermark_rows[0], ["id"], context="attendance ID sweep watermark"
+    )
+    watermark_id = _validated_attendance_id(
+        watermark_rows[0]["id"], context="attendance ID sweep watermark"
+    )
     cursor_id = 0
     ids: list[int] = []
     while True:
         page = execute_fn(
             "hr.attendance",
             "search_read",
-            [("id", ">", cursor_id)],
+            _and_domain(
+                ("id", ">", cursor_id),
+                ("id", "<=", watermark_id),
+            ),
             fields=["id"],
             order="id asc",
             limit=page_size,
         )
-        page_ids = [int(row["id"]) for row in page]
+        for row in page:
+            _require_response_fields(
+                row, ["id"], context="attendance ID sweep page"
+            )
+        page_ids = [
+            _validated_attendance_id(
+                row["id"], context="attendance ID sweep page"
+            )
+            for row in page
+        ]
         ids.extend(page_ids)
         if len(page) < page_size:
             break
@@ -290,20 +504,56 @@ def fetch_employee_attendance_rows(
     start_utc: datetime,
     end_utc: datetime | None,
 ) -> list[dict]:
-    domain: list[Any] = [
-        ("employee_id", "=", int(employee_odoo_id)),
+    start_utc = _require_aware_utc_datetime(start_utc, "start_utc")
+    if end_utc is not None:
+        end_utc = _require_aware_utc_datetime(end_utc, "end_utc")
+    open_overlap = [
         "|",
         ("check_out", "=", False),
         ("check_out", ">", to_odoo_dt(start_utc)),
     ]
-    if end_utc is not None:
-        domain.append(("check_in", "<", to_odoo_dt(end_utc)))
+    domain = _and_domain(
+        ("employee_id", "=", int(employee_odoo_id)),
+        open_overlap,
+        (
+            ("check_in", "<", to_odoo_dt(end_utc))
+            if end_utc is not None
+            else []
+        ),
+    )
     rows = execute_fn(
         "hr.attendance",
         "search_read",
         domain,
         fields=_raw_attendance_fields(wc_field, department_field),
         order="check_in asc, id asc",
+    )
+    return [
+        _normalize_raw_attendance(row, wc_field, department_field)
+        for row in rows
+    ]
+
+
+def fetch_employee_attendance_rows_at_checkout(
+    execute_fn: Callable[..., Any],
+    wc_field: str | None,
+    department_field: str | None,
+    employee_odoo_id: int,
+    check_out_utc: datetime,
+) -> list[dict]:
+    """Find rows closed at one exact Odoo-second retry boundary."""
+    check_out_utc = _require_aware_utc_datetime(
+        check_out_utc, "check_out_utc"
+    )
+    rows = execute_fn(
+        "hr.attendance",
+        "search_read",
+        _and_domain(
+            ("employee_id", "=", int(employee_odoo_id)),
+            ("check_out", "=", to_odoo_dt(check_out_utc)),
+        ),
+        fields=_raw_attendance_fields(wc_field, department_field),
+        order="id asc",
     )
     return [
         _normalize_raw_attendance(row, wc_field, department_field)
