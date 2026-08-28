@@ -1,4 +1,5 @@
 import os
+from contextlib import nullcontext
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -85,7 +86,13 @@ def test_schema_has_linked_request_constraints_and_future_safe_columns():
     assert "absence_pto_requests_pto_leave_uniq" in SCHEMA_DDL
     assert "absence_pto_requests_due_idx" in SCHEMA_DDL
     assert "ALTER TABLE absence_pto_requests" in SCHEMA_DDL
+    assert "ADD COLUMN IF NOT EXISTS id BIGSERIAL" in SCHEMA_DDL
     assert "ADD COLUMN IF NOT EXISTS lease_owner UUID" in SCHEMA_DDL
+    assert "absence_pto_requests_balance_check" in SCHEMA_DDL
+    assert "absence_pto_requests_id_seq" in SCHEMA_DDL
+    assert "ALTER COLUMN absence_day SET NOT NULL" in SCHEMA_DDL
+    assert "ALTER COLUMN updated_at SET NOT NULL" in SCHEMA_DDL
+    assert "FROM pg_constraint" in SCHEMA_DDL
     table_ddl = SCHEMA_DDL.split("CREATE TABLE IF NOT EXISTS absence_pto_requests", 1)[1]
     assert "REFERENCES manual_absences" not in table_ddl
 
@@ -206,7 +213,9 @@ def test_claim_is_atomic_and_lease_bounded(monkeypatch):
     assert "FOR UPDATE" in seen["sql"]
     assert "lease_until <=" in seen["sql"]
     assert "lease_owner = %s" in seen["sql"]
-    assert seen["sql"].rstrip().endswith(store.REQUEST_COLUMNS)
+    assert seen["sql"].rstrip().endswith(store.QUALIFIED_REQUEST_COLUMNS)
+    assert "request.id AS id" in seen["sql"]
+    assert "request.updated_at AS updated_at" in seen["sql"]
 
 
 def test_claim_returns_none_when_an_unexpired_other_owner_holds_it(monkeypatch):
@@ -392,7 +401,7 @@ def test_database_guard_rejects_unsafe_database(database_url):
         "whose database name ends in _test"
     ),
 )
-def test_live_postgres_allows_only_one_active_request_but_denial_reopens_slot():
+def test_live_postgres_claims_successfully_and_enforces_active_uniqueness(monkeypatch):
     from zira_dashboard import db
 
     class RollBackIntegrationData(Exception):
@@ -425,6 +434,16 @@ def test_live_postgres_allows_only_one_active_request_but_denial_reopens_slot():
                 """
                 cur.execute(insert_sql, params)
                 first_id = cur.fetchone()["id"]
+                def query_in_transaction(sql, query_params=None):
+                    cur.execute(sql, query_params)
+                    return list(cur.fetchall())
+
+                with monkeypatch.context() as transaction_patch:
+                    transaction_patch.setattr(store.db, "query", query_in_transaction)
+                    claimed = store.claim_request(first_id, OWNER, NOW)
+                assert claimed is not None
+                assert claimed.id == first_id
+                assert claimed.lease_owner == OWNER
                 cur.execute("SAVEPOINT active_duplicate")
                 with pytest.raises(psycopg2.errors.UniqueViolation):
                     cur.execute(insert_sql, params)
@@ -436,6 +455,163 @@ def test_live_postgres_allows_only_one_active_request_but_denial_reopens_slot():
                 )
                 cur.execute(insert_sql, params)
                 assert cur.fetchone()["id"] != first_id
+                raise RollBackIntegrationData
+    finally:
+        db.shutdown_pool()
+
+
+@pytest.mark.skipif(
+    not SAFE_TEST_DATABASE,
+    reason=(
+        "requires ABSENCE_PTO_TEST_DATABASE=1 and a loopback DATABASE_URL "
+        "whose database name ends in _test"
+    ),
+)
+def test_live_postgres_recovers_a_valid_partial_table_and_rejects_invalid_rows(
+    monkeypatch,
+):
+    from zira_dashboard import db
+
+    class RollBackIntegrationData(Exception):
+        pass
+
+    partial_table_sql = """
+        CREATE TABLE absence_pto_requests (
+            id BIGINT,
+            absence_day DATE,
+            emp_id TEXT,
+            person_odoo_id INTEGER,
+            person_name TEXT,
+            holiday_status_id INTEGER,
+            leave_type_name TEXT,
+            balance_at_submit NUMERIC,
+            state TEXT,
+            conversion_step TEXT,
+            task_attempts INTEGER,
+            requested_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ
+        )
+    """
+    insert_partial_sql = """
+        INSERT INTO absence_pto_requests (
+            id, absence_day, emp_id, person_odoo_id, person_name,
+            holiday_status_id, leave_type_name, balance_at_submit,
+            state, conversion_step, task_attempts, requested_at,
+            created_at, updated_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    db.shutdown_pool()
+    try:
+        db.init_pool(minconn=1, maxconn=2)
+        db.bootstrap_schema()
+        with pytest.raises(RollBackIntegrationData):
+            with db.cursor() as cur:
+                cur.execute("DROP TABLE absence_pto_requests")
+                cur.execute(partial_table_sql)
+                original = (
+                    91,
+                    date(2099, 1, 5),
+                    "pytest-partial-valid",
+                    44,
+                    "Partial Worker",
+                    7,
+                    "Paid Time Off",
+                    Decimal("8.5"),
+                    "pending",
+                    "not_started",
+                    0,
+                    NOW,
+                    NOW,
+                    NOW,
+                )
+                cur.execute(insert_partial_sql, original)
+
+                with monkeypatch.context() as transaction_patch:
+                    transaction_patch.setattr(db, "cursor", lambda: nullcontext(cur))
+                    db.bootstrap_schema()
+                    db.bootstrap_schema()
+
+                cur.execute(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conrelid = 'absence_pto_requests'::regclass"
+                )
+                constraint_names = {row["conname"] for row in cur.fetchall()}
+                assert {
+                    "absence_pto_requests_pkey",
+                    "absence_pto_requests_state_check",
+                    "absence_pto_requests_step_check",
+                    "absence_pto_requests_balance_check",
+                }.issubset(constraint_names)
+
+                required_columns = {
+                    "id",
+                    "absence_day",
+                    "emp_id",
+                    "person_odoo_id",
+                    "person_name",
+                    "holiday_status_id",
+                    "leave_type_name",
+                    "balance_at_submit",
+                    "state",
+                    "conversion_step",
+                    "task_attempts",
+                    "requested_at",
+                    "created_at",
+                    "updated_at",
+                }
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = 'absence_pto_requests' "
+                    "AND is_nullable = 'NO'"
+                )
+                not_null_columns = {row["column_name"] for row in cur.fetchall()}
+                assert required_columns.issubset(not_null_columns)
+
+                cur.execute(
+                    "SELECT id, absence_day, emp_id, person_odoo_id, person_name, "
+                    "holiday_status_id, leave_type_name, balance_at_submit, state, "
+                    "conversion_step, task_attempts, requested_at, created_at, updated_at "
+                    "FROM absence_pto_requests WHERE id = 91"
+                )
+                recovered = cur.fetchone()
+                assert tuple(recovered.values()) == original
+
+                def query_in_transaction(sql, query_params=None):
+                    cur.execute(sql, query_params)
+                    return list(cur.fetchall())
+
+                with monkeypatch.context() as transaction_patch:
+                    transaction_patch.setattr(store.db, "query", query_in_transaction)
+                    created = store.create_request(
+                        absence_day=date(2099, 1, 6),
+                        emp_id="pytest-partial-next-id",
+                        person_odoo_id=45,
+                        person_name="Next Worker",
+                        holiday_status_id=7,
+                        leave_type_name="Paid Time Off",
+                        balance_at_submit=Decimal("16"),
+                        now=NOW,
+                    )
+                assert created.id == 92
+
+                cur.execute("DROP TABLE absence_pto_requests")
+                cur.execute(partial_table_sql)
+                cur.execute(
+                    insert_partial_sql,
+                    original[:7]
+                    + (Decimal("-1"),)
+                    + original[8:],
+                )
+                cur.execute("SAVEPOINT invalid_partial_bootstrap")
+                with monkeypatch.context() as transaction_patch:
+                    transaction_patch.setattr(db, "cursor", lambda: nullcontext(cur))
+                    with pytest.raises(psycopg2.errors.CheckViolation):
+                        db.bootstrap_schema()
+                cur.execute("ROLLBACK TO SAVEPOINT invalid_partial_bootstrap")
+                cur.execute("RELEASE SAVEPOINT invalid_partial_bootstrap")
                 raise RollBackIntegrationData
     finally:
         db.shutdown_pool()

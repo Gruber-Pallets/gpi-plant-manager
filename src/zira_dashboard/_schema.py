@@ -2200,7 +2200,7 @@ CREATE TABLE IF NOT EXISTS absence_pto_requests (
   person_name TEXT NOT NULL,
   holiday_status_id INTEGER NOT NULL,
   leave_type_name TEXT NOT NULL,
-  balance_at_submit NUMERIC NOT NULL CHECK (balance_at_submit >= 0),
+  balance_at_submit NUMERIC NOT NULL,
   original_absence_leave_id INTEGER,
   pto_leave_id INTEGER,
   state TEXT NOT NULL DEFAULT 'pending',
@@ -2222,6 +2222,7 @@ CREATE TABLE IF NOT EXISTS absence_pto_requests (
   resolved_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT absence_pto_requests_balance_check CHECK (balance_at_submit >= 0),
   CONSTRAINT absence_pto_requests_state_check CHECK
     (state IN ('pending','converting','approved','denied','needs_review','resolved_manually')),
   CONSTRAINT absence_pto_requests_step_check CHECK
@@ -2230,6 +2231,7 @@ CREATE TABLE IF NOT EXISTS absence_pto_requests (
 
 -- Keep bootstrap parity if an earlier deployment created only part of the
 -- table. Each statement is safe to run on every process start.
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS id BIGSERIAL;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS absence_day DATE;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS emp_id TEXT;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS person_odoo_id INTEGER;
@@ -2263,6 +2265,97 @@ ALTER TABLE absence_pto_requests
   ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE absence_pto_requests
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- CREATE TABLE IF NOT EXISTS does not repair a table created by an earlier,
+-- partial release. Restore defaults without changing existing values, then
+-- add each named constraint exactly once. Constraint validation and the
+-- required-column ALTERs intentionally fail bootstrap if legacy data is
+-- invalid; weakening or silently rewriting the audit record is not safe.
+DO $absence_pto_request_id_default$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'absence_pto_requests'
+      AND column_name = 'id'
+      AND column_default LIKE 'nextval(%'
+  ) THEN
+    CREATE SEQUENCE IF NOT EXISTS absence_pto_requests_id_seq AS BIGINT;
+    ALTER SEQUENCE absence_pto_requests_id_seq
+      OWNED BY absence_pto_requests.id;
+    PERFORM setval(
+      'absence_pto_requests_id_seq',
+      COALESCE((SELECT MAX(id) FROM absence_pto_requests), 1),
+      EXISTS (SELECT 1 FROM absence_pto_requests)
+    );
+    ALTER TABLE absence_pto_requests ALTER COLUMN id
+      SET DEFAULT nextval('absence_pto_requests_id_seq'::regclass);
+  END IF;
+END
+$absence_pto_request_id_default$;
+
+ALTER TABLE absence_pto_requests ALTER COLUMN state SET DEFAULT 'pending';
+ALTER TABLE absence_pto_requests
+  ALTER COLUMN conversion_step SET DEFAULT 'not_started';
+ALTER TABLE absence_pto_requests ALTER COLUMN task_attempts SET DEFAULT 0;
+ALTER TABLE absence_pto_requests ALTER COLUMN requested_at SET DEFAULT now();
+ALTER TABLE absence_pto_requests ALTER COLUMN created_at SET DEFAULT now();
+ALTER TABLE absence_pto_requests ALTER COLUMN updated_at SET DEFAULT now();
+
+DO $absence_pto_request_constraints$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'absence_pto_requests'::regclass
+      AND conname = 'absence_pto_requests_pkey'
+  ) THEN
+    ALTER TABLE absence_pto_requests
+      ADD CONSTRAINT absence_pto_requests_pkey PRIMARY KEY (id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'absence_pto_requests'::regclass
+      AND conname = 'absence_pto_requests_balance_check'
+  ) THEN
+    ALTER TABLE absence_pto_requests
+      ADD CONSTRAINT absence_pto_requests_balance_check
+      CHECK (balance_at_submit >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'absence_pto_requests'::regclass
+      AND conname = 'absence_pto_requests_state_check'
+  ) THEN
+    ALTER TABLE absence_pto_requests
+      ADD CONSTRAINT absence_pto_requests_state_check CHECK
+      (state IN ('pending','converting','approved','denied','needs_review','resolved_manually'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'absence_pto_requests'::regclass
+      AND conname = 'absence_pto_requests_step_check'
+  ) THEN
+    ALTER TABLE absence_pto_requests
+      ADD CONSTRAINT absence_pto_requests_step_check CHECK
+      (conversion_step IN ('not_started','absence_refused','pto_created','pto_approved'));
+  END IF;
+END
+$absence_pto_request_constraints$;
+
+ALTER TABLE absence_pto_requests ALTER COLUMN id SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN absence_day SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN emp_id SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN person_odoo_id SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN person_name SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN holiday_status_id SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN leave_type_name SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN balance_at_submit SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN state SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN conversion_step SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN task_attempts SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN requested_at SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN created_at SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN updated_at SET NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS absence_pto_requests_active_uniq
   ON absence_pto_requests (absence_day, emp_id)

@@ -32,6 +32,10 @@ REQUEST_COLUMNS = (
     "requested_by_person_id, decided_by_upn, decided_by_name, requested_at, "
     "decided_at, resolved_at, created_at, updated_at"
 )
+QUALIFIED_REQUEST_COLUMNS = ", ".join(
+    f"request.{column.strip()} AS {column.strip()}"
+    for column in REQUEST_COLUMNS.split(",")
+)
 
 
 class StaleTransition(RuntimeError):
@@ -350,7 +354,7 @@ def claim_request(
         "WHERE request.id = locked.id AND (request.lease_owner IS NULL "
         "OR request.lease_until IS NULL OR request.lease_until <= %s "
         "OR request.lease_owner = %s) RETURNING "
-        f"{REQUEST_COLUMNS}"
+        f"{QUALIFIED_REQUEST_COLUMNS}"
     )
     rows = db.query(
         sql,
