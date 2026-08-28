@@ -19,6 +19,13 @@ from .time_format import fmt_decimal_hour
 _APPROVED = "validate"
 _PENDING = ("draft", "confirm", "validate1")
 _VISIBLE_STATES = (_APPROVED,) + _PENDING
+_ABSENCE_PAY_LABEL = {
+    "pending": "Absent · PTO pending",
+    "converting": "Absent · PTO pending",
+    "approved": "Absent · PTO",
+    "needs_review": "Absent · PTO review",
+    "resolved_manually": "Absent · handled",
+}
 
 
 def _timing_label(r: dict) -> str:
@@ -78,6 +85,20 @@ def _cleared_partial_names(day: _date) -> set[str]:
         return set()
 
 
+def _absence_pto_states(day: _date, emp_ids: set[str]) -> dict[str, str]:
+    """Newest linked pay state per absent employee, fetched in one query."""
+    if not emp_ids:
+        return {}
+    rows = db.query(
+        "SELECT DISTINCT ON (emp_id) emp_id, state "
+        "FROM absence_pto_requests "
+        "WHERE absence_day = %s AND emp_id = ANY(%s) "
+        "ORDER BY emp_id, requested_at DESC, id DESC",
+        (day, sorted(emp_ids)),
+    )
+    return {str(row["emp_id"]): str(row["state"]) for row in rows}
+
+
 def time_off_entries_for_day(day: _date) -> list[dict]:
     """List of scheduler time-off entries for ``day`` (approved + pending).
 
@@ -125,18 +146,25 @@ def time_off_entries_for_day(day: _date) -> list[dict]:
     # overrides any other entry for that person: drop theirs, add one Absent.
     from . import late_report
     try:
-        absent = late_report.absent_names_for_day(day)
+        absences = late_report.absences_for_day(day)
     except Exception:  # noqa: BLE001 — degrade to "no declared absences"
-        absent = set()
-    if absent:
-        out = [e for e in out if e["name"] not in absent]
-        for name in sorted(absent):
+        absences = []
+    if absences:
+        absent_names = {str(row["name"]) for row in absences}
+        linked_states = _absence_pto_states(
+            day, {str(row["emp_id"]) for row in absences}
+        )
+        out = [e for e in out if e["name"] not in absent_names]
+        for absence in sorted(absences, key=lambda row: str(row["name"])):
+            name = str(absence["name"])
+            state = linked_states.get(str(absence["emp_id"]))
+            label = _ABSENCE_PAY_LABEL.get(state, "Absent")
             out.append({
                 "name": name,
                 "hours": None,
-                "pay_type": "Absent",
+                "pay_type": label,
                 "time_range": "",
-                "timing_label": "Absent",
+                "timing_label": label,
                 "derived": False,
                 "manual_absent": True,
                 "pending": False,

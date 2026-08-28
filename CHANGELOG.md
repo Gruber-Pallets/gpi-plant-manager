@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Workers can use PTO for a missed day
+
+#### Features
+
+- **Workers can now ask to use one PTO day for a missed day in the current pay period.** The day still counts as an absence, a manager must approve it, and unclear closed-pay cases go to Wendy for review.
+
 ### Keep Odoo work-time checks safe
 
 - **Plant Manager now checks Odoo work times one at a time and double-checks empty lists.** This keeps overlapping or failed checks from hiding good work records. The safe copy is still running in the background only.

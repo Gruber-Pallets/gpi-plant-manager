@@ -1,6 +1,6 @@
 # Route modules, grouped by nav section
 
-The 35 files in this folder are mounted flat in `app.py` (each declares its
+The route files in this folder are mounted flat in `app.py` (each declares its
 own full URL paths — no router prefixes). This index groups them by where
 they surface in the UI so a newcomer can find the code behind a page.
 
@@ -37,6 +37,7 @@ Dashboards, leaderboards, and the trophy case — all under
 | `share.py` | `/staffing/share-to-slack` schedule PDF/permalink |
 | `time_off.py` | `/staffing/time-off` calendar + merged approvals panel |
 | `time_off_approvals.py` | approvals payload helpers (page URL now 301s to time_off) |
+| `absence_pto_admin.py` | manager actions for PTO linked to recorded absences |
 | `skills.py` | `/staffing/skills` People/Skills Matrix + automation goals |
 | `people.py` | `/staffing/people/{name}` player cards |
 | `past_schedules.py` | `/staffing/past` published-schedule browser |
@@ -62,6 +63,7 @@ Dashboards, leaderboards, and the trophy case — all under
 | `timeclock.py` | `/timeclock` punch flows + session tokens |
 | `timeclock_saturday.py` | Saturday offer/commit kiosk flow |
 | `timeclock_time_off.py` | kiosk time-off request/mine/calendar/whos-out |
+| `timeclock_absence_pto.py` | kiosk requests to use PTO for a recorded past absence |
 
 ## Cross-cutting / infrastructure
 | Module | Serves |

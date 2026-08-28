@@ -1,4 +1,6 @@
 from datetime import date
+
+import pytest
 from zira_dashboard import scheduler_time_off as sto
 
 
@@ -20,9 +22,10 @@ def _fake_db(monkeypatch, rows):
     from zira_dashboard import late_report
     monkeypatch.setattr(late_report, "cleared_partial_names_for_day", lambda day: set())
     # Likewise, time_off_entries_for_day queries manual_absences (via
-    # late_report.absent_names_for_day); the broad stub would read the time-off
-    # rows back as "absent". Default to none; the absent-specific test overrides.
-    monkeypatch.setattr(late_report, "absent_names_for_day", lambda day: set())
+    # late_report.absences_for_day); the broad stub would read the time-off rows
+    # back as "absent". Default to none; the absent-specific test overrides.
+    monkeypatch.setattr(late_report, "absences_for_day", lambda day: [])
+    monkeypatch.setattr(sto, "_absence_pto_states", lambda day, emp_ids: {})
 
 
 def test_scheduler_entry_exposes_editor_metadata_without_note(monkeypatch):
@@ -160,7 +163,14 @@ def test_declared_absent_becomes_full_day_absent_entry(monkeypatch):
          "state": "validate", "pay_type": "Unpaid Time Off"},
     ])
     import zira_dashboard.late_report as lr
-    monkeypatch.setattr(lr, "absent_names_for_day", lambda day: {"Ana", "Carl"})
+    monkeypatch.setattr(
+        lr,
+        "absences_for_day",
+        lambda day: [
+            {"emp_id": "44", "name": "Ana"},
+            {"emp_id": "45", "name": "Carl"},
+        ],
+    )
 
     out = {e["name"]: e for e in sto.time_off_entries_for_day(date(2026, 6, 1))}
 
@@ -175,3 +185,82 @@ def test_declared_absent_becomes_full_day_absent_entry(monkeypatch):
     # Carl: declared absent, not in the Odoo feed -> new Absent entry
     assert out["Carl"]["manual_absent"] is True
     assert out["Carl"]["hours"] is None
+
+
+@pytest.mark.parametrize(
+    ("state", "label"),
+    [
+        (None, "Absent"),
+        ("denied", "Absent"),
+        ("pending", "Absent · PTO pending"),
+        ("converting", "Absent · PTO pending"),
+        ("approved", "Absent · PTO"),
+        ("needs_review", "Absent · PTO review"),
+        ("resolved_manually", "Absent · handled"),
+    ],
+)
+def test_manual_absence_keeps_attendance_and_adds_pay_suffix(
+    monkeypatch, state, label
+):
+    day = date(2026, 8, 20)
+    monkeypatch.setattr(sto, "_rows_for_day", lambda _day: [])
+    monkeypatch.setattr(sto, "_cleared_partial_names", lambda _day: set())
+    from zira_dashboard import late_report
+
+    monkeypatch.setattr(
+        late_report,
+        "absences_for_day",
+        lambda _day: [{"emp_id": "44", "name": "Ana"}],
+    )
+    queries = []
+
+    def fake_query(sql, params=None):
+        queries.append((sql, params))
+        return [] if state is None else [{"emp_id": "44", "state": state}]
+
+    monkeypatch.setattr(sto.db, "query", fake_query)
+
+    row = sto.time_off_entries_for_day(day)[0]
+
+    assert row["manual_absent"] is True
+    assert row["pay_type"] == label
+    assert row["timing_label"] == label
+    assert row["hours"] is None
+    assert row["pending"] is False
+    assert row.get("editable", False) is False
+    assert len(queries) == 1
+    assert "absence_pto_requests" in queries[0][0]
+
+
+def test_linked_absence_states_are_fetched_once_for_all_absent_employees(monkeypatch):
+    day = date(2026, 8, 20)
+    monkeypatch.setattr(sto, "_rows_for_day", lambda _day: [])
+    monkeypatch.setattr(sto, "_cleared_partial_names", lambda _day: set())
+    from zira_dashboard import late_report
+
+    monkeypatch.setattr(
+        late_report,
+        "absences_for_day",
+        lambda _day: [
+            {"emp_id": "44", "name": "Ana"},
+            {"emp_id": "45", "name": "Bea"},
+        ],
+    )
+    queries = []
+
+    def fake_query(sql, params=None):
+        queries.append((sql, params))
+        return [
+            {"emp_id": "44", "state": "approved"},
+            {"emp_id": "45", "state": "pending"},
+        ]
+
+    monkeypatch.setattr(sto.db, "query", fake_query)
+
+    rows = {row["name"]: row for row in sto.time_off_entries_for_day(day)}
+
+    assert len(queries) == 1
+    assert set(queries[0][1][1]) == {"44", "45"}
+    assert rows["Ana"]["pay_type"] == "Absent · PTO"
+    assert rows["Bea"]["pay_type"] == "Absent · PTO pending"
+    assert len(rows) == 2

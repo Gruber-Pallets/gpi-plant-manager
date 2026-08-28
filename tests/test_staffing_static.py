@@ -129,6 +129,15 @@ def test_scheduler_time_off_rows_expose_editor_data_and_dialog():
     assert 'id="scheduler-time-off-cancel"' in html
 
 
+def test_manual_absence_rows_keep_light_red_style_without_edit_action():
+    html = _template()
+
+    assert "{% set is_absent = e.derived or e.manual_absent %}" in html
+    assert "{% if is_absent %}absent" in html
+    assert "{% if e.editable %} role=\"button\"" in html
+    assert "recorded absences" in html
+
+
 def test_scheduler_script_posts_editor_actions_and_restores_focus():
     js = _script()
 
