@@ -365,6 +365,12 @@ def approve_leave(
     return rows[0].get("state") if rows else state
 
 
+def approve_leave_once(execute_fn: Callable[..., Any], leave_id: int) -> None:
+    """Perform exactly one approval transition; the caller owns all rereads."""
+    normalized_leave_id = _record_id(leave_id, "id")
+    execute_fn("hr.leave", "action_approve", [normalized_leave_id])
+
+
 def write_leave(
     execute_fn: Callable[..., Any], leave_id: int, **fields: Any
 ) -> None:

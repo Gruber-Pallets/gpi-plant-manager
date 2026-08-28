@@ -49,6 +49,15 @@ def _now(value: datetime | None) -> datetime:
     return current
 
 
+def _clock() -> datetime:
+    """Injectable live clock for every lease and safety boundary."""
+    return datetime.now(UTC)
+
+
+def _lease_now() -> datetime:
+    return _now(_clock())
+
+
 def approve(
     request_id: int,
     actor_upn: str | None,
@@ -56,21 +65,23 @@ def approve(
     source: str | None,
     now: datetime | None = None,
 ) -> ConversionResult:
-    current_time = _now(now)
+    if now is not None:
+        _now(now)
     owner = uuid4()
-    current = store.claim_request(request_id, owner, current_time, lease_seconds=120)
+    current = store.claim_request(request_id, owner, _lease_now(), lease_seconds=120)
     if current is None:
         return ConversionResult("busy", _BUSY_MESSAGE, None)
     try:
-        return _resume_claim(current, owner, actor_upn, actor_name, source, current_time)
+        return _resume_claim(current, owner, actor_upn, actor_name, source)
     finally:
-        store.release_claim(request_id, owner, now=current_time)
+        store.release_claim(request_id, owner, now=_lease_now())
 
 
 def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
-    current_time = _now(now)
+    if now is not None:
+        _now(now)
     owner = uuid4()
-    current = store.claim_request(request_id, owner, current_time, lease_seconds=120)
+    current = store.claim_request(request_id, owner, _lease_now(), lease_seconds=120)
     if current is None:
         return ConversionResult("busy", _BUSY_MESSAGE, None)
     try:
@@ -84,10 +95,9 @@ def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
             current.decided_by_upn,
             current.decided_by_name,
             "reconciler",
-            current_time,
         )
     finally:
-        store.release_claim(request_id, owner, now=current_time)
+        store.release_claim(request_id, owner, now=_lease_now())
 
 
 def _manual_absence(request: store.AbsencePtoRequest) -> dict:
@@ -203,22 +213,36 @@ def _matching_pto(request: store.AbsencePtoRequest) -> dict | None:
     return verified
 
 
+def _renew_and_preflight(
+    request: store.AbsencePtoRequest,
+    owner: UUID,
+    *,
+    own_pto: dict | None = None,
+) -> store.AbsencePtoRequest:
+    """Renew in a short transaction, then rebuild the complete live safety view."""
+    renewed = store.renew_claim(request.id, owner, _lease_now(), lease_seconds=120)
+    _preflight(renewed, _lease_now(), own_pto=own_pto)
+    return renewed
+
+
 def _pending_for_low_balance(
     request: store.AbsencePtoRequest,
     owner: UUID,
-    now: datetime,
 ) -> ConversionResult:
     if request.state == "converting" and request.conversion_step == "not_started":
-        request = store.transition(
-            request.id,
-            owner,
-            expected_state="converting",
-            expected_step="not_started",
-            new_state="pending",
-            new_step="not_started",
-            sync_error=None,
-            now=now,
-        )
+        try:
+            request = store.transition(
+                request.id,
+                owner,
+                expected_state="converting",
+                expected_step="not_started",
+                new_state="pending",
+                new_step="not_started",
+                sync_error=None,
+                now=_lease_now(),
+            )
+        except store.StaleTransition:
+            return ConversionResult("busy", _BUSY_MESSAGE, None)
     return ConversionResult("pending", _PENDING_BALANCE_MESSAGE, request)
 
 
@@ -226,11 +250,18 @@ def _needs_review(
     request: store.AbsencePtoRequest,
     owner: UUID,
     error: Exception,
-    now: datetime,
 ) -> ConversionResult:
     message = str(error) or type(error).__name__
     if request.state in {"pending", "converting", "needs_review"}:
-        request = store.mark_needs_review(request.id, owner, error=message[:500], now=now)
+        try:
+            request = store.mark_needs_review(
+                request.id,
+                owner,
+                error=message[:500],
+                now=_lease_now(),
+            )
+        except store.StaleTransition:
+            return ConversionResult("busy", _BUSY_MESSAGE, None)
     return ConversionResult("needs_review", message, request)
 
 
@@ -260,7 +291,6 @@ def _resume_claim(
     actor_upn: str | None,
     actor_name: str | None,
     source: str | None,
-    now: datetime,
 ) -> ConversionResult:
     try:
         if request.state == "approved":
@@ -272,7 +302,7 @@ def _resume_claim(
         if request.state != "pending" and request.state != "converting":
             raise ConversionSafetyError("This request cannot be approved from its current state.")
 
-        _preflight(request, now)
+        _preflight(request, _lease_now())
         if request.state == "pending":
             request = store.transition(
                 request.id,
@@ -283,15 +313,15 @@ def _resume_claim(
                 new_step="not_started",
                 decided_by_upn=actor_upn,
                 decided_by_name=actor_name,
-                decided_at=now,
+                decided_at=_lease_now(),
                 sync_error=None,
-                now=now,
+                now=_lease_now(),
             )
 
         if request.conversion_step == "not_started":
             original = _verified_original(request)
             if original is not None and original["state"] == "validate":
-                _preflight(request, now)
+                request = _renew_and_preflight(request, owner)
                 original = _verified_original(request)
                 if original is None or original["state"] != "validate":
                     raise ConversionSafetyError("The original absence changed before refusal.")
@@ -308,17 +338,17 @@ def _resume_claim(
                 expected_step="not_started",
                 new_state="converting",
                 new_step="absence_refused",
-                now=now,
+                now=_lease_now(),
             )
 
         if request.conversion_step == "absence_refused":
-            _preflight(request, now)
+            _preflight(request, _lease_now())
             original = _verified_original(request)
             if original is not None and original["state"] != "refuse":
                 raise ConversionSafetyError("The original absence is no longer refused.")
             pto = _matching_pto(request)
             if pto is None:
-                _preflight(request, now)
+                request = _renew_and_preflight(request, owner)
                 if _matching_pto(request) is not None:
                     raise ConversionSafetyError("A PTO leave appeared before creation.")
                 try:
@@ -346,41 +376,69 @@ def _resume_claim(
                 new_state="converting",
                 new_step="pto_created",
                 pto_leave_id=pto["id"],
-                now=now,
+                now=_lease_now(),
             )
 
         if request.conversion_step == "pto_created":
             pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
             if pto["state"] == "draft":
-                _preflight(request, now, own_pto=pto)
+                request = _renew_and_preflight(request, owner, own_pto=pto)
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
                 if pto["state"] != "draft":
                     raise ConversionSafetyError("The PTO leave changed before confirmation.")
                 odoo_client.confirm_leave(pto["id"])
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
-            if pto["state"] in {"confirm", "validate1"}:
-                _preflight(request, now, own_pto=pto)
+                if pto["state"] not in {"confirm", "validate1", "validate"}:
+                    raise ConversionSafetyError("Odoo did not verify the PTO confirmation.")
+                request = store.transition(
+                    request.id,
+                    owner,
+                    expected_state="converting",
+                    expected_step="pto_created",
+                    new_state="converting",
+                    new_step="pto_created",
+                    now=_lease_now(),
+                )
+            while pto["state"] in {"confirm", "validate1"}:
+                expected_odoo_state = pto["state"]
+                request = _renew_and_preflight(request, owner, own_pto=pto)
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
-                if pto["state"] not in {"confirm", "validate1"}:
+                if pto["state"] != expected_odoo_state:
                     raise ConversionSafetyError("The PTO leave changed before approval.")
-                odoo_client.approve_leave(pto["id"])
+                odoo_client.approve_leave_once(pto["id"])
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
+                allowed_states = (
+                    {"validate1", "validate"} if expected_odoo_state == "confirm" else {"validate"}
+                )
+                if pto["state"] not in allowed_states:
+                    raise ConversionSafetyError("Odoo did not verify one PTO approval transition.")
+                next_step = "pto_approved" if pto["state"] == "validate" else "pto_created"
+                request = store.transition(
+                    request.id,
+                    owner,
+                    expected_state="converting",
+                    expected_step="pto_created",
+                    new_state="converting",
+                    new_step=next_step,
+                    now=_lease_now(),
+                )
             if pto["state"] != "validate":
                 raise ConversionSafetyError("Odoo did not verify the PTO approval.")
-            request = store.transition(
-                request.id,
-                owner,
-                expected_state="converting",
-                expected_step="pto_created",
-                new_state="converting",
-                new_step="pto_approved",
-                now=now,
-            )
+            if request.conversion_step == "pto_created":
+                request = store.transition(
+                    request.id,
+                    owner,
+                    expected_state="converting",
+                    expected_step="pto_created",
+                    new_state="converting",
+                    new_step="pto_approved",
+                    now=_lease_now(),
+                )
 
         if request.conversion_step != "pto_approved":
             raise ConversionSafetyError("The conversion step is not supported.")
         pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
-        _preflight(request, now, own_pto=pto)
+        request = _renew_and_preflight(request, owner, own_pto=pto)
         pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
         if pto["state"] != "validate":
             raise ConversionSafetyError("The PTO approval changed before finalization.")
@@ -392,7 +450,7 @@ def _resume_claim(
             actor_upn=actor_upn or request.decided_by_upn,
             actor_name=actor_name or request.decided_by_name,
             source=source,
-            now=now,
+            now=_lease_now(),
         )
         try:
             _invalidate_after_commit(request)
@@ -403,12 +461,14 @@ def _resume_claim(
                 exc_info=True,
             )
         return ConversionResult("approved", "The absence now uses approved PTO.", request)
+    except store.StaleTransition:
+        return ConversionResult("busy", _BUSY_MESSAGE, None)
     except _LowBalance as error:
         if request.conversion_step == "not_started":
-            return _pending_for_low_balance(request, owner, now)
-        return _needs_review(request, owner, error, now)
+            return _pending_for_low_balance(request, owner)
+        return _needs_review(request, owner, error)
     except Exception as error:  # noqa: BLE001 - preserve safe durable status
-        return _needs_review(request, owner, error, now)
+        return _needs_review(request, owner, error)
 
 
 def _invalidate_after_commit(request: store.AbsencePtoRequest) -> None:

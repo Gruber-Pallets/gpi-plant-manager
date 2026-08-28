@@ -945,6 +945,11 @@ def approve_leave(leave_id: int) -> str | None:
     return _odoo_time_off.approve_leave(execute, leave_id)
 
 
+def approve_leave_once(leave_id: int) -> None:
+    """Advance one approval state without hiding another mutation in a loop."""
+    _odoo_time_off.approve_leave_once(execute, leave_id)
+
+
 def write_leave(leave_id: int, **fields: Any) -> None:
     """Update fields on an existing hr.leave."""
     _odoo_time_off.write_leave(execute, leave_id, **fields)

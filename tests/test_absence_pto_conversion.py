@@ -63,10 +63,18 @@ def _leave(leave_id: int, employee_id: int, type_id: int, state: str) -> dict:
     }
 
 
+class MutableClock:
+    def __init__(self, current=NOW):
+        self.current = current
+
+    def advance(self, seconds):
+        self.current += timedelta(seconds=seconds)
+
+
 class FakeOdoo:
     """Stateful Odoo double: every read observes the latest mutation."""
 
-    def __init__(self, *, absence=None, pto=None, lost_create=False):
+    def __init__(self, *, absence=None, pto=None, lost_create=False, two_step=False):
         self.leaves = {}
         for leave in (absence, pto):
             if leave:
@@ -74,12 +82,21 @@ class FakeOdoo:
         self.events = []
         self.next_id = 71
         self.lost_create = lost_create
+        self.two_step = two_step
         self.on_mutation = None
+        self.after_mutation = None
+        self.timeline = []
 
-    def _mutating(self):
+    def _mutating(self, action, leave_id):
         if self.on_mutation:
             callback, self.on_mutation = self.on_mutation, None
             callback()
+        self.timeline.append((action, leave_id))
+
+    def _mutated(self, action, leave_id):
+        if self.after_mutation:
+            callback, self.after_mutation = self.after_mutation, None
+            callback(action, leave_id, self)
 
     def fetch_leave_snapshot(self, leave_id):
         leave = self.leaves.get(leave_id)
@@ -98,9 +115,10 @@ class FakeOdoo:
         return sorted(rows, key=lambda row: row["id"])[:2]
 
     def refuse_leave(self, leave_id):
-        self._mutating()
+        self._mutating("refuse", leave_id)
         self.events.append(("refuse", leave_id))
         self.leaves[leave_id]["state"] = "refuse"
+        self._mutated("refuse", leave_id)
 
     def create_leave(
         self,
@@ -112,40 +130,48 @@ class FakeOdoo:
         hour_to=None,
         note=None,
     ):
-        self._mutating()
         leave_id = self.next_id
+        self._mutating("create", leave_id)
         self.next_id += 1
         self.events.append(("create", employee_odoo_id, holiday_status_id, date_from))
         self.leaves[leave_id] = _leave(leave_id, employee_odoo_id, holiday_status_id, "draft")
+        self._mutated("create", leave_id)
         if self.lost_create:
             self.lost_create = False
             raise TimeoutError("response was lost")
         return leave_id
 
     def confirm_leave(self, leave_id):
-        self._mutating()
+        self._mutating("confirm", leave_id)
         if self.leaves[leave_id]["state"] == "draft":
             self.events.append(("confirm", leave_id))
             self.leaves[leave_id]["state"] = "confirm"
+        self._mutated("confirm", leave_id)
 
-    def approve_leave(self, leave_id):
-        self._mutating()
+    def approve_leave_once(self, leave_id):
+        self._mutating("approve", leave_id)
         if self.leaves[leave_id]["state"] in {"confirm", "validate1"}:
             self.events.append(("approve", leave_id))
-            self.leaves[leave_id]["state"] = "validate"
-        return self.leaves[leave_id]["state"]
+            self.leaves[leave_id]["state"] = (
+                "validate1"
+                if self.two_step and self.leaves[leave_id]["state"] == "confirm"
+                else "validate"
+            )
+        self._mutated("approve", leave_id)
 
 
 class FakeStore:
-    def __init__(self, request):
+    def __init__(self, request, clock):
         self.request = request
+        self.clock = clock
         self.owner = None
         self.guard = Lock()
         self.finalizations = []
+        self.timeline = []
 
     def claim_request(self, request_id, owner, now, lease_seconds=120):
         with self.guard:
-            if self.owner is not None and self.owner != owner:
+            if self.owner is not None and self.owner != owner and self.request.lease_until > now:
                 return None
             self.owner = owner
             self.request = replace(
@@ -153,11 +179,33 @@ class FakeStore:
                 lease_owner=owner,
                 lease_until=now + timedelta(seconds=lease_seconds),
             )
+            self.timeline.append(("claim", owner, now))
+            return self.request
+
+    def renew_claim(self, request_id, owner, now, lease_seconds=120):
+        with self.guard:
+            if (
+                self.owner != owner
+                or self.request.lease_until is None
+                or self.request.lease_until <= now
+            ):
+                raise store.StaleTransition("claim renewal lost its current lease")
+            self.request = replace(
+                self.request,
+                lease_until=now + timedelta(seconds=lease_seconds),
+                updated_at=now,
+            )
+            self.timeline.append(("renew", owner, now))
             return self.request
 
     def release_claim(self, request_id, owner, now=None):
         with self.guard:
-            if self.owner != owner:
+            current = now or self.clock.current
+            if (
+                self.owner != owner
+                or self.request.lease_until is None
+                or self.request.lease_until <= current
+            ):
                 return False
             self.owner = None
             self.request = replace(self.request, lease_owner=None, lease_until=None)
@@ -175,7 +223,13 @@ class FakeStore:
         now=None,
         **changes,
     ):
-        assert self.owner == owner
+        current = now or self.clock.current
+        if (
+            self.owner != owner
+            or self.request.lease_until is None
+            or self.request.lease_until <= current
+        ):
+            raise store.StaleTransition("request no longer matches its lease")
         assert self.request.state == expected_state
         assert self.request.conversion_step == expected_step
         allowed = {key: value for key, value in changes.items() if value is not store._UNSET}
@@ -186,10 +240,13 @@ class FakeStore:
             updated_at=now or NOW,
             **allowed,
         )
+        self.timeline.append(("transition", owner, current, new_step))
         return self.request
 
     def mark_needs_review(self, request_id, owner, *, error, now=None):
-        assert self.owner == owner
+        current = now or NOW
+        if self.owner != owner or self.request.lease_until <= current:
+            raise store.StaleTransition("review transition lost its current lease")
         self.request = replace(
             self.request,
             state="needs_review",
@@ -200,7 +257,12 @@ class FakeStore:
         return self.request
 
     def finalize_approved(self, request_id, owner, **kwargs):
-        assert self.owner == owner
+        if (
+            self.owner != owner
+            or self.request.lease_until is None
+            or self.request.lease_until <= kwargs["now"]
+        ):
+            raise store.StaleTransition("approval finalization lost its current lease")
         assert self.request.conversion_step == "pto_approved"
         self.finalizations.append(kwargs)
         self.request = replace(
@@ -214,10 +276,14 @@ class FakeStore:
         return self.request
 
 
-def wire(monkeypatch, fake_odoo, request, *, balance=4.0):
-    fake_store = FakeStore(request)
+def wire(monkeypatch, fake_odoo, request, *, balance=4.0, clock=None):
+    clock = clock or MutableClock()
+    fake_store = FakeStore(request, clock)
+    fake_odoo.timeline = fake_store.timeline
+    monkeypatch.setattr(conversion, "_clock", lambda: clock.current)
     monkeypatch.setattr(conversion.store, "claim_request", fake_store.claim_request)
     monkeypatch.setattr(conversion.store, "release_claim", fake_store.release_claim)
+    monkeypatch.setattr(conversion.store, "renew_claim", fake_store.renew_claim)
     monkeypatch.setattr(conversion.store, "transition", fake_store.transition)
     monkeypatch.setattr(conversion.store, "mark_needs_review", fake_store.mark_needs_review)
     monkeypatch.setattr(conversion.store, "finalize_approved", fake_store.finalize_approved)
@@ -230,7 +296,7 @@ def wire(monkeypatch, fake_odoo, request, *, balance=4.0):
     monkeypatch.setattr(conversion.odoo_client, "refuse_leave", fake_odoo.refuse_leave)
     monkeypatch.setattr(conversion.odoo_client, "create_leave", fake_odoo.create_leave)
     monkeypatch.setattr(conversion.odoo_client, "confirm_leave", fake_odoo.confirm_leave)
-    monkeypatch.setattr(conversion.odoo_client, "approve_leave", fake_odoo.approve_leave)
+    monkeypatch.setattr(conversion.odoo_client, "approve_leave_once", fake_odoo.approve_leave_once)
     monkeypatch.setattr(conversion.absence_sync, "resolve_absence_leave_type_id", lambda: 9)
     monkeypatch.setattr(
         conversion.absence_pto,
@@ -242,7 +308,12 @@ def wire(monkeypatch, fake_odoo, request, *, balance=4.0):
         "current_pay_period_bounds",
         lambda today: (date(2026, 8, 16), date(2026, 8, 29)),
     )
-    monkeypatch.setattr(conversion.time_off_balances, "refresh_for_employee", lambda employee_id: 1)
+
+    def refresh_balance(employee_id):
+        fake_store.timeline.append(("preflight_balance", fake_store.owner, clock.current))
+        return 1
+
+    monkeypatch.setattr(conversion.time_off_balances, "refresh_for_employee", refresh_balance)
     monkeypatch.setattr(
         conversion.time_off_balances,
         "get_for_employee",
@@ -287,6 +358,14 @@ def test_approve_refuses_absence_then_creates_and_approves_pto(monkeypatch):
     assert fake.fetch_leave_snapshot(71)["state"] == "validate"
     assert fake_store.request.pto_leave_id == 71
     assert fake_store.finalizations[0]["original_absence_leave_id"] == 70
+    previous_mutation = -1
+    for mutation_index, event in enumerate(fake_store.timeline):
+        if event[0] not in {"refuse", "create", "confirm", "approve"}:
+            continue
+        boundary = fake_store.timeline[previous_mutation + 1 : mutation_index]
+        assert any(item[0] == "renew" for item in boundary)
+        assert any(item[0] == "preflight_balance" for item in boundary)
+        previous_mutation = mutation_index
 
 
 def test_second_approve_adopts_verified_result_without_mutating_odoo(monkeypatch):
@@ -444,6 +523,11 @@ def test_unexpired_lease_contention_returns_busy(monkeypatch):
     fake = FakeOdoo()
     fake_store = wire(monkeypatch, fake, _request())
     fake_store.owner = UUID("17678a53-16f6-4f9f-ad94-c0503630cf1a")
+    fake_store.request = replace(
+        fake_store.request,
+        lease_owner=fake_store.owner,
+        lease_until=NOW + timedelta(seconds=120),
+    )
 
     result = conversion.approve(41, "dale@example.com", "Dale", "page", NOW)
 
@@ -465,6 +549,86 @@ def test_two_managers_cannot_mutate_odoo_at_the_same_time(monkeypatch):
     assert first.status == "approved"
     assert [result.status for result in competing] == ["busy"]
     assert [event[0] for event in fake.events].count("create") == 1
+
+
+def test_two_step_approval_renews_and_revalidates_between_approval_mutations(
+    monkeypatch,
+):
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"), two_step=True)
+    fake_store = wire(monkeypatch, fake, _request())
+
+    result = conversion.approve(41, "one@example.com", "Manager One", "page", NOW)
+
+    assert result.status == "approved"
+    assert [event for event in fake.events if event[0] == "approve"] == [
+        ("approve", 71),
+        ("approve", 71),
+    ]
+    approval_indexes = [
+        index for index, event in enumerate(fake_store.timeline) if event == ("approve", 71)
+    ]
+    between = fake_store.timeline[approval_indexes[0] + 1 : approval_indexes[1]]
+    assert any(event[0] == "renew" for event in between)
+    assert any(event[0] == "preflight_balance" for event in between)
+    assert any(event[0] == "transition" for event in between)
+
+
+def test_expired_manager_stops_after_refusal_when_second_manager_takes_lease(
+    monkeypatch,
+):
+    clock = MutableClock()
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"))
+    wire(monkeypatch, fake, _request(), clock=clock)
+    competing = []
+
+    def takeover(action, leave_id, _fake):
+        assert (action, leave_id) == ("refuse", 70)
+        clock.advance(121)
+        competing.append(conversion.approve(41, "two@example.com", "Manager Two", "page", NOW))
+
+    fake.after_mutation = takeover
+
+    stale = conversion.approve(41, "one@example.com", "Manager One", "page", NOW)
+
+    assert stale.status == "busy"
+    assert [result.status for result in competing] == ["approved"]
+    assert [event[0] for event in fake.events].count("refuse") == 1
+    assert [event[0] for event in fake.events].count("create") == 1
+
+
+def test_expired_manager_cannot_second_approve_after_validate1_takeover(monkeypatch):
+    clock = MutableClock()
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"), two_step=True)
+    fake_store = wire(monkeypatch, fake, _request(), clock=clock)
+    competing = []
+
+    def takeover(action, leave_id, current_fake):
+        if (action, current_fake.leaves[leave_id]["state"]) != (
+            "approve",
+            "validate1",
+        ):
+            current_fake.after_mutation = takeover
+            return
+        clock.advance(121)
+        competing.append(conversion.approve(41, "two@example.com", "Manager Two", "page", NOW))
+
+    fake.after_mutation = takeover
+
+    stale = conversion.approve(41, "one@example.com", "Manager One", "page", NOW)
+
+    assert stale.status == "busy"
+    assert [result.status for result in competing] == ["approved"]
+    assert [event[0] for event in fake.events].count("create") == 1
+    assert [event for event in fake.events if event[0] == "approve"] == [
+        ("approve", 71),
+        ("approve", 71),
+    ]
+    approval_indexes = [
+        index for index, event in enumerate(fake_store.timeline) if event == ("approve", 71)
+    ]
+    between = fake_store.timeline[approval_indexes[0] + 1 : approval_indexes[1]]
+    assert any(event[0] == "renew" for event in between)
+    assert any(event[0] == "preflight_balance" for event in between)
 
 
 class FakeCursor:
