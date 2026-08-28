@@ -23,6 +23,7 @@ STATES: Final = frozenset(
 CONVERSION_STEPS: Final = frozenset(
     {"not_started", "absence_refused", "pto_created", "pto_approved"}
 )
+RESOLUTION_STEPS: Final = frozenset({"none", "message_posted", "closed"})
 
 REQUEST_COLUMNS = (
     "id, absence_day, emp_id, person_odoo_id, person_name, holiday_status_id, "
@@ -30,7 +31,8 @@ REQUEST_COLUMNS = (
     "state, conversion_step, employee_note, denial_reason, manual_resolution_note, "
     "sync_error, odoo_task_id, task_attempts, task_next_at, lease_owner, lease_until, "
     "requested_by_person_id, decided_by_upn, decided_by_name, requested_at, "
-    "decided_at, resolved_at, created_at, updated_at"
+    "decided_at, resolved_at, created_at, updated_at, task_resolution_step, "
+    "task_resolution_attempts, task_resolution_next_at, task_resolution_error"
 )
 QUALIFIED_REQUEST_COLUMNS = ", ".join(
     f"request.{column.strip()} AS {column.strip()}"
@@ -73,6 +75,10 @@ class AbsencePtoRequest:
     resolved_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    task_resolution_step: str = "none"
+    task_resolution_attempts: int = 0
+    task_resolution_next_at: datetime | None = None
+    task_resolution_error: str | None = None
 
 
 def _positive_int(value: object, field: str) -> int:
@@ -164,6 +170,12 @@ def _step(value: object, field: str = "conversion_step") -> str:
     return value
 
 
+def _resolution_step(value: object, field: str = "task_resolution_step") -> str:
+    if type(value) is not str or value not in RESOLUTION_STEPS:
+        raise ValueError(f"{field} is not supported")
+    return value
+
+
 def _request_from_row(row: Mapping[str, object]) -> AbsencePtoRequest:
     """Validate one database row before exposing it to domain code."""
     if not isinstance(row, Mapping):
@@ -213,6 +225,18 @@ def _request_from_row(row: Mapping[str, object]) -> AbsencePtoRequest:
         resolved_at=_optional_aware_datetime(row.get("resolved_at"), "resolved_at"),
         created_at=_aware_datetime(row.get("created_at"), "created_at"),
         updated_at=_aware_datetime(row.get("updated_at"), "updated_at"),
+        task_resolution_step=_resolution_step(
+            row.get("task_resolution_step", "none")
+        ),
+        task_resolution_attempts=_nonnegative_int(
+            row.get("task_resolution_attempts", 0), "task_resolution_attempts"
+        ),
+        task_resolution_next_at=_optional_aware_datetime(
+            row.get("task_resolution_next_at"), "task_resolution_next_at"
+        ),
+        task_resolution_error=_optional_text(
+            row.get("task_resolution_error"), "task_resolution_error"
+        ),
     )
 
 
@@ -321,11 +345,17 @@ def list_due(now: datetime, *, limit: int = 25) -> list[AbsencePtoRequest]:
         raise ValueError("limit must be between 1 and 100")
     rows = db.query(
         f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests "
-        "WHERE state IN ('pending', 'converting', 'needs_review') "
+        "WHERE state IN ('pending', 'converting', 'needs_review', 'approved', "
+        "'resolved_manually') "
         "AND (lease_until IS NULL OR lease_until <= %s) "
-        "AND (state <> 'needs_review' OR task_next_at IS NULL OR task_next_at <= %s) "
-        "ORDER BY COALESCE(task_next_at, requested_at), id LIMIT %s",
-        (current, current, limit),
+        "AND ((state = 'needs_review' AND (task_next_at IS NULL OR task_next_at <= %s)) "
+        "OR state IN ('pending', 'converting') OR (state IN ('approved', "
+        "'resolved_manually') AND odoo_task_id IS NOT NULL "
+        "AND task_resolution_step <> 'closed' AND (task_resolution_next_at IS NULL "
+        "OR task_resolution_next_at <= %s))) "
+        "ORDER BY COALESCE(task_resolution_next_at, task_next_at, requested_at), "
+        "id LIMIT %s",
+        (current, current, current, limit),
     )
     return [_request_from_row(row) for row in rows]
 
@@ -362,7 +392,11 @@ def claim_due(
         "AND (request.state = 'converting' OR (request.state = 'pending' "
         "AND request.absence_day NOT BETWEEN %s AND %s) OR "
         "(request.state = 'needs_review' AND (request.task_next_at IS NULL "
-        "OR request.task_next_at <= %s))) "
+        "OR request.task_next_at <= %s)) OR (request.state IN ('approved', "
+        "'resolved_manually') AND request.odoo_task_id IS NOT NULL "
+        "AND request.task_resolution_step <> 'closed' "
+        "AND (request.task_resolution_next_at IS NULL "
+        "OR request.task_resolution_next_at <= %s))) "
         "ORDER BY request.requested_at, request.id LIMIT %s "
         "FOR UPDATE SKIP LOCKED"
         ") UPDATE absence_pto_requests AS request "
@@ -374,6 +408,7 @@ def claim_due(
             current,
             period_start,
             period_end,
+            current,
             current,
             limit,
             safe_owner,
@@ -641,6 +676,43 @@ def save_task_delivery(
     return _one_request(rows, "task delivery update")
 
 
+def save_resolution_delivery(
+    request_id: int,
+    owner: UUID,
+    *,
+    expected_step: str,
+    new_step: str,
+    attempts: int,
+    next_at: datetime | None,
+    error: str | None,
+    now: datetime | None = None,
+) -> AbsencePtoRequest:
+    """Checkpoint terminal task delivery for the current terminal-state owner."""
+    current = _now(now)
+    rows = db.query(
+        "UPDATE absence_pto_requests SET task_resolution_step = %s, "
+        "task_resolution_attempts = %s, task_resolution_next_at = %s, "
+        "task_resolution_error = %s, updated_at = %s WHERE id = %s "
+        "AND state IN ('approved', 'resolved_manually') AND lease_owner = %s "
+        "AND lease_until > %s AND task_resolution_step = %s "
+        f"RETURNING {REQUEST_COLUMNS}",
+        (
+            _resolution_step(new_step, "new_step"),
+            _nonnegative_int(attempts, "attempts"),
+            _optional_aware_datetime(next_at, "next_at"),
+            _optional_text(error, "error"),
+            current,
+            _positive_int(request_id, "request_id"),
+            _uuid(owner, "owner"),
+            current,
+            _resolution_step(expected_step, "expected_step"),
+        ),
+    )
+    if not rows:
+        raise StaleTransition("resolution delivery update lost its current lease")
+    return _one_request(rows, "resolution delivery update")
+
+
 def adopt_external_pto(
     request_id: int,
     owner: UUID,
@@ -764,7 +836,11 @@ def finalize_approved(
             "UPDATE absence_pto_requests SET state = 'approved', "
             "conversion_step = 'pto_approved', sync_error = NULL, "
             "decided_by_upn = %s, decided_by_name = %s, decided_at = %s, "
-            "updated_at = %s WHERE id = %s AND lease_owner = %s "
+            "task_resolution_step = CASE WHEN odoo_task_id IS NULL THEN 'closed' "
+            "ELSE 'none' END, task_resolution_attempts = 0, "
+            "task_resolution_next_at = CASE WHEN odoo_task_id IS NULL THEN NULL "
+            "ELSE %s END, task_resolution_error = NULL, updated_at = %s "
+            "WHERE id = %s AND lease_owner = %s "
             "AND lease_until > %s AND pto_leave_id = %s AND ("
             "(state = 'converting' AND conversion_step = 'pto_approved') OR "
             "state = 'needs_review') "
@@ -772,6 +848,7 @@ def finalize_approved(
             (
                 _optional_text(actor_upn, "actor_upn"),
                 _optional_text(actor_name, "actor_name"),
+                current,
                 current,
                 current,
                 safe_id,
@@ -848,7 +925,11 @@ def finalize_manual(
             "UPDATE absence_pto_requests SET state = 'resolved_manually', "
             "manual_resolution_note = %s, decided_by_upn = %s, "
             "decided_by_name = %s, decided_at = %s, resolved_at = %s, "
-            "task_next_at = NULL, updated_at = %s WHERE id = %s "
+            "task_next_at = NULL, task_resolution_step = CASE "
+            "WHEN odoo_task_id IS NULL THEN 'closed' ELSE 'none' END, "
+            "task_resolution_attempts = 0, task_resolution_next_at = CASE "
+            "WHEN odoo_task_id IS NULL THEN NULL ELSE %s END, "
+            "task_resolution_error = NULL, updated_at = %s WHERE id = %s "
             "AND state = 'needs_review' AND lease_owner = %s "
             "AND lease_until > %s "
             f"RETURNING {REQUEST_COLUMNS}",
@@ -856,6 +937,7 @@ def finalize_manual(
                 safe_note,
                 safe_upn,
                 safe_name,
+                current,
                 current,
                 current,
                 current,
@@ -902,6 +984,7 @@ __all__ = [
     "mark_needs_review",
     "release_claim",
     "renew_claim",
+    "save_resolution_delivery",
     "save_task_delivery",
     "transition",
     "transition_to_pending",

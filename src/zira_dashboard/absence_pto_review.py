@@ -8,6 +8,7 @@ import html
 import logging
 from typing import Literal
 from uuid import UUID, uuid4
+import xmlrpc.client
 
 from . import absence_pto_conversion as conversion
 from . import absence_pto_store as store
@@ -19,6 +20,7 @@ WENDY_LOGIN = "wendy@gruberpallets.com"
 _REVIEW_URL = "https://gpiplantmanager.com/staffing/time-off"
 _ROLLOVER_ERROR = "Configured pay period closed before approval."
 _DUPLICATE_TASK_ERROR = "More than one active exact Odoo task exists for this request."
+_DUPLICATE_PROJECT_ERROR = "More than one active exact Plant Manager project exists."
 _POLL_INTERVAL = timedelta(minutes=15)
 _RETRY_DELAYS = (60, 300, 900, 3600)
 _MAX_ATTEMPTS = 10
@@ -152,7 +154,7 @@ def _save_retry(
 ) -> store.AbsencePtoRequest:
     current = _lease_now()
     attempts = min(row.task_attempts + 1, _MAX_ATTEMPTS)
-    if permanent:
+    if permanent or attempts >= _MAX_ATTEMPTS:
         next_at = datetime.max.replace(tzinfo=UTC)
     else:
         delay = _RETRY_DELAYS[min(attempts - 1, len(_RETRY_DELAYS) - 1)]
@@ -176,6 +178,21 @@ def _save_task_id(
         row.id,
         owner,
         task_id=task_id,
+        attempts=row.task_attempts,
+        next_at=current + _POLL_INTERVAL,
+        error=_stop_reason(row.sync_error),
+        now=current,
+    )
+
+
+def _save_delivery_success(
+    row: store.AbsencePtoRequest, owner: UUID
+) -> store.AbsencePtoRequest:
+    current = _lease_now()
+    return store.save_task_delivery(
+        row.id,
+        owner,
+        task_id=row.odoo_task_id,
         attempts=0,
         next_at=current + _POLL_INTERVAL,
         error=_stop_reason(row.sync_error),
@@ -190,6 +207,30 @@ def _exact_task_ids(project_id: int, name: str) -> list[int]:
     return task_ids
 
 
+def _exact_project_id() -> int:
+    project_ids = odoo_client.find_active_feedback_project_ids(
+        odoo_client.FEEDBACK_PROJECT_NAME
+    )
+    if len(project_ids) > 1:
+        raise PermanentReviewDeliveryError(_DUPLICATE_PROJECT_ERROR)
+    if not project_ids:
+        raise ReviewDeliveryError("The active exact Plant Manager project was not found.")
+    return project_ids[0]
+
+
+def _compatibility_fault(error: Exception) -> bool:
+    return (
+        isinstance(error, xmlrpc.client.Fault)
+        and "user_ids" in (error.faultString or "")
+    )
+
+
+def _created_task_id(value: object) -> int:
+    if type(value) is not int or value <= 0:
+        raise PermanentReviewDeliveryError("Odoo returned an invalid created task ID.")
+    return value
+
+
 def _refresh_task(
     row: store.AbsencePtoRequest,
     owner: UUID,
@@ -197,15 +238,64 @@ def _refresh_task(
     task_id: int,
     wendy_uid: int,
     deadline: str,
+    project_id: int,
+    name: str,
 ) -> None:
     store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
-    odoo_client.update_feedback_task(
-        task_id,
-        description_html=task_body(row),
-        assignee_uid=wendy_uid,
-        deadline=deadline,
-        active=True,
-    )
+    values = {
+        "task_id": task_id,
+        "project_id": project_id,
+        "name": name,
+        "description_html": task_body(row),
+        "assignee_uid": wendy_uid,
+        "deadline": deadline,
+    }
+    try:
+        odoo_client.update_review_task_user_ids(**values)
+    except Exception as error:
+        if not _compatibility_fault(error):
+            raise
+        # The fallback is a separate mutation, so ownership is freshly fenced.
+        store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
+        odoo_client.update_review_task_user_id(**values)
+
+
+def _create_task(
+    row: store.AbsencePtoRequest,
+    owner: UUID,
+    *,
+    project_id: int,
+    name: str,
+    wendy_uid: int,
+    deadline: str,
+) -> int:
+    values = {
+        "project_id": project_id,
+        "name": name,
+        "description_html": task_body(row),
+        "assignee_uid": wendy_uid,
+        "tag_id": None,
+        "deadline": deadline,
+    }
+    store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
+    try:
+        return _created_task_id(odoo_client.create_review_task_user_ids(**values))
+    except Exception as primary_error:
+        # A create response can be lost even when Odoo committed it. Always
+        # search the exact active identity before considering another create.
+        task_ids = _exact_task_ids(project_id, name)
+        if task_ids:
+            return task_ids[0]
+        if not _compatibility_fault(primary_error):
+            raise primary_error
+        store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
+        try:
+            return _created_task_id(odoo_client.create_review_task_user_id(**values))
+        except Exception as fallback_error:
+            task_ids = _exact_task_ids(project_id, name)
+            if task_ids:
+                return task_ids[0]
+            raise fallback_error
 
 
 def _sync_claimed_task(
@@ -214,55 +304,46 @@ def _sync_claimed_task(
     """Create/adopt/update one task while a caller owns the durable row lease."""
     if row.state != "needs_review":
         return "failed"
+    if row.task_attempts >= _MAX_ATTEMPTS:
+        if row.task_next_at != datetime.max.replace(tzinfo=UTC):
+            _save_retry(
+                row,
+                owner,
+                PermanentReviewDeliveryError("Maximum task delivery attempts reached."),
+                permanent=True,
+            )
+        return "escalated"
     try:
         wendy_uid = _wendy_uid()
         deadline = _next_business_day(plant_today(_lease_now())).isoformat()
         name = task_name(row)
-
-        if row.odoo_task_id is not None:
-            row = _save_task_id(row, owner, row.odoo_task_id)
-            _refresh_task(
-                row,
-                owner,
-                task_id=row.odoo_task_id,
-                wendy_uid=wendy_uid,
-                deadline=deadline,
-            )
-            return "escalated"
-
-        project_id = odoo_client.ensure_feedback_project()
+        project_id = _exact_project_id()
         task_ids = _exact_task_ids(project_id, name)
         if task_ids:
-            row = _save_task_id(row, owner, task_ids[0])
-            _refresh_task(
+            task_id = task_ids[0]
+        elif row.odoo_task_id is not None:
+            identity = odoo_client.fetch_feedback_task_identity(row.odoo_task_id)
+            if (
+                identity is None
+                or identity.get("id") != row.odoo_task_id
+                or identity.get("name") != name
+                or identity.get("project_id") != project_id
+                or identity.get("active") is not False
+            ):
+                raise PermanentReviewDeliveryError(
+                    "The saved Odoo task no longer has its exact trusted identity."
+                )
+            task_id = row.odoo_task_id
+        else:
+            task_id = _create_task(
                 row,
                 owner,
-                task_id=task_ids[0],
+                project_id=project_id,
+                name=name,
                 wendy_uid=wendy_uid,
                 deadline=deadline,
             )
-            return "escalated"
-
-        store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
-        try:
-            task_id = odoo_client.create_feedback_task(
-                project_id=project_id,
-                name=name,
-                description_html=task_body(row),
-                assignee_uid=wendy_uid,
-                tag_id=None,
-                deadline=deadline,
-            )
-        except Exception as create_error:
-            try:
-                task_ids = _exact_task_ids(project_id, name)
-            except PermanentReviewDeliveryError:
-                raise
-            except Exception:
-                raise create_error
-            if not task_ids:
-                raise create_error
-            task_id = task_ids[0]
+        # Save immediately after verified creation/adoption, before any later call.
         row = _save_task_id(row, owner, int(task_id))
         _refresh_task(
             row,
@@ -270,7 +351,10 @@ def _sync_claimed_task(
             task_id=int(task_id),
             wendy_uid=wendy_uid,
             deadline=deadline,
+            project_id=project_id,
+            name=name,
         )
+        _save_delivery_success(row, owner)
         return "escalated"
     except PermanentReviewDeliveryError as error:
         _save_retry(row, owner, error, permanent=True)
@@ -293,7 +377,9 @@ def sync_review_task(request_id: int, now: datetime | None = None) -> ReviewResu
             return ReviewResult("blocked", None, None, "The review request is missing.")
         if saved.task_next_at == datetime.max.replace(tzinfo=UTC):
             status = "blocked"
-        elif saved.odoo_task_id is None:
+        elif saved.odoo_task_id is None or " Task delivery error:" in (
+            saved.sync_error or ""
+        ):
             status = "retry"
         else:
             status = "delivered"
@@ -326,16 +412,126 @@ def _matching_validated_pto(row: store.AbsencePtoRequest) -> dict | None:
     return snapshot if identity else None
 
 
-def _post_resolved_and_close(row: store.AbsencePtoRequest, owner: UUID) -> None:
-    if row.odoo_task_id is None:
-        return
-    store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
-    odoo_client.post_task_message(
-        row.odoo_task_id,
-        "✅ Plant Manager verified one exact approved PTO record and updated the local case.",
+def _resolution_marker(row: store.AbsencePtoRequest) -> str:
+    return f"gpi-pm-absence-pto-{row.id}"
+
+
+def _resolution_message(row: store.AbsencePtoRequest) -> str:
+    marker = _resolution_marker(row)
+    if row.state == "approved":
+        text = (
+            "✅ Plant Manager verified one exact approved PTO record and updated "
+            "the local case."
+        )
+    else:
+        text = (
+            "✅ Marked handled in Plant Manager.<br>"
+            f"<strong>Note:</strong> {html.escape(row.manual_resolution_note or '')}"
+        )
+    return f'{text}<span style="display:none">{marker}</span>'
+
+
+def _save_resolution_retry(
+    row: store.AbsencePtoRequest, owner: UUID, error: Exception
+) -> store.AbsencePtoRequest:
+    current = _lease_now()
+    attempts = row.task_resolution_attempts + 1
+    delay = _RETRY_DELAYS[min(attempts - 1, len(_RETRY_DELAYS) - 1)]
+    message = " ".join((str(error) or type(error).__name__).split())[:300]
+    return store.save_resolution_delivery(
+        row.id,
+        owner,
+        expected_step=row.task_resolution_step,
+        new_step=row.task_resolution_step,
+        attempts=attempts,
+        next_at=current + timedelta(seconds=delay),
+        error=message,
+        now=current,
     )
-    store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
-    odoo_client.close_task(row.odoo_task_id)
+
+
+def _checkpoint_resolution(
+    row: store.AbsencePtoRequest,
+    owner: UUID,
+    new_step: Literal["message_posted", "closed"],
+) -> store.AbsencePtoRequest:
+    return store.save_resolution_delivery(
+        row.id,
+        owner,
+        expected_step=row.task_resolution_step,
+        new_step=new_step,
+        attempts=0,
+        next_at=None if new_step == "closed" else _lease_now(),
+        error=None,
+        now=_lease_now(),
+    )
+
+
+def _deliver_terminal_claimed(
+    row: store.AbsencePtoRequest, owner: UUID
+) -> Literal["closed", "retry"]:
+    """Resume idempotent terminal message/archive delivery from a durable step."""
+    if row.state not in {"approved", "resolved_manually"}:
+        return "retry"
+    if row.task_resolution_step == "closed":
+        return "closed"
+    if row.odoo_task_id is None:
+        _checkpoint_resolution(row, owner, "closed")
+        return "closed"
+
+    try:
+        project_id = _exact_project_id()
+        identity = odoo_client.fetch_feedback_task_identity(row.odoo_task_id)
+        if (
+            identity is None
+            or identity.get("id") != row.odoo_task_id
+            or identity.get("name") != task_name(row)
+            or identity.get("project_id") != project_id
+            or not isinstance(identity.get("active"), bool)
+        ):
+            raise PermanentReviewDeliveryError(
+                "The saved Odoo task no longer has its exact trusted identity."
+            )
+
+        if row.task_resolution_step == "none":
+            marker = _resolution_marker(row)
+            messages = odoo_client.find_task_message_ids(row.odoo_task_id, marker)
+            if not messages:
+                store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
+                try:
+                    odoo_client.post_task_message(
+                        row.odoo_task_id, _resolution_message(row)
+                    )
+                except Exception as post_error:
+                    # A lost response may still mean the chatter write committed.
+                    messages = odoo_client.find_task_message_ids(
+                        row.odoo_task_id, marker
+                    )
+                    if not messages:
+                        raise post_error
+            row = _checkpoint_resolution(row, owner, "message_posted")
+
+        if not identity["active"]:
+            _checkpoint_resolution(row, owner, "closed")
+            return "closed"
+
+        store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
+        try:
+            odoo_client.close_task(row.odoo_task_id)
+        except Exception as close_error:
+            after = odoo_client.fetch_feedback_task_identity(row.odoo_task_id)
+            if after is None or after.get("active") is not False:
+                raise close_error
+        _checkpoint_resolution(row, owner, "closed")
+        return "closed"
+    except store.StaleTransition:
+        return "retry"
+    except Exception as error:  # noqa: BLE001 - terminal truth is already committed
+        try:
+            _save_resolution_retry(row, owner, error)
+        except store.StaleTransition:
+            pass
+        return "retry"
 
 
 def _resolve_external_claimed(
@@ -365,7 +561,7 @@ def _resolve_external_claimed(
         conversion._invalidate_after_commit(approved)
     except Exception:  # noqa: BLE001 - committed truth must not be rolled back
         _log.warning("absence PTO review cache invalidation failed", exc_info=True)
-    _post_resolved_and_close(approved, owner)
+    _deliver_terminal_claimed(approved, owner)
     return approved
 
 
@@ -377,7 +573,7 @@ def resolve_external_pto(request_id: int, now: datetime | None = None) -> Review
         return ReviewResult("busy", None, None, "This review is already being checked.")
     try:
         if row.state == "approved":
-            _post_resolved_and_close(row, owner)
+            _deliver_terminal_claimed(row, owner)
             return ReviewResult(
                 "approved", row.odoo_task_id, row, "The external PTO was verified."
             )
@@ -417,16 +613,7 @@ def resolve_manually(
         return ReviewResult("busy", None, None, "This review is already being checked.")
     try:
         if row.state == "resolved_manually":
-            if row.odoo_task_id is not None:
-                stored_note = row.manual_resolution_note or safe_note
-                store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
-                odoo_client.post_task_message(
-                    row.odoo_task_id,
-                    "✅ Marked handled in Plant Manager.<br>"
-                    f"<strong>Note:</strong> {html.escape(stored_note)}",
-                )
-                store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
-                odoo_client.close_task(row.odoo_task_id)
+            _deliver_terminal_claimed(row, owner)
             return ReviewResult(
                 "resolved_manually",
                 row.odoo_task_id,
@@ -445,15 +632,7 @@ def resolve_manually(
             note=safe_note,
             now=_lease_now(),
         )
-        if resolved.odoo_task_id is not None:
-            store.renew_claim(resolved.id, owner, _lease_now(), lease_seconds=120)
-            odoo_client.post_task_message(
-                resolved.odoo_task_id,
-                "✅ Marked handled in Plant Manager.<br>"
-                f"<strong>Note:</strong> {html.escape(safe_note)}",
-            )
-            store.renew_claim(resolved.id, owner, _lease_now(), lease_seconds=120)
-            odoo_client.close_task(resolved.odoo_task_id)
+        _deliver_terminal_claimed(resolved, owner)
         return ReviewResult(
             "resolved_manually",
             resolved.odoo_task_id,
@@ -465,6 +644,12 @@ def resolve_manually(
 
 
 def _reconcile_claimed(request: store.AbsencePtoRequest, owner: UUID) -> str:
+    if request.state in {"approved", "resolved_manually"}:
+        return (
+            "resumed"
+            if _deliver_terminal_claimed(request, owner) == "closed"
+            else "escalated"
+        )
     if request.state == "pending":
         reviewed = store.mark_needs_review(
             request.id, owner, error=_ROLLOVER_ERROR, now=_lease_now()

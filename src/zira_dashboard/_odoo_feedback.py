@@ -17,6 +17,38 @@ class OdooUserPayloadError(RuntimeError):
     """Odoo returned a user lookup row that cannot be trusted."""
 
 
+class OdooTaskPayloadError(RuntimeError):
+    """Odoo returned a project or task row that cannot be trusted."""
+
+
+def _positive_id(value: Any, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise OdooTaskPayloadError(f"Odoo {label} payload was malformed")
+    return value
+
+
+def find_active_feedback_project_ids(
+    execute_fn: Callable[..., Any], name: str = FEEDBACK_PROJECT_NAME
+) -> list[int]:
+    """Return zero, one, or two exact active projects without creating one."""
+    rows = execute_fn(
+        "project.project",
+        "search_read",
+        [("name", "=", name), ("active", "=", True)],
+        fields=["id"],
+        order="id asc",
+        limit=2,
+    )
+    if not isinstance(rows, list) or len(rows) > 2:
+        raise OdooTaskPayloadError("Odoo project payload was malformed")
+    ids: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise OdooTaskPayloadError("Odoo project payload was malformed")
+        ids.append(_positive_id(row.get("id"), label="project"))
+    return ids
+
+
 def find_active_users_by_login(
     execute_fn: Callable[..., Any], login: str, limit: int = 2
 ) -> list[dict]:
@@ -156,8 +188,56 @@ def find_active_feedback_task_ids(
         fields=["id"],
         order="id asc",
         limit=2,
-    ) or []
-    return [int(row["id"]) for row in rows]
+    )
+    if not isinstance(rows, list) or len(rows) > 2:
+        raise OdooTaskPayloadError("Odoo active task payload was malformed")
+    ids: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise OdooTaskPayloadError("Odoo active task payload was malformed")
+        ids.append(_positive_id(row.get("id"), label="active task"))
+    return ids
+
+
+def fetch_feedback_task_identity(
+    execute_fn: Callable[..., Any], task_id: int
+) -> dict[str, Any] | None:
+    """Read one task, including archived rows, for fail-closed identity checks."""
+    _positive_id(task_id, label="task")
+    rows = execute_fn(
+        "project.task",
+        "search_read",
+        [("id", "=", task_id)],
+        fields=["id", "name", "project_id", "active"],
+        limit=2,
+        context={"active_test": False},
+    )
+    if not isinstance(rows, list) or len(rows) > 1:
+        raise OdooTaskPayloadError("Odoo task identity payload was malformed")
+    if not rows:
+        return None
+    row = rows[0]
+    if not isinstance(row, dict):
+        raise OdooTaskPayloadError("Odoo task identity payload was malformed")
+    row_id = _positive_id(row.get("id"), label="task identity")
+    name = row.get("name")
+    project = row.get("project_id")
+    active = row.get("active")
+    if (
+        row_id != task_id
+        or not isinstance(name, str)
+        or not isinstance(project, (list, tuple))
+        or not project
+        or not isinstance(active, bool)
+    ):
+        raise OdooTaskPayloadError("Odoo task identity payload was malformed")
+    project_id = _positive_id(project[0], label="task project")
+    return {
+        "id": row_id,
+        "name": name,
+        "project_id": project_id,
+        "active": active,
+    }
 
 
 def find_feedback_attachment_ids(
@@ -211,6 +291,77 @@ def create_feedback_task(
         )
 
 
+def _review_task_create(
+    execute_fn: Callable[..., Any],
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    tag_id: int | None,
+    deadline: str,
+    *,
+    assignee_field: str,
+) -> int:
+    values: dict[str, Any] = {
+        "name": name,
+        "project_id": project_id,
+        "description": description_html,
+        "date_deadline": deadline,
+        assignee_field: (
+            [(6, 0, [assignee_uid])]
+            if assignee_field == "user_ids"
+            else assignee_uid
+        ),
+    }
+    if tag_id:
+        values["tag_ids"] = [(6, 0, [tag_id])]
+    return execute_fn("project.task", "create", values)
+
+
+def create_review_task_user_ids(
+    execute_fn: Callable[..., Any],
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    tag_id: int | None,
+    deadline: str,
+) -> int:
+    """Create one review task using the modern assignee field (one mutation)."""
+    return _review_task_create(
+        execute_fn,
+        project_id,
+        name,
+        description_html,
+        assignee_uid,
+        tag_id,
+        deadline,
+        assignee_field="user_ids",
+    )
+
+
+def create_review_task_user_id(
+    execute_fn: Callable[..., Any],
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    tag_id: int | None,
+    deadline: str,
+) -> int:
+    """Create one review task using the legacy assignee field (one mutation)."""
+    return _review_task_create(
+        execute_fn,
+        project_id,
+        name,
+        description_html,
+        assignee_uid,
+        tag_id,
+        deadline,
+        assignee_field="user_id",
+    )
+
+
 def update_task(
     execute_fn: Callable[..., Any], task_id: int, **fields: Any
 ) -> None:
@@ -248,6 +399,76 @@ def update_feedback_task(
         )
 
 
+def _update_review_task(
+    execute_fn: Callable[..., Any],
+    task_id: int,
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    deadline: str,
+    *,
+    assignee_field: str,
+) -> None:
+    fields: dict[str, Any] = {
+        "name": name,
+        "project_id": project_id,
+        "description": description_html,
+        "date_deadline": deadline,
+        "active": True,
+        assignee_field: (
+            [(6, 0, [assignee_uid])]
+            if assignee_field == "user_ids"
+            else assignee_uid
+        ),
+    }
+    execute_fn("project.task", "write", [task_id], fields)
+
+
+def update_review_task_user_ids(
+    execute_fn: Callable[..., Any],
+    task_id: int,
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    deadline: str,
+) -> None:
+    """Restore the exact review-task contract with one modern-schema write."""
+    _update_review_task(
+        execute_fn,
+        task_id,
+        project_id,
+        name,
+        description_html,
+        assignee_uid,
+        deadline,
+        assignee_field="user_ids",
+    )
+
+
+def update_review_task_user_id(
+    execute_fn: Callable[..., Any],
+    task_id: int,
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    deadline: str,
+) -> None:
+    """Restore the exact review-task contract with one legacy-schema write."""
+    _update_review_task(
+        execute_fn,
+        task_id,
+        project_id,
+        name,
+        description_html,
+        assignee_uid,
+        deadline,
+        assignee_field="user_id",
+    )
+
+
 def close_task(execute_fn: Callable[..., Any], task_id: int) -> None:
     """Archive one project.task without implying any payroll state."""
     if isinstance(task_id, bool) or not isinstance(task_id, int) or task_id <= 0:
@@ -260,6 +481,37 @@ def post_task_message(
 ) -> None:
     """Post a message to a project.task's chatter."""
     execute_fn("project.task", "message_post", [task_id], body=body)
+
+
+def find_task_message_ids(
+    execute_fn: Callable[..., Any], task_id: int, marker: str
+) -> list[int]:
+    """Return up to two task messages carrying a deterministic resolution marker."""
+    _positive_id(task_id, label="task")
+    if not isinstance(marker, str) or not marker.strip():
+        raise ValueError("marker must be nonblank")
+    rows = execute_fn(
+        "mail.message",
+        "search_read",
+        [
+            ("model", "=", "project.task"),
+            ("res_id", "=", task_id),
+            ("body", "ilike", marker),
+        ],
+        fields=["id", "body"],
+        order="id asc",
+        limit=2,
+    )
+    if not isinstance(rows, list) or len(rows) > 2:
+        raise OdooTaskPayloadError("Odoo task message payload was malformed")
+    ids: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("body"), str):
+            raise OdooTaskPayloadError("Odoo task message payload was malformed")
+        if marker.casefold() not in row["body"].casefold():
+            raise OdooTaskPayloadError("Odoo task message payload was malformed")
+        ids.append(_positive_id(row.get("id"), label="task message"))
+    return ids
 
 
 def add_task_attachment(

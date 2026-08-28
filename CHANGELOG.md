@@ -15,6 +15,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Wendy gets unclear past PTO cases
 
 - **When a pay period closes or a past PTO change is unclear, Plant Manager now makes one Odoo task for Wendy.** The task explains what needs review without changing payroll again.
+- **If Odoo loses a reply, Plant Manager now checks the same task before trying again.** This keeps one review task and finishes its message safely.
 
 ### People performance dashboard build plan
 

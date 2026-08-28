@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+import xmlrpc.client
 from uuid import UUID
 
 import pytest
@@ -166,6 +167,12 @@ def wire_review(monkeypatch, fake, row, *, matching=None):
     monkeypatch.setattr(review.odoo_client, "ensure_feedback_project", fake.ensure_feedback_project)
     monkeypatch.setattr(
         review.odoo_client,
+        "find_active_feedback_project_ids",
+        lambda name: [7],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
         "find_active_feedback_task_ids",
         fake.find_active_feedback_task_ids,
         raising=False,
@@ -174,6 +181,18 @@ def wire_review(monkeypatch, fake, row, *, matching=None):
         review.odoo_client, "find_active_users_by_login", fake.find_active_users_by_login
     )
     monkeypatch.setattr(review.odoo_client, "create_feedback_task", fake.create_feedback_task)
+    monkeypatch.setattr(
+        review.odoo_client,
+        "create_review_task_user_ids",
+        lambda **values: review.odoo_client.create_feedback_task(**values),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "create_review_task_user_id",
+        fake.create_feedback_task,
+        raising=False,
+    )
     monkeypatch.setattr(review.odoo_client, "update_task", fake.update_task)
     monkeypatch.setattr(
         review.odoo_client,
@@ -185,6 +204,74 @@ def wire_review(monkeypatch, fake, row, *, matching=None):
             assignee_uid=fields["assignee_uid"],
             deadline=fields["deadline"],
         ),
+    )
+    def update_review_task(**fields):
+        task_id = fields.pop("task_id")
+        fake.update_task(
+            task_id,
+            name=fields["name"],
+            project_id=fields["project_id"],
+            description=fields["description_html"],
+            active=True,
+            assignee_uid=fields["assignee_uid"],
+            deadline=fields["deadline"],
+        )
+
+    monkeypatch.setattr(
+        review.odoo_client,
+        "update_review_task_user_ids",
+        update_review_task,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "update_review_task_user_id",
+        update_review_task,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "fetch_feedback_task_identity",
+        lambda task_id: {
+            "id": task_id,
+            "name": review.task_name(current["row"]),
+            "project_id": 7,
+            "active": (
+                task_id in fake.task_ids or current["row"].odoo_task_id == task_id
+            ),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client, "find_task_message_ids", lambda *args: [], raising=False
+    )
+
+    def save_resolution_delivery(
+        request_id,
+        owner,
+        *,
+        expected_step,
+        new_step,
+        attempts,
+        next_at,
+        error,
+        now,
+    ):
+        current["row"] = replace(
+            current["row"],
+            task_resolution_step=new_step,
+            task_resolution_attempts=attempts,
+            task_resolution_next_at=next_at,
+            task_resolution_error=error,
+        )
+        fake.events.append(("resolution_save", new_step, attempts, next_at, error))
+        return current["row"]
+
+    monkeypatch.setattr(
+        review.store,
+        "save_resolution_delivery",
+        save_resolution_delivery,
+        raising=False,
     )
     monkeypatch.setattr(review.odoo_client, "post_task_message", fake.post_task_message)
     monkeypatch.setattr(review.odoo_client, "close_task", fake.close_task)
@@ -537,7 +624,7 @@ def test_saved_task_is_updated_directly_as_review_state_changes(monkeypatch):
     result = review.sync_review_task(41, NOW)
     assert result.task_id == 999
     assert fake.created == []
-    assert fake.events[0][0] != "search"
+    assert any(event[0] == "search" for event in fake.events)
     assert "Replacement PTO ID:</strong> 123" in fake.updated[0][1]["description"]
     assert "New safe fact" in fake.updated[0][1]["description"]
 
@@ -670,6 +757,13 @@ def test_manual_resolution_audits_posts_escaped_note_then_closes_without_pto(mon
 
 def test_marking_odoo_task_done_does_not_claim_pto_was_paid(monkeypatch):
     row = _needs_review(odoo_task_id=501)
+    monkeypatch.setattr(
+        review.odoo_client,
+        "fetch_task_stage_names",
+        lambda *args, **kwargs: pytest.fail(
+            "absence PTO reconciliation must not read task stages"
+        ),
+    )
     monkeypatch.setattr(review, "_clock", lambda: NOW)
     monkeypatch.setattr(
         review.staffing_hours,
@@ -689,3 +783,453 @@ def test_marking_odoo_task_done_does_not_claim_pto_was_paid(monkeypatch):
     result = review.reconcile_once(NOW)
     assert result == review.ReconcileResult(1, 0, 1, 0)
     assert row.state == "needs_review"
+
+
+@pytest.mark.parametrize(("project_ids", "status"), [([], "retry"), ([7, 8], "blocked")])
+def test_review_delivery_requires_one_existing_exact_active_project(
+    monkeypatch, project_ids, status
+):
+    fake = ReviewFake()
+    wire_review(monkeypatch, fake, _needs_review())
+    monkeypatch.setattr(
+        review.odoo_client,
+        "find_active_feedback_project_ids",
+        lambda name: list(project_ids),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "ensure_feedback_project",
+        lambda: pytest.fail("review delivery must never create a project"),
+    )
+
+    result = review.sync_review_task(41, NOW)
+
+    assert result.status == status
+    assert fake.created == []
+
+
+def test_active_exact_task_wins_over_different_saved_archived_id(monkeypatch):
+    fake = ReviewFake(task_ids=[502])
+    current = wire_review(monkeypatch, fake, _needs_review(odoo_task_id=501))
+    monkeypatch.setattr(
+        review.odoo_client,
+        "find_active_feedback_project_ids",
+        lambda name: [7],
+        raising=False,
+    )
+
+    result = review.sync_review_task(41, NOW)
+
+    assert result.task_id == 502
+    assert current["row"].odoo_task_id == 502
+    assert fake.updated[0][0] == 502
+
+
+def test_correct_archived_saved_task_is_verified_then_reactivated(monkeypatch):
+    fake = ReviewFake(task_ids=[])
+    wire_review(monkeypatch, fake, _needs_review(odoo_task_id=501))
+    checked = []
+    monkeypatch.setattr(
+        review.odoo_client,
+        "find_active_feedback_project_ids",
+        lambda name: [7],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "fetch_feedback_task_identity",
+        lambda task_id: checked.append(task_id)
+        or {
+            "id": 501,
+            "name": review.task_name(_needs_review()),
+            "project_id": 7,
+            "active": False,
+        },
+        raising=False,
+    )
+
+    result = review.sync_review_task(41, NOW)
+
+    assert result.task_id == 501
+    assert checked == [501]
+    assert fake.updated[0][0] == 501
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {
+            "id": 501,
+            "name": "renamed",
+            "project_id": 7,
+            "active": False,
+        },
+        {
+            "id": 501,
+            "name": "[GPI-PM-PTO-41] Review Person 41 — 2026-08-20",
+            "project_id": 8,
+            "active": False,
+        },
+        {
+            "id": 501,
+            "name": "[GPI-PM-PTO-41] Review Person 41 — 2026-08-20",
+            "project_id": 7,
+            "active": True,
+        },
+        None,
+    ],
+)
+def test_unverified_saved_task_identity_fails_permanently(monkeypatch, identity):
+    fake = ReviewFake(task_ids=[])
+    current = wire_review(monkeypatch, fake, _needs_review(odoo_task_id=501))
+    monkeypatch.setattr(
+        review.odoo_client,
+        "find_active_feedback_project_ids",
+        lambda name: [7],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "fetch_feedback_task_identity",
+        lambda task_id: identity,
+        raising=False,
+    )
+
+    result = review.sync_review_task(41, NOW)
+
+    assert result.status == "blocked"
+    assert current["row"].task_next_at.year == 9999
+    assert fake.updated == []
+    assert fake.created == []
+
+
+def test_tenth_recoverable_attempt_becomes_permanent_and_stops_future_mutations(monkeypatch):
+    fake = ReviewFake(users=[])
+    current = wire_review(monkeypatch, fake, _needs_review(task_attempts=9))
+
+    first = review.sync_review_task(41, NOW)
+    fake.events.clear()
+    second = review.sync_review_task(41, NOW)
+
+    assert first.status == "blocked"
+    assert second.status == "blocked"
+    assert current["row"].task_attempts == 10
+    assert current["row"].task_next_at.year == 9999
+    assert not {"users", "search", "create", "update"}.intersection(
+        event[0] for event in fake.events
+    )
+
+
+def test_create_compatibility_fallback_stops_when_lease_is_lost(monkeypatch):
+    fake = ReviewFake()
+    wire_review(monkeypatch, fake, _needs_review())
+    monkeypatch.setattr(
+        review.odoo_client,
+        "find_active_feedback_project_ids",
+        lambda name: [7],
+        raising=False,
+    )
+    primary = []
+    fallback = []
+    monkeypatch.setattr(
+        review.odoo_client,
+        "create_review_task_user_ids",
+        lambda **values: primary.append(values)
+        or (_ for _ in ()).throw(xmlrpc.client.Fault(1, "unknown field user_ids")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "create_review_task_user_id",
+        lambda **values: fallback.append(values) or 501,
+        raising=False,
+    )
+    renewals = 0
+
+    def renew(*args, **kwargs):
+        nonlocal renewals
+        renewals += 1
+        if renewals == 2:
+            raise store.StaleTransition("taken over")
+        return _needs_review(lease_owner=args[1], lease_until=NOW + timedelta(seconds=120))
+
+    monkeypatch.setattr(review.store, "renew_claim", renew)
+
+    review.sync_review_task(41, NOW)
+
+    assert len(primary) == 1
+    assert fallback == []
+
+
+def test_update_compatibility_fallback_stops_when_lease_is_lost(monkeypatch):
+    fake = ReviewFake(task_ids=[501])
+    wire_review(monkeypatch, fake, _needs_review(odoo_task_id=501))
+    monkeypatch.setattr(
+        review.odoo_client,
+        "find_active_feedback_project_ids",
+        lambda name: [7],
+        raising=False,
+    )
+    primary = []
+    fallback = []
+    monkeypatch.setattr(
+        review.odoo_client,
+        "update_review_task_user_ids",
+        lambda **values: primary.append(values)
+        or (_ for _ in ()).throw(xmlrpc.client.Fault(1, "unknown field user_ids")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "update_review_task_user_id",
+        lambda **values: fallback.append(values),
+        raising=False,
+    )
+    renewals = 0
+
+    def renew(*args, **kwargs):
+        nonlocal renewals
+        renewals += 1
+        if renewals == 2:
+            raise store.StaleTransition("taken over")
+        return _needs_review(
+            odoo_task_id=501,
+            lease_owner=args[1],
+            lease_until=NOW + timedelta(seconds=120),
+        )
+
+    monkeypatch.setattr(review.store, "renew_claim", renew)
+
+    review.sync_review_task(41, NOW)
+
+    assert len(primary) == 1
+    assert fallback == []
+
+
+def wire_resolution_progress(monkeypatch, current, fake):
+    def save_resolution_delivery(
+        request_id,
+        owner,
+        *,
+        expected_step,
+        new_step,
+        attempts,
+        next_at,
+        error,
+        now,
+    ):
+        assert current["row"].task_resolution_step == expected_step
+        current["row"] = replace(
+            current["row"],
+            task_resolution_step=new_step,
+            task_resolution_attempts=attempts,
+            task_resolution_next_at=next_at,
+            task_resolution_error=error,
+        )
+        fake.events.append(("resolution_save", new_step, attempts, next_at, error))
+        return current["row"]
+
+    monkeypatch.setattr(
+        review.store,
+        "save_resolution_delivery",
+        save_resolution_delivery,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "fetch_feedback_task_identity",
+        lambda task_id: {
+            "id": task_id,
+            "name": review.task_name(current["row"]),
+            "project_id": 7,
+            "active": True,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client,
+        "find_active_feedback_project_ids",
+        lambda name: [7],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        review.odoo_client, "find_task_message_ids", lambda *args: [], raising=False
+    )
+
+
+def test_external_truth_commits_when_resolution_message_fails_and_stays_due(monkeypatch):
+    matching = [{
+        "id": 991,
+        "employee_id": 41,
+        "holiday_status_id": 7,
+        "date_from": date(2026, 8, 20),
+        "date_to": date(2026, 8, 20),
+        "state": "validate",
+    }]
+    fake = ReviewFake()
+    current = wire_review(
+        monkeypatch, fake, _needs_review(odoo_task_id=501), matching=matching
+    )
+    wire_resolution_progress(monkeypatch, current, fake)
+
+    def adopt(*args, **kwargs):
+        current["row"] = replace(current["row"], pto_leave_id=991)
+        return current["row"]
+
+    monkeypatch.setattr(review.store, "adopt_external_pto", adopt, raising=False)
+
+    def finalize(*args, **kwargs):
+        current["row"] = replace(
+            current["row"],
+            state="approved",
+            pto_leave_id=991,
+            task_resolution_step="none",
+            task_resolution_attempts=0,
+            task_resolution_next_at=NOW,
+        )
+        return current["row"]
+
+    monkeypatch.setattr(review.store, "finalize_approved", finalize)
+    monkeypatch.setattr(review.conversion, "_invalidate_after_commit", lambda row: None)
+    monkeypatch.setattr(
+        review.odoo_client,
+        "post_task_message",
+        lambda *args: (_ for _ in ()).throw(TimeoutError("message response lost")),
+    )
+
+    result = review.resolve_external_pto(41, NOW)
+
+    assert result.status == "approved"
+    assert current["row"].state == "approved"
+    assert current["row"].task_resolution_step == "none"
+    assert current["row"].task_resolution_attempts == 1
+    assert current["row"].task_resolution_next_at > NOW
+    assert fake.closed == []
+
+
+def test_ambiguous_message_is_adopted_then_task_closes_once(monkeypatch):
+    fake = ReviewFake()
+    row = _needs_review(
+        state="approved",
+        odoo_task_id=501,
+        task_resolution_step="none",
+        task_resolution_attempts=0,
+        task_resolution_next_at=NOW,
+    )
+    current = wire_review(monkeypatch, fake, row)
+    wire_resolution_progress(monkeypatch, current, fake)
+    searches = 0
+
+    def find_messages(*args):
+        nonlocal searches
+        searches += 1
+        return [] if searches == 1 else [901]
+
+    monkeypatch.setattr(review.odoo_client, "find_task_message_ids", find_messages)
+    monkeypatch.setattr(
+        review.odoo_client,
+        "post_task_message",
+        lambda *args: (_ for _ in ()).throw(TimeoutError("response lost")),
+    )
+
+    outcome = review._deliver_terminal_claimed(current["row"], OWNER)
+
+    assert outcome == "closed"
+    assert searches == 2
+    assert current["row"].task_resolution_step == "closed"
+    assert fake.closed == [501]
+
+
+def test_restart_after_message_checkpoint_skips_duplicate_message_and_closes(monkeypatch):
+    fake = ReviewFake()
+    row = _needs_review(
+        state="approved",
+        odoo_task_id=501,
+        task_resolution_step="message_posted",
+        task_resolution_attempts=0,
+        task_resolution_next_at=NOW,
+    )
+    current = wire_review(monkeypatch, fake, row)
+    wire_resolution_progress(monkeypatch, current, fake)
+    monkeypatch.setattr(
+        review.odoo_client,
+        "post_task_message",
+        lambda *args: pytest.fail("checkpointed message must not be posted twice"),
+    )
+
+    outcome = review._deliver_terminal_claimed(current["row"], OWNER)
+
+    assert outcome == "closed"
+    assert current["row"].task_resolution_step == "closed"
+    assert fake.closed == [501]
+
+
+def test_close_failure_preserves_message_checkpoint_for_retry(monkeypatch):
+    fake = ReviewFake()
+    row = _needs_review(
+        state="resolved_manually",
+        manual_resolution_note="Paid another way",
+        odoo_task_id=501,
+        task_resolution_step="message_posted",
+        task_resolution_attempts=0,
+        task_resolution_next_at=NOW,
+    )
+    current = wire_review(monkeypatch, fake, row)
+    wire_resolution_progress(monkeypatch, current, fake)
+    monkeypatch.setattr(
+        review.odoo_client,
+        "close_task",
+        lambda task_id: (_ for _ in ()).throw(TimeoutError("close response lost")),
+    )
+
+    outcome = review._deliver_terminal_claimed(current["row"], OWNER)
+
+    assert outcome == "retry"
+    assert current["row"].task_resolution_step == "message_posted"
+    assert current["row"].task_resolution_attempts == 1
+    assert fake.messages == []
+
+
+def test_terminal_reconcile_isolates_retry_and_continues_to_later_row(monkeypatch):
+    first = _request(
+        41,
+        state="approved",
+        odoo_task_id=501,
+        task_resolution_step="none",
+        task_resolution_next_at=NOW,
+    )
+    second = _request(
+        42,
+        state="resolved_manually",
+        odoo_task_id=502,
+        task_resolution_step="message_posted",
+        task_resolution_next_at=NOW,
+    )
+    processed = []
+    monkeypatch.setattr(review, "_clock", lambda: NOW)
+    monkeypatch.setattr(
+        review.staffing_hours,
+        "current_pay_period_bounds",
+        lambda today: (date(2026, 8, 16), date(2026, 8, 29)),
+    )
+    monkeypatch.setattr(
+        review.store,
+        "claim_due",
+        lambda owner, now, **kwargs: [
+            replace(first, lease_owner=owner),
+            replace(second, lease_owner=owner),
+        ],
+    )
+    monkeypatch.setattr(review.store, "release_claim", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        review,
+        "_deliver_terminal_claimed",
+        lambda row, owner: processed.append(row.id) or ("retry" if row.id == 41 else "closed"),
+        raising=False,
+    )
+
+    result = review.reconcile_once(NOW, limit=2)
+
+    assert processed == [41, 42]
+    assert result == review.ReconcileResult(2, 1, 1, 0)
