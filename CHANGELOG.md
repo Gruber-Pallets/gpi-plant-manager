@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Live Odoo work-location build plan
+
+- **A step-by-step build plan is ready to keep worker locations and production matched with Odoo.** Plant Manager will clock people in and out, while the floor app records work areas and moves. The plan also covers clear alerts and safe fixes when times do not match. Nothing in the app has changed yet.
+
 ### Live Odoo work-location plan
 
 - **A plan is ready to make Odoo the source for where each person worked and which production they earned.** Plant Manager will still clock people in and out, while the floor app records their work areas and moves. Missing or mixed-up times will stay unassigned until a manager fixes them. Nothing in the app has changed yet.
