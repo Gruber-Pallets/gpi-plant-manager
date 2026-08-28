@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta, timezone
 import os
+from threading import Event, Thread
 
 import pytest
 
@@ -54,6 +55,38 @@ def test_local_days_do_not_count_checkout_at_local_midnight_twice():
     )
 
     assert days == {date(2026, 8, 28)}
+
+
+@pytest.mark.parametrize(
+    "instant",
+    [
+        datetime(2026, 8, 28, 13, 0, tzinfo=UTC),
+        datetime(2026, 8, 29, 5, 0, tzinfo=UTC),
+    ],
+)
+def test_zero_duration_rows_touch_no_local_day_even_at_midnight(instant):
+    assert attendance_mirror.local_days_touched(instant, instant) == set()
+
+
+def test_active_read_queries_exclude_closed_zero_duration_rows(monkeypatch):
+    queries = []
+    monkeypatch.setattr(
+        attendance_mirror.db,
+        "query",
+        lambda sql, params=None: queries.append((sql, params)) or [],
+    )
+    start = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
+    end = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
+
+    assert attendance_mirror.rows_overlapping(start, end) == ()
+    assert attendance_mirror.rows_for_employee(44, start, end) == ()
+    assert attendance_mirror.rows_for_employee(44, start, None) == ()
+
+    assert len(queries) == 3
+    assert all(
+        "check_out_utc IS NULL OR check_out_utc > check_in_utc" in sql
+        for sql, _params in queries
+    )
 
 
 def test_public_mirror_contract_rejects_naive_datetimes_before_database_access(
@@ -138,6 +171,90 @@ def test_health_and_cursor_snapshots_normalize_database_datetimes_to_utc(
     assert health.oldest_recalc_requested_at.tzinfo is UTC
 
 
+def test_logical_run_lock_uses_transaction_scoped_postgres_advisory_lock(
+    monkeypatch,
+):
+    events = []
+
+    class Cursor:
+        def execute(self, sql, params=None):
+            events.append(("execute", sql, params))
+
+    @contextmanager
+    def cursor():
+        events.append(("enter",))
+        yield Cursor()
+        events.append(("commit_exit",))
+
+    monkeypatch.setattr(attendance_mirror.db, "cursor", cursor)
+
+    with attendance_mirror._logical_run_lock():
+        events.append(("held",))
+
+    assert events[0] == ("enter",)
+    assert events[1][0] == "execute"
+    assert "pg_advisory_xact_lock" in events[1][1]
+    assert events[1][2] == (attendance_mirror._SYNC_ADVISORY_LOCK_KEY,)
+    assert events[2:] == [("held",), ("commit_exit",)]
+
+
+def test_owned_error_success_clear_preserves_foreign_failures():
+    stored = attendance_mirror._error_with_failure(
+        None, "incremental", "change page failed"
+    )
+    stored = attendance_mirror._error_with_failure(
+        stored, "sweep", "ID page failed"
+    )
+
+    after_incremental_success = attendance_mirror._error_after_success(
+        stored, "incremental"
+    )
+
+    assert attendance_mirror._format_error_state(after_incremental_success) == (
+        "sweep: ID page failed"
+    )
+    assert attendance_mirror._error_after_success(
+        after_incremental_success, "sweep"
+    ) is None
+
+
+def test_owned_error_encoding_is_bounded_and_health_format_is_deterministic():
+    stored = None
+    for owner in ("baseline", "sweep", "incremental"):
+        stored = attendance_mirror._error_with_failure(
+            stored, owner, owner[0] * 900
+        )
+
+    assert stored is not None
+    assert len(stored) <= 500
+    formatted = attendance_mirror._format_error_state(stored)
+    assert formatted.startswith("incremental: i")
+    assert "; sweep: s" in formatted
+    assert "; baseline: b" in formatted
+    assert len(formatted) <= 500
+
+
+def test_owned_error_mutation_preserves_legacy_unowned_error():
+    stored = attendance_mirror._error_with_failure(
+        "legacy failure", "sweep", "new sweep failure"
+    )
+
+    assert attendance_mirror._format_error_state(stored) == (
+        "sweep: new sweep failure; legacy: legacy failure"
+    )
+    assert "legacy failure" in attendance_mirror._format_error_state(
+        attendance_mirror._error_after_success(stored, "sweep")
+    )
+
+
+def test_owned_error_records_blank_exception_with_useful_fallback():
+    stored = attendance_mirror._error_with_failure(None, "sweep", Exception())
+
+    assert attendance_mirror._format_error_state(stored) == (
+        "sweep: unknown error"
+    )
+
+
 _needs_postgres = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"), reason="needs local Postgres"
 )
@@ -166,6 +283,51 @@ def clean_mirror():
         cur.execute("DELETE FROM attendance_recalc_queue")
         cur.execute("DELETE FROM attendance_strict_days")
         cur.execute("DELETE FROM odoo_attendance_mirror")
+
+
+@_needs_postgres
+def test_real_postgres_logical_run_lock_serializes_and_releases(clean_mirror):
+    first_entered = Event()
+    release_first = Event()
+    second_attempting = Event()
+    second_entered = Event()
+    errors = []
+
+    def hold_first_lock():
+        try:
+            with attendance_mirror._logical_run_lock():
+                first_entered.set()
+                if not release_first.wait(timeout=5):
+                    raise AssertionError("timed out waiting to release first lock")
+        except Exception as exc:  # pragma: no cover - reported by parent thread
+            errors.append(exc)
+
+    def wait_for_same_lock():
+        try:
+            if not first_entered.wait(timeout=5):
+                raise AssertionError("first lock was never acquired")
+            second_attempting.set()
+            with attendance_mirror._logical_run_lock():
+                second_entered.set()
+        except Exception as exc:  # pragma: no cover - reported by parent thread
+            errors.append(exc)
+
+    first = Thread(target=hold_first_lock)
+    second = Thread(target=wait_for_same_lock)
+    first.start()
+    second.start()
+    try:
+        assert second_attempting.wait(timeout=5)
+        assert not second_entered.wait(timeout=0.2)
+    finally:
+        release_first.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert not errors
+    assert second_entered.is_set()
 
 
 @_needs_postgres
@@ -356,3 +518,98 @@ def test_health_reports_pending_age_baseline_and_bounded_error(clean_mirror):
     assert health.baseline_completed_at == SYNCED_AT
     assert health.oldest_recalc_requested_at is not None
     assert health.last_error == "x" * 500
+
+
+@_needs_postgres
+def test_zero_duration_row_is_auditable_but_excluded_from_active_reads(
+    clean_mirror,
+):
+    instant = datetime(2026, 8, 29, 5, 0, tzinfo=UTC)
+    attendance_mirror.upsert_rows(
+        [_row(check_in=instant, check_out=instant)],
+        sync_completed_at=SYNCED_AT,
+    )
+
+    assert attendance_mirror.rows_overlapping(
+        instant - timedelta(hours=1), instant + timedelta(hours=1)
+    ) == ()
+    assert attendance_mirror.rows_for_employee(
+        44, instant - timedelta(hours=1), instant + timedelta(hours=1)
+    ) == ()
+    assert db.query(
+        "SELECT odoo_attendance_id FROM odoo_attendance_mirror"
+    ) == [{"odoo_attendance_id": 901}]
+
+
+@_needs_postgres
+def test_sweep_recovery_revives_tombstone_atomically_and_counts_deletions(
+    clean_mirror,
+):
+    attendance_mirror.upsert_rows([_row()], sync_completed_at=SYNCED_AT)
+    attendance_mirror.mark_deleted_after_successful_sweep(set(), generation=1)
+    db.execute(
+        "UPDATE odoo_attendance_sync_state SET baseline_completed_at = %s "
+        "WHERE singleton = TRUE",
+        (SYNCED_AT,),
+    )
+    recovered = _row(
+        check_out=datetime(2026, 8, 28, 21, 0, tzinfo=UTC),
+        write_date=datetime(2026, 8, 28, 21, 1, tzinfo=UTC),
+    )
+
+    result = attendance_mirror._store_full_sweep(
+        {901},
+        recovery_rows=[recovered],
+        generation=2,
+        completed_at=datetime(2026, 8, 28, 22, 0, tzinfo=UTC),
+    )
+
+    assert result.deleted_count == 0
+    assert result.affected_days == frozenset({date(2026, 8, 28)})
+    assert attendance_mirror.rows_for_employee(
+        44,
+        datetime(2026, 8, 28, 12, 0, tzinfo=UTC),
+        datetime(2026, 8, 29, 12, 0, tzinfo=UTC),
+    )[0]["check_out_utc"] == recovered["check_out_utc"]
+    assert db.query("SELECT day FROM attendance_recalc_queue") == [
+        {"day": date(2026, 8, 28)}
+    ]
+    assert db.query("SELECT day FROM attendance_strict_days") == [
+        {"day": date(2026, 8, 28)}
+    ]
+
+
+@_needs_postgres
+def test_prebaseline_tombstone_recovery_does_not_recalculate_history(
+    clean_mirror,
+):
+    attendance_mirror.upsert_rows([_row()], sync_completed_at=SYNCED_AT)
+    attendance_mirror.mark_deleted_after_successful_sweep(set(), generation=1)
+
+    result = attendance_mirror._store_full_sweep(
+        {901},
+        recovery_rows=[_row()],
+        generation=2,
+        completed_at=datetime(2026, 8, 28, 22, 0, tzinfo=UTC),
+    )
+
+    assert result.affected_days == frozenset()
+    assert db.query("SELECT * FROM attendance_recalc_queue") == []
+    assert db.query("SELECT * FROM attendance_strict_days") == []
+
+
+@_needs_postgres
+def test_owned_error_success_clears_only_matching_operation(clean_mirror):
+    attendance_mirror._record_failure("incremental", "change failed")
+    attendance_mirror._record_failure("sweep", "sweep failed")
+    assert attendance_mirror.health_snapshot().last_error == (
+        "incremental: change failed; sweep: sweep failed"
+    )
+
+    attendance_mirror.upsert_rows([], sync_completed_at=SYNCED_AT)
+    assert attendance_mirror.health_snapshot().last_error == (
+        "sweep: sweep failed"
+    )
+
+    attendance_mirror.mark_deleted_after_successful_sweep(set(), generation=1)
+    assert attendance_mirror.health_snapshot().last_error is None

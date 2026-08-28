@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Keep Odoo work-time checks safe
+
+- **Plant Manager now checks Odoo work times one at a time and double-checks empty lists.** This keeps overlapping or failed checks from hiding good work records. The safe copy is still running in the background only.
+
 ### People performance dashboard build plan
 
 - **A step-by-step build plan is ready for the new People performance page.** It covers work-area moves, goals, machine stops, forklift calls, tablets, safe refreshes, and clear warnings when data is missing. Nothing in the app has changed yet.
