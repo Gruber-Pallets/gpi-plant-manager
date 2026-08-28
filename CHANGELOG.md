@@ -28,6 +28,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **A step-by-step build plan is ready to keep worker locations and production matched with Odoo.** Plant Manager will clock people in and out, while the floor app records work areas and moves. The plan also covers clear alerts and safe fixes when times do not match. Nothing in the app has changed yet.
 
+### Past PTO changes can recover
+
+- **If Odoo stops in the middle of a past PTO change, Plant Manager can safely continue or put the old absence back.** Unclear cases stop for a person to review.
+
 ### Past PTO can change safely in Odoo
 
 - **Plant Manager can now safely change an approved missed day into approved PTO after a manager says yes.** The worker's absence record stays in place. The approval button is not connected yet.

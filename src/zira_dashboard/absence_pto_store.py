@@ -330,6 +330,58 @@ def list_due(now: datetime, *, limit: int = 25) -> list[AbsencePtoRequest]:
     return [_request_from_row(row) for row in rows]
 
 
+def claim_due(
+    owner: UUID,
+    now: datetime,
+    *,
+    period_start: date,
+    period_end: date,
+    limit: int = 25,
+    lease_seconds: int = 120,
+) -> list[AbsencePtoRequest]:
+    """Claim bounded expired conversions and pending requests after rollover."""
+    safe_owner = _uuid(owner, "owner")
+    current = _aware_datetime(now, "now")
+    if (
+        not isinstance(period_start, date)
+        or isinstance(period_start, datetime)
+        or not isinstance(period_end, date)
+        or isinstance(period_end, datetime)
+        or period_start > period_end
+    ):
+        raise ValueError("period bounds must be ordered dates")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    if type(lease_seconds) is not int or lease_seconds <= 0:
+        raise ValueError("lease_seconds must be a positive integer")
+    lease_until = current + timedelta(seconds=lease_seconds)
+    rows = db.query(
+        "WITH due AS MATERIALIZED ("
+        "SELECT request.id FROM absence_pto_requests AS request "
+        "WHERE (request.lease_until IS NULL OR request.lease_until <= %s) "
+        "AND (request.state = 'converting' OR (request.state = 'pending' "
+        "AND request.absence_day NOT BETWEEN %s AND %s)) "
+        "ORDER BY request.requested_at, request.id LIMIT %s "
+        "FOR UPDATE SKIP LOCKED"
+        ") UPDATE absence_pto_requests AS request "
+        "SET lease_owner = %s, lease_until = %s, updated_at = %s FROM due "
+        "WHERE request.id = due.id "
+        "AND (request.lease_until IS NULL OR request.lease_until <= %s) "
+        f"RETURNING {QUALIFIED_REQUEST_COLUMNS}",
+        (
+            current,
+            period_start,
+            period_end,
+            limit,
+            safe_owner,
+            lease_until,
+            current,
+            current,
+        ),
+    )
+    return [_request_from_row(row) for row in rows]
+
+
 def claim_request(
     request_id: int,
     owner: UUID,
@@ -525,6 +577,34 @@ def mark_needs_review(
     return _one_request(rows, "review transition")
 
 
+def transition_to_pending(
+    request_id: int,
+    owner: UUID,
+    *,
+    error: str,
+    now: datetime | None = None,
+) -> AbsencePtoRequest:
+    """Record verified compensation and make the request safely retryable."""
+    current = _now(now)
+    rows = db.query(
+        "UPDATE absence_pto_requests SET state = 'pending', "
+        "conversion_step = 'not_started', pto_leave_id = NULL, sync_error = %s, "
+        "task_next_at = NULL, updated_at = %s WHERE id = %s AND lease_owner = %s "
+        "AND lease_until > %s AND state = 'converting' "
+        f"RETURNING {REQUEST_COLUMNS}",
+        (
+            _required_text(error, "error"),
+            current,
+            _positive_int(request_id, "request_id"),
+            _uuid(owner, "owner"),
+            current,
+        ),
+    )
+    if not rows:
+        raise StaleTransition("pending transition lost its current conversion lease")
+    return _one_request(rows, "pending transition")
+
+
 def save_task_delivery(
     request_id: int,
     owner: UUID,
@@ -717,6 +797,7 @@ def finalize_approved(
 __all__ = [
     "AbsencePtoRequest",
     "StaleTransition",
+    "claim_due",
     "claim_request",
     "create_request",
     "get_request",
@@ -729,4 +810,5 @@ __all__ = [
     "renew_claim",
     "save_task_delivery",
     "transition",
+    "transition_to_pending",
 ]
