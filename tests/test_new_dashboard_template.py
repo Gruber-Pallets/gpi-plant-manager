@@ -129,6 +129,35 @@ def _stopped_sole_producer_bar():
     return bar
 
 
+def _zero_runway_bar():
+    bar = _segmented_bar()
+    segment = bar["segments"][0].copy()
+    segment.update(
+        actual_units=0.0,
+        goal_units=0.0,
+        result="neutral",
+        result_label="no goal",
+        is_active=False,
+        start_pct=0.0,
+        actual_pct=0.0,
+        shortfall_start_pct=0.0,
+        shortfall_pct=0.0,
+        finish_pct=None,
+    )
+    bar.update(
+        units=0,
+        expected=0,
+        pct=0.0,
+        pct_of_target=None,
+        no_one_here_now=False,
+        producer_names=("Humberto S.",),
+        sole_producer_name="Humberto S.",
+        show_segment_worker_names=False,
+        segments=[segment],
+    )
+    return bar
+
+
 def _legacy_worker_bar():
     bar = _segmented_bar()
     bar.update(
@@ -269,6 +298,17 @@ def test_new_horizontal_bar_keeps_segments_and_moves_details_to_hitareas():
     assert 'class="worker-segment-name"' not in html
     assert 'class="worker-segment-labels"' not in html
     assert 'class="bar-target-line"' not in html
+
+
+def test_zero_runway_stint_keeps_horizontal_accessible_hit_target():
+    html = _render_new(new_bars=[_zero_runway_bar()])
+
+    assert 'type="button" class="worker-stint-hitarea zero-runway"' in html
+    assert 'style="left:0.0%"' in html
+    assert 'data-stint-detail="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
+    assert 'aria-label="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
+    assert 'title="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
+    assert 'class="worker-segment-fill' not in html
 
 
 def test_stopped_sole_producer_name_is_left_while_finish_marker_stays_in_bar():
@@ -415,6 +455,20 @@ def test_new_vertical_bar_keeps_geometry_without_visible_worker_list():
     assert 'aria-label="Humberto S. · 7a-2:33p · 516/700 · 184 behind"' in html
     assert 'aria-label="Ana M. · since 2:35p · 32/25 · 7 ahead"' in html
     assert 'class="vworker-segment-list"' not in html
+
+
+def test_zero_runway_stint_keeps_vertical_accessible_hit_target():
+    html = _render_new(
+        customs={"new-bars": {"orientation": "vertical"}},
+        new_bars=[_zero_runway_bar()],
+    )
+
+    assert 'type="button" class="vworker-stint-hitarea zero-runway"' in html
+    assert 'style="bottom:0.0%"' in html
+    assert 'data-stint-detail="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
+    assert 'aria-label="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
+    assert 'title="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
+    assert 'class="vworker-segment-fill' not in html
 
 
 def test_recycling_and_new_load_worker_stint_details_in_screen_and_tv_modes():

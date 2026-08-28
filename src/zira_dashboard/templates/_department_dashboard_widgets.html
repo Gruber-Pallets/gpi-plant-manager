@@ -42,13 +42,11 @@
                        title="{{ 'Goal now' if s.is_active else 'Finish goal' }} {{ s.goal_units|round|int }}"></div>
                 {% endif %}
                 {% set runway_pct = s.actual_pct + s.shortfall_pct %}
-                {% if runway_pct > 0 %}
-                  <button type="button" class="vworker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}"
-                          style="bottom:{{ s.start_pct }}%;height:{{ runway_pct }}%"
-                          data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
-                          aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
-                          title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
-                {% endif %}
+                <button type="button" class="vworker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}{% if runway_pct <= 0 %} zero-runway{% endif %}"
+                        style="bottom:{{ s.start_pct }}%{% if runway_pct > 0 %};height:{{ runway_pct }}%{% endif %}"
+                        data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                        aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                        title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
               {% endfor %}
               {% if numpos == 'inside' %}<span class="vsegment-total in">{{ b.units }}</span>{% endif %}
               {% if numpos == 'bar' %}<span class="vsegment-total edge">{{ b.units }}</span>{% endif %}
@@ -142,13 +140,11 @@
                      title="{{ 'Goal now' if s.is_active else 'Finish goal' }} {{ s.goal_units|round|int }}"></div>
               {% endif %}
               {% set runway_pct = s.actual_pct + s.shortfall_pct %}
-              {% if runway_pct > 0 %}
-                <button type="button" class="worker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}"
-                        style="left:{{ s.start_pct }}%;width:{{ runway_pct }}%"
-                        data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
-                        aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
-                        title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
-              {% endif %}
+              <button type="button" class="worker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}{% if runway_pct <= 0 %} zero-runway{% endif %}"
+                      style="left:{{ s.start_pct }}%{% if runway_pct > 0 %};width:{{ runway_pct }}%{% endif %}"
+                      data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                      aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                      title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
             {% endfor %}
             {% if numpos == 'inside' %}<span class="segment-total in">{{ b.units }}</span>{% endif %}
             {% if numpos == 'bar' %}<span class="segment-total edge">{{ b.units }}</span>{% endif %}

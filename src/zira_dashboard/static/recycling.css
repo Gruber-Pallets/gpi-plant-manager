@@ -570,6 +570,7 @@
     left: -3px;
     right: -3px;
     transform: translateY(50%);
+    pointer-events: none;
   }
   .vworker-segment-goal.live {
     height: 3px;
@@ -601,12 +602,18 @@
     top: 0;
     bottom: 0;
   }
+  .worker-stint-hitarea.zero-runway {
+    width: 12px;
+  }
   .worker-stint-hitarea.has-boundary {
     border-left: 1px solid color-mix(in srgb, var(--panel) 72%, transparent);
   }
   .vworker-stint-hitarea {
     left: 0;
     right: 0;
+  }
+  .vworker-stint-hitarea.zero-runway {
+    height: 12px;
   }
   .vworker-stint-hitarea.has-boundary {
     border-bottom: 1px solid color-mix(in srgb, var(--panel) 72%, transparent);

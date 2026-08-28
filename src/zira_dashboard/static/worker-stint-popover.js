@@ -96,7 +96,7 @@
       close(false);
     }, true);
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape' && active) close(true);
+      if (event.key === 'Escape' && active) close(pinned);
     });
     windowObject.addEventListener('resize', function () {
       if (active) position(active);

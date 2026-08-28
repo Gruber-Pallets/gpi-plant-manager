@@ -22,6 +22,12 @@ def test_segment_totals_do_not_block_stint_hitareas():
     assert re.search(r"\.vsegment-total\s*\{[^}]*pointer-events:\s*none;", CSS)
 
 
+def test_vertical_goal_markers_do_not_block_stint_hitareas():
+    assert re.search(
+        r"\.vworker-segment-goal\s*\{[^}]*pointer-events:\s*none;", CSS
+    )
+
+
 def test_vertical_stint_focus_ring_is_inset_while_horizontal_stays_outset():
     assert re.search(
         r"\.worker-stint-hitarea:focus-visible\s*\{[^}]*"
@@ -32,6 +38,15 @@ def test_vertical_stint_focus_ring_is_inset_while_horizontal_stays_outset():
         r"\.vworker-stint-hitarea:focus-visible\s*\{[^}]*"
         r"outline-offset:\s*-2px;",
         CSS,
+    )
+
+
+def test_zero_runway_hitareas_have_small_horizontal_and_vertical_targets():
+    assert re.search(
+        r"\.worker-stint-hitarea\.zero-runway\s*\{[^}]*width:\s*12px;", CSS
+    )
+    assert re.search(
+        r"\.vworker-stint-hitarea\.zero-runway\s*\{[^}]*height:\s*12px;", CSS
     )
 
 
@@ -87,6 +102,10 @@ controller.init();
 documentListeners.pointerover(event(first));
 if (popover.hidden || popover.textContent !== first.dataset.stintDetail) throw new Error('hover did not open');
 if (first.getAttribute('aria-describedby') !== 'worker-stint-popover') throw new Error('missing description link');
+documentListeners.keydown({{key: 'Escape'}});
+if (!popover.hidden || focusCount !== 0) throw new Error('hover Escape moved focus');
+
+documentListeners.pointerover(event(first));
 documentListeners.pointerout({{target: first, relatedTarget: outside}});
 if (!popover.hidden) throw new Error('hover leave did not close');
 
@@ -105,7 +124,7 @@ if (!popover.hidden) throw new Error('outside tap did not close');
 
 documentListeners.click(event(first));
 documentListeners.keydown({{key: 'Escape'}});
-if (!popover.hidden || focusCount !== 1) throw new Error('Escape did not close and restore focus');
+if (!popover.hidden || focusCount !== 1) throw new Error('pinned Escape did not restore focus once');
 if (!appended || appended.id !== 'worker-stint-popover') throw new Error('shared popover was not created');
 """
     result = subprocess.run(
