@@ -452,7 +452,8 @@
         {% set issue_messages = rotation_issues | map(attribute='message') | list %}
         {% for warning in rotation_warnings %}
           {% if warning not in issue_messages %}
-            <li>{{ warning }}</li>
+            {% set warning_is_training = 'training block' in (warning | lower) or 'day-one pairing' in (warning | lower) %}
+            <li{% if warning_is_training %} class="training-warning"{% endif %}>{{ warning }}</li>
           {% endif %}
         {% endfor %}
       </ul>

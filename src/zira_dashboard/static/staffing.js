@@ -1579,6 +1579,10 @@
         persistentItem.textContent = persistentWarning;
         list.appendChild(persistentItem);
       }
+      const isTrainingWarning = warning => {
+        const message = String(warning || '').toLowerCase();
+        return message.includes('training block') || message.includes('day-one pairing');
+      };
       const issueMessages = new Set();
       window.ROTATION_ISSUES.forEach(issue => {
         issueMessages.add(issue.message);
@@ -1609,6 +1613,7 @@
       window.ROTATION_WARNINGS.forEach(warning => {
         if (issueMessages.has(warning)) return;
         const item = document.createElement('li');
+        if (isTrainingWarning(warning)) item.className = 'training-warning';
         item.textContent = warning;
         list.appendChild(item);
       });

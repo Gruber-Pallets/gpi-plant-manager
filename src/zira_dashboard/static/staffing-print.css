@@ -46,6 +46,8 @@ header.app,
 .day-notes .notes-label .hint,
 .day-notes:has(#notes-textarea:placeholder-shown),
 .training-sidebar,
+.rotation-warning .training-warning,
+.rotation-warning:has(.training-warning:only-child),
 .timeoff .ts-note,
 .custom-hours-banner,
 p.hint {

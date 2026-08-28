@@ -90,6 +90,19 @@ def test_printed_staffing_warnings_expand_instead_of_clipping():
     assert "max-height: none; overflow: visible;" in css
 
 
+def test_printed_staffing_hides_training_warnings_but_keeps_other_warnings():
+    html = _template()
+    css = _print_css()
+
+    assert (
+        "{% set warning_is_training = 'training block' in (warning | lower) "
+        "or 'day-one pairing' in (warning | lower) %}"
+    ) in html
+    assert '<li{% if warning_is_training %} class="training-warning"{% endif %}>{{ warning }}</li>' in html
+    assert ".rotation-warning .training-warning," in css
+    assert ".rotation-warning:has(.training-warning:only-child)," in css
+
+
 def test_printed_staffing_marks_active_trainees_without_training_cards():
     html = _template()
     css = _style()
@@ -767,6 +780,81 @@ def test_holiday_sync_warning_survives_repeated_live_warning_renders():
     assert result.returncode == 0, result.stderr
     assert 'data-persistent-warning="{{ holiday_sync_warning }}"' in html
     assert "persistentItem.textContent = persistentWarning;" in renderer
+
+
+def test_live_training_warnings_receive_print_marker():
+    js = _script()
+    renderer = (
+        "function renderCoverageIssues(warnings, issues) {"
+        + js.split("function renderCoverageIssues(warnings, issues) {", 1)[1].split(
+            "function renderCoverageFailure", 1
+        )[0]
+    )
+    harness = textwrap.dedent(
+        f"""
+        const renderer = {renderer!r};
+        class Element {{
+          constructor(tagName) {{
+            this.tagName = tagName;
+            this.children = [];
+            this.dataset = {{}};
+            this.hidden = false;
+            this.className = '';
+            this.textContent = '';
+          }}
+          appendChild(child) {{
+            this.children.push(child);
+            return child;
+          }}
+          append(...children) {{
+            this.children.push(...children);
+          }}
+          replaceChildren(...children) {{
+            this.children = [...children];
+          }}
+          get childElementCount() {{
+            return this.children.length;
+          }}
+        }}
+        const list = new Element('ul');
+        const warnBox = new Element('div');
+        const window = {{}};
+        const document = {{
+          getElementById(id) {{
+            if (id === 'rotation-warning-list') return list;
+            if (id === 'rotation-warnings') return warnBox;
+            return null;
+          }},
+          createElement(tagName) {{
+            return new Element(tagName);
+          }},
+        }};
+        const renderCoverageIssues = eval('(' + renderer + ')');
+
+        renderCoverageIssues([
+          'Training block for Woodpecker #1 did not reserve Jose L.; an existing assignment owns them.',
+          'Repair 1 needs coverage.',
+        ], []);
+
+        if (list.children.length !== 2) throw new Error('warnings were not rendered');
+        if (list.children[0].className !== 'training-warning') {{
+          throw new Error('live Training warning was not marked for print');
+        }}
+        if (list.children[1].className) {{
+          throw new Error('ordinary warning was incorrectly marked as Training');
+        }}
+        if (warnBox.hidden) throw new Error('warning panel was hidden on screen');
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_rotation_warning_success_schedules_authoritative_live_validation():

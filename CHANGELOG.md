@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Training warnings stay out of print
+
+- **Printed schedules now leave out Training problem messages.** Other schedule warnings still print, so people can see important coverage or safety problems.
+
 ### Cleaner training printouts
 
 - **Printed schedules now put a small Training label beside a trainee’s name.** The big Training box stays out of the printout, so the schedule is easier to read.
