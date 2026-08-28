@@ -118,12 +118,19 @@ def _custom_bounds(
     return start, end, None
 
 
+def current_pay_period_bounds(today: date) -> tuple[date, date]:
+    """Inclusive configured pay-period bounds containing ``today``."""
+    config = current_pay_period_config()
+    period_index = (today - config.anchor).days // config.cycle_days
+    start = config.anchor + timedelta(days=period_index * config.cycle_days)
+    return start, start + timedelta(days=config.cycle_days - 1)
+
+
 def _preset_bounds(
     preset: str,
     start_raw: str | None,
     end_raw: str | None,
     today: date,
-    config: PayPeriodConfig,
 ) -> tuple[date, date, str | None]:
     """Calculate the inclusive bounds for one supported report shortcut."""
     if preset == "this_week":
@@ -133,11 +140,12 @@ def _preset_bounds(
         end = today - timedelta(days=today.weekday() + 1)
         return end - timedelta(days=6), end, None
     if preset in _PAY_PERIOD_PRESETS:
-        period_index = (today - config.anchor).days // config.cycle_days
-        start = config.anchor + timedelta(days=period_index * config.cycle_days)
+        start, end = current_pay_period_bounds(today)
         if preset == "last_pay_period":
-            start -= timedelta(days=config.cycle_days)
-        return start, start + timedelta(days=config.cycle_days - 1), None
+            cycle = end - start + timedelta(days=1)
+            start -= cycle
+            end -= cycle
+        return start, end, None
     if preset == "this_month":
         start = _month_start(today)
         return start, _month_start(start + timedelta(days=32)) - timedelta(days=1), None
@@ -236,8 +244,7 @@ def resolve_hours_range(
     load_batches: Callable[[date, date], Sequence[PayrollBatch | Mapping[str, object]]],
 ) -> PeriodResolution:
     """Resolve an inclusive report range and verify pay-period shortcuts."""
-    config = current_pay_period_config()
-    start, end, error = _preset_bounds(preset, start_raw, end_raw, today, config)
+    start, end, error = _preset_bounds(preset, start_raw, end_raw, today)
     if error:
         return PeriodResolution(start, end, "invalid", None, error)
     return _verify_pay_period_range(preset, start, end, load_batches)

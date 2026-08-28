@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Pay-period dates stay together
+
+- **Plant Manager now uses one shared pay-period calendar.** This helps new pay tools use the same dates as the Hours page. Nothing new is showing to workers yet.
+
 ### Past absence PTO build plan
 
 - **A step-by-step build plan is ready so workers can ask to use PTO for a missed day.** The day will still count as an absence, and a manager must approve the pay change. Nothing in the app has changed yet.

@@ -21,6 +21,31 @@ def _no_batches(_start, _end):
     return []
 
 
+def test_current_pay_period_bounds_uses_configured_cycle(monkeypatch):
+    monkeypatch.setattr(
+        hours,
+        "current_pay_period_config",
+        lambda: hours.PayPeriodConfig(date(2026, 8, 16), 14),
+    )
+    assert hours.current_pay_period_bounds(date(2026, 8, 29)) == (
+        date(2026, 8, 16), date(2026, 8, 29)
+    )
+    assert hours.current_pay_period_bounds(date(2026, 8, 30)) == (
+        date(2026, 8, 30), date(2026, 9, 12)
+    )
+
+
+def test_current_pay_period_bounds_works_before_anchor(monkeypatch):
+    monkeypatch.setattr(
+        hours,
+        "current_pay_period_config",
+        lambda: hours.PayPeriodConfig(date(2026, 8, 16), 14),
+    )
+    assert hours.current_pay_period_bounds(date(2026, 8, 15)) == (
+        date(2026, 8, 2), date(2026, 8, 15)
+    )
+
+
 def test_this_pay_period_uses_the_august_16_biweekly_anchor():
     result = hours.resolve_hours_range(
         "this_pay_period", None, None, TODAY, _no_batches
