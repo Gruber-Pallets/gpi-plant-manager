@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import re
 import subprocess
 
 
@@ -14,6 +15,24 @@ def test_worker_stint_styles_keep_the_normal_bar_height_and_remove_detail_rows()
     assert ".vworker-stint-hitarea" in CSS
     assert ".worker-segment-labels" not in CSS
     assert ".vworker-segment-list" not in CSS
+
+
+def test_segment_totals_do_not_block_stint_hitareas():
+    assert re.search(r"\.segment-total\s*\{[^}]*pointer-events:\s*none;", CSS)
+    assert re.search(r"\.vsegment-total\s*\{[^}]*pointer-events:\s*none;", CSS)
+
+
+def test_vertical_stint_focus_ring_is_inset_while_horizontal_stays_outset():
+    assert re.search(
+        r"\.worker-stint-hitarea:focus-visible\s*\{[^}]*"
+        r"outline-offset:\s*2px;",
+        CSS,
+    )
+    assert re.search(
+        r"\.vworker-stint-hitarea:focus-visible\s*\{[^}]*"
+        r"outline-offset:\s*-2px;",
+        CSS,
+    )
 
 
 def test_worker_stint_popover_supports_hover_focus_tap_outside_and_escape():

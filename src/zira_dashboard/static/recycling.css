@@ -462,6 +462,7 @@
     z-index: 5;
     color: white;
     font-weight: 700;
+    pointer-events: none;
   }
   .segment-total.in {
     left: 50%;
@@ -613,7 +614,12 @@
   .worker-stint-hitarea:focus-visible,
   .vworker-stint-hitarea:focus-visible {
     outline: 2px solid var(--accent);
+  }
+  .worker-stint-hitarea:focus-visible {
     outline-offset: 2px;
+  }
+  .vworker-stint-hitarea:focus-visible {
+    outline-offset: -2px;
   }
   .worker-stint-popover {
     position: absolute;
@@ -640,6 +646,7 @@
     left: 50%;
     color: white;
     font-weight: 700;
+    pointer-events: none;
     transform: translateX(-50%);
   }
   .vsegment-total.in { bottom: 0.35rem; }
