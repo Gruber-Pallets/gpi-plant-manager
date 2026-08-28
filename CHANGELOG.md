@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### People performance dashboard plan
+
+- **A plan is ready for a manager dashboard built around people.** It will show where each person worked, when they moved, whether they met each goal, downtime, and forklift calls. Nothing in the app has changed yet.
+
 ### Live Odoo work-location build plan
 
 - **A step-by-step build plan is ready to keep worker locations and production matched with Odoo.** Plant Manager will clock people in and out, while the floor app records work areas and moves. The plan also covers clear alerts and safe fixes when times do not match. Nothing in the app has changed yet.
