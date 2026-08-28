@@ -725,11 +725,11 @@ Expected: FAIL because the worker does not exist.
 Expose:
 
 ```python
-process_next(*, client_factory=odoo_client,
+process_next(*, production_client=None,
              now_utc: datetime | None = None) -> RecalcResult | None
 ```
 
-Claim one day, call `precompute.precompute_day(day, client)`, refresh attribution-dependent caches, and mark complete. Register a 15-second warmer tick. A failed job records the error and remains eligible with bounded backoff.
+Claim one day. When `production_client` is `None`, lazily import `deps.client`; tests pass a fake Zira client directly. Call `precompute.precompute_day(day, production_client)`, refresh attribution-dependent caches, and mark complete. Register a 15-second warmer tick. A failed job records the error and remains eligible with bounded backoff.
 
 - [ ] **Step 8: Run focused and regression tests**
 
