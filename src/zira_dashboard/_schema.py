@@ -185,6 +185,118 @@ CREATE TABLE IF NOT EXISTS departments (
   name            TEXT PRIMARY KEY,
   goal_per_day_override INTEGER
 );
+ALTER TABLE departments
+  ADD COLUMN IF NOT EXISTS requires_work_center BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE departments
+  ADD COLUMN IF NOT EXISTS requires_work_center_explicit BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE departments
+   SET requires_work_center = FALSE
+ WHERE requires_work_center_explicit = FALSE
+   AND lower(regexp_replace(name, '^\\s*[0-9]+\\s*', ''))
+       IN ('maintenance', 'supervisor');
+
+-- Durable Odoo attendance mirror + rollout state ----------------------
+
+CREATE TABLE IF NOT EXISTS odoo_attendance_mirror (
+  odoo_attendance_id BIGINT PRIMARY KEY,
+  employee_odoo_id BIGINT NOT NULL,
+  employee_name TEXT,
+  check_in_utc TIMESTAMPTZ NOT NULL,
+  check_out_utc TIMESTAMPTZ,
+  odoo_work_center_id BIGINT,
+  odoo_work_center_name TEXT,
+  odoo_department_id BIGINT,
+  odoo_department_name TEXT,
+  odoo_write_date TIMESTAMPTZ NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_sweep_generation BIGINT,
+  deleted_at TIMESTAMPTZ,
+  CHECK (check_out_utc IS NULL OR check_out_utc >= check_in_utc)
+);
+
+CREATE INDEX IF NOT EXISTS odoo_attendance_mirror_employee_time_idx
+  ON odoo_attendance_mirror (employee_odoo_id, check_in_utc, check_out_utc)
+  WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS odoo_attendance_sync_state (
+  singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+  cursor_write_date TIMESTAMPTZ,
+  cursor_id BIGINT,
+  last_incremental_started_at TIMESTAMPTZ,
+  last_incremental_completed_at TIMESTAMPTZ,
+  last_full_sweep_completed_at TIMESTAMPTZ,
+  last_full_sweep_deletion_count INTEGER NOT NULL DEFAULT 0,
+  full_sweep_generation BIGINT NOT NULL DEFAULT 0,
+  baseline_completed_at TIMESTAMPTZ,
+  last_error TEXT
+);
+INSERT INTO odoo_attendance_sync_state DEFAULT VALUES
+  ON CONFLICT (singleton) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS attendance_recalc_queue (
+  day DATE PRIMARY KEY,
+  reason TEXT NOT NULL,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS attendance_strict_days (
+  day DATE PRIMARY KEY,
+  reason TEXT NOT NULL,
+  source_changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS attendance_correction_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  item_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN
+    ('planned', 'applying', 'verifying', 'recalculating', 'complete', 'failed')),
+  target_work_center_name TEXT NOT NULL,
+  target_odoo_work_center_id BIGINT NOT NULL,
+  start_utc TIMESTAMPTZ NOT NULL,
+  end_utc TIMESTAMPTZ,
+  employee_odoo_ids JSONB NOT NULL,
+  source_snapshot JSONB NOT NULL,
+  operations JSONB NOT NULL,
+  completed_operations JSONB NOT NULL DEFAULT '[]'::jsonb,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  verification_failure_count INTEGER NOT NULL DEFAULT 0,
+  actor_email TEXT,
+  actor_name TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  last_error TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS attendance_correction_jobs_active_item_idx
+  ON attendance_correction_jobs (item_key)
+  WHERE status IN ('planned', 'applying', 'verifying', 'recalculating');
+
+CREATE TABLE IF NOT EXISTS attendance_correction_job_events (
+  id BIGSERIAL PRIMARY KEY,
+  correction_job_id BIGINT NOT NULL REFERENCES attendance_correction_jobs(id),
+  phase TEXT NOT NULL,
+  result TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS attendance_correction_job_events_job_idx
+  ON attendance_correction_job_events (correction_job_id, id);
+
+CREATE TABLE IF NOT EXISTS attendance_department_repairs (
+  odoo_attendance_id BIGINT PRIMARY KEY,
+  expected_write_date TIMESTAMPTZ NOT NULL,
+  target_odoo_department_id BIGINT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'applying', 'complete', 'failed')),
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_error TEXT
+);
 
 -- App-specific (not mirrored anywhere) ---------------------------------
 

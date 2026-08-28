@@ -6,9 +6,12 @@ settings UI and the punch -> Odoo hr.attendance sync path. They pass against the
 PRE-refactor template and must stay green through every task. The remaining tests
 are added by later tasks (each fails before its task, passes after).
 
-Postgres-backed, same gate as the sibling settings tests.
+The existing render tests are Postgres-backed, with the same gate as sibling
+Settings tests. Attendance-location source and route contracts run everywhere.
 """
+import asyncio
 import os
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,7 +19,7 @@ from fastapi.testclient import TestClient
 from zira_dashboard.app import app
 from zira_dashboard import db, work_schedule_store, odoo_client
 
-pytestmark = pytest.mark.skipif(
+requires_postgres = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"), reason="needs Postgres"
 )
 
@@ -35,6 +38,7 @@ def _drop_override():
     work_schedule_store.reload()
 
 
+@requires_postgres
 def test_timeclock_panel_preserves_core_field_contract():
     r = client.get("/settings?section=timeclock")
     assert r.status_code == 200
@@ -54,6 +58,7 @@ def test_timeclock_panel_preserves_core_field_contract():
         assert f'action="{action}"' in html, action
 
 
+@requires_postgres
 def test_timeclock_panel_preserves_per_schedule_contract(monkeypatch):
     # Seed one override (so its card + remove form render) and stub Odoo so the
     # "Add a schedule" form renders too.
@@ -81,6 +86,7 @@ def test_timeclock_panel_preserves_per_schedule_contract(monkeypatch):
         _drop_override()
 
 
+@requires_postgres
 def test_timeclock_panel_renders_subtabs():
     r = client.get("/settings?section=timeclock")
     assert r.status_code == 200
@@ -95,6 +101,7 @@ def test_timeclock_panel_renders_subtabs():
         assert pid in html, pid
 
 
+@requires_postgres
 def test_rules_tab_orders_autolunch_after_per_schedule():
     r = client.get("/settings?section=timeclock")
     assert r.status_code == 200
@@ -107,6 +114,7 @@ def test_rules_tab_orders_autolunch_after_per_schedule():
         "Auto-Lunch should sit below the rounding blocks"
 
 
+@requires_postgres
 def test_rules_forms_have_no_explicit_save_buttons(monkeypatch):
     _seed_override()
     monkeypatch.setattr(
@@ -129,6 +137,7 @@ def test_rules_forms_have_no_explicit_save_buttons(monkeypatch):
         _drop_override()
 
 
+@requires_postgres
 def test_helper_text_unified_to_help_class():
     r = client.get("/settings?section=timeclock")
     assert r.status_code == 200
@@ -138,6 +147,7 @@ def test_helper_text_unified_to_help_class():
     assert 'class="help"' in html
 
 
+@requires_postgres
 def test_add_redirects_to_rules_tab(monkeypatch):
     monkeypatch.setattr(odoo_client, "fetch_work_schedules",
                         lambda: [{"id": CAL_ID, "name": "Drivers"}])
@@ -154,6 +164,7 @@ def test_add_redirects_to_rules_tab(monkeypatch):
         _drop_override()
 
 
+@requires_postgres
 def test_remove_redirects_to_rules_tab():
     work_schedule_store.create(CAL_ID, "Drivers")
     work_schedule_store.reload()
@@ -165,3 +176,117 @@ def test_remove_redirects_to_rules_tab():
         assert r.headers["location"].endswith("#rules")
     finally:
         _drop_override()
+
+
+class _FormValues(dict):
+    def getlist(self, key):
+        value = self.get(key, [])
+        return value if isinstance(value, list) else [value]
+
+
+class _FormRequest:
+    def __init__(self, values):
+        self._values = _FormValues(values)
+        self.headers = {"accept": "application/json"}
+
+    async def form(self):
+        return self._values
+
+
+def test_attendance_location_settings_section_has_health_and_policy_contract():
+    html = Path("src/zira_dashboard/templates/settings.html").read_text()
+
+    assert "Work-center attendance" in html
+    assert 'action="/settings/attendance-location"' in html
+    assert 'name="rollout_mode"' in html
+    assert 'name="department_requires_work_center"' in html
+    assert "Mirror freshness" in html
+    assert "Last full sweep" in html
+
+
+def test_attendance_location_save_is_super_admin_only(monkeypatch):
+    from zira_dashboard.routes import settings
+
+    monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: False)
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "set_rollout_config",
+        lambda *_args, **_kwargs: pytest.fail("manager changed rollout"),
+    )
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "set_department_requirement",
+        lambda *_args, **_kwargs: pytest.fail("manager changed department policy"),
+    )
+
+    response = asyncio.run(
+        settings.settings_save_attendance_location(
+            _FormRequest({"rollout_mode": "shadow"})
+        )
+    )
+
+    assert response.status_code == 403
+    assert response.body == b'{"ok":false,"error":"super_admin_required"}'
+
+
+def test_attendance_location_save_rejects_live_until_readiness_exists(monkeypatch):
+    from zira_dashboard.routes import settings
+
+    monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "set_rollout_config",
+        lambda *_args, **_kwargs: pytest.fail("ungated live config was persisted"),
+    )
+
+    response = asyncio.run(
+        settings.settings_save_attendance_location(
+            _FormRequest({"rollout_mode": "live"})
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.body == b'{"ok":false,"error":"live_readiness_required"}'
+
+
+def test_attendance_location_save_updates_shadow_and_department_choices(monkeypatch):
+    from zira_dashboard.routes import settings
+
+    saved_configs = []
+    saved_departments = []
+    monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
+    monkeypatch.setattr(
+        settings.work_centers_store,
+        "synced_departments",
+        lambda: ["Assembly", "Maintenance"],
+    )
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "set_rollout_config",
+        lambda config: saved_configs.append(config),
+    )
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "set_department_requirement",
+        lambda name, required: saved_departments.append((name, required)),
+    )
+
+    response = asyncio.run(
+        settings.settings_save_attendance_location(
+            _FormRequest(
+                {
+                    "rollout_mode": "shadow",
+                    "departments_present": "1",
+                    "department_requires_work_center": ["Assembly"],
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert saved_configs == [
+        settings.attendance_location_policy.RolloutConfig(
+            mode="shadow", cutover_at=None, live_gate=None
+        )
+    ]
+    assert saved_departments == [("Assembly", True), ("Maintenance", False)]

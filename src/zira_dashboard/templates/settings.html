@@ -504,6 +504,67 @@
 
     <div id="tc-tab-rules" class="tc-panel" role="tabpanel" aria-label="Rules" style="display:none">
 
+    <div id="attendance-location" style="margin-bottom:1.8rem">
+      <h3>Work-center attendance</h3>
+      <p class="help">
+        Choose which Odoo departments must have a work center. The new
+        attendance matcher stays off or in shadow until its readiness checks
+        are complete.
+      </p>
+
+      <dl style="display:grid;grid-template-columns:max-content 1fr;gap:.35rem .8rem;font-size:.9rem">
+        <dt>Rollout mode</dt>
+        <dd><strong>{{ attendance_location.mode }}</strong></dd>
+        <dt>Cutover</dt>
+        <dd>{{ attendance_location.cutover_at or 'not scheduled' }}</dd>
+        <dt>Mirror freshness</dt>
+        <dd>{{ attendance_location.mirror_freshness or 'not synced yet' }}</dd>
+        <dt>Last full sweep</dt>
+        <dd>{{ attendance_location.last_full_sweep or 'not completed yet' }}</dd>
+      </dl>
+
+      <form method="post" action="/settings/attendance-location" style="margin-top:1rem">
+        <label>Rollout mode
+          <select name="rollout_mode" {% if not can_manage_attendance_location %}disabled{% endif %}>
+            <option value="off" {% if attendance_location.mode == 'off' %}selected{% endif %}>Off</option>
+            <option value="shadow" {% if attendance_location.mode == 'shadow' %}selected{% endif %}>Shadow</option>
+            <option value="live" {% if attendance_location.mode == 'live' %}selected{% endif %} disabled>Live — readiness check required</option>
+          </select>
+        </label>
+        <label>Cutover at the local workday boundary
+          <input type="datetime-local" name="cutover_at"
+                 value="{{ attendance_location.cutover_local_input }}"
+                 {% if not can_manage_attendance_location %}disabled{% endif %}>
+        </label>
+        <input type="hidden" name="departments_present" value="1">
+        <table style="margin-top:.8rem">
+          <thead>
+            <tr><th>Department</th><th>Work center required</th></tr>
+          </thead>
+          <tbody>
+            {% for department in attendance_location.departments %}
+            <tr>
+              <td>{{ department.name }}</td>
+              <td>
+                <input type="checkbox" name="department_requires_work_center"
+                       value="{{ department.name }}"
+                       {% if department.requires_work_center %}checked{% endif %}
+                       {% if not can_manage_attendance_location %}disabled{% endif %}>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="2" class="help">No Odoo departments are synced yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if can_manage_attendance_location %}
+          <button type="submit">Save work-center attendance</button>
+        {% else %}
+          <p class="help">Only a super admin can change these settings.</p>
+        {% endif %}
+      </form>
+    </div>
+
     <h3>Rounding</h3>
     <p class="help">
       Note: Some jurisdictions may limit or prohibit rounding.

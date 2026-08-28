@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Set which teams need a work area
+
+- **Settings can now remember which teams must have a work area in Odoo.** Maintenance and supervisors can stay clocked in without one. The new Odoo location rules are still turned off.
+
 ### Production rebuild plan uses the right readings
 
 - **The Odoo location build plan now uses the plant's production readings when it counts a changed day.** This keeps the build steps clear. Nothing in the app has changed yet.
