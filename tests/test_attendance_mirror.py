@@ -188,7 +188,8 @@ def test_logical_run_lock_uses_transaction_scoped_postgres_advisory_lock(
 
     monkeypatch.setattr(attendance_mirror.db, "cursor", cursor)
 
-    with attendance_mirror._logical_run_lock():
+    with attendance_mirror._logical_run_lock() as locked_cursor:
+        assert locked_cursor.__class__ is Cursor
         events.append(("held",))
 
     assert events[0] == ("enter",)
@@ -253,6 +254,79 @@ def test_owned_error_records_blank_exception_with_useful_fallback():
     assert attendance_mirror._format_error_state(stored) == (
         "sweep: unknown error"
     )
+
+
+def test_sweep_keeps_recovery_and_deletion_recalc_reasons_separate(monkeypatch):
+    recovered_day = date(2026, 8, 27)
+    deleted_day = date(2026, 8, 28)
+    enqueue_calls = []
+
+    class SweepCursor:
+        def __init__(self):
+            self.rows = []
+
+        def execute(self, sql, params=None):
+            if "deleted_at IS NOT NULL" in sql:
+                self.rows = [{"odoo_attendance_id": 901}]
+            elif "AND NOT (odoo_attendance_id = ANY" in sql:
+                self.rows = [
+                    {
+                        "odoo_attendance_id": 902,
+                        "check_in_utc": datetime(
+                            2026, 8, 28, 13, 0, tzinfo=UTC
+                        ),
+                        "check_out_utc": datetime(
+                            2026, 8, 28, 21, 0, tzinfo=UTC
+                        ),
+                    }
+                ]
+            else:
+                self.rows = []
+
+        def fetchall(self):
+            return list(self.rows)
+
+    state = {
+        "cursor_write_date": None,
+        "cursor_id": None,
+        "last_incremental_completed_at": SYNCED_AT,
+        "last_full_sweep_completed_at": SYNCED_AT,
+        "full_sweep_generation": 1,
+        "baseline_completed_at": SYNCED_AT,
+        "last_error": None,
+    }
+    monkeypatch.setattr(
+        attendance_mirror, "_locked_sync_state", lambda _cur: state
+    )
+
+    def recover_rows(_cur, _rows, **_kwargs):
+        enqueue_calls.append(
+            (frozenset({recovered_day}), "odoo_attendance_changed")
+        )
+        return {recovered_day}
+
+    monkeypatch.setattr(attendance_mirror, "_upsert_rows_cur", recover_rows)
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_enqueue_recalc_cur",
+        lambda _cur, days, reason, **_kwargs: enqueue_calls.append(
+            (frozenset(days), reason)
+        ),
+    )
+
+    result = attendance_mirror._store_full_sweep_cur(
+        SweepCursor(),
+        {901},
+        recovery_rows=[_row()],
+        generation=2,
+        completed_at=datetime(2026, 8, 28, 22, 0, tzinfo=UTC),
+    )
+
+    assert result.affected_days == frozenset({recovered_day, deleted_day})
+    assert enqueue_calls == [
+        (frozenset({recovered_day}), "odoo_attendance_changed"),
+        (frozenset({deleted_day}), "odoo_attendance_deleted"),
+    ]
 
 
 _needs_postgres = pytest.mark.skipif(
@@ -328,6 +402,35 @@ def test_real_postgres_logical_run_lock_serializes_and_releases(clean_mirror):
     assert not second.is_alive()
     assert not errors
     assert second_entered.is_set()
+
+
+@_needs_postgres
+def test_real_postgres_locked_cursor_rolls_back_rows_and_state_together(
+    clean_mirror,
+):
+    with pytest.raises(ConnectionError, match="lock connection lost"):
+        with attendance_mirror._logical_run_lock() as cur:
+            attendance_mirror._record_incremental_started_cur(cur, SYNCED_AT)
+            attendance_mirror._store_incremental_cycle_cur(
+                cur,
+                [_row()],
+                cursor_write_date=_row()["odoo_write_date"],
+                cursor_id=901,
+                completed_at=SYNCED_AT,
+            )
+            raise ConnectionError("lock connection lost")
+
+    assert db.query("SELECT * FROM odoo_attendance_mirror") == []
+    state = db.query(
+        "SELECT last_incremental_started_at, "
+        "last_incremental_completed_at, cursor_write_date "
+        "FROM odoo_attendance_sync_state WHERE singleton = TRUE"
+    )[0]
+    assert state == {
+        "last_incremental_started_at": None,
+        "last_incremental_completed_at": None,
+        "cursor_write_date": None,
+    }
 
 
 @_needs_postgres
@@ -577,6 +680,53 @@ def test_sweep_recovery_revives_tombstone_atomically_and_counts_deletions(
     assert db.query("SELECT day FROM attendance_strict_days") == [
         {"day": date(2026, 8, 28)}
     ]
+
+
+@_needs_postgres
+def test_sweep_recovery_and_unrelated_deletion_keep_distinct_reasons(
+    clean_mirror,
+):
+    recovered = _row(
+        attendance_id=901,
+        check_in=datetime(2026, 8, 27, 13, 0, tzinfo=UTC),
+        check_out=datetime(2026, 8, 27, 21, 0, tzinfo=UTC),
+        write_date=datetime(2026, 8, 27, 21, 1, tzinfo=UTC),
+    )
+    deleted = _row(
+        attendance_id=902,
+        check_in=datetime(2026, 8, 28, 13, 0, tzinfo=UTC),
+        check_out=datetime(2026, 8, 28, 21, 0, tzinfo=UTC),
+        write_date=datetime(2026, 8, 28, 21, 1, tzinfo=UTC),
+    )
+    attendance_mirror.upsert_rows(
+        [recovered, deleted], sync_completed_at=SYNCED_AT
+    )
+    attendance_mirror.mark_deleted_after_successful_sweep(
+        {902}, generation=1
+    )
+    db.execute(
+        "UPDATE odoo_attendance_sync_state SET baseline_completed_at = %s "
+        "WHERE singleton = TRUE",
+        (SYNCED_AT,),
+    )
+
+    attendance_mirror._store_full_sweep(
+        {901},
+        recovery_rows=[recovered],
+        generation=2,
+        completed_at=datetime(2026, 8, 28, 22, 0, tzinfo=UTC),
+    )
+
+    expected = [
+        {"day": date(2026, 8, 27), "reason": "odoo_attendance_changed"},
+        {"day": date(2026, 8, 28), "reason": "odoo_attendance_deleted"},
+    ]
+    assert db.query(
+        "SELECT day, reason FROM attendance_recalc_queue ORDER BY day"
+    ) == expected
+    assert db.query(
+        "SELECT day, reason FROM attendance_strict_days ORDER BY day"
+    ) == expected
 
 
 @_needs_postgres

@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from zira_dashboard import attendance_sync
+from zira_dashboard import attendance_mirror, attendance_sync
 
 
 NOW = datetime(2026, 8, 28, 15, 0, tzinfo=UTC)
@@ -125,16 +125,36 @@ class TransactionalMirrorBackend:
         self.active_ids = set(active_ids)
         self.tombstoned_ids = set(tombstoned_ids)
         self.lock_events: list[str] = []
+        self.transaction_events: list[str] = []
         self.lock_depth = 0
         self._run_lock = threading.Lock()
 
     @contextmanager
-    def logical_run_lock(self):
+    def logical_run(self):
         with self._run_lock:
             self.lock_events.append("enter")
+            self.transaction_events.append("begin")
             self.lock_depth += 1
+            state_before = self.state
+            started_count = len(self.started)
+            incremental_count = len(self.incremental_transactions)
+            sweep_count = len(self.sweep_transactions)
+            errors_before = getattr(self, "errors", None)
+            if errors_before is not None:
+                errors_before = dict(errors_before)
             try:
-                yield
+                yield self
+            except Exception:
+                self.state = state_before
+                del self.started[started_count:]
+                del self.incremental_transactions[incremental_count:]
+                del self.sweep_transactions[sweep_count:]
+                if errors_before is not None:
+                    self.errors = errors_before
+                self.transaction_events.append("rollback")
+                raise
+            else:
+                self.transaction_events.append("commit")
             finally:
                 self.lock_depth -= 1
                 self.lock_events.append("exit")
@@ -199,6 +219,7 @@ class TransactionalMirrorBackend:
         )
 
     def record_failure(self, owner, error):
+        self.transaction_events.append("record_failure")
         self.failures.append(error)
 
     def complete_baseline_if_ready(self, completed_at):
@@ -257,6 +278,180 @@ def install_dependencies(monkeypatch):
         return source, backend
 
     return install
+
+
+def _install_single_cursor_production_backend(monkeypatch):
+    events = []
+
+    class Cursor:
+        def execute(self, sql, params=None):
+            assert "pg_advisory_xact_lock" in sql
+            events.append(("lock", self, params))
+
+    cursor = Cursor()
+
+    @contextmanager
+    def one_connection_only():
+        if any(event[0] == "checkout" for event in events):
+            raise AssertionError("successful run attempted a second pool checkout")
+        events.append(("checkout", cursor))
+        try:
+            yield cursor
+        except Exception:
+            events.append(("rollback", cursor))
+            raise
+        else:
+            events.append(("commit", cursor))
+
+    def state_for(used_cursor):
+        events.append(("state", used_cursor))
+        return attendance_mirror.SyncState(
+            cursor_write_date=None,
+            cursor_id=None,
+            last_incremental_completed_at=None,
+            last_full_sweep_completed_at=None,
+            full_sweep_generation=0,
+            baseline_completed_at=None,
+        )
+
+    monkeypatch.setattr(attendance_mirror.db, "cursor", one_connection_only)
+    monkeypatch.setattr(
+        attendance_mirror, "_sync_state_cur", state_for, raising=False
+    )
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_record_incremental_started_cur",
+        lambda used_cursor, _at: events.append(("started", used_cursor)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_store_incremental_cycle_cur",
+        lambda used_cursor, *_args, **_kwargs: (
+            events.append(("incremental_store", used_cursor)) or set()
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_active_attendance_ids_cur",
+        lambda used_cursor: (
+            events.append(("active_ids", used_cursor)) or set()
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_tombstoned_attendance_ids_cur",
+        lambda used_cursor, _ids: (
+            events.append(("tombstoned_ids", used_cursor)) or set()
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_store_full_sweep_cur",
+        lambda used_cursor, *_args, **_kwargs: (
+            events.append(("sweep_store", used_cursor))
+            or attendance_mirror._FullSweepStoreResult(
+                affected_days=frozenset(), deleted_count=0
+            )
+        ),
+        raising=False,
+    )
+    backend = attendance_sync._MirrorBackend()
+    monkeypatch.setattr(attendance_sync, "_backend", backend)
+    return cursor, events
+
+
+def test_production_incremental_lock_state_and_store_share_one_cursor(
+    monkeypatch,
+):
+    cursor, events = _install_single_cursor_production_backend(monkeypatch)
+    monkeypatch.setattr(attendance_sync, "_source", CompleteOdooSource())
+
+    result = attendance_sync.run_incremental_sync(now_utc=NOW)
+
+    assert result.success is True
+    assert [event[0] for event in events] == [
+        "checkout",
+        "lock",
+        "state",
+        "started",
+        "incremental_store",
+        "commit",
+    ]
+    assert all(event[1] is cursor for event in events)
+
+
+def test_production_forced_sweep_lock_state_and_store_share_one_cursor(
+    monkeypatch,
+):
+    cursor, events = _install_single_cursor_production_backend(monkeypatch)
+    monkeypatch.setattr(
+        attendance_sync, "_source", CompleteOdooSource(ids=[901])
+    )
+
+    result = attendance_sync.run_full_sweep(now_utc=NOW)
+
+    assert result.success is True
+    assert [event[0] for event in events] == [
+        "checkout",
+        "lock",
+        "state",
+        "active_ids",
+        "tombstoned_ids",
+        "sweep_store",
+        "commit",
+    ]
+    assert all(event[1] is cursor for event in events)
+
+
+def test_source_failure_rolls_back_locked_transaction_before_failure_record(
+    install_dependencies,
+):
+    backend = TransactionalMirrorBackend()
+    install_dependencies(
+        CompleteOdooSource(changes=RuntimeError("source failed")), backend
+    )
+
+    result = attendance_sync.run_incremental_sync(now_utc=NOW)
+
+    assert result.success is False
+    assert backend.started == []
+    assert backend.transaction_events == [
+        "begin",
+        "rollback",
+        "record_failure",
+    ]
+
+
+def test_lock_connection_loss_rolls_back_staged_rows_before_failure_record(
+    install_dependencies,
+):
+    class ConnectionLossBackend(TransactionalMirrorBackend):
+        @contextmanager
+        def logical_run(self):
+            with super().logical_run() as run:
+                yield run
+                raise ConnectionError("lock connection lost before commit")
+
+    backend = ConnectionLossBackend()
+    install_dependencies(
+        CompleteOdooSource(changes=[_row(901, write_date=NOW)]), backend
+    )
+
+    result = attendance_sync.run_incremental_sync(now_utc=NOW)
+
+    assert result.success is False
+    assert result.error == "lock connection lost before commit"
+    assert backend.incremental_transactions == []
+    assert backend.state.last_incremental_completed_at is None
+    assert backend.transaction_events == [
+        "begin",
+        "rollback",
+        "record_failure",
+    ]
 
 
 def test_incremental_and_open_rows_merge_dedupe_and_store_as_one_cycle(
@@ -349,6 +544,12 @@ def test_database_failure_does_not_report_cursor_or_freshness_success(
     assert backend.state.cursor_write_date == previous_cursor
     assert backend.state.last_incremental_completed_at == previous_cursor
     assert backend.failures == ["database transaction failed"]
+    assert backend.started == []
+    assert backend.transaction_events == [
+        "begin",
+        "rollback",
+        "record_failure",
+    ]
 
 
 def test_sweep_success_does_not_clear_incremental_failure(
@@ -614,6 +815,11 @@ def test_failed_malformed_or_duplicate_sweep_marks_nothing_deleted(
     assert backend.state.last_full_sweep_completed_at is None
     assert len(backend.failures) == 1
     assert source.sweep_calls == 1
+    assert backend.transaction_events == [
+        "begin",
+        "rollback",
+        "record_failure",
+    ]
 
 
 def test_unconfirmed_empty_sweep_marks_nothing_deleted(install_dependencies):
@@ -890,6 +1096,51 @@ def test_tick_refreshes_incremental_and_open_every_time_but_sweeps_hourly(
     assert source.open_calls == 2
     assert len(source.change_calls) == 2
     assert source.sweep_calls == 1
+
+
+def test_concurrent_ticks_recheck_due_state_under_lock_and_sweep_once(
+    install_dependencies,
+):
+    initial_reads = threading.Barrier(2)
+
+    class ConcurrentTickBackend(TransactionalMirrorBackend):
+        def sync_state(self):
+            if self.lock_depth == 0:
+                stale_state = self.state
+                initial_reads.wait(timeout=2)
+                return stale_state
+            return super().sync_state()
+
+    backend = ConcurrentTickBackend(
+        attendance_sync.SyncState(
+            cursor_write_date=None,
+            cursor_id=None,
+            last_incremental_completed_at=NOW - timedelta(minutes=1),
+            last_full_sweep_completed_at=NOW - timedelta(hours=1),
+            full_sweep_generation=4,
+            baseline_completed_at=NOW - timedelta(days=1),
+        )
+    )
+    source, _backend = install_dependencies(
+        CompleteOdooSource(ids=[901]), backend
+    )
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(attendance_sync.tick(now_utc=NOW)))
+        for _ in range(2)
+    ]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(results) == 2
+    assert all(result.success for result in results)
+    assert source.sweep_calls == 1
+    assert sum(result.full_sweep_completed for result in results) == 1
+    assert len(backend.sweep_transactions) == 1
 
 
 def test_post_baseline_result_reports_recalc_days_from_atomic_store(

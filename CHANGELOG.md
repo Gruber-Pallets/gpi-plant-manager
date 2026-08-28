@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Keep Odoo work-time updates together
+
+- **Plant Manager now saves each Odoo work-time check in one safe step.** Two background checks cannot repeat the same hourly check, and restored or removed times keep the right note. The safe copy is still running in the background only.
+
 ### Keep Odoo work-time checks safe
 
 - **Plant Manager now checks Odoo work times one at a time and double-checks empty lists.** This keeps overlapping or failed checks from hiding good work records. The safe copy is still running in the background only.

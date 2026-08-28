@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 import logging
@@ -65,8 +66,10 @@ class _OdooSource:
 
 
 class _MirrorBackend:
-    def logical_run_lock(self):
-        return attendance_mirror._logical_run_lock()
+    @contextmanager
+    def logical_run(self):
+        with attendance_mirror._logical_run_lock() as cur:
+            yield _MirrorRunBackend(cur)
 
     def sync_state(self) -> SyncState:
         state = attendance_mirror._sync_state_snapshot()
@@ -79,8 +82,32 @@ class _MirrorBackend:
             baseline_completed_at=state.baseline_completed_at,
         )
 
+    def record_failure(self, owner: str, error: object) -> None:
+        attendance_mirror._record_failure(owner, error)
+
+    def complete_baseline_if_ready(self, completed_at: datetime) -> bool:
+        return attendance_mirror._complete_baseline_if_ready(completed_at)
+
+
+class _MirrorRunBackend:
+    """Mirror operations bound to the cursor holding the logical-run lock."""
+
+    def __init__(self, cur):
+        self._cur = cur
+
+    def sync_state(self) -> SyncState:
+        state = attendance_mirror._sync_state_cur(self._cur)
+        return SyncState(
+            cursor_write_date=state.cursor_write_date,
+            cursor_id=state.cursor_id,
+            last_incremental_completed_at=state.last_incremental_completed_at,
+            last_full_sweep_completed_at=state.last_full_sweep_completed_at,
+            full_sweep_generation=state.full_sweep_generation,
+            baseline_completed_at=state.baseline_completed_at,
+        )
+
     def record_incremental_started(self, started_at: datetime) -> None:
-        attendance_mirror._record_incremental_started(started_at)
+        attendance_mirror._record_incremental_started_cur(self._cur, started_at)
 
     def store_incremental_cycle(
         self,
@@ -90,12 +117,19 @@ class _MirrorBackend:
         cursor_id: int | None,
         completed_at: datetime,
     ) -> set[date]:
-        return attendance_mirror._store_incremental_cycle(
+        return attendance_mirror._store_incremental_cycle_cur(
+            self._cur,
             rows,
             cursor_write_date=cursor_write_date,
             cursor_id=cursor_id,
             completed_at=completed_at,
         )
+
+    def active_attendance_ids(self) -> set[int]:
+        return attendance_mirror._active_attendance_ids_cur(self._cur)
+
+    def tombstoned_attendance_ids(self, ids: set[int]) -> set[int]:
+        return attendance_mirror._tombstoned_attendance_ids_cur(self._cur, ids)
 
     def store_full_sweep(
         self,
@@ -105,7 +139,8 @@ class _MirrorBackend:
         generation: int,
         completed_at: datetime,
     ) -> SweepStoreResult:
-        result = attendance_mirror._store_full_sweep(
+        result = attendance_mirror._store_full_sweep_cur(
+            self._cur,
             ids,
             recovery_rows=recovery_rows,
             generation=generation,
@@ -115,18 +150,6 @@ class _MirrorBackend:
             affected_days=result.affected_days,
             deleted_count=result.deleted_count,
         )
-
-    def active_attendance_ids(self) -> set[int]:
-        return attendance_mirror._active_attendance_ids()
-
-    def tombstoned_attendance_ids(self, ids: set[int]) -> set[int]:
-        return attendance_mirror._tombstoned_attendance_ids(ids)
-
-    def record_failure(self, owner: str, error: object) -> None:
-        attendance_mirror._record_failure(owner, error)
-
-    def complete_baseline_if_ready(self, completed_at: datetime) -> bool:
-        return attendance_mirror._complete_baseline_if_ready(completed_at)
 
 
 # These are complete source/store boundaries. Tests replace each whole object,
@@ -162,8 +185,8 @@ def _normalize_source_rows(value: object, *, context: str) -> tuple[dict, ...]:
         if not isinstance(raw_row, Mapping):
             raise RuntimeError(f"Odoo {context} response contained a malformed row")
         # The mirror owns the exact normalized-row validation contract. Running
-        # it before opening the transaction prevents a malformed page from
-        # partially changing the last-good mirror.
+        # it before any mirror write ensures a malformed page rolls back the
+        # locked transaction without changing the last-good mirror.
         rows.append(attendance_mirror._normalize_row(raw_row))
     return tuple(rows)
 
@@ -190,34 +213,30 @@ def _cursor_for(rows: Sequence[dict]) -> tuple[datetime | None, int | None]:
     return newest["odoo_write_date"], newest["odoo_attendance_id"]
 
 
-def _run_incremental_locked(now: datetime) -> SyncResult:
-    try:
-        state = _backend.sync_state()
-        _backend.record_incremental_started(now)
-        raw_changes = _source.fetch_attendance_changes(
-            after_write_date=state.cursor_write_date,
-            after_id=state.cursor_id,
-        )
-        # Fetching all open rows is deliberately part of the same logical
-        # cycle. Nothing is stored if either complete Task 2 read fails.
-        raw_open_rows = _source.fetch_open_attendance_rows()
-        changes = _normalize_source_rows(
-            raw_changes, context="attendance changes"
-        )
-        open_rows = _normalize_source_rows(
-            raw_open_rows, context="open attendance"
-        )
-        merged = _merged_rows(changes, open_rows)
-        cursor_write_date, cursor_id = _cursor_for(changes)
-        affected = _backend.store_incremental_cycle(
-            merged,
-            cursor_write_date=cursor_write_date,
-            cursor_id=cursor_id,
-            completed_at=now,
-        )
-    except Exception as exc:  # noqa: BLE001 - report failure, keep last-good state
-        _record_failure_safely("incremental", exc)
-        return SyncResult(success=False, error=_error_text(exc))
+def _run_incremental_locked(run_backend, now: datetime) -> SyncResult:
+    state = run_backend.sync_state()
+    run_backend.record_incremental_started(now)
+    raw_changes = _source.fetch_attendance_changes(
+        after_write_date=state.cursor_write_date,
+        after_id=state.cursor_id,
+    )
+    # Fetching all open rows is deliberately part of the same logical
+    # cycle. Nothing is stored if either complete Task 2 read fails.
+    raw_open_rows = _source.fetch_open_attendance_rows()
+    changes = _normalize_source_rows(
+        raw_changes, context="attendance changes"
+    )
+    open_rows = _normalize_source_rows(
+        raw_open_rows, context="open attendance"
+    )
+    merged = _merged_rows(changes, open_rows)
+    cursor_write_date, cursor_id = _cursor_for(changes)
+    affected = run_backend.store_incremental_cycle(
+        merged,
+        cursor_write_date=cursor_write_date,
+        cursor_id=cursor_id,
+        completed_at=now,
+    )
     return SyncResult(
         success=True,
         incremental_completed=True,
@@ -230,9 +249,10 @@ def run_incremental_sync(*, now_utc: datetime | None = None) -> SyncResult:
     """Fetch changes plus all open rows, then commit one completed cycle."""
     now = _now_utc(now_utc)
     try:
-        with _backend.logical_run_lock():
-            return _run_incremental_locked(now)
-    except Exception as exc:  # noqa: BLE001 - lock acquisition/commit failure
+        with _backend.logical_run() as run_backend:
+            result = _run_incremental_locked(run_backend, now)
+        return result
+    except Exception as exc:  # noqa: BLE001 - rollback before failure recording
         _record_failure_safely("incremental", exc)
         return SyncResult(success=False, error=_error_text(exc))
 
@@ -284,31 +304,31 @@ def _read_rows_by_ids(ids: set[int], *, require_all: bool) -> tuple[dict, ...]:
     return tuple(rows)
 
 
-def _run_full_sweep_locked(now: datetime) -> SyncResult:
-    try:
-        state = _backend.sync_state()
-        ids = _validated_sweep_snapshot(
-            _source.fetch_complete_attendance_id_sweep()
-        )
-        active_ids = _backend.active_attendance_ids()
-        if not ids and active_ids:
-            confirmation_rows = _read_rows_by_ids(active_ids, require_all=False)
-            if confirmation_rows:
-                raise RuntimeError(
-                    "Odoo empty attendance sweep contradicted direct ID confirmation"
-                )
-        recovery_ids = _backend.tombstoned_attendance_ids(ids)
-        recovery_rows = _read_rows_by_ids(recovery_ids, require_all=True)
-        generation = state.full_sweep_generation + 1
-        committed = _backend.store_full_sweep(
-            ids,
-            recovery_rows=recovery_rows,
-            generation=generation,
-            completed_at=now,
-        )
-    except Exception as exc:  # noqa: BLE001 - fail closed without tombstones
-        _record_failure_safely("sweep", exc)
-        return SyncResult(success=False, error=_error_text(exc))
+def _run_full_sweep_locked(
+    run_backend, now: datetime, *, only_if_due: bool = False
+) -> SyncResult:
+    state = run_backend.sync_state()
+    if only_if_due and not _sweep_is_due(state, now):
+        return SyncResult(success=True)
+    ids = _validated_sweep_snapshot(
+        _source.fetch_complete_attendance_id_sweep()
+    )
+    active_ids = run_backend.active_attendance_ids()
+    if not ids and active_ids:
+        confirmation_rows = _read_rows_by_ids(active_ids, require_all=False)
+        if confirmation_rows:
+            raise RuntimeError(
+                "Odoo empty attendance sweep contradicted direct ID confirmation"
+            )
+    recovery_ids = run_backend.tombstoned_attendance_ids(ids)
+    recovery_rows = _read_rows_by_ids(recovery_ids, require_all=True)
+    generation = state.full_sweep_generation + 1
+    committed = run_backend.store_full_sweep(
+        ids,
+        recovery_rows=recovery_rows,
+        generation=generation,
+        completed_at=now,
+    )
     return SyncResult(
         success=True,
         full_sweep_completed=True,
@@ -317,15 +337,27 @@ def _run_full_sweep_locked(now: datetime) -> SyncResult:
     )
 
 
-def run_full_sweep(*, now_utc: datetime | None = None) -> SyncResult:
-    """Tombstone rows only after one complete, validated Task 2 ID sweep."""
-    now = _now_utc(now_utc)
+def _run_full_sweep(
+    now: datetime, *, only_if_due: bool
+) -> SyncResult:
     try:
-        with _backend.logical_run_lock():
-            return _run_full_sweep_locked(now)
-    except Exception as exc:  # noqa: BLE001 - lock acquisition/commit failure
+        with _backend.logical_run() as run_backend:
+            result = _run_full_sweep_locked(
+                run_backend, now, only_if_due=only_if_due
+            )
+        return result
+    except Exception as exc:  # noqa: BLE001 - rollback before failure recording
         _record_failure_safely("sweep", exc)
         return SyncResult(success=False, error=_error_text(exc))
+
+
+def run_full_sweep(*, now_utc: datetime | None = None) -> SyncResult:
+    """Force one complete, validated Task 2 ID sweep and safe tombstone pass."""
+    return _run_full_sweep(_now_utc(now_utc), only_if_due=False)
+
+
+def _run_full_sweep_if_due(now: datetime) -> SyncResult:
+    return _run_full_sweep(now, only_if_due=True)
 
 
 def _sweep_is_due(state: SyncState, now: datetime) -> bool:
@@ -344,7 +376,7 @@ def tick(*, now_utc: datetime | None = None) -> SyncResult:
 
     sweep_due = _sweep_is_due(initial_state, now)
     incremental = run_incremental_sync(now_utc=now)
-    sweep = run_full_sweep(now_utc=now) if sweep_due else SyncResult(success=True)
+    sweep = _run_full_sweep_if_due(now) if sweep_due else SyncResult(success=True)
 
     baseline_completed = initial_state.baseline_completed_at is not None
     can_complete_baseline = incremental.success and (not sweep_due or sweep.success)
