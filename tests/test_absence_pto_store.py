@@ -206,6 +206,78 @@ def test_load_and_list_queries_have_stable_scope_and_order(monkeypatch):
     assert "ORDER BY requested_at, id" in calls[2][0]
 
 
+def test_bounded_person_history_validates_limit_and_uses_sql_limit(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        store.db,
+        "query",
+        lambda sql, params: seen.update(sql=sql, params=params) or [_row()],
+    )
+
+    assert store.list_history_for_person("0044", limit=25)[0].emp_id == "0044"
+    assert "ORDER BY requested_at DESC, id DESC LIMIT %s" in seen["sql"]
+    assert seen["params"] == ("0044", 25)
+
+    for invalid in (True, 0, 101, 1.5, "10"):
+        with pytest.raises(ValueError, match="limit must be between 1 and 100"):
+            store.list_history_for_person("0044", limit=invalid)
+
+
+def test_person_request_counts_are_one_aggregate_row(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        store.db,
+        "query",
+        lambda sql, params: seen.update(sql=sql, params=params)
+        or [{"total": 9, "unresolved": 3, "actionable": 2}],
+    )
+
+    assert store.request_counts_for_person("44") == store.PersonRequestCounts(
+        total=9,
+        unresolved=3,
+        actionable=2,
+    )
+    assert "COUNT(*) AS total" in seen["sql"]
+    assert "state IN ('pending', 'converting', 'needs_review')" in seen["sql"]
+    assert "state IN ('pending', 'converting')" in seen["sql"]
+    assert seen["params"] == ("44",)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"total": True, "unresolved": 0, "actionable": 0},
+        {"total": 1, "unresolved": 2, "actionable": 0},
+        {"total": 2, "unresolved": 1, "actionable": 2},
+    ],
+)
+def test_person_request_counts_reject_malformed_or_impossible_values(
+    monkeypatch, row
+):
+    monkeypatch.setattr(store.db, "query", lambda sql, params: [row])
+
+    with pytest.raises(ValueError):
+        store.request_counts_for_person("44")
+
+
+def test_blocking_days_query_is_scoped_to_current_period(monkeypatch):
+    seen = {}
+    start = date(2026, 8, 16)
+    end = date(2026, 8, 28)
+    monkeypatch.setattr(
+        store.db,
+        "query",
+        lambda sql, params: seen.update(sql=sql, params=params)
+        or [{"absence_day": date(2026, 8, 20)}],
+    )
+
+    assert store.blocking_days_for_person("44", start, end) == {
+        date(2026, 8, 20)
+    }
+    assert "absence_day BETWEEN %s AND %s" in seen["sql"]
+    assert seen["params"] == ("44", start, end)
+
+
 def test_finalize_denied_is_lease_guarded_and_records_both_audits(monkeypatch):
     pending = _row(lease_owner=OWNER, lease_until=NOW + timedelta(seconds=120))
     denied = _row(

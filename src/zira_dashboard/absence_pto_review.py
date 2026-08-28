@@ -12,7 +12,7 @@ import xmlrpc.client
 
 from . import absence_pto_conversion as conversion
 from . import absence_pto_store as store
-from . import odoo_client, shift_config, staffing_hours
+from . import absence_pto_cache, odoo_client, shift_config, staffing_hours
 from .plant_day import today as plant_today
 
 
@@ -714,6 +714,7 @@ def _reconcile_claimed(
             lease_now=_lease_now(),
         )
         if reviewed.state == "needs_review":
+            absence_pto_cache.invalidate_for_absence(reviewed.absence_day)
             return _sync_claimed_task(reviewed, owner, current)
         return "escalated"
     if request.state == "needs_review":

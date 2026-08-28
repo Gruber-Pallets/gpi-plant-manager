@@ -34,12 +34,13 @@ Routes:
 from __future__ import annotations
 
 import json as _json
-from datetime import date as _date
+from datetime import UTC, date as _date, datetime as _datetime
 
 from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import (
+    absence_pto,
     company_holidays,
     db,
     odoo_client,
@@ -51,6 +52,7 @@ from .. import (
     timeclock_i18n,
 )
 from ..deps import templates
+from ..plant_day import today as plant_today
 from ..time_off_wizard import (
     compute_working_hours_json as _compute_working_hours_json,
     shape_to_hour_bounds as _shape_to_hour_bounds,
@@ -64,6 +66,21 @@ from .timeclock import (
 )
 
 router = APIRouter()
+
+_LINKED_MIRROR_EXCLUSION = (
+    "NOT EXISTS (SELECT 1 FROM absence_pto_requests linked "
+    "WHERE linked.person_odoo_id = r.person_odoo_id "
+    "AND (linked.pto_leave_id = r.odoo_leave_id "
+    "OR linked.original_absence_leave_id = r.odoo_leave_id))"
+)
+_ABSENCE_PTO_STATE_BUCKETS = {
+    "pending": "Pending",
+    "converting": "Processing",
+    "approved": "Approved",
+    "denied": "Denied",
+    "needs_review": "Needs review",
+    "resolved_manually": "Handled",
+}
 
 
 def _pending_count(person_odoo_id: int) -> int:
@@ -86,8 +103,9 @@ def _all_count(person_odoo_id: int) -> int:
     My Requests action so the user sees there is history to look at even
     after everything has been approved or refused."""
     rows = db.query(
-        "SELECT COUNT(*) AS n FROM time_off_requests "
-        "WHERE person_odoo_id = %s",
+        "SELECT COUNT(*) AS n FROM time_off_requests r "
+        "WHERE r.person_odoo_id = %s AND "
+        f"{_LINKED_MIRROR_EXCLUSION}",
         (person_odoo_id,),
     )
     return rows[0]["n"] if rows else 0
@@ -111,6 +129,20 @@ def _sync_error_warning(person_odoo_id: int) -> dict | None:
     return {"count": rows[0]["n"], "latest_error": rows[0]["latest"]}
 
 
+def _absence_pto_counts(person_odoo_id: int) -> tuple[int, int, int]:
+    """Return action, open, and history counts for linked absence PTO."""
+    if person_odoo_id <= 0:
+        return 0, 0, 0
+    candidates = absence_pto.list_candidates(person_odoo_id, plant_today())
+    counts = absence_pto.employee_request_counts(person_odoo_id)
+    eligible_count = sum(1 for candidate in candidates if candidate.eligible)
+    return (
+        eligible_count + counts.actionable,
+        counts.unresolved,
+        counts.total,
+    )
+
+
 @router.get("/timeclock/time-off/{token}", response_class=HTMLResponse)
 def time_off_landing(request: Request, token: str):
     """Landing page: the time-off-shape picker (Full Day + three
@@ -120,9 +152,9 @@ def time_off_landing(request: Request, token: str):
     device never lets the next user act as the previous one.
 
     Mints a fresh token before render so a user reading the screen (or
-    pausing to think) doesn't time out mid-tap. The counts come from the
-    local `time_off_requests` mirror so this is a few millisecond
-    Postgres SELECTs, no Odoo XML-RPC on the hot path.
+    pausing to think) doesn't time out mid-tap. Ordinary counts come from the
+    local mirror; the past-absence action reuses its authoritative eligibility
+    check so its badge follows the same pay-period and PTO-balance rules.
     """
     person_id = _verify_token(token)
     if person_id is None:
@@ -135,14 +167,18 @@ def time_off_landing(request: Request, token: str):
     # matches nothing in time_off_requests rather than returning early —
     # the page still renders with zero counts and a generic landing.
     odoo_id = p.get("odoo_id") or -1
+    absence_action_count, absence_open_count, absence_history_count = (
+        _absence_pto_counts(int(odoo_id))
+    )
     return templates.TemplateResponse(
         request,
         "timeclock_time_off_landing.html",
         {
             "person": p,
             "token": fresh,
-            "pending_count": _pending_count(odoo_id),
-            "all_count": _all_count(odoo_id),
+            "pending_count": _pending_count(odoo_id) + absence_open_count,
+            "all_count": _all_count(odoo_id) + absence_history_count,
+            "absence_pto_count": absence_action_count,
             "sync_warning": _sync_error_warning(odoo_id),
             # Salaried staff land here directly (no punch dashboard), so
             # their "Back" should exit to the home roster, not /dashboard.
@@ -651,11 +687,12 @@ def _list_my_requests(person_odoo_id: int) -> list[dict]:
     rows = db.query(
         "SELECT r.id, r.shape, r.date_from, r.date_to, r.hour_from, "
         "r.hour_to, r.state, r.note, r.holiday_status_id, "
-        "r.originating_kiosk_user, t.name AS type_name "
+        "r.originating_kiosk_user, r.created_at, t.name AS type_name "
         "FROM time_off_requests r "
         "LEFT JOIN leave_types_cache t "
         "ON t.holiday_status_id = r.holiday_status_id "
-        "WHERE r.person_odoo_id = %s "
+        "WHERE r.person_odoo_id = %s AND "
+        f"{_LINKED_MIRROR_EXCLUSION} "
         "ORDER BY r.created_at DESC LIMIT 100",
         (person_odoo_id,),
     )
@@ -676,6 +713,43 @@ def _state_to_bucket(state: str) -> str:
     return state
 
 
+def _combined_my_requests(person_odoo_id: int, token: str) -> list[dict]:
+    """Normalize ordinary and linked requests into one newest-first list."""
+    combined: list[tuple[_datetime, dict]] = []
+    oldest = _datetime.min.replace(tzinfo=UTC)
+    for source in _list_my_requests(person_odoo_id):
+        row = dict(source)
+        row["request_kind"] = "ordinary"
+        row["bucket"] = _state_to_bucket(str(row["state"]))
+        row["detail_url"] = f"/timeclock/time-off/mine/{token}/{row['id']}"
+        sort_at = row.pop("created_at", None) or oldest
+        if sort_at.tzinfo is None:
+            sort_at = sort_at.replace(tzinfo=UTC)
+        combined.append((sort_at, row))
+
+    for linked in absence_pto.employee_requests(person_odoo_id, limit=100):
+        row = {
+            "request_kind": "absence_pto",
+            "id": linked.id,
+            "type_name": "Past absence · Paid Time Off",
+            "date_from": linked.absence_day,
+            "date_to": linked.absence_day,
+            "hour_from": None,
+            "hour_to": None,
+            "bucket": _ABSENCE_PTO_STATE_BUCKETS.get(linked.state, linked.state),
+            "detail_url": (
+                f"/timeclock/time-off/past-absence/{token}/requests/{linked.id}"
+            ),
+        }
+        sort_at = linked.requested_at
+        if sort_at.tzinfo is None:
+            sort_at = sort_at.replace(tzinfo=UTC)
+        combined.append((sort_at, row))
+
+    combined.sort(key=lambda item: item[0], reverse=True)
+    return [row for _sort_at, row in combined[:100]]
+
+
 @router.get("/timeclock/time-off/mine/{token}", response_class=HTMLResponse)
 def mine_list(request: Request, token: str):
     """My Requests — newest 100 requests for the calling employee.
@@ -691,9 +765,7 @@ def mine_list(request: Request, token: str):
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/timeclock", status_code=303)
     fresh = _mint_token(person_id)
-    rows = _list_my_requests(p["odoo_id"])
-    for r in rows:
-        r["bucket"] = _state_to_bucket(r["state"])
+    rows = _combined_my_requests(int(p["odoo_id"]), fresh)
     return templates.TemplateResponse(
         request,
         "timeclock_time_off_mine.html",

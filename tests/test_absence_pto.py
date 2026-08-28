@@ -62,6 +62,17 @@ def _wire_candidate(
         "list_for_person",
         lambda emp_id: list(requests),
     )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "blocking_days_for_person",
+        lambda emp_id, start, end: {
+            request.absence_day
+            for request in requests
+            if request.state
+            in {"pending", "converting", "approved", "needs_review", "resolved_manually"}
+        },
+        raising=False,
+    )
     refreshed = []
     monkeypatch.setattr(
         domain.time_off_balances,
@@ -468,8 +479,73 @@ def test_employee_requests_uses_canonical_odoo_employee_key(monkeypatch):
     expected = [_request()]
     monkeypatch.setattr(
         domain.absence_pto_store,
-        "list_for_person",
-        lambda emp_id: expected if emp_id == "44" else pytest.fail(emp_id),
+        "list_history_for_person",
+        lambda emp_id, *, limit: (
+            expected if (emp_id, limit) == ("44", 25) else pytest.fail((emp_id, limit))
+        ),
+        raising=False,
     )
 
-    assert domain.employee_requests(44) is expected
+    assert domain.employee_requests(44, limit=25) is expected
+
+
+def test_employee_request_counts_use_aggregate_store_api(monkeypatch):
+    expected = SimpleNamespace(total=7, unresolved=2, actionable=1)
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "request_counts_for_person",
+        lambda emp_id: expected if emp_id == "44" else pytest.fail(emp_id),
+        raising=False,
+    )
+
+    assert domain.employee_request_counts(44) is expected
+
+
+def test_submit_invalidates_staffing_and_all_page_caches_after_commit(monkeypatch):
+    _wire_candidate(monkeypatch)
+    created = _request()
+    events = []
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "create_request",
+        lambda **kwargs: events.append("commit") or created,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_cache.staffing,
+        "invalidate_schedule_cache",
+        lambda day: events.append(("schedule", day)),
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_cache._http_cache,
+        "invalidate_all_cache",
+        lambda: events.append(("responses", None)),
+    )
+
+    assert domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY) is created
+    assert events == [
+        "commit",
+        ("schedule", ABSENCE_DAY),
+        ("responses", None),
+    ]
+
+
+def test_submit_cache_failures_cannot_overturn_committed_request(monkeypatch):
+    _wire_candidate(monkeypatch)
+    created = _request()
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "create_request",
+        lambda **kwargs: created,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_cache.staffing,
+        "invalidate_schedule_cache",
+        lambda day: (_ for _ in ()).throw(RuntimeError("schedule cache failed")),
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_cache._http_cache,
+        "invalidate_all_cache",
+        lambda: (_ for _ in ()).throw(RuntimeError("page cache failed")),
+    )
+
+    assert domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY) is created
