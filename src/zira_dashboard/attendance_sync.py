@@ -214,7 +214,7 @@ def _validated_sweep_ids(value: object) -> set[int]:
 
 
 def run_full_sweep(*, now_utc: datetime | None = None) -> SyncResult:
-    """Tombstone rows only after one complete, validated Task 2 ID sweep."""
+    """Record one validated ID sweep and delete on consecutive absence."""
     now = _now_utc(now_utc)
     try:
         state = _backend.sync_state()

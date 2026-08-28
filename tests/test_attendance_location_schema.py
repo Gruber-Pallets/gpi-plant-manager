@@ -9,6 +9,11 @@ def test_attendance_location_schema_is_idempotent_and_versioned():
     assert "ADD COLUMN IF NOT EXISTS requires_work_center_explicit" in ddl
     assert "CREATE TABLE IF NOT EXISTS odoo_attendance_mirror" in ddl
     assert "odoo_attendance_id BIGINT PRIMARY KEY" in ddl
+    assert "missing_since_sweep_generation BIGINT" in ddl
+    assert (
+        "ALTER TABLE odoo_attendance_mirror ADD COLUMN IF NOT EXISTS "
+        "missing_since_sweep_generation BIGINT" in ddl
+    )
     assert "CREATE TABLE IF NOT EXISTS odoo_attendance_sync_state" in ddl
     assert "CREATE TABLE IF NOT EXISTS attendance_recalc_queue" in ddl
     assert "CREATE TABLE IF NOT EXISTS attendance_strict_days" in ddl

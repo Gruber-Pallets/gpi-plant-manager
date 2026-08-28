@@ -292,6 +292,15 @@ def _upsert_rows_cur(
                 affected_days.update(_row_days(incoming, sync_completed_at))
             continue
 
+        incoming_is_stale = (
+            incoming["odoo_write_date"] < existing["odoo_write_date"]
+        )
+        if incoming_is_stale:
+            # An older raw Odoo version cannot confirm current existence. It
+            # must not revive a tombstone, move last_seen_at, or reset a
+            # complete-sweep absence recorded against newer source truth.
+            continue
+
         if not _observation_can_revive(
             observed_at=sync_completed_at,
             deleted_at=existing["deleted_at"],
@@ -301,13 +310,10 @@ def _upsert_rows_cur(
             # tombstone would make an older observation overwrite newer truth.
             continue
 
-        incoming_is_stale = (
-            incoming["odoo_write_date"] < existing["odoo_write_date"]
+        source = incoming
+        changed = bool(existing["deleted_at"] is not None) or _materially_different(
+            existing, incoming
         )
-        source = dict(existing) if incoming_is_stale else incoming
-        changed = bool(existing["deleted_at"] is not None)
-        if not incoming_is_stale:
-            changed = changed or _materially_different(existing, incoming)
         if baseline_completed and changed:
             affected_days.update(_row_days(existing, sync_completed_at))
             affected_days.update(_row_days(source, sync_completed_at))
@@ -317,7 +323,8 @@ def _upsert_rows_cur(
             "check_out_utc = %s, odoo_work_center_id = %s, "
             "odoo_work_center_name = %s, odoo_department_id = %s, "
             "odoo_department_name = %s, odoo_write_date = %s, "
-            "last_seen_at = GREATEST(last_seen_at, %s), deleted_at = NULL "
+            "last_seen_at = GREATEST(last_seen_at, %s), deleted_at = NULL, "
+            "missing_since_sweep_generation = NULL "
             "WHERE odoo_attendance_id = %s",
             tuple(source[field] for field in _ROW_FIELDS[1:])
             + (sync_completed_at, attendance_id),
@@ -507,13 +514,14 @@ def _store_full_sweep(
             raise ValueError("full sweep generation is stale")
         if present_ids:
             cur.execute(
-                "UPDATE odoo_attendance_mirror SET last_sweep_generation = %s "
+                "UPDATE odoo_attendance_mirror SET last_sweep_generation = %s, "
+                "missing_since_sweep_generation = NULL "
                 "WHERE deleted_at IS NULL AND odoo_attendance_id = ANY(%s)",
                 (sweep_generation, sorted(present_ids)),
             )
             cur.execute(
                 "SELECT odoo_attendance_id, check_in_utc, check_out_utc, "
-                "last_seen_at "
+                "last_seen_at, missing_since_sweep_generation "
                 "FROM odoo_attendance_mirror WHERE deleted_at IS NULL "
                 "AND NOT (odoo_attendance_id = ANY(%s)) FOR UPDATE",
                 (sorted(present_ids),),
@@ -521,17 +529,32 @@ def _store_full_sweep(
         else:
             cur.execute(
                 "SELECT odoo_attendance_id, check_in_utc, check_out_utc, "
-                "last_seen_at "
+                "last_seen_at, missing_since_sweep_generation "
                 "FROM odoo_attendance_mirror WHERE deleted_at IS NULL FOR UPDATE"
             )
+        missing_rows = tuple(cur.fetchall())
         deleted_rows = tuple(
             row
-            for row in cur.fetchall()
-            if _sweep_can_delete(
+            for row in missing_rows
+            if row["missing_since_sweep_generation"] == sweep_generation - 1
+            and _sweep_can_delete(
                 last_seen_at=row["last_seen_at"], sweep_started_at=completed
             )
         )
         deleted_ids = [row["odoo_attendance_id"] for row in deleted_rows]
+        deleted_id_set = set(deleted_ids)
+        deferred_ids = [
+            row["odoo_attendance_id"]
+            for row in missing_rows
+            if row["odoo_attendance_id"] not in deleted_id_set
+        ]
+        if deferred_ids:
+            cur.execute(
+                "UPDATE odoo_attendance_mirror SET last_sweep_generation = %s, "
+                "missing_since_sweep_generation = %s "
+                "WHERE odoo_attendance_id = ANY(%s) AND deleted_at IS NULL",
+                (sweep_generation, sweep_generation, deferred_ids),
+            )
         if deleted_ids:
             cur.execute(
                 "UPDATE odoo_attendance_mirror SET deleted_at = %s, "

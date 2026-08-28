@@ -211,9 +211,12 @@ CREATE TABLE IF NOT EXISTS odoo_attendance_mirror (
   first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_sweep_generation BIGINT,
+  missing_since_sweep_generation BIGINT,
   deleted_at TIMESTAMPTZ,
   CHECK (check_out_utc IS NULL OR check_out_utc >= check_in_utc)
 );
+
+ALTER TABLE odoo_attendance_mirror ADD COLUMN IF NOT EXISTS missing_since_sweep_generation BIGINT;
 
 CREATE INDEX IF NOT EXISTS odoo_attendance_mirror_employee_time_idx
   ON odoo_attendance_mirror (employee_odoo_id, check_in_utc, check_out_utc)
