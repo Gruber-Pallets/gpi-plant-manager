@@ -13,6 +13,46 @@ FEEDBACK_DONE_STAGE = "Done"
 FEEDBACK_REJECTED_STAGE = "Rejected"
 
 
+class OdooUserPayloadError(RuntimeError):
+    """Odoo returned a user lookup row that cannot be trusted."""
+
+
+def find_active_users_by_login(
+    execute_fn: Callable[..., Any], login: str, limit: int = 2
+) -> list[dict]:
+    """Return at most two active users echoing one normalized email."""
+    if not isinstance(login, str):
+        raise ValueError("login must be a normalized email and limit must be 2")
+    normalized = login.strip().casefold()
+    if login != normalized or "@" not in normalized or limit != 2:
+        raise ValueError("login must be a normalized email and limit must be 2")
+    rows = execute_fn(
+        "res.users",
+        "search_read",
+        [("active", "=", True), ("login", "=ilike", normalized)],
+        fields=["id", "login"],
+        limit=limit,
+    )
+    if not isinstance(rows, list) or len(rows) > limit:
+        raise OdooUserPayloadError("Odoo user payload was malformed")
+    out: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise OdooUserPayloadError("Odoo user payload row was malformed")
+        user_id = row.get("id")
+        echoed_login = row.get("login")
+        if (
+            isinstance(user_id, bool)
+            or not isinstance(user_id, int)
+            or user_id <= 0
+            or not isinstance(echoed_login, str)
+        ):
+            raise OdooUserPayloadError("Odoo user payload row was malformed")
+        if echoed_login.casefold() == normalized:
+            out.append({"id": user_id, "login": echoed_login})
+    return out
+
+
 def find_or_create_feedback_project(execute_fn: Callable[..., Any]) -> int:
     found = execute_fn(
         "project.project",
@@ -157,6 +197,13 @@ def update_task(
 ) -> None:
     """Write fields on a project.task (e.g. description=..., active=False)."""
     execute_fn("project.task", "write", [task_id], fields)
+
+
+def close_task(execute_fn: Callable[..., Any], task_id: int) -> None:
+    """Archive one project.task without implying any payroll state."""
+    if isinstance(task_id, bool) or not isinstance(task_id, int) or task_id <= 0:
+        raise ValueError("task_id must be a positive integer")
+    execute_fn("project.task", "write", [task_id], {"active": False})
 
 
 def post_task_message(

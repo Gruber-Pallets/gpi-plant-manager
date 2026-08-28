@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any, Callable
 
 from ._odoo_attendance import to_odoo_dt
@@ -12,6 +13,104 @@ _ALLOCATION_STATE_VALIDATED = "validate"
 # hr.leave states pulled together; "validate" is taken, others are pending.
 _LEAVE_STATES_OPEN = ("confirm", "validate1", "validate")
 _LEAVE_STATE_TAKEN = "validate"
+_LEAVE_SNAPSHOT_FIELDS = [
+    "id",
+    "employee_id",
+    "holiday_status_id",
+    "request_date_from",
+    "request_date_to",
+    "state",
+]
+_LEAVE_TERMINAL_STATES = ["cancel", "refuse"]
+
+
+class OdooLeavePayloadError(RuntimeError):
+    """Odoo returned a leave row that cannot be verified safely."""
+
+
+def _record_id(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise OdooLeavePayloadError(
+            f"Odoo leave payload has an invalid {field}"
+        )
+    return value
+
+
+def _m2o_id(value: Any, field: str) -> int:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise OdooLeavePayloadError(
+            f"Odoo leave payload has an invalid {field}"
+        )
+    display_name = value[1]
+    if not isinstance(display_name, str) or not display_name.strip():
+        raise OdooLeavePayloadError(
+            f"Odoo leave payload has an invalid {field} display name"
+        )
+    return _record_id(value[0], field)
+
+
+def _snapshot_from_row(
+    row: Any,
+    *,
+    expected_leave_id: int | None = None,
+    expected_employee_id: int | None = None,
+    expected_type_id: int | None = None,
+    expected_day: date | None = None,
+) -> dict:
+    if not isinstance(row, dict):
+        raise OdooLeavePayloadError("Odoo leave payload row was malformed")
+    leave_id = _record_id(row.get("id"), "id")
+    employee_id = _m2o_id(row.get("employee_id"), "employee_id")
+    type_id = _m2o_id(
+        row.get("holiday_status_id"), "holiday_status_id"
+    )
+    try:
+        date_from = date.fromisoformat(row["request_date_from"])
+        date_to = date.fromisoformat(row["request_date_to"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise OdooLeavePayloadError(
+            "Odoo leave payload has invalid request dates"
+        ) from exc
+    state = row.get("state")
+    if not isinstance(state, str) or not state or state != state.strip():
+        raise OdooLeavePayloadError(
+            "Odoo leave payload has an invalid state"
+        )
+    if expected_leave_id is not None and leave_id != expected_leave_id:
+        raise OdooLeavePayloadError(
+            "Odoo leave payload did not echo the requested id"
+        )
+    if (
+        expected_employee_id is not None
+        and employee_id != expected_employee_id
+    ):
+        raise OdooLeavePayloadError(
+            "Odoo leave payload did not echo the requested employee"
+        )
+    if expected_type_id is not None and type_id != expected_type_id:
+        raise OdooLeavePayloadError(
+            "Odoo leave payload did not echo the requested type"
+        )
+    if expected_day is not None and (
+        date_from != expected_day or date_to != expected_day
+    ):
+        raise OdooLeavePayloadError(
+            "Odoo leave payload did not echo the requested day"
+        )
+    return {
+        "id": leave_id,
+        "employee_id": employee_id,
+        "holiday_status_id": type_id,
+        "date_from": date_from,
+        "date_to": date_to,
+        "state": state,
+    }
+
+
+def _validated_rows(rows: Any) -> list:
+    if not isinstance(rows, list) or len(rows) > 2:
+        raise OdooLeavePayloadError("Odoo leave payload was malformed")
+    return rows
 
 
 def _norm_requires_allocation(value) -> str:
@@ -296,6 +395,75 @@ def fetch_leave_state(
         fields=["state"],
     )
     return rows[0]["state"] if rows else None
+
+
+def fetch_leave_snapshot(
+    execute_fn: Callable[..., Any], leave_id: int
+) -> dict | None:
+    """Read and normalize one archived-inclusive hr.leave identity row."""
+    normalized_leave_id = _record_id(leave_id, "id")
+    rows = _validated_rows(
+        execute_fn(
+            "hr.leave",
+            "search_read",
+            [("id", "=", normalized_leave_id)],
+            fields=_LEAVE_SNAPSHOT_FIELDS,
+            limit=2,
+            context={"active_test": False},
+        )
+    )
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise OdooLeavePayloadError(
+            "Odoo leave payload returned multiple rows for one id"
+        )
+    return _snapshot_from_row(
+        rows[0], expected_leave_id=normalized_leave_id
+    )
+
+
+def find_matching_leaves(
+    execute_fn: Callable[..., Any],
+    employee_id: int,
+    type_id: int,
+    day: date,
+    include_terminal: bool = True,
+) -> list[dict]:
+    """Return up to two exact employee/type/day leave snapshots."""
+    normalized_employee_id = _record_id(employee_id, "employee_id")
+    normalized_type_id = _record_id(type_id, "holiday_status_id")
+    if isinstance(day, datetime) or not isinstance(day, date):
+        raise ValueError("day must be a date")
+    if not isinstance(include_terminal, bool):
+        raise ValueError("include_terminal must be a boolean")
+    domain = [
+        ("employee_id", "=", normalized_employee_id),
+        ("holiday_status_id", "=", normalized_type_id),
+        ("request_date_from", "=", day.isoformat()),
+        ("request_date_to", "=", day.isoformat()),
+    ]
+    kwargs: dict[str, Any] = {
+        "fields": _LEAVE_SNAPSHOT_FIELDS,
+        "order": "id asc",
+        "limit": 2,
+    }
+    if include_terminal:
+        kwargs["context"] = {"active_test": False}
+    else:
+        domain.append(("state", "not in", _LEAVE_TERMINAL_STATES))
+    rows = _validated_rows(
+        execute_fn("hr.leave", "search_read", domain, **kwargs)
+    )
+    return [
+        _snapshot_from_row(
+            row,
+            expected_employee_id=normalized_employee_id,
+            expected_type_id=normalized_type_id,
+            expected_day=day,
+        )
+        for row in rows
+    ]
 
 
 def post_leave_message(
