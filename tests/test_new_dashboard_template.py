@@ -129,33 +129,101 @@ def _stopped_sole_producer_bar():
     return bar
 
 
-def _zero_runway_bar():
+def _ordered_runway_bar(*kinds):
     bar = _segmented_bar()
-    segment = bar["segments"][0].copy()
-    segment.update(
-        actual_units=0.0,
-        goal_units=0.0,
-        result="neutral",
-        result_label="no goal",
-        is_active=False,
-        start_pct=0.0,
-        actual_pct=0.0,
-        shortfall_start_pct=0.0,
-        shortfall_pct=0.0,
-        finish_pct=None,
-    )
+    zero_count = 0
+    segments = []
+    for kind in kinds:
+        segment = bar["segments"][0].copy()
+        if kind == "positive":
+            segment.update(
+                person_name="Positive stint",
+                person_label="Positive stint",
+                time_label="7a-8a",
+                actual_units=10.0,
+                goal_units=10.0,
+                result="ahead",
+                result_label="on goal",
+                is_active=False,
+                start_pct=40.0,
+                actual_pct=10.0,
+                shortfall_start_pct=50.0,
+                shortfall_pct=0.0,
+                finish_pct=None,
+            )
+        else:
+            zero_count += 1
+            label = f"Zero stint {zero_count}"
+            segment.update(
+                person_name=label,
+                person_label=label,
+                time_label="7a-7a",
+                actual_units=0.0,
+                goal_units=0.0,
+                result="neutral",
+                result_label="no goal",
+                is_active=False,
+                start_pct=40.0,
+                actual_pct=0.0,
+                shortfall_start_pct=40.0,
+                shortfall_pct=0.0,
+                finish_pct=None,
+            )
+        segments.append(segment)
     bar.update(
-        units=0,
-        expected=0,
-        pct=0.0,
+        units=10 if "positive" in kinds else 0,
+        expected=10 if "positive" in kinds else 0,
+        pct=10.0 if "positive" in kinds else 0.0,
         pct_of_target=None,
         no_one_here_now=False,
-        producer_names=("Humberto S.",),
-        sole_producer_name="Humberto S.",
-        show_segment_worker_names=False,
-        segments=[segment],
+        producer_names=tuple(s["person_label"] for s in segments),
+        sole_producer_name=None,
+        show_segment_worker_names=True,
+        segments=segments,
     )
     return bar
+
+
+def _assert_zero_dock(html, orientation, expected_zero_labels, has_positive):
+    if orientation == "horizontal":
+        dock_class = "worker-stint-zero-dock"
+        hitarea_class = "worker-stint-hitarea"
+        positive_style = 'style="left:40.0%;width:10.0%"'
+        cursor_only_style = 'style="left:40.0%"'
+    else:
+        dock_class = "vworker-stint-zero-dock"
+        hitarea_class = "vworker-stint-hitarea"
+        positive_style = 'style="bottom:40.0%;height:10.0%"'
+        cursor_only_style = 'style="bottom:40.0%"'
+
+    dock_match = re.search(
+        rf'<div class="{dock_class}">(.*?)</div>', html, re.DOTALL
+    )
+    assert dock_match
+    assert re.search(rf'</div>\s*<div class="{dock_class}">', html)
+    dock = dock_match.group(1)
+    controls = re.findall(
+        rf'<button type="button" class="{hitarea_class} zero-runway"'
+        rf'(.*?)></button>',
+        dock,
+        re.DOTALL,
+    )
+    assert len(controls) == len(expected_zero_labels)
+    assert all("style=" not in control for control in controls)
+    assert cursor_only_style not in dock
+
+    detail_positions = []
+    for label in expected_zero_labels:
+        detail = f'{label} · 7a-7a · 0/0 · no goal'
+        assert f'data-stint-detail="{detail}"' in dock
+        assert f'aria-label="{detail}"' in dock
+        assert f'title="{detail}"' in dock
+        detail_positions.append(dock.index(detail))
+    assert detail_positions == sorted(detail_positions)
+
+    assert (positive_style in html) is has_positive
+    if has_positive:
+        assert 'aria-label="Positive stint · 7a-8a · 10/10 · on goal"' in html
 
 
 def _legacy_worker_bar():
@@ -300,15 +368,24 @@ def test_new_horizontal_bar_keeps_segments_and_moves_details_to_hitareas():
     assert 'class="bar-target-line"' not in html
 
 
-def test_zero_runway_stint_keeps_horizontal_accessible_hit_target():
-    html = _render_new(new_bars=[_zero_runway_bar()])
+def test_horizontal_dock_keeps_zero_before_positive_reachable():
+    html = _render_new(new_bars=[_ordered_runway_bar("zero", "positive")])
 
-    assert 'type="button" class="worker-stint-hitarea zero-runway"' in html
-    assert 'style="left:0.0%"' in html
-    assert 'data-stint-detail="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
-    assert 'aria-label="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
-    assert 'title="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
-    assert 'class="worker-segment-fill' not in html
+    _assert_zero_dock(html, "horizontal", ["Zero stint 1"], True)
+
+
+def test_horizontal_dock_keeps_zero_after_positive_reachable():
+    html = _render_new(new_bars=[_ordered_runway_bar("positive", "zero")])
+
+    _assert_zero_dock(html, "horizontal", ["Zero stint 1"], True)
+
+
+def test_horizontal_dock_keeps_consecutive_zero_stints_separate_and_ordered():
+    html = _render_new(new_bars=[_ordered_runway_bar("zero", "zero")])
+
+    _assert_zero_dock(
+        html, "horizontal", ["Zero stint 1", "Zero stint 2"], False
+    )
 
 
 def test_stopped_sole_producer_name_is_left_while_finish_marker_stays_in_bar():
@@ -457,18 +534,31 @@ def test_new_vertical_bar_keeps_geometry_without_visible_worker_list():
     assert 'class="vworker-segment-list"' not in html
 
 
-def test_zero_runway_stint_keeps_vertical_accessible_hit_target():
+def test_vertical_dock_keeps_zero_before_positive_reachable():
     html = _render_new(
         customs={"new-bars": {"orientation": "vertical"}},
-        new_bars=[_zero_runway_bar()],
+        new_bars=[_ordered_runway_bar("zero", "positive")],
     )
 
-    assert 'type="button" class="vworker-stint-hitarea zero-runway"' in html
-    assert 'style="bottom:0.0%"' in html
-    assert 'data-stint-detail="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
-    assert 'aria-label="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
-    assert 'title="Humberto S. · 7a-2:33p · 0/0 · no goal"' in html
-    assert 'class="vworker-segment-fill' not in html
+    _assert_zero_dock(html, "vertical", ["Zero stint 1"], True)
+
+
+def test_vertical_dock_keeps_zero_after_positive_reachable():
+    html = _render_new(
+        customs={"new-bars": {"orientation": "vertical"}},
+        new_bars=[_ordered_runway_bar("positive", "zero")],
+    )
+
+    _assert_zero_dock(html, "vertical", ["Zero stint 1"], True)
+
+
+def test_vertical_dock_keeps_consecutive_zero_stints_separate_and_ordered():
+    html = _render_new(
+        customs={"new-bars": {"orientation": "vertical"}},
+        new_bars=[_ordered_runway_bar("zero", "zero")],
+    )
+
+    _assert_zero_dock(html, "vertical", ["Zero stint 1", "Zero stint 2"], False)
 
 
 def test_recycling_and_new_load_worker_stint_details_in_screen_and_tv_modes():

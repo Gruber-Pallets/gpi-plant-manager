@@ -602,9 +602,6 @@
     top: 0;
     bottom: 0;
   }
-  .worker-stint-hitarea.zero-runway {
-    width: 12px;
-  }
   .worker-stint-hitarea.has-boundary {
     border-left: 1px solid color-mix(in srgb, var(--panel) 72%, transparent);
   }
@@ -612,11 +609,41 @@
     left: 0;
     right: 0;
   }
-  .vworker-stint-hitarea.zero-runway {
-    height: 12px;
-  }
   .vworker-stint-hitarea.has-boundary {
     border-bottom: 1px solid color-mix(in srgb, var(--panel) 72%, transparent);
+  }
+  .grid-stack-item-content .bar-row.has-zero-runway .bar-track {
+    grid-column: 2;
+    grid-row: 1;
+    height: 20px;
+    min-height: 20px;
+  }
+  .worker-stint-zero-dock {
+    grid-column: 2;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 12px;
+    margin-top: 2px;
+  }
+  .vworker-stint-zero-dock {
+    display: flex;
+    flex: 0 0 12px;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+  }
+  .worker-stint-zero-dock .zero-runway,
+  .vworker-stint-zero-dock .zero-runway {
+    position: relative;
+    inset: auto;
+    flex: 0 0 12px;
+    width: 12px;
+    height: 12px;
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--accent) 30%, var(--panel));
   }
   .worker-stint-hitarea:focus-visible,
   .vworker-stint-hitarea:focus-visible {

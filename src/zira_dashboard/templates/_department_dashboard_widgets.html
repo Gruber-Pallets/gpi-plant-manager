@@ -21,6 +21,12 @@
     <div class="vbars">
       {% for b in items %}
         {% set fill_color = b.color or 'var(--good)' %}
+        {% set zero_stints = namespace(found=false) %}
+        {% if b.has_segments %}
+          {% for s in b.segments %}
+            {% if s.actual_pct + s.shortfall_pct <= 0 %}{% set zero_stints.found = true %}{% endif %}
+          {% endfor %}
+        {% endif %}
         <div class="vbar-col" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
           {% if numpos == 'widget' %}<div class="vbar-val">{{ b.units }}{% if b.expected %}<span class="pct"> / {{ b.expected }}</span>{% endif %}</div>{% endif %}
           <div class="vbar-track">
@@ -42,11 +48,13 @@
                        title="{{ 'Goal now' if s.is_active else 'Finish goal' }} {{ s.goal_units|round|int }}"></div>
                 {% endif %}
                 {% set runway_pct = s.actual_pct + s.shortfall_pct %}
-                <button type="button" class="vworker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}{% if runway_pct <= 0 %} zero-runway{% endif %}"
-                        style="bottom:{{ s.start_pct }}%{% if runway_pct > 0 %};height:{{ runway_pct }}%{% endif %}"
-                        data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
-                        aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
-                        title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
+                {% if runway_pct > 0 %}
+                  <button type="button" class="vworker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}"
+                          style="bottom:{{ s.start_pct }}%;height:{{ runway_pct }}%"
+                          data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                          aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                          title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
+                {% endif %}
               {% endfor %}
               {% if numpos == 'inside' %}<span class="vsegment-total in">{{ b.units }}</span>{% endif %}
               {% if numpos == 'bar' %}<span class="vsegment-total edge">{{ b.units }}</span>{% endif %}
@@ -58,6 +66,18 @@
               {% if b.target_pct is not none %}<div class="vbar-target-line" style="bottom: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
             {% endif %}
           </div>
+          {% if zero_stints.found %}
+            <div class="vworker-stint-zero-dock">
+              {% for s in b.segments %}
+                {% if s.actual_pct + s.shortfall_pct <= 0 %}
+                  <button type="button" class="vworker-stint-hitarea zero-runway"
+                          data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                          aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                          title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% endif %}
           <div class="vbar-name">
             {% if is_range %}
               <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
@@ -92,7 +112,13 @@
   {% else %}
     {% for b in items %}
       {% set fill_color = b.color or 'var(--good)' %}
-      <div class="bar-row numpos-{{ numpos }}" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
+      {% set zero_stints = namespace(found=false) %}
+      {% if b.has_segments %}
+        {% for s in b.segments %}
+          {% if s.actual_pct + s.shortfall_pct <= 0 %}{% set zero_stints.found = true %}{% endif %}
+        {% endfor %}
+      {% endif %}
+      <div class="bar-row numpos-{{ numpos }}{% if zero_stints.found %} has-zero-runway{% endif %}" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
         <div class="name">
           {% if is_range %}
             <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
@@ -140,11 +166,13 @@
                      title="{{ 'Goal now' if s.is_active else 'Finish goal' }} {{ s.goal_units|round|int }}"></div>
               {% endif %}
               {% set runway_pct = s.actual_pct + s.shortfall_pct %}
-              <button type="button" class="worker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}{% if runway_pct <= 0 %} zero-runway{% endif %}"
-                      style="left:{{ s.start_pct }}%{% if runway_pct > 0 %};width:{{ runway_pct }}%{% endif %}"
-                      data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
-                      aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
-                      title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
+              {% if runway_pct > 0 %}
+                <button type="button" class="worker-stint-hitarea{% if not loop.first %} has-boundary{% endif %}"
+                        style="left:{{ s.start_pct }}%;width:{{ runway_pct }}%"
+                        data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                        aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                        title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
+              {% endif %}
             {% endfor %}
             {% if numpos == 'inside' %}<span class="segment-total in">{{ b.units }}</span>{% endif %}
             {% if numpos == 'bar' %}<span class="segment-total edge">{{ b.units }}</span>{% endif %}
@@ -156,6 +184,18 @@
             {% if b.target_pct is not none %}<div class="bar-target-line" style="left: {{ b.target_pct }}%" title="goal {{ b.expected }}"></div>{% endif %}
           {% endif %}
         </div>
+        {% if zero_stints.found %}
+          <div class="worker-stint-zero-dock">
+            {% for s in b.segments %}
+              {% if s.actual_pct + s.shortfall_pct <= 0 %}
+                <button type="button" class="worker-stint-hitarea zero-runway"
+                        data-stint-detail="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                        aria-label="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"
+                        title="{{ s.person_label }} · {{ s.time_label }} · {{ s.actual_units|round|int }}/{{ s.goal_units|round|int }} · {{ s.result_label }}"></button>
+              {% endif %}
+            {% endfor %}
+          </div>
+        {% endif %}
         {% if numpos == 'widget' %}<div class="val">{{ b.units }}{% if b.expected %}<span class="pct">/{{ b.expected }}</span>{% endif %}</div>{% endif %}
       </div>
     {% endfor %}

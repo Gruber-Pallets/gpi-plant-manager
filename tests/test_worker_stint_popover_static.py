@@ -41,13 +41,44 @@ def test_vertical_stint_focus_ring_is_inset_while_horizontal_stays_outset():
     )
 
 
-def test_zero_runway_hitareas_have_small_horizontal_and_vertical_targets():
-    assert re.search(
-        r"\.worker-stint-hitarea\.zero-runway\s*\{[^}]*width:\s*12px;", CSS
+def test_zero_runway_docks_stay_outside_tracks_without_resizing_the_bar():
+    horizontal_track = re.search(
+        r"\.grid-stack-item-content \.bar-row\.has-zero-runway \.bar-track"
+        r"\s*\{([^}]*)\}",
+        CSS,
     )
-    assert re.search(
-        r"\.vworker-stint-hitarea\.zero-runway\s*\{[^}]*height:\s*12px;", CSS
+    horizontal_dock = re.search(
+        r"\.worker-stint-zero-dock\s*\{([^}]*)\}", CSS
     )
+    vertical_dock = re.search(
+        r"\.vworker-stint-zero-dock\s*\{([^}]*)\}", CSS
+    )
+
+    assert horizontal_track
+    assert "grid-row: 1" in horizontal_track.group(1)
+    assert "height: 20px" in horizontal_track.group(1)
+    assert horizontal_dock
+    assert "grid-row: 2" in horizontal_dock.group(1)
+    assert "display: flex" in horizontal_dock.group(1)
+    assert "gap:" in horizontal_dock.group(1)
+    assert vertical_dock
+    assert "display: flex" in vertical_dock.group(1)
+    assert "gap:" in vertical_dock.group(1)
+
+
+def test_zero_runway_dock_targets_are_visible_and_non_overlapping():
+    targets = re.search(
+        r"\.vworker-stint-zero-dock \.zero-runway\s*\{([^}]*)\}", CSS
+    )
+
+    assert targets
+    declarations = targets.group(1)
+    assert "position: relative" in declarations
+    assert "flex: 0 0 12px" in declarations
+    assert "width: 12px" in declarations
+    assert "height: 12px" in declarations
+    assert "border: 1px solid" in declarations
+    assert "background:" in declarations
 
 
 def test_worker_stint_popover_supports_hover_focus_tap_outside_and_escape():
