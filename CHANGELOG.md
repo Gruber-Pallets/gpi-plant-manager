@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-28
+
+### Cleaner training printout plan
+
+- **A plan is ready to make printed schedules simpler.** People who are training will have a small Training label beside their name instead of a big Training box. Nothing in the app has changed yet.
+
 ## 2026-08-27
 
 ### See weekly work hours
