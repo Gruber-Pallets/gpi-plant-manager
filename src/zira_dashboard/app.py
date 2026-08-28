@@ -38,6 +38,7 @@ from .routes import (
     recycling_leaderboard,
     saturday_recruiting,
     timeclock,
+    timeclock_absence_pto,
     timeclock_saturday,
     timeclock_time_off,
     late_report,
@@ -652,6 +653,7 @@ app.include_router(admin.router)
 app.include_router(auto_salaried_admin.router)
 app.include_router(goat_watch.router)
 app.include_router(timeclock.router)
+app.include_router(timeclock_absence_pto.router)
 app.include_router(timeclock_saturday.router)
 app.include_router(timeclock_time_off.router)
 

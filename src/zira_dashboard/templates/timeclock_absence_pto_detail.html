@@ -1,0 +1,35 @@
+{% extends "timeclock_base.html" %}
+{% block title %}Past Absence PTO Request — {{ person.name }}{% endblock %}
+{% block content %}
+<div class="k-header">
+  <a href="/timeclock/time-off/past-absence/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <span>{{ t("Past Absence PTO Request") }}</span>
+  {% include "_timeclock_brand.html" %}
+</div>
+
+<main class="k-main" style="align-items: center;">
+  <section style="box-sizing: border-box; width: 100%; max-width: 720px; background: #fff; border: 1px solid #cbd5e1; border-radius: 0.75rem; padding: 1.5rem 1.75rem;">
+    <div style="display: inline-block; border-radius: 999px; background: #fef3c7; color: #78350f; padding: 0.5rem 1rem; font-size: 1.1rem; font-weight: 700; margin-bottom: 1.25rem;">
+      {{ state_label }}
+    </div>
+    <dl style="display: grid; grid-template-columns: 10rem 1fr; gap: 0.85rem 1.25rem; margin: 0; font-size: 1.15rem; line-height: 1.4;">
+      <dt style="color: #64748b;">{{ t("Missed day") }}</dt>
+      <dd style="margin: 0; font-weight: 600;">{{ request_row.absence_day }}</dd>
+      <dt style="color: #64748b;">{{ t("PTO kind") }}</dt>
+      <dd style="margin: 0;">{{ request_row.leave_type_name }}</dd>
+      <dt style="color: #64748b;">{{ t("Balance when asked") }}</dt>
+      <dd style="margin: 0;">{{ request_row.balance_at_submit }} {{ t("days") }}</dd>
+      <dt style="color: #64748b;">{{ t("This request") }}</dt>
+      <dd style="margin: 0;">{{ t("1 day") }}</dd>
+      {% if request_row.employee_note %}
+        <dt style="color: #64748b;">{{ t("Your note") }}</dt>
+        <dd style="margin: 0; overflow-wrap: anywhere;">{{ request_row.employee_note }}</dd>
+      {% endif %}
+      {% if request_row.denial_reason %}
+        <dt style="color: #64748b;">{{ t("Manager reply") }}</dt>
+        <dd style="margin: 0; overflow-wrap: anywhere;">{{ request_row.denial_reason }}</dd>
+      {% endif %}
+    </dl>
+  </section>
+</main>
+{% endblock %}

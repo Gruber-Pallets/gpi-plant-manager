@@ -1,0 +1,81 @@
+{% extends "timeclock_base.html" %}
+{% block title %}Past Absence PTO — {{ person.name }}{% endblock %}
+{% block content %}
+<div class="k-header">
+  <a href="/timeclock/time-off/{{ token }}" class="k-back">{{ t("‹ Back") }}</a>
+  <span>{{ t("Use PTO for a Past Absence") }}</span>
+  {% include "_timeclock_brand.html" %}
+</div>
+
+<main class="k-main" style="align-items: center;">
+  <div style="width: 100%; max-width: 760px;">
+    {% if error %}
+      <div class="k-warning" role="alert" style="margin-bottom: 1.25rem;">
+        {{ error }}
+      </div>
+    {% endif %}
+
+    <p style="font-size: 1.2rem; line-height: 1.5; color: #334155;">
+      {{ t("Choose a missed day below. Your manager must approve the request before PTO is used.") }}
+    </p>
+
+    {% if candidates %}
+      <ul style="list-style: none; padding: 0; display: grid; gap: 1rem;">
+        {% for candidate in candidates %}
+          <li style="background: #fff; border: 1px solid #cbd5e1; border-radius: 0.75rem; padding: 1.25rem;">
+            <div style="font-size: 1.4rem; font-weight: 700; margin-bottom: 0.75rem;">
+              {{ candidate.day }} · {{ t("Paid Time Off") }}
+            </div>
+            {% if candidate.available_practical is not none %}
+              <p style="font-size: 1.1rem; color: #475569;">
+                {{ t("Available PTO") }}: {{ "%g"|format(candidate.available_practical) }} · {{ t("This request: 1 day") }}
+              </p>
+            {% endif %}
+            {% if candidate.eligible %}
+              <form method="post" action="/timeclock/time-off/past-absence/{{ token }}/{{ candidate.day }}">
+                <label for="note-{{ candidate.day }}" style="display: block; font-size: 1.1rem; font-weight: 600; margin-bottom: 0.4rem;">
+                  {{ t("Optional note") }}
+                </label>
+                <textarea id="note-{{ candidate.day }}" name="note" rows="2" maxlength="1000"
+                          style="box-sizing: border-box; width: 100%; min-height: 72px; font-size: 1.15rem; padding: 0.75rem; border: 2px solid #94a3b8; border-radius: 0.5rem;"></textarea>
+                <button type="submit" class="k-btn success"
+                        style="width: 100%; min-height: 64px; margin-top: 0.9rem;">
+                  {{ t("Ask to Use 1 PTO Day") }}
+                </button>
+              </form>
+            {% else %}
+              <p id="blocked-{{ candidate.day }}" style="font-size: 1.1rem; color: #9f1239; font-weight: 600;">
+                {{ candidate.blocked_reason }}
+              </p>
+              <button type="button" class="k-btn" disabled
+                      aria-describedby="blocked-{{ candidate.day }}"
+                      style="width: 100%; min-height: 64px; opacity: 0.6;">
+                {{ t("Not available") }}
+              </button>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p style="font-size: 1.3rem; color: #475569; padding: 2rem 0; text-align: center;">
+        {{ t("There are no past absences that can be checked in this pay period.") }}
+      </p>
+    {% endif %}
+
+    {% if requests %}
+      <h2 style="font-size: 1.5rem; margin-top: 2.5rem;">{{ t("Past requests") }}</h2>
+      <ul style="list-style: none; padding: 0; display: grid; gap: 0.75rem;">
+        {% for row in requests %}
+          <li>
+            <a href="/timeclock/time-off/past-absence/{{ token }}/requests/{{ row.id }}"
+               style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; min-height: 72px; padding: 1rem 1.25rem; background: #fff; border: 1px solid #cbd5e1; border-radius: 0.75rem; color: #0f172a; text-decoration: none; font-size: 1.15rem;">
+              <span>{{ row.absence_day }} · {{ t("Paid Time Off") }}</span>
+              <strong>{{ state_labels.get(row.state, row.state) }}</strong>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+</main>
+{% endblock %}

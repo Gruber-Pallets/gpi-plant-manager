@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Missed-day PTO checks are ready
+
+- **Plant Manager can now tell which missed days may use PTO.** It checks the worker, pay period, PTO kind, and balance. The new choice is not on the time clock yet.
+
 ### Compact worker-stint bar build plan
 
 - **A step-by-step build plan is ready for shorter production bars.** Each person's work time will stay in one bar, and pointing to or tapping a section will show more details. Nothing in the app has changed yet.
