@@ -34,6 +34,20 @@ def _stored_live_config(cutover_utc: datetime, activated_at: datetime | None):
     }
 
 
+def _stored_shadow_rollback(
+    rollback_utc: datetime, activated_at: datetime
+) -> dict:
+    return {
+        "mode": "shadow",
+        "cutover_at": rollback_utc.isoformat(),
+        "live_gate": {
+            "checked_at": (activated_at - timedelta(minutes=1)).isoformat(),
+            "report_digest": "b617a1c0" * 8,
+            "activated_at": activated_at.isoformat(),
+        },
+    }
+
+
 def test_rollout_defaults_to_off_for_missing_or_invalid_setting(monkeypatch):
     monkeypatch.setattr(policy.app_settings, "get_setting", lambda _key: None)
     assert policy.get_rollout_config() == policy.RolloutConfig(
@@ -136,6 +150,80 @@ def test_live_is_active_only_after_gate_activation(monkeypatch):
     assert policy.live_is_active(now_utc=cutover) is True
 
 
+def test_scheduled_shadow_rollback_stays_live_until_clean_boundary(monkeypatch):
+    activated_at = _cutover_utc(date(2026, 8, 31))
+    rollback_at = _cutover_utc(date(2026, 9, 2))
+    monkeypatch.setattr(
+        policy.app_settings,
+        "get_setting",
+        lambda _key: _stored_shadow_rollback(rollback_at, activated_at),
+    )
+
+    assert policy.live_is_active(now_utc=rollback_at - timedelta(seconds=1)) is True
+    assert policy.live_is_active(now_utc=rollback_at) is False
+
+
+def test_scheduled_shadow_rollback_keeps_prior_days_strict(monkeypatch):
+    activated_day = date(2026, 8, 31)
+    rollback_day = date(2026, 9, 2)
+    activated_at = _cutover_utc(activated_day)
+    rollback_at = _cutover_utc(rollback_day)
+    monkeypatch.setattr(
+        policy.app_settings,
+        "get_setting",
+        lambda _key: _stored_shadow_rollback(rollback_at, activated_at),
+    )
+    persisted = set()
+    monkeypatch.setattr(policy, "strict_days", lambda: persisted)
+    monkeypatch.setattr(
+        policy, "_utc_now", lambda: rollback_at - timedelta(seconds=1)
+    )
+
+    assert policy.match_state_for_day(
+        date(2026, 9, 1), now_utc=rollback_at - timedelta(seconds=1)
+    ) == "strict"
+    assert policy.match_state_for_day(
+        date(2026, 8, 30), now_utc=rollback_at - timedelta(seconds=1)
+    ) == "legacy"
+    assert policy.match_state_for_day(
+        rollback_day, now_utc=rollback_at - timedelta(seconds=1)
+    ) == "legacy"
+    assert policy.day_is_strict(date(2026, 9, 1)) is True
+    assert policy.day_is_strict(date(2026, 8, 30)) is False
+    assert policy.day_is_strict(rollback_day) is False
+
+    persisted.add(date(2026, 9, 1))
+    assert policy.match_state_for_day(
+        date(2026, 9, 1), now_utc=rollback_at
+    ) == "strict"
+    assert policy.match_state_for_day(rollback_day, now_utc=rollback_at) == "legacy"
+
+
+def test_active_live_rollback_rejects_a_past_clean_boundary(monkeypatch):
+    now = datetime(2026, 9, 1, 18, tzinfo=UTC)
+    activated_at = _cutover_utc(date(2026, 8, 31))
+    past_boundary = _cutover_utc(date(2026, 9, 1))
+    monkeypatch.setattr(policy, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        policy.app_settings,
+        "set_setting",
+        lambda *_args, **_kwargs: pytest.fail("past rollback was persisted"),
+    )
+
+    with pytest.raises(ValueError, match="^rollback_future_boundary_required$"):
+        policy.set_rollout_config(
+            policy.RolloutConfig(
+                mode="shadow",
+                cutover_at=past_boundary,
+                live_gate=policy.LiveGate(
+                    checked_at=activated_at - timedelta(minutes=1),
+                    report_digest="b617a1c0" * 8,
+                    activated_at=activated_at,
+                ),
+            )
+        )
+
+
 def test_match_state_tracks_legacy_pending_and_strict(monkeypatch):
     cutover_day = date(2026, 8, 31)
     cutover = _cutover_utc(cutover_day)
@@ -213,3 +301,22 @@ def test_set_department_requirement_marks_the_choice_explicit(monkeypatch):
 
     assert "requires_work_center_explicit = TRUE" in executed["sql"]
     assert executed["params"] == (True, "Maintenance")
+
+
+def test_set_department_requirement_uses_supplied_transaction_cursor(monkeypatch):
+    executed = {}
+
+    class Cursor:
+        def execute(self, sql, params):
+            executed.update({"sql": sql, "params": params})
+
+    monkeypatch.setattr(
+        policy.db,
+        "execute",
+        lambda *_args, **_kwargs: pytest.fail("write escaped transaction cursor"),
+    )
+
+    policy.set_department_requirement("Maintenance", False, cur=Cursor())
+
+    assert "requires_work_center_explicit = TRUE" in executed["sql"]
+    assert executed["params"] == (False, "Maintenance")

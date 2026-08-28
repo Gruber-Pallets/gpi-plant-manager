@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from .. import (
     attendance_location_policy,
     auth,
+    db,
     odoo_client,
     schedule_store,
     settings_context,
@@ -196,8 +197,6 @@ def _api_settings_forbidden() -> JSONResponse:
 
 def _attendance_location_context() -> dict:
     """Build the read-only rollout health + department policy view."""
-    from .. import db
-
     config = attendance_location_policy.get_rollout_config()
     try:
         department_rows = db.query(
@@ -606,10 +605,19 @@ async def settings_save_attendance_location(request: Request):
                 request, "cutover_invalid", status_code=422
             )
 
+    current_config = attendance_location_policy.get_rollout_config()
+    rollback_gate = None
+    if mode == "shadow" and attendance_location_policy.live_is_active():
+        if cutover_at is None:
+            return _attendance_location_error(
+                request, "rollback_boundary_required", status_code=422
+            )
+        rollback_gate = current_config.live_gate
+
     config = attendance_location_policy.RolloutConfig(
         mode=mode,
         cutover_at=cutover_at,
-        live_gate=None,
+        live_gate=rollback_gate,
     )
     selected_departments = set(form.getlist("department_requires_work_center"))
     departments = (
@@ -619,12 +627,14 @@ async def settings_save_attendance_location(request: Request):
     )
 
     def _save() -> None:
-        attendance_location_policy.set_rollout_config(config)
-        for department_name in departments:
-            attendance_location_policy.set_department_requirement(
-                department_name,
-                department_name in selected_departments,
-            )
+        with db.cursor() as cur:
+            attendance_location_policy.set_rollout_config(config, cur=cur)
+            for department_name in departments:
+                attendance_location_policy.set_department_requirement(
+                    department_name,
+                    department_name in selected_departments,
+                    cur=cur,
+                )
 
     try:
         await asyncio.to_thread(_save)

@@ -348,6 +348,21 @@ def _employee_snapshot_error(
     return None
 
 
+def _upsert_departments(cur, departments: list[str]) -> None:
+    """Insert newly synced departments with their initial location policy."""
+    from . import attendance_location_policy
+
+    for name in departments:
+        cur.execute(
+            "INSERT INTO departments (name, requires_work_center) VALUES (%s, %s) "
+            "ON CONFLICT (name) DO NOTHING",
+            (
+                name,
+                attendance_location_policy.default_department_requires_work_center(name),
+            ),
+        )
+
+
 def sync(force: bool = False) -> SyncResult:
     """Synchronize one complete Odoo snapshot without interleaving another."""
     with _SNAPSHOT_SYNC_LOCK:
@@ -587,12 +602,7 @@ def _sync_locked(force: bool = False) -> SyncResult:
     # is preserved by the ON CONFLICT DO NOTHING.
     if departments:
         with db.cursor() as cur:
-            for name in departments:
-                cur.execute(
-                    "INSERT INTO departments (name) VALUES (%s) "
-                    "ON CONFLICT (name) DO NOTHING",
-                    (name,),
-                )
+            _upsert_departments(cur, departments)
 
     _write_last_sync(pulled_at)
     _set_roster_sync_alert(None)

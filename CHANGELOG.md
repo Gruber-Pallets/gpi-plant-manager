@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Work area settings stay safe
+
+- **Work-area settings now change all at once or not at all.** New maintenance and supervisor teams get the right choice, and a future switch away from live rules waits for a new workday. The new rules are still turned off.
+
 ### Set which teams need a work area
 
 - **Settings can now remember which teams must have a work area in Odoo.** Maintenance and supervisors can stay clocked in without one. The new Odoo location rules are still turned off.

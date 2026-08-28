@@ -129,6 +129,17 @@ def set_rollout_config(config: RolloutConfig, *, cur=None) -> None:
     if config.mode == "live":
         _validate_cutover(config.cutover_at)
         _validate_live_gate(config.live_gate)
+    if (
+        config.mode == "shadow"
+        and config.live_gate is not None
+        and config.live_gate.activated_at is not None
+    ):
+        if not _is_aware(config.live_gate.activated_at):
+            raise ValueError("live_readiness_required")
+        _validate_cutover(config.cutover_at)
+        assert config.cutover_at is not None
+        if config.cutover_at.astimezone(UTC) <= _utc_now():
+            raise ValueError("rollback_future_boundary_required")
     value = {
         "mode": config.mode,
         "cutover_at": (
@@ -158,11 +169,18 @@ def _aware_utc(value: datetime | None) -> datetime:
 
 def _live_is_active(config: RolloutConfig, now_utc: datetime) -> bool:
     gate = config.live_gate
+    if (
+        gate is None
+        or gate.activated_at is None
+        or gate.activated_at.astimezone(UTC) > now_utc
+    ):
+        return False
+    if config.mode == "live":
+        return True
     return bool(
-        config.mode == "live"
-        and gate is not None
-        and gate.activated_at is not None
-        and gate.activated_at.astimezone(UTC) <= now_utc
+        config.mode == "shadow"
+        and config.cutover_at is not None
+        and now_utc < config.cutover_at.astimezone(UTC)
     )
 
 
@@ -183,7 +201,15 @@ def day_is_strict(day: date) -> bool:
     config = get_rollout_config()
     if config.cutover_at is None or not _live_is_active(config, _utc_now()):
         return False
-    return day >= config.cutover_at.astimezone(shift_config.SITE_TZ).date()
+    cutover_day = config.cutover_at.astimezone(shift_config.SITE_TZ).date()
+    if config.mode == "shadow":
+        assert config.live_gate is not None
+        assert config.live_gate.activated_at is not None
+        activated_day = config.live_gate.activated_at.astimezone(
+            shift_config.SITE_TZ
+        ).date()
+        return activated_day <= day < cutover_day
+    return day >= cutover_day
 
 
 def match_state_for_day(
@@ -193,11 +219,27 @@ def match_state_for_day(
     if day in strict_days():
         return "strict"
     config = get_rollout_config()
-    if config.mode != "live" or config.cutover_at is None:
+    if config.cutover_at is None:
         return "legacy"
     now = _aware_utc(now_utc)
     cutover = config.cutover_at.astimezone(UTC)
     cutover_day = config.cutover_at.astimezone(shift_config.SITE_TZ).date()
+    if config.mode == "shadow":
+        gate = config.live_gate
+        activated_day = (
+            gate.activated_at.astimezone(shift_config.SITE_TZ).date()
+            if gate is not None and gate.activated_at is not None
+            else None
+        )
+        if (
+            _live_is_active(config, now)
+            and activated_day is not None
+            and activated_day <= day < cutover_day
+        ):
+            return "strict"
+        return "legacy"
+    if config.mode != "live":
+        return "legacy"
     if day < cutover_day or now < cutover:
         return "legacy"
     if _live_is_active(config, now):
@@ -211,6 +253,14 @@ def _normalized_department_name(department_name: str | None) -> str:
     return _NUMBERED_DEPARTMENT_PREFIX.sub("", department_name).strip().lower()
 
 
+def default_department_requires_work_center(department_name: str | None) -> bool:
+    """Default for a department that has not received an explicit choice."""
+    return _normalized_department_name(department_name) not in {
+        "maintenance",
+        "supervisor",
+    }
+
+
 def department_requires_work_center(department_name: str | None) -> bool:
     """Return the saved department rule, with safe defaults before DB sync."""
     if not department_name:
@@ -221,19 +271,22 @@ def department_requires_work_center(department_name: str | None) -> bool:
     )
     if rows:
         return bool(rows[0]["requires_work_center"])
-    return _normalized_department_name(department_name) not in {
-        "maintenance",
-        "supervisor",
-    }
+    return default_department_requires_work_center(department_name)
 
 
-def set_department_requirement(department_name: str, required: bool) -> None:
+def set_department_requirement(
+    department_name: str, required: bool, *, cur=None
+) -> None:
     """Save an explicit administrator choice that bootstrap will not replace."""
     name = department_name.strip()
     if not name:
         raise ValueError("department_required")
-    db.execute(
+    sql = (
         "UPDATE departments SET requires_work_center = %s, "
-        "requires_work_center_explicit = TRUE WHERE name = %s",
-        (bool(required), name),
+        "requires_work_center_explicit = TRUE WHERE name = %s"
     )
+    params = (bool(required), name)
+    if cur is not None:
+        cur.execute(sql, params)
+    else:
+        db.execute(sql, params)

@@ -11,6 +11,8 @@ Settings tests. Attendance-location source and route contracts run everywhere.
 """
 import asyncio
 import os
+from datetime import datetime, time, timedelta, timezone
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -193,6 +195,11 @@ class _FormRequest:
         return self._values
 
 
+@contextmanager
+def _settings_cursor():
+    yield object()
+
+
 def test_attendance_location_settings_section_has_health_and_policy_contract():
     html = Path("src/zira_dashboard/templates/settings.html").read_text()
 
@@ -233,6 +240,7 @@ def test_attendance_location_save_rejects_live_until_readiness_exists(monkeypatc
     from zira_dashboard.routes import settings
 
     monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
+    monkeypatch.setattr(settings.db, "cursor", _settings_cursor)
     monkeypatch.setattr(
         settings.attendance_location_policy,
         "set_rollout_config",
@@ -249,12 +257,97 @@ def test_attendance_location_save_rejects_live_until_readiness_exists(monkeypatc
     assert response.body == b'{"ok":false,"error":"live_readiness_required"}'
 
 
+def test_attendance_location_route_schedules_active_live_rollback(monkeypatch):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    activated_at = datetime(2026, 8, 31, 12, tzinfo=timezone.utc)
+    rollback_at = datetime(2026, 9, 2, 12, tzinfo=timezone.utc)
+    stored = {
+        "value": {
+            "mode": "live",
+            "cutover_at": activated_at.isoformat(),
+            "live_gate": {
+                "checked_at": (activated_at - timedelta(minutes=1)).isoformat(),
+                "report_digest": "b617a1c0" * 8,
+                "activated_at": activated_at.isoformat(),
+            },
+        }
+    }
+    monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
+    monkeypatch.setattr(settings.db, "cursor", _settings_cursor)
+    monkeypatch.setattr(policy.shift_config, "shift_start_for", lambda _day: time(7, 0))
+    monkeypatch.setattr(policy.app_settings, "get_setting", lambda _key: stored["value"])
+    monkeypatch.setattr(
+        policy.app_settings,
+        "set_setting",
+        lambda _key, value, *, cur=None: stored.update(value=value),
+    )
+    monkeypatch.setattr(policy, "_utc_now", lambda: activated_at + timedelta(hours=1))
+
+    response = asyncio.run(
+        settings.settings_save_attendance_location(
+            _FormRequest(
+                {
+                    "rollout_mode": "shadow",
+                    "cutover_at": "2026-09-02T07:00",
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert policy.live_is_active(now_utc=rollback_at - timedelta(seconds=1)) is True
+    assert policy.live_is_active(now_utc=rollback_at) is False
+
+
+def test_attendance_location_route_rejects_midday_rollback(monkeypatch):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    activated_at = datetime(2026, 8, 31, 12, tzinfo=timezone.utc)
+    stored = {
+        "mode": "live",
+        "cutover_at": activated_at.isoformat(),
+        "live_gate": {
+            "checked_at": (activated_at - timedelta(minutes=1)).isoformat(),
+            "report_digest": "b617a1c0" * 8,
+            "activated_at": activated_at.isoformat(),
+        },
+    }
+    monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
+    monkeypatch.setattr(settings.db, "cursor", _settings_cursor)
+    monkeypatch.setattr(policy.shift_config, "shift_start_for", lambda _day: time(7, 0))
+    monkeypatch.setattr(policy.app_settings, "get_setting", lambda _key: stored)
+    monkeypatch.setattr(
+        policy.app_settings,
+        "set_setting",
+        lambda *_args, **_kwargs: pytest.fail("midday rollback was persisted"),
+    )
+    monkeypatch.setattr(policy, "_utc_now", lambda: activated_at + timedelta(hours=1))
+
+    response = asyncio.run(
+        settings.settings_save_attendance_location(
+            _FormRequest(
+                {
+                    "rollout_mode": "shadow",
+                    "cutover_at": "2026-09-02T12:00",
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.body == b'{"ok":false,"error":"cutover_boundary_required"}'
+
+
 def test_attendance_location_save_updates_shadow_and_department_choices(monkeypatch):
     from zira_dashboard.routes import settings
 
     saved_configs = []
     saved_departments = []
     monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
+    monkeypatch.setattr(settings.db, "cursor", _settings_cursor)
     monkeypatch.setattr(
         settings.work_centers_store,
         "synced_departments",
@@ -263,12 +356,24 @@ def test_attendance_location_save_updates_shadow_and_department_choices(monkeypa
     monkeypatch.setattr(
         settings.attendance_location_policy,
         "set_rollout_config",
-        lambda config: saved_configs.append(config),
+        lambda config, *, cur=None: saved_configs.append(config),
     )
     monkeypatch.setattr(
         settings.attendance_location_policy,
         "set_department_requirement",
-        lambda name, required: saved_departments.append((name, required)),
+        lambda name, required, *, cur=None: saved_departments.append((name, required)),
+    )
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "get_rollout_config",
+        lambda: settings.attendance_location_policy.RolloutConfig(
+            mode="off", cutover_at=None, live_gate=None
+        ),
+    )
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "live_is_active",
+        lambda: False,
     )
 
     response = asyncio.run(
@@ -290,3 +395,75 @@ def test_attendance_location_save_updates_shadow_and_department_choices(monkeypa
         )
     ]
     assert saved_departments == [("Assembly", True), ("Maintenance", False)]
+
+
+def test_attendance_location_save_rolls_back_every_write_on_department_failure(
+    monkeypatch,
+):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    class TransactionalDb:
+        def __init__(self):
+            self.durable = []
+            self.cursor_entries = 0
+
+        @contextmanager
+        def cursor(self):
+            self.cursor_entries += 1
+            pending = []
+            try:
+                yield pending
+            except Exception:
+                raise
+            else:
+                self.durable.extend(pending)
+
+    transactional_db = TransactionalDb()
+
+    def persist(item, cur):
+        if cur is None:
+            transactional_db.durable.append(item)
+        else:
+            cur.append(item)
+
+    def save_rollout(config, *, cur=None):
+        persist(("rollout", config.mode), cur)
+
+    def save_department(name, required, *, cur=None):
+        if name == "Maintenance":
+            raise ValueError("injected_department_failure")
+        persist(("department", name, required), cur)
+
+    monkeypatch.setattr(settings, "db", transactional_db, raising=False)
+    monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
+    monkeypatch.setattr(
+        settings.work_centers_store,
+        "synced_departments",
+        lambda: ["Assembly", "Maintenance"],
+    )
+    monkeypatch.setattr(
+        policy,
+        "get_rollout_config",
+        lambda: policy.RolloutConfig(mode="off", cutover_at=None, live_gate=None),
+    )
+    monkeypatch.setattr(policy, "live_is_active", lambda: False)
+    monkeypatch.setattr(policy, "set_rollout_config", save_rollout)
+    monkeypatch.setattr(policy, "set_department_requirement", save_department)
+
+    response = asyncio.run(
+        settings.settings_save_attendance_location(
+            _FormRequest(
+                {
+                    "rollout_mode": "off",
+                    "departments_present": "1",
+                    "department_requires_work_center": ["Assembly"],
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.body == b'{"ok":false,"error":"injected_department_failure"}'
+    assert transactional_db.cursor_entries == 1
+    assert transactional_db.durable == []
