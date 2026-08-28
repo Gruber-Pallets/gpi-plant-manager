@@ -80,6 +80,44 @@ def test_find_active_users_by_login_filters_wrong_echo(monkeypatch):
     ) == []
 
 
+def test_find_active_users_by_login_returns_empty_for_real_empty_list(
+    monkeypatch,
+):
+    _calls, responses = _stub(monkeypatch)
+    responses.append([])
+
+    assert odoo_client.find_active_users_by_login(
+        "wendy@gruberpallets.com"
+    ) == []
+
+
+@pytest.mark.parametrize("payload", [None, {"id": 17}])
+def test_find_active_users_by_login_rejects_non_list_payloads(
+    monkeypatch, payload
+):
+    _calls, responses = _stub(monkeypatch)
+    responses.append(payload)
+
+    with pytest.raises(RuntimeError, match="user payload"):
+        odoo_client.find_active_users_by_login("wendy@gruberpallets.com")
+
+
+def test_find_active_users_by_login_rejects_payload_over_fixed_bound(
+    monkeypatch,
+):
+    _calls, responses = _stub(monkeypatch)
+    responses.append(
+        [
+            {"id": 17, "login": "wendy@gruberpallets.com"},
+            {"id": 18, "login": "WENDY@GRUBERPALLETS.COM"},
+            {"id": 19, "login": "wendy@gruberpallets.com"},
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="user payload"):
+        odoo_client.find_active_users_by_login("wendy@gruberpallets.com")
+
+
 @pytest.mark.parametrize(
     ("login", "limit"),
     [
@@ -102,6 +140,9 @@ def test_find_active_users_by_login_requires_normalized_email_and_limit(
     "rows",
     [
         [{"id": True, "login": "wendy@gruberpallets.com"}],
+        [{"id": [17, "Wendy"], "login": "wendy@gruberpallets.com"}],
+        [{"id": 0, "login": "wendy@gruberpallets.com"}],
+        [{"id": -1, "login": "wendy@gruberpallets.com"}],
         ["not-a-row"],
     ],
 )

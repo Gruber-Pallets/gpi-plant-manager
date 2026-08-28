@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -667,10 +667,83 @@ def test_fetch_leave_snapshot_normalizes_verified_identity(monkeypatch):
     )
 
 
+def test_fetch_leave_snapshot_supports_two_item_tuple_m2o_values(monkeypatch):
+    monkeypatch.setattr(
+        odoo_client,
+        "execute",
+        MagicMock(
+            return_value=[
+                {
+                    "id": 91,
+                    "employee_id": (44, "Ana"),
+                    "holiday_status_id": (7, "Paid Time Off"),
+                    "request_date_from": "2026-08-20",
+                    "request_date_to": "2026-08-20",
+                    "state": "validate",
+                }
+            ]
+        ),
+    )
+
+    snapshot = odoo_client.fetch_leave_snapshot(91)
+
+    assert snapshot is not None
+    assert snapshot["employee_id"] == 44
+    assert snapshot["holiday_status_id"] == 7
+
+
 def test_fetch_leave_snapshot_returns_none_when_missing(monkeypatch):
     monkeypatch.setattr(odoo_client, "execute", MagicMock(return_value=[]))
 
     assert odoo_client.fetch_leave_snapshot(91) is None
+
+
+@pytest.mark.parametrize("payload", [None, {"id": 91}])
+def test_fetch_leave_snapshot_rejects_non_list_payloads(
+    monkeypatch, payload
+):
+    monkeypatch.setattr(
+        odoo_client, "execute", MagicMock(return_value=payload)
+    )
+
+    with pytest.raises(RuntimeError, match="leave payload"):
+        odoo_client.fetch_leave_snapshot(91)
+
+
+def test_fetch_leave_snapshot_rejects_payload_over_fixed_bound(monkeypatch):
+    row = {
+        "id": 91,
+        "employee_id": [44, "Ana"],
+        "holiday_status_id": [7, "Paid Time Off"],
+        "request_date_from": "2026-08-20",
+        "request_date_to": "2026-08-20",
+        "state": "validate",
+    }
+    monkeypatch.setattr(
+        odoo_client,
+        "execute",
+        MagicMock(return_value=[row, row, row]),
+    )
+
+    with pytest.raises(RuntimeError, match="leave payload"):
+        odoo_client.fetch_leave_snapshot(91)
+
+
+def test_fetch_leave_snapshot_rejects_duplicate_rows(monkeypatch):
+    row = {
+        "id": 91,
+        "employee_id": [44, "Ana"],
+        "holiday_status_id": [7, "Paid Time Off"],
+        "request_date_from": "2026-08-20",
+        "request_date_to": "2026-08-20",
+        "state": "validate",
+    }
+    monkeypatch.setattr(
+        odoo_client, "execute", MagicMock(return_value=[row, row])
+    )
+
+    with pytest.raises(RuntimeError, match="multiple rows"):
+        odoo_client.fetch_leave_snapshot(91)
 
 
 @pytest.mark.parametrize(
@@ -713,6 +786,48 @@ def test_fetch_leave_snapshot_returns_none_when_missing(monkeypatch):
 def test_fetch_leave_snapshot_rejects_malformed_or_mismatched_rows(
     monkeypatch, row
 ):
+    monkeypatch.setattr(
+        odoo_client, "execute", MagicMock(return_value=[row])
+    )
+
+    with pytest.raises(RuntimeError, match="leave payload"):
+        odoo_client.fetch_leave_snapshot(91)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("id", [91, "Leave"]),
+        ("id", "91"),
+        ("id", 0),
+        ("id", -1),
+        ("employee_id", 44),
+        ("employee_id", [44]),
+        ("employee_id", [44, "Ana", "extra"]),
+        ("employee_id", [[44], "Ana"]),
+        ("employee_id", [True, "Ana"]),
+        ("employee_id", [0, "Ana"]),
+        ("employee_id", [-1, "Ana"]),
+        ("employee_id", [44, ""]),
+        ("employee_id", [44, 123]),
+        ("holiday_status_id", 7),
+        ("holiday_status_id", [7]),
+        ("holiday_status_id", [7, "Paid Time Off", "extra"]),
+        ("holiday_status_id", [7, ""]),
+    ],
+)
+def test_fetch_leave_snapshot_rejects_malformed_record_and_m2o_ids(
+    monkeypatch, field, value
+):
+    row = {
+        "id": 91,
+        "employee_id": [44, "Ana"],
+        "holiday_status_id": [7, "Paid Time Off"],
+        "request_date_from": "2026-08-20",
+        "request_date_to": "2026-08-20",
+        "state": "validate",
+    }
+    row[field] = value
     monkeypatch.setattr(
         odoo_client, "execute", MagicMock(return_value=[row])
     )
@@ -816,6 +931,17 @@ def test_find_matching_leaves_excludes_terminal_states_when_requested(
         order="id asc",
         limit=2,
     )
+
+
+def test_find_matching_leaves_rejects_datetime_day(monkeypatch):
+    execute = MagicMock(return_value=[])
+    monkeypatch.setattr(odoo_client, "execute", execute)
+
+    with pytest.raises(ValueError, match="day must be a date"):
+        odoo_client.find_matching_leaves(
+            44, 7, datetime(2026, 8, 20, 12, 30)
+        )
+    execute.assert_not_called()
 
 
 def test_find_matching_leaves_rejects_mismatched_echo(monkeypatch):

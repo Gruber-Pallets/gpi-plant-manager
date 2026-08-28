@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Callable
 
 from ._odoo_attendance import to_odoo_dt
@@ -28,14 +28,25 @@ class OdooLeavePayloadError(RuntimeError):
     """Odoo returned a leave row that cannot be verified safely."""
 
 
-def _positive_id(value: Any, field: str) -> int:
-    if isinstance(value, (list, tuple)):
-        value = value[0] if value else None
+def _record_id(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise OdooLeavePayloadError(
             f"Odoo leave payload has an invalid {field}"
         )
     return value
+
+
+def _m2o_id(value: Any, field: str) -> int:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise OdooLeavePayloadError(
+            f"Odoo leave payload has an invalid {field}"
+        )
+    display_name = value[1]
+    if not isinstance(display_name, str) or not display_name.strip():
+        raise OdooLeavePayloadError(
+            f"Odoo leave payload has an invalid {field} display name"
+        )
+    return _record_id(value[0], field)
 
 
 def _snapshot_from_row(
@@ -48,9 +59,9 @@ def _snapshot_from_row(
 ) -> dict:
     if not isinstance(row, dict):
         raise OdooLeavePayloadError("Odoo leave payload row was malformed")
-    leave_id = _positive_id(row.get("id"), "id")
-    employee_id = _positive_id(row.get("employee_id"), "employee_id")
-    type_id = _positive_id(
+    leave_id = _record_id(row.get("id"), "id")
+    employee_id = _m2o_id(row.get("employee_id"), "employee_id")
+    type_id = _m2o_id(
         row.get("holiday_status_id"), "holiday_status_id"
     )
     try:
@@ -97,8 +108,6 @@ def _snapshot_from_row(
 
 
 def _validated_rows(rows: Any) -> list:
-    if rows is None:
-        return []
     if not isinstance(rows, list) or len(rows) > 2:
         raise OdooLeavePayloadError("Odoo leave payload was malformed")
     return rows
@@ -392,7 +401,7 @@ def fetch_leave_snapshot(
     execute_fn: Callable[..., Any], leave_id: int
 ) -> dict | None:
     """Read and normalize one archived-inclusive hr.leave identity row."""
-    normalized_leave_id = _positive_id(leave_id, "id")
+    normalized_leave_id = _record_id(leave_id, "id")
     rows = _validated_rows(
         execute_fn(
             "hr.leave",
@@ -422,9 +431,9 @@ def find_matching_leaves(
     include_terminal: bool = True,
 ) -> list[dict]:
     """Return up to two exact employee/type/day leave snapshots."""
-    normalized_employee_id = _positive_id(employee_id, "employee_id")
-    normalized_type_id = _positive_id(type_id, "holiday_status_id")
-    if isinstance(day, bool) or not isinstance(day, date):
+    normalized_employee_id = _record_id(employee_id, "employee_id")
+    normalized_type_id = _record_id(type_id, "holiday_status_id")
+    if isinstance(day, datetime) or not isinstance(day, date):
         raise ValueError("day must be a date")
     if not isinstance(include_terminal, bool):
         raise ValueError("include_terminal must be a boolean")

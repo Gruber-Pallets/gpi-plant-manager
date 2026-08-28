@@ -33,8 +33,6 @@ def find_active_users_by_login(
         fields=["id", "login"],
         limit=limit,
     )
-    if rows is None:
-        rows = []
     if not isinstance(rows, list) or len(rows) > limit:
         raise OdooUserPayloadError("Odoo user payload was malformed")
     out: list[dict] = []
