@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Past absence PTO build plan
+
+- **A step-by-step build plan is ready so workers can ask to use PTO for a missed day.** The day will still count as an absence, and a manager must approve the pay change. Nothing in the app has changed yet.
+
 ### Pay a past absence with PTO plan
 
 - **A plan is ready to let a worker ask to use PTO for a missed day.** The missed day will still count as an absence, and a manager must approve the pay change. Nothing in the app has changed yet.
