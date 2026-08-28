@@ -400,7 +400,7 @@ def _resume_claim(
                     raise ConversionSafetyError("The PTO leave changed before confirmation.")
                 leave_id = pto["id"]
                 request = _fence_mutation(request, owner)
-                odoo_client.confirm_leave(leave_id)
+                odoo_client.confirm_leave_once(leave_id)
                 pto = _verified_snapshot(request.pto_leave_id, request, request.holiday_status_id)
                 if pto["state"] not in {"confirm", "validate1", "validate"}:
                     raise ConversionSafetyError("Odoo did not verify the PTO confirmation.")

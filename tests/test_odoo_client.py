@@ -627,6 +627,25 @@ def test_fetch_leave_state_returns_state_or_none(monkeypatch):
     assert odoo_client.fetch_leave_state(999) is None
 
 
+def test_confirm_leave_once_performs_exactly_one_confirmation_transition(monkeypatch):
+    calls = _stub_execute(monkeypatch, {("hr.leave", "action_confirm"): True})
+
+    odoo_client.confirm_leave_once(112)
+
+    assert calls == [("hr.leave", "action_confirm", ([112],), {})]
+
+
+@pytest.mark.parametrize("leave_id", [0, True, "112"])
+def test_confirm_leave_once_rejects_non_exact_positive_ids(monkeypatch, leave_id):
+    execute = MagicMock()
+    monkeypatch.setattr(odoo_client, "execute", execute)
+
+    with pytest.raises(odoo_client._odoo_time_off.OdooLeavePayloadError):
+        odoo_client.confirm_leave_once(leave_id)
+
+    execute.assert_not_called()
+
+
 def test_approve_leave_once_performs_exactly_one_approval_transition(monkeypatch):
     calls = _stub_execute(monkeypatch, {("hr.leave", "action_approve"): True})
 

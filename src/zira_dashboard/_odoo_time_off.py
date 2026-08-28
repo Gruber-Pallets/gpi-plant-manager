@@ -346,6 +346,12 @@ def confirm_leave(execute_fn: Callable[..., Any], leave_id: int) -> None:
         execute_fn("hr.leave", "action_confirm", [leave_id])
 
 
+def confirm_leave_once(execute_fn: Callable[..., Any], leave_id: int) -> None:
+    """Perform exactly one confirmation mutation; the caller owns all reads."""
+    normalized_leave_id = _record_id(leave_id, "id")
+    execute_fn("hr.leave", "action_confirm", [normalized_leave_id])
+
+
 def approve_leave(
     execute_fn: Callable[..., Any], leave_id: int
 ) -> str | None:

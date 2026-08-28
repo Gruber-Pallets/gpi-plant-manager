@@ -141,7 +141,7 @@ class FakeOdoo:
             raise TimeoutError("response was lost")
         return leave_id
 
-    def confirm_leave(self, leave_id):
+    def confirm_leave_once(self, leave_id):
         self._mutating("confirm", leave_id)
         if self.leaves[leave_id]["state"] == "draft":
             self.events.append(("confirm", leave_id))
@@ -300,7 +300,16 @@ def wire(monkeypatch, fake_odoo, request, *, balance=4.0, clock=None):
     )
     monkeypatch.setattr(conversion.odoo_client, "refuse_leave", fake_odoo.refuse_leave)
     monkeypatch.setattr(conversion.odoo_client, "create_leave", fake_odoo.create_leave)
-    monkeypatch.setattr(conversion.odoo_client, "confirm_leave", fake_odoo.confirm_leave)
+    monkeypatch.setattr(
+        conversion.odoo_client, "confirm_leave_once", fake_odoo.confirm_leave_once
+    )
+    monkeypatch.setattr(
+        conversion.odoo_client,
+        "confirm_leave",
+        lambda leave_id: (_ for _ in ()).throw(
+            AssertionError("conversion must not call the read-then-confirm helper")
+        ),
+    )
     monkeypatch.setattr(conversion.odoo_client, "approve_leave_once", fake_odoo.approve_leave_once)
     monkeypatch.setattr(conversion.absence_sync, "resolve_absence_leave_type_id", lambda: 9)
     monkeypatch.setattr(
@@ -406,6 +415,30 @@ def test_local_only_absence_skips_refusal(monkeypatch):
         ("confirm", 71),
         ("approve", 71),
     ]
+
+
+def test_conversion_confirmation_cannot_call_read_then_confirm_helper(monkeypatch):
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, "refuse"),
+        pto=_leave(71, 44, 7, "draft"),
+    )
+    wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="pto_created", pto_leave_id=71),
+    )
+    ordinary_calls = []
+    monkeypatch.setattr(
+        conversion.odoo_client,
+        "confirm_leave",
+        lambda leave_id: ordinary_calls.append(leave_id),
+    )
+
+    result = conversion.approve(41, "dale@example.com", "Dale", "page", NOW)
+
+    assert result.status == "approved"
+    assert ordinary_calls == []
+    assert [event for event in fake.events if event[0] == "confirm"] == [("confirm", 71)]
 
 
 def test_lost_create_response_adopts_one_exact_pto(monkeypatch):
