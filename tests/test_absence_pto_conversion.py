@@ -179,6 +179,7 @@ class FakeStore:
         self.owner = None
         self.guard = Lock()
         self.finalizations = []
+        self.review_marks = []
         self.timeline = []
         self.renew_calls = 0
         self.before_renew = None
@@ -263,6 +264,13 @@ class FakeStore:
     def mark_needs_review(
         self, request_id, owner, *, error, workflow_now, lease_now
     ):
+        self.review_marks.append(
+            {
+                "error": error,
+                "workflow_now": workflow_now,
+                "lease_now": lease_now,
+            }
+        )
         current = lease_now
         if self.owner != owner or self.request.lease_until <= current:
             raise store.StaleTransition("review transition lost its current lease")
@@ -553,6 +561,33 @@ def test_failed_live_balance_refresh_fails_closed_before_odoo_mutation(monkeypat
 
     assert result.status == "needs_review"
     assert fake_store.request.state == "needs_review"
+    assert fake.events == []
+
+
+def test_direct_failure_keeps_workflow_time_separate_from_live_lease_time(monkeypatch):
+    workflow_now = datetime(2020, 1, 2, 3, 4, tzinfo=UTC)
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"))
+    fake_store = wire(monkeypatch, fake, _request())
+    monkeypatch.setattr(conversion.time_off_balances, "refresh_for_employee", lambda _: 0)
+
+    result = conversion.approve(
+        41,
+        "dale@example.com",
+        "Dale",
+        "page",
+        workflow_now,
+    )
+
+    assert result.status == "needs_review"
+    assert fake_store.review_marks == [
+        {
+            "error": "The current PTO balance could not be refreshed.",
+            "workflow_now": workflow_now,
+            "lease_now": NOW,
+        }
+    ]
+    assert fake_store.request.task_next_at == workflow_now
+    assert fake_store.request.updated_at == workflow_now
     assert fake.events == []
 
 
@@ -905,6 +940,41 @@ def test_incomplete_pto_close_failure_moves_to_review_with_known_id(monkeypatch)
     assert fake_store.request.sync_error == "approval unavailable; PTO would not close"
     assert fake.leaves[71]["state"] == "confirm"
     assert fake.leaves[70]["state"] == "refuse"
+
+
+def test_failed_compensation_uses_workflow_time_without_expiring_live_lease(
+    monkeypatch,
+):
+    workflow_now = datetime(2035, 6, 7, 8, 9, tzinfo=UTC)
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, "refuse"),
+        pto=_leave(71, 44, 7, "confirm"),
+    )
+    fake.fail_before["approve"] = RuntimeError("approval unavailable")
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="pto_created", pto_leave_id=71),
+    )
+    monkeypatch.setattr(
+        conversion.odoo_client,
+        "refuse_leave",
+        lambda leave_id: (_ for _ in ()).throw(RuntimeError("PTO would not close")),
+    )
+
+    result = conversion.resume(41, workflow_now)
+
+    assert result.status == "needs_review"
+    assert fake_store.review_marks == [
+        {
+            "error": "approval unavailable; PTO would not close",
+            "workflow_now": workflow_now,
+            "lease_now": NOW,
+        }
+    ]
+    assert fake_store.request.task_next_at == workflow_now
+    assert fake_store.request.updated_at == workflow_now
+    assert fake_store.request.state == "needs_review"
 
 
 def test_original_absence_restore_failure_moves_to_review(monkeypatch):

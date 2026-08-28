@@ -270,17 +270,17 @@ def _needs_review(
     request: store.AbsencePtoRequest,
     owner: UUID,
     error: Exception,
+    workflow_now: datetime,
 ) -> ConversionResult:
     message = str(error) or type(error).__name__
     if request.state in {"pending", "converting", "needs_review"}:
         try:
-            current = _lease_now()
             request = store.mark_needs_review(
                 request.id,
                 owner,
                 error=message[:500],
-                workflow_now=current,
-                lease_now=current,
+                workflow_now=_now(workflow_now),
+                lease_now=_lease_now(),
             )
         except store.StaleTransition:
             return ConversionResult("busy", _BUSY_MESSAGE, None)
@@ -516,6 +516,7 @@ def _compensate(
     request: store.AbsencePtoRequest,
     owner: UUID,
     error: Exception,
+    workflow_now: datetime,
 ) -> ConversionResult:
     try:
         request = _close_incomplete_pto(request, owner)
@@ -525,7 +526,7 @@ def _compensate(
         return ConversionResult("busy", _BUSY_MESSAGE, None)
     except Exception as compensation_error:  # noqa: BLE001 - fail closed to review
         combined = ConversionSafetyError(_friendly(error, compensation_error))
-        result = _needs_review(request, owner, combined)
+        result = _needs_review(request, owner, combined, workflow_now)
         return ConversionResult(result.status, _REVIEW_MESSAGE, result.request)
 
 
@@ -809,13 +810,13 @@ def _resume_claim(
     except _LowBalance as error:
         if request.conversion_step == "not_started" and not post_refusal:
             return _pending_for_low_balance(request, owner)
-        return _compensate(request, owner, error)
+        return _compensate(request, owner, error, workflow_now)
     except Exception as error:  # noqa: BLE001 - preserve safe durable status
         if request.state == "converting" and (
             request.conversion_step != "not_started" or post_refusal
         ):
-            return _compensate(request, owner, error)
-        return _needs_review(request, owner, error)
+            return _compensate(request, owner, error, workflow_now)
+        return _needs_review(request, owner, error, workflow_now)
 
 
 def _invalidate_after_commit(request: store.AbsencePtoRequest) -> None:
