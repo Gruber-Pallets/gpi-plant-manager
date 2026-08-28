@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Cleaner training printouts
+
+- **Printed schedules now put a small Training label beside a trainee’s name.** The big Training box stays out of the printout, so the schedule is easier to read.
+
 ### Training printout build plan
 
 - **The app now has a step-by-step plan for simpler printed schedules.** It will put a small Training label by each learner’s name and remove the big Training box. Nothing in the app has changed yet.

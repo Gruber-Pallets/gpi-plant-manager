@@ -90,6 +90,23 @@ def test_printed_staffing_warnings_expand_instead_of_clipping():
     assert "max-height: none; overflow: visible;" in css
 
 
+def test_printed_staffing_marks_active_trainees_without_training_cards():
+    html = _template()
+    css = _style()
+    print_css = _print_css()
+
+    assert "{% set active_training_trainees = active_training_blocks | map(attribute='trainee') | list %}" in html
+    assert (
+        '{% if a.name in active_training_trainees %}<span class="training-print-label">Training</span>{% endif %}'
+        in html
+    )
+    assert ".training-print-label { display: none; }" in css
+    assert ".training-sidebar," in print_css
+    assert ".training-sidebar:not(:has(.training-card))" not in print_css
+    assert ".training-print-label {" in print_css
+    assert "display: inline;" in print_css
+
+
 def test_scheduler_time_off_rows_expose_editor_data_and_dialog():
     html = _template()
 
@@ -515,14 +532,15 @@ def test_staffing_print_hides_schedule_goal_and_schedule_actions():
     assert ".sidebar-schedule-actions" in css
 
 
-def test_staffing_print_hides_empty_day_notes_and_training():
+def test_staffing_print_hides_empty_day_notes_and_training_sidebar():
     css = _print_css()
     html = _template()
     hidden = css.split(".section.reserves,", 1)[1].split("{", 1)[0]
 
     assert ".day-notes:has(#notes-textarea:placeholder-shown)," in hidden
-    assert ".training-sidebar:not(:has(.training-card))," in hidden
-    assert ".training-start-toggle," in hidden
+    assert ".training-sidebar," in hidden
+    assert ".training-sidebar:not(:has(.training-card))," not in hidden
+    assert ".training-start-toggle," not in hidden
     assert 'id="notes-textarea"' in html
     assert 'placeholder=" "' in html.split('id="notes-textarea"', 1)[1].split(">", 1)[0]
 

@@ -5,7 +5,7 @@
  * (toolbar, pickers, reserves, X buttons, modals) and renders WC
  * assignments + cert badges + Unscheduled list + time-off chips +
  * WC notes + day notes in a clean, paper-friendly two-column layout.
- * Empty day-notes and an empty Training sidebar stay off the page.
+ * Empty day-notes and the Training sidebar stay off the page.
  *
  * `.print-header { display: none }` lives in staffing.css (screen side
  * hides the print-only header); the show-rule for it is below.
@@ -45,10 +45,7 @@ header.app,
 .bay .bay-sub,
 .day-notes .notes-label .hint,
 .day-notes:has(#notes-textarea:placeholder-shown),
-.training-sidebar:not(:has(.training-card)),
-.training-start-toggle,
-.training-sidebar-create,
-.training-card-actions,
+.training-sidebar,
 .timeoff .ts-note,
 .custom-hours-banner,
 p.hint {
@@ -120,6 +117,13 @@ table.sched td {
 .multi-dd .dd-summary-text .lvl-0 {
   color: black !important;
   font-weight: normal;
+}
+
+.training-print-label {
+  display: inline;
+  margin-left: 0.25em;
+  font-size: 8pt;
+  font-weight: 700;
 }
 
 /* Two-column print layout:

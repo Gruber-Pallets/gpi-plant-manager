@@ -782,6 +782,9 @@
     overflow-y: auto; overflow-wrap: anywhere;
   }
 
+  /* Printed schedules show this beside an active trainee's name. */
+  .training-print-label { display: none; }
+
   /* ---------- Training sidebar (under Notes) ---------- */
   .training-sidebar {
     margin-top: 0.85rem;
