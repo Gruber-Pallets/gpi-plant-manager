@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Compact worker-stint bar build plan
+
+- **A step-by-step build plan is ready for shorter production bars.** Each person's work time will stay in one bar, and pointing to or tapping a section will show more details. Nothing in the app has changed yet.
+
 ### Simpler worker-stint bar plan
 
 - **A plan is ready to keep each worker's time on one normal-size production bar.** Names, times, and goal details will appear only when someone points to or taps a section. Nothing in the app has changed yet.
