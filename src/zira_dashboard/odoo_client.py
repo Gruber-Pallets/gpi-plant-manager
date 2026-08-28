@@ -1373,6 +1373,10 @@ def find_feedback_task_ids(project_id: int, name: str) -> list[int]:
     return _odoo_feedback.find_feedback_task_ids(execute, project_id, name)
 
 
+def find_active_feedback_task_ids(project_id: int, name: str) -> list[int]:
+    return _odoo_feedback.find_active_feedback_task_ids(execute, project_id, name)
+
+
 def find_feedback_attachment_ids(task_id: int, name: str) -> list[int]:
     return _odoo_feedback.find_feedback_attachment_ids(execute, task_id, name)
 
@@ -1398,6 +1402,24 @@ def create_feedback_task(
 
 def update_task(task_id: int, **fields: Any) -> None:
     _odoo_feedback.update_task(execute, task_id, **fields)
+
+
+def update_feedback_task(
+    task_id: int,
+    *,
+    description_html: str,
+    assignee_uid: int,
+    deadline: str,
+    active: bool = True,
+) -> None:
+    _odoo_feedback.update_feedback_task(
+        execute,
+        task_id,
+        description_html=description_html,
+        assignee_uid=assignee_uid,
+        deadline=deadline,
+        active=active,
+    )
 
 
 def close_task(task_id: int) -> None:

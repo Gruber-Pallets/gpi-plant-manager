@@ -360,7 +360,9 @@ def claim_due(
         "SELECT request.id FROM absence_pto_requests AS request "
         "WHERE (request.lease_until IS NULL OR request.lease_until <= %s) "
         "AND (request.state = 'converting' OR (request.state = 'pending' "
-        "AND request.absence_day NOT BETWEEN %s AND %s)) "
+        "AND request.absence_day NOT BETWEEN %s AND %s) OR "
+        "(request.state = 'needs_review' AND (request.task_next_at IS NULL "
+        "OR request.task_next_at <= %s))) "
         "ORDER BY request.requested_at, request.id LIMIT %s "
         "FOR UPDATE SKIP LOCKED"
         ") UPDATE absence_pto_requests AS request "
@@ -372,6 +374,7 @@ def claim_due(
             current,
             period_start,
             period_end,
+            current,
             limit,
             safe_owner,
             lease_until,
@@ -638,6 +641,33 @@ def save_task_delivery(
     return _one_request(rows, "task delivery update")
 
 
+def adopt_external_pto(
+    request_id: int,
+    owner: UUID,
+    *,
+    pto_leave_id: int,
+    now: datetime | None = None,
+) -> AbsencePtoRequest:
+    """Durably bind the one verified external PTO before local finalization."""
+    current = _now(now)
+    rows = db.query(
+        "UPDATE absence_pto_requests SET pto_leave_id = %s, updated_at = %s "
+        "WHERE id = %s AND state = 'needs_review' AND lease_owner = %s "
+        "AND lease_until > %s "
+        f"RETURNING {REQUEST_COLUMNS}",
+        (
+            _positive_int(pto_leave_id, "pto_leave_id"),
+            current,
+            _positive_int(request_id, "request_id"),
+            _uuid(owner, "owner"),
+            current,
+        ),
+    )
+    if not rows:
+        raise StaleTransition("external PTO adoption lost its current review lease")
+    return _one_request(rows, "external PTO adoption")
+
+
 def finalize_approved(
     request_id: int,
     owner: UUID,
@@ -660,9 +690,10 @@ def finalize_approved(
     with db.cursor() as cur:
         cur.execute(
             f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests "
-            "WHERE id = %s AND lease_owner = %s AND lease_until > %s "
-            "AND state = 'converting' AND conversion_step = 'pto_approved' FOR UPDATE",
-            (safe_id, safe_owner, current),
+            "WHERE id = %s AND lease_owner = %s AND lease_until > %s AND ("
+            "(state = 'converting' AND conversion_step = 'pto_approved') OR "
+            "(state = 'needs_review' AND pto_leave_id = %s)) FOR UPDATE",
+            (safe_id, safe_owner, current, safe_pto_id),
         )
         request = _one_request(list(cur.fetchall()), "approval finalization lock")
         if (
@@ -730,11 +761,13 @@ def finalize_approved(
             raise StaleTransition("attendance absence link update lost its row")
 
         cur.execute(
-            "UPDATE absence_pto_requests SET state = 'approved', sync_error = NULL, "
+            "UPDATE absence_pto_requests SET state = 'approved', "
+            "conversion_step = 'pto_approved', sync_error = NULL, "
             "decided_by_upn = %s, decided_by_name = %s, decided_at = %s, "
             "updated_at = %s WHERE id = %s AND lease_owner = %s "
-            "AND lease_until > %s AND state = 'converting' "
-            "AND conversion_step = 'pto_approved' AND pto_leave_id = %s "
+            "AND lease_until > %s AND pto_leave_id = %s AND ("
+            "(state = 'converting' AND conversion_step = 'pto_approved') OR "
+            "state = 'needs_review') "
             f"RETURNING {REQUEST_COLUMNS}",
             (
                 _optional_text(actor_upn, "actor_upn"),
@@ -794,14 +827,75 @@ def finalize_approved(
     return approved
 
 
+def finalize_manual(
+    request_id: int,
+    owner: UUID,
+    *,
+    actor_upn: str,
+    actor_name: str,
+    note: str,
+    now: datetime | None = None,
+) -> AbsencePtoRequest:
+    """Atomically record an explicit non-PTO resolution and its audit event."""
+    safe_id = _positive_int(request_id, "request_id")
+    safe_owner = _uuid(owner, "owner")
+    safe_upn = _required_text(actor_upn, "actor_upn").strip()
+    safe_name = _required_text(actor_name, "actor_name").strip()
+    safe_note = _required_text(note, "note").strip()
+    current = _now(now)
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE absence_pto_requests SET state = 'resolved_manually', "
+            "manual_resolution_note = %s, decided_by_upn = %s, "
+            "decided_by_name = %s, decided_at = %s, resolved_at = %s, "
+            "task_next_at = NULL, updated_at = %s WHERE id = %s "
+            "AND state = 'needs_review' AND lease_owner = %s "
+            "AND lease_until > %s "
+            f"RETURNING {REQUEST_COLUMNS}",
+            (
+                safe_note,
+                safe_upn,
+                safe_name,
+                current,
+                current,
+                current,
+                safe_id,
+                safe_owner,
+                current,
+            ),
+        )
+        resolved = _one_request(list(cur.fetchall()), "manual review resolution")
+        request_key = f"absence_pto:{safe_id}"
+        inbox_log.record_event_with_cursor(
+            cur,
+            item_kind="absence_pto",
+            item_key=request_key,
+            person_name=resolved.person_name,
+            category_label="Past absence PTO",
+            action="handled",
+            outcome="Handled manually",
+            before_value="Needs payroll review",
+            after_value="Handled outside Plant Manager PTO",
+            reason=safe_note,
+            actor_upn=safe_upn,
+            actor_name=safe_name,
+            source="absence_pto_review",
+            reversible=False,
+            detail={"request_kind": "absence_pto", "request_key": request_key},
+        )
+    return resolved
+
+
 __all__ = [
     "AbsencePtoRequest",
     "StaleTransition",
     "claim_due",
     "claim_request",
     "create_request",
+    "adopt_external_pto",
     "get_request",
     "finalize_approved",
+    "finalize_manual",
     "list_due",
     "list_for_person",
     "list_pending",

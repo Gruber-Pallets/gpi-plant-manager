@@ -141,6 +141,25 @@ def find_feedback_task_ids(
     return [int(row["id"]) for row in rows]
 
 
+def find_active_feedback_task_ids(
+    execute_fn: Callable[..., Any], project_id: int, name: str
+) -> list[int]:
+    """Return zero, one, or two active exact-name tasks without collapsing risk."""
+    rows = execute_fn(
+        "project.task",
+        "search_read",
+        [
+            ("project_id", "=", project_id),
+            ("name", "=", name),
+            ("active", "=", True),
+        ],
+        fields=["id"],
+        order="id asc",
+        limit=2,
+    ) or []
+    return [int(row["id"]) for row in rows]
+
+
 def find_feedback_attachment_ids(
     execute_fn: Callable[..., Any], task_id: int, name: str
 ) -> list[int]:
@@ -197,6 +216,36 @@ def update_task(
 ) -> None:
     """Write fields on a project.task (e.g. description=..., active=False)."""
     execute_fn("project.task", "write", [task_id], fields)
+
+
+def update_feedback_task(
+    execute_fn: Callable[..., Any],
+    task_id: int,
+    *,
+    description_html: str,
+    assignee_uid: int,
+    deadline: str,
+    active: bool = True,
+) -> None:
+    """Refresh a task and enforce one assignee across supported Odoo schemas."""
+    fields = {
+        "description": description_html,
+        "date_deadline": deadline,
+        "active": active,
+    }
+    try:
+        execute_fn(
+            "project.task",
+            "write",
+            [task_id],
+            dict(fields, user_ids=[(6, 0, [assignee_uid])]),
+        )
+    except xmlrpc.client.Fault as fault:
+        if "user_ids" not in (fault.faultString or ""):
+            raise
+        execute_fn(
+            "project.task", "write", [task_id], dict(fields, user_id=assignee_uid)
+        )
 
 
 def close_task(execute_fn: Callable[..., Any], task_id: int) -> None:

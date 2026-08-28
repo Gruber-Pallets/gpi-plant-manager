@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Wendy gets unclear past PTO cases
+
+- **When a pay period closes or a past PTO change is unclear, Plant Manager now makes one Odoo task for Wendy.** The task explains what needs review without changing payroll again.
+
 ### People performance dashboard build plan
 
 - **A step-by-step build plan is ready for the new People performance page.** It covers work-area moves, goals, machine stops, forklift calls, tablets, safe refreshes, and clear warnings when data is missing. Nothing in the app has changed yet.
@@ -19,7 +23,6 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Keep a safe copy of Odoo work times
 
 - **Plant Manager now keeps a fresh copy of Odoo work times and checks for changed or removed records.** A failed check cannot erase good records. The copy is still running in the background only.
-
 ### People performance dashboard plan
 
 - **A plan is ready for a manager dashboard built around people.** It will show where each person worked, when they moved, whether they met each goal, downtime, and forklift calls. Nothing in the app has changed yet.
@@ -35,7 +38,6 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Work area settings stay safe
 
 - **Work-area settings now change all at once or not at all.** New maintenance and supervisor teams get the right choice, and a future switch away from live rules waits for a new workday. The new rules are still turned off.
-
 ### Set which teams need a work area
 
 - **Settings can now remember which teams must have a work area in Odoo.** Maintenance and supervisors can stay clocked in without one. The new Odoo location rules are still turned off.
