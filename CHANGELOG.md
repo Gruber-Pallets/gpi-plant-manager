@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Live Odoo work-location plan
+
+- **A plan is ready to make Odoo the source for where each person worked and which production they earned.** Plant Manager will still clock people in and out, while the floor app records their work areas and moves. Missing or mixed-up times will stay unassigned until a manager fixes them. Nothing in the app has changed yet.
+
 ### Worker times fit in one short bar
 
 - **Production bars now keep each person's work time in one normal-size bar.** Point to, select, or tap a section to see the person's name, time, goal, and result without filling the screen with extra lines.
