@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta, timezone
 import os
+from threading import Event
 
 import pytest
 
-from zira_dashboard import attendance_mirror, db
+from zira_dashboard import attendance_mirror, attendance_sync, db
 
 
 SYNCED_AT = datetime(2026, 8, 28, 15, 0, tzinfo=UTC)
@@ -136,6 +138,37 @@ def test_health_and_cursor_snapshots_normalize_database_datetimes_to_utc(
     assert health.last_full_sweep_completed_at.tzinfo is UTC
     assert health.baseline_completed_at.tzinfo is UTC
     assert health.oldest_recalc_requested_at.tzinfo is UTC
+
+
+def test_db_free_stale_incremental_commit_after_sweep_keeps_tombstone():
+    deleted_at = datetime(2026, 8, 28, 15, 2, tzinfo=UTC)
+
+    assert attendance_mirror._observation_can_revive(
+        observed_at=deleted_at - timedelta(seconds=1), deleted_at=deleted_at
+    ) is False
+    assert attendance_mirror._observation_can_revive(
+        observed_at=deleted_at, deleted_at=deleted_at
+    ) is False
+    assert attendance_mirror._observation_can_revive(
+        observed_at=deleted_at + timedelta(seconds=1), deleted_at=deleted_at
+    ) is True
+
+
+def test_db_free_sweep_commit_after_fresh_incremental_keeps_row_active():
+    sweep_started_at = datetime(2026, 8, 28, 15, 1, tzinfo=UTC)
+
+    assert attendance_mirror._sweep_can_delete(
+        last_seen_at=sweep_started_at - timedelta(seconds=1),
+        sweep_started_at=sweep_started_at,
+    ) is True
+    assert attendance_mirror._sweep_can_delete(
+        last_seen_at=sweep_started_at,
+        sweep_started_at=sweep_started_at,
+    ) is True
+    assert attendance_mirror._sweep_can_delete(
+        last_seen_at=sweep_started_at + timedelta(seconds=1),
+        sweep_started_at=sweep_started_at,
+    ) is False
 
 
 _needs_postgres = pytest.mark.skipif(
@@ -293,6 +326,107 @@ def test_sweep_tombstones_are_auditable_excluded_and_enqueue_old_days(
         "WHERE odoo_attendance_id = 902"
     )
     assert deleted[0]["deleted_at"] is not None
+
+
+@_needs_postgres
+def test_stale_incremental_observation_cannot_revive_concurrent_sweep_tombstone(
+    clean_mirror, monkeypatch
+):
+    stale_observed_at = SYNCED_AT + timedelta(minutes=1)
+    sweep_started_at = SYNCED_AT + timedelta(minutes=2)
+    attendance_mirror.upsert_rows([_row()], sync_completed_at=SYNCED_AT)
+    incremental_fetched = Event()
+    release_incremental = Event()
+
+    class SweepWinsSource:
+        def fetch_attendance_changes(self, **_kwargs):
+            return [_row()]
+
+        def fetch_open_attendance_rows(self):
+            incremental_fetched.set()
+            if not release_incremental.wait(timeout=5):
+                raise TimeoutError("incremental race was not released")
+            return []
+
+        def fetch_all_attendance_ids(self):
+            return [999]
+
+    monkeypatch.setattr(attendance_sync, "_source", SweepWinsSource())
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending_incremental = executor.submit(
+            attendance_sync.run_incremental_sync, now_utc=stale_observed_at
+        )
+        assert incremental_fetched.wait(timeout=5)
+        sweep = attendance_sync.run_full_sweep(now_utc=sweep_started_at)
+        release_incremental.set()
+        incremental = pending_incremental.result(timeout=5)
+
+    assert sweep.success is True
+    assert sweep.rows_deleted == 1
+    assert incremental.success is True
+    stored = db.query(
+        "SELECT last_seen_at, deleted_at FROM odoo_attendance_mirror "
+        "WHERE odoo_attendance_id = 901"
+    )[0]
+    assert stored["last_seen_at"] == SYNCED_AT
+    assert stored["deleted_at"] == sweep_started_at
+
+
+@_needs_postgres
+@pytest.mark.parametrize("seed_existing", [False, True], ids=["inserted", "refreshed"])
+def test_sweep_cannot_tombstone_row_observed_after_sweep_started(
+    clean_mirror, monkeypatch, seed_existing
+):
+    sweep_started_at = SYNCED_AT + timedelta(minutes=1)
+    fresh_observed_at = SYNCED_AT + timedelta(minutes=2)
+    if seed_existing:
+        attendance_mirror.upsert_rows([_row()], sync_completed_at=SYNCED_AT)
+    sweep_fetched = Event()
+    release_sweep = Event()
+    refreshed = _row(
+        employee_id=45,
+        write_date=datetime(2026, 8, 28, 13, 2, tzinfo=UTC),
+    )
+
+    class IncrementalWinsSource:
+        def fetch_attendance_changes(self, **_kwargs):
+            return [refreshed]
+
+        def fetch_open_attendance_rows(self):
+            return []
+
+        def fetch_all_attendance_ids(self):
+            sweep_fetched.set()
+            if not release_sweep.wait(timeout=5):
+                raise TimeoutError("sweep race was not released")
+            return [999]
+
+    monkeypatch.setattr(attendance_sync, "_source", IncrementalWinsSource())
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending_sweep = executor.submit(
+            attendance_sync.run_full_sweep, now_utc=sweep_started_at
+        )
+        assert sweep_fetched.wait(timeout=5)
+        incremental = attendance_sync.run_incremental_sync(
+            now_utc=fresh_observed_at
+        )
+        release_sweep.set()
+        sweep = pending_sweep.result(timeout=5)
+
+    assert incremental.success is True
+    assert sweep.success is True
+    assert sweep.rows_deleted == 0
+    stored = db.query(
+        "SELECT employee_odoo_id, last_seen_at, deleted_at "
+        "FROM odoo_attendance_mirror WHERE odoo_attendance_id = 901"
+    )[0]
+    assert stored == {
+        "employee_odoo_id": 45,
+        "last_seen_at": fresh_observed_at,
+        "deleted_at": None,
+    }
 
 
 @_needs_postgres

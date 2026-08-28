@@ -63,7 +63,7 @@ class CompleteOdooSource:
 
 
 class TransactionalMirrorBackend:
-    def __init__(self, state=None):
+    def __init__(self, state=None, *, rows_deleted=0):
         self.state = state or attendance_sync.SyncState(
             cursor_write_date=None,
             cursor_id=None,
@@ -78,6 +78,8 @@ class TransactionalMirrorBackend:
         self.failures: list[str] = []
         self.baseline_attempts: list[datetime] = []
         self.fail_incremental_store = False
+        self.fail_baseline_completion = False
+        self.rows_deleted = rows_deleted
 
     def sync_state(self):
         return self.state
@@ -121,13 +123,18 @@ class TransactionalMirrorBackend:
             last_full_sweep_completed_at=completed_at,
             full_sweep_generation=generation,
         )
-        return {date(2026, 8, 27)} if self.state.baseline_completed_at else set()
+        affected = (
+            {date(2026, 8, 27)} if self.state.baseline_completed_at else set()
+        )
+        return affected, self.rows_deleted
 
     def record_failure(self, error):
         self.failures.append(error)
 
     def complete_baseline_if_ready(self, completed_at):
         self.baseline_attempts.append(completed_at)
+        if self.fail_baseline_completion:
+            raise RuntimeError("baseline completion failed")
         if (
             self.state.last_incremental_completed_at is not None
             and self.state.last_full_sweep_completed_at is not None
@@ -286,6 +293,16 @@ def test_complete_sweep_commits_one_generation_after_complete_validated_read(
     assert source.sweep_calls == 1
 
 
+def test_full_sweep_reports_exact_committed_deletion_count(install_dependencies):
+    backend = TransactionalMirrorBackend(rows_deleted=3)
+    install_dependencies(CompleteOdooSource(ids=[901]), backend)
+
+    result = attendance_sync.run_full_sweep(now_utc=NOW)
+
+    assert result.success is True
+    assert result.rows_deleted == 3
+
+
 def test_initial_tick_requires_both_successful_halves_before_baseline(
     install_dependencies,
 ):
@@ -307,6 +324,31 @@ def test_initial_tick_requires_both_successful_halves_before_baseline(
     assert len(backend.incremental_transactions) == 1
     assert len(backend.sweep_transactions) == 1
     assert source.open_calls == 1
+
+
+def test_tick_reports_exact_committed_sweep_deletion_count(install_dependencies):
+    backend = TransactionalMirrorBackend(rows_deleted=2)
+    install_dependencies(CompleteOdooSource(ids=[901]), backend)
+
+    result = attendance_sync.tick(now_utc=NOW)
+
+    assert result.success is True
+    assert result.rows_deleted == 2
+
+
+def test_tick_keeps_committed_deletion_count_when_baseline_completion_fails(
+    install_dependencies,
+):
+    backend = TransactionalMirrorBackend(rows_deleted=2)
+    backend.fail_baseline_completion = True
+    install_dependencies(CompleteOdooSource(ids=[901]), backend)
+
+    result = attendance_sync.tick(now_utc=NOW)
+
+    assert result.success is False
+    assert result.full_sweep_completed is True
+    assert result.rows_deleted == 2
+    assert result.error == "baseline completion failed"
 
 
 def test_tick_does_not_mark_baseline_when_full_sweep_fails(

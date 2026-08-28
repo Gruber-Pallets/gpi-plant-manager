@@ -171,6 +171,24 @@ def _materially_different(
     return any(existing[field] != incoming[field] for field in _MATERIAL_FIELDS)
 
 
+def _observation_can_revive(
+    *, observed_at: datetime, deleted_at: datetime | None
+) -> bool:
+    """Return whether an observation is newer than a confirmed deletion."""
+    observed = _aware_utc(observed_at, "observed_at")
+    deleted = _optional_aware_utc(deleted_at, "deleted_at")
+    return deleted is None or observed > deleted
+
+
+def _sweep_can_delete(
+    *, last_seen_at: datetime, sweep_started_at: datetime
+) -> bool:
+    """Return whether the row lacks an observation after the sweep began."""
+    last_seen = _aware_utc(last_seen_at, "last_seen_at")
+    sweep_started = _aware_utc(sweep_started_at, "sweep_started_at")
+    return last_seen <= sweep_started
+
+
 def _enqueue_recalc_cur(
     cur,
     days: Iterable[date],
@@ -252,7 +270,8 @@ def _upsert_rows_cur(
             "SELECT odoo_attendance_id, employee_odoo_id, employee_name, "
             "check_in_utc, check_out_utc, odoo_work_center_id, "
             "odoo_work_center_name, odoo_department_id, odoo_department_name, "
-            "odoo_write_date, deleted_at FROM odoo_attendance_mirror "
+            "odoo_write_date, last_seen_at, deleted_at "
+            "FROM odoo_attendance_mirror "
             "WHERE odoo_attendance_id = %s FOR UPDATE",
             (attendance_id,),
         )
@@ -273,6 +292,15 @@ def _upsert_rows_cur(
                 affected_days.update(_row_days(incoming, sync_completed_at))
             continue
 
+        if not _observation_can_revive(
+            observed_at=sync_completed_at,
+            deleted_at=existing["deleted_at"],
+        ):
+            # This row was fetched before a newer complete sweep confirmed it
+            # missing. Advancing the cycle cursor is safe, but reviving this
+            # tombstone would make an older observation overwrite newer truth.
+            continue
+
         incoming_is_stale = (
             incoming["odoo_write_date"] < existing["odoo_write_date"]
         )
@@ -289,7 +317,7 @@ def _upsert_rows_cur(
             "check_out_utc = %s, odoo_work_center_id = %s, "
             "odoo_work_center_name = %s, odoo_department_id = %s, "
             "odoo_department_name = %s, odoo_write_date = %s, "
-            "last_seen_at = %s, deleted_at = NULL "
+            "last_seen_at = GREATEST(last_seen_at, %s), deleted_at = NULL "
             "WHERE odoo_attendance_id = %s",
             tuple(source[field] for field in _ROW_FIELDS[1:])
             + (sync_completed_at, attendance_id),
@@ -469,7 +497,7 @@ def _validated_ids(ids: Iterable[int]) -> set[int]:
 
 def _store_full_sweep(
     ids: set[int], *, generation: int, completed_at: datetime
-) -> set[date]:
+) -> tuple[set[date], int]:
     present_ids = _validated_ids(ids)
     sweep_generation = _positive_int(generation, "generation")
     completed = _aware_utc(completed_at, "completed_at")
@@ -484,17 +512,25 @@ def _store_full_sweep(
                 (sweep_generation, sorted(present_ids)),
             )
             cur.execute(
-                "SELECT odoo_attendance_id, check_in_utc, check_out_utc "
+                "SELECT odoo_attendance_id, check_in_utc, check_out_utc, "
+                "last_seen_at "
                 "FROM odoo_attendance_mirror WHERE deleted_at IS NULL "
                 "AND NOT (odoo_attendance_id = ANY(%s)) FOR UPDATE",
                 (sorted(present_ids),),
             )
         else:
             cur.execute(
-                "SELECT odoo_attendance_id, check_in_utc, check_out_utc "
+                "SELECT odoo_attendance_id, check_in_utc, check_out_utc, "
+                "last_seen_at "
                 "FROM odoo_attendance_mirror WHERE deleted_at IS NULL FOR UPDATE"
             )
-        deleted_rows = tuple(cur.fetchall())
+        deleted_rows = tuple(
+            row
+            for row in cur.fetchall()
+            if _sweep_can_delete(
+                last_seen_at=row["last_seen_at"], sweep_started_at=completed
+            )
+        )
         deleted_ids = [row["odoo_attendance_id"] for row in deleted_rows]
         if deleted_ids:
             cur.execute(
@@ -523,17 +559,18 @@ def _store_full_sweep(
             "WHERE singleton = TRUE",
             (completed, len(deleted_ids), sweep_generation),
         )
-    return affected_days
+    return affected_days, len(deleted_ids)
 
 
 def mark_deleted_after_successful_sweep(
     ids: set[int], generation: int
 ) -> set[date]:
-    return _store_full_sweep(
+    affected_days, _rows_deleted = _store_full_sweep(
         ids,
         generation=generation,
         completed_at=datetime.now(UTC),
     )
+    return affected_days
 
 
 def _sync_state_snapshot() -> SyncState:

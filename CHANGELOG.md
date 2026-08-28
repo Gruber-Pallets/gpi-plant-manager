@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Odoo time checks finish safely
+
+- **Plant Manager now keeps the newest result when two Odoo time checks finish out of order.** Removed times stay removed, and fresh times do not get erased.
+
 ### People performance dashboard build plan
 
 - **A step-by-step build plan is ready for the new People performance page.** It covers work-area moves, goals, machine stops, forklift calls, tablets, safe refreshes, and clear warnings when data is missing. Nothing in the app has changed yet.

@@ -80,7 +80,7 @@ class _MirrorBackend:
 
     def store_full_sweep(
         self, ids: set[int], *, generation: int, completed_at: datetime
-    ) -> set[date]:
+    ) -> tuple[set[date], int]:
         return attendance_mirror._store_full_sweep(
             ids, generation=generation, completed_at=completed_at
         )
@@ -220,7 +220,7 @@ def run_full_sweep(*, now_utc: datetime | None = None) -> SyncResult:
         state = _backend.sync_state()
         ids = _validated_sweep_ids(_source.fetch_all_attendance_ids())
         generation = state.full_sweep_generation + 1
-        affected = _backend.store_full_sweep(
+        affected, rows_deleted = _backend.store_full_sweep(
             ids, generation=generation, completed_at=now
         )
     except Exception as exc:  # noqa: BLE001 - fail closed without tombstones
@@ -229,6 +229,7 @@ def run_full_sweep(*, now_utc: datetime | None = None) -> SyncResult:
     return SyncResult(
         success=True,
         full_sweep_completed=True,
+        rows_deleted=rows_deleted,
         affected_days=frozenset(affected),
     )
 
@@ -264,6 +265,7 @@ def tick(*, now_utc: datetime | None = None) -> SyncResult:
                 full_sweep_completed=sweep.full_sweep_completed,
                 baseline_completed=False,
                 rows_stored=incremental.rows_stored,
+                rows_deleted=sweep.rows_deleted,
                 affected_days=incremental.affected_days | sweep.affected_days,
                 error=_error_text(exc),
             )
