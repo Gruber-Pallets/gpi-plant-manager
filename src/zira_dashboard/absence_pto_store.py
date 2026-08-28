@@ -332,7 +332,8 @@ def list_for_person(emp_id: str) -> list[AbsencePtoRequest]:
 
 def list_pending() -> list[AbsencePtoRequest]:
     rows = db.query(
-        f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests WHERE state = 'pending' "
+        f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests "
+        "WHERE state IN ('pending', 'needs_review') "
         "ORDER BY requested_at, id"
     )
     return [_request_from_row(row) for row in rows]
@@ -993,6 +994,103 @@ def finalize_manual(
     return resolved
 
 
+def finalize_denied(
+    request_id: int,
+    owner: UUID,
+    *,
+    actor_upn: str | None,
+    actor_name: str | None,
+    reason: str,
+    source: str | None,
+    workflow_now: datetime,
+    lease_now: datetime,
+) -> AbsencePtoRequest:
+    """Atomically deny a pending request and append both manager audits."""
+    safe_id = _positive_int(request_id, "request_id")
+    safe_owner = _uuid(owner, "owner")
+    safe_reason = _required_text(reason, "reason").strip()
+    safe_upn = _optional_text(actor_upn, "actor_upn")
+    safe_name = _optional_text(actor_name, "actor_name")
+    safe_source = _optional_text(source, "source")
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
+    with db.cursor() as cur:
+        cur.execute(
+            f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests "
+            "WHERE id = %s AND state = 'pending' AND lease_owner = %s "
+            "AND lease_until > %s FOR UPDATE",
+            (safe_id, safe_owner, lease_current),
+        )
+        request = _one_request(list(cur.fetchall()), "denial finalization lock")
+        cur.execute(
+            "UPDATE absence_pto_requests SET state = 'denied', "
+            "denial_reason = %s, decided_by_upn = %s, decided_by_name = %s, "
+            "decided_at = %s, resolved_at = %s, sync_error = NULL, "
+            "task_next_at = NULL, updated_at = %s WHERE id = %s "
+            "AND state = 'pending' AND lease_owner = %s AND lease_until > %s "
+            f"RETURNING {REQUEST_COLUMNS}",
+            (
+                safe_reason,
+                safe_upn,
+                safe_name,
+                workflow_current,
+                workflow_current,
+                workflow_current,
+                safe_id,
+                safe_owner,
+                lease_current,
+            ),
+        )
+        denied = _one_request(list(cur.fetchall()), "denial finalization")
+        request_key = f"absence_pto:{safe_id}"
+        detail = {
+            "original_absence_leave_id": request.original_absence_leave_id,
+            "pto_leave_id": request.pto_leave_id,
+            "conversion_step": request.conversion_step,
+        }
+        time_off_audit.record_decision_with_cursor(
+            cur,
+            request_id=safe_id,
+            odoo_leave_id=request.original_absence_leave_id,
+            person_odoo_id=request.person_odoo_id,
+            person_name=request.person_name,
+            leave_type=request.leave_type_name,
+            date_from=request.absence_day,
+            date_to=request.absence_day,
+            hour_from=None,
+            hour_to=None,
+            action="deny",
+            result_state="denied",
+            reason=safe_reason,
+            actor_upn=safe_upn,
+            actor_name=safe_name,
+            source=safe_source,
+            request_kind="absence_pto",
+            request_key=request_key,
+            detail=detail,
+            decided_at=workflow_current,
+        )
+        inbox_log.record_event_with_cursor(
+            cur,
+            item_kind="absence_pto",
+            item_key=request_key,
+            person_name=request.person_name,
+            category_label="Past absence PTO",
+            action="deny",
+            outcome="Denied",
+            before_value="Absent · PTO pending",
+            after_value="Absent · unpaid",
+            reason=safe_reason,
+            actor_upn=safe_upn,
+            actor_name=safe_name,
+            source=safe_source,
+            reversible=False,
+            detail=detail,
+            resolved_at=workflow_current,
+        )
+    return denied
+
+
 __all__ = [
     "AbsencePtoRequest",
     "StaleTransition",
@@ -1002,6 +1100,7 @@ __all__ = [
     "adopt_external_pto",
     "get_request",
     "finalize_approved",
+    "finalize_denied",
     "finalize_manual",
     "list_due",
     "list_for_person",

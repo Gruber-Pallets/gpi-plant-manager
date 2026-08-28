@@ -26,13 +26,19 @@
         {% for r in pending %}
           <tr class="exception-row"
               data-request-id="{{ r.id }}"
+              data-request-kind="{{ r.request_kind }}"
+              data-action-base="{{ r.action_base }}"
               data-action-type="time_off"
               data-priority="{{ 'urgent' if r.past_due or r.over_balance else 'normal' }}">
             <th scope="row">{{ r.person_name }}</th>
             <td>
               {{ r.leave_type }} · {{ r.date_label or r.date_from }}
+              {% if r.past_absence %}<span class="priority-pill info">Past absence</span>{% endif %}
               {% if r.past_due %}<span class="priority-pill urgent">Past due</span>{% endif %}
               <span class="priority-pill {{ 'warn' if r.awaiting_second else 'info' }}">{{ r.state_label or 'To approve' }}</span>
+              {% if r.past_absence %}
+                <div class="muted">{{ r.treatment_label or 'Absent · unpaid' }} · 1 PTO day</div>
+              {% endif %}
             </td>
             <td>
               {% if r.balance %}
@@ -42,14 +48,23 @@
               {% else %}
                 <span class="priority-pill normal">Balance unknown</span>
               {% endif %}
+              {% if r.past_absence %}
+              <span class="priority-pill {{ 'normal' if r.period_open else 'warn' }}">{{ r.period_label }}</span>
+              {% else %}
               <span class="priority-pill {{ 'warn' if r.coverage.count else 'normal' }}">
                 {% if r.coverage.count %}{{ r.coverage.count }} off{% else %}Nobody off{% endif %}{% if r.coverage.scope == 'plant' %} plant-wide{% endif %}
               </span>
+              {% endif %}
             </td>
             <td class="row-actions">
+              {% if r.request_kind == 'absence_pto' and r.state == 'needs_review' %}
+              <input type="text" class="inline-input js-handled-note" aria-label="How this past PTO request was handled" placeholder="How was this handled?" hidden>
+              <button type="button" class="row-btn primary js-handled">Mark handled</button>
+              {% else %}
               <button type="button" class="row-btn primary js-approve">Approve</button>
               <input type="text" class="inline-input js-reason" aria-label="Reason to deny time off" placeholder="Reason to deny" hidden>
               <button type="button" class="row-btn danger js-refuse">Deny</button>
+              {% endif %}
               <span class="row-status" hidden></span>
             </td>
           </tr>

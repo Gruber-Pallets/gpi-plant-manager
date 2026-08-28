@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Managers can review past PTO
+
+- **Managers can now approve or deny a request to pay a missed day with PTO.** If the pay period closed, they can see that Wendy needs to review it.
+
 ### Wendy gets unclear past PTO cases
 
 - **When a pay period closes or a past PTO change is unclear, Plant Manager now makes one Odoo task for Wendy.** The task explains what needs review without changing payroll again.

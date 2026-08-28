@@ -24,6 +24,7 @@ from . import page_views
 from .plant_day import today as plant_today
 from .routes import (
     admin,
+    absence_pto_admin,
     api_layout,
     auth as auth_routes,
     auto_salaried_admin,
@@ -628,6 +629,7 @@ if auth_disabled():
 
 # Mount each feature router. URL paths are owned by the routers themselves.
 app.include_router(auth_routes.router)
+app.include_router(absence_pto_admin.router)
 app.include_router(dashboard.router)
 app.include_router(exceptions.router)
 app.include_router(departments.router)

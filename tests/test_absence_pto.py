@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -11,6 +11,7 @@ TODAY = date(2026, 8, 28)
 PERIOD_START = date(2026, 8, 17)
 PERIOD_END = date(2026, 8, 30)
 ABSENCE_DAY = date(2026, 8, 20)
+LIVE_NOW = datetime(2026, 8, 28, 14, 30, tzinfo=UTC)
 
 
 def _type_row(type_id=7, **overrides):
@@ -163,6 +164,112 @@ def test_denied_request_allows_resubmission_while_still_eligible(monkeypatch):
     assert row.eligible is True
     assert row.blocked_reason is None
     assert row.available_practical == 4.0
+
+
+def test_deny_records_reason_and_actor_without_calling_odoo(monkeypatch):
+    pending = _request(state="pending")
+    denied = SimpleNamespace(
+        absence_day=pending.absence_day,
+        state="denied",
+        denial_reason="Save the PTO",
+        decided_by_upn="dale@gruberpallets.com",
+        decided_by_name="Dale",
+    )
+    calls = []
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda request_id, owner, now, lease_seconds=120: pending,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "finalize_denied",
+        lambda request_id, owner, **kwargs: calls.append(
+            (request_id, owner, kwargs)
+        )
+        or denied,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "release_claim",
+        lambda request_id, owner, now=None: True,
+    )
+    from zira_dashboard import odoo_client
+
+    monkeypatch.setattr(
+        odoo_client,
+        "refuse_leave",
+        lambda *args: pytest.fail("denial must not mutate Odoo"),
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "post_leave_message",
+        lambda *args: pytest.fail("denial must not write Odoo chatter"),
+    )
+
+    result = domain.deny(
+        41,
+        "dale@gruberpallets.com",
+        "Dale",
+        "  Save the PTO  ",
+        "page",
+    )
+
+    assert result is denied
+    assert len(calls) == 1
+    assert calls[0][0] == 41
+    assert calls[0][2]["reason"] == "Save the PTO"
+    assert calls[0][2]["actor_upn"] == "dale@gruberpallets.com"
+    assert calls[0][2]["actor_name"] == "Dale"
+    assert calls[0][2]["source"] == "page"
+
+
+def test_deny_requires_a_reason_before_claiming(monkeypatch):
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda *args: pytest.fail("blank reason must fail before a claim"),
+    )
+
+    with pytest.raises(domain.DecisionError, match="reason is required"):
+        domain.deny(41, "dale@gruberpallets.com", "Dale", " ", "page")
+
+
+def test_deny_keeps_a_supplied_workflow_time_out_of_live_lease_checks(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    pending = _request(state="pending")
+    seen = {}
+    monkeypatch.setattr(domain, "_clock", lambda: LIVE_NOW)
+
+    def claim(request_id, owner, now, lease_seconds=120):
+        seen["claim_now"] = now
+        return pending
+
+    def finalize(request_id, owner, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(state="denied", absence_day=ABSENCE_DAY)
+
+    def release(request_id, owner, now=None):
+        seen["release_now"] = now
+        return True
+
+    monkeypatch.setattr(domain.absence_pto_store, "claim_request", claim)
+    monkeypatch.setattr(domain.absence_pto_store, "finalize_denied", finalize)
+    monkeypatch.setattr(domain.absence_pto_store, "release_claim", release)
+
+    domain.deny(
+        41,
+        "dale@gruberpallets.com",
+        "Dale",
+        "Save the PTO",
+        "page",
+        now=workflow_now,
+    )
+
+    assert seen["claim_now"] == LIVE_NOW
+    assert seen["lease_now"] == LIVE_NOW
+    assert seen["release_now"] == LIVE_NOW
+    assert seen["workflow_now"] == workflow_now
 
 
 @pytest.mark.parametrize("day", [TODAY, date(2026, 8, 29)])

@@ -202,8 +202,77 @@ def test_load_and_list_queries_have_stable_scope_and_order(monkeypatch):
     assert "WHERE id = %s" in calls[0][0]
     assert "WHERE emp_id = %s" in calls[1][0]
     assert "ORDER BY requested_at DESC, id DESC" in calls[1][0]
-    assert "WHERE state = 'pending'" in calls[2][0]
+    assert "WHERE state IN ('pending', 'needs_review')" in calls[2][0]
     assert "ORDER BY requested_at, id" in calls[2][0]
+
+
+def test_finalize_denied_is_lease_guarded_and_records_both_audits(monkeypatch):
+    pending = _row(lease_owner=OWNER, lease_until=NOW + timedelta(seconds=120))
+    denied = _row(
+        state="denied",
+        denial_reason="Save the PTO",
+        decided_by_upn="dale@gruberpallets.com",
+        decided_by_name="Dale",
+        decided_at=NOW,
+        resolved_at=NOW,
+        lease_owner=OWNER,
+        lease_until=NOW + timedelta(seconds=120),
+    )
+
+    class FakeCursor:
+        def __init__(self):
+            self.calls = []
+            self.rows = []
+
+        def execute(self, sql, params=None):
+            self.calls.append((sql, params))
+            self.rows = [pending if "FOR UPDATE" in sql else denied]
+
+        def fetchall(self):
+            return list(self.rows)
+
+    cursor = FakeCursor()
+
+    @contextmanager
+    def transaction():
+        yield cursor
+
+    decision_audits = []
+    inbox_audits = []
+    monkeypatch.setattr(store.db, "cursor", transaction)
+    monkeypatch.setattr(
+        store.time_off_audit,
+        "record_decision_with_cursor",
+        lambda cur, **kwargs: decision_audits.append((cur, kwargs)),
+    )
+    monkeypatch.setattr(
+        store.inbox_log,
+        "record_event_with_cursor",
+        lambda cur, **kwargs: inbox_audits.append((cur, kwargs)),
+    )
+
+    result = store.finalize_denied(
+        41,
+        OWNER,
+        actor_upn="dale@gruberpallets.com",
+        actor_name="Dale",
+        reason="Save the PTO",
+        source="page",
+        workflow_now=NOW,
+        lease_now=NOW,
+    )
+
+    assert result.state == "denied"
+    assert result.denial_reason == "Save the PTO"
+    assert "state = 'pending'" in cursor.calls[0][0]
+    assert "lease_owner = %s" in cursor.calls[0][0]
+    assert "lease_until > %s" in cursor.calls[0][0]
+    assert "state = 'denied'" in cursor.calls[1][0]
+    assert decision_audits[0][1]["request_kind"] == "absence_pto"
+    assert decision_audits[0][1]["action"] == "deny"
+    assert decision_audits[0][1]["reason"] == "Save the PTO"
+    assert inbox_audits[0][1]["item_key"] == "absence_pto:41"
+    assert inbox_audits[0][1]["outcome"] == "Denied"
 
 
 def test_missing_request_returns_none(monkeypatch):
