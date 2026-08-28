@@ -169,7 +169,8 @@ def _save_retry(
         attempts=attempts,
         next_at=next_at,
         error=_delivery_error(row, error),
-        now=_lease_now(),
+        workflow_now=current,
+        lease_now=_lease_now(),
     )
 
 
@@ -187,7 +188,8 @@ def _save_task_id(
         attempts=row.task_attempts,
         next_at=current + _POLL_INTERVAL,
         error=_stop_reason(row.sync_error),
-        now=_lease_now(),
+        workflow_now=current,
+        lease_now=_lease_now(),
     )
 
 
@@ -202,7 +204,8 @@ def _save_delivery_success(
         attempts=0,
         next_at=current + _POLL_INTERVAL,
         error=_stop_reason(row.sync_error),
-        now=_lease_now(),
+        workflow_now=current,
+        lease_now=_lease_now(),
     )
 
 
@@ -324,8 +327,8 @@ def _sync_claimed_task(
             )
         return "escalated"
     try:
-        wendy_uid = _wendy_uid()
         deadline = _next_business_day(plant_today(current)).isoformat()
+        wendy_uid = _wendy_uid()
         name = task_name(row)
         project_id = _exact_project_id()
         task_ids = _exact_task_ids(project_id, name)
@@ -467,7 +470,8 @@ def _save_resolution_retry(
         attempts=attempts,
         next_at=next_at,
         error=message,
-        now=_lease_now(),
+        workflow_now=current,
+        lease_now=_lease_now(),
     )
 
 
@@ -486,7 +490,8 @@ def _checkpoint_resolution(
         attempts=0,
         next_at=None if new_step == "closed" else current,
         error=None,
-        now=_lease_now(),
+        workflow_now=current,
+        lease_now=_lease_now(),
     )
 
 
@@ -580,7 +585,11 @@ def _resolve_external_claimed(
     if pto is None:
         return None
     row = store.adopt_external_pto(
-        row.id, owner, pto_leave_id=pto["id"], now=_lease_now()
+        row.id,
+        owner,
+        pto_leave_id=pto["id"],
+        workflow_now=current,
+        lease_now=_lease_now(),
     )
     row = store.renew_claim(row.id, owner, _lease_now(), lease_seconds=120)
     verified = _matching_validated_pto(row)
@@ -594,7 +603,8 @@ def _resolve_external_claimed(
         actor_upn=row.decided_by_upn,
         actor_name=row.decided_by_name,
         source="absence_pto_review",
-        now=_lease_now(),
+        workflow_now=current,
+        lease_now=_lease_now(),
     )
     try:
         conversion._invalidate_after_commit(approved)
@@ -669,7 +679,8 @@ def resolve_manually(
             actor_upn=safe_upn,
             actor_name=safe_name,
             note=safe_note,
-            now=_lease_now(),
+            workflow_now=current,
+            lease_now=_lease_now(),
         )
         _deliver_terminal_claimed(resolved, owner, current)
         return ReviewResult(
@@ -696,7 +707,11 @@ def _reconcile_claimed(
         )
     if request.state == "pending":
         reviewed = store.mark_needs_review(
-            request.id, owner, error=_ROLLOVER_ERROR, now=_lease_now()
+            request.id,
+            owner,
+            error=_ROLLOVER_ERROR,
+            workflow_now=current,
+            lease_now=_lease_now(),
         )
         if reviewed.state == "needs_review":
             return _sync_claimed_task(reviewed, owner, current)
@@ -708,7 +723,7 @@ def _reconcile_claimed(
         return _sync_claimed_task(request, owner, current)
     if request.state != "converting":
         return "failed"
-    result = conversion.resume_claimed(request, owner)
+    result = conversion.resume_claimed(request, owner, current)
     if result.status == "needs_review":
         if result.request is not None and result.request.state == "needs_review":
             return _sync_claimed_task(result.request, owner, current)
@@ -740,6 +755,7 @@ def reconcile_once(now: datetime | None = None, limit: int = 25) -> ReconcileRes
     requests = store.claim_due(
         owner,
         current,
+        lease_now=_lease_now(),
         period_start=period_start,
         period_end=period_end,
         limit=limit,

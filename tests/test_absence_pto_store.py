@@ -340,6 +340,7 @@ def test_release_requires_owner_and_does_not_clear_a_newer_lease(monkeypatch):
 
 
 def test_mark_needs_review_and_task_delivery_keep_owner_guard(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
     calls = []
     monkeypatch.setattr(
         store.db,
@@ -347,15 +348,22 @@ def test_mark_needs_review_and_task_delivery_keep_owner_guard(monkeypatch):
         lambda sql, params: calls.append((sql, params))
         or [_row(state="needs_review", sync_error="Needs a person")],
     )
-    reviewed = store.mark_needs_review(41, OWNER, error="Needs a person", now=NOW)
+    reviewed = store.mark_needs_review(
+        41,
+        OWNER,
+        error="Needs a person",
+        workflow_now=workflow_now,
+        lease_now=NOW,
+    )
     delivered = store.save_task_delivery(
         41,
         OWNER,
         task_id=501,
         attempts=1,
-        next_at=NOW,
+        next_at=workflow_now,
         error=None,
-        now=NOW,
+        workflow_now=workflow_now,
+        lease_now=NOW,
     )
     assert reviewed.state == "needs_review"
     assert delivered.id == 41
@@ -363,11 +371,17 @@ def test_mark_needs_review_and_task_delivery_keep_owner_guard(monkeypatch):
     assert "state = 'needs_review'" in calls[0][0]
     assert "odoo_task_id = %s" in calls[1][0]
     assert "task_attempts = %s" in calls[1][0]
+    assert calls[0][1][1:3] == (workflow_now, workflow_now)
+    assert calls[0][1][-1] == NOW
+    assert calls[1][1][2] == workflow_now
+    assert calls[1][1][4] == workflow_now
+    assert calls[1][1][-1] == NOW
 
 
 def test_resolution_delivery_checkpoint_is_terminal_state_step_and_lease_guarded(
     monkeypatch,
 ):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
     calls = []
     monkeypatch.setattr(
         store.db,
@@ -388,9 +402,10 @@ def test_resolution_delivery_checkpoint_is_terminal_state_step_and_lease_guarded
         expected_step="none",
         new_step="message_posted",
         attempts=0,
-        next_at=NOW,
+        next_at=workflow_now,
         error=None,
-        now=NOW,
+        workflow_now=workflow_now,
+        lease_now=NOW,
     )
 
     assert saved.task_resolution_step == "message_posted"
@@ -399,16 +414,43 @@ def test_resolution_delivery_checkpoint_is_terminal_state_step_and_lease_guarded
     assert "lease_owner = %s" in sql
     assert "lease_until > %s" in sql
     assert "task_resolution_step = %s" in sql
+    assert calls[0][1][2] == workflow_now
+    assert calls[0][1][4] == workflow_now
+    assert calls[0][1][-2] == NOW
+
+
+def test_external_pto_adoption_splits_workflow_and_lease_timestamps(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    seen = {}
+    monkeypatch.setattr(
+        store.db,
+        "query",
+        lambda sql, params: seen.update(sql=sql, params=params)
+        or [_row(state="needs_review", pto_leave_id=991)],
+    )
+
+    adopted = store.adopt_external_pto(
+        41,
+        OWNER,
+        pto_leave_id=991,
+        workflow_now=workflow_now,
+        lease_now=NOW,
+    )
+
+    assert adopted.pto_leave_id == 991
+    assert seen["params"][1] == workflow_now
+    assert seen["params"][-1] == NOW
 
 
 def test_due_query_is_bounded_and_only_returns_expired_or_due_work(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
     seen = {}
     monkeypatch.setattr(
         store.db,
         "query",
         lambda sql, params: seen.update(sql=sql, params=params) or [_row()],
     )
-    assert store.list_due(NOW, limit=25)[0].id == 41
+    assert store.list_due(workflow_now, lease_now=NOW, limit=25)[0].id == 41
     assert "lease_until IS NULL OR lease_until <= %s" in seen["sql"]
     assert "task_next_at IS NULL OR task_next_at <= %s" in seen["sql"]
     assert "task_resolution_next_at IS NULL" in seen["sql"]
@@ -416,6 +458,56 @@ def test_due_query_is_bounded_and_only_returns_expired_or_due_work(monkeypatch):
     assert "ORDER BY" in seen["sql"]
     assert "LIMIT %s" in seen["sql"]
     assert seen["params"][-1] == 25
+    assert seen["params"][:3] == (NOW, workflow_now, workflow_now)
+
+
+def test_claim_due_future_workflow_time_never_checks_lease_expiry(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    lease_now = NOW
+    seen = {}
+    monkeypatch.setattr(
+        store.db,
+        "query",
+        lambda sql, params: seen.update(sql=sql, params=params) or [],
+    )
+
+    store.claim_due(
+        OWNER,
+        workflow_now,
+        lease_now=lease_now,
+        period_start=date(2031, 3, 30),
+        period_end=date(2031, 4, 12),
+    )
+
+    params = seen["params"]
+    assert params[0] == lease_now
+    assert params[3:5] == (workflow_now, workflow_now)
+    assert params[-1] == lease_now
+
+
+def test_claim_due_historical_workflow_creates_lease_from_live_time(monkeypatch):
+    workflow_now = datetime(2020, 1, 2, 14, 30, tzinfo=UTC)
+    lease_now = NOW
+    seen = {}
+    monkeypatch.setattr(
+        store.db,
+        "query",
+        lambda sql, params: seen.update(sql=sql, params=params) or [],
+    )
+
+    store.claim_due(
+        OWNER,
+        workflow_now,
+        lease_now=lease_now,
+        period_start=date(2019, 12, 29),
+        period_end=date(2020, 1, 11),
+        lease_seconds=120,
+    )
+
+    params = seen["params"]
+    assert params[7] == lease_now + timedelta(seconds=120)
+    assert params[8] == workflow_now
+    assert params[9] == lease_now
 
 
 @pytest.mark.parametrize(
@@ -573,6 +665,9 @@ def test_live_postgres_terminal_claim_and_review_finalizers_are_durable_and_atom
                 rollback_id = insert_request(
                     date(2099, 2, 3), f"pytest-rollback-{marker}", task_id=503
                 )
+                historical_id = insert_request(
+                    date(2099, 2, 4), f"pytest-historical-{marker}", task_id=504
+                )
 
                 def query_in_transaction(sql, params=None):
                     cur.execute(sql, params)
@@ -599,7 +694,11 @@ def test_live_postgres_terminal_claim_and_review_finalizers_are_durable_and_atom
                     transaction_patch.setattr(store.db, "query", query_in_transaction)
                     transaction_patch.setattr(store.db, "cursor", transaction_in_test)
                     adopted = store.adopt_external_pto(
-                        approval_id, OWNER, pto_leave_id=971, now=NOW
+                        approval_id,
+                        OWNER,
+                        pto_leave_id=971,
+                        workflow_now=NOW,
+                        lease_now=NOW,
                     )
                     approved = store.finalize_approved(
                         approval_id,
@@ -609,7 +708,8 @@ def test_live_postgres_terminal_claim_and_review_finalizers_are_durable_and_atom
                         actor_upn="manager@example.com",
                         actor_name="Manager",
                         source="pytest",
-                        now=NOW,
+                        workflow_now=NOW,
+                        lease_now=NOW,
                     )
                     manual = store.finalize_manual(
                         manual_id,
@@ -617,7 +717,8 @@ def test_live_postgres_terminal_claim_and_review_finalizers_are_durable_and_atom
                         actor_upn="manager@example.com",
                         actor_name="Manager",
                         note="Handled by payroll",
-                        now=NOW,
+                        workflow_now=NOW,
+                        lease_now=NOW,
                     )
 
                     assert approved.state == "approved"
@@ -643,7 +744,8 @@ def test_live_postgres_terminal_claim_and_review_finalizers_are_durable_and_atom
                             actor_upn="manager@example.com",
                             actor_name="Manager",
                             note="must roll back",
-                            now=NOW,
+                            workflow_now=NOW,
+                            lease_now=NOW,
                         )
                     transaction_patch.setattr(
                         store.inbox_log,
@@ -661,6 +763,40 @@ def test_live_postgres_terminal_claim_and_review_finalizers_are_durable_and_atom
                         "manual_resolution_note": None,
                     }
 
+                    future_owner = UUID("8d899941-ef52-4072-94eb-4fc95b0895a3")
+                    future_claims = store.claim_due(
+                        future_owner,
+                        datetime(2099, 2, 10, 14, 30, tzinfo=UTC),
+                        lease_now=NOW,
+                        period_start=date(2099, 2, 1),
+                        period_end=date(2099, 2, 14),
+                        limit=100,
+                    )
+                    assert rollback_id not in {
+                        request.id for request in future_claims
+                    }
+
+                    cur.execute(
+                        "UPDATE absence_pto_requests SET state = 'pending', "
+                        "conversion_step = 'not_started', lease_owner = NULL, "
+                        "lease_until = NULL WHERE id = %s",
+                        (historical_id,),
+                    )
+                    historical_claims = store.claim_due(
+                        future_owner,
+                        datetime(2020, 1, 2, 14, 30, tzinfo=UTC),
+                        lease_now=NOW,
+                        period_start=date(2019, 12, 29),
+                        period_end=date(2020, 1, 11),
+                        limit=100,
+                    )
+                    historical = next(
+                        request
+                        for request in historical_claims
+                        if request.id == historical_id
+                    )
+                    assert historical.lease_until == NOW + timedelta(seconds=120)
+
                     cur.execute(
                         "UPDATE absence_pto_requests SET lease_owner = NULL, "
                         "lease_until = NULL WHERE id IN (%s, %s)",
@@ -669,6 +805,7 @@ def test_live_postgres_terminal_claim_and_review_finalizers_are_durable_and_atom
                     claimed = store.claim_due(
                         OWNER,
                         NOW,
+                        lease_now=NOW,
                         period_start=date(2026, 8, 16),
                         period_end=date(2026, 8, 29),
                         limit=100,

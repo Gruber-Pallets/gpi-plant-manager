@@ -135,17 +135,18 @@ def wire_review(monkeypatch, fake, row, *, matching=None):
         attempts,
         next_at,
         error,
-        now,
+        workflow_now,
+        lease_now,
     ):
         current["row"] = replace(
             current["row"],
             lease_owner=owner,
-            lease_until=now + timedelta(seconds=120),
+            lease_until=lease_now + timedelta(seconds=120),
             odoo_task_id=task_id,
             task_attempts=attempts,
             task_next_at=next_at,
             sync_error=error,
-            updated_at=now,
+            updated_at=workflow_now,
         )
         fake.events.append(("save", task_id, attempts, next_at, error))
         return current["row"]
@@ -255,7 +256,8 @@ def wire_review(monkeypatch, fake, row, *, matching=None):
         attempts,
         next_at,
         error,
-        now,
+        workflow_now,
+        lease_now,
     ):
         current["row"] = replace(
             current["row"],
@@ -309,6 +311,7 @@ def test_due_claim_is_bounded_skip_locked_and_takes_expired_conversions_or_rollo
     rows = store.claim_due(
         OWNER,
         NOW,
+        lease_now=NOW,
         period_start=date(2026, 8, 16),
         period_end=date(2026, 8, 29),
         limit=25,
@@ -349,7 +352,9 @@ def test_reconcile_rollover_and_resume_are_isolated_with_exact_counts(monkeypatc
         lambda owner, now, **kwargs: [replace(row, lease_owner=owner) for row in claims],
     )
 
-    def mark_needs_review(request_id, owner, *, error, now):
+    def mark_needs_review(
+        request_id, owner, *, error, workflow_now, lease_now
+    ):
         errors[request_id] = error
         return next(row for row in claims if row.id == request_id)
 
@@ -360,7 +365,7 @@ def test_reconcile_rollover_and_resume_are_isolated_with_exact_counts(monkeypatc
         lambda request_id, owner, now: released.append(request_id) or True,
     )
 
-    def resume_claimed(request, owner):
+    def resume_claimed(request, owner, workflow_now):
         if request.id == 42:
             return conversion.ConversionResult("approved", "approved", request)
         if request.id == 43:
@@ -402,7 +407,7 @@ def test_reconcile_release_exception_keeps_operation_context_and_continues(
         ],
     )
 
-    def resume_claimed(request, owner):
+    def resume_claimed(request, owner, workflow_now):
         processed.append(request.id)
         if request.id == 41:
             raise RuntimeError("resume exploded")
@@ -443,7 +448,7 @@ def test_reconcile_unsuccessful_release_reclassifies_once_and_continues(monkeypa
         ],
     )
 
-    def resume_claimed(request, owner):
+    def resume_claimed(request, owner, workflow_now):
         processed.append(request.id)
         status = "approved" if request.id == 41 else "needs_review"
         return conversion.ConversionResult(status, status, request)
@@ -484,7 +489,9 @@ def test_reconcile_passes_a_new_owner_when_taking_over_an_expired_lease(monkeypa
     monkeypatch.setattr(
         review.conversion,
         "resume_claimed",
-        lambda request, owner: conversion.ConversionResult("pending", "restored", request),
+        lambda request, owner, workflow_now: conversion.ConversionResult(
+            "pending", "restored", request
+        ),
     )
     monkeypatch.setattr(review.store, "release_claim", lambda *args, **kwargs: True)
 
@@ -498,6 +505,32 @@ def test_reconcile_passes_a_new_owner_when_taking_over_an_expired_lease(monkeypa
 def test_reconcile_rejects_an_unbounded_limit(limit):
     with pytest.raises(ValueError, match="limit"):
         review.reconcile_once(NOW, limit=limit)
+
+
+def test_reconcile_passes_distinct_workflow_and_live_lease_times(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    lease_now = datetime(2026, 8, 28, 14, 30, tzinfo=UTC)
+    seen = {}
+    monkeypatch.setattr(review, "_clock", lambda: lease_now)
+    monkeypatch.setattr(
+        review.staffing_hours,
+        "current_pay_period_bounds",
+        lambda today: (date(2031, 3, 30), date(2031, 4, 12)),
+    )
+
+    def claim_due(owner, supplied_workflow_now, *, lease_now, **kwargs):
+        seen.update(
+            workflow_now=supplied_workflow_now,
+            lease_now=lease_now,
+            kwargs=kwargs,
+        )
+        return []
+
+    monkeypatch.setattr(review.store, "claim_due", claim_due)
+
+    assert review.reconcile_once(workflow_now) == review.ReconcileResult(0, 0, 0, 0)
+    assert seen["workflow_now"] == workflow_now
+    assert seen["lease_now"] == lease_now
 
 
 def test_review_task_is_assigned_to_exact_wendy_and_saved(monkeypatch):
@@ -598,6 +631,9 @@ def test_configured_calendar_exception_retries_without_odoo_mutation(monkeypatch
     assert current["row"].task_next_at == NOW + timedelta(seconds=60)
     assert fake.created == []
     assert fake.updated == []
+    assert not {"users", "search", "create", "update"}.intersection(
+        event[0] for event in fake.events
+    )
 
 
 def test_all_closed_calendar_horizon_blocks_without_odoo_mutation(monkeypatch):
@@ -617,6 +653,9 @@ def test_all_closed_calendar_horizon_blocks_without_odoo_mutation(monkeypatch):
     assert current["row"].task_next_at.year == 9999
     assert fake.created == []
     assert fake.updated == []
+    assert not {"users", "search", "create", "update"}.intersection(
+        event[0] for event in fake.events
+    )
 
 
 def test_sync_now_determines_deadline_and_retry_timestamp(monkeypatch):
@@ -666,6 +705,11 @@ def test_reconcile_now_determines_review_retry_timestamp(monkeypatch):
     row = _needs_review()
     fake = ReviewFake(users=[])
     current = wire_review(monkeypatch, fake, row)
+    monkeypatch.setattr(
+        review.shift_config,
+        "is_workday",
+        lambda candidate: candidate == date(2031, 4, 13),
+    )
     monkeypatch.setattr(
         review.staffing_hours,
         "current_pay_period_bounds",
@@ -771,7 +815,9 @@ def test_external_approved_pto_uses_atomic_finalizer_then_message_then_close(mon
         monkeypatch, fake, _needs_review(odoo_task_id=501), matching=matching
     )
 
-    def adopt_external(request_id, owner, *, pto_leave_id, now):
+    def adopt_external(
+        request_id, owner, *, pto_leave_id, workflow_now, lease_now
+    ):
         current["row"] = replace(current["row"], pto_leave_id=pto_leave_id)
         fake.events.append(("adopt_pto", pto_leave_id))
         return current["row"]
@@ -853,16 +899,25 @@ def test_manual_resolution_audits_posts_escaped_note_then_closes_without_pto(mon
     fake = ReviewFake()
     current = wire_review(monkeypatch, fake, _needs_review(odoo_task_id=501))
 
-    def finalize_manual(request_id, owner, *, actor_upn, actor_name, note, now):
+    def finalize_manual(
+        request_id,
+        owner,
+        *,
+        actor_upn,
+        actor_name,
+        note,
+        workflow_now,
+        lease_now,
+    ):
         current["row"] = replace(
             current["row"],
             state="resolved_manually",
             manual_resolution_note=note,
             decided_by_upn=actor_upn,
             decided_by_name=actor_name,
-            resolved_at=now,
+            resolved_at=workflow_now,
         )
-        fake.events.append(("manual", actor_upn, actor_name, note, now))
+        fake.events.append(("manual", actor_upn, actor_name, note, workflow_now))
         return current["row"]
 
     monkeypatch.setattr(review.store, "finalize_manual", finalize_manual, raising=False)
@@ -1146,7 +1201,8 @@ def wire_resolution_progress(monkeypatch, current, fake):
         attempts,
         next_at,
         error,
-        now,
+        workflow_now,
+        lease_now,
     ):
         assert current["row"].task_resolution_step == expected_step
         current["row"] = replace(

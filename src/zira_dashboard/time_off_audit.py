@@ -6,7 +6,7 @@ leave type, and dates to stand alone. See the design spec.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from psycopg2.extras import Json
@@ -18,9 +18,10 @@ _INSERT_DECISION_SQL = (
     "INSERT INTO time_off_decisions "
     "(request_id, odoo_leave_id, person_odoo_id, person_name, leave_type, "
     " date_from, date_to, hour_from, hour_to, action, result_state, "
-    " reason, actor_upn, actor_name, source, request_kind, request_key, detail) "
+    " reason, actor_upn, actor_name, source, request_kind, request_key, detail, "
+    "decided_at) "
     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-    "%s, %s, %s)"
+    "%s, %s, %s, COALESCE(%s, now()))"
 )
 
 
@@ -44,6 +45,7 @@ def record_decision(
     request_kind: str = "time_off",
     request_key: str | None = None,
     detail: dict[str, Any] | None = None,
+    decided_at: datetime | None = None,
 ) -> None:
     """Insert one decision row. ``action`` is 'approve' or 'deny'."""
     db.execute(
@@ -67,6 +69,7 @@ def record_decision(
             request_kind=request_kind,
             request_key=request_key,
             detail=detail,
+            decided_at=decided_at,
         ),
     )
 
@@ -96,6 +99,7 @@ def _decision_params(
     request_kind: str = "time_off",
     request_key: str | None = None,
     detail: dict[str, Any] | None = None,
+    decided_at: datetime | None = None,
 ) -> tuple[Any, ...]:
     return (
         request_id,
@@ -116,6 +120,7 @@ def _decision_params(
         request_kind,
         request_key,
         Json(detail) if detail is not None else None,
+        decided_at,
     )
 
 

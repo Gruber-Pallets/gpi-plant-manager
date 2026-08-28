@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 from . import db
@@ -47,18 +48,21 @@ def record_event_with_cursor(
     source: str | None = "inbox",
     reversible: bool = False,
     detail: Any | None = None,
+    resolved_at: datetime | None = None,
 ) -> int:
     """Insert one event with an existing transaction cursor and return its id."""
     cursor.execute(
         "INSERT INTO inbox_events "
         "(item_kind, item_key, person_name, category_label, action, outcome, "
         " before_value, after_value, reason, actor_upn, actor_name, source, "
-        " reversible, detail) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb) "
+        " reversible, detail, resolved_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+        "%s::jsonb, COALESCE(%s, now())) "
         "RETURNING id",
         (item_kind, item_key, person_name, category_label, action, outcome,
          before_value, after_value, reason, actor_upn, actor_name, source,
-         reversible, json.dumps(detail, default=str) if detail is not None else None),
+         reversible, json.dumps(detail, default=str) if detail is not None else None,
+         resolved_at),
     )
     return int(cursor.fetchone()["id"])
 
@@ -79,6 +83,7 @@ def record_event(
     source: str | None = "inbox",
     reversible: bool = False,
     detail: Any | None = None,
+    resolved_at: datetime | None = None,
 ) -> int:
     """Insert one event row and return its id (for later undo correlation)."""
     with db.cursor() as cursor:
@@ -98,6 +103,7 @@ def record_event(
             source=source,
             reversible=reversible,
             detail=detail,
+            resolved_at=resolved_at,
         )
 
 

@@ -68,21 +68,21 @@ def approve(
     source: str | None,
     now: datetime | None = None,
 ) -> ConversionResult:
-    if now is not None:
-        _now(now)
+    workflow_now = _now(now)
     owner = uuid4()
     current = store.claim_request(request_id, owner, _lease_now(), lease_seconds=120)
     if current is None:
         return ConversionResult("busy", _BUSY_MESSAGE, None)
     try:
-        return _resume_claim(current, owner, actor_upn, actor_name, source)
+        return _resume_claim(
+            current, owner, actor_upn, actor_name, source, workflow_now
+        )
     finally:
         store.release_claim(request_id, owner, now=_lease_now())
 
 
 def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
-    if now is not None:
-        _now(now)
+    workflow_now = _now(now)
     owner = uuid4()
     current = store.claim_request(request_id, owner, _lease_now(), lease_seconds=120)
     if current is None:
@@ -92,7 +92,7 @@ def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
             return ConversionResult(
                 "pending", "This request is waiting for manager approval.", current
             )
-        return resume_claimed(current, owner)
+        return resume_claimed(current, owner, workflow_now)
     finally:
         store.release_claim(request_id, owner, now=_lease_now())
 
@@ -100,6 +100,7 @@ def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
 def resume_claimed(
     request: store.AbsencePtoRequest,
     owner: UUID,
+    workflow_now: datetime,
 ) -> ConversionResult:
     """Resume one row already leased by the bounded reconciler claim."""
     current = store.renew_claim(request.id, owner, _lease_now(), lease_seconds=120)
@@ -109,6 +110,7 @@ def resume_claimed(
         current.decided_by_upn,
         current.decided_by_name,
         "reconciler",
+        _now(workflow_now),
     )
 
 
@@ -272,11 +274,13 @@ def _needs_review(
     message = str(error) or type(error).__name__
     if request.state in {"pending", "converting", "needs_review"}:
         try:
+            current = _lease_now()
             request = store.mark_needs_review(
                 request.id,
                 owner,
                 error=message[:500],
-                now=_lease_now(),
+                workflow_now=current,
+                lease_now=current,
             )
         except store.StaleTransition:
             return ConversionResult("busy", _BUSY_MESSAGE, None)
@@ -551,6 +555,7 @@ def _resume_claim(
     actor_upn: str | None,
     actor_name: str | None,
     source: str | None,
+    workflow_now: datetime,
 ) -> ConversionResult:
     post_refusal = request.conversion_step != "not_started"
     try:
@@ -787,7 +792,8 @@ def _resume_claim(
             actor_upn=actor_upn or request.decided_by_upn,
             actor_name=actor_name or request.decided_by_name,
             source=source,
-            now=_lease_now(),
+            workflow_now=_now(workflow_now),
+            lease_now=_lease_now(),
         )
         try:
             _invalidate_after_commit(request)
