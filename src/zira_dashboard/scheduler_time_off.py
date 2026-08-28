@@ -10,9 +10,13 @@ approved in Odoo (``state != 'validate'``) so the template can style them.
 from __future__ import annotations
 
 from datetime import date as _date
+import logging
 
 from . import db
 from .time_format import fmt_decimal_hour
+
+
+_log = logging.getLogger(__name__)
 
 # Requests in these states count as "happening" on the scheduler. 'validate'
 # is approved; the rest are pending. Refused/cancelled/draft-cancel excluded.
@@ -151,9 +155,17 @@ def time_off_entries_for_day(day: _date) -> list[dict]:
         absences = []
     if absences:
         absent_names = {str(row["name"]) for row in absences}
-        linked_states = _absence_pto_states(
-            day, {str(row["emp_id"]) for row in absences}
-        )
+        try:
+            linked_states = _absence_pto_states(
+                day, {str(row["emp_id"]) for row in absences}
+            )
+        except Exception:  # noqa: BLE001 - attendance must remain visible
+            _log.warning(
+                "linked absence PTO state lookup failed for %s",
+                day,
+                exc_info=True,
+            )
+            linked_states = {}
         out = [e for e in out if e["name"] not in absent_names]
         for absence in sorted(absences, key=lambda row: str(row["name"])):
             name = str(absence["name"])

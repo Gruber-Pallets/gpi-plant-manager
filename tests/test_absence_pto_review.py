@@ -386,6 +386,71 @@ def test_reconcile_rollover_and_resume_are_isolated_with_exact_counts(monkeypatc
     assert released == [41, 42, 43, 44]
 
 
+def test_rollover_invalidates_staffing_and_page_caches_before_wendy_delivery(
+    monkeypatch,
+):
+    pending = _request(41, state="pending")
+    reviewed = replace(pending, state="needs_review")
+    events = []
+    monkeypatch.setattr(
+        review.store,
+        "mark_needs_review",
+        lambda *args, **kwargs: events.append("commit") or reviewed,
+    )
+    monkeypatch.setattr(
+        review.absence_pto_cache.staffing,
+        "invalidate_schedule_cache",
+        lambda day: events.append(("schedule", day)),
+    )
+    monkeypatch.setattr(
+        review.absence_pto_cache._http_cache,
+        "invalidate_all_cache",
+        lambda: events.append(("responses", None)),
+    )
+    monkeypatch.setattr(
+        review,
+        "_sync_claimed_task",
+        lambda row, owner, now: events.append(("wendy", row.id)) or "escalated",
+    )
+
+    assert review._reconcile_claimed(pending, OWNER, NOW) == "escalated"
+    assert events == [
+        "commit",
+        ("schedule", pending.absence_day),
+        ("responses", None),
+        ("wendy", 41),
+    ]
+
+
+def test_rollover_cache_failures_cannot_block_wendy_delivery(monkeypatch):
+    pending = _request(41, state="pending")
+    reviewed = replace(pending, state="needs_review")
+    delivered = []
+    monkeypatch.setattr(
+        review.store,
+        "mark_needs_review",
+        lambda *args, **kwargs: reviewed,
+    )
+    monkeypatch.setattr(
+        review.absence_pto_cache.staffing,
+        "invalidate_schedule_cache",
+        lambda day: (_ for _ in ()).throw(RuntimeError("schedule cache failed")),
+    )
+    monkeypatch.setattr(
+        review.absence_pto_cache._http_cache,
+        "invalidate_all_cache",
+        lambda: (_ for _ in ()).throw(RuntimeError("page cache failed")),
+    )
+    monkeypatch.setattr(
+        review,
+        "_sync_claimed_task",
+        lambda row, owner, now: delivered.append(row.id) or "escalated",
+    )
+
+    assert review._reconcile_claimed(pending, OWNER, NOW) == "escalated"
+    assert delivered == [41]
+
+
 def test_reconcile_release_exception_keeps_operation_context_and_continues(
     monkeypatch, caplog
 ):

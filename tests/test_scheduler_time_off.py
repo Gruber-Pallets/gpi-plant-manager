@@ -264,3 +264,37 @@ def test_linked_absence_states_are_fetched_once_for_all_absent_employees(monkeyp
     assert rows["Ana"]["pay_type"] == "Absent · PTO"
     assert rows["Bea"]["pay_type"] == "Absent · PTO pending"
     assert len(rows) == 2
+
+
+def test_linked_state_lookup_failure_keeps_plain_attendance_absence(
+    monkeypatch, caplog
+):
+    day = date(2026, 8, 20)
+    monkeypatch.setattr(sto, "_rows_for_day", lambda _day: [])
+    monkeypatch.setattr(sto, "_cleared_partial_names", lambda _day: set())
+    from zira_dashboard import late_report
+
+    monkeypatch.setattr(
+        late_report,
+        "absences_for_day",
+        lambda _day: [{"emp_id": "44", "name": "Ana"}],
+    )
+    monkeypatch.setattr(
+        sto,
+        "_absence_pto_states",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("linked state unavailable")),
+    )
+
+    row = sto.time_off_entries_for_day(day)[0]
+
+    assert row == {
+        "name": "Ana",
+        "hours": None,
+        "pay_type": "Absent",
+        "time_range": "",
+        "timing_label": "Absent",
+        "derived": False,
+        "manual_absent": True,
+        "pending": False,
+    }
+    assert "linked absence PTO state lookup failed" in caplog.text

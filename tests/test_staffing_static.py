@@ -138,6 +138,19 @@ def test_manual_absence_rows_keep_light_red_style_without_edit_action():
     assert "recorded absences" in html
 
 
+def test_historical_staffing_uses_live_cache_bucket_for_mutable_pto_labels():
+    from datetime import date
+    from zira_dashboard import _http_cache
+    from zira_dashboard.routes import staffing
+
+    today = date(2026, 8, 28)
+    assert staffing._staffing_uses_live_cache(date(2026, 8, 20), today) is True
+    assert staffing._staffing_uses_live_cache(today, today) is True
+    assert staffing._staffing_uses_live_cache(date(2026, 8, 29), today) is True
+    assert _http_cache._RESPONSE_CACHE_TODAY._ttl <= 60
+    assert _http_cache._TODAY_MAX_AGE <= 60
+
+
 def test_scheduler_script_posts_editor_actions_and_restores_focus():
     js = _script()
 

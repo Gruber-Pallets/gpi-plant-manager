@@ -67,7 +67,12 @@ from .timeclock import (
 
 router = APIRouter()
 
-_OPEN_ABSENCE_PTO_STATES = frozenset({"pending", "converting", "needs_review"})
+_LINKED_MIRROR_EXCLUSION = (
+    "NOT EXISTS (SELECT 1 FROM absence_pto_requests linked "
+    "WHERE linked.person_odoo_id = r.person_odoo_id "
+    "AND (linked.pto_leave_id = r.odoo_leave_id "
+    "OR linked.original_absence_leave_id = r.odoo_leave_id))"
+)
 _ABSENCE_PTO_STATE_BUCKETS = {
     "pending": "Pending",
     "converting": "Processing",
@@ -98,8 +103,9 @@ def _all_count(person_odoo_id: int) -> int:
     My Requests action so the user sees there is history to look at even
     after everything has been approved or refused."""
     rows = db.query(
-        "SELECT COUNT(*) AS n FROM time_off_requests "
-        "WHERE person_odoo_id = %s",
+        "SELECT COUNT(*) AS n FROM time_off_requests r "
+        "WHERE r.person_odoo_id = %s AND "
+        f"{_LINKED_MIRROR_EXCLUSION}",
         (person_odoo_id,),
     )
     return rows[0]["n"] if rows else 0
@@ -128,12 +134,13 @@ def _absence_pto_counts(person_odoo_id: int) -> tuple[int, int, int]:
     if person_odoo_id <= 0:
         return 0, 0, 0
     candidates = absence_pto.list_candidates(person_odoo_id, plant_today())
-    linked = absence_pto.employee_requests(person_odoo_id)
+    counts = absence_pto.employee_request_counts(person_odoo_id)
     eligible_count = sum(1 for candidate in candidates if candidate.eligible)
-    open_count = sum(
-        1 for row in linked if row.state in _OPEN_ABSENCE_PTO_STATES
+    return (
+        eligible_count + counts.actionable,
+        counts.unresolved,
+        counts.total,
     )
-    return eligible_count + open_count, open_count, len(linked)
 
 
 @router.get("/timeclock/time-off/{token}", response_class=HTMLResponse)
@@ -684,13 +691,8 @@ def _list_my_requests(person_odoo_id: int) -> list[dict]:
         "FROM time_off_requests r "
         "LEFT JOIN leave_types_cache t "
         "ON t.holiday_status_id = r.holiday_status_id "
-        "WHERE r.person_odoo_id = %s "
-        "AND NOT EXISTS ("
-        "SELECT 1 FROM absence_pto_requests linked "
-        "WHERE linked.person_odoo_id = r.person_odoo_id "
-        "AND (linked.pto_leave_id = r.odoo_leave_id "
-        "OR linked.original_absence_leave_id = r.odoo_leave_id)"
-        ") "
+        "WHERE r.person_odoo_id = %s AND "
+        f"{_LINKED_MIRROR_EXCLUSION} "
         "ORDER BY r.created_at DESC LIMIT 100",
         (person_odoo_id,),
     )
@@ -725,7 +727,7 @@ def _combined_my_requests(person_odoo_id: int, token: str) -> list[dict]:
             sort_at = sort_at.replace(tzinfo=UTC)
         combined.append((sort_at, row))
 
-    for linked in absence_pto.employee_requests(person_odoo_id):
+    for linked in absence_pto.employee_requests(person_odoo_id, limit=100):
         row = {
             "request_kind": "absence_pto",
             "id": linked.id,

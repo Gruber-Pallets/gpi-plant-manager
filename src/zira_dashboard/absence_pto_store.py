@@ -81,6 +81,13 @@ class AbsencePtoRequest:
     task_resolution_error: str | None = None
 
 
+@dataclass(frozen=True)
+class PersonRequestCounts:
+    total: int
+    unresolved: int
+    actionable: int
+
+
 def _positive_int(value: object, field: str) -> int:
     if type(value) is not int or value <= 0:
         raise ValueError(f"{field} must be a positive integer")
@@ -328,6 +335,75 @@ def list_for_person(emp_id: str) -> list[AbsencePtoRequest]:
         (_required_text(emp_id, "emp_id"),),
     )
     return [_request_from_row(row) for row in rows]
+
+
+def _history_limit(value: object) -> int:
+    if type(value) is not int or not 1 <= value <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    return value
+
+
+def list_history_for_person(
+    emp_id: str, *, limit: int = 100
+) -> list[AbsencePtoRequest]:
+    """Return a bounded newest-first employee history for presentation."""
+    rows = db.query(
+        f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests WHERE emp_id = %s "
+        "ORDER BY requested_at DESC, id DESC LIMIT %s",
+        (_required_text(emp_id, "emp_id"), _history_limit(limit)),
+    )
+    return [_request_from_row(row) for row in rows]
+
+
+def request_counts_for_person(emp_id: str) -> PersonRequestCounts:
+    """Return constant-size history and unresolved counts for landing badges."""
+    rows = db.query(
+        "SELECT COUNT(*) AS total, "
+        "COUNT(*) FILTER (WHERE state IN "
+        "('pending', 'converting', 'needs_review')) AS unresolved, "
+        "COUNT(*) FILTER (WHERE state IN "
+        "('pending', 'converting')) AS actionable "
+        "FROM absence_pto_requests WHERE emp_id = %s",
+        (_required_text(emp_id, "emp_id"),),
+    )
+    if len(rows) != 1:
+        raise ValueError("request count query must return exactly one row")
+    counts = PersonRequestCounts(
+        total=_nonnegative_int(rows[0].get("total"), "total"),
+        unresolved=_nonnegative_int(rows[0].get("unresolved"), "unresolved"),
+        actionable=_nonnegative_int(rows[0].get("actionable"), "actionable"),
+    )
+    if counts.actionable > counts.unresolved or counts.unresolved > counts.total:
+        raise ValueError("request counts are inconsistent")
+    return counts
+
+
+def blocking_days_for_person(
+    emp_id: str, period_start: date, period_end: date
+) -> set[date]:
+    """Return only blocking days in the candidate period, without row history."""
+    if (
+        not isinstance(period_start, date)
+        or isinstance(period_start, datetime)
+        or not isinstance(period_end, date)
+        or isinstance(period_end, datetime)
+        or period_start > period_end
+    ):
+        raise ValueError("period bounds must be ordered dates")
+    rows = db.query(
+        "SELECT DISTINCT absence_day FROM absence_pto_requests "
+        "WHERE emp_id = %s AND absence_day BETWEEN %s AND %s "
+        "AND state IN ('pending', 'converting', 'approved', "
+        "'needs_review', 'resolved_manually')",
+        (_required_text(emp_id, "emp_id"), period_start, period_end),
+    )
+    result = set()
+    for row in rows:
+        day = row.get("absence_day")
+        if not isinstance(day, date) or isinstance(day, datetime):
+            raise ValueError("absence_day must be a date")
+        result.add(day)
+    return result
 
 
 def list_pending() -> list[AbsencePtoRequest]:
@@ -1093,21 +1169,25 @@ def finalize_denied(
 
 __all__ = [
     "AbsencePtoRequest",
+    "PersonRequestCounts",
     "StaleTransition",
     "claim_due",
     "claim_request",
     "create_request",
     "adopt_external_pto",
+    "blocking_days_for_person",
     "get_request",
     "finalize_approved",
     "finalize_denied",
     "finalize_manual",
     "list_due",
     "list_for_person",
+    "list_history_for_person",
     "list_pending",
     "mark_needs_review",
     "release_claim",
     "renew_claim",
+    "request_counts_for_person",
     "save_resolution_delivery",
     "save_task_delivery",
     "transition",
