@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-28
 
+### Simpler worker-stint bar plan
+
+- **A plan is ready to keep each worker's time on one normal-size production bar.** Names, times, and goal details will appear only when someone points to or taps a section. Nothing in the app has changed yet.
+
 ### Pay-period dates stay together
 
 - **Plant Manager now uses one shared pay-period calendar.** This helps new pay tools use the same dates as the Hours page. Nothing new is showing to workers yet.
