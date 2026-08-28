@@ -86,7 +86,13 @@ def test_schema_has_linked_request_constraints_and_future_safe_columns():
     assert "absence_pto_requests_pto_leave_uniq" in SCHEMA_DDL
     assert "absence_pto_requests_due_idx" in SCHEMA_DDL
     assert "ALTER TABLE absence_pto_requests" in SCHEMA_DDL
-    assert "ADD COLUMN IF NOT EXISTS id BIGSERIAL" in SCHEMA_DDL
+    assert "id BIGSERIAL PRIMARY KEY" in SCHEMA_DDL
+    assert "ADD COLUMN IF NOT EXISTS id BIGINT;" in SCHEMA_DDL
+    alter_path = SCHEMA_DDL.split(
+        "-- Keep bootstrap parity if an earlier deployment created only part of the",
+        1,
+    )[1]
+    assert "ADD COLUMN IF NOT EXISTS id BIGSERIAL" not in alter_path
     assert "ADD COLUMN IF NOT EXISTS lease_owner UUID" in SCHEMA_DDL
     assert "absence_pto_requests_balance_check" in SCHEMA_DDL
     assert "absence_pto_requests_id_seq" in SCHEMA_DDL
@@ -612,6 +618,101 @@ def test_live_postgres_recovers_a_valid_partial_table_and_rejects_invalid_rows(
                         db.bootstrap_schema()
                 cur.execute("ROLLBACK TO SAVEPOINT invalid_partial_bootstrap")
                 cur.execute("RELEASE SAVEPOINT invalid_partial_bootstrap")
+                raise RollBackIntegrationData
+    finally:
+        db.shutdown_pool()
+
+
+@pytest.mark.skipif(
+    not SAFE_TEST_DATABASE,
+    reason=(
+        "requires ABSENCE_PTO_TEST_DATABASE=1 and a loopback DATABASE_URL "
+        "whose database name ends in _test"
+    ),
+)
+def test_live_postgres_rejects_nonempty_partial_table_without_inventing_ids(
+    monkeypatch,
+):
+    from zira_dashboard import db
+
+    class RollBackIntegrationData(Exception):
+        pass
+
+    db.shutdown_pool()
+    try:
+        db.init_pool(minconn=1, maxconn=2)
+        db.bootstrap_schema()
+        with pytest.raises(RollBackIntegrationData):
+            with db.cursor() as cur:
+                cur.execute("DROP TABLE absence_pto_requests")
+                cur.execute(
+                    """
+                    CREATE TABLE absence_pto_requests (
+                        absence_day DATE,
+                        emp_id TEXT,
+                        person_odoo_id INTEGER,
+                        person_name TEXT,
+                        holiday_status_id INTEGER,
+                        leave_type_name TEXT,
+                        balance_at_submit NUMERIC,
+                        state TEXT,
+                        conversion_step TEXT,
+                        task_attempts INTEGER,
+                        requested_at TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ
+                    )
+                    """
+                )
+                original = (
+                    date(2099, 1, 7),
+                    "pytest-partial-no-id",
+                    44,
+                    "No ID Worker",
+                    7,
+                    "Paid Time Off",
+                    Decimal("8"),
+                    "pending",
+                    "not_started",
+                    0,
+                    NOW,
+                    NOW,
+                    NOW,
+                )
+                cur.execute(
+                    """
+                    INSERT INTO absence_pto_requests (
+                        absence_day, emp_id, person_odoo_id, person_name,
+                        holiday_status_id, leave_type_name, balance_at_submit,
+                        state, conversion_step, task_attempts, requested_at,
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    original,
+                )
+                cur.execute("SAVEPOINT missing_id_bootstrap")
+                with monkeypatch.context() as transaction_patch:
+                    transaction_patch.setattr(db, "cursor", lambda: nullcontext(cur))
+                    with pytest.raises(psycopg2.errors.NotNullViolation):
+                        db.bootstrap_schema()
+                cur.execute("ROLLBACK TO SAVEPOINT missing_id_bootstrap")
+                cur.execute("RELEASE SAVEPOINT missing_id_bootstrap")
+
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = 'absence_pto_requests'"
+                )
+                columns = {row["column_name"] for row in cur.fetchall()}
+                assert "id" not in columns
+                cur.execute(
+                    "SELECT absence_day, emp_id, person_odoo_id, person_name, "
+                    "holiday_status_id, leave_type_name, balance_at_submit, state, "
+                    "conversion_step, task_attempts, requested_at, created_at, updated_at "
+                    "FROM absence_pto_requests"
+                )
+                unchanged = cur.fetchone()
+                assert tuple(unchanged.values()) == original
                 raise RollBackIntegrationData
     finally:
         db.shutdown_pool()

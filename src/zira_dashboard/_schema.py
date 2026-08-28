@@ -2231,7 +2231,7 @@ CREATE TABLE IF NOT EXISTS absence_pto_requests (
 
 -- Keep bootstrap parity if an earlier deployment created only part of the
 -- table. Each statement is safe to run on every process start.
-ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS id BIGINT;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS absence_day DATE;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS emp_id TEXT;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS person_odoo_id INTEGER;
