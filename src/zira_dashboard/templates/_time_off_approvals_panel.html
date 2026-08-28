@@ -36,6 +36,9 @@
               {% if r.past_absence %}<span class="priority-pill info">Past absence</span>{% endif %}
               {% if r.past_due %}<span class="priority-pill urgent">Past due</span>{% endif %}
               <span class="priority-pill {{ 'warn' if r.awaiting_second else 'info' }}">{{ r.state_label or 'To approve' }}</span>
+              {% if r.request_kind == 'absence_pto' and r.state == 'needs_review' %}
+                <div class="muted">{{ r.review_reason or 'This needs payroll review.' }}</div>
+              {% endif %}
               {% if r.past_absence %}
                 <div class="muted">{{ r.treatment_label or 'Absent · unpaid' }} · 1 PTO day</div>
               {% endif %}

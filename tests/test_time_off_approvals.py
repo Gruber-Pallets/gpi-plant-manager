@@ -138,6 +138,7 @@ def test_linked_pending_payload_has_distinct_action_contract(monkeypatch):
         "treatment_label": "Absent · unpaid",
         "period_open": True,
         "period_label": "Pay period open",
+        "review_reason": None,
         "awaiting_second": False,
         "request_kind": "absence_pto",
         "action_base": "/api/exceptions/absence-pto/41",
@@ -169,6 +170,31 @@ def test_needs_review_payload_stays_visible_with_closed_period_state(monkeypatch
     assert linked["state_label"] == "Needs Wendy review"
     assert linked["period_open"] is False
     assert linked["period_label"] == "Pay period closed"
+    assert linked["review_reason"] == "Period closed"
+
+
+def test_needs_review_payload_uses_safe_reason_fallback(monkeypatch):
+    monkeypatch.setattr(page, "_pending_rows", lambda today: [])
+    monkeypatch.setattr(
+        page.absence_pto_store,
+        "list_pending",
+        lambda: [_linked(state="needs_review", sync_error=None)],
+    )
+    monkeypatch.setattr(page.time_off_context, "balance_for", lambda *args: None)
+    monkeypatch.setattr(
+        page.time_off_context,
+        "coverage_for",
+        lambda *args: {"count": 0, "scope": "plant"},
+    )
+    monkeypatch.setattr(
+        page.staffing_hours,
+        "current_pay_period_bounds",
+        lambda today: (date(2026, 8, 23), date(2026, 9, 5)),
+    )
+
+    linked = page._pending_payload(date(2026, 8, 28))[0]
+
+    assert linked["review_reason"] == "This needs payroll review."
 
 
 def test_pending_payload_flags_over_balance_and_past_due(monkeypatch):
@@ -382,3 +408,45 @@ def test_approvals_markup_and_js_dispatch_by_server_action_metadata():
     assert "base + '/handled'" in js
     assert "resp.warning" in js
     assert "resp.error" in js
+    assert "resp.status === 'needs_review'" in js
+    assert "window.location.reload()" in js
+
+
+def test_needs_review_reason_renders_visibly_and_html_escaped():
+    from pathlib import Path
+
+    from jinja2 import Environment
+
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "zira_dashboard"
+        / "templates"
+        / "_time_off_approvals_panel.html"
+    ).read_text(encoding="utf-8")
+    reason = "Period closed <script>alert('no')</script>"
+    rendered = Environment(autoescape=True).from_string(template).render(
+        pending=[{
+            "id": 41,
+            "person_name": "Maria",
+            "leave_type": "Paid Time Off",
+            "date_label": "2026-08-20",
+            "request_kind": "absence_pto",
+            "action_base": "/api/exceptions/absence-pto/41",
+            "state": "needs_review",
+            "state_label": "Needs Wendy review",
+            "review_reason": reason,
+            "past_absence": True,
+            "treatment_label": "Absent · unpaid",
+            "past_due": False,
+            "over_balance": False,
+            "awaiting_second": False,
+            "balance": None,
+            "period_open": False,
+            "period_label": "Pay period closed",
+        }],
+        recent=[],
+    )
+
+    assert "Period closed &lt;script&gt;alert" in rendered
+    assert "<script>alert('no')</script>" not in rendered

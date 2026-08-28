@@ -272,6 +272,86 @@ def test_deny_keeps_a_supplied_workflow_time_out_of_live_lease_checks(monkeypatc
     assert seen["workflow_now"] == workflow_now
 
 
+def test_deny_returns_committed_result_when_claim_release_raises(monkeypatch, caplog):
+    pending = _request(state="pending")
+    denied = SimpleNamespace(state="denied", absence_day=ABSENCE_DAY)
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda *args, **kwargs: pending,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "finalize_denied",
+        lambda *args, **kwargs: denied,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "release_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("release failed")),
+    )
+
+    result = domain.deny(
+        41, "dale@gruberpallets.com", "Dale", "Save the PTO", "page"
+    )
+
+    assert result is denied
+    assert "release failed" in caplog.text
+
+
+def test_deny_logs_false_claim_release_after_commit(monkeypatch, caplog):
+    pending = _request(state="pending")
+    denied = SimpleNamespace(state="denied", absence_day=ABSENCE_DAY)
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda *args, **kwargs: pending,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "finalize_denied",
+        lambda *args, **kwargs: denied,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "release_claim",
+        lambda *args, **kwargs: False,
+    )
+
+    result = domain.deny(
+        41, "dale@gruberpallets.com", "Dale", "Save the PTO", "page"
+    )
+
+    assert result is denied
+    assert "could not confirm claim release" in caplog.text
+
+
+def test_deny_release_failure_does_not_mask_primary_finalization_error(
+    monkeypatch,
+):
+    pending = _request(state="pending")
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda *args, **kwargs: pending,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "finalize_denied",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("audit failed")),
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "release_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("release failed")),
+    )
+
+    with pytest.raises(ValueError, match="audit failed"):
+        domain.deny(
+            41, "dale@gruberpallets.com", "Dale", "Save the PTO", "page"
+        )
+
+
 @pytest.mark.parametrize("day", [TODAY, date(2026, 8, 29)])
 def test_submit_rejects_current_or_future_day_before_database_lookup(monkeypatch, day):
     monkeypatch.setattr(

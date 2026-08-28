@@ -105,6 +105,35 @@ def test_approve_route_captures_actor_and_dispatches_one_sync_domain_call(monkey
 
 
 @pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        ([], "Request body must be a JSON object."),
+        ({"source": []}, "Source must be text."),
+        ({"source": {}}, "Source must be text."),
+        ({"source": False}, "Source must be text."),
+    ],
+)
+def test_approve_rejects_non_text_payload_values_before_actor_or_domain(
+    monkeypatch, payload, error
+):
+    monkeypatch.setattr(
+        routes.inbox_log,
+        "actor_from",
+        lambda request: pytest.fail("invalid JSON must fail before actor lookup"),
+    )
+    monkeypatch.setattr(
+        routes.absence_pto_conversion,
+        "approve",
+        lambda *args: pytest.fail("invalid JSON must not reach conversion/Odoo"),
+    )
+
+    response = _run(routes.approve_absence_pto, payload)
+
+    assert response.status_code == 400
+    assert _body(response) == {"ok": False, "error": error}
+
+
+@pytest.mark.parametrize(
     ("status", "message", "status_code", "message_key"),
     [
         ("busy", "This request is already being checked.", 409, "error"),
@@ -152,6 +181,38 @@ def test_deny_route_requires_reason_before_calling_domain(monkeypatch):
     assert _body(response) == {"ok": False, "error": "A reason is required to deny."}
 
 
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        ([], "Request body must be a JSON object."),
+        ({"reason": []}, "Reason must be text."),
+        ({"reason": {}}, "Reason must be text."),
+        ({"reason": False}, "Reason must be text."),
+        ({"reason": "No", "source": []}, "Source must be text."),
+        ({"reason": "No", "source": {}}, "Source must be text."),
+        ({"reason": "No", "source": True}, "Source must be text."),
+    ],
+)
+def test_deny_rejects_non_text_payload_values_before_actor_or_domain(
+    monkeypatch, payload, error
+):
+    monkeypatch.setattr(
+        routes.inbox_log,
+        "actor_from",
+        lambda request: pytest.fail("invalid JSON must fail before actor lookup"),
+    )
+    monkeypatch.setattr(
+        routes.absence_pto,
+        "deny",
+        lambda *args: pytest.fail("invalid JSON must not reach denial/Odoo"),
+    )
+
+    response = _run(routes.deny_absence_pto, payload)
+
+    assert response.status_code == 400
+    assert _body(response) == {"ok": False, "error": error}
+
+
 def test_deny_route_captures_actor_refreshes_cache_and_returns_decision(monkeypatch):
     calls = []
     denied = _row(state="denied", denial_reason="Not enough PTO")
@@ -184,6 +245,46 @@ def test_deny_route_captures_actor_refreshes_cache_and_returns_decision(monkeypa
     ]
 
 
+def test_deny_route_refreshes_after_committed_denial_even_if_release_raises(
+    monkeypatch,
+):
+    pending = _row()
+    denied = _row(state="denied", denial_reason="Not enough PTO")
+    refreshed = []
+    monkeypatch.setattr(
+        routes.inbox_log,
+        "actor_from",
+        lambda request: ("dale@gruberpallets.com", "Dale Gruber"),
+    )
+    monkeypatch.setattr(
+        routes.absence_pto.absence_pto_store,
+        "claim_request",
+        lambda *args, **kwargs: pending,
+    )
+    monkeypatch.setattr(
+        routes.absence_pto.absence_pto_store,
+        "finalize_denied",
+        lambda *args, **kwargs: denied,
+    )
+    monkeypatch.setattr(
+        routes.absence_pto.absence_pto_store,
+        "release_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("release failed")),
+    )
+    monkeypatch.setattr(
+        routes, "_refresh_surfaces", lambda request: refreshed.append(request)
+    )
+
+    response = _run(
+        routes.deny_absence_pto,
+        {"reason": "Not enough PTO", "source": "page"},
+    )
+
+    assert response.status_code == 200
+    assert _body(response)["status"] == "denied"
+    assert refreshed == [denied]
+
+
 def test_handled_route_requires_note_before_calling_domain(monkeypatch):
     monkeypatch.setattr(
         routes.absence_pto_review,
@@ -195,6 +296,38 @@ def test_handled_route_requires_note_before_calling_domain(monkeypatch):
 
     assert response.status_code == 400
     assert _body(response) == {"ok": False, "error": "A note is required to mark this handled."}
+
+
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        ([], "Request body must be a JSON object."),
+        ({"note": []}, "Note must be text."),
+        ({"note": {}}, "Note must be text."),
+        ({"note": False}, "Note must be text."),
+        ({"note": "Handled", "source": []}, "Source must be text."),
+        ({"note": "Handled", "source": {}}, "Source must be text."),
+        ({"note": "Handled", "source": True}, "Source must be text."),
+    ],
+)
+def test_handled_rejects_non_text_payload_values_before_actor_or_domain(
+    monkeypatch, payload, error
+):
+    monkeypatch.setattr(
+        routes.inbox_log,
+        "actor_from",
+        lambda request: pytest.fail("invalid JSON must fail before actor lookup"),
+    )
+    monkeypatch.setattr(
+        routes.absence_pto_review,
+        "resolve_manually",
+        lambda *args: pytest.fail("invalid JSON must not reach manual resolution/Odoo"),
+    )
+
+    response = _run(routes.handle_absence_pto, payload)
+
+    assert response.status_code == 400
+    assert _body(response) == {"ok": False, "error": error}
 
 
 def test_handled_route_captures_actor_refreshes_cache_and_returns_result(monkeypatch):

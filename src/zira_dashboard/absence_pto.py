@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+import logging
 from typing import Final
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ _ACTIVE_UNIQUE_INDEX: Final = "absence_pto_requests_active_uniq"
 _DUPLICATE_MESSAGE: Final = "A PTO request already exists for this absence."
 _TYPE_MESSAGE: Final = "Paid Time Off is not available right now."
 _BALANCE_MESSAGE: Final = "Your PTO balance is not available right now."
+_log = logging.getLogger(__name__)
 
 
 def _clock() -> datetime:
@@ -243,4 +245,19 @@ def deny(
             lease_now=_clock(),
         )
     finally:
-        absence_pto_store.release_claim(request_id, owner, now=_clock())
+        try:
+            released = absence_pto_store.release_claim(
+                request_id, owner, now=_clock()
+            )
+            if not released:
+                _log.warning(
+                    "absence PTO denial could not confirm claim release for %s",
+                    request_id,
+                )
+        except Exception as error:  # noqa: BLE001 - preserve primary/committed result
+            _log.warning(
+                "absence PTO denial claim release failed for %s: %s",
+                request_id,
+                error,
+                exc_info=True,
+            )

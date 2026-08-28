@@ -149,6 +149,11 @@ def _pending_payload(today: date) -> list[dict[str, Any]]:
             "treatment_label": "Absent · unpaid",
             "period_open": period_open,
             "period_label": "Pay period open" if period_open else "Pay period closed",
+            "review_reason": (
+                (request.sync_error or "This needs payroll review.")
+                if request.state == "needs_review"
+                else None
+            ),
             "awaiting_second": False,
             "request_kind": "absence_pto",
             "action_base": f"/api/exceptions/absence-pto/{request.id}",
