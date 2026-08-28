@@ -2188,4 +2188,87 @@ CREATE INDEX IF NOT EXISTS wc_time_attributions_breakdown_idx
 -- averages and the recycling per-WC expected calc to shrink the expected
 -- denominator without touching units.
 ALTER TABLE production_daily ADD COLUMN IF NOT EXISTS excluded_minutes NUMERIC NOT NULL DEFAULT 0;
+
+-- 2026-08-28: durable requests to replace the pay treatment of one recorded
+-- absence with PTO. There is deliberately no foreign key to manual_absences:
+-- managers must still be able to remove the source attendance correction.
+CREATE TABLE IF NOT EXISTS absence_pto_requests (
+  id BIGSERIAL PRIMARY KEY,
+  absence_day DATE NOT NULL,
+  emp_id TEXT NOT NULL,
+  person_odoo_id INTEGER NOT NULL,
+  person_name TEXT NOT NULL,
+  holiday_status_id INTEGER NOT NULL,
+  leave_type_name TEXT NOT NULL,
+  balance_at_submit NUMERIC NOT NULL CHECK (balance_at_submit >= 0),
+  original_absence_leave_id INTEGER,
+  pto_leave_id INTEGER,
+  state TEXT NOT NULL DEFAULT 'pending',
+  conversion_step TEXT NOT NULL DEFAULT 'not_started',
+  employee_note TEXT,
+  denial_reason TEXT,
+  manual_resolution_note TEXT,
+  sync_error TEXT,
+  odoo_task_id INTEGER,
+  task_attempts INTEGER NOT NULL DEFAULT 0,
+  task_next_at TIMESTAMPTZ,
+  lease_owner UUID,
+  lease_until TIMESTAMPTZ,
+  requested_by_person_id INTEGER,
+  decided_by_upn TEXT,
+  decided_by_name TEXT,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT absence_pto_requests_state_check CHECK
+    (state IN ('pending','converting','approved','denied','needs_review','resolved_manually')),
+  CONSTRAINT absence_pto_requests_step_check CHECK
+    (conversion_step IN ('not_started','absence_refused','pto_created','pto_approved'))
+);
+
+-- Keep bootstrap parity if an earlier deployment created only part of the
+-- table. Each statement is safe to run on every process start.
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS absence_day DATE;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS emp_id TEXT;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS person_odoo_id INTEGER;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS person_name TEXT;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS holiday_status_id INTEGER;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS leave_type_name TEXT;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS balance_at_submit NUMERIC;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS original_absence_leave_id INTEGER;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS pto_leave_id INTEGER;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE absence_pto_requests
+  ADD COLUMN IF NOT EXISTS conversion_step TEXT NOT NULL DEFAULT 'not_started';
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS employee_note TEXT;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS denial_reason TEXT;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS manual_resolution_note TEXT;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS sync_error TEXT;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS odoo_task_id INTEGER;
+ALTER TABLE absence_pto_requests
+  ADD COLUMN IF NOT EXISTS task_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS task_next_at TIMESTAMPTZ;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS lease_owner UUID;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS requested_by_person_id INTEGER;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS decided_by_upn TEXT;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS decided_by_name TEXT;
+ALTER TABLE absence_pto_requests
+  ADD COLUMN IF NOT EXISTS requested_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE absence_pto_requests
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE absence_pto_requests
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE UNIQUE INDEX IF NOT EXISTS absence_pto_requests_active_uniq
+  ON absence_pto_requests (absence_day, emp_id)
+  WHERE state IN ('pending','converting','needs_review');
+CREATE UNIQUE INDEX IF NOT EXISTS absence_pto_requests_pto_leave_uniq
+  ON absence_pto_requests (pto_leave_id) WHERE pto_leave_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS absence_pto_requests_due_idx
+  ON absence_pto_requests (state, task_next_at, lease_until);
 """

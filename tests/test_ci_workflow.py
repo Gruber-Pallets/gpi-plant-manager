@@ -17,3 +17,7 @@ def test_tests_workflow_cancels_superseded_runs():
 
 def test_tests_workflow_explicitly_opts_into_payroll_guard_test_database():
     assert 'PAYROLL_GUARD_TEST_DATABASE: "1"' in TEST_WORKFLOW
+
+
+def test_tests_workflow_explicitly_opts_into_absence_pto_test_database():
+    assert 'ABSENCE_PTO_TEST_DATABASE: "1"' in TEST_WORKFLOW

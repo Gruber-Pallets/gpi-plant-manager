@@ -37,6 +37,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gpi_test
       PAYROLL_GUARD_TEST_DATABASE: "1"
+      ABSENCE_PTO_TEST_DATABASE: "1"
       # deps.py raises at import if ZIRA_API_KEY is unset; CI has no .env, so
       # provide a dummy (tests that actually hit Zira are mocked or DB-gated).
       ZIRA_API_KEY: ci-dummy-zira-key
