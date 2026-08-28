@@ -127,6 +127,13 @@ async def _tick_odoo_attendance():
     await asyncio.to_thread(live_cache.refresh_odoo_open_attendance)
 
 
+async def _tick_attendance_mirror():
+    """Refresh the durable canonical Odoo attendance mirror."""
+    from . import attendance_sync
+
+    await asyncio.to_thread(attendance_sync.tick)
+
+
 async def _tick_auto_lunch():
     """Drive the auto-lunch worker. No-ops while the feature is disabled
     (auto_lunch_settings.enabled defaults to FALSE)."""
@@ -415,6 +422,7 @@ _WARMERS = [
     ("machine breakdown", _tick_machine_breakdown, 45),
     ("kiosk sync", _tick_timeclock_sync, 60),
     ("Odoo open-attendance", _tick_odoo_attendance, 30),
+    ("attendance mirror", _tick_attendance_mirror, 30),
     ("auto-lunch", _tick_auto_lunch, 60),
     ("auto-salaried punch", _tick_auto_salaried, 60),
     ("auto-salaried reconcile", _tick_auto_salaried_reconcile, 600),
