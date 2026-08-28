@@ -16,9 +16,37 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **A plan is ready for a manager dashboard built around people.** It will show where each person worked, when they moved, whether they met each goal, downtime, and forklift calls. Nothing in the app has changed yet.
 
+### Keep every Odoo work-area detail
+
+- **Plant Manager can now read the full work-area record from Odoo without losing names it does not know yet.** This prepares the app to show the real source clearly. The new records are not driving production yet.
+
+### Live rules wait for a new workday
+
+- **Live work-area rules cannot turn off in the middle of a workday.** Choose Shadow and a future workday start instead. This keeps today's work from changing halfway through the day.
+
+### Work area settings stay safe
+
+- **Work-area settings now change all at once or not at all.** New maintenance and supervisor teams get the right choice, and a future switch away from live rules waits for a new workday. The new rules are still turned off.
+
+### Set which teams need a work area
+
+- **Settings can now remember which teams must have a work area in Odoo.** Maintenance and supervisors can stay clocked in without one. The new Odoo location rules are still turned off.
+
+### Production rebuild plan uses the right readings
+
+- **The Odoo location build plan now uses the plant's production readings when it counts a changed day.** This keeps the build steps clear. Nothing in the app has changed yet.
+
 ### Live Odoo work-location build plan
 
 - **A step-by-step build plan is ready to keep worker locations and production matched with Odoo.** Plant Manager will clock people in and out, while the floor app records work areas and moves. The plan also covers clear alerts and safe fixes when times do not match. Nothing in the app has changed yet.
+
+### Past PTO changes can recover
+
+- **If Odoo stops in the middle of a past PTO change, Plant Manager can safely continue or put the old absence back.** Unclear cases stop for a person to review.
+
+### Past PTO can change safely in Odoo
+
+- **Plant Manager can now safely change an approved missed day into approved PTO after a manager says yes.** The worker's absence record stays in place. The approval button is not connected yet.
 
 ### Live Odoo work-location plan
 

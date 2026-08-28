@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from zira_dashboard import odoo_client
 
@@ -31,6 +31,87 @@ def test_attendance_facade_resolves_dependencies_at_call_time(monkeypatch):
             "x_current_department",
             odoo_client._app_wc_name_for_odoo_id,
         )
+    ]
+
+
+def test_raw_attendance_facade_resolves_fields_at_call_time(monkeypatch):
+    calls = []
+    execute_fn = lambda *args, **kwargs: None
+    monkeypatch.setattr(odoo_client, "execute", execute_fn)
+    monkeypatch.setattr(odoo_client, "_kiosk_wc_field", lambda: "x_current_wc")
+    monkeypatch.setattr(
+        odoo_client,
+        "_kiosk_department_field",
+        lambda: "x_current_department",
+    )
+    monkeypatch.setattr(
+        odoo_client._odoo_attendance,
+        "fetch_attendance_changes",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or [],
+    )
+    cursor = datetime(2026, 8, 28, 13, 0, tzinfo=timezone.utc)
+    overlap = timedelta(minutes=3)
+
+    assert odoo_client.fetch_attendance_changes(
+        after_write_date=cursor,
+        after_id=900,
+        overlap=overlap,
+        page_size=17,
+    ) == []
+    assert calls == [
+        (
+            (
+                execute_fn,
+                "x_current_wc",
+                "x_current_department",
+            ),
+            {
+                "after_write_date": cursor,
+                "after_id": 900,
+                "overlap": overlap,
+                "page_size": 17,
+            },
+        )
+    ]
+
+
+def test_raw_attendance_facade_wraps_open_ids_direct_and_employee_reads(monkeypatch):
+    calls = []
+    execute_fn = lambda *args, **kwargs: None
+    monkeypatch.setattr(odoo_client, "execute", execute_fn)
+    monkeypatch.setattr(odoo_client, "_kiosk_wc_field", lambda: "x_current_wc")
+    monkeypatch.setattr(
+        odoo_client,
+        "_kiosk_department_field",
+        lambda: "x_current_department",
+    )
+    for name in (
+        "fetch_open_attendance_rows",
+        "fetch_all_attendance_ids",
+        "fetch_attendance_rows_by_ids",
+        "fetch_employee_attendance_rows",
+    ):
+        monkeypatch.setattr(
+            odoo_client._odoo_attendance,
+            name,
+            lambda *args, _name=name, **kwargs: (
+                calls.append((_name, args, kwargs)) or []
+            ),
+        )
+    start = datetime(2026, 8, 28, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 29, tzinfo=timezone.utc)
+
+    assert odoo_client.fetch_open_attendance_rows(page_size=19) == []
+    assert odoo_client.fetch_all_attendance_ids(page_size=23) == []
+    assert odoo_client.fetch_attendance_rows_by_ids([7, 8]) == []
+    assert odoo_client.fetch_employee_attendance_rows(44, start, end) == []
+
+    common = (execute_fn, "x_current_wc", "x_current_department")
+    assert calls == [
+        ("fetch_open_attendance_rows", common, {"page_size": 19}),
+        ("fetch_all_attendance_ids", (execute_fn,), {"page_size": 23}),
+        ("fetch_attendance_rows_by_ids", (*common, [7, 8]), {}),
+        ("fetch_employee_attendance_rows", (*common, 44, start, end), {}),
     ]
 
 

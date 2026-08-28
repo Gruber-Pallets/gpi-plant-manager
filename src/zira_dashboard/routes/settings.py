@@ -11,13 +11,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from urllib.parse import quote_plus, urlencode
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import (
+    attendance_location_policy,
     auth,
+    db,
     odoo_client,
     schedule_store,
     settings_context,
@@ -189,6 +192,56 @@ def _api_settings_forbidden() -> JSONResponse:
     return JSONResponse(
         {"ok": False, "error": "super_admin_required"},
         status_code=403,
+    )
+
+
+def _attendance_location_context() -> dict:
+    """Build the read-only rollout health + department policy view."""
+    config = attendance_location_policy.get_rollout_config()
+    try:
+        department_rows = db.query(
+            "SELECT name, requires_work_center FROM departments ORDER BY lower(name)"
+        )
+        sync_rows = db.query(
+            "SELECT last_incremental_completed_at AS mirror_freshness, "
+            "last_full_sweep_completed_at "
+            "FROM odoo_attendance_sync_state WHERE singleton = TRUE"
+        )
+    except Exception:  # noqa: BLE001 - Settings health must survive DB rollout skew
+        logging.warning("Attendance-location Settings health unavailable", exc_info=True)
+        department_rows = []
+        sync_rows = []
+    sync = sync_rows[0] if sync_rows else {}
+    cutover_local = (
+        config.cutover_at.astimezone(shift_config.SITE_TZ)
+        if config.cutover_at is not None
+        else None
+    )
+    return {
+        "mode": config.mode,
+        "live_active": attendance_location_policy.live_is_active(),
+        "cutover_at": cutover_local,
+        "cutover_local_input": (
+            cutover_local.strftime("%Y-%m-%dT%H:%M") if cutover_local else ""
+        ),
+        "mirror_freshness": sync.get("mirror_freshness"),
+        "last_full_sweep": sync.get("last_full_sweep_completed_at"),
+        "departments": [
+            {
+                "name": row["name"],
+                "requires_work_center": bool(row["requires_work_center"]),
+            }
+            for row in department_rows
+        ],
+    }
+
+
+def _attendance_location_error(request: Request, error: str, status_code: int):
+    if (request.headers.get("accept") or "").startswith("application/json"):
+        return JSONResponse({"ok": False, "error": error}, status_code=status_code)
+    query = urlencode({"section": "timeclock", "error": error})
+    return RedirectResponse(
+        url=f"/settings?{query}#attendance-location", status_code=303
     )
 
 
@@ -470,6 +523,7 @@ def settings_page(
         # unreachable; the template guards on these keys being absent.
         forklift_ctx = {"enabled": True}
     pay_period = staffing_hours.current_pay_period_config()
+    attendance_location = _attendance_location_context()
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -509,6 +563,8 @@ def settings_page(
             "kiosk_recent_punches": kiosk_recent_punches,
             "kiosk_recent_variances": kiosk_recent_variances,
             "timeclock_sync_status": timeclock_sync_status,
+            "attendance_location": attendance_location,
+            "can_manage_attendance_location": can_manage_api_keys,
             "staffing_hours_pay_period": {
                 "anchor": pay_period.anchor.isoformat(),
                 "cycle_days": pay_period.cycle_days,
@@ -516,6 +572,84 @@ def settings_page(
             "time_off_settings": time_off_settings,
             "forklift": forklift_ctx,
         },
+    )
+
+
+@router.post("/settings/attendance-location")
+async def settings_save_attendance_location(request: Request):
+    """Save rollout and department policy through the super-admin boundary."""
+    if not auth.request_is_super_admin(request):
+        return _api_settings_forbidden()
+    form = await request.form()
+    mode = (form.get("rollout_mode") or "").strip()
+    if mode == "live":
+        return _attendance_location_error(
+            request, "live_readiness_required", status_code=422
+        )
+    if mode not in ("off", "shadow"):
+        return _attendance_location_error(
+            request, "invalid_rollout_mode", status_code=422
+        )
+    live_active = attendance_location_policy.live_is_active()
+    if mode == "off" and live_active:
+        return _attendance_location_error(
+            request, "rollback_boundary_required", status_code=422
+        )
+
+    cutover_at = None
+    raw_cutover = (form.get("cutover_at") or "").strip()
+    if raw_cutover:
+        try:
+            parsed = datetime.fromisoformat(raw_cutover)
+            cutover_at = (
+                parsed.replace(tzinfo=shift_config.SITE_TZ)
+                if parsed.tzinfo is None
+                else parsed
+            )
+        except ValueError:
+            return _attendance_location_error(
+                request, "cutover_invalid", status_code=422
+            )
+
+    rollback_gate = None
+    if mode == "shadow" and live_active:
+        if cutover_at is None:
+            return _attendance_location_error(
+                request, "rollback_boundary_required", status_code=422
+            )
+        rollback_gate = attendance_location_policy.get_rollout_config().live_gate
+
+    config = attendance_location_policy.RolloutConfig(
+        mode=mode,
+        cutover_at=cutover_at,
+        live_gate=rollback_gate,
+    )
+    selected_departments = set(form.getlist("department_requires_work_center"))
+    departments = (
+        work_centers_store.synced_departments()
+        if "departments_present" in form
+        else []
+    )
+
+    def _save() -> None:
+        with db.cursor() as cur:
+            attendance_location_policy.set_rollout_config(config, cur=cur)
+            for department_name in departments:
+                attendance_location_policy.set_department_requirement(
+                    department_name,
+                    department_name in selected_departments,
+                    cur=cur,
+                )
+
+    try:
+        await asyncio.to_thread(_save)
+    except ValueError as exc:
+        return _attendance_location_error(request, str(exc), status_code=422)
+    if (request.headers.get("accept") or "").startswith("application/json"):
+        return JSONResponse({"ok": True})
+    return RedirectResponse(
+        url="/settings?saved=1&section=timeclock#attendance-location",
+        status_code=303,
     )
 
 
