@@ -166,7 +166,13 @@ class TransactionalMirrorBackend:
         self.started.append(started_at)
 
     def store_incremental_cycle(
-        self, rows, *, cursor_write_date, cursor_id, completed_at
+        self,
+        rows,
+        *,
+        cursor_write_date,
+        cursor_id,
+        completed_at,
+        observed_at,
     ):
         if self.fail_incremental_store:
             raise RuntimeError("database transaction failed")
@@ -195,7 +201,13 @@ class TransactionalMirrorBackend:
         return set(ids) & self.tombstoned_ids
 
     def store_full_sweep(
-        self, ids, *, recovery_rows=(), generation, completed_at
+        self,
+        ids,
+        *,
+        recovery_rows=(),
+        generation,
+        completed_at,
+        observed_at,
     ):
         self.sweep_transactions.append(
             {

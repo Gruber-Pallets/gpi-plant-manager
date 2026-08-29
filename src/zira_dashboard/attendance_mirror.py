@@ -379,6 +379,7 @@ def _upsert_rows_cur(
     rows: tuple[dict[str, Any], ...],
     *,
     sync_completed_at: datetime,
+    observed_at: datetime,
     baseline_completed: bool,
 ) -> set[date]:
     affected_days: set[date] = set()
@@ -404,7 +405,7 @@ def _upsert_rows_cur(
                 "last_seen_at, deleted_at) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL)",
                 tuple(incoming[field] for field in _ROW_FIELDS)
-                + (sync_completed_at, sync_completed_at),
+                + (observed_at, observed_at),
             )
             if baseline_completed:
                 affected_days.update(_row_days(incoming, sync_completed_at))
@@ -419,7 +420,7 @@ def _upsert_rows_cur(
             continue
 
         if not _observation_can_revive(
-            observed_at=sync_completed_at,
+            observed_at=observed_at,
             deleted_at=existing["deleted_at"],
         ):
             # This row was fetched before a newer complete sweep confirmed it
@@ -443,7 +444,7 @@ def _upsert_rows_cur(
             "last_seen_at = GREATEST(last_seen_at, %s), deleted_at = NULL "
             "WHERE odoo_attendance_id = %s",
             tuple(source[field] for field in _ROW_FIELDS[1:])
-            + (sync_completed_at, attendance_id),
+            + (observed_at, attendance_id),
         )
 
     if affected_days:
@@ -492,8 +493,14 @@ def _store_incremental_cycle_cur(
     cursor_write_date: datetime | None,
     cursor_id: int | None,
     completed_at: datetime,
+    observed_at: datetime | None = None,
 ) -> set[date]:
     completed = _aware_utc(completed_at, "completed_at")
+    observed = (
+        completed
+        if observed_at is None
+        else _aware_utc(observed_at, "observed_at")
+    )
     normalized = _normalized_rows(rows)
     if cursor_write_date is not None:
         cursor_write_date = _aware_utc(cursor_write_date, "cursor_write_date")
@@ -506,6 +513,7 @@ def _store_incremental_cycle_cur(
         cur,
         normalized,
         sync_completed_at=completed,
+        observed_at=observed,
         baseline_completed=state["baseline_completed_at"] is not None,
     )
     next_date, next_id = _later_cursor(
@@ -535,6 +543,7 @@ def _store_incremental_cycle(
     cursor_write_date: datetime | None,
     cursor_id: int | None,
     completed_at: datetime,
+    observed_at: datetime | None = None,
 ) -> set[date]:
     with db.cursor() as cur:
         return _store_incremental_cycle_cur(
@@ -543,6 +552,7 @@ def _store_incremental_cycle(
             cursor_write_date=cursor_write_date,
             cursor_id=cursor_id,
             completed_at=completed_at,
+            observed_at=observed_at,
         )
 
 
@@ -688,6 +698,7 @@ def _store_full_sweep_cur(
     recovery_rows: Sequence[dict] = (),
     generation: int,
     completed_at: datetime,
+    observed_at: datetime | None = None,
 ) -> _FullSweepStoreResult:
     present_ids = _validated_ids(ids)
     normalized_recovery = _normalized_rows(recovery_rows)
@@ -698,6 +709,11 @@ def _store_full_sweep_cur(
         raise ValueError("recovery rows must be present in the completed sweep")
     sweep_generation = _positive_int(generation, "generation")
     completed = _aware_utc(completed_at, "completed_at")
+    observed = (
+        completed
+        if observed_at is None
+        else _aware_utc(observed_at, "observed_at")
+    )
     state = _locked_sync_state(cur)
     if sweep_generation != int(state["full_sweep_generation"]) + 1:
         raise ValueError("full sweep generation is stale")
@@ -717,6 +733,7 @@ def _store_full_sweep_cur(
         cur,
         normalized_recovery,
         sync_completed_at=completed,
+        observed_at=observed,
         baseline_completed=state["baseline_completed_at"] is not None,
     )
     if present_ids:
@@ -743,7 +760,7 @@ def _store_full_sweep_cur(
             "UPDATE odoo_attendance_mirror SET deleted_at = %s, "
             "last_sweep_generation = %s "
             "WHERE odoo_attendance_id = ANY(%s) AND deleted_at IS NULL",
-            (completed, sweep_generation, deleted_ids),
+            (observed, sweep_generation, deleted_ids),
         )
     deleted_days: set[date] = set()
     if state["baseline_completed_at"] is not None:
@@ -782,6 +799,7 @@ def _store_full_sweep(
     recovery_rows: Sequence[dict] = (),
     generation: int,
     completed_at: datetime,
+    observed_at: datetime | None = None,
 ) -> _FullSweepStoreResult:
     with db.cursor() as cur:
         return _store_full_sweep_cur(
@@ -790,6 +808,7 @@ def _store_full_sweep(
             recovery_rows=recovery_rows,
             generation=generation,
             completed_at=completed_at,
+            observed_at=observed_at,
         )
 
 

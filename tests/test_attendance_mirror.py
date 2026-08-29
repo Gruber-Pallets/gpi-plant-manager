@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta, timezone
 import os
-from threading import Event, Thread
+from threading import Event, Thread, current_thread
 
 import pytest
 
@@ -777,7 +777,7 @@ def test_real_postgres_sweep_commit_precedes_later_incremental_recovery(
     clean_mirror, monkeypatch
 ):
     sweep_started_at = SYNCED_AT + timedelta(minutes=1)
-    fresh_observed_at = SYNCED_AT + timedelta(minutes=2)
+    incremental_completed_at = SYNCED_AT + timedelta(minutes=2)
     attendance_mirror.upsert_rows([_row()], sync_completed_at=SYNCED_AT)
     sweep_source_entered = Event()
     release_sweep = Event()
@@ -808,6 +808,7 @@ def test_real_postgres_sweep_commit_precedes_later_incremental_recovery(
 
     monkeypatch.setattr(attendance_sync, "_source", SerializedSource())
     results = {}
+    observation_window_started = datetime.now(UTC)
     sweep_thread = Thread(
         target=lambda: results.update(
             sweep=attendance_sync.run_full_sweep(now_utc=sweep_started_at)
@@ -815,15 +816,120 @@ def test_real_postgres_sweep_commit_precedes_later_incremental_recovery(
     )
     incremental_thread = Thread(
         target=lambda: results.update(
-            incremental=attendance_sync.run_incremental_sync(
-                now_utc=fresh_observed_at
-            )
+                incremental=attendance_sync.run_incremental_sync(
+                    now_utc=incremental_completed_at
+                )
         )
     )
 
     sweep_thread.start()
     assert sweep_source_entered.wait(timeout=5)
     incremental_thread.start()
+    try:
+        assert not incremental_source_entered.wait(timeout=0.2)
+    finally:
+        release_sweep.set()
+    sweep_thread.join(timeout=5)
+    incremental_thread.join(timeout=5)
+    observation_window_ended = datetime.now(UTC)
+
+    assert not sweep_thread.is_alive()
+    assert not incremental_thread.is_alive()
+    assert results["sweep"].success is True
+    assert results["sweep"].rows_deleted == 1
+    assert results["incremental"].success is True
+    stored = db.query(
+        "SELECT employee_odoo_id, last_seen_at, deleted_at "
+        "FROM odoo_attendance_mirror WHERE odoo_attendance_id = 901"
+    )[0]
+    assert stored["employee_odoo_id"] == 45
+    assert stored["deleted_at"] is None
+    assert observation_window_started <= stored["last_seen_at"]
+    assert stored["last_seen_at"] <= observation_window_ended
+
+
+@pytest.mark.parametrize(
+    "explicit_clock",
+    [False, True],
+    ids=("default-clock", "explicit-business-clock"),
+)
+@_needs_postgres
+def test_post_sweep_source_read_uses_lock_acquisition_order(
+    clean_mirror, monkeypatch, explicit_clock
+):
+    """An invocation paused before the lock must observe after the sweep."""
+    incremental_run_at = SYNCED_AT + timedelta(minutes=1)
+    sweep_run_at = SYNCED_AT + timedelta(minutes=2)
+    attendance_mirror.upsert_rows([_row()], sync_completed_at=SYNCED_AT)
+    incremental_before_lock = Event()
+    allow_incremental_lock_attempt = Event()
+    sweep_source_entered = Event()
+    release_sweep = Event()
+    incremental_source_entered = Event()
+    refreshed = _row(
+        employee_id=45,
+        write_date=datetime(2026, 8, 28, 13, 2, tzinfo=UTC),
+    )
+
+    class ReorderedSource:
+        def fetch_attendance_changes(self, **_kwargs):
+            assert current_thread().name == "early-invoked-incremental"
+            incremental_source_entered.set()
+            return [refreshed]
+
+        def fetch_open_attendance_rows(self):
+            return []
+
+        def fetch_complete_attendance_id_sweep(self):
+            assert current_thread().name == "later-invoked-sweep"
+            sweep_source_entered.set()
+            if not release_sweep.wait(timeout=5):
+                raise TimeoutError("sweep source was not released")
+            return attendance_sync.AttendanceIdSweepSnapshot(
+                ids=(), complete=True
+            )
+
+        def fetch_attendance_rows_by_ids(self, _ids):
+            return []
+
+    real_backend = attendance_sync._backend
+
+    class ReorderedBackend:
+        @contextmanager
+        def logical_run(self):
+            if current_thread().name == "early-invoked-incremental":
+                incremental_before_lock.set()
+                if not allow_incremental_lock_attempt.wait(timeout=5):
+                    raise TimeoutError("incremental lock attempt was not released")
+            with real_backend.logical_run() as run_backend:
+                yield run_backend
+
+        def __getattr__(self, name):
+            return getattr(real_backend, name)
+
+    monkeypatch.setattr(attendance_sync, "_source", ReorderedSource())
+    monkeypatch.setattr(attendance_sync, "_backend", ReorderedBackend())
+    results = {}
+
+    def run_incremental():
+        kwargs = {"now_utc": incremental_run_at} if explicit_clock else {}
+        results["incremental"] = attendance_sync.run_incremental_sync(**kwargs)
+
+    def run_sweep():
+        kwargs = {"now_utc": sweep_run_at} if explicit_clock else {}
+        results["sweep"] = attendance_sync.run_full_sweep(**kwargs)
+
+    incremental_thread = Thread(
+        target=run_incremental,
+        name="early-invoked-incremental",
+    )
+    sweep_thread = Thread(target=run_sweep, name="later-invoked-sweep")
+
+    incremental_thread.start()
+    assert incremental_before_lock.wait(timeout=5)
+    sweep_thread.start()
+    assert sweep_source_entered.wait(timeout=5)
+    allow_incremental_lock_attempt.set()
     try:
         assert not incremental_source_entered.wait(timeout=0.2)
     finally:
@@ -837,14 +943,30 @@ def test_real_postgres_sweep_commit_precedes_later_incremental_recovery(
     assert results["sweep"].rows_deleted == 1
     assert results["incremental"].success is True
     stored = db.query(
-        "SELECT employee_odoo_id, last_seen_at, deleted_at "
+        "SELECT employee_odoo_id, odoo_write_date, deleted_at "
         "FROM odoo_attendance_mirror WHERE odoo_attendance_id = 901"
     )[0]
+    state = db.query(
+        "SELECT cursor_write_date, cursor_id, "
+        "last_incremental_completed_at, last_full_sweep_completed_at "
+        "FROM odoo_attendance_sync_state WHERE singleton = TRUE"
+    )[0]
+
     assert stored == {
         "employee_odoo_id": 45,
-        "last_seen_at": fresh_observed_at,
+        "odoo_write_date": refreshed["odoo_write_date"],
         "deleted_at": None,
     }
+    assert state["cursor_write_date"] == refreshed["odoo_write_date"]
+    assert state["cursor_id"] == 901
+    if explicit_clock:
+        assert state["last_incremental_completed_at"] == incremental_run_at
+        assert state["last_full_sweep_completed_at"] == sweep_run_at
+    else:
+        assert (
+            state["last_incremental_completed_at"]
+            > state["last_full_sweep_completed_at"]
+        )
 
 
 @_needs_postgres
