@@ -531,8 +531,13 @@ def test_material_move_enqueues_old_and_new_days_but_version_only_does_not(
 def test_sweep_tombstones_are_auditable_excluded_and_enqueue_old_days(
     clean_mirror,
 ):
+    check_out = datetime(2026, 8, 28, 14, 0, tzinfo=UTC)
     attendance_mirror.upsert_rows(
-        [_row(901), _row(902, employee_id=45)], sync_completed_at=SYNCED_AT
+        [
+            _row(901, check_out=check_out),
+            _row(902, employee_id=45, check_out=check_out),
+        ],
+        sync_completed_at=SYNCED_AT,
     )
     db.execute(
         "UPDATE odoo_attendance_sync_state SET baseline_completed_at = %s "

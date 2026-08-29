@@ -480,6 +480,22 @@ def test_release_requires_owner_and_does_not_clear_a_newer_lease(monkeypatch):
     assert "lease_owner = NULL" in calls[0][0]
 
 
+@pytest.mark.parametrize("failure", [False, RuntimeError("release exploded")])
+def test_fail_soft_release_logs_false_or_exception_without_raising(
+    monkeypatch, caplog, failure
+):
+    def release(*args, **kwargs):
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(store, "release_claim", release)
+
+    assert store.release_claim_safely(41, OWNER, now=NOW, context="approval") is False
+    assert "approval" in caplog.text
+    assert "41" in caplog.text
+
+
 def test_mark_needs_review_and_task_delivery_keep_owner_guard(monkeypatch):
     workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
     calls = []

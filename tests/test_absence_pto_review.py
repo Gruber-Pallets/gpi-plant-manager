@@ -1170,6 +1170,121 @@ def test_tenth_recoverable_attempt_becomes_permanent_and_stops_future_mutations(
     )
 
 
+@pytest.mark.parametrize("step", ["none", "message_posted"])
+def test_tenth_transient_terminal_failure_becomes_permanent_and_stops_odoo(
+    monkeypatch, step
+):
+    fake = ReviewFake()
+    row = _needs_review(
+        state="approved",
+        odoo_task_id=501,
+        task_resolution_step=step,
+        task_resolution_attempts=9,
+        task_resolution_next_at=NOW,
+    )
+    current = wire_review(monkeypatch, fake, row)
+    wire_resolution_progress(monkeypatch, current, fake)
+    identity_reads = []
+    monkeypatch.setattr(
+        review.odoo_client,
+        "fetch_feedback_task_identity",
+        lambda task_id: identity_reads.append(task_id)
+        or {
+            "id": task_id,
+            "name": review.task_name(current["row"]),
+            "project_id": 7,
+            "active": True,
+        },
+    )
+    if step == "none":
+        monkeypatch.setattr(
+            review.odoo_client,
+            "find_task_message_ids",
+            lambda *args: [],
+        )
+        monkeypatch.setattr(
+            review.odoo_client,
+            "post_task_message",
+            lambda *args: (_ for _ in ()).throw(TimeoutError("message timed out")),
+        )
+    else:
+        monkeypatch.setattr(
+            review.odoo_client,
+            "close_task",
+            lambda *args: (_ for _ in ()).throw(TimeoutError("close timed out")),
+        )
+
+    first = review._deliver_terminal_claimed(current["row"], OWNER, NOW)
+    reads_after_first = list(identity_reads)
+    fake.events.clear()
+    second = review._deliver_terminal_claimed(current["row"], OWNER, NOW)
+
+    assert first == "retry"
+    assert second == "retry"
+    assert current["row"].task_resolution_attempts == review._MAX_ATTEMPTS
+    assert current["row"].task_resolution_next_at.year == 9999
+    assert reads_after_first
+    assert identity_reads == reads_after_first
+    assert fake.events == []
+
+
+@pytest.mark.parametrize("api", ["sync", "external", "manual"])
+def test_direct_review_api_returns_committed_result_when_release_fails(
+    monkeypatch, caplog, api
+):
+    fake = ReviewFake()
+    if api == "sync":
+        row = _needs_review()
+    elif api == "external":
+        row = _needs_review(state="approved", task_resolution_step="closed")
+    else:
+        row = _needs_review(
+            state="resolved_manually",
+            manual_resolution_note="Handled",
+            task_resolution_step="closed",
+        )
+    current = wire_review(monkeypatch, fake, row)
+    monkeypatch.setattr(
+        review.store,
+        "release_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("release exploded")),
+    )
+    if api == "sync":
+        monkeypatch.setattr(
+            review, "_sync_claimed_task", lambda *args, **kwargs: "escalated"
+        )
+        result = review.sync_review_task(41, NOW)
+    elif api == "external":
+        result = review.resolve_external_pto(41, NOW)
+    else:
+        result = review.resolve_manually(
+            41, "manager@example.com", "Manager", "Handled", NOW
+        )
+
+    assert result.request is not None
+    assert result.request.id == current["row"].id
+    assert result.request.state == current["row"].state
+    assert "release exploded" in caplog.text
+
+
+def test_direct_review_release_failure_preserves_primary_exception(monkeypatch):
+    fake = ReviewFake()
+    wire_review(monkeypatch, fake, _needs_review())
+    monkeypatch.setattr(
+        review,
+        "_sync_claimed_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("primary exploded")),
+    )
+    monkeypatch.setattr(
+        review.store,
+        "release_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("release exploded")),
+    )
+
+    with pytest.raises(ValueError, match="primary exploded"):
+        review.sync_review_task(41, NOW)
+
+
 def test_create_compatibility_fallback_stops_when_lease_is_lost(monkeypatch):
     fake = ReviewFake()
     wire_review(monkeypatch, fake, _needs_review())
