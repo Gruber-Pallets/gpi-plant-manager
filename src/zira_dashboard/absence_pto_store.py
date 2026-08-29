@@ -11,10 +11,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+import logging
 from typing import Final
 from uuid import UUID
 
 from . import db, inbox_log, time_off_audit
+
+
+_log = logging.getLogger(__name__)
 
 
 STATES: Final = frozenset(
@@ -670,6 +674,34 @@ def release_claim(
     return len(rows) == 1
 
 
+def release_claim_safely(
+    request_id: int,
+    owner: UUID,
+    *,
+    now: datetime,
+    context: str,
+) -> bool:
+    """Release a direct-call lease without masking its primary outcome."""
+    try:
+        released = release_claim(request_id, owner, now=now)
+    except Exception as error:  # noqa: BLE001 - cleanup cannot replace primary truth
+        _log.warning(
+            "absence PTO %s claim release failed for request %s: %s",
+            context,
+            request_id,
+            error,
+            exc_info=True,
+        )
+        return False
+    if not released:
+        _log.warning(
+            "absence PTO %s could not confirm claim release for request %s",
+            context,
+            request_id,
+        )
+    return released
+
+
 def mark_needs_review(
     request_id: int,
     owner: UUID,
@@ -1186,6 +1218,7 @@ __all__ = [
     "list_pending",
     "mark_needs_review",
     "release_claim",
+    "release_claim_safely",
     "renew_claim",
     "request_counts_for_person",
     "save_resolution_delivery",

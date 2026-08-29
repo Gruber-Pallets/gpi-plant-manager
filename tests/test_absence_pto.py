@@ -52,6 +52,8 @@ def _wire_candidate(
             else:
                 assert params[0] == "44"
             return [{"day": absence_day, "odoo_leave_id": 91}]
+        if "FROM time_off_requests" in sql:
+            return []
         if "FROM leave_types_cache" in sql:
             return [_type_row()] if type_rows is None else type_rows
         raise AssertionError(sql)
@@ -175,6 +177,58 @@ def test_denied_request_allows_resubmission_while_still_eligible(monkeypatch):
     assert row.eligible is True
     assert row.blocked_reason is None
     assert row.available_practical == 4.0
+
+
+def test_approved_exact_pto_mirror_blocks_local_only_absence_candidate(monkeypatch):
+    _wire_candidate(monkeypatch)
+    original_query = domain.db.query
+    seen = {}
+
+    def fake_query(sql, params=None):
+        if "FROM manual_absences" in sql:
+            return [{"day": ABSENCE_DAY, "odoo_leave_id": None}]
+        if "FROM time_off_requests" in sql:
+            seen.update(sql=sql, params=params)
+            return [{"day": ABSENCE_DAY}]
+        return original_query(sql, params)
+
+    monkeypatch.setattr(domain.db, "query", fake_query)
+
+    row = domain.list_candidates(44, TODAY)[0]
+
+    assert row.eligible is False
+    assert row.blocked_reason == "A PTO request already exists for this absence."
+    assert "person_odoo_id = %s" in seen["sql"]
+    assert "holiday_status_id = %s" in seen["sql"]
+    assert "shape = 'full_day'" in seen["sql"]
+    assert "state = 'validate'" in seen["sql"]
+    assert "date_from = date_to" in seen["sql"]
+    assert seen["params"] == (44, 7, PERIOD_START, TODAY)
+
+
+def test_approved_pto_mirror_query_requires_every_exact_identity_field(monkeypatch):
+    _wire_candidate(monkeypatch)
+    original_query = domain.db.query
+
+    def fake_query(sql, params=None):
+        if "FROM time_off_requests" in sql:
+            # These are the nonmatches the database must exclude: another
+            # employee, another type/day/state, and a multi-day range.
+            assert "person_odoo_id = %s" in sql
+            assert "holiday_status_id = %s" in sql
+            assert "state = 'validate'" in sql
+            assert "shape = 'full_day'" in sql
+            assert "date_from = date_to" in sql
+            assert "date_from >= %s" in sql
+            assert "date_from < %s" in sql
+            return []
+        return original_query(sql, params)
+
+    monkeypatch.setattr(domain.db, "query", fake_query)
+
+    row = domain.list_candidates(44, TODAY)[0]
+
+    assert row.eligible is True
 
 
 def test_deny_records_reason_and_actor_without_calling_odoo(monkeypatch):
@@ -428,6 +482,62 @@ def test_submit_refreshes_then_rereads_the_matching_balance(monkeypatch):
     }
 
 
+def test_submit_authoritatively_rejects_preexisting_approved_pto_mirror(
+    monkeypatch,
+):
+    _wire_candidate(monkeypatch)
+    original_query = domain.db.query
+
+    def fake_query(sql, params=None):
+        if "FROM time_off_requests" in sql:
+            return [{"day": ABSENCE_DAY}]
+        return original_query(sql, params)
+
+    monkeypatch.setattr(domain.db, "query", fake_query)
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "create_request",
+        lambda **kwargs: pytest.fail("approved PTO must block before persistence"),
+    )
+
+    with pytest.raises(domain.DuplicateSubmissionError, match="already exists"):
+        domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY)
+
+
+def test_submit_blocking_day_uses_typed_duplicate_contract(monkeypatch):
+    _wire_candidate(monkeypatch, requests=[_request(state="pending")])
+
+    with pytest.raises(domain.DuplicateSubmissionError) as caught:
+        domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY)
+
+    assert str(caught.value) == "A PTO request already exists for this absence."
+
+
+@pytest.mark.parametrize(
+    ("note", "message"),
+    [
+        (object(), "note must be text"),
+        ("x" * 1001, "1,000 characters or fewer"),
+    ],
+)
+def test_submit_validates_employee_note_before_persistence_or_remote_refresh(
+    monkeypatch, note, message
+):
+    monkeypatch.setattr(
+        domain.time_off_balances,
+        "refresh_for_employee",
+        lambda *_: pytest.fail("invalid note must fail before refresh"),
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "create_request",
+        lambda **kwargs: pytest.fail("invalid note must fail before persistence"),
+    )
+
+    with pytest.raises(domain.SubmissionError, match=message):
+        domain.submit(3, 44, "Ana", ABSENCE_DAY, note, TODAY)
+
+
 def test_submit_rejects_low_balance_after_refresh(monkeypatch):
     _wire_candidate(monkeypatch, balance=0.75)
 
@@ -451,8 +561,20 @@ def test_submit_translates_only_named_partial_unique_race(monkeypatch):
         ),
     )
 
-    with pytest.raises(domain.SubmissionError, match="already exists"):
+    with pytest.raises(domain.DuplicateSubmissionError, match="already exists"):
         domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY)
+
+
+def test_unexpected_balance_refresh_error_is_not_silently_hidden(monkeypatch):
+    _wire_candidate(monkeypatch)
+    monkeypatch.setattr(
+        domain.time_off_balances,
+        "refresh_for_employee",
+        lambda *_: (_ for _ in ()).throw(AssertionError("bad test double")),
+    )
+
+    with pytest.raises(AssertionError, match="bad test double"):
+        domain.list_candidates(44, TODAY)
 
 
 def test_submit_reraises_unrelated_database_failure(monkeypatch):

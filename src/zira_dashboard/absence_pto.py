@@ -7,9 +7,8 @@ Employee submissions remain local until the separate manager workflow acts.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-import logging
 from typing import Final
 from uuid import uuid4
 
@@ -28,7 +27,6 @@ _ACTIVE_UNIQUE_INDEX: Final = "absence_pto_requests_active_uniq"
 _DUPLICATE_MESSAGE: Final = "A PTO request already exists for this absence."
 _TYPE_MESSAGE: Final = "Paid Time Off is not available right now."
 _BALANCE_MESSAGE: Final = "Your PTO balance is not available right now."
-_log = logging.getLogger(__name__)
 
 
 def _clock() -> datetime:
@@ -37,6 +35,10 @@ def _clock() -> datetime:
 
 class SubmissionError(ValueError):
     """The requested absence is not currently eligible for PTO."""
+
+
+class DuplicateSubmissionError(SubmissionError):
+    """An existing request or approved PTO already covers the absence."""
 
 
 class DecisionError(ValueError):
@@ -85,14 +87,33 @@ def _blocking_days(person_odoo_id: int, start: date, end: date) -> set[date]:
     )
 
 
+def _approved_pto_days(
+    person_odoo_id: int,
+    type_id: int,
+    start: date,
+    end_exclusive: date,
+) -> set[date]:
+    """Return exact approved full-day PTO mirrors without reading Odoo live."""
+    rows = db.query(
+        "SELECT DISTINCT date_from AS day FROM time_off_requests "
+        "WHERE person_odoo_id = %s AND holiday_status_id = %s "
+        "AND shape = 'full_day' AND state = 'validate' "
+        "AND date_from = date_to AND date_from >= %s AND date_from < %s",
+        (person_odoo_id, type_id, start, end_exclusive),
+    )
+    days: set[date] = set()
+    for row in rows:
+        day = row.get("day")
+        if not isinstance(day, date) or isinstance(day, datetime):
+            raise ValueError("approved PTO mirror day must be a date")
+        days.add(day)
+    return days
+
+
 def _refresh_and_read_balance(person_odoo_id: int, type_id: int) -> float | None:
-    # Refresh failures must not erase a usable cached balance. The balance
-    # module already swallows Odoo failures, and this guard preserves that
-    # fallback contract if a test double or future implementation raises.
-    try:
-        time_off_balances.refresh_for_employee(person_odoo_id)
-    except Exception:  # noqa: BLE001 - cached balance remains authoritative fallback
-        pass
+    # The balance module itself handles documented Odoo failures. Unexpected
+    # exceptions here are programmer/contract failures and must stay visible.
+    time_off_balances.refresh_for_employee(person_odoo_id)
     rows = time_off_balances.get_for_employee(person_odoo_id)
     matches = [row for row in rows if row.get("holiday_status_id") == type_id]
     if len(matches) != 1 or matches[0].get("available_practical") is None:
@@ -123,6 +144,14 @@ def list_candidates(person_odoo_id: int, today: date) -> list[AbsenceCandidate]:
         ]
 
     blocked_days = _blocking_days(person_odoo_id, start, today)
+    blocked_days.update(
+        _approved_pto_days(
+            person_odoo_id,
+            pto_type.holiday_status_id,
+            start,
+            today,
+        )
+    )
     balance = _refresh_and_read_balance(person_odoo_id, pto_type.holiday_status_id)
     candidates = []
     for row in rows:
@@ -157,8 +186,13 @@ def _validate_submission(
         raise SubmissionError("That absence was not found for this employee.")
 
     pto_type = resolve_paid_time_off_type()
-    if day in _blocking_days(person_odoo_id, start, end):
-        raise SubmissionError(_DUPLICATE_MESSAGE)
+    if day in _blocking_days(person_odoo_id, start, end) or day in _approved_pto_days(
+        person_odoo_id,
+        pto_type.holiday_status_id,
+        day,
+        day + timedelta(days=1),
+    ):
+        raise DuplicateSubmissionError(_DUPLICATE_MESSAGE)
 
     balance = _refresh_and_read_balance(person_odoo_id, pto_type.holiday_status_id)
     if balance is None:
@@ -177,10 +211,14 @@ def submit(
     today: date,
 ) -> absence_pto_store.AbsencePtoRequest:
     """Revalidate and create one local pending request without touching Odoo."""
+    if type(note) is not str:
+        raise SubmissionError("The note must be text.")
+    cleaned_note = note.strip()
+    if len(cleaned_note) > 1000:
+        raise SubmissionError("The note must be 1,000 characters or fewer.")
     pto_type, balance, original_leave_id = _validate_submission(
         person_odoo_id, day, today
     )
-    cleaned_note = note.strip()
     try:
         created = absence_pto_store.create_request(
             absence_day=day,
@@ -197,7 +235,7 @@ def submit(
     except UniqueViolation as error:
         constraint_name = getattr(getattr(error, "diag", None), "constraint_name", None)
         if constraint_name == _ACTIVE_UNIQUE_INDEX:
-            raise SubmissionError(_DUPLICATE_MESSAGE) from error
+            raise DuplicateSubmissionError(_DUPLICATE_MESSAGE) from error
         raise
     absence_pto_cache.invalidate_for_absence(day)
     return created
@@ -259,19 +297,6 @@ def deny(
             lease_now=_clock(),
         )
     finally:
-        try:
-            released = absence_pto_store.release_claim(
-                request_id, owner, now=_clock()
-            )
-            if not released:
-                _log.warning(
-                    "absence PTO denial could not confirm claim release for %s",
-                    request_id,
-                )
-        except Exception as error:  # noqa: BLE001 - preserve primary/committed result
-            _log.warning(
-                "absence PTO denial claim release failed for %s: %s",
-                request_id,
-                error,
-                exc_info=True,
-            )
+        absence_pto_store.release_claim_safely(
+            request_id, owner, now=_clock(), context="denial"
+        )

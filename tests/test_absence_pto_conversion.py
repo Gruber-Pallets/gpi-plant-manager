@@ -398,6 +398,51 @@ def wire(monkeypatch, fake_odoo, request, *, balance=4.0, clock=None):
     return fake_store
 
 
+@pytest.mark.parametrize("operation", ["approve", "resume"])
+def test_direct_conversion_returns_committed_result_when_release_fails(
+    monkeypatch, caplog, operation
+):
+    claimed = _request(state="converting")
+    committed = conversion.ConversionResult("approved", "done", claimed)
+    monkeypatch.setattr(conversion, "_clock", lambda: NOW)
+    monkeypatch.setattr(conversion.store, "claim_request", lambda *args, **kwargs: claimed)
+    monkeypatch.setattr(
+        conversion.store,
+        "release_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("release exploded")),
+    )
+    if operation == "approve":
+        monkeypatch.setattr(conversion, "_resume_claim", lambda *args, **kwargs: committed)
+        result = conversion.approve(41, "manager@example.com", "Manager", "page", NOW)
+    else:
+        monkeypatch.setattr(
+            conversion, "resume_claimed", lambda *args, **kwargs: committed
+        )
+        result = conversion.resume(41, NOW)
+
+    assert result is committed
+    assert "release exploded" in caplog.text
+
+
+def test_direct_conversion_release_failure_preserves_primary_exception(monkeypatch):
+    claimed = _request(state="converting")
+    monkeypatch.setattr(conversion, "_clock", lambda: NOW)
+    monkeypatch.setattr(conversion.store, "claim_request", lambda *args, **kwargs: claimed)
+    monkeypatch.setattr(
+        conversion,
+        "_resume_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("primary exploded")),
+    )
+    monkeypatch.setattr(
+        conversion.store,
+        "release_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("release exploded")),
+    )
+
+    with pytest.raises(ValueError, match="primary exploded"):
+        conversion.approve(41, "manager@example.com", "Manager", "page", NOW)
+
+
 def test_approve_refuses_absence_then_creates_and_approves_pto(monkeypatch):
     fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"))
     fake_store = wire(monkeypatch, fake, _request(original_absence_leave_id=70))
