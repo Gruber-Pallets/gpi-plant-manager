@@ -8,8 +8,8 @@ seeded-person fixture (Task 16 in the plan promises to wire it).
 
 from __future__ import annotations
 
-import os
-from datetime import date
+from datetime import UTC, date, datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -71,19 +71,314 @@ def test_landing_route_redirects_when_token_invalid(monkeypatch):
     assert r.status_code in (302, 303, 307)
 
 
+def test_landing_counts_eligible_and_open_absence_pto_requests(monkeypatch):
+    captured = {}
+    person = {"id": 3, "name": "Ana", "odoo_id": 44}
+    monkeypatch.setattr(timeclock_time_off, "_verify_token", lambda _token: 3)
+    monkeypatch.setattr(timeclock_time_off, "_person_by_id", lambda _id: person)
+    monkeypatch.setattr(timeclock_time_off, "_mint_token", lambda _id: "fresh")
+    monkeypatch.setattr(timeclock_time_off, "_pending_count", lambda _id: 1)
+    monkeypatch.setattr(timeclock_time_off, "_all_count", lambda _id: 2)
+    monkeypatch.setattr(timeclock_time_off, "_sync_error_warning", lambda _id: None)
+    monkeypatch.setattr(
+        timeclock_time_off.absence_pto,
+        "list_candidates",
+        lambda _id, _today: [
+            SimpleNamespace(eligible=True),
+            SimpleNamespace(eligible=False),
+        ],
+    )
+    monkeypatch.setattr(
+        timeclock_time_off.absence_pto,
+        "employee_requests",
+        lambda _id, limit=100: pytest.fail("landing must use count aggregate"),
+    )
+    monkeypatch.setattr(
+        timeclock_time_off.absence_pto,
+        "employee_request_counts",
+        lambda _id: SimpleNamespace(
+            total=4,
+            unresolved=3,
+            actionable=2,
+        ),
+    )
+    monkeypatch.setattr(timeclock_time_off, "plant_today", lambda: date(2026, 8, 28))
+
+    def fake_response(request, template, context, status_code=200):
+        captured.update(template=template, context=context, status_code=status_code)
+        return SimpleNamespace(context=context, headers={})
+
+    monkeypatch.setattr(timeclock_time_off.templates, "TemplateResponse", fake_response)
+
+    timeclock_time_off.time_off_landing(SimpleNamespace(), "token")
+
+    assert captured["context"]["absence_pto_count"] == 3
+    assert captured["context"]["pending_count"] == 4
+    assert captured["context"]["all_count"] == 6
+
+
+def test_my_requests_combines_ordinary_and_linked_rows_with_exact_urls(monkeypatch):
+    captured = {}
+    person = {"id": 3, "name": "Ana", "odoo_id": 44}
+    ordinary_created = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    linked_requested = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    monkeypatch.setattr(timeclock_time_off, "_verify_token", lambda _token: 3)
+    monkeypatch.setattr(timeclock_time_off, "_person_by_id", lambda _id: person)
+    monkeypatch.setattr(timeclock_time_off, "_mint_token", lambda _id: "fresh")
+    monkeypatch.setattr(
+        timeclock_time_off,
+        "_list_my_requests",
+        lambda _id: [{
+            "id": 12,
+            "state": "confirm",
+            "type_name": "Vacation",
+            "date_from": date(2026, 8, 22),
+            "date_to": date(2026, 8, 22),
+            "hour_from": None,
+            "hour_to": None,
+            "created_at": ordinary_created,
+        }],
+    )
+    monkeypatch.setattr(
+        timeclock_time_off.absence_pto,
+        "employee_requests",
+        lambda _id, limit=100: [SimpleNamespace(
+            id=41,
+            state="needs_review",
+            absence_day=date(2026, 8, 20),
+            requested_at=linked_requested,
+        )],
+    )
+
+    def fake_response(request, template, context, status_code=200):
+        captured.update(template=template, context=context, status_code=status_code)
+        return SimpleNamespace(context=context, headers={})
+
+    monkeypatch.setattr(timeclock_time_off.templates, "TemplateResponse", fake_response)
+
+    timeclock_time_off.mine_list(SimpleNamespace(), "token")
+
+    rows = captured["context"]["requests"]
+    assert [row["request_kind"] for row in rows] == ["absence_pto", "ordinary"]
+    assert rows[0] == {
+        "request_kind": "absence_pto",
+        "id": 41,
+        "type_name": "Past absence · Paid Time Off",
+        "date_from": date(2026, 8, 20),
+        "date_to": date(2026, 8, 20),
+        "hour_from": None,
+        "hour_to": None,
+        "bucket": "Needs review",
+        "detail_url": "/timeclock/time-off/past-absence/fresh/requests/41",
+    }
+    assert rows[1]["detail_url"] == "/timeclock/time-off/mine/fresh/12"
+    assert rows[1]["bucket"] == "Pending"
+
+
+def test_needs_review_is_not_counted_as_available_or_pending(monkeypatch):
+    monkeypatch.setattr(
+        timeclock_time_off.absence_pto,
+        "list_candidates",
+        lambda _id, _today: [],
+    )
+    monkeypatch.setattr(
+        timeclock_time_off.absence_pto,
+        "employee_request_counts",
+        lambda _id: SimpleNamespace(total=1, unresolved=1, actionable=0),
+    )
+
+    assert timeclock_time_off._absence_pto_counts(44) == (0, 1, 1)
+
+
+def test_ordinary_history_hides_the_pto_mirror_owned_by_a_linked_request(
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_query(sql, params):
+        captured.update(sql=sql, params=params)
+        return []
+
+    monkeypatch.setattr(timeclock_time_off.db, "query", fake_query)
+
+    assert timeclock_time_off._list_my_requests(44) == []
+    assert "NOT EXISTS" in captured["sql"]
+    assert "FROM absence_pto_requests" in captured["sql"]
+    assert "linked.pto_leave_id = r.odoo_leave_id" in captured["sql"]
+    assert "linked.original_absence_leave_id = r.odoo_leave_id" in captured["sql"]
+    assert captured["params"] == (44,)
+
+
+def test_my_requests_count_uses_the_exact_linked_mirror_exclusion(monkeypatch):
+    calls = []
+
+    def fake_query(sql, params):
+        calls.append((sql, params))
+        if "COUNT(*) AS n" in sql:
+            return [{"n": 0}]
+        return []
+
+    monkeypatch.setattr(timeclock_time_off.db, "query", fake_query)
+
+    assert timeclock_time_off._all_count(44) == 0
+    assert timeclock_time_off._list_my_requests(44) == []
+    count_sql, list_sql = calls[0][0], calls[1][0]
+    assert "FROM time_off_requests r" in count_sql
+    assert timeclock_time_off._LINKED_MIRROR_EXCLUSION in count_sql
+    assert timeclock_time_off._LINKED_MIRROR_EXCLUSION in list_sql
+
+
+def test_approved_linked_request_counts_once_when_both_odoo_mirrors_are_hidden(
+    monkeypatch,
+):
+    person = {"id": 3, "name": "Ana", "odoo_id": 44}
+    captured = {}
+    monkeypatch.setattr(timeclock_time_off, "_verify_token", lambda _token: 3)
+    monkeypatch.setattr(timeclock_time_off, "_person_by_id", lambda _id: person)
+    monkeypatch.setattr(timeclock_time_off, "_mint_token", lambda _id: "fresh")
+    monkeypatch.setattr(timeclock_time_off, "_pending_count", lambda _id: 0)
+    monkeypatch.setattr(timeclock_time_off, "_all_count", lambda _id: 0)
+    monkeypatch.setattr(timeclock_time_off, "_sync_error_warning", lambda _id: None)
+    monkeypatch.setattr(timeclock_time_off, "_absence_pto_counts", lambda _id: (0, 0, 1))
+
+    def fake_response(request, template, context, status_code=200):
+        captured.update(context=context)
+        return SimpleNamespace(context=context, headers={})
+
+    monkeypatch.setattr(timeclock_time_off.templates, "TemplateResponse", fake_response)
+
+    timeclock_time_off.time_off_landing(SimpleNamespace(), "token")
+
+    # The approved linked row is visible once; its original Absence and PTO
+    # mirror rows are excluded by the ordinary count/query scope.
+    assert captured["context"]["all_count"] == 1
+
+
+def test_combined_history_requests_only_top_100_linked_rows(monkeypatch):
+    seen = []
+    monkeypatch.setattr(timeclock_time_off, "_list_my_requests", lambda _id: [])
+    monkeypatch.setattr(
+        timeclock_time_off.absence_pto,
+        "employee_requests",
+        lambda person_id, *, limit: seen.append((person_id, limit)) or [],
+    )
+
+    assert timeclock_time_off._combined_my_requests(44, "token") == []
+    assert seen == [(44, 100)]
+
+
+def test_combined_history_merges_top_100_from_each_source_then_keeps_newest_100(
+    monkeypatch,
+):
+    base = datetime(2026, 8, 28, tzinfo=UTC)
+    ordinary = [
+        {
+            "id": index,
+            "state": "validate",
+            "type_name": "Vacation",
+            "date_from": date(2026, 8, 20),
+            "date_to": date(2026, 8, 20),
+            "hour_from": None,
+            "hour_to": None,
+            "created_at": base.replace(microsecond=index),
+        }
+        for index in range(100)
+    ]
+    linked = [
+        SimpleNamespace(
+            id=1000 + index,
+            state="approved",
+            absence_day=date(2026, 8, 20),
+            requested_at=base.replace(microsecond=100 + index),
+        )
+        for index in range(100)
+    ]
+    monkeypatch.setattr(timeclock_time_off, "_list_my_requests", lambda _id: ordinary)
+    monkeypatch.setattr(
+        timeclock_time_off.absence_pto,
+        "employee_requests",
+        lambda _id, *, limit: linked if limit == 100 else pytest.fail(limit),
+    )
+
+    rows = timeclock_time_off._combined_my_requests(44, "token")
+
+    assert len(rows) == 100
+    assert {row["request_kind"] for row in rows} == {"absence_pto"}
+    assert {row["id"] for row in rows} == {1000 + index for index in range(100)}
+
+
+def test_my_requests_real_template_links_each_request_kind_to_its_detail(monkeypatch):
+    monkeypatch.setattr(timeclock_time_off, "_verify_token", lambda _token: 3)
+    monkeypatch.setattr(
+        timeclock_time_off,
+        "_person_by_id",
+        lambda _id: {"id": 3, "name": "Ana", "odoo_id": 44},
+    )
+    monkeypatch.setattr(timeclock_time_off, "_mint_token", lambda _id: "fresh")
+    monkeypatch.setattr(
+        timeclock_time_off,
+        "_combined_my_requests",
+        lambda _id, _token: [
+            {
+                "id": 41,
+                "type_name": "Past absence · Paid Time Off",
+                "date_from": date(2026, 8, 20),
+                "date_to": date(2026, 8, 20),
+                "hour_from": None,
+                "hour_to": None,
+                "bucket": "Pending",
+                "detail_url": (
+                    "/timeclock/time-off/past-absence/fresh/requests/41"
+                ),
+            },
+            {
+                "id": 12,
+                "type_name": "Vacation",
+                "date_from": date(2026, 8, 22),
+                "date_to": date(2026, 8, 22),
+                "hour_from": None,
+                "hour_to": None,
+                "bucket": "Approved",
+                "detail_url": "/timeclock/time-off/mine/fresh/12",
+            },
+        ],
+    )
+
+    response = TestClient(app).get(
+        "/timeclock/time-off/mine/token", follow_redirects=False
+    )
+
+    assert response.status_code == 200
+    assert 'href="/timeclock/time-off/past-absence/fresh/requests/41"' in response.text
+    assert 'href="/timeclock/time-off/mine/fresh/12"' in response.text
+
+
 def test_landing_route_renders_when_token_valid(monkeypatch):
-    """Token valid + person exists → 200 with the landing HTML."""
-    monkeypatch.setenv("KIOSK_TIME_OFF_ENABLED", "1")
-    # Need to seed a person row. If the test DB isn't available, skip.
-    if not os.environ.get("DATABASE_URL"):
-        pytest.skip("Requires DATABASE_URL")
-    # Implementer: insert a test person, then:
-    # token = _token_for(<person_id>)
-    # client = TestClient(app)
-    # r = client.get(f"/timeclock/time-off/{token}")
-    # assert r.status_code == 200
-    # assert "Request Time Off" in r.text
-    pytest.skip("Needs test fixture for seeded person row")
+    """The real landing template renders the past-absence action safely."""
+    monkeypatch.setattr(timeclock_time_off, "_verify_token", lambda _token: 3)
+    monkeypatch.setattr(
+        timeclock_time_off,
+        "_person_by_id",
+        lambda _id: {"id": 3, "name": "Ana", "odoo_id": 44},
+    )
+    monkeypatch.setattr(timeclock_time_off, "_mint_token", lambda _id: "fresh")
+    monkeypatch.setattr(timeclock_time_off, "_pending_count", lambda _id: 0)
+    monkeypatch.setattr(timeclock_time_off, "_all_count", lambda _id: 0)
+    monkeypatch.setattr(timeclock_time_off, "_sync_error_warning", lambda _id: None)
+    monkeypatch.setattr(
+        timeclock_time_off,
+        "_absence_pto_counts",
+        lambda _id: (2, 1, 1),
+    )
+
+    response = TestClient(app).get(
+        "/timeclock/time-off/token", follow_redirects=False
+    )
+
+    assert response.status_code == 200
+    assert "Use PTO for a Past Absence" in response.text
+    assert 'href="/timeclock/time-off/past-absence/fresh"' in response.text
+    assert "2 available or pending" in response.text
 
 
 def test_request_shape_picker_redirects_on_bad_token():

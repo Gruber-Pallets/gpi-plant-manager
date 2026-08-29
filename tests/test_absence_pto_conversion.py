@@ -179,6 +179,7 @@ class FakeStore:
         self.owner = None
         self.guard = Lock()
         self.finalizations = []
+        self.review_marks = []
         self.timeline = []
         self.renew_calls = 0
         self.before_renew = None
@@ -260,16 +261,25 @@ class FakeStore:
         self.timeline.append(("transition", owner, current, new_step))
         return self.request
 
-    def mark_needs_review(self, request_id, owner, *, error, now=None):
-        current = now or NOW
+    def mark_needs_review(
+        self, request_id, owner, *, error, workflow_now, lease_now
+    ):
+        self.review_marks.append(
+            {
+                "error": error,
+                "workflow_now": workflow_now,
+                "lease_now": lease_now,
+            }
+        )
+        current = lease_now
         if self.owner != owner or self.request.lease_until <= current:
             raise store.StaleTransition("review transition lost its current lease")
         self.request = replace(
             self.request,
             state="needs_review",
             sync_error=error,
-            task_next_at=now or NOW,
-            updated_at=now or NOW,
+            task_next_at=workflow_now,
+            updated_at=workflow_now,
         )
         return self.request
 
@@ -291,7 +301,7 @@ class FakeStore:
         if (
             self.owner != owner
             or self.request.lease_until is None
-            or self.request.lease_until <= kwargs["now"]
+            or self.request.lease_until <= kwargs["lease_now"]
         ):
             raise store.StaleTransition("approval finalization lost its current lease")
         assert self.request.conversion_step == "pto_approved"
@@ -301,8 +311,8 @@ class FakeStore:
             state="approved",
             decided_by_upn=kwargs["actor_upn"],
             decided_by_name=kwargs["actor_name"],
-            decided_at=kwargs["now"],
-            updated_at=kwargs["now"],
+            decided_at=kwargs["workflow_now"],
+            updated_at=kwargs["workflow_now"],
         )
         return self.request
 
@@ -404,6 +414,8 @@ def test_approve_refuses_absence_then_creates_and_approves_pto(monkeypatch):
     assert fake.fetch_leave_snapshot(71)["state"] == "validate"
     assert fake_store.request.pto_leave_id == 71
     assert fake_store.finalizations[0]["original_absence_leave_id"] == 70
+    assert fake_store.finalizations[0]["workflow_now"] == NOW
+    assert fake_store.finalizations[0]["lease_now"] == NOW
     previous_mutation = -1
     for mutation_index, event in enumerate(fake_store.timeline):
         if event[0] not in {"refuse", "create", "confirm", "approve"}:
@@ -549,6 +561,33 @@ def test_failed_live_balance_refresh_fails_closed_before_odoo_mutation(monkeypat
 
     assert result.status == "needs_review"
     assert fake_store.request.state == "needs_review"
+    assert fake.events == []
+
+
+def test_direct_failure_keeps_workflow_time_separate_from_live_lease_time(monkeypatch):
+    workflow_now = datetime(2020, 1, 2, 3, 4, tzinfo=UTC)
+    fake = FakeOdoo(absence=_leave(70, 44, 9, "validate"))
+    fake_store = wire(monkeypatch, fake, _request())
+    monkeypatch.setattr(conversion.time_off_balances, "refresh_for_employee", lambda _: 0)
+
+    result = conversion.approve(
+        41,
+        "dale@example.com",
+        "Dale",
+        "page",
+        workflow_now,
+    )
+
+    assert result.status == "needs_review"
+    assert fake_store.review_marks == [
+        {
+            "error": "The current PTO balance could not be refreshed.",
+            "workflow_now": workflow_now,
+            "lease_now": NOW,
+        }
+    ]
+    assert fake_store.request.task_next_at == workflow_now
+    assert fake_store.request.updated_at == workflow_now
     assert fake.events == []
 
 
@@ -903,6 +942,41 @@ def test_incomplete_pto_close_failure_moves_to_review_with_known_id(monkeypatch)
     assert fake.leaves[70]["state"] == "refuse"
 
 
+def test_failed_compensation_uses_workflow_time_without_expiring_live_lease(
+    monkeypatch,
+):
+    workflow_now = datetime(2035, 6, 7, 8, 9, tzinfo=UTC)
+    fake = FakeOdoo(
+        absence=_leave(70, 44, 9, "refuse"),
+        pto=_leave(71, 44, 7, "confirm"),
+    )
+    fake.fail_before["approve"] = RuntimeError("approval unavailable")
+    fake_store = wire(
+        monkeypatch,
+        fake,
+        _request(state="converting", conversion_step="pto_created", pto_leave_id=71),
+    )
+    monkeypatch.setattr(
+        conversion.odoo_client,
+        "refuse_leave",
+        lambda leave_id: (_ for _ in ()).throw(RuntimeError("PTO would not close")),
+    )
+
+    result = conversion.resume(41, workflow_now)
+
+    assert result.status == "needs_review"
+    assert fake_store.review_marks == [
+        {
+            "error": "approval unavailable; PTO would not close",
+            "workflow_now": workflow_now,
+            "lease_now": NOW,
+        }
+    ]
+    assert fake_store.request.task_next_at == workflow_now
+    assert fake_store.request.updated_at == workflow_now
+    assert fake_store.request.state == "needs_review"
+
+
 def test_original_absence_restore_failure_moves_to_review(monkeypatch):
     fake = FakeOdoo(
         absence=_leave(70, 44, 9, "refuse"),
@@ -1178,7 +1252,8 @@ def test_finalize_approved_uses_one_transaction_for_mirrors_link_and_audits(monk
         actor_upn="dale@example.com",
         actor_name="Dale",
         source="page",
-        now=NOW,
+        workflow_now=NOW,
+        lease_now=NOW,
     )
 
     sql = "\n".join(operation[0] for operation in cursor.operations)
@@ -1194,8 +1269,108 @@ def test_finalize_approved_uses_one_transaction_for_mirrors_link_and_audits(monk
         params for statement, params in cursor.operations if "time_off_decisions" in statement
     )
     assert "absence_pto" in decision
-    decision_detail = getattr(decision[-1], "adapted", decision[-1])
+    decision_detail = getattr(decision[-2], "adapted", decision[-2])
     assert {
         "original_absence_leave_id": 70,
         "pto_leave_id": 71,
     }.items() <= decision_detail.items()
+
+
+def test_finalize_approved_splits_business_and_lease_timestamps(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    lease_now = NOW
+    owner = UUID("8ff2b216-3c83-4ca2-9187-3978954dc82c")
+    request = _request(
+        state="converting",
+        conversion_step="pto_approved",
+        pto_leave_id=71,
+        lease_owner=owner,
+        lease_until=lease_now + timedelta(seconds=120),
+    )
+    cursor = FakeCursor(_request_row(request))
+
+    @contextmanager
+    def cursor_context():
+        yield cursor
+
+    monkeypatch.setattr(store.db, "cursor", cursor_context)
+
+    store.finalize_approved(
+        41,
+        owner,
+        original_absence_leave_id=70,
+        pto_leave_id=71,
+        actor_upn="dale@example.com",
+        actor_name="Dale",
+        source="page",
+        workflow_now=workflow_now,
+        lease_now=lease_now,
+    )
+
+    lock_params = next(
+        params
+        for sql, params in cursor.operations
+        if "FROM absence_pto_requests" in sql and "FOR UPDATE" in sql
+    )
+    request_params = next(
+        params
+        for sql, params in cursor.operations
+        if "UPDATE absence_pto_requests SET state = 'approved'" in sql
+    )
+    decision_params = next(
+        params for sql, params in cursor.operations if "time_off_decisions" in sql
+    )
+    inbox_params = next(
+        params for sql, params in cursor.operations if "INSERT INTO inbox_events" in sql
+    )
+    assert lock_params[2] == lease_now
+    assert request_params[2:5] == (workflow_now, workflow_now, workflow_now)
+    assert request_params[-2] == lease_now
+    assert decision_params[-1] == workflow_now
+    assert inbox_params[-1] == workflow_now
+
+
+def test_finalize_manual_splits_business_and_lease_timestamps(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    lease_now = NOW
+    owner = UUID("8ff2b216-3c83-4ca2-9187-3978954dc82c")
+    request = _request(
+        state="needs_review",
+        conversion_step="absence_refused",
+        lease_owner=owner,
+        lease_until=lease_now + timedelta(seconds=120),
+    )
+    cursor = FakeCursor(_request_row(request))
+
+    @contextmanager
+    def cursor_context():
+        yield cursor
+
+    monkeypatch.setattr(store.db, "cursor", cursor_context)
+
+    store.finalize_manual(
+        41,
+        owner,
+        actor_upn="dale@example.com",
+        actor_name="Dale",
+        note="Handled by payroll",
+        workflow_now=workflow_now,
+        lease_now=lease_now,
+    )
+
+    request_params = next(
+        params
+        for sql, params in cursor.operations
+        if "UPDATE absence_pto_requests SET state = 'resolved_manually'" in sql
+    )
+    inbox_params = next(
+        params for sql, params in cursor.operations if "INSERT INTO inbox_events" in sql
+    )
+    assert request_params[3:7] == (
+        workflow_now,
+        workflow_now,
+        workflow_now,
+        workflow_now,
+    )
+    assert request_params[-1] == lease_now
+    assert inbox_params[-1] == workflow_now

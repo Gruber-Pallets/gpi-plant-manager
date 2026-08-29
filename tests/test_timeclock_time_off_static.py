@@ -32,6 +32,14 @@ def _detail_template():
     return Path("src/zira_dashboard/templates/timeclock_time_off_mine_detail.html").read_text()
 
 
+def _landing_template():
+    return Path("src/zira_dashboard/templates/timeclock_time_off_landing.html").read_text()
+
+
+def _mine_template():
+    return Path("src/zira_dashboard/templates/timeclock_time_off_mine.html").read_text()
+
+
 def _script():
     return Path("src/zira_dashboard/static/timeclock_time_off.js").read_text()
 
@@ -77,6 +85,21 @@ def test_time_off_cancel_submit_exposes_busy_state():
     assert "form.addEventListener('submit'" in html
     assert "btn.disabled = true;" in html
     assert "btn.setAttribute('aria-busy', 'true');" in html
+
+
+def test_landing_exposes_large_past_absence_pto_action_with_count():
+    html = _landing_template()
+
+    assert 'href="/timeclock/time-off/past-absence/{{ token }}"' in html
+    assert '{{ t("Use PTO for a Past Absence") }}' in html
+    assert "absence_pto_count" in html
+
+
+def test_my_requests_uses_server_normalized_detail_urls():
+    html = _mine_template()
+
+    assert 'href="{{ r.detail_url }}"' in html
+    assert '/timeclock/time-off/mine/{{ token }}/{{ r.id }}' not in html
 
 
 @pytest.mark.parametrize(

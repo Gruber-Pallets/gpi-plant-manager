@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+import json
 from typing import Any
 
 from . import db
@@ -12,6 +14,9 @@ from .shift_config import SITE_TZ
 
 
 _ERROR_LIMIT = 500
+_ERROR_OWNERS = ("incremental", "sweep", "baseline")
+_ERROR_DISPLAY_ORDER = (*_ERROR_OWNERS, "legacy")
+_SYNC_ADVISORY_LOCK_KEY = 0x5A49524141545445
 _ROW_FIELDS = (
     "odoo_attendance_id",
     "employee_odoo_id",
@@ -52,6 +57,101 @@ class SyncState:
     last_full_sweep_completed_at: datetime | None
     full_sweep_generation: int
     baseline_completed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class _FullSweepStoreResult:
+    affected_days: frozenset[date]
+    deleted_count: int
+
+
+@contextmanager
+def _logical_run_lock():
+    """Serialize a complete attendance source snapshot through its commit."""
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(%s)",
+            (_SYNC_ADVISORY_LOCK_KEY,),
+        )
+        yield cur
+
+
+def _decode_error_state(raw: object) -> dict[str, str]:
+    if raw is None or str(raw) == "":
+        return {}
+    text = str(raw)
+    try:
+        decoded = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {"legacy": text[:_ERROR_LIMIT]}
+    if not isinstance(decoded, dict):
+        return {"legacy": text[:_ERROR_LIMIT]}
+    errors = {
+        owner: str(decoded[owner])
+        for owner in _ERROR_DISPLAY_ORDER
+        if owner in decoded and str(decoded[owner])
+    }
+    return errors or {"legacy": text[:_ERROR_LIMIT]}
+
+
+def _encode_error_state(errors: Mapping[str, str]) -> str | None:
+    values = {
+        owner: str(errors[owner])
+        for owner in _ERROR_DISPLAY_ORDER
+        if owner in errors and str(errors[owner])
+    }
+    if not values:
+        return None
+    per_owner_limit = _ERROR_LIMIT
+    while True:
+        bounded = {
+            owner: value[:per_owner_limit] for owner, value in values.items()
+        }
+        encoded = json.dumps(bounded, separators=(",", ":"), sort_keys=True)
+        if len(encoded) <= _ERROR_LIMIT:
+            return encoded
+        excess = len(encoded) - _ERROR_LIMIT
+        per_owner_limit = max(
+            1,
+            per_owner_limit
+            - ((excess + len(bounded) - 1) // len(bounded)),
+        )
+
+
+def _require_error_owner(owner: str) -> str:
+    if owner not in _ERROR_OWNERS:
+        raise ValueError(f"invalid attendance sync error owner: {owner}")
+    return owner
+
+
+def _error_with_failure(raw: object, owner: str, error: object) -> str:
+    owner = _require_error_owner(owner)
+    errors = _decode_error_state(raw)
+    errors[owner] = str(error) or "unknown error"
+    encoded = _encode_error_state(errors)
+    assert encoded is not None
+    return encoded
+
+
+def _error_after_success(raw: object, owner: str) -> str | None:
+    owner = _require_error_owner(owner)
+    errors = _decode_error_state(raw)
+    errors.pop(owner, None)
+    return _encode_error_state(errors)
+
+
+def _format_error_state(raw: object) -> str | None:
+    if raw is None or str(raw) == "":
+        return None
+    errors = _decode_error_state(raw)
+    formatted = "; ".join(
+        f"{owner}: {errors[owner]}"
+        for owner in _ERROR_DISPLAY_ORDER
+        if owner in errors
+    )
+    if set(errors) == {"legacy"} and not str(raw).lstrip().startswith("{"):
+        return errors["legacy"][:_ERROR_LIMIT]
+    return formatted[:_ERROR_LIMIT] or None
 
 
 def _aware_utc(value: Any, field_name: str) -> datetime:
@@ -145,8 +245,10 @@ def local_days_touched(
     """Return plant calendar days intersected by the half-open UTC interval."""
     start = _aware_utc(start_utc, "start_utc")
     end = _optional_aware_utc(end_utc, "end_utc")
-    if end is None or end <= start:
+    if end is None:
         return {start.astimezone(SITE_TZ).date()}
+    if end == start:
+        return set()
     first = start.astimezone(SITE_TZ).date()
     # Attendance intervals are half-open. A checkout exactly at local midnight
     # belongs to the preceding day, not to a zero-length slice of the next day.
@@ -178,15 +280,6 @@ def _observation_can_revive(
     observed = _aware_utc(observed_at, "observed_at")
     deleted = _optional_aware_utc(deleted_at, "deleted_at")
     return deleted is None or observed > deleted
-
-
-def _sweep_can_delete(
-    *, last_seen_at: datetime, sweep_started_at: datetime
-) -> bool:
-    """Return whether the row lacks an observation after the sweep began."""
-    last_seen = _aware_utc(last_seen_at, "last_seen_at")
-    sweep_started = _aware_utc(sweep_started_at, "sweep_started_at")
-    return last_seen <= sweep_started
 
 
 def _enqueue_recalc_cur(
@@ -247,13 +340,38 @@ def _locked_sync_state(cur) -> Mapping[str, Any]:
     cur.execute(
         "SELECT cursor_write_date, cursor_id, last_incremental_completed_at, "
         "last_full_sweep_completed_at, full_sweep_generation, "
-        "baseline_completed_at FROM odoo_attendance_sync_state "
+        "baseline_completed_at, last_error FROM odoo_attendance_sync_state "
         "WHERE singleton = TRUE FOR UPDATE"
     )
     state = cur.fetchone()
     if state is None:
         raise RuntimeError("Odoo attendance sync state is missing")
     return state
+
+
+def _sync_state_from_row(row: Mapping[str, Any]) -> SyncState:
+    return SyncState(
+        cursor_write_date=_optional_aware_utc(
+            row["cursor_write_date"], "cursor_write_date"
+        ),
+        cursor_id=row["cursor_id"],
+        last_incremental_completed_at=_optional_aware_utc(
+            row["last_incremental_completed_at"],
+            "last_incremental_completed_at",
+        ),
+        last_full_sweep_completed_at=_optional_aware_utc(
+            row["last_full_sweep_completed_at"],
+            "last_full_sweep_completed_at",
+        ),
+        full_sweep_generation=int(row["full_sweep_generation"]),
+        baseline_completed_at=_optional_aware_utc(
+            row["baseline_completed_at"], "baseline_completed_at"
+        ),
+    )
+
+
+def _sync_state_cur(cur) -> SyncState:
+    return _sync_state_from_row(_locked_sync_state(cur))
 
 
 def _upsert_rows_cur(
@@ -297,8 +415,7 @@ def _upsert_rows_cur(
         )
         if incoming_is_stale:
             # An older raw Odoo version cannot confirm current existence. It
-            # must not revive a tombstone, move last_seen_at, or reset a
-            # complete-sweep absence recorded against newer source truth.
+            # must not revive a tombstone or move last_seen_at.
             continue
 
         if not _observation_can_revive(
@@ -323,8 +440,7 @@ def _upsert_rows_cur(
             "check_out_utc = %s, odoo_work_center_id = %s, "
             "odoo_work_center_name = %s, odoo_department_id = %s, "
             "odoo_department_name = %s, odoo_write_date = %s, "
-            "last_seen_at = GREATEST(last_seen_at, %s), deleted_at = NULL, "
-            "missing_since_sweep_generation = NULL "
+            "last_seen_at = GREATEST(last_seen_at, %s), deleted_at = NULL "
             "WHERE odoo_attendance_id = %s",
             tuple(source[field] for field in _ROW_FIELDS[1:])
             + (sync_completed_at, attendance_id),
@@ -369,7 +485,8 @@ def _later_cursor(
     return current_date, current_id
 
 
-def _store_incremental_cycle(
+def _store_incremental_cycle_cur(
+    cur,
     rows: Sequence[dict],
     *,
     cursor_write_date: datetime | None,
@@ -384,28 +501,49 @@ def _store_incremental_cycle(
     elif cursor_id is not None:
         raise ValueError("cursor_id requires cursor_write_date")
 
-    with db.cursor() as cur:
-        state = _locked_sync_state(cur)
-        affected = _upsert_rows_cur(
-            cur,
-            normalized,
-            sync_completed_at=completed,
-            baseline_completed=state["baseline_completed_at"] is not None,
-        )
-        next_date, next_id = _later_cursor(
-            state["cursor_write_date"],
-            state["cursor_id"],
-            cursor_write_date,
-            cursor_id,
-        )
-        cur.execute(
-            "UPDATE odoo_attendance_sync_state SET "
-            "cursor_write_date = %s, cursor_id = %s, "
-            "last_incremental_completed_at = %s, last_error = NULL "
-            "WHERE singleton = TRUE",
-            (next_date, next_id, completed),
-        )
+    state = _locked_sync_state(cur)
+    affected = _upsert_rows_cur(
+        cur,
+        normalized,
+        sync_completed_at=completed,
+        baseline_completed=state["baseline_completed_at"] is not None,
+    )
+    next_date, next_id = _later_cursor(
+        state["cursor_write_date"],
+        state["cursor_id"],
+        cursor_write_date,
+        cursor_id,
+    )
+    cur.execute(
+        "UPDATE odoo_attendance_sync_state SET "
+        "cursor_write_date = %s, cursor_id = %s, "
+        "last_incremental_completed_at = %s, last_error = %s "
+        "WHERE singleton = TRUE",
+        (
+            next_date,
+            next_id,
+            completed,
+            _error_after_success(state["last_error"], "incremental"),
+        ),
+    )
     return affected
+
+
+def _store_incremental_cycle(
+    rows: Sequence[dict],
+    *,
+    cursor_write_date: datetime | None,
+    cursor_id: int | None,
+    completed_at: datetime,
+) -> set[date]:
+    with db.cursor() as cur:
+        return _store_incremental_cycle_cur(
+            cur,
+            rows,
+            cursor_write_date=cursor_write_date,
+            cursor_id=cursor_id,
+            completed_at=completed_at,
+        )
 
 
 def upsert_rows(
@@ -457,7 +595,9 @@ def rows_overlapping(
         _utc_database_row(row)
         for row in db.query(
             "SELECT * FROM odoo_attendance_mirror "
-            "WHERE deleted_at IS NULL AND check_in_utc < %s "
+            "WHERE deleted_at IS NULL "
+            "AND (check_out_utc IS NULL OR check_out_utc > check_in_utc) "
+            "AND check_in_utc < %s "
             "AND (check_out_utc IS NULL OR check_out_utc > %s) "
             "ORDER BY check_in_utc, odoo_attendance_id",
             (end, start),
@@ -478,6 +618,7 @@ def rows_for_employee(
             for row in db.query(
                 "SELECT * FROM odoo_attendance_mirror "
                 "WHERE employee_odoo_id = %s AND deleted_at IS NULL "
+                "AND (check_out_utc IS NULL OR check_out_utc > check_in_utc) "
                 "AND (check_out_utc IS NULL OR check_out_utc > %s) "
                 "ORDER BY check_in_utc, odoo_attendance_id",
                 (employee_id, start),
@@ -488,6 +629,7 @@ def rows_for_employee(
         for row in db.query(
             "SELECT * FROM odoo_attendance_mirror "
             "WHERE employee_odoo_id = %s AND deleted_at IS NULL "
+            "AND (check_out_utc IS NULL OR check_out_utc > check_in_utc) "
             "AND check_in_utc < %s "
             "AND (check_out_utc IS NULL OR check_out_utc > %s) "
             "ORDER BY check_in_utc, odoo_attendance_id",
@@ -502,98 +644,164 @@ def _validated_ids(ids: Iterable[int]) -> set[int]:
     return {_positive_int(value, "attendance id") for value in ids}
 
 
-def _store_full_sweep(
-    ids: set[int], *, generation: int, completed_at: datetime
-) -> tuple[set[date], int]:
+def _active_attendance_ids_cur(cur) -> set[int]:
+    cur.execute(
+        "SELECT odoo_attendance_id FROM odoo_attendance_mirror "
+        "WHERE deleted_at IS NULL ORDER BY odoo_attendance_id"
+    )
+    return {
+        int(row["odoo_attendance_id"])
+        for row in cur.fetchall()
+    }
+
+
+def _active_attendance_ids() -> set[int]:
+    with db.cursor() as cur:
+        return _active_attendance_ids_cur(cur)
+
+
+def _tombstoned_attendance_ids_cur(cur, ids: set[int]) -> set[int]:
+    requested = _validated_ids(ids)
+    if not requested:
+        return set()
+    cur.execute(
+        "SELECT odoo_attendance_id FROM odoo_attendance_mirror "
+        "WHERE deleted_at IS NOT NULL AND odoo_attendance_id = ANY(%s) "
+        "ORDER BY odoo_attendance_id",
+        (sorted(requested),),
+    )
+    return {
+        int(row["odoo_attendance_id"])
+        for row in cur.fetchall()
+    }
+
+
+def _tombstoned_attendance_ids(ids: set[int]) -> set[int]:
+    with db.cursor() as cur:
+        return _tombstoned_attendance_ids_cur(cur, ids)
+
+
+def _store_full_sweep_cur(
+    cur,
+    ids: set[int],
+    *,
+    recovery_rows: Sequence[dict] = (),
+    generation: int,
+    completed_at: datetime,
+) -> _FullSweepStoreResult:
     present_ids = _validated_ids(ids)
+    normalized_recovery = _normalized_rows(recovery_rows)
+    recovery_ids = {
+        row["odoo_attendance_id"] for row in normalized_recovery
+    }
+    if not recovery_ids <= present_ids:
+        raise ValueError("recovery rows must be present in the completed sweep")
     sweep_generation = _positive_int(generation, "generation")
     completed = _aware_utc(completed_at, "completed_at")
-    with db.cursor() as cur:
-        state = _locked_sync_state(cur)
-        if sweep_generation != int(state["full_sweep_generation"]) + 1:
-            raise ValueError("full sweep generation is stale")
-        if present_ids:
-            cur.execute(
-                "UPDATE odoo_attendance_mirror SET last_sweep_generation = %s, "
-                "missing_since_sweep_generation = NULL "
-                "WHERE deleted_at IS NULL AND odoo_attendance_id = ANY(%s)",
-                (sweep_generation, sorted(present_ids)),
-            )
-            cur.execute(
-                "SELECT odoo_attendance_id, check_in_utc, check_out_utc, "
-                "last_seen_at, missing_since_sweep_generation "
-                "FROM odoo_attendance_mirror WHERE deleted_at IS NULL "
-                "AND NOT (odoo_attendance_id = ANY(%s)) FOR UPDATE",
-                (sorted(present_ids),),
-            )
-        else:
-            cur.execute(
-                "SELECT odoo_attendance_id, check_in_utc, check_out_utc, "
-                "last_seen_at, missing_since_sweep_generation "
-                "FROM odoo_attendance_mirror WHERE deleted_at IS NULL FOR UPDATE"
-            )
-        missing_rows = tuple(cur.fetchall())
-        deleted_rows = tuple(
-            row
-            for row in missing_rows
-            if row["missing_since_sweep_generation"] == sweep_generation - 1
-            and _sweep_can_delete(
-                last_seen_at=row["last_seen_at"], sweep_started_at=completed
-            )
-        )
-        deleted_ids = [row["odoo_attendance_id"] for row in deleted_rows]
-        deleted_id_set = set(deleted_ids)
-        deferred_ids = [
-            row["odoo_attendance_id"]
-            for row in missing_rows
-            if row["odoo_attendance_id"] not in deleted_id_set
-        ]
-        if deferred_ids:
-            cur.execute(
-                "UPDATE odoo_attendance_mirror SET last_sweep_generation = %s, "
-                "missing_since_sweep_generation = %s "
-                "WHERE odoo_attendance_id = ANY(%s) AND deleted_at IS NULL",
-                (sweep_generation, sweep_generation, deferred_ids),
-            )
-        if deleted_ids:
-            cur.execute(
-                "UPDATE odoo_attendance_mirror SET deleted_at = %s, "
-                "last_sweep_generation = %s "
-                "WHERE odoo_attendance_id = ANY(%s) AND deleted_at IS NULL",
-                (completed, sweep_generation, deleted_ids),
-            )
-        affected_days: set[date] = set()
-        if state["baseline_completed_at"] is not None:
-            for row in deleted_rows:
-                affected_days.update(_row_days(row, completed))
-            if affected_days:
-                _enqueue_recalc_cur(
-                    cur,
-                    affected_days,
-                    "odoo_attendance_deleted",
-                    mark_strict=True,
-                    requested_at=completed,
-                )
+    state = _locked_sync_state(cur)
+    if sweep_generation != int(state["full_sweep_generation"]) + 1:
+        raise ValueError("full sweep generation is stale")
+    if recovery_ids:
         cur.execute(
-            "UPDATE odoo_attendance_sync_state SET "
-            "last_full_sweep_completed_at = %s, "
-            "last_full_sweep_deletion_count = %s, "
-            "full_sweep_generation = %s, last_error = NULL "
-            "WHERE singleton = TRUE",
-            (completed, len(deleted_ids), sweep_generation),
+            "SELECT odoo_attendance_id FROM odoo_attendance_mirror "
+            "WHERE deleted_at IS NOT NULL "
+            "AND odoo_attendance_id = ANY(%s) FOR UPDATE",
+            (sorted(recovery_ids),),
         )
-    return affected_days, len(deleted_ids)
+        locked_recovery_ids = {
+            int(row["odoo_attendance_id"]) for row in cur.fetchall()
+        }
+        if locked_recovery_ids != recovery_ids:
+            raise RuntimeError("tombstone recovery state changed before commit")
+    recovered_days = _upsert_rows_cur(
+        cur,
+        normalized_recovery,
+        sync_completed_at=completed,
+        baseline_completed=state["baseline_completed_at"] is not None,
+    )
+    if present_ids:
+        cur.execute(
+            "UPDATE odoo_attendance_mirror SET last_sweep_generation = %s "
+            "WHERE deleted_at IS NULL AND odoo_attendance_id = ANY(%s)",
+            (sweep_generation, sorted(present_ids)),
+        )
+        cur.execute(
+            "SELECT odoo_attendance_id, check_in_utc, check_out_utc "
+            "FROM odoo_attendance_mirror WHERE deleted_at IS NULL "
+            "AND NOT (odoo_attendance_id = ANY(%s)) FOR UPDATE",
+            (sorted(present_ids),),
+        )
+    else:
+        cur.execute(
+            "SELECT odoo_attendance_id, check_in_utc, check_out_utc "
+            "FROM odoo_attendance_mirror WHERE deleted_at IS NULL FOR UPDATE"
+        )
+    deleted_rows = tuple(cur.fetchall())
+    deleted_ids = [row["odoo_attendance_id"] for row in deleted_rows]
+    if deleted_ids:
+        cur.execute(
+            "UPDATE odoo_attendance_mirror SET deleted_at = %s, "
+            "last_sweep_generation = %s "
+            "WHERE odoo_attendance_id = ANY(%s) AND deleted_at IS NULL",
+            (completed, sweep_generation, deleted_ids),
+        )
+    deleted_days: set[date] = set()
+    if state["baseline_completed_at"] is not None:
+        for row in deleted_rows:
+            deleted_days.update(_row_days(row, completed))
+        if deleted_days:
+            _enqueue_recalc_cur(
+                cur,
+                deleted_days,
+                "odoo_attendance_deleted",
+                mark_strict=True,
+                requested_at=completed,
+            )
+    cur.execute(
+        "UPDATE odoo_attendance_sync_state SET "
+        "last_full_sweep_completed_at = %s, "
+        "last_full_sweep_deletion_count = %s, "
+        "full_sweep_generation = %s, last_error = %s "
+        "WHERE singleton = TRUE",
+        (
+            completed,
+            len(deleted_ids),
+            sweep_generation,
+            _error_after_success(state["last_error"], "sweep"),
+        ),
+    )
+    return _FullSweepStoreResult(
+        affected_days=frozenset(recovered_days | deleted_days),
+        deleted_count=len(deleted_ids),
+    )
+
+
+def _store_full_sweep(
+    ids: set[int],
+    *,
+    recovery_rows: Sequence[dict] = (),
+    generation: int,
+    completed_at: datetime,
+) -> _FullSweepStoreResult:
+    with db.cursor() as cur:
+        return _store_full_sweep_cur(
+            cur,
+            ids,
+            recovery_rows=recovery_rows,
+            generation=generation,
+            completed_at=completed_at,
+        )
 
 
 def mark_deleted_after_successful_sweep(
     ids: set[int], generation: int
 ) -> set[date]:
-    affected_days, _rows_deleted = _store_full_sweep(
+    result = _store_full_sweep(
         ids,
         generation=generation,
         completed_at=datetime.now(UTC),
     )
-    return affected_days
+    return set(result.affected_days)
 
 
 def _sync_state_snapshot() -> SyncState:
@@ -606,63 +814,56 @@ def _sync_state_snapshot() -> SyncState:
     if not rows:
         raise RuntimeError("Odoo attendance sync state is missing")
     row = rows[0]
-    return SyncState(
-        cursor_write_date=_optional_aware_utc(
-            row["cursor_write_date"], "cursor_write_date"
-        ),
-        cursor_id=row["cursor_id"],
-        last_incremental_completed_at=_optional_aware_utc(
-            row["last_incremental_completed_at"],
-            "last_incremental_completed_at",
-        ),
-        last_full_sweep_completed_at=_optional_aware_utc(
-            row["last_full_sweep_completed_at"],
-            "last_full_sweep_completed_at",
-        ),
-        full_sweep_generation=int(row["full_sweep_generation"]),
-        baseline_completed_at=_optional_aware_utc(
-            row["baseline_completed_at"], "baseline_completed_at"
-        ),
-    )
+    return _sync_state_from_row(row)
 
 
-def _record_incremental_started(started_at: datetime) -> None:
+def _record_incremental_started_cur(cur, started_at: datetime) -> None:
     started = _aware_utc(started_at, "started_at")
-    db.execute(
+    cur.execute(
         "UPDATE odoo_attendance_sync_state SET last_incremental_started_at = %s "
         "WHERE singleton = TRUE",
         (started,),
     )
 
 
-def _bounded_error(error: object) -> str:
-    return str(error)[:_ERROR_LIMIT]
+def _record_incremental_started(started_at: datetime) -> None:
+    with db.cursor() as cur:
+        _record_incremental_started_cur(cur, started_at)
 
 
-def _record_failure(error: object) -> None:
-    db.execute(
-        "UPDATE odoo_attendance_sync_state SET last_error = %s "
-        "WHERE singleton = TRUE",
-        (_bounded_error(error),),
-    )
+def _record_failure(owner: str, error: object) -> None:
+    owner = _require_error_owner(owner)
+    with db.cursor() as cur:
+        state = _locked_sync_state(cur)
+        cur.execute(
+            "UPDATE odoo_attendance_sync_state SET last_error = %s "
+            "WHERE singleton = TRUE",
+            (_error_with_failure(state["last_error"], owner, error),),
+        )
 
 
 def _complete_baseline_if_ready(completed_at: datetime) -> bool:
     completed = _aware_utc(completed_at, "completed_at")
     with db.cursor() as cur:
-        cur.execute(
-            "UPDATE odoo_attendance_sync_state SET baseline_completed_at = %s "
-            "WHERE singleton = TRUE AND baseline_completed_at IS NULL "
-            "AND last_incremental_completed_at IS NOT NULL "
-            "AND last_full_sweep_completed_at IS NOT NULL",
-            (completed,),
-        )
-        cur.execute(
-            "SELECT baseline_completed_at FROM odoo_attendance_sync_state "
-            "WHERE singleton = TRUE"
-        )
-        row = cur.fetchone()
-    return bool(row and row["baseline_completed_at"] is not None)
+        state = _locked_sync_state(cur)
+        baseline_completed_at = state["baseline_completed_at"]
+        if (
+            baseline_completed_at is None
+            and state["last_incremental_completed_at"] is not None
+            and state["last_full_sweep_completed_at"] is not None
+        ):
+            baseline_completed_at = completed
+        if baseline_completed_at is not None:
+            cur.execute(
+                "UPDATE odoo_attendance_sync_state SET "
+                "baseline_completed_at = %s, last_error = %s "
+                "WHERE singleton = TRUE",
+                (
+                    baseline_completed_at,
+                    _error_after_success(state["last_error"], "baseline"),
+                ),
+            )
+    return baseline_completed_at is not None
 
 
 def health_snapshot() -> MirrorHealth:
@@ -692,11 +893,7 @@ def health_snapshot() -> MirrorHealth:
         oldest_recalc_requested_at=_optional_aware_utc(
             row["oldest_recalc_requested_at"], "oldest_recalc_requested_at"
         ),
-        last_error=(
-            _bounded_error(row["last_error"])
-            if row["last_error"] is not None
-            else None
-        ),
+        last_error=_format_error_state(row["last_error"]),
     )
 
 

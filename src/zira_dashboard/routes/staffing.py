@@ -1621,6 +1621,12 @@ def _seed_new_future_draft(
     return staffing.load_schedule(day)
 
 
+def _staffing_uses_live_cache(day: date, today: date) -> bool:
+    """Staffing history stays mutable when absence pay treatment changes."""
+    del day, today
+    return True
+
+
 @router.get("/staffing", response_class=HTMLResponse)
 def staffing_page(
     request: Request,
@@ -1640,13 +1646,15 @@ def staffing_page(
     except ValueError:
         d = _next_working_day(today)
 
-    # Server-side response cache: 15 s for today, 5 min for past days.
+    # Every Staffing date uses the live bucket: a past recorded absence can
+    # gain a PTO/review suffix after the day ends. This keeps browser freshness
+    # at 15s and server freshness at 60s for historical labels too.
     # Most pageviews — including the reload after a clear-partial click —
     # serve from cache and never pay the Odoo/Zira/DB chain.
     # Mutations (POST /staffing, /api/staffing/attribute, clear-partial,
     # declare-absent, etc.) all call invalidate_today_cache() so saves
     # show up on the next reload regardless of TTL.
-    is_today = d >= today
+    cache_is_live = _staffing_uses_live_cache(d, today)
     view_mode_normalized = view if view in ("draft", "posted") else "draft"
     publish_errors = (
         tuple(str(error) for error in publish_error)
@@ -1660,7 +1668,9 @@ def staffing_page(
         int(publish_blocked or 0),
         publish_errors,
     )
-    cached_resp = _http_cache.get_cached_response(response_cache_key, includes_today=is_today)
+    cached_resp = _http_cache.get_cached_response(
+        response_cache_key, includes_today=cache_is_live
+    )
     if cached_resp is not None:
         return cached_resp
 
@@ -2253,17 +2263,16 @@ def staffing_page(
             },
         )
 
-    # Past-day staffing pages are immutable, so the browser can cache them
-    # for a long time. Today / future days get the short cache (so edits
-    # appear immediately on reload).
-    _http_cache.set_cache_headers(response, includes_today=is_today)
+    # Historical absence pay labels can change, so every Staffing response
+    # uses the short live browser policy.
+    _http_cache.set_cache_headers(response, includes_today=cache_is_live)
 
     phases["total"] = (time.perf_counter() - _total_t0) * 1000.0
     response.headers["Server-Timing"] = _server_timing_header(phases)
-    # Stash in the server-side response cache. Mutations bust this via
-    # invalidate_today_cache; non-today buckets live for 5 min.
+    # Stash in the live server bucket. Absence-PTO mutations also invalidate
+    # all buckets immediately; the 60s TTL is the fail-safe visibility bound.
     _http_cache.store_cached_response(
-        response_cache_key, includes_today=is_today, response=response
+        response_cache_key, includes_today=cache_is_live, response=response
     )
     return response
 

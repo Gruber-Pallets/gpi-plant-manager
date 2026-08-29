@@ -54,7 +54,8 @@ def test_record_event_with_cursor_returns_real_dict_id_and_serializes_detail():
         "Machine Breakdown",
         "auto_resolved",
     )
-    assert json.loads(cursor.params[-1]) == {"day": "2026-08-20"}
+    assert json.loads(cursor.params[-2]) == {"day": "2026-08-20"}
+    assert cursor.params[-1] is None
 
 
 def test_record_event_delegates_to_cursor_aware_insert(monkeypatch):
@@ -97,8 +98,9 @@ def test_record_event_delegates_to_cursor_aware_insert(monkeypatch):
                 "actor_upn": None,
                 "actor_name": None,
                 "source": "inbox",
-                "reversible": False,
-                "detail": None,
+                    "reversible": False,
+                    "detail": None,
+                    "resolved_at": None,
             },
         )
     ]

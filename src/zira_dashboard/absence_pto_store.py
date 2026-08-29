@@ -23,6 +23,7 @@ STATES: Final = frozenset(
 CONVERSION_STEPS: Final = frozenset(
     {"not_started", "absence_refused", "pto_created", "pto_approved"}
 )
+RESOLUTION_STEPS: Final = frozenset({"none", "message_posted", "closed"})
 
 REQUEST_COLUMNS = (
     "id, absence_day, emp_id, person_odoo_id, person_name, holiday_status_id, "
@@ -30,7 +31,8 @@ REQUEST_COLUMNS = (
     "state, conversion_step, employee_note, denial_reason, manual_resolution_note, "
     "sync_error, odoo_task_id, task_attempts, task_next_at, lease_owner, lease_until, "
     "requested_by_person_id, decided_by_upn, decided_by_name, requested_at, "
-    "decided_at, resolved_at, created_at, updated_at"
+    "decided_at, resolved_at, created_at, updated_at, task_resolution_step, "
+    "task_resolution_attempts, task_resolution_next_at, task_resolution_error"
 )
 QUALIFIED_REQUEST_COLUMNS = ", ".join(
     f"request.{column.strip()} AS {column.strip()}"
@@ -73,6 +75,17 @@ class AbsencePtoRequest:
     resolved_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    task_resolution_step: str = "none"
+    task_resolution_attempts: int = 0
+    task_resolution_next_at: datetime | None = None
+    task_resolution_error: str | None = None
+
+
+@dataclass(frozen=True)
+class PersonRequestCounts:
+    total: int
+    unresolved: int
+    actionable: int
 
 
 def _positive_int(value: object, field: str) -> int:
@@ -164,6 +177,12 @@ def _step(value: object, field: str = "conversion_step") -> str:
     return value
 
 
+def _resolution_step(value: object, field: str = "task_resolution_step") -> str:
+    if type(value) is not str or value not in RESOLUTION_STEPS:
+        raise ValueError(f"{field} is not supported")
+    return value
+
+
 def _request_from_row(row: Mapping[str, object]) -> AbsencePtoRequest:
     """Validate one database row before exposing it to domain code."""
     if not isinstance(row, Mapping):
@@ -213,6 +232,18 @@ def _request_from_row(row: Mapping[str, object]) -> AbsencePtoRequest:
         resolved_at=_optional_aware_datetime(row.get("resolved_at"), "resolved_at"),
         created_at=_aware_datetime(row.get("created_at"), "created_at"),
         updated_at=_aware_datetime(row.get("updated_at"), "updated_at"),
+        task_resolution_step=_resolution_step(
+            row.get("task_resolution_step", "none")
+        ),
+        task_resolution_attempts=_nonnegative_int(
+            row.get("task_resolution_attempts", 0), "task_resolution_attempts"
+        ),
+        task_resolution_next_at=_optional_aware_datetime(
+            row.get("task_resolution_next_at"), "task_resolution_next_at"
+        ),
+        task_resolution_error=_optional_text(
+            row.get("task_resolution_error"), "task_resolution_error"
+        ),
     )
 
 
@@ -306,34 +337,114 @@ def list_for_person(emp_id: str) -> list[AbsencePtoRequest]:
     return [_request_from_row(row) for row in rows]
 
 
+def _history_limit(value: object) -> int:
+    if type(value) is not int or not 1 <= value <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    return value
+
+
+def list_history_for_person(
+    emp_id: str, *, limit: int = 100
+) -> list[AbsencePtoRequest]:
+    """Return a bounded newest-first employee history for presentation."""
+    rows = db.query(
+        f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests WHERE emp_id = %s "
+        "ORDER BY requested_at DESC, id DESC LIMIT %s",
+        (_required_text(emp_id, "emp_id"), _history_limit(limit)),
+    )
+    return [_request_from_row(row) for row in rows]
+
+
+def request_counts_for_person(emp_id: str) -> PersonRequestCounts:
+    """Return constant-size history and unresolved counts for landing badges."""
+    rows = db.query(
+        "SELECT COUNT(*) AS total, "
+        "COUNT(*) FILTER (WHERE state IN "
+        "('pending', 'converting', 'needs_review')) AS unresolved, "
+        "COUNT(*) FILTER (WHERE state IN "
+        "('pending', 'converting')) AS actionable "
+        "FROM absence_pto_requests WHERE emp_id = %s",
+        (_required_text(emp_id, "emp_id"),),
+    )
+    if len(rows) != 1:
+        raise ValueError("request count query must return exactly one row")
+    counts = PersonRequestCounts(
+        total=_nonnegative_int(rows[0].get("total"), "total"),
+        unresolved=_nonnegative_int(rows[0].get("unresolved"), "unresolved"),
+        actionable=_nonnegative_int(rows[0].get("actionable"), "actionable"),
+    )
+    if counts.actionable > counts.unresolved or counts.unresolved > counts.total:
+        raise ValueError("request counts are inconsistent")
+    return counts
+
+
+def blocking_days_for_person(
+    emp_id: str, period_start: date, period_end: date
+) -> set[date]:
+    """Return only blocking days in the candidate period, without row history."""
+    if (
+        not isinstance(period_start, date)
+        or isinstance(period_start, datetime)
+        or not isinstance(period_end, date)
+        or isinstance(period_end, datetime)
+        or period_start > period_end
+    ):
+        raise ValueError("period bounds must be ordered dates")
+    rows = db.query(
+        "SELECT DISTINCT absence_day FROM absence_pto_requests "
+        "WHERE emp_id = %s AND absence_day BETWEEN %s AND %s "
+        "AND state IN ('pending', 'converting', 'approved', "
+        "'needs_review', 'resolved_manually')",
+        (_required_text(emp_id, "emp_id"), period_start, period_end),
+    )
+    result = set()
+    for row in rows:
+        day = row.get("absence_day")
+        if not isinstance(day, date) or isinstance(day, datetime):
+            raise ValueError("absence_day must be a date")
+        result.add(day)
+    return result
+
+
 def list_pending() -> list[AbsencePtoRequest]:
     rows = db.query(
-        f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests WHERE state = 'pending' "
+        f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests "
+        "WHERE state IN ('pending', 'needs_review') "
         "ORDER BY requested_at, id"
     )
     return [_request_from_row(row) for row in rows]
 
 
-def list_due(now: datetime, *, limit: int = 25) -> list[AbsencePtoRequest]:
+def list_due(
+    workflow_now: datetime, *, lease_now: datetime, limit: int = 25
+) -> list[AbsencePtoRequest]:
     """Return bounded reconciliation candidates; callers claim each row separately."""
-    current = _aware_datetime(now, "now")
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
     if type(limit) is not int or limit <= 0 or limit > 100:
         raise ValueError("limit must be between 1 and 100")
     rows = db.query(
         f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests "
-        "WHERE state IN ('pending', 'converting', 'needs_review') "
+        "WHERE state IN ('pending', 'converting', 'needs_review', 'approved', "
+        "'resolved_manually') "
         "AND (lease_until IS NULL OR lease_until <= %s) "
-        "AND (state <> 'needs_review' OR task_next_at IS NULL OR task_next_at <= %s) "
-        "ORDER BY COALESCE(task_next_at, requested_at), id LIMIT %s",
-        (current, current, limit),
+        "AND ((state = 'needs_review' AND (task_next_at IS NULL OR task_next_at <= %s)) "
+        "OR state IN ('pending', 'converting') OR (state IN ('approved', "
+        "'resolved_manually') AND odoo_task_id IS NOT NULL "
+        "AND task_resolution_step <> 'closed' AND (task_resolution_next_at IS NULL "
+        "OR task_resolution_next_at <= %s))) "
+        "ORDER BY COALESCE(task_resolution_next_at, task_next_at, requested_at), "
+        "id LIMIT %s",
+        (lease_current, workflow_current, workflow_current, limit),
     )
     return [_request_from_row(row) for row in rows]
 
 
 def claim_due(
     owner: UUID,
-    now: datetime,
+    workflow_now: datetime,
     *,
+    lease_now: datetime,
     period_start: date,
     period_end: date,
     limit: int = 25,
@@ -341,7 +452,8 @@ def claim_due(
 ) -> list[AbsencePtoRequest]:
     """Claim bounded expired conversions and pending requests after rollover."""
     safe_owner = _uuid(owner, "owner")
-    current = _aware_datetime(now, "now")
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
     if (
         not isinstance(period_start, date)
         or isinstance(period_start, datetime)
@@ -354,13 +466,19 @@ def claim_due(
         raise ValueError("limit must be between 1 and 100")
     if type(lease_seconds) is not int or lease_seconds <= 0:
         raise ValueError("lease_seconds must be a positive integer")
-    lease_until = current + timedelta(seconds=lease_seconds)
+    lease_until = lease_current + timedelta(seconds=lease_seconds)
     rows = db.query(
         "WITH due AS MATERIALIZED ("
         "SELECT request.id FROM absence_pto_requests AS request "
         "WHERE (request.lease_until IS NULL OR request.lease_until <= %s) "
         "AND (request.state = 'converting' OR (request.state = 'pending' "
-        "AND request.absence_day NOT BETWEEN %s AND %s)) "
+        "AND request.absence_day NOT BETWEEN %s AND %s) OR "
+        "(request.state = 'needs_review' AND (request.task_next_at IS NULL "
+        "OR request.task_next_at <= %s)) OR (request.state IN ('approved', "
+        "'resolved_manually') AND request.odoo_task_id IS NOT NULL "
+        "AND request.task_resolution_step <> 'closed' "
+        "AND (request.task_resolution_next_at IS NULL "
+        "OR request.task_resolution_next_at <= %s))) "
         "ORDER BY request.requested_at, request.id LIMIT %s "
         "FOR UPDATE SKIP LOCKED"
         ") UPDATE absence_pto_requests AS request "
@@ -369,14 +487,16 @@ def claim_due(
         "AND (request.lease_until IS NULL OR request.lease_until <= %s) "
         f"RETURNING {QUALIFIED_REQUEST_COLUMNS}",
         (
-            current,
+            lease_current,
             period_start,
             period_end,
+            workflow_current,
+            workflow_current,
             limit,
             safe_owner,
             lease_until,
-            current,
-            current,
+            workflow_current,
+            lease_current,
         ),
     )
     return [_request_from_row(row) for row in rows]
@@ -555,9 +675,11 @@ def mark_needs_review(
     owner: UUID,
     *,
     error: str,
-    now: datetime | None = None,
+    workflow_now: datetime,
+    lease_now: datetime,
 ) -> AbsencePtoRequest:
-    current = _now(now)
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
     rows = db.query(
         "UPDATE absence_pto_requests SET state = 'needs_review', sync_error = %s, "
         "task_next_at = %s, updated_at = %s WHERE id = %s AND lease_owner = %s "
@@ -565,11 +687,11 @@ def mark_needs_review(
         f"RETURNING {REQUEST_COLUMNS}",
         (
             _required_text(error, "error"),
-            current,
-            current,
+            workflow_current,
+            workflow_current,
             _positive_int(request_id, "request_id"),
             _uuid(owner, "owner"),
-            current,
+            lease_current,
         ),
     )
     if not rows:
@@ -613,10 +735,12 @@ def save_task_delivery(
     attempts: int,
     next_at: datetime | None,
     error: str | None,
-    now: datetime | None = None,
+    workflow_now: datetime,
+    lease_now: datetime,
 ) -> AbsencePtoRequest:
     """Save task delivery progress only for the current review lease owner."""
-    current = _now(now)
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
     rows = db.query(
         "UPDATE absence_pto_requests SET odoo_task_id = %s, task_attempts = %s, "
         "task_next_at = %s, sync_error = %s, updated_at = %s "
@@ -627,15 +751,83 @@ def save_task_delivery(
             _nonnegative_int(attempts, "attempts"),
             _optional_aware_datetime(next_at, "next_at"),
             _optional_text(error, "error"),
-            current,
+            workflow_current,
             _positive_int(request_id, "request_id"),
             _uuid(owner, "owner"),
-            current,
+            lease_current,
         ),
     )
     if not rows:
         raise StaleTransition("task delivery update lost its current review lease")
     return _one_request(rows, "task delivery update")
+
+
+def save_resolution_delivery(
+    request_id: int,
+    owner: UUID,
+    *,
+    expected_step: str,
+    new_step: str,
+    attempts: int,
+    next_at: datetime | None,
+    error: str | None,
+    workflow_now: datetime,
+    lease_now: datetime,
+) -> AbsencePtoRequest:
+    """Checkpoint terminal task delivery for the current terminal-state owner."""
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
+    rows = db.query(
+        "UPDATE absence_pto_requests SET task_resolution_step = %s, "
+        "task_resolution_attempts = %s, task_resolution_next_at = %s, "
+        "task_resolution_error = %s, updated_at = %s WHERE id = %s "
+        "AND state IN ('approved', 'resolved_manually') AND lease_owner = %s "
+        "AND lease_until > %s AND task_resolution_step = %s "
+        f"RETURNING {REQUEST_COLUMNS}",
+        (
+            _resolution_step(new_step, "new_step"),
+            _nonnegative_int(attempts, "attempts"),
+            _optional_aware_datetime(next_at, "next_at"),
+            _optional_text(error, "error"),
+            workflow_current,
+            _positive_int(request_id, "request_id"),
+            _uuid(owner, "owner"),
+            lease_current,
+            _resolution_step(expected_step, "expected_step"),
+        ),
+    )
+    if not rows:
+        raise StaleTransition("resolution delivery update lost its current lease")
+    return _one_request(rows, "resolution delivery update")
+
+
+def adopt_external_pto(
+    request_id: int,
+    owner: UUID,
+    *,
+    pto_leave_id: int,
+    workflow_now: datetime,
+    lease_now: datetime,
+) -> AbsencePtoRequest:
+    """Durably bind the one verified external PTO before local finalization."""
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
+    rows = db.query(
+        "UPDATE absence_pto_requests SET pto_leave_id = %s, updated_at = %s "
+        "WHERE id = %s AND state = 'needs_review' AND lease_owner = %s "
+        "AND lease_until > %s "
+        f"RETURNING {REQUEST_COLUMNS}",
+        (
+            _positive_int(pto_leave_id, "pto_leave_id"),
+            workflow_current,
+            _positive_int(request_id, "request_id"),
+            _uuid(owner, "owner"),
+            lease_current,
+        ),
+    )
+    if not rows:
+        raise StaleTransition("external PTO adoption lost its current review lease")
+    return _one_request(rows, "external PTO adoption")
 
 
 def finalize_approved(
@@ -647,7 +839,8 @@ def finalize_approved(
     actor_upn: str | None,
     actor_name: str | None,
     source: str | None,
-    now: datetime | None = None,
+    workflow_now: datetime,
+    lease_now: datetime,
 ) -> AbsencePtoRequest:
     """Atomically settle local mirrors, links, request state, and audit."""
     safe_id = _positive_int(request_id, "request_id")
@@ -656,13 +849,15 @@ def finalize_approved(
         original_absence_leave_id, "original_absence_leave_id"
     )
     safe_pto_id = _positive_int(pto_leave_id, "pto_leave_id")
-    current = _now(now)
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
     with db.cursor() as cur:
         cur.execute(
             f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests "
-            "WHERE id = %s AND lease_owner = %s AND lease_until > %s "
-            "AND state = 'converting' AND conversion_step = 'pto_approved' FOR UPDATE",
-            (safe_id, safe_owner, current),
+            "WHERE id = %s AND lease_owner = %s AND lease_until > %s AND ("
+            "(state = 'converting' AND conversion_step = 'pto_approved') OR "
+            "(state = 'needs_review' AND pto_leave_id = %s)) FOR UPDATE",
+            (safe_id, safe_owner, lease_current, safe_pto_id),
         )
         request = _one_request(list(cur.fetchall()), "approval finalization lock")
         if (
@@ -688,7 +883,12 @@ def finalize_approved(
                 "synced_to_odoo = TRUE, sync_error = NULL, local_record = FALSE, "
                 "last_pulled_at = %s, last_pushed_at = %s, updated_at = %s "
                 "WHERE odoo_leave_id = %s",
-                (current, current, current, safe_original_id),
+                (
+                    workflow_current,
+                    workflow_current,
+                    workflow_current,
+                    safe_original_id,
+                ),
             )
 
         cur.execute(
@@ -715,9 +915,9 @@ def finalize_approved(
                 request.absence_day,
                 "Paid Time Off for recorded absence",
                 safe_pto_id,
-                current,
-                current,
-                current,
+                workflow_current,
+                workflow_current,
+                workflow_current,
             ),
         )
         cur.execute(
@@ -730,20 +930,27 @@ def finalize_approved(
             raise StaleTransition("attendance absence link update lost its row")
 
         cur.execute(
-            "UPDATE absence_pto_requests SET state = 'approved', sync_error = NULL, "
+            "UPDATE absence_pto_requests SET state = 'approved', "
+            "conversion_step = 'pto_approved', sync_error = NULL, "
             "decided_by_upn = %s, decided_by_name = %s, decided_at = %s, "
-            "updated_at = %s WHERE id = %s AND lease_owner = %s "
-            "AND lease_until > %s AND state = 'converting' "
-            "AND conversion_step = 'pto_approved' AND pto_leave_id = %s "
+            "task_resolution_step = CASE WHEN odoo_task_id IS NULL THEN 'closed' "
+            "ELSE 'none' END, task_resolution_attempts = 0, "
+            "task_resolution_next_at = CASE WHEN odoo_task_id IS NULL THEN NULL "
+            "ELSE %s END, task_resolution_error = NULL, updated_at = %s "
+            "WHERE id = %s AND lease_owner = %s "
+            "AND lease_until > %s AND pto_leave_id = %s AND ("
+            "(state = 'converting' AND conversion_step = 'pto_approved') OR "
+            "state = 'needs_review') "
             f"RETURNING {REQUEST_COLUMNS}",
             (
                 _optional_text(actor_upn, "actor_upn"),
                 _optional_text(actor_name, "actor_name"),
-                current,
-                current,
+                workflow_current,
+                workflow_current,
+                workflow_current,
                 safe_id,
                 safe_owner,
-                current,
+                lease_current,
                 safe_pto_id,
             ),
         )
@@ -774,6 +981,7 @@ def finalize_approved(
             request_kind="absence_pto",
             request_key=request_key,
             detail=detail,
+            decided_at=workflow_current,
         )
         inbox_log.record_event_with_cursor(
             cur,
@@ -790,24 +998,197 @@ def finalize_approved(
             source=source,
             reversible=False,
             detail=detail,
+            resolved_at=workflow_current,
         )
     return approved
 
 
+def finalize_manual(
+    request_id: int,
+    owner: UUID,
+    *,
+    actor_upn: str,
+    actor_name: str,
+    note: str,
+    workflow_now: datetime,
+    lease_now: datetime,
+) -> AbsencePtoRequest:
+    """Atomically record an explicit non-PTO resolution and its audit event."""
+    safe_id = _positive_int(request_id, "request_id")
+    safe_owner = _uuid(owner, "owner")
+    safe_upn = _required_text(actor_upn, "actor_upn").strip()
+    safe_name = _required_text(actor_name, "actor_name").strip()
+    safe_note = _required_text(note, "note").strip()
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE absence_pto_requests SET state = 'resolved_manually', "
+            "manual_resolution_note = %s, decided_by_upn = %s, "
+            "decided_by_name = %s, decided_at = %s, resolved_at = %s, "
+            "task_next_at = NULL, task_resolution_step = CASE "
+            "WHEN odoo_task_id IS NULL THEN 'closed' ELSE 'none' END, "
+            "task_resolution_attempts = 0, task_resolution_next_at = CASE "
+            "WHEN odoo_task_id IS NULL THEN NULL ELSE %s END, "
+            "task_resolution_error = NULL, updated_at = %s WHERE id = %s "
+            "AND state = 'needs_review' AND lease_owner = %s "
+            "AND lease_until > %s "
+            f"RETURNING {REQUEST_COLUMNS}",
+            (
+                safe_note,
+                safe_upn,
+                safe_name,
+                workflow_current,
+                workflow_current,
+                workflow_current,
+                workflow_current,
+                safe_id,
+                safe_owner,
+                lease_current,
+            ),
+        )
+        resolved = _one_request(list(cur.fetchall()), "manual review resolution")
+        request_key = f"absence_pto:{safe_id}"
+        inbox_log.record_event_with_cursor(
+            cur,
+            item_kind="absence_pto",
+            item_key=request_key,
+            person_name=resolved.person_name,
+            category_label="Past absence PTO",
+            action="handled",
+            outcome="Handled manually",
+            before_value="Needs payroll review",
+            after_value="Handled outside Plant Manager PTO",
+            reason=safe_note,
+            actor_upn=safe_upn,
+            actor_name=safe_name,
+            source="absence_pto_review",
+            reversible=False,
+            detail={"request_kind": "absence_pto", "request_key": request_key},
+            resolved_at=workflow_current,
+        )
+    return resolved
+
+
+def finalize_denied(
+    request_id: int,
+    owner: UUID,
+    *,
+    actor_upn: str | None,
+    actor_name: str | None,
+    reason: str,
+    source: str | None,
+    workflow_now: datetime,
+    lease_now: datetime,
+) -> AbsencePtoRequest:
+    """Atomically deny a pending request and append both manager audits."""
+    safe_id = _positive_int(request_id, "request_id")
+    safe_owner = _uuid(owner, "owner")
+    safe_reason = _required_text(reason, "reason").strip()
+    safe_upn = _optional_text(actor_upn, "actor_upn")
+    safe_name = _optional_text(actor_name, "actor_name")
+    safe_source = _optional_text(source, "source")
+    workflow_current = _aware_datetime(workflow_now, "workflow_now")
+    lease_current = _aware_datetime(lease_now, "lease_now")
+    with db.cursor() as cur:
+        cur.execute(
+            f"SELECT {REQUEST_COLUMNS} FROM absence_pto_requests "
+            "WHERE id = %s AND state = 'pending' AND lease_owner = %s "
+            "AND lease_until > %s FOR UPDATE",
+            (safe_id, safe_owner, lease_current),
+        )
+        request = _one_request(list(cur.fetchall()), "denial finalization lock")
+        cur.execute(
+            "UPDATE absence_pto_requests SET state = 'denied', "
+            "denial_reason = %s, decided_by_upn = %s, decided_by_name = %s, "
+            "decided_at = %s, resolved_at = %s, sync_error = NULL, "
+            "task_next_at = NULL, updated_at = %s WHERE id = %s "
+            "AND state = 'pending' AND lease_owner = %s AND lease_until > %s "
+            f"RETURNING {REQUEST_COLUMNS}",
+            (
+                safe_reason,
+                safe_upn,
+                safe_name,
+                workflow_current,
+                workflow_current,
+                workflow_current,
+                safe_id,
+                safe_owner,
+                lease_current,
+            ),
+        )
+        denied = _one_request(list(cur.fetchall()), "denial finalization")
+        request_key = f"absence_pto:{safe_id}"
+        detail = {
+            "original_absence_leave_id": request.original_absence_leave_id,
+            "pto_leave_id": request.pto_leave_id,
+            "conversion_step": request.conversion_step,
+        }
+        time_off_audit.record_decision_with_cursor(
+            cur,
+            request_id=safe_id,
+            odoo_leave_id=request.original_absence_leave_id,
+            person_odoo_id=request.person_odoo_id,
+            person_name=request.person_name,
+            leave_type=request.leave_type_name,
+            date_from=request.absence_day,
+            date_to=request.absence_day,
+            hour_from=None,
+            hour_to=None,
+            action="deny",
+            result_state="denied",
+            reason=safe_reason,
+            actor_upn=safe_upn,
+            actor_name=safe_name,
+            source=safe_source,
+            request_kind="absence_pto",
+            request_key=request_key,
+            detail=detail,
+            decided_at=workflow_current,
+        )
+        inbox_log.record_event_with_cursor(
+            cur,
+            item_kind="absence_pto",
+            item_key=request_key,
+            person_name=request.person_name,
+            category_label="Past absence PTO",
+            action="deny",
+            outcome="Denied",
+            before_value="Absent · PTO pending",
+            after_value="Absent · unpaid",
+            reason=safe_reason,
+            actor_upn=safe_upn,
+            actor_name=safe_name,
+            source=safe_source,
+            reversible=False,
+            detail=detail,
+            resolved_at=workflow_current,
+        )
+    return denied
+
+
 __all__ = [
     "AbsencePtoRequest",
+    "PersonRequestCounts",
     "StaleTransition",
     "claim_due",
     "claim_request",
     "create_request",
+    "adopt_external_pto",
+    "blocking_days_for_person",
     "get_request",
     "finalize_approved",
+    "finalize_denied",
+    "finalize_manual",
     "list_due",
     "list_for_person",
+    "list_history_for_person",
     "list_pending",
     "mark_needs_review",
     "release_claim",
     "renew_claim",
+    "request_counts_for_person",
+    "save_resolution_delivery",
     "save_task_delivery",
     "transition",
     "transition_to_pending",
