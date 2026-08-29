@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-29
+
+### Past PTO requests have stronger safety checks
+
+- **Plant Manager now stops a second PTO request when that missed day is already paid.** It also keeps saved results safe when a short cleanup step fails, and it stops retrying after too many failed Wendy updates.
+
 ## 2026-08-28
 
 ### Keep Odoo work-time updates together

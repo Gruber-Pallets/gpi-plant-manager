@@ -121,7 +121,9 @@ def test_duplicate_submission_returns_conflict(monkeypatch):
         routes.absence_pto,
         "submit",
         lambda *_: (_ for _ in ()).throw(
-            absence_pto.SubmissionError("A PTO request already exists for this absence.")
+            absence_pto.DuplicateSubmissionError(
+                "A PTO request already exists for this absence."
+            )
         ),
     )
     monkeypatch.setattr(routes.absence_pto, "list_candidates", lambda *_: [])
@@ -133,6 +135,50 @@ def test_duplicate_submission_returns_conflict(monkeypatch):
 
     assert response.status_code == 409
     assert "already exists" in response.text
+
+
+def test_same_duplicate_words_without_typed_contract_are_unprocessable(monkeypatch):
+    _wire_identity(monkeypatch)
+    monkeypatch.setattr(
+        routes.absence_pto,
+        "submit",
+        lambda *_: (_ for _ in ()).throw(
+            absence_pto.SubmissionError(
+                "A PTO request already exists for this absence."
+            )
+        ),
+    )
+    monkeypatch.setattr(routes.absence_pto, "list_candidates", lambda *_: [])
+    monkeypatch.setattr(routes.absence_pto, "employee_requests", lambda *_: [])
+
+    response = TestClient(app).post(
+        f"/timeclock/time-off/past-absence/token/{DAY}", follow_redirects=False
+    )
+
+    assert response.status_code == 422
+
+
+def test_route_rejects_overlong_employee_note_before_domain_side_effects(monkeypatch):
+    _wire_identity(monkeypatch)
+    monkeypatch.setattr(routes, "plant_today", lambda: date(2026, 8, 28))
+    monkeypatch.setattr(
+        routes.absence_pto_store,
+        "create_request",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("overlong note reached persistence")
+        ),
+    )
+    monkeypatch.setattr(routes.absence_pto, "list_candidates", lambda *_: [])
+    monkeypatch.setattr(routes.absence_pto, "employee_requests", lambda *_: [])
+
+    response = TestClient(app).post(
+        f"/timeclock/time-off/past-absence/token/{DAY}",
+        data={"note": "x" * 1001},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 422
+    assert "1,000 characters or fewer" in response.text
 
 
 def test_success_redirects_to_owned_request_detail_with_fresh_token(monkeypatch):

@@ -398,7 +398,9 @@ def sync_review_task(request_id: int, now: datetime | None = None) -> ReviewResu
             status = "delivered"
         return ReviewResult(status, saved.odoo_task_id, saved, saved.sync_error or status)
     finally:
-        store.release_claim(request_id, owner, now=_lease_now())
+        store.release_claim_safely(
+            request_id, owner, now=_lease_now(), context="review sync"
+        )
 
 
 def _matching_validated_pto(row: store.AbsencePtoRequest) -> dict | None:
@@ -454,9 +456,11 @@ def _save_resolution_retry(
 ) -> store.AbsencePtoRequest:
     current = _now(workflow_now)
     attempts = (
-        _MAX_ATTEMPTS if permanent else row.task_resolution_attempts + 1
+        _MAX_ATTEMPTS
+        if permanent
+        else min(row.task_resolution_attempts + 1, _MAX_ATTEMPTS)
     )
-    if permanent:
+    if permanent or attempts >= _MAX_ATTEMPTS:
         next_at = datetime.max.replace(tzinfo=UTC)
     else:
         delay = _RETRY_DELAYS[min(attempts - 1, len(_RETRY_DELAYS) - 1)]
@@ -642,7 +646,9 @@ def resolve_external_pto(request_id: int, now: datetime | None = None) -> Review
             "approved", approved.odoo_task_id, approved, "The external PTO was verified."
         )
     finally:
-        store.release_claim(request_id, owner, now=_lease_now())
+        store.release_claim_safely(
+            request_id, owner, now=_lease_now(), context="external PTO resolution"
+        )
 
 
 def resolve_manually(
@@ -690,7 +696,9 @@ def resolve_manually(
             "The review was marked handled.",
         )
     finally:
-        store.release_claim(request_id, owner, now=_lease_now())
+        store.release_claim_safely(
+            request_id, owner, now=_lease_now(), context="manual resolution"
+        )
 
 
 def _reconcile_claimed(

@@ -78,7 +78,9 @@ def approve(
             current, owner, actor_upn, actor_name, source, workflow_now
         )
     finally:
-        store.release_claim(request_id, owner, now=_lease_now())
+        store.release_claim_safely(
+            request_id, owner, now=_lease_now(), context="approval"
+        )
 
 
 def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
@@ -94,7 +96,9 @@ def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
             )
         return resume_claimed(current, owner, workflow_now)
     finally:
-        store.release_claim(request_id, owner, now=_lease_now())
+        store.release_claim_safely(
+            request_id, owner, now=_lease_now(), context="resume"
+        )
 
 
 def resume_claimed(
