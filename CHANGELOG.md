@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-29
 
+### One clear answer for each worker's location
+
+- **Plant Manager can now turn Odoo records into one clear work-area timeline.** It keeps gaps, unknown areas, and mixed-up overlaps visible instead of guessing.
+
 ### Overnight work-time checks stay steady
 
 - **A safety check for overnight work times now gives the same answer every day.** Nothing people see in Plant Manager changed.
