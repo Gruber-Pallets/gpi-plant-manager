@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-29
 
+### Overnight work-time checks stay steady
+
+- **A safety check for overnight work times now gives the same answer every day.** Nothing people see in Plant Manager changed.
+
 ### Past PTO requests have stronger safety checks
 
 - **Plant Manager now stops a second PTO request when that missed day is already paid.** It also keeps saved results safe when a short cleanup step fails, and it stops retrying after too many failed Wendy updates.
