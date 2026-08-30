@@ -36,6 +36,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Plant Manager now saves each Odoo work-time check in one safe step.** Two background checks cannot repeat the same hourly check, and restored or removed times keep the right note. The safe copy is still running in the background only.
 
+### Odoo time checks finish safely
+
+- **Plant Manager now keeps the newest result when two Odoo time checks finish out of order.** Removed times stay removed, and fresh times do not get erased.
+
 ### Past PTO updates stay clear and fresh
 
 - **The request count now matches the requests a worker can see.** Old Staffing days also show a new PTO status within about one minute, and a missed day still stays visible if its pay status cannot load.

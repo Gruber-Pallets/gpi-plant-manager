@@ -116,6 +116,7 @@ class _MirrorRunBackend:
         cursor_write_date: datetime | None,
         cursor_id: int | None,
         completed_at: datetime,
+        observed_at: datetime,
     ) -> set[date]:
         return attendance_mirror._store_incremental_cycle_cur(
             self._cur,
@@ -123,6 +124,7 @@ class _MirrorRunBackend:
             cursor_write_date=cursor_write_date,
             cursor_id=cursor_id,
             completed_at=completed_at,
+            observed_at=observed_at,
         )
 
     def active_attendance_ids(self) -> set[int]:
@@ -138,6 +140,7 @@ class _MirrorRunBackend:
         recovery_rows: Sequence[dict],
         generation: int,
         completed_at: datetime,
+        observed_at: datetime,
     ) -> SweepStoreResult:
         result = attendance_mirror._store_full_sweep_cur(
             self._cur,
@@ -145,6 +148,7 @@ class _MirrorRunBackend:
             recovery_rows=recovery_rows,
             generation=generation,
             completed_at=completed_at,
+            observed_at=observed_at,
         )
         return SweepStoreResult(
             affected_days=result.affected_days,
@@ -164,6 +168,23 @@ def _now_utc(value: datetime | None) -> datetime:
     if not isinstance(value, datetime) or value.utcoffset() is None:
         raise TypeError("now_utc must be an aware datetime")
     return value.astimezone(UTC)
+
+
+def _requested_time(value: datetime | None) -> datetime | None:
+    """Validate a caller clock without resolving the default before the lock."""
+    return None if value is None else _now_utc(value)
+
+
+def _locked_run_times(requested_at: datetime | None) -> tuple[datetime, datetime]:
+    """Resolve clocks without letting a caller clock order source observations.
+
+    ``requested_at`` remains the deterministic clock for scheduling and sync
+    completion state. The internal observation clock is always sampled after
+    the logical-run lock is held, so its order matches serialized source reads.
+    """
+    completed_at = requested_at if requested_at is not None else _now_utc(None)
+    observed_at = _now_utc(None)
+    return completed_at, observed_at
 
 
 def _error_text(error: object) -> str:
@@ -213,9 +234,14 @@ def _cursor_for(rows: Sequence[dict]) -> tuple[datetime | None, int | None]:
     return newest["odoo_write_date"], newest["odoo_attendance_id"]
 
 
-def _run_incremental_locked(run_backend, now: datetime) -> SyncResult:
+def _run_incremental_locked(
+    run_backend,
+    completed_at: datetime,
+    *,
+    observed_at: datetime,
+) -> SyncResult:
     state = run_backend.sync_state()
-    run_backend.record_incremental_started(now)
+    run_backend.record_incremental_started(completed_at)
     raw_changes = _source.fetch_attendance_changes(
         after_write_date=state.cursor_write_date,
         after_id=state.cursor_id,
@@ -235,7 +261,8 @@ def _run_incremental_locked(run_backend, now: datetime) -> SyncResult:
         merged,
         cursor_write_date=cursor_write_date,
         cursor_id=cursor_id,
-        completed_at=now,
+        completed_at=completed_at,
+        observed_at=observed_at,
     )
     return SyncResult(
         success=True,
@@ -247,10 +274,15 @@ def _run_incremental_locked(run_backend, now: datetime) -> SyncResult:
 
 def run_incremental_sync(*, now_utc: datetime | None = None) -> SyncResult:
     """Fetch changes plus all open rows, then commit one completed cycle."""
-    now = _now_utc(now_utc)
+    requested_at = _requested_time(now_utc)
     try:
         with _backend.logical_run() as run_backend:
-            result = _run_incremental_locked(run_backend, now)
+            completed_at, observed_at = _locked_run_times(requested_at)
+            result = _run_incremental_locked(
+                run_backend,
+                completed_at,
+                observed_at=observed_at,
+            )
         return result
     except Exception as exc:  # noqa: BLE001 - rollback before failure recording
         _record_failure_safely("incremental", exc)
@@ -305,10 +337,14 @@ def _read_rows_by_ids(ids: set[int], *, require_all: bool) -> tuple[dict, ...]:
 
 
 def _run_full_sweep_locked(
-    run_backend, now: datetime, *, only_if_due: bool = False
+    run_backend,
+    completed_at: datetime,
+    *,
+    observed_at: datetime,
+    only_if_due: bool = False,
 ) -> SyncResult:
     state = run_backend.sync_state()
-    if only_if_due and not _sweep_is_due(state, now):
+    if only_if_due and not _sweep_is_due(state, completed_at):
         return SyncResult(success=True)
     ids = _validated_sweep_snapshot(
         _source.fetch_complete_attendance_id_sweep()
@@ -327,7 +363,8 @@ def _run_full_sweep_locked(
         ids,
         recovery_rows=recovery_rows,
         generation=generation,
-        completed_at=now,
+        completed_at=completed_at,
+        observed_at=observed_at,
     )
     return SyncResult(
         success=True,
@@ -338,12 +375,16 @@ def _run_full_sweep_locked(
 
 
 def _run_full_sweep(
-    now: datetime, *, only_if_due: bool
+    requested_at: datetime | None, *, only_if_due: bool
 ) -> SyncResult:
     try:
         with _backend.logical_run() as run_backend:
+            completed_at, observed_at = _locked_run_times(requested_at)
             result = _run_full_sweep_locked(
-                run_backend, now, only_if_due=only_if_due
+                run_backend,
+                completed_at,
+                observed_at=observed_at,
+                only_if_due=only_if_due,
             )
         return result
     except Exception as exc:  # noqa: BLE001 - rollback before failure recording
@@ -353,11 +394,11 @@ def _run_full_sweep(
 
 def run_full_sweep(*, now_utc: datetime | None = None) -> SyncResult:
     """Force one complete, validated Task 2 ID sweep and safe tombstone pass."""
-    return _run_full_sweep(_now_utc(now_utc), only_if_due=False)
+    return _run_full_sweep(_requested_time(now_utc), only_if_due=False)
 
 
-def _run_full_sweep_if_due(now: datetime) -> SyncResult:
-    return _run_full_sweep(now, only_if_due=True)
+def _run_full_sweep_if_due(requested_at: datetime | None) -> SyncResult:
+    return _run_full_sweep(requested_at, only_if_due=True)
 
 
 def _sweep_is_due(state: SyncState, now: datetime) -> bool:
@@ -367,22 +408,32 @@ def _sweep_is_due(state: SyncState, now: datetime) -> bool:
 
 def tick(*, now_utc: datetime | None = None) -> SyncResult:
     """Run the live poll each tick and the safe deletion sweep once per hour."""
-    now = _now_utc(now_utc)
+    requested_at = _requested_time(now_utc)
+    initial_now = requested_at if requested_at is not None else _now_utc(None)
     try:
         initial_state = _backend.sync_state()
     except Exception as exc:  # noqa: BLE001 - present a bounded health result
         _record_failure_safely("incremental", exc)
         return SyncResult(success=False, error=_error_text(exc))
 
-    sweep_due = _sweep_is_due(initial_state, now)
-    incremental = run_incremental_sync(now_utc=now)
-    sweep = _run_full_sweep_if_due(now) if sweep_due else SyncResult(success=True)
+    sweep_due = _sweep_is_due(initial_state, initial_now)
+    incremental = run_incremental_sync(now_utc=requested_at)
+    sweep = (
+        _run_full_sweep_if_due(requested_at)
+        if sweep_due
+        else SyncResult(success=True)
+    )
 
     baseline_completed = initial_state.baseline_completed_at is not None
     can_complete_baseline = incremental.success and (not sweep_due or sweep.success)
     if can_complete_baseline:
         try:
-            baseline_completed = _backend.complete_baseline_if_ready(now)
+            baseline_completed_at = (
+                requested_at if requested_at is not None else _now_utc(None)
+            )
+            baseline_completed = _backend.complete_baseline_if_ready(
+                baseline_completed_at
+            )
         except Exception as exc:  # noqa: BLE001 - baseline must remain incomplete
             _record_failure_safely("baseline", exc)
             return SyncResult(
