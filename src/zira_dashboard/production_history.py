@@ -13,14 +13,33 @@ data and is fully testable. The wrappers (`attribution_for`,
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, UTC
+import math
+from typing import TypeAlias
 
-from .production_segments import credit_work_segments
+from .production_segments import (
+    SegmentCredit,
+    UnassignedRun,
+    credit_work_segments,
+    unassigned_runs_for_samples,
+)
+
+
+PersonAttributionKey: TypeAlias = str | tuple[int, str]
 
 
 class ProductionSourceUnavailable(RuntimeError):
     """Raised when a precompute cannot safely replace saved production."""
+
+
+def attribution_key(credit: SegmentCredit) -> PersonAttributionKey:
+    """Preserve Odoo identity while keeping legacy name keys compatible."""
+    if credit.person_name is None:
+        raise ValueError("unassigned credit has no attribution key")
+    if credit.person_odoo_id is None:
+        return credit.person_name
+    return (credit.person_odoo_id, credit.person_name)
 
 
 def attribute_for_day(
@@ -97,7 +116,8 @@ def attribute_for_segments(
     samples_by_wc: dict[str, list[tuple]],
     productive_minutes: Callable[[str, str, datetime, datetime], float],
     excluded_minutes: dict[str, dict[str, float]] | None = None,
-) -> dict[str, dict[str, dict[str, float]]]:
+    strict: bool = False,
+) -> dict[PersonAttributionKey, dict[str, dict[str, float]]]:
     """Credit output to the people at each WC when the unit was recorded.
 
     ``segments`` is the Odoo-attendance-backed output of
@@ -117,10 +137,13 @@ def attribute_for_segments(
         wc_totals={wc_name: totals[0] for wc_name, totals in wc_totals.items()},
         samples_by_wc=samples_by_wc,
         productive_minutes=productive_minutes,
+        allow_total_fallback=not strict,
     )
-    out: dict[str, dict[str, dict[str, float]]] = {}
+    out: dict[PersonAttributionKey, dict[str, dict[str, float]]] = {}
 
-    def entry(person: str, wc_name: str) -> dict[str, float]:
+    def entry(
+        person: PersonAttributionKey, display_name: str, wc_name: str
+    ) -> dict[str, float]:
         return out.setdefault(person, {}).setdefault(
             wc_name,
             {
@@ -128,7 +151,7 @@ def attribute_for_segments(
                 "downtime": 0.0,
                 "hours": 0.0,
                 "days_worked": 1,
-                "excluded_minutes": excluded_minutes.get(person, {}).get(
+                "excluded_minutes": excluded_minutes.get(display_name, {}).get(
                     wc_name, 0.0
                 ),
             },
@@ -138,7 +161,9 @@ def attribute_for_segments(
         for credit in wc_credits:
             if credit.person_name is None or credit.productive_minutes <= 0:
                 continue
-            totals = entry(credit.person_name, wc_name)
+            totals = entry(
+                attribution_key(credit), credit.person_name, wc_name
+            )
             totals["units"] += credit.actual_units
             totals["hours"] += credit.productive_minutes / 60.0
 
@@ -298,7 +323,141 @@ def _excluded_minutes_by_person_wc(day: date, now: datetime) -> dict[str, dict[s
     return out
 
 
-def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
+def match_state_for_day(day: date) -> str:
+    """Resolve rollout state while keeping DB-less unit callers legacy-only."""
+    from . import attendance_location_policy
+
+    try:
+        return attendance_location_policy.match_state_for_day(day)
+    except RuntimeError as exc:
+        # The application cannot boot without Postgres, but pure unit tests and
+        # small offline scripts historically call this module without a pool.
+        if str(exc) == "DATABASE_URL is not set. Postgres connection cannot be initialized.":
+            return "legacy"
+        raise
+
+
+def _strict_window(day: date, now_utc: datetime) -> tuple[datetime, datetime, datetime]:
+    from . import shift_config
+
+    shift_start = datetime.combine(
+        day, shift_config.shift_start_for(day), tzinfo=shift_config.SITE_TZ
+    ).astimezone(UTC)
+    shift_end = datetime.combine(
+        day, shift_config.shift_end_for(day), tzinfo=shift_config.SITE_TZ
+    ).astimezone(UTC)
+    as_of = max(shift_start, min(now_utc, shift_end))
+    return shift_start, shift_end, as_of
+
+
+def _raise_strict_source_unavailable(day: date, message: str) -> None:
+    from . import attendance_mirror
+
+    attendance_mirror.enqueue_recalc(
+        (day,), message[:500], mark_strict=True
+    )
+    raise ProductionSourceUnavailable(message)
+
+
+def _strict_spans_for_day(
+    day: date, *, now_utc: datetime
+) -> tuple[Sequence, datetime, datetime]:
+    from . import attendance_mirror, attendance_timeline
+
+    mirror_health = attendance_mirror.health_snapshot()
+    if mirror_health.baseline_completed_at is None:
+        _raise_strict_source_unavailable(
+            day,
+            f"Odoo attendance mirror baseline is incomplete for {day.isoformat()}",
+        )
+    if mirror_health.last_incremental_completed_at is None:
+        _raise_strict_source_unavailable(
+            day,
+            f"Odoo attendance mirror has no verified snapshot for {day.isoformat()}",
+        )
+    window_start, window_end, as_of = _strict_window(day, now_utc)
+    try:
+        spans = attendance_timeline.timeline_for_range(
+            window_start, window_end, as_of_utc=as_of
+        )
+    except RuntimeError as exc:
+        if str(exc) != "attendance mirror has no verified freshness":
+            raise
+        _raise_strict_source_unavailable(
+            day,
+            f"Odoo attendance mirror has no verified snapshot for {day.isoformat()}",
+        )
+    return spans, window_start, window_end
+
+
+def _validate_strict_sample_totals(
+    day: date,
+    wc_totals: Mapping[str, tuple[int, int]],
+    samples_by_wc: Mapping[str, Sequence[tuple[datetime, float]]],
+) -> None:
+    for wc_name in sorted(set(wc_totals) | set(samples_by_wc)):
+        source_total = float(wc_totals.get(wc_name, (0, 0))[0] or 0)
+        timestamped_total = sum(
+            float(units or 0)
+            for _timestamp, units in samples_by_wc.get(wc_name, ())
+            if float(units or 0) > 0
+        )
+        if math.isclose(
+            source_total,
+            timestamped_total,
+            rel_tol=1e-9,
+            abs_tol=1e-6,
+        ):
+            continue
+        _raise_strict_source_unavailable(
+            day,
+            f"Strict production for {wc_name} on {day.isoformat()} has "
+            f"{source_total:g} source units but {timestamped_total:g} "
+            "timestamped units; saved production was left unchanged",
+        )
+
+
+def _strict_attribution_for(
+    day: date, client, *, now_utc: datetime
+) -> dict[PersonAttributionKey, dict[str, dict[str, float]]]:
+    from . import assignment_windows, shift_config, wc_attributions
+
+    spans, window_start, window_end = _strict_spans_for_day(
+        day, now_utc=now_utc
+    )
+    segments = assignment_windows.work_segments_from_timeline(
+        spans,
+        window_start_utc=window_start,
+        window_end_utc=window_end,
+    )
+    wc_totals = _fetch_wc_totals(client, day)
+    samples_by_wc = _fetch_wc_samples(client, day)
+    testing = wc_attributions.testing_windows_for_day(day)
+    if testing:
+        wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)
+        samples_by_wc = _without_testing_samples(samples_by_wc, testing)
+    _validate_strict_sample_totals(day, wc_totals, samples_by_wc)
+    try:
+        excluded = _excluded_minutes_by_person_wc(
+            day, _effective_now(day, now_utc)
+        )
+    except Exception:
+        excluded = {}
+    return attribute_for_segments(
+        segments,
+        wc_totals=wc_totals,
+        samples_by_wc=samples_by_wc,
+        productive_minutes=lambda _person, _wc_name, start, end: (
+            shift_config.productive_minutes_in_window(day, start, end)
+        ),
+        excluded_minutes=excluded,
+        strict=True,
+    )
+
+
+def attribution_for(
+    d: date, client
+) -> dict[PersonAttributionKey, dict[str, dict[str, float]]]:
     """Attribute production on a single day.
 
     Odoo work-center attendance is authoritative whenever it is available.
@@ -310,6 +469,15 @@ def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
     `attribute_for_day` (empty merged dict).
     """
     from datetime import datetime
+    state = match_state_for_day(d)
+    if state == "pending":
+        raise ProductionSourceUnavailable(
+            f"Strict production cutover for {d.isoformat()} is due but not activated; "
+            "saved production was left unchanged"
+        )
+    if state == "strict":
+        return _strict_attribution_for(d, client, now_utc=datetime.now(UTC))
+
     from . import (
         assignment_windows,
         shift_config,
@@ -401,6 +569,131 @@ def attribution_for(d: date, client) -> dict[str, dict[str, dict[str, float]]]:
         sched.assignments, wc_totals, elapsed,
         extra_assignments=extra, excluded_minutes=excluded,
     )
+
+
+def _subtract_windows(
+    intervals: Sequence[tuple[datetime, datetime]],
+    exclusions: Sequence[tuple[datetime, datetime]],
+) -> tuple[tuple[datetime, datetime], ...]:
+    remaining = list(intervals)
+    for excluded_start, excluded_end in sorted(exclusions):
+        next_remaining: list[tuple[datetime, datetime]] = []
+        for start, end in remaining:
+            if excluded_end <= start or excluded_start >= end:
+                next_remaining.append((start, end))
+                continue
+            if excluded_start > start:
+                next_remaining.append((start, min(excluded_start, end)))
+            if excluded_end < end:
+                next_remaining.append((max(excluded_end, start), end))
+        remaining = next_remaining
+    return tuple((start, end) for start, end in remaining if end > start)
+
+
+def _run_exclusions_by_wc(
+    day: date,
+    *,
+    testing_windows: Mapping[str, Sequence[tuple[datetime, datetime | None]]],
+    now_utc: datetime,
+) -> dict[str, list[tuple[datetime, datetime]]]:
+    from . import shift_config, wc_attributions
+
+    shift_start, shift_end, _as_of = _strict_window(day, now_utc)
+    common: list[tuple[datetime, datetime]] = []
+    for break_window in shift_config.breaks_for(day) or ():
+        common.append(
+            (
+                datetime.combine(
+                    day, break_window.start, tzinfo=shift_config.SITE_TZ
+                ).astimezone(UTC),
+                datetime.combine(
+                    day, break_window.end, tzinfo=shift_config.SITE_TZ
+                ).astimezone(UTC),
+            )
+        )
+    by_wc: dict[str, list[tuple[datetime, datetime]]] = {
+        wc_name: [
+            (max(shift_start, start), min(shift_end, end or min(now_utc, shift_end)))
+            for start, end in windows
+            if min(shift_end, end or min(now_utc, shift_end)) > max(shift_start, start)
+        ]
+        for wc_name, windows in testing_windows.items()
+    }
+    try:
+        breakdowns = wc_attributions.breakdown_windows_for_day(day)
+    except Exception:
+        breakdowns = {}
+    for (_person_name, wc_name), windows in breakdowns.items():
+        wc_exclusions = by_wc.setdefault(wc_name, [])
+        for start, end in windows:
+            resolved_end = end or min(now_utc, shift_end)
+            clipped = (max(shift_start, start), min(shift_end, resolved_end))
+            if clipped[1] > clipped[0]:
+                wc_exclusions.append(clipped)
+    by_wc["*"] = common
+    return by_wc
+
+
+def unassigned_runs_for_day(
+    day: date,
+    client,
+    *,
+    now_utc: datetime | None = None,
+) -> tuple[UnassignedRun, ...]:
+    """Return strict uncovered production runs from warmed Zira samples."""
+    from . import assignment_windows, wc_attributions
+
+    state = match_state_for_day(day)
+    if state == "pending":
+        raise ProductionSourceUnavailable(
+            f"Strict production cutover for {day.isoformat()} is due but not activated"
+        )
+    if state != "strict":
+        return ()
+    now = now_utc or datetime.now(UTC)
+    spans, window_start, window_end = _strict_spans_for_day(day, now_utc=now)
+    segments = assignment_windows.work_segments_from_timeline(
+        spans,
+        window_start_utc=window_start,
+        window_end_utc=window_end,
+    )
+    results = _metered_leaderboard(client, day)
+    testing = wc_attributions.testing_windows_for_day(day)
+    exclusions_by_wc = _run_exclusions_by_wc(
+        day, testing_windows=testing, now_utc=now
+    )
+    runs: list[UnassignedRun] = []
+    for result in results:
+        wc_name = result.station.name
+        samples = _without_testing_samples(
+            {wc_name: list(result.samples)}, testing
+        ).get(wc_name, [])
+        assigned_times = {
+            timestamp
+            for timestamp, raw_units in samples
+            if float(raw_units or 0) > 0
+            and any(
+                segment.wc_name == wc_name
+                and segment.start_utc <= timestamp < segment.end_utc
+                for segment in segments
+            )
+        }
+        active_intervals = _subtract_windows(
+            result.active_intervals,
+            [
+                *exclusions_by_wc.get("*", ()),
+                *exclusions_by_wc.get(wc_name, ()),
+            ],
+        )
+        runs.extend(
+            unassigned_runs_for_samples(
+                samples,
+                assigned_times,
+                active_intervals,
+                wc_name=wc_name,
+            )
+        )
+    return tuple(sorted(runs, key=lambda run: (run.start_utc, run.wc_name)))
 
 
 def attribution_per_day(

@@ -19,9 +19,14 @@ Pure -- no DB, no network. The route supplies already-loaded inputs.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .attendance_timeline import LocationSpan
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,35 @@ class WorkSegment:
     start_utc: datetime
     end_utc: datetime
     source: str  # 'schedule' | 'punch' | 'attribution'
+    person_odoo_id: int | None = None
+
+
+def work_segments_from_timeline(
+    spans: Sequence[LocationSpan],
+    *,
+    window_start_utc: datetime,
+    window_end_utc: datetime,
+) -> tuple[WorkSegment, ...]:
+    """Convert only verified, mapped Odoo spans into production segments."""
+    segments: list[WorkSegment] = []
+    for span in spans:
+        if span.status != "valid" or not span.app_work_center_name:
+            continue
+        start = max(span.start_utc, window_start_utc)
+        end = min(span.end_utc, window_end_utc)
+        if end <= start:
+            continue
+        segments.append(
+            WorkSegment(
+                person_name=span.employee_name,
+                wc_name=span.app_work_center_name,
+                start_utc=start,
+                end_utc=end,
+                source="odoo",
+                person_odoo_id=span.employee_odoo_id,
+            )
+        )
+    return tuple(segments)
 
 
 def resolve_segments(

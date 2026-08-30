@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from zira_dashboard.assignment_windows import WorkSegment
+from zira_dashboard import production_segments
 from zira_dashboard.production_segments import (
     SegmentScore,
     coalesce_display_scores,
@@ -266,6 +267,53 @@ def test_unassigned_and_total_without_samples_are_never_dropped():
     assert credits[0].person_name is None
     assert credits[0].source == "unassigned"
     assert credits[0].actual_units == 50.0
+
+
+def test_strict_identity_splits_duplicate_display_names_exactly():
+    segments = [
+        WorkSegment("Repair 4", "Alex", t(12), t(13), "odoo", 41),
+        WorkSegment("Repair 4", "Alex", t(12), t(13), "odoo", 42),
+    ]
+
+    credits = credit_work_segments(
+        segments,
+        wc_totals={"Repair 4": 21},
+        samples_by_wc={"Repair 4": [(t(12, 30), 21)]},
+        productive_minutes=lambda *_args: 60,
+        allow_total_fallback=False,
+    )["Repair 4"]
+
+    assert [(row.person_odoo_id, row.actual_units) for row in credits] == [
+        (41, 10.5),
+        (42, 10.5),
+    ]
+
+
+def test_unassigned_samples_remain_separate_across_run_and_assigned_boundaries():
+    samples = [
+        (t(12), 5),
+        (t(12, 5), 7),
+        (t(12, 10), 11),
+        (t(14), 13),
+        (t(14, 5), 17),
+    ]
+
+    runs = production_segments.unassigned_runs_for_samples(
+        samples,
+        assigned_sample_times={t(12, 5)},
+        active_intervals=((t(12), t(12, 30)), (t(14), t(14, 30))),
+        wc_name="Repair 4",
+    )
+
+    assert runs == (
+        production_segments.UnassignedRun("Repair 4", t(12), t(12), 5, 1),
+        production_segments.UnassignedRun(
+            "Repair 4", t(12, 10), t(12, 10), 11, 1
+        ),
+        production_segments.UnassignedRun(
+            "Repair 4", t(14), t(14, 5), 30, 2
+        ),
+    )
 
 
 def test_remaining_total_uses_each_segment_productive_time():

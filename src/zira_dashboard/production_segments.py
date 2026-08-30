@@ -24,6 +24,16 @@ class SegmentCredit:
     productive_minutes: float
     actual_units: float
     is_active: bool
+    person_odoo_id: int | None = None
+
+
+@dataclass(frozen=True)
+class UnassignedRun:
+    wc_name: str
+    start_utc: datetime
+    end_utc: datetime
+    units: float
+    sample_count: int
 
 
 @dataclass(frozen=True)
@@ -179,8 +189,81 @@ def _ordered_segments(segments: Sequence[WorkSegment]) -> list[WorkSegment]:
             segment.end_utc.timestamp(),
             segment.wc_name,
             segment.person_name,
+            segment.person_odoo_id or 0,
         ),
     )
+
+
+def _merged_active_intervals(
+    intervals: Sequence[tuple[datetime, datetime]],
+) -> tuple[tuple[datetime, datetime], ...]:
+    merged: list[tuple[datetime, datetime]] = []
+    for start, end in sorted(intervals):
+        if end < start:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
+
+
+def unassigned_runs_for_samples(
+    samples: Sequence[tuple[datetime, float]],
+    assigned_sample_times: set[datetime],
+    active_intervals: Sequence[tuple[datetime, datetime]],
+    *,
+    wc_name: str = "",
+) -> tuple[UnassignedRun, ...]:
+    """Group adjacent uncovered positive samples without bridging run stops."""
+    intervals = _merged_active_intervals(active_intervals)
+
+    def run_index(timestamp: datetime) -> int | None:
+        for index, (start, end) in enumerate(intervals):
+            if start <= timestamp < end:
+                return index
+        return None
+
+    runs: list[UnassignedRun] = []
+    current: UnassignedRun | None = None
+    current_run_index: int | None = None
+    previous_was_unassigned = False
+    for timestamp, raw_units in sorted(samples, key=lambda item: item[0]):
+        units = float(raw_units or 0)
+        if units <= 0:
+            continue
+        if timestamp in assigned_sample_times:
+            current = None
+            current_run_index = None
+            previous_was_unassigned = False
+            continue
+        sample_run_index = run_index(timestamp)
+        if (
+            current is not None
+            and previous_was_unassigned
+            and sample_run_index is not None
+            and sample_run_index == current_run_index
+        ):
+            current = UnassignedRun(
+                wc_name=wc_name,
+                start_utc=current.start_utc,
+                end_utc=timestamp,
+                units=current.units + units,
+                sample_count=current.sample_count + 1,
+            )
+            runs[-1] = current
+        else:
+            current = UnassignedRun(
+                wc_name=wc_name,
+                start_utc=timestamp,
+                end_utc=timestamp,
+                units=units,
+                sample_count=1,
+            )
+            runs.append(current)
+        current_run_index = sample_run_index
+        previous_was_unassigned = True
+    return tuple(runs)
 
 
 def credit_work_segments(
@@ -190,6 +273,7 @@ def credit_work_segments(
     samples_by_wc: Mapping[str, Sequence[tuple[datetime, float]]],
     productive_minutes: Callable[[str, str, datetime, datetime], float],
     live_cap_utc: datetime | None = None,
+    allow_total_fallback: bool = True,
 ) -> dict[str, tuple[SegmentCredit, ...]]:
     """Credit samples and total-only fallbacks to individual work segments."""
     ordered = _ordered_segments(segments)
@@ -218,6 +302,7 @@ def credit_work_segments(
             "actual_units": 0.0,
             "is_active": live_cap_utc is not None
             and segment.end_utc == live_cap_utc,
+            "person_odoo_id": segment.person_odoo_id,
         }
         indices_by_wc.setdefault(segment.wc_name, []).append(len(rows))
         rows.append(row)
@@ -231,11 +316,16 @@ def credit_work_segments(
             if units <= 0:
                 continue
             sampled_units[wc_name] = sampled_units.get(wc_name, 0.0) + units
-            active_by_person: dict[str, int] = {}
+            active_by_person: dict[tuple[str, object], int] = {}
             for index in wc_indices:
                 row = rows[index]
                 if row["start_utc"] <= timestamp < row["end_utc"]:
-                    active_by_person.setdefault(row["person_name"], index)
+                    identity = (
+                        ("odoo", row["person_odoo_id"])
+                        if row["person_odoo_id"] is not None
+                        else ("legacy", row["person_name"])
+                    )
+                    active_by_person.setdefault(identity, index)
             if active_by_person:
                 share = units / len(active_by_person)
                 for index in active_by_person.values():
@@ -254,6 +344,8 @@ def credit_work_segments(
             bucket["end_utc"] = max(bucket["end_utc"], timestamp)
 
     for wc_name, raw_total in wc_totals.items():
+        if not allow_total_fallback:
+            continue
         remaining = max(
             0.0,
             float(raw_total or 0) - sampled_units.get(wc_name, 0.0),
@@ -290,6 +382,7 @@ def credit_work_segments(
                 "productive_minutes": 0.0,
                 "actual_units": bucket["actual_units"],
                 "is_active": False,
+                "person_odoo_id": None,
             }
         )
 

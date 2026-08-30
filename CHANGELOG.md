@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-30
+
+### Match production only to clear Odoo locations
+
+- **Plant Manager can now match production to workers only when Odoo clearly shows the same work area.** Missing or mixed-up time stays unassigned, and shared work is split evenly. The strict rule is still not live.
+
 ## 2026-08-29
 
 ### One clear answer for each worker's location

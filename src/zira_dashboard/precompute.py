@@ -20,11 +20,15 @@ from __future__ import annotations
 
 from datetime import date
 from collections.abc import Iterable
+from typing import TypeAlias
+
+
+PersonAttributionKey: TypeAlias = str | tuple[int, str]
 
 
 def flatten_attribution(
     day: date,
-    attribution: dict[str, dict[str, dict[str, float]]],
+    attribution: dict[PersonAttributionKey, dict[str, dict[str, float]]],
     name_to_emp_id: dict[str, str],
 ) -> list[dict]:
     """Turn {person: {wc: {units, downtime, hours, days_worked,
@@ -40,8 +44,12 @@ def flatten_attribution(
     by name), so a production row is never silently dropped.
     """
     rows: list[dict] = []
-    for person, wc_map in attribution.items():
-        emp_id = name_to_emp_id.get(person) or person  # fall back to name; never drop
+    for person_key, wc_map in attribution.items():
+        if isinstance(person_key, tuple):
+            emp_id, person = person_key
+        else:
+            person = person_key
+            emp_id = name_to_emp_id.get(person) or person
         for wc_name, totals in wc_map.items():
             units = float(totals.get("units") or 0)
             hours = float(totals.get("hours") or 0)
@@ -66,6 +74,7 @@ def upsert_production_daily(
     rows: Iterable[dict],
     *,
     replace_days: Iterable[date] = (),
+    strict_days: Iterable[date] = (),
 ) -> int:
     """UPSERT a batch of rows into production_daily. Returns count written.
 
@@ -82,7 +91,8 @@ def upsert_production_daily(
     from . import db
     rows = list(rows)
     days_to_replace = sorted(set(replace_days))
-    if not rows and not days_to_replace:
+    days_to_mark_strict = sorted(set(strict_days))
+    if not rows and not days_to_replace and not days_to_mark_strict:
         return 0
     sql = """
         INSERT INTO production_daily (
@@ -99,6 +109,13 @@ def upsert_production_daily(
             computed_at      = now()
     """
     with db.cursor() as cur:
+        for day in days_to_mark_strict:
+            cur.execute(
+                "INSERT INTO attendance_strict_days "
+                "(day, reason, source_changed_at) "
+                "VALUES (%s, %s, now()) ON CONFLICT (day) DO NOTHING",
+                (day, "strict production attribution"),
+            )
         for day in days_to_replace:
             cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
         if not rows:
@@ -121,10 +138,25 @@ def precompute_day(day: date, client) -> dict:
     Returns {"day": iso, "rows_written": int}. Idempotent; safe to re-run.
     """
     from . import production_history, attendance
+    initial_match_state = production_history.match_state_for_day(day)
+    if initial_match_state == "pending":
+        raise production_history.ProductionSourceUnavailable(
+            f"Strict production cutover for {day.isoformat()} is due but not "
+            "activated; saved production was left unchanged"
+        )
     attribution = production_history.attribution_for(day, client)
+    final_match_state = production_history.match_state_for_day(day)
+    if final_match_state != initial_match_state:
+        raise production_history.ProductionSourceUnavailable(
+            f"Production attribution state changed during recomputation for "
+            f"{day.isoformat()}; saved production was left unchanged"
+        )
     name_to_emp_id = attendance.name_to_person_id()
     rows = flatten_attribution(day, attribution, name_to_emp_id)
-    written = upsert_production_daily(rows, replace_days=(day,))
+    kwargs = {"replace_days": (day,)}
+    if initial_match_state == "strict":
+        kwargs["strict_days"] = (day,)
+    written = upsert_production_daily(rows, **kwargs)
     return {"day": day.isoformat(), "rows_written": written}
 
 
