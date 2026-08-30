@@ -16,15 +16,20 @@ Cores that operate on lists/dicts of rows (rank_by_category,
 apply_overrides, _rank_single_day) live in their own modules and are
 unaffected.
 """
+
 from __future__ import annotations
 
 from datetime import date
 from collections.abc import Iterable
+import logging
+
+
+_log = logging.getLogger(__name__)
 
 
 def flatten_attribution(
     day: date,
-    attribution: dict[str, dict[str, dict[str, float]]],
+    attribution: dict,
     name_to_emp_id: dict[str, str],
 ) -> list[dict]:
     """Turn {person: {wc: {units, downtime, hours, days_worked,
@@ -41,24 +46,39 @@ def flatten_attribution(
     """
     rows: list[dict] = []
     for person, wc_map in attribution.items():
-        emp_id = name_to_emp_id.get(person) or person  # fall back to name; never drop
+        if isinstance(person, tuple):
+            if (
+                len(person) != 2
+                or isinstance(person[0], bool)
+                or not isinstance(person[0], int)
+                or person[0] <= 0
+                or not isinstance(person[1], str)
+                or not person[1]
+            ):
+                raise ValueError("strict attribution identity is malformed")
+            emp_id, display_name = person
+        else:
+            display_name = person
+            emp_id = name_to_emp_id.get(person) or person
         for wc_name, totals in wc_map.items():
             units = float(totals.get("units") or 0)
             hours = float(totals.get("hours") or 0)
             days_worked = float(totals.get("days_worked") or 0)
             if units <= 0 and (hours <= 0 or days_worked <= 0):
                 continue
-            rows.append({
-                "day": day,
-                "emp_id": str(emp_id),
-                "name": person,
-                "wc_name": wc_name,
-                "units": units,
-                "downtime": float(totals.get("downtime") or 0),
-                "hours": hours,
-                "days_worked": days_worked,
-                "excluded_minutes": float(totals.get("excluded_minutes") or 0),
-            })
+            rows.append(
+                {
+                    "day": day,
+                    "emp_id": str(emp_id),
+                    "name": display_name,
+                    "wc_name": wc_name,
+                    "units": units,
+                    "downtime": float(totals.get("downtime") or 0),
+                    "hours": hours,
+                    "days_worked": days_worked,
+                    "excluded_minutes": float(totals.get("excluded_minutes") or 0),
+                }
+            )
     return rows
 
 
@@ -66,6 +86,7 @@ def upsert_production_daily(
     rows: Iterable[dict],
     *,
     replace_days: Iterable[date] = (),
+    strict_day: date | None = None,
 ) -> int:
     """UPSERT a batch of rows into production_daily. Returns count written.
 
@@ -80,9 +101,12 @@ def upsert_production_daily(
     the machine-breakdown feature -- keep working unchanged.
     """
     from . import db
+
     rows = list(rows)
     days_to_replace = sorted(set(replace_days))
-    if not rows and not days_to_replace:
+    if strict_day is not None and strict_day not in days_to_replace:
+        raise ValueError("strict_day must be replaced in the same transaction")
+    if not rows and not days_to_replace and strict_day is None:
         return 0
     sql = """
         INSERT INTO production_daily (
@@ -99,6 +123,14 @@ def upsert_production_daily(
             computed_at      = now()
     """
     with db.cursor() as cur:
+        if strict_day is not None:
+            cur.execute(
+                "INSERT INTO attendance_strict_days "
+                "(day, reason, source_changed_at) "
+                "VALUES (%s, %s, now()) "
+                "ON CONFLICT (day) DO NOTHING",
+                (strict_day, "strict_production_attribution"),
+            )
         for day in days_to_replace:
             cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
         if not rows:
@@ -106,12 +138,25 @@ def upsert_production_daily(
         # execute_values folds every row into one statement — a single
         # round-trip instead of executemany's one per row (this runs
         # every 45s from the live warmer).
-        db.execute_values(cur, sql, [
-            (r["day"], r["emp_id"], r["name"], r["wc_name"],
-             r["units"], r["downtime"], r["hours"], r["days_worked"],
-             r.get("excluded_minutes", 0))
-            for r in rows
-        ], template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, now())")
+        db.execute_values(
+            cur,
+            sql,
+            [
+                (
+                    r["day"],
+                    r["emp_id"],
+                    r["name"],
+                    r["wc_name"],
+                    r["units"],
+                    r["downtime"],
+                    r["hours"],
+                    r["days_worked"],
+                    r.get("excluded_minutes", 0),
+                )
+                for r in rows
+            ],
+            template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, now())",
+        )
     return len(rows)
 
 
@@ -120,12 +165,30 @@ def precompute_day(day: date, client) -> dict:
 
     Returns {"day": iso, "rows_written": int}. Idempotent; safe to re-run.
     """
-    from . import production_history, attendance
-    attribution = production_history.attribution_for(day, client)
-    name_to_emp_id = attendance.name_to_person_id()
-    rows = flatten_attribution(day, attribution, name_to_emp_id)
-    written = upsert_production_daily(rows, replace_days=(day,))
-    return {"day": day.isoformat(), "rows_written": written}
+    from . import attendance, attendance_mirror, production_history
+
+    try:
+        attribution = production_history.attribution_for(day, client)
+        name_to_emp_id = attendance.name_to_person_id()
+        rows = flatten_attribution(day, attribution, name_to_emp_id)
+        strict_day = day if getattr(attribution, "is_strict", False) else None
+        if strict_day is None:
+            written = upsert_production_daily(rows, replace_days=(day,))
+        else:
+            written = upsert_production_daily(rows, replace_days=(day,), strict_day=strict_day)
+        return {"day": day.isoformat(), "rows_written": written}
+    except Exception:
+        try:
+            attendance_mirror.enqueue_recalc(
+                (day,), "production_source_unavailable", mark_strict=False
+            )
+        except Exception:
+            _log.warning(
+                "could not enqueue failed production recomputation for %s",
+                day,
+                exc_info=True,
+            )
+        raise
 
 
 def sum_by_range(
@@ -140,6 +203,7 @@ def sum_by_range(
     `wc_names` filters which WCs to include. None = all WCs.
     """
     from . import db
+
     if group_by != "name":
         raise ValueError(f"group_by must be 'name'; got {group_by!r}")
     params: list = [start, end]
@@ -165,6 +229,7 @@ def sum_by_name(name: str, start: date, end: date) -> list[dict]:
     Return rows: {wc_name, units, downtime, hours, days_worked}.
     """
     from . import db
+
     return db.query(
         """
         SELECT wc_name,
@@ -188,6 +253,7 @@ def daily_records_in_range(start: date, end: date) -> list[dict]:
     Each row: {day, person, wc, units, downtime, hours, excluded_minutes}.
     """
     from . import db
+
     rows = db.query(
         """
         SELECT day, name AS person, wc_name AS wc,
@@ -225,6 +291,7 @@ def normalized_daily_records_in_range(start: date, end: date) -> list[dict]:
     positive-units reader.
     """
     from . import db
+
     rows = db.query(
         """
         SELECT pd.day, COALESCE(pia.canonical_emp_id, pd.emp_id) AS emp_id,
