@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Keep Odoo teams lined up with work areas
+
+- **When an Odoo work area and team disagree, Plant Manager can now keep the work area and safely fix the team.** It checks the record again before and after the change.
+
 ### Stop false work center alerts
 
 - **Maintenance, Transportation, and Supervisor workers no longer get a work center warning when they do not need one.** If a time record loses its department, Plant Manager now checks the worker's saved Odoo department before showing a warning.
