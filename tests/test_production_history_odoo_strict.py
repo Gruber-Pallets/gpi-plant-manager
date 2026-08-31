@@ -618,13 +618,13 @@ def test_precompute_source_failure_preserves_snapshot_and_enqueues_retry(monkeyp
     monkeypatch.setattr(
         attendance_mirror,
         "enqueue_recalc",
-        lambda days, reason, *, mark_strict: enqueued.append((tuple(days), reason, mark_strict)),
+        lambda days, reason: enqueued.append((tuple(days), reason)),
     )
 
     with pytest.raises(ProductionSourceUnavailable, match="verified"):
         precompute.precompute_day(DAY, object())
 
-    assert enqueued == [((DAY,), "production_source_unavailable", False)]
+    assert enqueued == [((DAY,), "production_source_unavailable")]
 
 
 def test_precompute_store_failure_enqueues_without_retrying_or_falling_back(monkeypatch):
@@ -647,7 +647,7 @@ def test_precompute_store_failure_enqueues_without_retrying_or_falling_back(monk
     monkeypatch.setattr(
         attendance_mirror,
         "enqueue_recalc",
-        lambda days, reason, *, mark_strict: enqueued.append((tuple(days), reason, mark_strict)),
+        lambda days, reason: enqueued.append((tuple(days), reason)),
     )
 
     with pytest.raises(RuntimeError, match="store failed"):
@@ -657,4 +657,4 @@ def test_precompute_store_failure_enqueues_without_retrying_or_falling_back(monk
     assert writes[0].day == DAY
     assert writes[0].strict_day == DAY
     assert writes[0].expected_match_state == "strict"
-    assert enqueued == [((DAY,), "production_source_unavailable", False)]
+    assert enqueued == [((DAY,), "production_source_unavailable")]

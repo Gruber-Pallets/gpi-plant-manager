@@ -39,6 +39,45 @@ def _row(
     }
 
 
+class _InsertCursor:
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, sql, params=None):
+        self.statements.append((sql, params))
+
+    def fetchone(self):
+        return None
+
+
+def test_incremental_attendance_change_queues_without_marking_strict(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_enqueue_recalc_cur",
+        lambda _cur, days, reason, **kwargs: calls.append(
+            (frozenset(days), reason, kwargs)
+        ),
+    )
+
+    result = attendance_mirror._upsert_rows_cur(
+        _InsertCursor(),
+        (attendance_mirror._normalize_row(_row()),),
+        sync_completed_at=SYNCED_AT,
+        observed_at=SYNCED_AT,
+        baseline_completed=True,
+    )
+
+    assert result == {date(2026, 8, 28)}
+    assert calls == [
+        (
+            frozenset({date(2026, 8, 28)}),
+            "odoo_attendance_changed",
+            {"requested_at": SYNCED_AT},
+        )
+    ]
+
+
 def test_local_days_use_plant_timezone_and_cover_cross_midnight_rows():
     days = attendance_mirror.local_days_touched(
         datetime(2026, 8, 29, 4, 30, tzinfo=UTC),
@@ -323,8 +362,8 @@ def test_sweep_keeps_recovery_and_deletion_recalc_reasons_separate(monkeypatch):
     monkeypatch.setattr(
         attendance_mirror,
         "_enqueue_recalc_cur",
-        lambda _cur, days, reason, **_kwargs: enqueue_calls.append(
-            (frozenset(days), reason)
+        lambda _cur, days, reason, **kwargs: enqueue_calls.append(
+            (frozenset(days), reason, kwargs)
         ),
     )
 
@@ -339,7 +378,13 @@ def test_sweep_keeps_recovery_and_deletion_recalc_reasons_separate(monkeypatch):
     assert result.affected_days == frozenset({recovered_day, deleted_day})
     assert enqueue_calls == [
         (frozenset({recovered_day}), "odoo_attendance_changed"),
-        (frozenset({deleted_day}), "odoo_attendance_deleted"),
+        (
+            frozenset({deleted_day}),
+            "odoo_attendance_deleted",
+            {
+                "requested_at": datetime(2026, 8, 28, 22, 0, tzinfo=UTC),
+            },
+        ),
     ]
 
 
@@ -490,9 +535,7 @@ def test_upsert_is_idempotent_preserves_unknown_labels_and_handles_close_reopen(
     assert [(item["day"], item["completed_at"]) for item in queue] == [
         (date(2026, 8, 28), None)
     ]
-    assert db.query("SELECT day FROM attendance_strict_days") == [
-        {"day": date(2026, 8, 28)}
-    ]
+    assert db.query("SELECT * FROM attendance_strict_days") == []
 
 
 @_needs_postgres
@@ -562,6 +605,7 @@ def test_sweep_tombstones_are_auditable_excluded_and_enqueue_old_days(
     assert attendance_mirror.mark_deleted_after_successful_sweep(
         {901}, generation=1
     ) == {date(2026, 8, 28)}
+    assert db.query("SELECT * FROM attendance_strict_days") == []
     assert [
         row["odoo_attendance_id"]
         for row in attendance_mirror.rows_overlapping(
@@ -1020,7 +1064,6 @@ def test_health_reports_pending_age_baseline_and_bounded_error(clean_mirror):
     attendance_mirror.enqueue_recalc(
         [date(2026, 8, 29), date(2026, 8, 28)],
         "source_changed",
-        mark_strict=True,
     )
 
     health = attendance_mirror.health_snapshot()
@@ -1090,9 +1133,7 @@ def test_sweep_recovery_revives_tombstone_atomically_and_counts_deletions(
     assert db.query("SELECT day FROM attendance_recalc_queue") == [
         {"day": date(2026, 8, 28)}
     ]
-    assert db.query("SELECT day FROM attendance_strict_days") == [
-        {"day": date(2026, 8, 28)}
-    ]
+    assert db.query("SELECT * FROM attendance_strict_days") == []
 
 
 @_needs_postgres
@@ -1139,9 +1180,7 @@ def test_sweep_recovery_and_unrelated_deletion_keep_distinct_reasons(
     assert db.query(
         "SELECT day, reason FROM attendance_recalc_queue ORDER BY day"
     ) == expected
-    assert db.query(
-        "SELECT day, reason FROM attendance_strict_days ORDER BY day"
-    ) == expected
+    assert db.query("SELECT * FROM attendance_strict_days") == []
 
 
 @_needs_postgres
