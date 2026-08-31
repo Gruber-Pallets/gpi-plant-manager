@@ -321,8 +321,12 @@ def _strict_production_owns_day(snapshot) -> bool:
     return snapshot.production_mode in ("strict", "pending")
 
 
-def _attendance_sections_are_active(snapshot) -> bool:
+def _attendance_owns_location(snapshot) -> bool:
     return _timeline_owns_location(snapshot) or _strict_production_owns_day(snapshot)
+
+
+def _attendance_sections_should_render(snapshot) -> bool:
+    return bool(snapshot.issues or _attendance_owns_location(snapshot))
 
 
 def _attendance_row_key(issue, row: dict) -> str:
@@ -419,7 +423,7 @@ def _attendance_issue_row(issue) -> dict:
 
 
 def _attendance_sections(snapshot) -> list[dict]:
-    if not _attendance_sections_are_active(snapshot):
+    if not _attendance_sections_should_render(snapshot):
         return []
     sections = []
     for kind, (title, tone) in _ATTENDANCE_SECTION_META.items():
@@ -490,7 +494,7 @@ def build_summary() -> dict:
     late = _capture(source_errors, "Late / Absence", staffing_routes.late_report_payload, {})
     missing_rows = (
         []
-        if _attendance_sections_are_active(attendance_snapshot)
+        if _attendance_owns_location(attendance_snapshot)
         else _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
     )
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
@@ -526,7 +530,7 @@ def build_summary() -> dict:
     auto_lunch_count = int(auto_lunch_alert is not None)
     attendance_counts = (
         {kind: len(attendance_snapshot.issues_for(kind)) for kind in _ATTENDANCE_SECTION_META}
-        if _attendance_sections_are_active(attendance_snapshot)
+        if _attendance_sections_should_render(attendance_snapshot)
         else {}
     )
     attendance_urgent_count = sum(
@@ -583,7 +587,7 @@ def build_summary() -> dict:
             **attendance_counts,
         },
     }
-    if _attendance_sections_are_active(attendance_snapshot):
+    if _attendance_owns_location(attendance_snapshot):
         summary["sections"].pop("missing_wc", None)
     return summary
 
@@ -613,7 +617,7 @@ def build_snapshot() -> dict:
     late = _capture(source_errors, "Late / Absence", staffing_routes.late_report_payload, {})
     missing_rows = (
         []
-        if _attendance_sections_are_active(attendance_snapshot)
+        if _attendance_owns_location(attendance_snapshot)
         else _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
     )
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
@@ -900,8 +904,9 @@ def build_snapshot() -> dict:
             "rows": pending_rows,
         },
     ]
-    if _attendance_sections_are_active(attendance_snapshot):
+    if _attendance_owns_location(attendance_snapshot):
         sections = [section for section in sections if section["id"] != "missing_wc"]
+    if _attendance_sections_should_render(attendance_snapshot):
         sections[2:2] = _attendance_sections(attendance_snapshot)
     queue = _queue_from_sections(sections)
     total = sum(int(s["count"]) for s in sections)

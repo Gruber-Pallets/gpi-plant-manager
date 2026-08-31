@@ -297,6 +297,66 @@ def test_production_row_revision_changes_with_units_and_sample_count():
     assert initial["row_key"] != changed["row_key"]
 
 
+def test_shadow_builder_failure_renders_source_issue_without_claiming_legacy(monkeypatch):
+    _empty_legacy(
+        monkeypatch,
+        missing=({"attendance_id": 901, "name": "Adrian", "check_in_label": "8:00 AM"},),
+        assignments=(_legacy_assignment(),),
+    )
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "build_snapshot",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("attendance projection failed")),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "get_rollout_config",
+        lambda: attendance_location_policy.RolloutConfig("shadow", NOW, None),
+    )
+    monkeypatch.setattr(attendance_location_policy, "strict_days", lambda: set())
+    monkeypatch.setattr(exception_inbox, "_auto_lunch_alert", lambda *_a, **_k: None)
+
+    full = exception_inbox.build_snapshot()
+    summary = exception_inbox.build_summary()
+    sections = {section["id"]: section for section in full["sections"]}
+
+    unavailable = sections["production_source_unavailable"]
+    assert unavailable["count"] == 1
+    assert unavailable["rows"][0]["item_key"] == "production_source_unavailable:2026-08-31"
+    assert unavailable["rows"][0]["comparison_only"] is True
+    assert sections["assignments"]["count"] == 1
+    assert sections["missing_wc"]["count"] == 1
+    assert summary["sections"]["production_source_unavailable"] == 1
+    assert summary["sections"]["assignments"] == 1
+    assert summary["sections"]["missing_wc"] == 1
+    assert summary["total"] == full["total"] == 3
+    assert summary["urgent_total"] == full["urgent_total"] == 2
+
+
+def test_empty_prebaseline_shadow_snapshot_does_not_claim_or_render(monkeypatch):
+    _empty_legacy(
+        monkeypatch,
+        missing=({"attendance_id": 901, "name": "Adrian", "check_in_label": "8:00 AM"},),
+        assignments=(_legacy_assignment(),),
+    )
+    incomplete = replace(
+        _attendance_snapshot(mode="shadow", production_mode="shadow", complete=False),
+        baseline_complete=False,
+    )
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "build_snapshot",
+        lambda *_a, **_k: incomplete,
+    )
+
+    full = exception_inbox.build_snapshot()
+    sections = {section["id"]: section for section in full["sections"]}
+
+    assert sections["assignments"]["count"] == 1
+    assert sections["missing_wc"]["count"] == 1
+    assert not set(exception_inbox._ATTENDANCE_SECTION_META).intersection(sections)
+
+
 @pytest.mark.parametrize(
     ("production_mode", "builder_failure"),
     [("strict", False), ("pending", False), ("strict", True)],
