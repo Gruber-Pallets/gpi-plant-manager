@@ -12,13 +12,14 @@ import binascii
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 import hashlib
 import json
 import math
 import re
 from types import MappingProxyType
-from typing import Literal, TypeAlias
+import logging
+from typing import Any, Literal, TypeAlias
 
 
 OperationKind: TypeAlias = Literal["create", "update", "delete"]
@@ -49,6 +50,66 @@ _SOURCE_REQUIRED_FIELDS = (
     "odoo_department_id",
 )
 _EXPECTED_REQUIRED_FIELDS = ("odoo_attendance_id", *_MUTABLE_FIELDS)
+
+_JOB_STATUSES = frozenset(
+    ("planned", "applying", "verifying", "recalculating", "complete", "failed")
+)
+_ACTIVE_JOB_STATUSES = frozenset(("planned", "applying", "verifying", "recalculating"))
+_CLAIM_LEASE = timedelta(minutes=15)
+_ERROR_LIMIT = 500
+_TEXT_LIMIT = 200
+_ITEM_KEY_LIMIT = 500
+_ACTOR_LIMIT = 320
+_MAX_EMPLOYEES = 100
+_MAX_OPERATIONS = 1000
+_MAX_EVENT_IDS = 100
+_EVENT_DETAIL_FIELDS = frozenset(
+    (
+        "job_id",
+        "operation_key",
+        "operation_kind",
+        "attendance_id",
+        "employee_odoo_id",
+        "work_center_id",
+        "recalc_ids",
+        "attendance_ids",
+        "employee_ids",
+        "operation_keys",
+        "reason_code",
+        "attempt_count",
+        "verification_failure_count",
+    )
+)
+_EVENT_OUTCOMES = frozenset(
+    (
+        ("planning", "created"),
+        ("planning", "invalid_plan"),
+        ("claim", "claimed"),
+        ("applying", "source_changed"),
+        ("applying", "odoo_failure"),
+        ("applying", "confirmed"),
+        ("applying", "adopted"),
+        ("applying", "adopted_timeout"),
+        ("applying", "operations_complete"),
+        ("verifying", "mismatch"),
+        ("verifying", "verified"),
+        ("verifying", "odoo_failure"),
+        ("mirror", "failed"),
+        ("mirror", "complete"),
+        ("recalculation", "enqueued"),
+        ("recalculation", "failed"),
+        ("recalculation", "complete"),
+        ("cache", "failed"),
+        ("cache", "complete"),
+        ("audit", "failed"),
+        ("audit", "complete"),
+        ("completion", "complete"),
+    )
+)
+_SOURCE_SNAPSHOT_SCHEMA = 1
+_PLANS_WRAPPER_SCHEMA = 2
+_SOURCE_INTEGRITY_PREFIX = "attendance-correction-source-v1:"
+_log = logging.getLogger(__name__)
 
 
 class _FrozenMapping(Mapping[str, object]):
@@ -1334,3 +1395,1994 @@ def plan_from_json(value: object) -> CorrectionPlan:
     if integrity != _plan_integrity(_plan_json_payload(plan)):
         raise ValueError("correction plan integrity does not match its contents")
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Durable correction orchestration
+
+
+@dataclass(frozen=True)
+class CorrectionPreview:
+    item_key: str
+    employee_odoo_ids: tuple[int, ...]
+    target_work_center_name: str
+    target_odoo_work_center_id: int
+    target_odoo_department_id: int | None
+    start_utc: datetime
+    end_utc: datetime | None
+    plans: tuple[CorrectionPlan, ...]
+
+    def __post_init__(self) -> None:
+        item_key = _bounded_text(self.item_key, "item_key", _ITEM_KEY_LIMIT)
+        work_center_name = _bounded_text(
+            self.target_work_center_name,
+            "target_work_center_name",
+            _TEXT_LIMIT,
+        )
+        employees = _employee_ids(self.employee_odoo_ids)
+        work_center_id = _positive_int(
+            self.target_odoo_work_center_id, "target_odoo_work_center_id"
+        )
+        department_id = _optional_positive_int(
+            self.target_odoo_department_id, "target_odoo_department_id"
+        )
+        start = _aware_utc(self.start_utc, "start_utc")
+        end = _optional_aware_utc(self.end_utc, "end_utc")
+        if end is not None and end <= start:
+            raise ValueError("end_utc must be later than start_utc")
+        plans = tuple(self.plans)
+        if len(plans) not in (0, len(employees)):
+            raise ValueError("preview must contain one plan per employee")
+        if not all(isinstance(plan, CorrectionPlan) for plan in plans):
+            raise TypeError("plans must contain CorrectionPlan values")
+        object.__setattr__(self, "item_key", item_key)
+        object.__setattr__(self, "employee_odoo_ids", employees)
+        object.__setattr__(self, "target_work_center_name", work_center_name)
+        object.__setattr__(self, "target_odoo_work_center_id", work_center_id)
+        object.__setattr__(self, "target_odoo_department_id", department_id)
+        object.__setattr__(self, "start_utc", start)
+        object.__setattr__(self, "end_utc", end)
+        object.__setattr__(self, "plans", plans)
+
+
+@dataclass(frozen=True)
+class CorrectionJobResult:
+    job_id: int
+    status: str
+    attempt_count: int
+    error: str | None = None
+    retry_at: datetime | None = None
+    completed_operation_count: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "job_id", _positive_int(self.job_id, "job_id"))
+        if self.status not in _JOB_STATUSES and self.status not in (
+            "recoverable",
+            "superseded",
+        ):
+            raise ValueError("invalid correction job result status")
+        if (
+            isinstance(self.attempt_count, bool)
+            or not isinstance(self.attempt_count, int)
+            or self.attempt_count < 0
+        ):
+            raise ValueError("attempt_count must be a non-negative integer")
+        if (
+            isinstance(self.completed_operation_count, bool)
+            or not isinstance(self.completed_operation_count, int)
+            or self.completed_operation_count < 0
+        ):
+            raise ValueError("completed_operation_count must be non-negative")
+        if self.error is not None:
+            object.__setattr__(self, "error", str(self.error)[:_ERROR_LIMIT])
+        if self.retry_at is not None:
+            object.__setattr__(self, "retry_at", _aware_utc(self.retry_at, "retry_at"))
+
+
+@dataclass(frozen=True)
+class _JobClaim:
+    job_id: int
+    attempt_count: int
+    lease_until: datetime
+    row: Mapping[str, Any]
+
+
+class _SourceChanged(RuntimeError):
+    pass
+
+
+class _RecoverableWrite(RuntimeError):
+    pass
+
+
+def _bounded_text(value: object, field_name: str, limit: int) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be text")
+    clean = value.strip()
+    if not clean:
+        raise ValueError(f"{field_name} cannot be empty")
+    if len(clean) > limit:
+        raise ValueError(f"{field_name} is too long")
+    return clean
+
+
+def _optional_bounded_text(value: object, field_name: str, limit: int) -> str | None:
+    if value is None:
+        return None
+    return _bounded_text(value, field_name, limit)
+
+
+def _employee_ids(values: Sequence[int]) -> tuple[int, ...]:
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise TypeError("employee_odoo_ids must be a sequence")
+    normalized = tuple(sorted({_positive_int(value, "employee_odoo_id") for value in values}))
+    if not normalized:
+        raise ValueError("at least one employee is required")
+    if len(normalized) > _MAX_EMPLOYEES:
+        raise ValueError("too many employees selected")
+    return normalized
+
+
+def _validated_request(
+    *,
+    item_key: str,
+    employee_odoo_ids: Sequence[int],
+    target_work_center_name: str,
+    start_utc: datetime,
+    end_utc: datetime | None,
+) -> tuple[str, tuple[int, ...], str, datetime, datetime | None]:
+    key = _bounded_text(item_key, "item_key", _ITEM_KEY_LIMIT)
+    employees = _employee_ids(employee_odoo_ids)
+    name = _bounded_text(target_work_center_name, "target_work_center_name", _TEXT_LIMIT)
+    start = _aware_utc(start_utc, "start_utc")
+    end = _optional_aware_utc(end_utc, "end_utc")
+    if end is not None and end <= start:
+        raise ValueError("end_utc must be later than start_utc")
+    return key, employees, name, start, end
+
+
+def _default_facade():
+    """Import Odoo only after validated correction work is available."""
+    from . import odoo_client
+
+    return odoo_client
+
+
+def _resolve_mapping(target_name: str, facade) -> tuple[int, int | None]:
+    """Resolve an explicit saved mapping and confirm the Odoo row is active.
+
+    Department identity is optional unless the injected facade exposes an exact
+    work-center-to-department resolver.  We intentionally do not name-match an
+    Odoo department here; Task 9 owns verified department repair.
+    """
+    from . import db
+
+    rows = db.query(
+        "SELECT odoo_work_center_id, odoo_work_center_name FROM work_centers WHERE name = %s",
+        (target_name,),
+    )
+    if len(rows) != 1 or rows[0].get("odoo_work_center_id") is None:
+        raise ValueError("target work center has no saved Odoo mapping")
+    work_center_id = _positive_int(
+        int(rows[0]["odoo_work_center_id"]), "target_odoo_work_center_id"
+    )
+    catalog = facade.fetch_manufacturing_work_centers(force=True)
+    active = [
+        row for row in catalog if isinstance(row, Mapping) and row.get("id") == work_center_id
+    ]
+    if len(active) != 1:
+        raise ValueError("target Odoo work center is unknown or inactive")
+    saved_odoo_name = str(rows[0].get("odoo_work_center_name") or "").strip()
+    active_name = str(active[0].get("name") or "").strip()
+    if saved_odoo_name and active_name != saved_odoo_name:
+        raise ValueError("saved Odoo work-center mapping is stale")
+    resolver = getattr(facade, "target_department_id_for_work_center", None)
+    department_id = None
+    if resolver is not None:
+        department_id = _optional_positive_int(
+            resolver(work_center_id), "target_odoo_department_id"
+        )
+    return work_center_id, department_id
+
+
+def _canonical_source_row(row: Mapping[str, object], employee_id: int) -> dict[str, object]:
+    source = _normalize_source_row(row, employee_id)
+    return {
+        "odoo_attendance_id": source.attendance_id,
+        "employee_odoo_id": source.employee_id,
+        "check_in_utc": source.start,
+        "check_out_utc": source.end,
+        "odoo_work_center_id": source.work_center_id,
+        "odoo_department_id": source.department_id,
+        "odoo_write_date": source.write_date,
+    }
+
+
+def _build_preview(
+    *,
+    item_key: str,
+    employee_odoo_ids: tuple[int, ...],
+    target_work_center_name: str,
+    start_utc: datetime,
+    end_utc: datetime | None,
+) -> CorrectionPreview:
+    facade = _default_facade()
+    roster = facade.fetch_employee_statuses()
+    active_employee_ids = {
+        int(row["id"])
+        for row in roster
+        if isinstance(row, Mapping)
+        and not isinstance(row.get("id"), bool)
+        and isinstance(row.get("id"), int)
+        and row.get("active") is True
+    }
+    missing = sorted(set(employee_odoo_ids) - active_employee_ids)
+    if missing:
+        raise ValueError("selected employee is unknown or inactive in Odoo")
+    work_center_id, department_id = _resolve_mapping(target_work_center_name, facade)
+    plans: list[CorrectionPlan] = []
+    for employee_id in employee_odoo_ids:
+        rows = facade.fetch_employee_attendance_rows(employee_id, start_utc, end_utc)
+        plans.append(
+            plan_correction(
+                rows=rows,
+                employee_odoo_id=employee_id,
+                start_utc=start_utc,
+                end_utc=end_utc,
+                odoo_work_center_id=work_center_id,
+                odoo_department_id=department_id,
+            )
+        )
+    return CorrectionPreview(
+        item_key=item_key,
+        employee_odoo_ids=employee_odoo_ids,
+        target_work_center_name=target_work_center_name,
+        target_odoo_work_center_id=work_center_id,
+        target_odoo_department_id=department_id,
+        start_utc=start_utc,
+        end_utc=end_utc,
+        plans=tuple(plans),
+    )
+
+
+def correction_preview(
+    *,
+    item_key: str,
+    employee_odoo_ids: Sequence[int],
+    target_work_center_name: str,
+    start_utc: datetime,
+    end_utc: datetime | None,
+) -> CorrectionPreview:
+    """Re-read Odoo and return an immutable, read-only correction preview."""
+    key, employees, target, start, end = _validated_request(
+        item_key=item_key,
+        employee_odoo_ids=employee_odoo_ids,
+        target_work_center_name=target_work_center_name,
+        start_utc=start_utc,
+        end_utc=end_utc,
+    )
+    return _build_preview(
+        item_key=key,
+        employee_odoo_ids=employees,
+        target_work_center_name=target,
+        start_utc=start,
+        end_utc=end,
+    )
+
+
+def _snapshot_payload(preview: CorrectionPreview) -> dict[str, object]:
+    employees: list[dict[str, object]] = []
+    for employee_id, plan in zip(preview.employee_odoo_ids, preview.plans, strict=True):
+        versions = [
+            {
+                "attendance_id": version.attendance_id,
+                "write_date": _utc_text(version.write_date),
+            }
+            for version in plan.source_versions
+        ]
+        source_by_id: dict[int, dict[str, object]] = {}
+        for expected in plan.expected_intervals:
+            attendance_id = expected["odoo_attendance_id"]
+            if attendance_id is not None:
+                source_by_id.setdefault(
+                    int(attendance_id),
+                    {
+                        "odoo_attendance_id": int(attendance_id),
+                        "employee_odoo_id": employee_id,
+                        **{
+                            field: expected[field] for field in _MUTABLE_FIELDS if field in expected
+                        },
+                    },
+                )
+        for operation in plan.operations:
+            if operation.attendance_id is None or operation.before is None:
+                continue
+            source = source_by_id.setdefault(
+                operation.attendance_id,
+                {
+                    "odoo_attendance_id": operation.attendance_id,
+                    "employee_odoo_id": employee_id,
+                },
+            )
+            source.update(operation.before)
+        version_by_id = {item["attendance_id"]: item["write_date"] for item in versions}
+        rows = []
+        for attendance_id in sorted(source_by_id):
+            row = source_by_id[attendance_id]
+            row["odoo_write_date"] = _parse_utc_text(version_by_id[attendance_id], "write_date")
+            # An update operation stores only changed fields. The expected
+            # interval supplies the rest; a deleted row's delete-before is full.
+            missing = [field for field in _SOURCE_REQUIRED_FIELDS if field not in row]
+            if missing:
+                raise ValueError("plan cannot reconstruct canonical source snapshot")
+            rows.append(_encode_data(row))
+        employees.append({"employee_odoo_id": employee_id, "rows": rows})
+    payload: dict[str, object] = {
+        "schema_version": _SOURCE_SNAPSHOT_SCHEMA,
+        "employees": employees,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    payload["integrity"] = (
+        _SOURCE_INTEGRITY_PREFIX + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    )
+    return payload
+
+
+def _plans_payload(preview: CorrectionPreview) -> dict[str, object]:
+    return {
+        "schema_version": _PLANS_WRAPPER_SCHEMA,
+        "plans": [
+            {
+                "employee_odoo_id": employee_id,
+                "plan": plan_to_json(plan),
+            }
+            for employee_id, plan in zip(preview.employee_odoo_ids, preview.plans, strict=True)
+        ],
+    }
+
+
+def _decode_json_column(value: object, field_name: str) -> object:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"{field_name} is corrupt JSON") from error
+    return value
+
+
+def _source_rows_from_json(
+    value: object, employee_ids: tuple[int, ...]
+) -> dict[int, tuple[dict[str, object], ...]]:
+    raw = _decode_json_column(value, "source_snapshot")
+    if not isinstance(raw, Mapping):
+        raise TypeError("source_snapshot must be an object")
+    _exact_keys(
+        raw,
+        frozenset(("schema_version", "employees", "integrity")),
+        "source_snapshot",
+    )
+    if (
+        isinstance(raw["schema_version"], bool)
+        or not isinstance(raw["schema_version"], int)
+        or raw["schema_version"] != _SOURCE_SNAPSHOT_SCHEMA
+    ):
+        raise ValueError("unsupported source snapshot schema version")
+    payload = {
+        "schema_version": raw["schema_version"],
+        "employees": raw["employees"],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    expected_integrity = (
+        _SOURCE_INTEGRITY_PREFIX + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    )
+    if raw["integrity"] != expected_integrity:
+        raise ValueError("source snapshot integrity does not match")
+    items = _require_json_list(raw["employees"], "source employees")
+    result: dict[int, tuple[dict[str, object], ...]] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise TypeError("source employee must be an object")
+        _exact_keys(item, frozenset(("employee_odoo_id", "rows")), "source employee")
+        employee_id = _positive_int(item["employee_odoo_id"], "employee_odoo_id")
+        if employee_id in result:
+            raise ValueError("duplicate source employee")
+        rows: list[dict[str, object]] = []
+        for encoded_row in _require_json_list(item["rows"], "source rows"):
+            decoded = _decode_data(encoded_row)
+            if not isinstance(decoded, Mapping):
+                raise TypeError("source row must decode to a mapping")
+            rows.append(_canonical_source_row(decoded, employee_id))
+        if [int(row["odoo_attendance_id"]) for row in rows] != sorted(
+            int(row["odoo_attendance_id"]) for row in rows
+        ):
+            raise ValueError("source rows are not in canonical ID order")
+        _normalize_source_rows(rows, employee_id)
+        result[employee_id] = tuple(rows)
+    if tuple(sorted(result)) != employee_ids:
+        raise ValueError("source snapshot employees do not match the job")
+    return result
+
+
+def _plans_from_json(value: object, employee_ids: tuple[int, ...]) -> dict[int, CorrectionPlan]:
+    raw = _decode_json_column(value, "operations")
+    if not isinstance(raw, Mapping):
+        raise TypeError("operations must be an object")
+    _exact_keys(raw, frozenset(("schema_version", "plans")), "operations wrapper")
+    if (
+        isinstance(raw["schema_version"], bool)
+        or not isinstance(raw["schema_version"], int)
+        or raw["schema_version"] != _PLANS_WRAPPER_SCHEMA
+    ):
+        raise ValueError("unsupported operations schema version")
+    result: dict[int, CorrectionPlan] = {}
+    ordered_employee_ids: list[int] = []
+    for item in _require_json_list(raw["plans"], "plans"):
+        if not isinstance(item, Mapping):
+            raise TypeError("plan wrapper must be an object")
+        _exact_keys(item, frozenset(("employee_odoo_id", "plan")), "plan wrapper")
+        employee_id = _positive_int(item["employee_odoo_id"], "employee_odoo_id")
+        if employee_id in result:
+            raise ValueError("duplicate employee correction plan")
+        ordered_employee_ids.append(employee_id)
+        result[employee_id] = plan_from_json(item["plan"])
+    if tuple(sorted(result)) != employee_ids:
+        raise ValueError("plan employees do not match the job")
+    if tuple(ordered_employee_ids) != employee_ids:
+        raise ValueError("plans are not in canonical employee order")
+    if sum(len(plan.operations) for plan in result.values()) > _MAX_OPERATIONS:
+        raise ValueError("correction job contains too many operations")
+    return result
+
+
+def _json_list(value: object, field_name: str) -> list[dict[str, object]]:
+    raw = _decode_json_column(value, field_name)
+    if not isinstance(raw, list) or not all(isinstance(item, Mapping) for item in raw):
+        raise ValueError(f"{field_name} must be a JSON list of objects")
+    return [dict(item) for item in raw]
+
+
+def _validated_completed_records(
+    value: object, plans: Mapping[int, CorrectionPlan]
+) -> list[dict[str, object]]:
+    records = _json_list(value, "completed_operations")
+    if len(records) > _MAX_OPERATIONS + 10:
+        raise ValueError("completed_operations is not bounded")
+    operations = {
+        operation.key: operation for plan in plans.values() for operation in plan.operations
+    }
+    allowed_stages = frozenset(
+        ("mirror_complete", "recalc_enqueued", "recalc_complete", "cache_refreshed")
+    )
+    stage_order = (
+        "mirror_complete",
+        "recalc_enqueued",
+        "recalc_complete",
+        "cache_refreshed",
+    )
+    seen: set[str] = set()
+    seen_operation_keys: set[str] = set()
+    seen_stages: list[str] = []
+    for record in records:
+        operation_key = record.get("operation_key")
+        stage = record.get("stage")
+        if isinstance(operation_key, str):
+            if set(record) != {"operation_key", "kind", "attendance_id"}:
+                raise ValueError("completed operation has unknown fields")
+            operation = operations.get(operation_key)
+            if operation is None or record.get("kind") != operation.kind:
+                raise ValueError("completed operation does not match the saved plan")
+            attendance_id = _positive_int(record.get("attendance_id"), "attendance_id")
+            if operation.kind != "create" and attendance_id != operation.attendance_id:
+                raise ValueError("completed operation attendance id changed")
+            identity = "operation:" + operation_key
+            seen_operation_keys.add(operation_key)
+        elif isinstance(stage, str):
+            allowed = {"stage", "recalc_ids"} if stage == "recalc_enqueued" else {"stage"}
+            if set(record) != allowed or stage not in allowed_stages:
+                raise ValueError("completed stage is invalid")
+            if stage == "recalc_enqueued":
+                recalc_ids = record["recalc_ids"]
+                if (
+                    isinstance(recalc_ids, (str, bytes))
+                    or not isinstance(recalc_ids, list)
+                    or len(recalc_ids) > 500
+                    or not all(
+                        isinstance(item, str) and 1 <= len(item) <= 20 for item in recalc_ids
+                    )
+                ):
+                    raise ValueError("completed recalculation IDs are invalid")
+            identity = "stage:" + stage
+            seen_stages.append(stage)
+        else:
+            raise ValueError("completed record omitted its identity")
+        if identity in seen:
+            raise ValueError("duplicate completed operation or stage")
+        seen.add(identity)
+    if seen_stages:
+        if seen_operation_keys != set(operations):
+            raise ValueError("downstream stages began before every operation completed")
+        if tuple(seen_stages) != stage_order[: len(seen_stages)]:
+            raise ValueError("completed stages are out of order")
+    return records
+
+
+def _event_detail(**values: object) -> dict[str, object]:
+    unknown = set(values) - _EVENT_DETAIL_FIELDS
+    if unknown:
+        raise ValueError("event detail keys must be allowlisted")
+    detail: dict[str, object] = {}
+    for key, value in values.items():
+        if value is None:
+            continue
+        if key.endswith("_ids") or key == "operation_keys":
+            if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+                raise TypeError(f"{key} must be a sequence")
+            if len(value) > _MAX_EVENT_IDS:
+                raise ValueError("event detail is not bounded")
+            cleaned: list[int | str] = []
+            for item in value:
+                if isinstance(item, str):
+                    if key == "operation_keys" and _KEY_PATTERN.fullmatch(item):
+                        item = item.rsplit(":", 1)[-1]
+                    if not item or len(item) > _TEXT_LIMIT:
+                        raise ValueError("event detail is not bounded")
+                    cleaned.append(item)
+                else:
+                    cleaned.append(_positive_int(item, key))
+            detail[key] = cleaned
+        elif isinstance(value, str):
+            if key == "operation_key" and _KEY_PATTERN.fullmatch(value):
+                value = value.rsplit(":", 1)[-1]
+            if not value or len(value) > _TEXT_LIMIT:
+                raise ValueError("event detail is not bounded")
+            detail[key] = value
+        else:
+            detail[key] = _positive_int(value, key)
+    encoded = json.dumps(detail, sort_keys=True, separators=(",", ":"))
+    if len(encoded) > 10_000:
+        raise ValueError("event detail is not bounded")
+    return detail
+
+
+def _append_event_cur(
+    cur,
+    job_id: int,
+    phase: str,
+    result: str,
+    detail: Mapping[str, object] | None = None,
+) -> None:
+    phase = _bounded_text(phase, "phase", 50)
+    result = _bounded_text(result, "result", 50)
+    if (phase, result) not in _EVENT_OUTCOMES:
+        raise ValueError("correction event phase/result is not allowlisted")
+    safe_detail = _event_detail(**dict(detail or {}))
+    cur.execute(
+        "INSERT INTO attendance_correction_job_events "
+        "(correction_job_id, phase, result, detail) VALUES (%s, %s, %s, %s::jsonb)",
+        (job_id, phase, result, json.dumps(safe_detail, separators=(",", ":"))),
+    )
+
+
+def _active_job_id(item_key: str) -> int | None:
+    from . import db
+
+    rows = db.query(
+        "SELECT id FROM attendance_correction_jobs WHERE item_key = %s "
+        "AND status IN ('planned','applying','verifying','recalculating') "
+        "ORDER BY id DESC LIMIT 1",
+        (item_key,),
+    )
+    return int(rows[0]["id"]) if rows else None
+
+
+def create_job(
+    *,
+    item_key: str,
+    employee_odoo_ids: Sequence[int],
+    target_work_center_name: str,
+    start_utc: datetime,
+    end_utc: datetime | None,
+    actor_email: str | None,
+    actor_name: str | None,
+) -> int:
+    """Persist a fresh schema-v2 plan, deduplicated by active inbox item."""
+    key, employees, target, start, end = _validated_request(
+        item_key=item_key,
+        employee_odoo_ids=employee_odoo_ids,
+        target_work_center_name=target_work_center_name,
+        start_utc=start_utc,
+        end_utc=end_utc,
+    )
+    email = _optional_bounded_text(actor_email, "actor_email", _ACTOR_LIMIT)
+    name = _optional_bounded_text(actor_name, "actor_name", _ACTOR_LIMIT)
+    existing = _active_job_id(key)
+    if existing is not None:
+        return existing
+    preview = _build_preview(
+        item_key=key,
+        employee_odoo_ids=employees,
+        target_work_center_name=target,
+        start_utc=start,
+        end_utc=end,
+    )
+    source_snapshot = _snapshot_payload(preview)
+    plans = _plans_payload(preview)
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO attendance_correction_jobs "
+            "(item_key, status, target_work_center_name, "
+            "target_odoo_work_center_id, start_utc, end_utc, employee_odoo_ids, "
+            "source_snapshot, operations, completed_operations, actor_email, actor_name) "
+            "VALUES (%s, 'planned', %s, %s, %s, %s, %s::jsonb, %s::jsonb, "
+            "%s::jsonb, '[]'::jsonb, %s, %s) "
+            "ON CONFLICT (item_key) WHERE status IN "
+            "('planned','applying','verifying','recalculating') DO NOTHING "
+            "RETURNING id",
+            (
+                key,
+                target,
+                preview.target_odoo_work_center_id,
+                start,
+                end,
+                json.dumps(list(employees)),
+                json.dumps(source_snapshot, separators=(",", ":")),
+                json.dumps(plans, separators=(",", ":")),
+                email,
+                name,
+            ),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            job_id = int(row["id"])
+            _append_event_cur(
+                cur,
+                job_id,
+                "planning",
+                "created",
+                _event_detail(
+                    job_id=job_id,
+                    employee_ids=employees,
+                    work_center_id=preview.target_odoo_work_center_id,
+                ),
+            )
+            return job_id
+        cur.execute(
+            "SELECT id FROM attendance_correction_jobs WHERE item_key = %s "
+            "AND status IN ('planned','applying','verifying','recalculating') "
+            "ORDER BY id DESC LIMIT 1 FOR UPDATE",
+            (key,),
+        )
+        duplicate = cur.fetchone()
+        if duplicate is None:
+            raise RuntimeError("active correction dedupe winner disappeared")
+        return int(duplicate["id"])
+
+
+def _claim_job(*, job_id: int | None, now_utc: datetime) -> _JobClaim | None:
+    from . import db
+
+    now = _aware_utc(now_utc, "now_utc")
+    lease_until = now + _CLAIM_LEASE
+    with db.cursor() as cur:
+        params: list[object] = [now]
+        predicate = ""
+        if job_id is not None:
+            predicate = "AND id = %s "
+            params.append(_positive_int(job_id, "job_id"))
+        cur.execute(
+            "SELECT * FROM attendance_correction_jobs "
+            "WHERE status IN ('planned','applying','verifying','recalculating') "
+            "AND (status = 'planned' OR updated_at <= %s) "
+            + predicate
+            + "ORDER BY created_at ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+            tuple(params),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        next_attempt = int(row.get("attempt_count") or 0) + 1
+        next_status = "applying" if row["status"] == "planned" else row["status"]
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET status = %s, "
+            "attempt_count = %s, updated_at = %s, last_error = NULL "
+            "WHERE id = %s AND attempt_count = %s RETURNING *",
+            (
+                next_status,
+                next_attempt,
+                lease_until,
+                row["id"],
+                int(row.get("attempt_count") or 0),
+            ),
+        )
+        claimed = cur.fetchone()
+        if claimed is None:
+            return None
+        claimed = dict(claimed)
+        _append_event_cur(
+            cur,
+            int(claimed["id"]),
+            "claim",
+            "claimed",
+            _event_detail(job_id=int(claimed["id"]), attempt_count=next_attempt),
+        )
+        return _JobClaim(int(claimed["id"]), next_attempt, lease_until, claimed)
+
+
+def _transition(
+    claim: _JobClaim,
+    *,
+    status: str | None = None,
+    phase: str,
+    result: str,
+    detail: Mapping[str, object] | None = None,
+    last_error: str | None = None,
+    retry_at: datetime | None = None,
+    verification_increment: bool = False,
+) -> bool:
+    from . import db
+
+    if status is not None and status not in _JOB_STATUSES:
+        raise ValueError("invalid correction job status")
+    updated_at = claim.lease_until if retry_at is None else _aware_utc(retry_at, "retry_at")
+    bounded_error = None if last_error is None else str(last_error)[:_ERROR_LIMIT]
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET "
+            "status = COALESCE(%s, status), updated_at = %s, last_error = %s, "
+            "verification_failure_count = verification_failure_count + %s "
+            "WHERE id = %s AND attempt_count = %s "
+            "AND status IN ('applying','verifying','recalculating') RETURNING id",
+            (
+                status,
+                updated_at,
+                bounded_error,
+                1 if verification_increment else 0,
+                claim.job_id,
+                claim.attempt_count,
+            ),
+        )
+        if cur.fetchone() is None:
+            return False
+        _append_event_cur(cur, claim.job_id, phase, result, detail)
+        return True
+
+
+def _complete_record(
+    claim: _JobClaim,
+    record: Mapping[str, object],
+    *,
+    phase: str,
+    result: str,
+    detail: Mapping[str, object],
+) -> bool:
+    from . import db
+
+    completed = _json_list(claim.row.get("completed_operations", []), "completed_operations")
+    key = record.get("operation_key") or record.get("stage")
+    if any((item.get("operation_key") or item.get("stage")) == key for item in completed):
+        return True
+    completed.append(dict(record))
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET completed_operations = %s::jsonb, "
+            "updated_at = %s WHERE id = %s AND attempt_count = %s "
+            "AND status IN ('applying','verifying','recalculating') RETURNING id",
+            (
+                json.dumps(completed, separators=(",", ":")),
+                claim.lease_until,
+                claim.job_id,
+                claim.attempt_count,
+            ),
+        )
+        if cur.fetchone() is None:
+            return False
+        _append_event_cur(cur, claim.job_id, phase, result, detail)
+    claim.row["completed_operations"] = completed  # type: ignore[index]
+    return True
+
+
+def _claim_is_current(claim: _JobClaim) -> bool:
+    """Read the durable fence before starting another non-transactional step."""
+    from . import db
+
+    rows = db.query(
+        "SELECT 1 FROM attendance_correction_jobs WHERE id = %s "
+        "AND attempt_count = %s AND status IN "
+        "('applying','verifying','recalculating')",
+        (claim.job_id, claim.attempt_count),
+    )
+    return bool(rows)
+
+
+def _operation_source_state(
+    operation: CorrectionOperation,
+    *,
+    source_row: Mapping[str, object],
+    current_row: Mapping[str, object] | None,
+) -> Literal["before", "after", "source_changed"]:
+    if current_row is None:
+        return "after" if operation.kind == "delete" else "source_changed"
+    employee_id = operation.employee_odoo_id
+    source = _canonical_source_row(source_row, employee_id)
+    current = _canonical_source_row(current_row, employee_id)
+    if operation.kind != "delete":
+        desired = dict(source)
+        assert operation.after is not None
+        desired.update(operation.after)
+        if all(current[field] == desired[field] for field in _MUTABLE_FIELDS):
+            return "after"
+    exact_before = all(
+        current[field] == source[field]
+        for field in (
+            "odoo_attendance_id",
+            *_MUTABLE_FIELDS,
+            "odoo_write_date",
+        )
+    )
+    return "before" if exact_before else "source_changed"
+
+
+def _operation_effective_row(
+    operation: CorrectionOperation, source: Mapping[str, object]
+) -> dict[str, object] | None:
+    if operation.kind == "delete":
+        return None
+    result = dict(source)
+    assert operation.after is not None
+    result.update(operation.after)
+    return result
+
+
+def _source_row_by_id(
+    source_rows: Sequence[Mapping[str, object]], attendance_id: int
+) -> Mapping[str, object]:
+    matches = [row for row in source_rows if row["odoo_attendance_id"] == attendance_id]
+    if len(matches) != 1:
+        raise ValueError("operation source row is missing or duplicated")
+    return matches[0]
+
+
+def _is_open_producing(
+    operation: CorrectionOperation, source_rows: Sequence[Mapping[str, object]]
+) -> bool:
+    if operation.after is None:
+        return False
+    if "check_out_utc" in operation.after:
+        return operation.after["check_out_utc"] is None
+    if operation.attendance_id is None:
+        return False
+    source = _source_row_by_id(source_rows, operation.attendance_id)
+    return source["check_out_utc"] is None
+
+
+def _ordered_operations(
+    operations: Sequence[CorrectionOperation],
+    *,
+    source_rows: Sequence[Mapping[str, object]],
+) -> tuple[CorrectionOperation, ...]:
+    def phase(operation: CorrectionOperation) -> int:
+        if _is_open_producing(operation, source_rows):
+            return 4
+        if operation.kind == "update":
+            source = _source_row_by_id(source_rows, int(operation.attendance_id))
+            if source["check_out_utc"] is None:
+                return 0
+            return 1
+        if operation.kind == "create":
+            return 2
+        return 3
+
+    return tuple(
+        sorted(
+            operations,
+            key=lambda operation: (
+                phase(operation),
+                operation.employee_odoo_id,
+                operation.key,
+            ),
+        )
+    )
+
+
+def _preflight_operations(
+    facade,
+    operations: Sequence[CorrectionOperation],
+    source_rows: Sequence[Mapping[str, object]],
+) -> None:
+    """Prove the whole remaining preview is safe before its first new write.
+
+    Per-operation guards still run immediately before each mutation. This
+    additional pass prevents a row that was already stale farther down the plan
+    from being discovered only after an earlier row was changed.
+    """
+    operation_by_source = {
+        int(operation.attendance_id): operation
+        for operation in operations
+        if operation.attendance_id is not None
+    }
+    source_ids = {int(row["odoo_attendance_id"]) for row in source_rows}
+    for source in source_rows:
+        attendance_id = int(source["odoo_attendance_id"])
+        operation = operation_by_source.get(attendance_id)
+        current = _read_one(facade, attendance_id)
+        if operation is None:
+            if current is None:
+                raise _SourceChanged("unoperated source row disappeared")
+            normalized = _canonical_source_row(current, int(source["employee_odoo_id"]))
+            expected = _canonical_source_row(source, int(source["employee_odoo_id"]))
+            if any(
+                normalized[field] != expected[field]
+                for field in (
+                    "odoo_attendance_id",
+                    *_MUTABLE_FIELDS,
+                    "odoo_write_date",
+                )
+            ):
+                raise _SourceChanged("unoperated source row changed")
+            continue
+        if (
+            _operation_source_state(operation, source_row=source, current_row=current)
+            == "source_changed"
+        ):
+            raise _SourceChanged("source row changed after preview")
+
+    for operation in operations:
+        if operation.kind != "create":
+            continue
+        assert operation.after is not None
+        candidates = _create_candidates(facade, operation)
+        outsiders = [row for row in candidates if int(row["odoo_attendance_id"]) not in source_ids]
+        exact_outsiders = [row for row in outsiders if _exact_mutable(row, operation.after)]
+        if len(exact_outsiders) > 1 or any(row not in exact_outsiders for row in outsiders):
+            raise _SourceChanged("create interval has new conflicting Odoo state")
+        if exact_outsiders and len(candidates) != 1:
+            raise _SourceChanged("create interval has ambiguous Odoo state")
+
+
+def _read_one(facade, attendance_id: int) -> Mapping[str, object] | None:
+    rows = facade.fetch_attendance_rows_by_ids([attendance_id])
+    if len(rows) > 1:
+        raise _SourceChanged("duplicate source attendance identity")
+    return rows[0] if rows else None
+
+
+def _interval_overlaps(row: Mapping[str, object], start: datetime, end: datetime | None) -> bool:
+    row_start = _aware_utc(row["check_in_utc"], "check_in_utc")
+    row_end = _optional_aware_utc(row["check_out_utc"], "check_out_utc")
+    infinity = datetime.max.replace(tzinfo=UTC)
+    return row_start < (end or infinity) and (row_end or infinity) > start
+
+
+def _exact_mutable(row: Mapping[str, object], values: Mapping[str, object]) -> bool:
+    return all(row.get(field) == values[field] for field in _MUTABLE_FIELDS)
+
+
+def _create_candidates(facade, operation: CorrectionOperation) -> tuple[Mapping[str, object], ...]:
+    assert operation.after is not None
+    start = _aware_utc(operation.after["check_in_utc"], "check_in_utc")
+    end = _optional_aware_utc(operation.after["check_out_utc"], "check_out_utc")
+    rows = facade.fetch_employee_attendance_rows(operation.employee_odoo_id, start, end)
+    return tuple(row for row in rows if _interval_overlaps(row, start, end))
+
+
+def _perform_operation(
+    facade,
+    operation: CorrectionOperation,
+    source_rows: Sequence[Mapping[str, object]],
+) -> tuple[dict[str, object], str]:
+    """Apply or safely adopt one operation, returning its durable record."""
+    if operation.kind == "create":
+        assert operation.after is not None
+        candidates = _create_candidates(facade, operation)
+        exact = [row for row in candidates if _exact_mutable(row, operation.after)]
+        if len(exact) == 1 and len(candidates) == 1:
+            attendance_id = _positive_int(exact[0]["odoo_attendance_id"], "odoo_attendance_id")
+            return {
+                "operation_key": operation.key,
+                "kind": operation.kind,
+                "attendance_id": attendance_id,
+            }, "adopted"
+        if exact or candidates:
+            raise _SourceChanged("create interval overlaps changed Odoo state")
+        try:
+            attendance_id = facade.create_attendance_interval(
+                employee_odoo_id=operation.employee_odoo_id,
+                check_in_utc=operation.after["check_in_utc"],
+                check_out_utc=operation.after["check_out_utc"],
+                odoo_work_center_id=operation.after["odoo_work_center_id"],
+                odoo_department_id=operation.after["odoo_department_id"],
+            )
+        except Exception as error:  # noqa: BLE001 - ambiguous timeout needs reread
+            candidates = _create_candidates(facade, operation)
+            exact = [row for row in candidates if _exact_mutable(row, operation.after)]
+            if len(exact) == 1 and len(candidates) == 1:
+                return {
+                    "operation_key": operation.key,
+                    "kind": operation.kind,
+                    "attendance_id": _positive_int(
+                        exact[0]["odoo_attendance_id"], "odoo_attendance_id"
+                    ),
+                }, "adopted_timeout"
+            if exact or candidates:
+                raise _SourceChanged("create outcome is ambiguous") from error
+            raise _RecoverableWrite(str(error) or type(error).__name__) from error
+        confirmed = _read_one(facade, _positive_int(attendance_id, "attendance_id"))
+        if confirmed is None or not _exact_mutable(confirmed, operation.after):
+            raise _RecoverableWrite("created attendance is not yet exactly visible")
+        return {
+            "operation_key": operation.key,
+            "kind": operation.kind,
+            "attendance_id": int(attendance_id),
+        }, "confirmed"
+
+    assert operation.attendance_id is not None
+    source = _source_row_by_id(source_rows, operation.attendance_id)
+    current = _read_one(facade, operation.attendance_id)
+    state = _operation_source_state(operation, source_row=source, current_row=current)
+    if state == "after":
+        return {
+            "operation_key": operation.key,
+            "kind": operation.kind,
+            "attendance_id": operation.attendance_id,
+        }, "adopted"
+    if state != "before":
+        raise _SourceChanged("source row changed after preview")
+    try:
+        if operation.kind == "update":
+            assert operation.after is not None
+            facade.update_attendance_interval(operation.attendance_id, values=dict(operation.after))
+        else:
+            facade.delete_attendance_interval(operation.attendance_id)
+    except Exception as error:  # noqa: BLE001 - ambiguous timeout needs reread
+        current = _read_one(facade, operation.attendance_id)
+        state = _operation_source_state(operation, source_row=source, current_row=current)
+        if state == "after":
+            return {
+                "operation_key": operation.key,
+                "kind": operation.kind,
+                "attendance_id": operation.attendance_id,
+            }, "adopted_timeout"
+        if state == "source_changed":
+            raise _SourceChanged("Odoo write outcome conflicts with the plan") from error
+        raise _RecoverableWrite(str(error) or type(error).__name__) from error
+    current = _read_one(facade, operation.attendance_id)
+    if _operation_source_state(operation, source_row=source, current_row=current) != "after":
+        raise _RecoverableWrite("Odoo write was not exactly visible")
+    return {
+        "operation_key": operation.key,
+        "kind": operation.kind,
+        "attendance_id": operation.attendance_id,
+    }, "confirmed"
+
+
+def _expected_with_created_ids(
+    plan: CorrectionPlan,
+    completed: Sequence[Mapping[str, object]],
+) -> tuple[dict[str, object], ...]:
+    by_key = {
+        item.get("operation_key"): item
+        for item in completed
+        if item.get("operation_key") is not None
+    }
+    create_by_values: dict[tuple[object, ...], CorrectionOperation] = {}
+    for operation in plan.operations:
+        if operation.kind == "create":
+            assert operation.after is not None
+            create_by_values[tuple(operation.after[field] for field in _MUTABLE_FIELDS)] = operation
+    result: list[dict[str, object]] = []
+    for expected in plan.expected_intervals:
+        row = dict(expected)
+        if row["odoo_attendance_id"] is None:
+            values = tuple(row[field] for field in _MUTABLE_FIELDS)
+            operation = create_by_values.get(values)
+            record = by_key.get(operation.key if operation is not None else None)
+            if record is None or record.get("attendance_id") is None:
+                raise ValueError("created attendance id was not confirmed")
+            row["odoo_attendance_id"] = _positive_int(record["attendance_id"], "attendance_id")
+        result.append(row)
+    return tuple(result)
+
+
+def _verification_rows(
+    facade,
+    plans: Mapping[int, CorrectionPlan],
+    completed: Sequence[Mapping[str, object]],
+    start: datetime,
+    end: datetime | None,
+) -> tuple[dict[str, object], ...]:
+    verified: list[dict[str, object]] = []
+    for employee_id in sorted(plans):
+        expected = _expected_with_created_ids(plans[employee_id], completed)
+        verification_start = min((row["check_in_utc"] for row in expected), default=start)
+        expected_ends = [row["check_out_utc"] for row in expected]
+        verification_end = (
+            None
+            if any(value is None for value in expected_ends)
+            else max(expected_ends, default=end)
+        )
+        actual = facade.fetch_employee_attendance_rows(
+            employee_id, verification_start, verification_end
+        )
+        normalized_actual = tuple(
+            sorted(
+                (_canonical_source_row(row, employee_id) for row in actual),
+                key=lambda row: (row["check_in_utc"], row["odoo_attendance_id"]),
+            )
+        )
+        comparable_actual = tuple(
+            {
+                "odoo_attendance_id": row["odoo_attendance_id"],
+                **{field: row[field] for field in _MUTABLE_FIELDS},
+            }
+            for row in normalized_actual
+        )
+        comparable_expected = tuple(
+            sorted(
+                (
+                    {
+                        "odoo_attendance_id": row["odoo_attendance_id"],
+                        **{field: row[field] for field in _MUTABLE_FIELDS},
+                    }
+                    for row in expected
+                ),
+                key=lambda row: (row["check_in_utc"], row["odoo_attendance_id"]),
+            )
+        )
+        if comparable_actual != comparable_expected:
+            raise _SourceChanged("verified Odoo intervals do not match the plan")
+        verified.extend(normalized_actual)
+    return tuple(verified)
+
+
+def _touched_days(
+    source_rows: Mapping[int, Sequence[Mapping[str, object]]],
+    plans: Mapping[int, CorrectionPlan],
+) -> tuple[date, ...]:
+    from . import attendance_mirror
+
+    days: set[date] = set()
+    for rows in source_rows.values():
+        for row in rows:
+            days.update(
+                attendance_mirror.local_days_touched(row["check_in_utc"], row["check_out_utc"])
+            )
+    for plan in plans.values():
+        for row in plan.expected_intervals:
+            days.update(
+                attendance_mirror.local_days_touched(row["check_in_utc"], row["check_out_utc"])
+            )
+    return tuple(sorted(days))
+
+
+def _mirror_verified_rows(
+    claim: _JobClaim,
+    rows: Sequence[Mapping[str, object]],
+    source_rows: Mapping[int, Sequence[Mapping[str, object]]],
+    completed: Sequence[Mapping[str, object]],
+    *,
+    completed_at: datetime,
+) -> bool:
+    from . import attendance_mirror, db
+
+    # The facade normally includes display names. The mirror contract accepts
+    # nullable display values, so identifiers and exact interval fields remain
+    # authoritative when a test/minimal facade omits them.
+    mirror_rows = [
+        {
+            **row,
+            "employee_name": row.get("employee_name"),
+            "odoo_work_center_name": row.get("odoo_work_center_name"),
+            "odoo_department_name": row.get("odoo_department_name"),
+        }
+        for row in rows
+    ]
+    verified_ids = {int(row["odoo_attendance_id"]) for row in rows}
+    source_ids = {
+        int(row["odoo_attendance_id"])
+        for employee_rows in source_rows.values()
+        for row in employee_rows
+    }
+    deleted_ids = sorted(source_ids - verified_ids)
+    normalized = attendance_mirror._normalized_rows(mirror_rows)
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT status, attempt_count FROM attendance_correction_jobs WHERE id = %s FOR UPDATE",
+            (claim.job_id,),
+        )
+        owned = cur.fetchone()
+        if (
+            owned is None
+            or owned["status"] != "recalculating"
+            or int(owned["attempt_count"]) != claim.attempt_count
+        ):
+            return False
+        state = attendance_mirror._locked_sync_state(cur)
+        attendance_mirror._upsert_rows_cur(
+            cur,
+            normalized,
+            sync_completed_at=completed_at,
+            observed_at=completed_at,
+            baseline_completed=state["baseline_completed_at"] is not None,
+        )
+        if deleted_ids:
+            cur.execute(
+                "UPDATE odoo_attendance_mirror SET deleted_at = %s, last_seen_at = %s "
+                "WHERE odoo_attendance_id = ANY(%s) AND deleted_at IS NULL",
+                (completed_at, completed_at, deleted_ids),
+            )
+        next_completed = [dict(item) for item in completed]
+        next_completed.append({"stage": "mirror_complete"})
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET completed_operations = %s::jsonb, "
+            "updated_at = %s WHERE id = %s AND attempt_count = %s "
+            "AND status = 'recalculating' RETURNING id",
+            (
+                json.dumps(next_completed, separators=(",", ":")),
+                claim.lease_until,
+                claim.job_id,
+                claim.attempt_count,
+            ),
+        )
+        if cur.fetchone() is None:
+            raise RuntimeError("mirror completion fence changed")
+        _append_event_cur(
+            cur,
+            claim.job_id,
+            "mirror",
+            "complete",
+            _event_detail(
+                job_id=claim.job_id,
+                attendance_ids=sorted(int(item["odoo_attendance_id"]) for item in rows)[
+                    :_MAX_EVENT_IDS
+                ],
+            ),
+        )
+    claim.row["completed_operations"] = next_completed  # type: ignore[index]
+    return True
+
+
+def _enqueue_recalculation(
+    claim: _JobClaim,
+    days: Sequence[date],
+    completed: Sequence[Mapping[str, object]],
+    *,
+    requested_at: datetime,
+) -> bool:
+    """Fence, enqueue strict days, and record the stage in one transaction."""
+    from . import attendance_mirror, db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT status, attempt_count FROM attendance_correction_jobs WHERE id = %s FOR UPDATE",
+            (claim.job_id,),
+        )
+        owned = cur.fetchone()
+        if (
+            owned is None
+            or owned["status"] != "recalculating"
+            or int(owned["attempt_count"]) != claim.attempt_count
+        ):
+            return False
+        attendance_mirror._enqueue_recalc_cur(
+            cur,
+            days,
+            "attendance_correction_verified",
+            mark_strict=True,
+            requested_at=requested_at,
+        )
+        marker = {
+            "stage": "recalc_enqueued",
+            "recalc_ids": [day.isoformat() for day in days],
+        }
+        next_completed = [dict(item) for item in completed]
+        next_completed.append(marker)
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET completed_operations = %s::jsonb, "
+            "updated_at = %s WHERE id = %s AND attempt_count = %s "
+            "AND status = 'recalculating' RETURNING id",
+            (
+                json.dumps(next_completed, separators=(",", ":")),
+                claim.lease_until,
+                claim.job_id,
+                claim.attempt_count,
+            ),
+        )
+        if cur.fetchone() is None:
+            raise RuntimeError("recalculation enqueue fence changed")
+        _append_event_cur(
+            cur,
+            claim.job_id,
+            "recalculation",
+            "enqueued",
+            _event_detail(
+                job_id=claim.job_id,
+                recalc_ids=[day.isoformat() for day in days],
+            ),
+        )
+    claim.row["completed_operations"] = next_completed  # type: ignore[index]
+    return True
+
+
+def _recalc_complete(days: Sequence[date]) -> bool:
+    from . import db
+
+    if not days:
+        return True
+    rows = db.query(
+        "SELECT day, completed_at FROM attendance_recalc_queue WHERE day = ANY(%s)",
+        (list(days),),
+    )
+    return len(rows) == len(days) and all(row["completed_at"] is not None for row in rows)
+
+
+def _run_recalculation(days: Sequence[date]) -> bool:
+    from . import attendance_recalc
+
+    for _ in range(max(1, len(days))):
+        if _recalc_complete(days):
+            return True
+        result = attendance_recalc.process_next()
+        if result is None or result.status == "failed":
+            break
+    return _recalc_complete(days)
+
+
+def _refresh_after_correction(days: Sequence[date]) -> None:
+    from . import _http_cache, staffing
+
+    for day in days:
+        staffing.invalidate_schedule_cache(day)
+    _http_cache.invalidate_all_cache()
+
+
+def _complete_with_audit(
+    claim: _JobClaim,
+    *,
+    source_rows: Mapping[int, Sequence[Mapping[str, object]]],
+    plans: Mapping[int, CorrectionPlan],
+    completed: Sequence[Mapping[str, object]],
+    completed_at: datetime,
+) -> bool:
+    from . import db, inbox_log
+
+    operation_keys = [
+        str(item["operation_key"]).rsplit(":", 1)[-1]
+        for item in completed
+        if isinstance(item.get("operation_key"), str)
+    ]
+    before_ids = sorted(
+        int(row["odoo_attendance_id"]) for rows in source_rows.values() for row in rows
+    )
+    expected_ids = sorted(
+        int(row["odoo_attendance_id"])
+        for plan in plans.values()
+        for row in _expected_with_created_ids(plan, completed)
+    )
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT status, attempt_count, completed_operations FROM "
+            "attendance_correction_jobs WHERE id = %s FOR UPDATE",
+            (claim.job_id,),
+        )
+        locked = cur.fetchone()
+        if (
+            locked is None
+            or locked["status"] != "recalculating"
+            or int(locked["attempt_count"]) != claim.attempt_count
+        ):
+            return False
+        stages = _json_list(locked["completed_operations"], "completed_operations")
+        if any(item.get("stage") == "audit_complete" for item in stages):
+            return False
+        inbox_log.record_event_with_cursor(
+            cur,
+            item_kind="attendance_correction",
+            item_key=str(claim.row["item_key"]),
+            person_name=None,
+            category_label="Odoo attendance correction",
+            action="corrected_odoo_attendance",
+            outcome="Verified and recalculated",
+            actor_upn=claim.row.get("actor_email"),
+            actor_name=claim.row.get("actor_name"),
+            source="inbox",
+            reversible=False,
+            detail={
+                "job_id": claim.job_id,
+                "employee_ids": sorted(source_rows),
+                "before_attendance_ids": before_ids[:_MAX_EVENT_IDS],
+                "after_attendance_ids": expected_ids[:_MAX_EVENT_IDS],
+                "operation_keys": operation_keys[:_MAX_EVENT_IDS],
+            },
+            resolved_at=completed_at,
+        )
+        _append_event_cur(
+            cur,
+            claim.job_id,
+            "audit",
+            "complete",
+            _event_detail(
+                job_id=claim.job_id,
+                operation_keys=operation_keys[:_MAX_EVENT_IDS],
+            ),
+        )
+        stages.append({"stage": "audit_complete"})
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET status = 'complete', "
+            "completed_operations = %s::jsonb, completed_at = %s, updated_at = %s, "
+            "last_error = NULL WHERE id = %s AND attempt_count = %s "
+            "AND status = 'recalculating' RETURNING id",
+            (
+                json.dumps(stages, separators=(",", ":")),
+                completed_at,
+                completed_at,
+                claim.job_id,
+                claim.attempt_count,
+            ),
+        )
+        if cur.fetchone() is None:
+            raise RuntimeError("correction completion fence changed during audit")
+        _append_event_cur(
+            cur,
+            claim.job_id,
+            "completion",
+            "complete",
+            _event_detail(
+                job_id=claim.job_id,
+                operation_keys=operation_keys[:_MAX_EVENT_IDS],
+                attendance_ids=expected_ids[:_MAX_EVENT_IDS],
+            ),
+        )
+    return True
+
+
+def _retry_at(attempt_count: int, now: datetime) -> datetime:
+    seconds = min(15 * (2 ** min(max(attempt_count - 1, 0), 10)), 900)
+    return now + timedelta(seconds=seconds)
+
+
+def _validate_applying_targets(
+    row: Mapping[str, object], employee_ids: tuple[int, ...], facade
+) -> None:
+    try:
+        mapped_id, _department_id = _resolve_mapping(
+            _bounded_text(
+                row["target_work_center_name"],
+                "target_work_center_name",
+                _TEXT_LIMIT,
+            ),
+            facade,
+        )
+    except ValueError as error:
+        raise _SourceChanged(str(error)) from error
+    if mapped_id != _positive_int(row["target_odoo_work_center_id"], "target_odoo_work_center_id"):
+        raise _SourceChanged("saved work-center mapping changed after preview")
+    roster = facade.fetch_employee_statuses()
+    active_ids = {
+        int(item["id"])
+        for item in roster
+        if isinstance(item, Mapping)
+        and isinstance(item.get("id"), int)
+        and not isinstance(item.get("id"), bool)
+        and item.get("active") is True
+    }
+    if set(employee_ids) - active_ids:
+        raise _SourceChanged("selected employee became inactive after preview")
+
+
+def _result(
+    claim: _JobClaim,
+    status: str,
+    *,
+    error: str | None = None,
+    retry_at: datetime | None = None,
+) -> CorrectionJobResult:
+    try:
+        completed = _json_list(claim.row.get("completed_operations", []), "completed_operations")
+    except (TypeError, ValueError):
+        completed = []
+    return CorrectionJobResult(
+        job_id=claim.job_id,
+        status=status,
+        attempt_count=claim.attempt_count,
+        error=error,
+        retry_at=retry_at,
+        completed_operation_count=sum(
+            1 for item in completed if item.get("operation_key") is not None
+        ),
+    )
+
+
+def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResult:
+    now = _aware_utc(now_utc, "now_utc")
+    row = claim.row
+    employee_ids = _employee_ids(_decode_json_column(row["employee_odoo_ids"], "employee_odoo_ids"))
+    try:
+        source_rows = _source_rows_from_json(row["source_snapshot"], employee_ids)
+        plans = _plans_from_json(row["operations"], employee_ids)
+        completed = _validated_completed_records(row.get("completed_operations", []), plans)
+        for employee_id in employee_ids:
+            plan_versions = {
+                (item.attendance_id, item.write_date) for item in plans[employee_id].source_versions
+            }
+            source_versions = {
+                (int(item["odoo_attendance_id"]), item["odoo_write_date"])
+                for item in source_rows[employee_id]
+            }
+            if plan_versions != source_versions:
+                raise ValueError("source snapshot does not match schema-v2 plan")
+    except Exception as error:  # noqa: BLE001 - corrupt durable plans fail closed
+        _transition(
+            claim,
+            status="failed",
+            phase="planning",
+            result="invalid_plan",
+            detail=_event_detail(job_id=claim.job_id, reason_code="invalid_plan"),
+            last_error="fresh preview required: invalid saved plan",
+        )
+        return _result(claim, "failed", error=str(error))
+
+    facade = _default_facade()
+    completed_keys = {
+        item["operation_key"] for item in completed if isinstance(item.get("operation_key"), str)
+    }
+
+    if row["status"] == "applying":
+        try:
+            _validate_applying_targets(row, employee_ids, facade)
+        except _SourceChanged as error:
+            _transition(
+                claim,
+                status="failed",
+                phase="applying",
+                result="source_changed",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="mapping_or_employee_changed",
+                ),
+                last_error="source_changed: fresh preview required",
+            )
+            return _result(claim, "failed", error=str(error))
+        except Exception as error:  # noqa: BLE001 - target read is retryable
+            retry_at = _retry_at(claim.attempt_count, now)
+            _transition(
+                claim,
+                phase="applying",
+                result="odoo_failure",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="target_validation_unavailable",
+                ),
+                last_error=str(error),
+                retry_at=retry_at,
+            )
+            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+        all_operations: list[CorrectionOperation] = []
+        for employee_id in employee_ids:
+            all_operations.extend(
+                _ordered_operations(
+                    plans[employee_id].operations,
+                    source_rows=source_rows[employee_id],
+                )
+            )
+        # Re-sort across people by the same Odoo-safe phase while preserving
+        # independence. This keeps every open-producing operation last.
+        all_operations = list(
+            _ordered_operations(
+                all_operations,
+                source_rows=tuple(
+                    source for employee_id in employee_ids for source in source_rows[employee_id]
+                ),
+            )
+        )
+        try:
+            _preflight_operations(
+                facade,
+                all_operations,
+                tuple(
+                    source for employee_id in employee_ids for source in source_rows[employee_id]
+                ),
+            )
+        except _SourceChanged as error:
+            _transition(
+                claim,
+                status="failed",
+                phase="applying",
+                result="source_changed",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="preflight_source_changed",
+                ),
+                last_error="source_changed: fresh preview required",
+            )
+            return _result(claim, "failed", error=str(error))
+        except Exception as error:  # noqa: BLE001 - preflight read is retryable
+            retry_at = _retry_at(claim.attempt_count, now)
+            _transition(
+                claim,
+                phase="applying",
+                result="odoo_failure",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="preflight_read_unavailable",
+                ),
+                last_error=str(error),
+                retry_at=retry_at,
+            )
+            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+        for operation in all_operations:
+            if operation.key in completed_keys:
+                continue
+            if not _claim_is_current(claim):
+                return _result(claim, "superseded")
+            try:
+                record, confirmation = _perform_operation(
+                    facade, operation, source_rows[operation.employee_odoo_id]
+                )
+            except _SourceChanged as error:
+                _transition(
+                    claim,
+                    status="failed",
+                    phase="applying",
+                    result="source_changed",
+                    detail=_event_detail(
+                        job_id=claim.job_id,
+                        operation_key=operation.key,
+                        operation_kind=operation.kind,
+                        employee_odoo_id=operation.employee_odoo_id,
+                        reason_code="fresh_preview_required",
+                    ),
+                    last_error="source_changed: fresh preview required",
+                )
+                return _result(claim, "failed", error=str(error))
+            except _RecoverableWrite as error:
+                retry_at = _retry_at(claim.attempt_count, now)
+                _transition(
+                    claim,
+                    phase="applying",
+                    result="odoo_failure",
+                    detail=_event_detail(
+                        job_id=claim.job_id,
+                        operation_key=operation.key,
+                        operation_kind=operation.kind,
+                        employee_odoo_id=operation.employee_odoo_id,
+                        reason_code="recoverable_odoo_failure",
+                    ),
+                    last_error=str(error),
+                    retry_at=retry_at,
+                )
+                return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+            except Exception as error:  # noqa: BLE001 - source reads can fail too
+                retry_at = _retry_at(claim.attempt_count, now)
+                _transition(
+                    claim,
+                    phase="applying",
+                    result="odoo_failure",
+                    detail=_event_detail(
+                        job_id=claim.job_id,
+                        operation_key=operation.key,
+                        operation_kind=operation.kind,
+                        employee_odoo_id=operation.employee_odoo_id,
+                        reason_code="odoo_read_unavailable",
+                    ),
+                    last_error=str(error),
+                    retry_at=retry_at,
+                )
+                return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+            if not _complete_record(
+                claim,
+                record,
+                phase="applying",
+                result=confirmation,
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    operation_key=operation.key,
+                    operation_kind=operation.kind,
+                    attendance_id=record["attendance_id"],
+                    employee_odoo_id=operation.employee_odoo_id,
+                ),
+            ):
+                return _result(claim, "superseded")
+            completed.append(record)
+            completed_keys.add(operation.key)
+        if not _transition(
+            claim,
+            status="verifying",
+            phase="applying",
+            result="operations_complete",
+            detail=_event_detail(
+                job_id=claim.job_id,
+                operation_keys=sorted(completed_keys)[:_MAX_EVENT_IDS],
+            ),
+        ):
+            return _result(claim, "superseded")
+        row["status"] = "verifying"
+
+    if row["status"] == "verifying":
+        try:
+            verified = _verification_rows(
+                facade,
+                plans,
+                completed,
+                _aware_utc(row["start_utc"], "start_utc"),
+                _optional_aware_utc(row.get("end_utc"), "end_utc"),
+            )
+        except _SourceChanged as error:  # exact mismatch is terminal
+            _transition(
+                claim,
+                status="failed",
+                phase="verifying",
+                result="mismatch",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="verified_intervals_mismatch",
+                ),
+                last_error="verification failed: fresh preview required",
+                verification_increment=True,
+            )
+            return _result(claim, "failed", error=str(error))
+        except Exception as error:  # noqa: BLE001 - verification read is retryable
+            retry_at = _retry_at(claim.attempt_count, now)
+            _transition(
+                claim,
+                phase="verifying",
+                result="odoo_failure",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="verification_read_unavailable",
+                ),
+                last_error=str(error),
+                retry_at=retry_at,
+            )
+            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+        if not _transition(
+            claim,
+            status="recalculating",
+            phase="verifying",
+            result="verified",
+            detail=_event_detail(
+                job_id=claim.job_id,
+                attendance_ids=sorted(int(item["odoo_attendance_id"]) for item in verified)[
+                    :_MAX_EVENT_IDS
+                ],
+            ),
+        ):
+            return _result(claim, "superseded")
+        row["status"] = "recalculating"
+    else:
+        # A durable recalculation resume re-reads exact Odoo state but never
+        # replays writes. This also supplies the rows needed for mirror repair.
+        try:
+            verified = _verification_rows(
+                facade,
+                plans,
+                completed,
+                _aware_utc(row["start_utc"], "start_utc"),
+                _optional_aware_utc(row.get("end_utc"), "end_utc"),
+            )
+        except _SourceChanged as error:
+            _transition(
+                claim,
+                status="failed",
+                phase="verifying",
+                result="mismatch",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="verified_intervals_changed",
+                ),
+                last_error="verification changed: fresh preview required",
+                verification_increment=True,
+            )
+            return _result(claim, "failed", error=str(error))
+        except Exception as error:  # noqa: BLE001 - verification read is retryable
+            retry_at = _retry_at(claim.attempt_count, now)
+            _transition(
+                claim,
+                phase="verifying",
+                result="odoo_failure",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="verification_read_unavailable",
+                ),
+                last_error=str(error),
+                retry_at=retry_at,
+            )
+            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+
+    stages = {str(item["stage"]) for item in completed if isinstance(item.get("stage"), str)}
+    days = _touched_days(source_rows, plans)
+    if "mirror_complete" not in stages:
+        try:
+            mirror_complete = _mirror_verified_rows(
+                claim,
+                verified,
+                source_rows,
+                completed,
+                completed_at=now,
+            )
+        except Exception as error:  # noqa: BLE001 - retry downstream only
+            retry_at = _retry_at(claim.attempt_count, now)
+            _transition(
+                claim,
+                phase="mirror",
+                result="failed",
+                detail=_event_detail(job_id=claim.job_id, reason_code="mirror_refresh_failed"),
+                last_error=str(error),
+                retry_at=retry_at,
+            )
+            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+        if not mirror_complete:
+            return _result(claim, "superseded")
+        marker = {"stage": "mirror_complete"}
+        completed.append(marker)
+        stages.add("mirror_complete")
+
+    if "recalc_enqueued" not in stages:
+        try:
+            enqueued = _enqueue_recalculation(
+                claim,
+                days,
+                completed,
+                requested_at=now,
+            )
+        except Exception as error:  # noqa: BLE001 - durable enqueue is retryable
+            retry_at = _retry_at(claim.attempt_count, now)
+            _transition(
+                claim,
+                phase="recalculation",
+                result="failed",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="recalculation_enqueue_failed",
+                ),
+                last_error=str(error),
+                retry_at=retry_at,
+            )
+            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+        if not enqueued:
+            return _result(claim, "superseded")
+        marker = {"stage": "recalc_enqueued", "recalc_ids": [day.isoformat() for day in days]}
+        completed.append(marker)
+        stages.add("recalc_enqueued")
+
+    try:
+        recalculated = _run_recalculation(days)
+    except Exception as error:  # noqa: BLE001 - production source retry
+        recalculated = False
+        recalc_error = str(error)
+    else:
+        recalc_error = "targeted recalculation is still pending"
+    if not recalculated:
+        retry_at = _retry_at(claim.attempt_count, now)
+        _transition(
+            claim,
+            phase="recalculation",
+            result="failed",
+            detail=_event_detail(
+                job_id=claim.job_id,
+                reason_code="recalculation_pending",
+            ),
+            last_error=recalc_error,
+            retry_at=retry_at,
+        )
+        return _result(claim, "recoverable", error=recalc_error, retry_at=retry_at)
+    if "recalc_complete" not in stages:
+        marker = {"stage": "recalc_complete"}
+        if not _complete_record(
+            claim,
+            marker,
+            phase="recalculation",
+            result="complete",
+            detail=_event_detail(
+                job_id=claim.job_id,
+                recalc_ids=[day.isoformat() for day in days],
+            ),
+        ):
+            return _result(claim, "superseded")
+        completed.append(marker)
+        stages.add("recalc_complete")
+
+    if "cache_refreshed" not in stages:
+        if not _claim_is_current(claim):
+            return _result(claim, "superseded")
+        try:
+            _refresh_after_correction(days)
+        except Exception as error:  # noqa: BLE001 - do not audit/complete
+            retry_at = _retry_at(claim.attempt_count, now)
+            _transition(
+                claim,
+                phase="cache",
+                result="failed",
+                detail=_event_detail(job_id=claim.job_id, reason_code="cache_refresh_failed"),
+                last_error=str(error),
+                retry_at=retry_at,
+            )
+            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+        marker = {"stage": "cache_refreshed"}
+        if not _complete_record(
+            claim,
+            marker,
+            phase="cache",
+            result="complete",
+            detail=_event_detail(job_id=claim.job_id),
+        ):
+            return _result(claim, "superseded")
+        completed.append(marker)
+
+    try:
+        complete = _complete_with_audit(
+            claim,
+            source_rows=source_rows,
+            plans=plans,
+            completed=completed,
+            completed_at=now,
+        )
+    except Exception as error:  # audit failure keeps durable job incomplete
+        retry_at = _retry_at(claim.attempt_count, now)
+        _transition(
+            claim,
+            phase="audit",
+            result="failed",
+            detail=_event_detail(job_id=claim.job_id, reason_code="audit_write_failed"),
+            last_error=str(error),
+            retry_at=retry_at,
+        )
+        return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+    if not complete:
+        return _result(claim, "superseded")
+    return _result(claim, "complete")
+
+
+def process_job(job_id: int) -> CorrectionJobResult:
+    """Claim and advance one exact job without holding DB locks over I/O."""
+    now = datetime.now(UTC)
+    claim = _claim_job(job_id=_positive_int(job_id, "job_id"), now_utc=now)
+    if claim is None:
+        from . import db
+
+        rows = db.query(
+            "SELECT id, status, attempt_count, last_error, completed_operations "
+            "FROM attendance_correction_jobs WHERE id = %s",
+            (job_id,),
+        )
+        if not rows:
+            raise ValueError("correction job does not exist")
+        row = rows[0]
+        return CorrectionJobResult(
+            job_id=int(row["id"]),
+            status=(row["status"] if row["status"] in ("complete", "failed") else "superseded"),
+            attempt_count=int(row.get("attempt_count") or 0),
+            error=row.get("last_error"),
+            completed_operation_count=sum(
+                1
+                for item in _json_list(row.get("completed_operations", []), "completed_operations")
+                if item.get("operation_key") is not None
+            ),
+        )
+    return _process_claim(claim, now_utc=now)
+
+
+def process_next() -> CorrectionJobResult | None:
+    """Claim the oldest eligible correction and advance at most one job."""
+    now = datetime.now(UTC)
+    claim = _claim_job(job_id=None, now_utc=now)
+    if claim is None:
+        return None
+    return _process_claim(claim, now_utc=now)
+
+
+__all__ = [
+    "CorrectionJobResult",
+    "CorrectionOperation",
+    "CorrectionPlan",
+    "CorrectionPreview",
+    "SourceVersion",
+    "correction_preview",
+    "create_job",
+    "plan_correction",
+    "plan_from_json",
+    "plan_to_json",
+    "process_job",
+    "process_next",
+]
