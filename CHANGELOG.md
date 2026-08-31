@@ -16,6 +16,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Plant Manager can now save a manager's time fix, finish it safely after a connection problem, and check Odoo before calling it done.** Production is counted again only after the fix is confirmed.
 
+### Finished work stays matched with Odoo
+
+- **The work helpers now check off the matching 2s improvement after a change is finished, checked, and saved.** They stop and ask for help if they cannot find or confirm one clear match.
+
+### Odoo completion rule build plan
+
+- **A step-by-step build plan is ready so the work helpers can check off the matching 2s improvement after finished work.** They will stop and ask for help when there is not one clear match. Nothing in the app has changed yet.
+
 ### Keep correction plans locked and exact
 
 - **Plant Manager now keeps time-fix plans locked after they are made.** It preserves outside time records and rejects a saved plan if any step no longer matches.

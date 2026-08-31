@@ -6,6 +6,17 @@
 - If any planned work is deferred, incomplete, or unverified, keep the task active and state that it is partially complete.
 - Continue routine implementation, commits, and pushes without requesting confirmation; surface only genuine blockers, failed verification, or choices that materially change scope.
 
+# Odoo 2s Improvement completion tracking
+
+- This workflow applies when a user-requested task corresponds to an existing row in Odoo's **2s Improvement Reference Data** table.
+- A plan is intended work only. Do not update Odoo until every scoped implementation item is complete, required validation passes, and the implementation commits are pushed to `origin/main`.
+- Locate exactly one matching existing improvement. Prefer an Odoo ID or Plant Manager Source ID supplied with the task; otherwise require one clear title-and-description match. Never create a row or guess between matches.
+- If Source is `GPI Plant Manager` and Source ID is `GPI-PM-FB-<positive id>`, complete the authoritative local feedback through Plant Manager's authenticated admin lifecycle with the current actor and a short plain-language resolution note. Wait for its existing mirror to synchronize; do not edit only the Odoo mirror.
+- For an existing row not owned by Plant Manager, use the authenticated Odoo completion workflow to set Status to `Completed`. Fill only completion fields required by that workflow, using the current date, authenticated actor, and a short plain-language result. Do not change unrelated fields.
+- Read the same Odoo row back and verify Status is `Completed`. State the verified Odoo result in the final handoff.
+- If there is no single match, access is unavailable, a write or synchronization fails, or the readback is not `Completed`, leave Odoo unchanged where possible, keep the task active or partially complete, and report the blocker to Dale without exposing sensitive details.
+- Never create, delete, archive, merge, or otherwise rewrite Odoo improvement rows as part of completion tracking.
+
 # What's New patch notes
 
 - For every push to `main`, write any new `CHANGELOG.md` / What's New patch
