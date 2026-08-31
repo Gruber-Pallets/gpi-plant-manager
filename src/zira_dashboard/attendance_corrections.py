@@ -7,6 +7,9 @@ apply and verify later.
 
 from __future__ import annotations
 
+import base64
+import binascii
+from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -21,9 +24,14 @@ from typing import Literal, TypeAlias
 OperationKind: TypeAlias = Literal["create", "update", "delete"]
 JSONValue: TypeAlias = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 
-_SCHEMA_VERSION = 1
-_KEY_PREFIX = "attendance-correction-v1:"
-_KEY_PATTERN = re.compile(r"^attendance-correction-v1:[0-9a-f]{64}$")
+_SCHEMA_VERSION = 2
+_KEY_PREFIX = "attendance-correction-v2:"
+_KEY_PATTERN = re.compile(
+    r"^attendance-correction-v2:(0|[1-9][0-9]*):"
+    r"([A-Za-z0-9_-]+):([0-9a-f]{64})$"
+)
+_INTEGRITY_PREFIX = "attendance-correction-plan-v1:"
+_INTEGRITY_PATTERN = re.compile(r"^attendance-correction-plan-v1:[0-9a-f]{64}$")
 _UTC_TEXT_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?Z$")
 _KINDS = frozenset(("create", "update", "delete"))
 _MUTABLE_FIELDS = (
@@ -59,7 +67,13 @@ class _FrozenMapping(Mapping[str, object]):
             if not isinstance(key, str):
                 raise TypeError("mapping keys must be text")
             normalized[key] = _freeze_value(values[key])
-        self._values = MappingProxyType(normalized)
+        object.__setattr__(self, "_values", MappingProxyType(normalized))
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("frozen mapping values cannot be reassigned")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("frozen mapping values cannot be deleted")
 
     def __getitem__(self, key: str) -> object:
         return self._values[key]
@@ -378,13 +392,15 @@ def _target_piece(
     end: datetime | None,
     work_center_id: int,
     department_id: int | None,
+    *,
+    reuse_source_id: bool,
 ) -> _Piece:
     return _Piece(
         start=start,
         end=end,
         work_center_id=work_center_id,
         department_id=department_id,
-        attendance_id=source.attendance_id if source is not None else None,
+        attendance_id=(source.attendance_id if source is not None and reuse_source_id else None),
         source=source,
         target=True,
     )
@@ -396,15 +412,22 @@ def _closed_pieces_and_groups(
     end: datetime,
     work_center_id: int,
     department_id: int | None,
-) -> tuple[list[_Piece], list[tuple[_SourceRow, tuple[_SourceRow, ...], list[_Piece]]]]:
+) -> tuple[list[_Piece], frozenset[int]]:
     overlaps = [
         item for item in sources if item.start < end and (item.end is None or item.end > start)
     ]
     if not overlaps:
         return [
             *map(_untouched_piece, sources),
-            _target_piece(None, start, end, work_center_id, department_id),
-        ], []
+            _target_piece(
+                None,
+                start,
+                end,
+                work_center_id,
+                department_id,
+                reuse_source_id=False,
+            ),
+        ], frozenset()
 
     grouped: list[list[_SourceRow]] = []
     for item in overlaps:
@@ -414,14 +437,18 @@ def _closed_pieces_and_groups(
             grouped.append([item])
     affected_ids = {item.attendance_id for item in overlaps}
     pieces = [_untouched_piece(item) for item in sources if item.attendance_id not in affected_ids]
-    result_groups: list[tuple[_SourceRow, tuple[_SourceRow, ...], list[_Piece]]] = []
     for group in grouped:
         first = group[0]
         last = group[-1]
         target_start = max(start, first.start)
         last_end = last.end if last.end is not None else end
         target_end = min(end, last_end)
-        reuse = first
+        fully_covered = [
+            item
+            for item in group
+            if item.start >= target_start and item.end is not None and item.end <= target_end
+        ]
+        reuse = fully_covered[0] if fully_covered else None
         shoulders: list[_Piece] = []
         if first.start < target_start:
             shoulders.append(
@@ -431,11 +458,14 @@ def _closed_pieces_and_groups(
                     end=target_start,
                     work_center_id=first.work_center_id,
                     department_id=first.department_id,
-                    attendance_id=None,
+                    attendance_id=first.attendance_id,
                     target=False,
                 )
             )
         if last.end is None or last.end > target_end:
+            left_already_reused = (
+                first.attendance_id == last.attendance_id and first.start < target_start
+            )
             shoulders.append(
                 _piece_from_source(
                     last,
@@ -443,22 +473,22 @@ def _closed_pieces_and_groups(
                     end=last.end,
                     work_center_id=last.work_center_id,
                     department_id=last.department_id,
-                    attendance_id=None,
+                    attendance_id=(None if left_already_reused else last.attendance_id),
                     target=False,
                 )
             )
         pieces.extend(shoulders)
         pieces.append(
             _target_piece(
-                reuse,
+                reuse if reuse is not None else first,
                 target_start,
                 target_end,
                 work_center_id,
                 department_id,
+                reuse_source_id=reuse is not None,
             )
         )
-        result_groups.append((reuse, tuple(group), shoulders))
-    return pieces, result_groups
+    return pieces, frozenset(affected_ids)
 
 
 def _open_pieces_and_groups(
@@ -466,31 +496,49 @@ def _open_pieces_and_groups(
     start: datetime,
     work_center_id: int,
     department_id: int | None,
-) -> tuple[list[_Piece], list[tuple[_SourceRow, tuple[_SourceRow, ...], list[_Piece]]]]:
+) -> tuple[list[_Piece], frozenset[int]]:
     affected = [item for item in sources if item.end is None or item.end > start]
     unaffected = [item for item in sources if item.end is not None and item.end <= start]
     if not affected:
         return [
             *map(_untouched_piece, sources),
-            _target_piece(None, start, None, work_center_id, department_id),
-        ], []
-    reuse = affected[0]
+            _target_piece(
+                None,
+                start,
+                None,
+                work_center_id,
+                department_id,
+                reuse_source_id=False,
+            ),
+        ], frozenset()
+    boundary = affected[0] if affected[0].start < start else None
+    fully_covered = [item for item in affected if item.start >= start]
+    reuse = fully_covered[0] if fully_covered else None
     shoulders: list[_Piece] = []
-    if reuse.start < start:
+    if boundary is not None:
         shoulders.append(
             _piece_from_source(
-                reuse,
-                start=reuse.start,
+                boundary,
+                start=boundary.start,
                 end=start,
-                work_center_id=reuse.work_center_id,
-                department_id=reuse.department_id,
-                attendance_id=None,
+                work_center_id=boundary.work_center_id,
+                department_id=boundary.department_id,
+                attendance_id=boundary.attendance_id,
                 target=False,
             )
         )
     pieces = [*map(_untouched_piece, unaffected), *shoulders]
-    pieces.append(_target_piece(reuse, start, None, work_center_id, department_id))
-    return pieces, [(reuse, tuple(affected), shoulders)]
+    pieces.append(
+        _target_piece(
+            reuse if reuse is not None else boundary,
+            start,
+            None,
+            work_center_id,
+            department_id,
+            reuse_source_id=reuse is not None,
+        )
+    )
+    return pieces, frozenset(item.attendance_id for item in affected)
 
 
 def _mutable_values(
@@ -531,7 +579,7 @@ def _piece_mutable_values(piece: _Piece, employee_id: int) -> dict[str, object]:
 
 
 def _expected_mapping(piece: _Piece, employee_id: int) -> dict[str, object]:
-    if piece.source is None:
+    if piece.source is None or (piece.target and piece.attendance_id is None):
         values: dict[str, object] = {}
     else:
         values = {
@@ -559,6 +607,108 @@ def _operation_key_value(value: object) -> object:
     return value
 
 
+def _request_identity(
+    *,
+    start: datetime,
+    end: datetime | None,
+    work_center_id: int,
+    department_id: int | None,
+) -> dict[str, object]:
+    return {
+        "start_utc": start,
+        "end_utc": end,
+        "odoo_work_center_id": work_center_id,
+        "odoo_department_id": department_id,
+    }
+
+
+def _request_token(request: Mapping[str, object]) -> str:
+    encoded = json.dumps(
+        _operation_key_value(request),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+
+def _decode_request_token(token: str) -> Mapping[str, object]:
+    def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate correction request key: {key}")
+            result[key] = value
+        return result
+
+    try:
+        padding = "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(token + padding).decode("utf-8")
+        decoded = json.loads(raw, object_pairs_hook=_unique_object)
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("operation key request identity is malformed") from exc
+    if not isinstance(decoded, Mapping):
+        raise ValueError("operation key request identity must be an object")
+    _exact_keys(
+        decoded,
+        frozenset(
+            (
+                "start_utc",
+                "end_utc",
+                "odoo_work_center_id",
+                "odoo_department_id",
+            )
+        ),
+        "operation key request identity",
+    )
+    start = _parse_utc_text(decoded["start_utc"], "request start_utc")
+    end_value = decoded["end_utc"]
+    end = None if end_value is None else _parse_utc_text(end_value, "request end_utc")
+    if end is not None and end <= start:
+        raise ValueError("operation key request interval is invalid")
+    request = _request_identity(
+        start=start,
+        end=end,
+        work_center_id=_positive_int(decoded["odoo_work_center_id"], "odoo_work_center_id"),
+        department_id=_optional_positive_int(decoded["odoo_department_id"], "odoo_department_id"),
+    )
+    if _request_token(request) != token:
+        raise ValueError("operation key request identity is not canonical")
+    return _FrozenMapping(request)
+
+
+def _operation_key_from_values(
+    *,
+    kind: OperationKind,
+    attendance_id: int | None,
+    employee_id: int,
+    before: Mapping[str, object] | None,
+    after: Mapping[str, object] | None,
+    source_id: int,
+    source_write_date: datetime | None,
+    request: Mapping[str, object],
+) -> str:
+    request_token = _request_token(request)
+    identity = {
+        "contract": "attendance-correction-operation-v2",
+        "employee_odoo_id": employee_id,
+        "source_attendance_id": source_id,
+        "source_write_date": source_write_date,
+        "kind": kind,
+        "attendance_id": attendance_id,
+        "before": before,
+        "after": after,
+        "request": request,
+    }
+    encoded = json.dumps(
+        _operation_key_value(identity),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return f"{_KEY_PREFIX}{source_id}:{request_token}:{hashlib.sha256(encoded).hexdigest()}"
+
+
 def _operation_key(
     pending: _PendingOperation,
     *,
@@ -568,63 +718,69 @@ def _operation_key(
     desired_department_id: int | None,
 ) -> str:
     source = pending.source
-    identity = {
-        "contract": "attendance-correction-operation-v1",
-        "employee_odoo_id": pending.employee_id,
-        "requested_start_utc": request_start,
-        "requested_end_utc": request_end,
-        "source_attendance_id": source.attendance_id if source is not None else None,
-        "source_write_date": source.write_date if source is not None else None,
-        "kind": pending.kind,
-        "attendance_id": pending.attendance_id,
-        "desired_work_center_id": desired_work_center_id,
-        "desired_department_id": desired_department_id,
-        "before": pending.before,
-        "after": pending.after,
-    }
-    encoded = json.dumps(
-        _operation_key_value(identity),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return _KEY_PREFIX + hashlib.sha256(encoded).hexdigest()
+    return _operation_key_from_values(
+        kind=pending.kind,
+        attendance_id=pending.attendance_id,
+        employee_id=pending.employee_id,
+        before=pending.before,
+        after=pending.after,
+        source_id=source.attendance_id if source is not None else 0,
+        source_write_date=source.write_date if source is not None else None,
+        request=_request_identity(
+            start=request_start,
+            end=request_end,
+            work_center_id=desired_work_center_id,
+            department_id=desired_department_id,
+        ),
+    )
 
 
-def _operations_for_groups(
+def _validate_operation_key(
+    operation: CorrectionOperation,
+    versions_by_id: Mapping[int, SourceVersion],
+) -> Mapping[str, object]:
+    match = _KEY_PATTERN.fullmatch(operation.key)
+    if match is None:
+        raise ValueError("operation key is not a canonical correction key")
+    source_id = int(match.group(1))
+    request = _decode_request_token(match.group(2))
+    if operation.kind in {"update", "delete"}:
+        if source_id != operation.attendance_id:
+            raise ValueError("operation key source does not match attendance id")
+    source_version = versions_by_id.get(source_id) if source_id else None
+    if source_id and source_version is None:
+        raise ValueError("operation key references an unknown source version")
+    expected = _operation_key_from_values(
+        kind=operation.kind,
+        attendance_id=operation.attendance_id,
+        employee_id=operation.employee_odoo_id,
+        before=operation.before,
+        after=operation.after,
+        source_id=source_id,
+        source_write_date=(source_version.write_date if source_version is not None else None),
+        request=request,
+    )
+    if operation.key != expected:
+        raise ValueError("operation key does not match canonical identity material")
+    return request
+
+
+def _operations_for_pieces(
     *,
+    sources: tuple[_SourceRow, ...],
     pieces: list[_Piece],
-    groups: list[tuple[_SourceRow, tuple[_SourceRow, ...], list[_Piece]]],
+    affected_ids: frozenset[int],
     employee_id: int,
 ) -> list[_PendingOperation]:
     pending: list[_PendingOperation] = []
-    group_sources = {
-        item.attendance_id for _reuse, sources, _shoulders in groups for item in sources
+    pieces_by_id = {
+        piece.attendance_id: piece for piece in pieces if piece.attendance_id is not None
     }
-    for reuse, sources, shoulders in groups:
-        target = next(
-            piece for piece in pieces if piece.target and piece.attendance_id == reuse.attendance_id
-        )
-        before_values = _source_mutable_values(reuse)
-        target_values = _piece_mutable_values(target, employee_id)
-        changed = tuple(
-            field for field in _MUTABLE_FIELDS if before_values[field] != target_values[field]
-        )
-        if changed:
-            pending.append(
-                _PendingOperation(
-                    kind="update",
-                    attendance_id=reuse.attendance_id,
-                    employee_id=employee_id,
-                    before={field: before_values[field] for field in changed},
-                    after={field: target_values[field] for field in changed},
-                    source=reuse,
-                    effective_start=target.start,
-                )
-            )
-        for source in sources:
-            if source.attendance_id == reuse.attendance_id:
-                continue
+    for source in sources:
+        if source.attendance_id not in affected_ids:
+            continue
+        retained = pieces_by_id.get(source.attendance_id)
+        if retained is None:
             pending.append(
                 _PendingOperation(
                     kind="delete",
@@ -636,37 +792,37 @@ def _operations_for_groups(
                     effective_start=source.start,
                 )
             )
-        for shoulder in shoulders:
+            continue
+        before_values = _source_mutable_values(source)
+        retained_values = _piece_mutable_values(retained, employee_id)
+        changed = tuple(
+            field for field in _MUTABLE_FIELDS if before_values[field] != retained_values[field]
+        )
+        if changed:
+            pending.append(
+                _PendingOperation(
+                    kind="update",
+                    attendance_id=source.attendance_id,
+                    employee_id=employee_id,
+                    before={field: before_values[field] for field in changed},
+                    after={field: retained_values[field] for field in changed},
+                    source=source,
+                    effective_start=retained.start,
+                )
+            )
+    for piece in pieces:
+        if piece.attendance_id is None:
             pending.append(
                 _PendingOperation(
                     kind="create",
                     attendance_id=None,
                     employee_id=employee_id,
                     before=None,
-                    after=_piece_mutable_values(shoulder, employee_id),
-                    source=shoulder.source,
-                    effective_start=shoulder.start,
+                    after=_piece_mutable_values(piece, employee_id),
+                    source=piece.source,
+                    effective_start=piece.start,
                 )
             )
-    if not groups:
-        created_targets = [piece for piece in pieces if piece.target]
-        if len(created_targets) != 1:
-            raise ValueError("a source-free correction must have one target interval")
-        target = created_targets[0]
-        pending.append(
-            _PendingOperation(
-                kind="create",
-                attendance_id=None,
-                employee_id=employee_id,
-                before=None,
-                after=_piece_mutable_values(target, employee_id),
-                source=None,
-                effective_start=target.start,
-            )
-        )
-    assert all(
-        item.source is None or item.source.attendance_id in group_sources for item in pending
-    )
     return pending
 
 
@@ -716,14 +872,17 @@ def plan_correction(
     sources = _normalize_source_rows(rows, employee_id)
 
     if end is None:
-        pieces, groups = _open_pieces_and_groups(sources, start, work_center_id, department_id)
+        pieces, affected_ids = _open_pieces_and_groups(
+            sources, start, work_center_id, department_id
+        )
     else:
-        pieces, groups = _closed_pieces_and_groups(
+        pieces, affected_ids = _closed_pieces_and_groups(
             sources, start, end, work_center_id, department_id
         )
-    pending = _operations_for_groups(
+    pending = _operations_for_pieces(
+        sources=sources,
         pieces=pieces,
-        groups=groups,
+        affected_ids=affected_ids,
         employee_id=employee_id,
     )
     operations = [
@@ -851,25 +1010,7 @@ def _validate_plan(plan: CorrectionPlan) -> None:
     version_ids = [item.attendance_id for item in plan.source_versions]
     if len(version_ids) != len(set(version_ids)):
         raise ValueError("duplicate source attendance id")
-    operation_keys = [item.key for item in plan.operations]
-    if len(operation_keys) != len(set(operation_keys)):
-        raise ValueError("duplicate correction operation key")
-    expected_by_id = {
-        item["odoo_attendance_id"]: item
-        for item in plan.expected_intervals
-        if item["odoo_attendance_id"] is not None
-    }
-    if plan.operations != tuple(
-        sorted(
-            plan.operations,
-            key=lambda item: _operation_sort_key(item, expected_by_id),
-        )
-    ):
-        raise ValueError("operations are not in canonical order")
-    known_ids = set(version_ids)
-    for operation in plan.operations:
-        if operation.attendance_id is not None and operation.attendance_id not in known_ids:
-            raise ValueError("operation references an unknown source attendance id")
+    versions_by_id = {item.attendance_id: item for item in plan.source_versions}
 
     interval_state = [_validate_expected_interval(item) for item in plan.expected_intervals]
     canonical_intervals = tuple(
@@ -885,9 +1026,6 @@ def _validate_plan(plan: CorrectionPlan) -> None:
         raise ValueError("expected intervals are not in canonical order")
     seen_interval_ids: set[int] = set()
     employee_ids = {item[3] for item in interval_state}
-    employee_ids.update(item.employee_odoo_id for item in plan.operations)
-    if len(employee_ids) > 1:
-        raise ValueError("correction plan contains mixed employees")
     previous_end: datetime | None = None
     for index, (start, end, attendance_id, _employee_id) in enumerate(interval_state):
         if index and (previous_end is None or previous_end > start):
@@ -896,9 +1034,84 @@ def _validate_plan(plan: CorrectionPlan) -> None:
         if attendance_id is not None:
             if attendance_id in seen_interval_ids:
                 raise ValueError("duplicate expected attendance id")
-            if attendance_id not in known_ids:
+            if attendance_id not in versions_by_id:
                 raise ValueError("expected interval references unknown source id")
             seen_interval_ids.add(attendance_id)
+
+    operation_keys = [item.key for item in plan.operations]
+    if len(operation_keys) != len(set(operation_keys)):
+        raise ValueError("duplicate correction operation key")
+    expected_by_id = {
+        item["odoo_attendance_id"]: item
+        for item in plan.expected_intervals
+        if item["odoo_attendance_id"] is not None
+    }
+    if plan.operations != tuple(
+        sorted(
+            plan.operations,
+            key=lambda item: _operation_sort_key(item, expected_by_id),
+        )
+    ):
+        raise ValueError("operations are not in canonical order")
+    mutations_by_id: dict[int, CorrectionOperation] = {}
+    request_identity: Mapping[str, object] | None = None
+    for operation in plan.operations:
+        operation_request = _validate_operation_key(operation, versions_by_id)
+        if request_identity is None:
+            request_identity = operation_request
+        elif request_identity != operation_request:
+            raise ValueError("operations contain mixed correction requests")
+        employee_ids.add(operation.employee_odoo_id)
+        if operation.attendance_id is not None:
+            if operation.attendance_id not in versions_by_id:
+                raise ValueError("operation references an unknown source attendance id")
+            if operation.attendance_id in mutations_by_id:
+                raise ValueError("duplicate source mutation operation")
+            mutations_by_id[operation.attendance_id] = operation
+    if len(employee_ids) > 1:
+        raise ValueError("correction plan contains mixed employees")
+
+    for source_id in versions_by_id:
+        operation = mutations_by_id.get(source_id)
+        represented = source_id in expected_by_id
+        if operation is not None and operation.kind == "delete":
+            if represented:
+                raise ValueError("deleted source remains in expected intervals")
+            continue
+        if not represented:
+            raise ValueError("unoperated source is missing from expected intervals")
+        if operation is not None:
+            assert operation.kind == "update" and operation.after is not None
+            expected = expected_by_id[source_id]
+            for field, value in operation.after.items():
+                if expected[field] != value:
+                    raise ValueError("update operation does not match expected interval")
+
+    expected_creates = Counter(
+        tuple(item[field] for field in _MUTABLE_FIELDS)
+        for item in plan.expected_intervals
+        if item["odoo_attendance_id"] is None
+    )
+    operation_creates = Counter(
+        tuple(operation.after[field] for field in _MUTABLE_FIELDS)
+        for operation in plan.operations
+        if operation.kind == "create" and operation.after is not None
+    )
+    if expected_creates != operation_creates:
+        raise ValueError("create operations do not match created expected intervals")
+    if request_identity is not None:
+        request_start = request_identity["start_utc"]
+        request_end = request_identity["end_utc"]
+        assert isinstance(request_start, datetime)
+        matching_target = any(
+            item["odoo_work_center_id"] == request_identity["odoo_work_center_id"]
+            and item["odoo_department_id"] == request_identity["odoo_department_id"]
+            and item["check_in_utc"] < (request_end or datetime.max.replace(tzinfo=UTC))
+            and (item["check_out_utc"] is None or item["check_out_utc"] > request_start)
+            for item in plan.expected_intervals
+        )
+        if not matching_target:
+            raise ValueError("correction request has no matching expected target interval")
 
 
 def _utc_text(value: datetime) -> str:
@@ -983,12 +1196,7 @@ def _decode_data(value: object) -> object:
     raise ValueError("encoded plan data contains an unknown type")
 
 
-def plan_to_json(plan: CorrectionPlan) -> JSONValue:
-    """Return the canonical, lossless JSONB value for an immutable plan."""
-
-    if not isinstance(plan, CorrectionPlan):
-        raise TypeError("plan must be a CorrectionPlan")
-    _validate_plan(plan)
+def _plan_json_payload(plan: CorrectionPlan) -> dict[str, JSONValue]:
     return {
         "schema_version": _SCHEMA_VERSION,
         "source_versions": [
@@ -1013,6 +1221,27 @@ def plan_to_json(plan: CorrectionPlan) -> JSONValue:
     }
 
 
+def _plan_integrity(payload: Mapping[str, JSONValue]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return _INTEGRITY_PREFIX + hashlib.sha256(encoded).hexdigest()
+
+
+def plan_to_json(plan: CorrectionPlan) -> JSONValue:
+    """Return the canonical, lossless JSONB value for an immutable plan."""
+
+    if not isinstance(plan, CorrectionPlan):
+        raise TypeError("plan must be a CorrectionPlan")
+    _validate_plan(plan)
+    payload = _plan_json_payload(plan)
+    return {**payload, "integrity": _plan_integrity(payload)}
+
+
 def _require_json_list(value: object, field_name: str) -> list[object]:
     if not isinstance(value, list):
         raise TypeError(f"{field_name} must be a JSON list")
@@ -1032,6 +1261,7 @@ def plan_from_json(value: object) -> CorrectionPlan:
                 "source_versions",
                 "operations",
                 "expected_intervals",
+                "integrity",
             )
         ),
         "correction plan JSON",
@@ -1039,6 +1269,9 @@ def plan_from_json(value: object) -> CorrectionPlan:
     version = value["schema_version"]
     if isinstance(version, bool) or not isinstance(version, int) or version != _SCHEMA_VERSION:
         raise ValueError("unsupported correction plan schema version")
+    integrity = value["integrity"]
+    if not isinstance(integrity, str) or not _INTEGRITY_PATTERN.fullmatch(integrity):
+        raise ValueError("correction plan integrity is not canonical")
 
     source_versions: list[SourceVersion] = []
     for item in _require_json_list(value["source_versions"], "source_versions"):
@@ -1097,4 +1330,7 @@ def plan_from_json(value: object) -> CorrectionPlan:
         if not isinstance(decoded, Mapping):
             raise TypeError("expected interval must decode to a mapping")
         expected.append(decoded)
-    return CorrectionPlan(tuple(source_versions), tuple(operations), tuple(expected))
+    plan = CorrectionPlan(tuple(source_versions), tuple(operations), tuple(expected))
+    if integrity != _plan_integrity(_plan_json_payload(plan)):
+        raise ValueError("correction plan integrity does not match its contents")
+    return plan

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta, timezone
 from itertools import permutations
 
@@ -142,24 +143,24 @@ def test_exact_source_row_reuses_id_and_updates_only_location_fields():
             at(8),
             at(9),
             [
-                (101, at(8), at(9), WORK_CENTER, DEPARTMENT),
-                (None, at(9), at(10), 11, 3),
+                (None, at(8), at(9), WORK_CENTER, DEPARTMENT),
+                (101, at(9), at(10), 11, 3),
             ],
         ),
         (
             at(9),
             at(10),
             [
-                (None, at(8), at(9), 11, 3),
-                (101, at(9), at(10), WORK_CENTER, DEPARTMENT),
+                (101, at(8), at(9), 11, 3),
+                (None, at(9), at(10), WORK_CENTER, DEPARTMENT),
             ],
         ),
         (
             at(8, 30),
             at(9, 30),
             [
-                (None, at(8), at(8, 30), 11, 3),
-                (101, at(8, 30), at(9, 30), WORK_CENTER, DEPARTMENT),
+                (101, at(8), at(8, 30), 11, 3),
+                (None, at(8, 30), at(9, 30), WORK_CENTER, DEPARTMENT),
                 (None, at(9, 30), at(10), 11, 3),
             ],
         ),
@@ -182,10 +183,10 @@ def test_lunch_gap_is_not_bridged_and_each_covered_group_is_reused():
     )
 
     assert interval_tuples(plan) == [
-        (None, at(8), at(9), 11, 3),
-        (101, at(9), at(12), WORK_CENTER, DEPARTMENT),
-        (102, at(13), at(16), WORK_CENTER, DEPARTMENT),
-        (None, at(16), at(17), 11, 3),
+        (101, at(8), at(9), 11, 3),
+        (None, at(9), at(12), WORK_CENTER, DEPARTMENT),
+        (None, at(13), at(16), WORK_CENTER, DEPARTMENT),
+        (102, at(16), at(17), 11, 3),
     ]
     assert not any(
         item["check_in_utc"] == at(12) and item["check_out_utc"] == at(13)
@@ -207,6 +208,51 @@ def test_adjacent_fully_covered_rows_become_one_interval_with_one_reused_id():
     ]
 
 
+def test_two_partial_boundary_rows_keep_both_source_ids_outside_window():
+    plan = planned(
+        [row(101, at(8), at(10)), row(102, at(10), at(12))],
+        at(9),
+        at(11),
+    )
+
+    assert interval_tuples(plan) == [
+        (101, at(8), at(9), 11, 3),
+        (None, at(9), at(11), WORK_CENTER, DEPARTMENT),
+        (102, at(11), at(12), 11, 3),
+    ]
+    assert [(op.kind, op.attendance_id) for op in plan.operations] == [
+        ("update", 101),
+        ("create", None),
+        ("update", 102),
+    ]
+    assert not any(op.kind == "delete" for op in plan.operations)
+
+
+def test_partial_boundaries_keep_ids_and_fully_covered_interior_is_reused():
+    plan = planned(
+        [
+            row(101, at(8), at(10)),
+            row(102, at(10), at(11)),
+            row(103, at(11), at(12)),
+            row(104, at(12), at(14)),
+        ],
+        at(9),
+        at(13),
+    )
+
+    assert interval_tuples(plan) == [
+        (101, at(8), at(9), 11, 3),
+        (102, at(9), at(13), WORK_CENTER, DEPARTMENT),
+        (104, at(13), at(14), 11, 3),
+    ]
+    assert [(op.kind, op.attendance_id) for op in plan.operations] == [
+        ("update", 101),
+        ("update", 102),
+        ("delete", 103),
+        ("update", 104),
+    ]
+
+
 def test_open_source_and_open_correction_preserve_only_time_before_start():
     plan = planned(
         [row(101, at(8), None)],
@@ -215,8 +261,25 @@ def test_open_source_and_open_correction_preserve_only_time_before_start():
     )
 
     assert interval_tuples(plan) == [
-        (None, at(8), at(10), 11, 3),
-        (101, at(10), None, WORK_CENTER, DEPARTMENT),
+        (101, at(8), at(10), 11, 3),
+        (None, at(10), None, WORK_CENTER, DEPARTMENT),
+    ]
+
+
+def test_open_correction_preserves_boundary_id_and_reuses_fully_covered_future_row():
+    plan = planned(
+        [row(101, at(8), at(12)), row(102, at(12), at(14))],
+        at(10),
+        None,
+    )
+
+    assert interval_tuples(plan) == [
+        (101, at(8), at(10), 11, 3),
+        (102, at(10), None, WORK_CENTER, DEPARTMENT),
+    ]
+    assert [(op.kind, op.attendance_id) for op in plan.operations] == [
+        ("update", 101),
+        ("update", 102),
     ]
 
 
@@ -238,8 +301,8 @@ def test_closed_correction_of_open_source_preserves_open_suffix():
     plan = planned([row(101, at(8), None)], at(9), at(10))
 
     assert interval_tuples(plan) == [
-        (None, at(8), at(9), 11, 3),
-        (101, at(9), at(10), WORK_CENTER, DEPARTMENT),
+        (101, at(8), at(9), 11, 3),
+        (None, at(9), at(10), WORK_CENTER, DEPARTMENT),
         (None, at(10), None, 11, 3),
     ]
 
@@ -300,6 +363,10 @@ def test_split_shoulders_preserve_extra_raw_fields_without_aliasing():
         plan.expected_intervals[0]["note"] = "nope"  # type: ignore[index]
     with pytest.raises(TypeError):
         plan.expected_intervals[0]._values["note"] = "nope"  # type: ignore[attr-defined,index]
+    with pytest.raises((AttributeError, TypeError)):
+        plan.expected_intervals[0]._values = {}  # type: ignore[attr-defined,misc]
+    with pytest.raises((AttributeError, TypeError)):
+        del plan.expected_intervals[0]._values  # type: ignore[attr-defined,misc]
 
 
 def test_changed_location_does_not_keep_a_stale_display_name():
@@ -517,6 +584,19 @@ def valid_json_value() -> dict[str, object]:
     return value
 
 
+def replace_encoded_mapping_value(encoded: object, key: str, replacement: object) -> None:
+    assert isinstance(encoded, dict)
+    assert encoded["type"] == "mapping"
+    items = encoded["items"]
+    assert isinstance(items, list)
+    for item in items:
+        assert isinstance(item, list)
+        if item[0] == key:
+            item[1] = replacement
+            return
+    raise AssertionError(f"encoded mapping omitted {key}")
+
+
 @pytest.mark.parametrize("mutation", ["unknown", "missing", "version"])
 def test_plan_from_json_rejects_unknown_missing_and_wrong_schema(mutation):
     value = valid_json_value()
@@ -525,7 +605,7 @@ def test_plan_from_json_rejects_unknown_missing_and_wrong_schema(mutation):
     elif mutation == "missing":
         del value["operations"]
     else:
-        value["schema_version"] = 2
+        value["schema_version"] = 999
 
     with pytest.raises(ValueError):
         plan_from_json(value)
@@ -536,6 +616,77 @@ def test_plan_from_json_rejects_float_schema_version():
     value["schema_version"] = 1.0
 
     with pytest.raises(ValueError, match="schema version"):
+        plan_from_json(value)
+
+
+def test_serialized_plan_has_canonical_whole_plan_integrity():
+    value = valid_json_value()
+
+    assert isinstance(value.get("integrity"), str)
+    assert value["integrity"].startswith("attendance-correction-plan-v1:")
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "remove_operations",
+        "expected_value",
+        "operation_after",
+        "source_version",
+        "operation_key",
+        "integrity",
+    ],
+)
+def test_plan_from_json_rejects_canonical_looking_plan_tampering(tamper):
+    value = deepcopy(valid_json_value())
+    operations = value["operations"]
+    expected = value["expected_intervals"]
+    versions = value["source_versions"]
+    assert isinstance(operations, list)
+    assert isinstance(expected, list)
+    assert isinstance(versions, list)
+    assert isinstance(operations[0], dict)
+    assert isinstance(versions[0], dict)
+    if tamper == "remove_operations":
+        operations.clear()
+    elif tamper == "expected_value":
+        replace_encoded_mapping_value(expected[0], "odoo_work_center_id", WORK_CENTER + 1)
+    elif tamper == "operation_after":
+        replace_encoded_mapping_value(
+            operations[0]["after"], "odoo_work_center_id", WORK_CENTER + 1
+        )
+    elif tamper == "source_version":
+        versions[0]["write_date"] = "2026-08-31T00:02:00Z"
+    elif tamper == "operation_key":
+        key = operations[0]["key"]
+        assert isinstance(key, str)
+        operations[0]["key"] = key[:-1] + ("0" if key[-1] != "0" else "1")
+    else:
+        integrity = value["integrity"]
+        assert isinstance(integrity, str)
+        value["integrity"] = integrity[:-1] + ("0" if integrity[-1] != "0" else "1")
+
+    with pytest.raises(ValueError):
+        plan_from_json(value)
+
+
+def test_integrity_protects_a_legitimate_no_operation_plan():
+    source = row(
+        101,
+        at(8),
+        at(10),
+        work_center=WORK_CENTER,
+        department=DEPARTMENT,
+    )
+    plan = planned([source], at(8), at(10))
+    assert plan.operations == ()
+    value = plan_to_json(plan)
+    assert isinstance(value, dict)
+    expected = value["expected_intervals"]
+    assert isinstance(expected, list)
+    replace_encoded_mapping_value(expected[0], "odoo_work_center_id", WORK_CENTER + 1)
+
+    with pytest.raises(ValueError, match="integrity"):
         plan_from_json(value)
 
 
