@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta, timezone
+import hashlib
 from itertools import permutations
+import json
 
 import pytest
 
@@ -119,6 +121,21 @@ def encoded_mapping_replace(value: object, field: str, encoded_value: object) ->
             item[1] = encoded_value
             return
     raise AssertionError(f"encoded mapping omitted {field}")
+
+
+def refresh_integrity(value: dict[str, object]) -> None:
+    payload = {key: item for key, item in value.items() if key != "integrity"}
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    value["integrity"] = "attendance-correction-plan-v2:" + hashlib.sha256(encoded).hexdigest()
+
+
+def different_canonical_key(key: str) -> str:
+    return key[:-1] + ("0" if key[-1] != "0" else "1")
 
 
 @pytest.mark.parametrize("end", [at(10), None])
@@ -606,6 +623,155 @@ def test_operation_keys_survive_json_and_change_with_source_or_request():
     assert baseline.operations[0].key != wider.operations[0].key
 
 
+def test_operation_keys_ignore_presentation_fields_but_plan_integrity_covers_them():
+    baseline = planned(
+        [
+            row(
+                101,
+                at(8),
+                at(10),
+                write_minute=7,
+                employee_name="Ada",
+                odoo_work_center_name="Old Cell",
+                odoo_department_name="Old Department",
+                raw_payload={"display": "first"},
+            )
+        ],
+        at(8),
+        at(10),
+    )
+    presentation_only = planned(
+        [
+            row(
+                101,
+                at(8),
+                at(10),
+                write_minute=7,
+                employee_name="Ada Lovelace",
+                odoo_work_center_name="Renamed Cell",
+                odoo_department_name="Renamed Department",
+                raw_payload={"display": "second"},
+            )
+        ],
+        at(8),
+        at(10),
+    )
+
+    assert tuple(item.key for item in baseline.operations) == tuple(
+        item.key for item in presentation_only.operations
+    )
+    baseline_json = plan_to_json(baseline)
+    presentation_json = plan_to_json(presentation_only)
+    assert baseline_json["integrity"] != presentation_json["integrity"]
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        row(102, at(8), at(10), write_minute=7),
+        row(101, at(8), at(10), write_minute=8),
+        row(101, at(7, 30), at(10), write_minute=7),
+        row(101, at(8), at(10), write_minute=7, work_center=12),
+    ],
+    ids=["source_id", "write_date", "interval", "location_id"],
+)
+def test_operation_keys_change_with_concurrency_relevant_source_facts(changed):
+    baseline = planned(
+        [row(101, at(8), at(10), write_minute=7)],
+        at(8),
+        at(10),
+    )
+    changed_plan = planned([changed], at(8), at(10))
+
+    assert tuple(item.key for item in baseline.operations) != tuple(
+        item.key for item in changed_plan.operations
+    )
+
+
+def test_created_middle_target_key_covers_its_causal_source_version():
+    baseline = planned(
+        [row(101, at(8), at(12), write_minute=7)],
+        at(9),
+        at(10),
+    )
+    newer = planned(
+        [row(101, at(8), at(12), write_minute=8)],
+        at(9),
+        at(10),
+    )
+
+    def corrected_target_key(plan):
+        return next(
+            operation.key
+            for operation in plan.operations
+            if operation.kind == "create"
+            and operation.after is not None
+            and operation.after["odoo_work_center_id"] == WORK_CENTER
+        )
+
+    assert corrected_target_key(baseline) != corrected_target_key(newer)
+
+
+@pytest.mark.parametrize("mutation", ["request_start", "request_end", "expected", "source"])
+def test_whole_plan_integrity_protects_no_operation_plans(mutation):
+    plan = planned(
+        [
+            row(
+                101,
+                at(8),
+                at(12),
+                work_center=WORK_CENTER,
+                department=DEPARTMENT,
+                note="original",
+            )
+        ],
+        at(9),
+        at(10),
+    )
+    assert plan.operations == ()
+    value = plan_to_json(plan)
+    integrity = value.get("integrity")
+    assert isinstance(integrity, str)
+    assert integrity.startswith("attendance-correction-plan-v2:")
+
+    if mutation == "request_start":
+        encoded_mapping_replace(
+            value["request"],
+            "start_utc",
+            {"type": "datetime", "value": "2026-08-31T09:15:00Z"},
+        )
+    elif mutation == "request_end":
+        encoded_mapping_replace(
+            value["request"],
+            "end_utc",
+            {"type": "datetime", "value": "2026-08-31T09:45:00Z"},
+        )
+    elif mutation == "expected":
+        expected = value["expected_intervals"]
+        assert isinstance(expected, list)
+        encoded_mapping_replace(expected[0], "note", "changed")
+    else:
+        sources = value["source_intervals"]
+        assert isinstance(sources, list)
+        encoded_mapping_replace(sources[0], "note", "changed")
+
+    with pytest.raises(ValueError, match="integrity"):
+        plan_from_json(value)
+
+
+def test_decoder_rejects_reordered_mapping_even_with_refreshed_integrity():
+    value = valid_json_value()
+    request = value["request"]
+    assert isinstance(request, dict)
+    items = request["items"]
+    assert isinstance(items, list)
+    items[0], items[1] = items[1], items[0]
+    refresh_integrity(value)
+
+    with pytest.raises(ValueError, match="canonical order"):
+        plan_from_json(value)
+
+
 def valid_json_value() -> dict[str, object]:
     value = plan_to_json(planned([row(101, at(8), at(10))], at(8), at(10)))
     assert isinstance(value, dict)
@@ -653,6 +819,7 @@ def test_plan_from_json_rejects_invalid_operation_and_datetime_values(mutation):
         versions[0]["write_date"] = "not-a-date"
     else:
         versions[0]["write_date"] = "2026-08-31T01:00:00+01:00"
+    refresh_integrity(value)
 
     with pytest.raises((TypeError, ValueError)):
         plan_from_json(value)
@@ -665,6 +832,7 @@ def test_plan_from_json_rejects_duplicate_ids_and_operation_keys(duplicate):
     entries = value[key]
     assert isinstance(entries, list)
     entries.append(entries[0])
+    refresh_integrity(value)
 
     with pytest.raises(ValueError, match="duplicate"):
         plan_from_json(value)
@@ -701,9 +869,10 @@ def test_plan_from_json_rejects_distinct_operations_for_the_same_source_id(pair)
         duplicate = deepcopy(deleted)
     operations = value["operations"]
     assert isinstance(operations, list)
-    duplicate["key"] = "attendance-correction-v2:" + "f" * 64
+    duplicate["key"] = different_canonical_key(duplicate["key"])
     operations.append(duplicate)
     operations.sort(key=lambda operation: operation["key"])
+    refresh_integrity(value)
 
     with pytest.raises(ValueError, match="duplicate operation attendance id"):
         plan_from_json(value)
@@ -717,6 +886,7 @@ def test_plan_from_json_rejects_unchanged_fields_piggybacked_on_an_update():
     assert isinstance(operation, dict)
     encoded_mapping_set(operation["before"], "employee_odoo_id", EMPLOYEE)
     encoded_mapping_set(operation["after"], "employee_odoo_id", EMPLOYEE)
+    refresh_integrity(value)
 
     with pytest.raises(ValueError, match="every update field must change"):
         plan_from_json(value)
@@ -733,6 +903,7 @@ def test_plan_from_json_authenticates_operation_key_and_projection():
     assert isinstance(alternate_operations[0], dict)
 
     operations[0]["key"] = alternate_operations[0]["key"]
+    refresh_integrity(value)
 
     with pytest.raises(ValueError, match="operation key"):
         plan_from_json(value)
@@ -757,6 +928,7 @@ def test_plan_from_json_authenticates_operation_key_and_projection():
             "value": "2026-08-31T07:30:00Z",
         },
     )
+    refresh_integrity(value)
 
     with pytest.raises(ValueError, match="operation key|projection"):
         plan_from_json(value)
@@ -765,6 +937,7 @@ def test_plan_from_json_authenticates_operation_key_and_projection():
     expected = value["expected_intervals"]
     assert isinstance(expected, list)
     encoded_mapping_replace(expected[0], "odoo_work_center_id", 73)
+    refresh_integrity(value)
 
     with pytest.raises(ValueError, match="operation projection"):
         plan_from_json(value)
@@ -781,6 +954,7 @@ def test_plan_from_json_rejects_duplicate_keys_inside_encoded_mapping():
     items = after["items"]
     assert isinstance(items, list)
     items.append(items[0])
+    refresh_integrity(value)
 
     with pytest.raises(ValueError, match="duplicate"):
         plan_from_json(value)
@@ -791,6 +965,7 @@ def test_plan_from_json_revalidates_internal_interval_invariants():
     expected = value["expected_intervals"]
     assert isinstance(expected, list)
     expected.append(expected[0])
+    refresh_integrity(value)
 
     with pytest.raises(ValueError, match="overlap"):
         plan_from_json(value)
