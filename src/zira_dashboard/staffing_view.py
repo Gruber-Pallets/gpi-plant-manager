@@ -16,6 +16,103 @@ already leans on and that the staffing tests monkeypatch.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+
+from .attendance_timeline import LocationSpan, LocationStatus
+
+
+@dataclass(frozen=True)
+class StaffingPersonLocation:
+    person_name: str
+    planned_work_center: str | None
+    live_work_center: str | None
+    raw_odoo_work_center: str | None
+    status: LocationStatus
+    since_utc: datetime
+    source_fresh_at: datetime | None
+
+    @property
+    def working_elsewhere(self) -> bool:
+        return bool(
+            self.status == "valid"
+            and self.planned_work_center
+            and self.live_work_center
+            and self.planned_work_center != self.live_work_center
+        )
+
+    @property
+    def display_text(self) -> str:
+        if self.status == "valid":
+            return self.live_work_center or "Location unavailable"
+        if self.status == "unmapped_location":
+            raw = self.raw_odoo_work_center or "Unknown Odoo location"
+            return f"{raw} · Odoo only — mapping needed"
+        if self.status == "pending_first_location":
+            return "Waiting for Odoo location"
+        if self.status == "missing_required_location":
+            return "Location missing"
+        if self.status == "conflicting_location":
+            return "Location conflict"
+        if self.status == "exempt_no_location":
+            return "Outside work-center bays"
+        if self.status == "stale_open_location":
+            raw = self.raw_odoo_work_center or self.live_work_center or "Last known location"
+            return f"{raw} · stale"
+        return "Location unavailable"
+
+
+def build_live_locations(
+    planned_by_wc: Mapping[str, Sequence[str]],
+    spans: Sequence[LocationSpan],
+    *,
+    as_of_utc: datetime,
+) -> tuple[StaffingPersonLocation, ...]:
+    """Overlay one current projected location without moving planned seats."""
+    if as_of_utc.utcoffset() is None:
+        raise ValueError("as_of_utc must be timezone-aware")
+    planned_by_name: dict[str, str] = {}
+    planned_order: list[str] = []
+    for work_center, names in planned_by_wc.items():
+        for name in names:
+            if name not in planned_by_name:
+                planned_by_name[name] = work_center
+                planned_order.append(name)
+
+    current_by_name: dict[str, LocationSpan] = {}
+    for span in spans:
+        if span.start_utc > as_of_utc or span.end_utc < as_of_utc:
+            continue
+        previous = current_by_name.get(span.employee_name)
+        if previous is None or (span.start_utc, span.end_utc) > (
+            previous.start_utc,
+            previous.end_utc,
+        ):
+            current_by_name[span.employee_name] = span
+
+    names = planned_order + sorted(
+        (name for name in current_by_name if name not in planned_by_name),
+        key=str.lower,
+    )
+    result = []
+    for name in names:
+        span = current_by_name.get(name)
+        if span is None:
+            continue
+        result.append(
+            StaffingPersonLocation(
+                person_name=name,
+                planned_work_center=planned_by_name.get(name),
+                live_work_center=span.app_work_center_name,
+                raw_odoo_work_center=span.odoo_work_center_name,
+                status=span.status,
+                since_utc=span.start_utc,
+                source_fresh_at=as_of_utc,
+            )
+        )
+    return tuple(result)
+
 
 def build_staffing_bays(
     roster, sched, time_off_entries, publish_blocked, enabled_work_centers=None,

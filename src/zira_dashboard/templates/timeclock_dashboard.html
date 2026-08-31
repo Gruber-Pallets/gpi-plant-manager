@@ -24,7 +24,23 @@
     </div>
   {% endif %}
 
-  {% if is_clocked_in %}
+  {% if attendance_source_unavailable %}
+    <div class="k-warning" style="max-width: 720px; text-align: left;">
+      <strong>Odoo attendance is unavailable.</strong>
+      The clock state cannot be verified right now. Please see a manager.
+      / La asistencia de Odoo no está disponible. Consulta a un gerente.
+    </div>
+  {% elif attendance_source_stale %}
+    <div class="k-warning" style="max-width: 720px; text-align: left;">
+      <strong>Odoo attendance is stale.</strong>
+      The state below is the last verified state.
+      / La asistencia de Odoo está atrasada. Este es el último estado verificado.
+    </div>
+  {% endif %}
+
+  {% if attendance_source_unavailable and is_clocked_in is none %}
+    <h2>Clock state unavailable / Estado del reloj no disponible</h2>
+  {% elif is_clocked_in %}
     <h2>{% if current_wc %}{{ t("You're clocked in on") }}{% else %}{{ t("You're clocked in") }}{% endif %}</h2>
     {% if current_wc %}
       <h1 style="font-size: 3rem; color: #ea580c;">{{ current_wc }}</h1>
@@ -41,13 +57,30 @@
       <form method="post" action="/timeclock/clock-out/{{ token }}" class="k-punch-form" style="margin: 0;">
         <button type="submit" class="k-btn danger" aria-busy="false">{{ t("Clock Out") }}</button>
       </form>
-      <a href="/timeclock/pick-wc/{{ token }}?purpose=transfer"
+      {% if not location_live %}
+        <a href="/timeclock/pick-wc/{{ token }}?purpose=transfer"
          class="k-btn secondary" style="text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">
-        {{ t("Transfer") }}
-      </a>
+          {{ t("Transfer") }}
+        </a>
+      {% endif %}
     </div>
   {% else %}
-    {% if approved_full_day_leave %}
+    {% if location_live %}
+      {% if approved_full_day_leave %}
+        <h2>You have approved time off today</h2>
+        <p style="font-size: 1.25rem; color: #64748b; margin-bottom: 2rem; max-width: 620px; text-align: center;">
+          Confirm that your time off should be cleared before clocking in.
+        </p>
+      {% else %}
+        <h2>{{ t("You're not clocked in") }}</h2>
+      {% endif %}
+      <form method="post" action="/timeclock/clock-in/{{ token }}" class="k-punch-form"
+            style="margin-bottom: 1.5rem;">
+        <button type="submit" class="k-btn success" aria-busy="false">
+          {{ t("Confirm — Clock In") }}
+        </button>
+      </form>
+    {% elif approved_full_day_leave %}
       <h2>You have approved time off today</h2>
       <p style="font-size: 1.25rem; color: #64748b; margin-bottom: 2rem; max-width: 620px; text-align: center;">
         Choose the work center you are reporting to. You'll confirm that your time off should be cleared before clocking in.

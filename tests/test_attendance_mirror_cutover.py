@@ -1,0 +1,479 @@
+"""Canonical mirror read ownership for shadow/live attendance consumers."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, date, datetime, time, timedelta
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from zira_dashboard import (
+    app,
+    attendance,
+    attendance_mirror,
+    attendance_state,
+    auto_lunch,
+    auto_lunch_settings,
+    live_cache,
+    staffing_attendance,
+    timeclock_windows,
+    work_centers_store,
+)
+
+
+DAY = date(2026, 8, 31)
+FRESH_AT = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+FIRST_IN = datetime(2026, 8, 31, 11, 0, tzinfo=UTC)
+
+
+def _config(mode: str):
+    return SimpleNamespace(mode=mode)
+
+
+def _health(*, complete: bool = True):
+    return attendance_mirror.MirrorHealth(
+        last_incremental_completed_at=FRESH_AT,
+        last_full_sweep_completed_at=FRESH_AT,
+        baseline_completed_at=FRESH_AT if complete else None,
+        oldest_recalc_requested_at=None,
+        last_error=None,
+    )
+
+
+def test_off_mode_keeps_legacy_day_and_open_cache_reads(monkeypatch):
+    monkeypatch.setattr(live_cache.attendance_location_policy, "get_rollout_config", lambda: _config("off"))
+    mirror_health = MagicMock(side_effect=AssertionError("off must not inspect mirror"))
+    monkeypatch.setattr(live_cache.attendance_mirror, "health_snapshot", mirror_health)
+    monkeypatch.setattr(
+        live_cache,
+        "_read",
+        lambda table, day: ({"legacy": table}, FRESH_AT),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "_read_open_attendance_legacy",
+        lambda: ({"legacy": {"att_id": 7}}, FRESH_AT),
+    )
+
+    day_source = live_cache.read_attendance_source(DAY)
+    open_source = live_cache.read_open_attendance_source()
+
+    assert day_source.mirror_owned is False
+    assert day_source.payload == {"legacy": "today_attendance_cache"}
+    assert open_source.mirror_owned is False
+    assert open_source.payload == {"legacy": {"att_id": 7}}
+    mirror_health.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["shadow", "live"])
+def test_complete_baseline_makes_shadow_and_live_read_only_the_mirror(monkeypatch, mode):
+    monkeypatch.setattr(live_cache.attendance_location_policy, "get_rollout_config", lambda: _config(mode))
+    monkeypatch.setattr(live_cache.attendance_mirror, "health_snapshot", lambda: _health())
+    monkeypatch.setattr(
+        live_cache.attendance_mirror,
+        "day_presence",
+        lambda day: {"5": {"first_check_in": FIRST_IN.isoformat(), "currently_open": True}},
+    )
+    monkeypatch.setattr(
+        live_cache.attendance_mirror,
+        "current_open_attendance",
+        lambda: (
+            {
+                "odoo_attendance_id": 90,
+                "employee_odoo_id": 5,
+                "check_in_utc": FIRST_IN,
+                "odoo_work_center_id": 8,
+                "odoo_work_center_name": "Luke Bay 8",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        live_cache.work_centers_store,
+        "app_work_center_name_for_odoo_id",
+        lambda wc_id: "Bay 8" if wc_id == 8 else None,
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "_read",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("legacy day cache consulted")),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "_read_open_attendance_legacy",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy open cache consulted")),
+    )
+
+    day_source = live_cache.read_attendance_source(DAY)
+    open_source = live_cache.read_open_attendance_source()
+
+    assert day_source.mirror_owned is True and day_source.available is True
+    assert day_source.refreshed_at == FRESH_AT
+    assert day_source.payload["5"]["currently_open"] is True
+    assert open_source.mirror_owned is True and open_source.available is True
+    assert open_source.refreshed_at == FRESH_AT
+    assert open_source.payload == {
+        "5": {
+            "att_id": 90,
+            "check_in": FIRST_IN.isoformat(),
+            "wc_name": "Bay 8",
+            "raw_odoo_wc_name": "Luke Bay 8",
+        }
+    }
+
+
+@pytest.mark.parametrize("mode", ["shadow", "live"])
+def test_incomplete_baseline_keeps_legacy_cache_path(monkeypatch, mode):
+    monkeypatch.setattr(live_cache.attendance_location_policy, "get_rollout_config", lambda: _config(mode))
+    monkeypatch.setattr(live_cache.attendance_mirror, "health_snapshot", lambda: _health(complete=False))
+    monkeypatch.setattr(
+        live_cache,
+        "_read",
+        lambda table, day: ({"legacy": table}, FRESH_AT),
+    )
+
+    source = live_cache.read_attendance_source(DAY)
+
+    assert source.mirror_owned is False
+    assert source.available is True
+    assert source.payload == {"legacy": "today_attendance_cache"}
+
+
+def test_owned_mirror_read_failure_is_unavailable_without_legacy_fallback(monkeypatch):
+    monkeypatch.setattr(live_cache.attendance_location_policy, "get_rollout_config", lambda: _config("shadow"))
+    monkeypatch.setattr(live_cache.attendance_mirror, "health_snapshot", lambda: _health())
+    monkeypatch.setattr(
+        live_cache.attendance_mirror,
+        "day_presence",
+        lambda _day: (_ for _ in ()).throw(RuntimeError("mirror read failed")),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "_read",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("legacy fallback forbidden")),
+    )
+
+    source = live_cache.read_attendance_source(DAY)
+
+    assert source.mirror_owned is True
+    assert source.available is False
+    assert source.payload is None
+    assert source.refreshed_at == FRESH_AT
+
+
+def test_owned_unavailable_source_never_fabricates_no_punch_status(monkeypatch):
+    source = SimpleNamespace(
+        payload=None,
+        refreshed_at=FRESH_AT,
+        mirror_owned=True,
+        available=False,
+    )
+    monkeypatch.setattr(live_cache, "read_attendance_source", lambda _day: source)
+    monkeypatch.setattr(
+        attendance,
+        "punches_for_day",
+        lambda _day: (_ for _ in ()).throw(AssertionError("Odoo fallback forbidden")),
+    )
+
+    assert attendance.status_for_day(DAY, ["5"], FIRST_IN, FIRST_IN) == {}
+    assert staffing_attendance._attendance_with_fallback(DAY, ["5"]) is None
+
+
+def test_mirror_health_failure_in_shadow_stays_unavailable(monkeypatch):
+    monkeypatch.setattr(live_cache.attendance_location_policy, "get_rollout_config", lambda: _config("shadow"))
+    monkeypatch.setattr(
+        live_cache.attendance_mirror,
+        "health_snapshot",
+        lambda: (_ for _ in ()).throw(RuntimeError("health unavailable")),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "_read",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("legacy fallback forbidden")),
+    )
+
+    source = live_cache.read_attendance_source(DAY)
+
+    assert source.mirror_owned is True
+    assert source.available is False
+    assert source.payload is None
+
+
+def test_migrated_day_readers_use_mirror_source_and_never_fetch_odoo(monkeypatch):
+    source = SimpleNamespace(
+        payload={"5": {"first_check_in": FIRST_IN.isoformat(), "currently_open": True}},
+        refreshed_at=FRESH_AT,
+        mirror_owned=True,
+        available=True,
+    )
+    monkeypatch.setattr(live_cache, "read_attendance_source", lambda _day: source)
+    monkeypatch.setattr(
+        attendance,
+        "punches_for_day",
+        lambda _day: (_ for _ in ()).throw(AssertionError("on-request Odoo fetch forbidden")),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "read_attendance",
+        lambda _day: (_ for _ in ()).throw(AssertionError("legacy cache forbidden")),
+    )
+    monkeypatch.setattr(attendance_state, "latest_punches_bulk", lambda _ids: {})
+
+    status = attendance.status_for_day(DAY, ["5"], FIRST_IN, FIRST_IN)
+    staffing_punches = staffing_attendance._attendance_with_fallback(DAY, ["5"])
+
+    assert status["5"]["currently_open"] is True
+    assert staffing_punches == source.payload
+
+
+def test_migrated_open_readers_share_mirror_freshness_without_refresh(monkeypatch):
+    source = SimpleNamespace(
+        payload={
+            "5": {
+                "att_id": 90,
+                "check_in": FIRST_IN.isoformat(),
+                "wc_name": "Bay 8",
+                "raw_odoo_wc_name": "Luke Bay 8",
+            }
+        },
+        refreshed_at=FRESH_AT,
+        mirror_owned=True,
+        available=True,
+    )
+    monkeypatch.setattr(live_cache, "read_open_attendance_source", lambda: source)
+    monkeypatch.setattr(
+        live_cache,
+        "read_open_attendance",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy cache forbidden")),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "refresh_odoo_open_attendance",
+        lambda: (_ for _ in ()).throw(AssertionError("on-request Odoo refresh forbidden")),
+    )
+    monkeypatch.setattr(attendance_state, "latest_punch", lambda _person_id: None)
+    monkeypatch.setattr(attendance, "person_id_to_name", lambda: {"5": "Maria"})
+    monkeypatch.setattr(live_cache, "is_stale", lambda _at: False)
+
+    state = attendance_state.current_state(5)
+    windows, refreshed_at = timeclock_windows.current_attendance_windows()
+
+    assert state["current_wc"] == "Bay 8"
+    assert windows == {"Maria": [("Bay 8", FIRST_IN, None)]}
+    assert refreshed_at == FRESH_AT
+
+
+def test_owned_unavailable_open_source_is_not_replaced_by_synced_local_log(monkeypatch):
+    monkeypatch.setattr(
+        live_cache,
+        "read_open_attendance_source",
+        lambda: SimpleNamespace(
+            payload=None,
+            refreshed_at=FRESH_AT,
+            mirror_owned=True,
+            available=False,
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_state,
+        "latest_punch",
+        lambda _person_id: {
+            "action": "clock_in",
+            "wc_name": "Bay 3",
+            "occurred_at": FIRST_IN,
+            "odoo_attendance_id": 90,
+            "synced_to_odoo": True,
+            "synced_at": FIRST_IN,
+        },
+    )
+
+    state = attendance_state.current_state(5)
+
+    assert state["is_clocked_in"] is None
+    assert state["attendance_source_unavailable"] is True
+
+
+def test_owned_stale_open_source_keeps_last_verified_odoo_state(monkeypatch):
+    stale_at = FIRST_IN + timedelta(minutes=10)
+    monkeypatch.setattr(
+        live_cache,
+        "read_open_attendance_source",
+        lambda: SimpleNamespace(
+            payload={
+                "5": {
+                    "att_id": 91,
+                    "check_in": FIRST_IN.isoformat(),
+                    "wc_name": "Bay 8",
+                }
+            },
+            refreshed_at=stale_at,
+            mirror_owned=True,
+            available=True,
+        ),
+    )
+    monkeypatch.setattr(live_cache, "is_stale", lambda _at: True)
+    monkeypatch.setattr(
+        attendance_state,
+        "latest_punch",
+        lambda _person_id: {
+            "action": "clock_in",
+            "wc_name": "Bay 3",
+            "occurred_at": FIRST_IN,
+            "odoo_attendance_id": 90,
+            "synced_to_odoo": True,
+            "synced_at": FIRST_IN,
+        },
+    )
+
+    state = attendance_state.current_state(5)
+
+    assert state["is_clocked_in"] is True
+    assert state["current_wc"] == "Bay 8"
+    assert state["attendance_source_stale"] is True
+
+
+def test_mirror_day_windows_cap_open_rows_at_verified_freshness(monkeypatch):
+    policy = live_cache.AttendanceReadPolicy(
+        mirror_owned=True,
+        available=True,
+        refreshed_at=FRESH_AT,
+        mode="shadow",
+    )
+    monkeypatch.setattr(live_cache, "attendance_read_policy", lambda: policy)
+    monkeypatch.setattr(
+        attendance_mirror,
+        "rows_overlapping",
+        lambda *_args: (
+            {
+                "employee_odoo_id": 5,
+                "check_in_utc": FIRST_IN,
+                "check_out_utc": None,
+                "odoo_work_center_id": 8,
+            },
+        ),
+    )
+    monkeypatch.setattr(attendance, "person_id_to_name", lambda: {"5": "Maria"})
+    monkeypatch.setattr(
+        work_centers_store,
+        "app_work_center_name_for_odoo_id",
+        lambda _wc_id: "Bay 8",
+    )
+
+    windows, available = timeclock_windows.attendance_windows_for_day_with_availability(
+        DAY
+    )
+
+    assert available is True
+    assert windows == {"Maria": [("Bay 8", FIRST_IN, FRESH_AT)]}
+
+
+def test_auto_lunch_stops_on_owned_mirror_unavailability(monkeypatch):
+    monkeypatch.setattr(
+        auto_lunch_settings,
+        "current",
+        lambda: SimpleNamespace(enabled=True, observe_only=False),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "read_open_attendance_source",
+        lambda: SimpleNamespace(
+            payload=None,
+            refreshed_at=FRESH_AT,
+            mirror_owned=True,
+            available=False,
+        ),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "read_open_attendance",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy cache forbidden")),
+    )
+    monkeypatch.setattr(auto_lunch.shift_config, "is_workday", lambda _day: False)
+    monkeypatch.setattr(
+        auto_lunch.db,
+        "query",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("unknown state must stop tick")),
+    )
+
+    auto_lunch.run_tick(datetime.combine(DAY, time(11, 0), tzinfo=UTC))
+
+
+def test_legacy_attendance_warmers_noop_only_after_mirror_owns(monkeypatch):
+    owns = iter([True, True, False, False])
+    monkeypatch.setattr(live_cache, "mirror_owns_attendance_reads", lambda: next(owns))
+    attendance_refresh = MagicMock()
+    open_refresh = MagicMock()
+    production_refresh = MagicMock()
+    monkeypatch.setattr(live_cache, "refresh_attendance", attendance_refresh)
+    monkeypatch.setattr(live_cache, "refresh_odoo_open_attendance", open_refresh)
+    monkeypatch.setattr(live_cache, "refresh_production", production_refresh)
+    monkeypatch.setattr(app, "plant_today", lambda: DAY)
+    monkeypatch.setattr(app, "_zira_client", lambda: object())
+
+    asyncio.run(app._tick_live_cache())
+    asyncio.run(app._tick_odoo_attendance())
+    asyncio.run(app._tick_live_cache())
+    asyncio.run(app._tick_odoo_attendance())
+
+    attendance_refresh.assert_called_once_with(DAY)
+    open_refresh.assert_called_once_with()
+    assert production_refresh.call_count == 2
+
+
+def test_day_presence_and_current_open_queries_are_bounded(monkeypatch):
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((" ".join(sql.split()), params))
+        if "GROUP BY employee_odoo_id" in sql:
+            return [
+                {
+                    "employee_odoo_id": 5,
+                    "first_check_in": FIRST_IN,
+                    "currently_open": True,
+                }
+            ]
+        return [
+            {
+                "odoo_attendance_id": 90,
+                "employee_odoo_id": 5,
+                "check_in_utc": FIRST_IN,
+                "odoo_work_center_id": 8,
+                "odoo_work_center_name": "Luke Bay 8",
+            }
+        ]
+
+    monkeypatch.setattr(attendance_mirror.db, "query", query)
+
+    assert attendance_mirror.day_presence(DAY) == {
+        "5": {"first_check_in": FIRST_IN.isoformat(), "currently_open": True}
+    }
+    assert attendance_mirror.current_open_attendance()[0]["odoo_attendance_id"] == 90
+    assert "check_in_utc >= %s" in calls[0][0]
+    assert "check_in_utc < %s" in calls[0][0]
+    assert "check_out_utc IS NULL" in calls[1][0]
+
+
+def test_injected_policy_prevents_a_second_ownership_health_decision(monkeypatch):
+    policy = live_cache.AttendanceReadPolicy(
+        mirror_owned=True,
+        available=True,
+        refreshed_at=FRESH_AT,
+        mode="shadow",
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "attendance_read_policy",
+        lambda: (_ for _ in ()).throw(AssertionError("policy must stay frozen")),
+    )
+    monkeypatch.setattr(
+        live_cache.attendance_mirror,
+        "day_presence",
+        lambda _day: {"5": {"first_check_in": FIRST_IN.isoformat(), "currently_open": True}},
+    )
+
+    source = live_cache.read_attendance_source(DAY, policy=policy)
+
+    assert source.mirror_owned is True
+    assert source.refreshed_at == FRESH_AT

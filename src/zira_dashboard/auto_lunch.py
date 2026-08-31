@@ -154,6 +154,11 @@ def _day_bounds(day: date) -> tuple[datetime, datetime]:
 def _first_clock_in(person_odoo_id: int, day: date) -> datetime | None:
     """The person's earliest clock_in on `day` (their morning punch). Used as
     the flex elapsed-time anchor."""
+    source = live_cache.read_attendance_source(day)
+    if source.mirror_owned:
+        entry = (source.payload or {}).get(str(person_odoo_id))
+        raw = entry.get("first_check_in") if entry else None
+        return datetime.fromisoformat(raw) if raw else None
     start, end = _day_bounds(day)
     rows = db.query(
         "SELECT MIN(COALESCE(rounded_at, occurred_at)) AS first_in "
@@ -172,6 +177,10 @@ def _latest_in_wc(person_odoo_id: int, day: date) -> str | None:
     reconciled state carries no work center (e.g. the open-attendance cache
     doesn't surface it) — so the auto sign-in still restores the WC and its
     Kiosk Department, matching the regular timeclock."""
+    source = live_cache.read_open_attendance_source()
+    if source.mirror_owned:
+        entry = (source.payload or {}).get(str(person_odoo_id))
+        return entry.get("wc_name") if entry else None
     start, end = _day_bounds(day)
     rows = db.query(
         "SELECT wc_name FROM timeclock_punches_log "
@@ -388,8 +397,9 @@ def run_tick(now: datetime | None = None) -> None:
     if shift_config.is_workday(today):
         fixed_window = lunch_window_for_day(shift_config.breaks_for(today), today)
 
-    snapshot, refreshed_at = live_cache.read_open_attendance()
-    if snapshot is None or live_cache.is_stale(refreshed_at):
+    source = live_cache.read_open_attendance_source()
+    snapshot, refreshed_at = source.payload, source.refreshed_at
+    if not source.available or snapshot is None or live_cache.is_stale(refreshed_at):
         _log.info("auto-lunch: open-attendance cache missing/stale; skipping tick")
         return
 

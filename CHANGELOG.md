@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Timeclock starts and ends the day
+
+- **When the new Odoo location rule is turned on, workers will use Plant Manager only to clock in and out.** The plant-floor app will choose work areas and move people during the day, while Staffing can already show both the plan and the live Odoo location.
+
 ### Fix unassigned production from the inbox
 
 - **A manager can now choose who did an unassigned production run, set the exact start and end time, and preview the Odoo change before saving.** “Still working” keeps the time open.

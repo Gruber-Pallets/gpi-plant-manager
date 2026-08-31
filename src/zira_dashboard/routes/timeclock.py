@@ -56,6 +56,7 @@ from fastapi import APIRouter, BackgroundTasks, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import (
+    attendance_location_policy,
     attendance_state,
     db,
     shift_config,
@@ -98,6 +99,15 @@ def _time_off_enabled() -> bool:
     the user-facing tile stays hidden until we're ready to flip it on.
     """
     return os.environ.get("KIOSK_TIME_OFF_ENABLED", "").strip() == "1"
+
+
+def _live_location_active() -> bool:
+    """Fail closed to the unchanged legacy flow if rollout state is unreadable."""
+    try:
+        return attendance_location_policy.live_is_active()
+    except Exception:  # noqa: BLE001 -- a kiosk punch must remain available
+        _log.exception("Could not read attendance-location rollout state")
+        return False
 
 
 def _is_time_off_only(p: dict | None) -> bool:
@@ -247,8 +257,8 @@ def _time_off_override_confirmation(
     *,
     person: dict,
     person_id: int,
-    wc_name: str,
-    scheduled_wc_name: str,
+    wc_name: str | None,
+    scheduled_wc_name: str | None,
     error: str | None = None,
     status_code: int = 200,
 ):
@@ -261,6 +271,7 @@ def _time_off_override_confirmation(
             "token": _mint_token(person_id),
             "wc_name": wc_name,
             "scheduled_wc_name": scheduled_wc_name,
+            "location_live": _live_location_active(),
             "error": error,
             **timeclock_i18n.context_for_person(person),
         },
@@ -654,6 +665,7 @@ def timeclock_dashboard(request: Request, token: str):
         _pending_time_off_count(p["odoo_id"]) if time_off_on and p.get("odoo_id") else 0
     )
 
+    location_live = _live_location_active()
     return templates.TemplateResponse(
         request,
         "timeclock_dashboard.html",
@@ -662,6 +674,10 @@ def timeclock_dashboard(request: Request, token: str):
             "token": fresh_token,
             "is_clocked_in": state["is_clocked_in"],
             "current_wc": state["current_wc"],
+            "attendance_source_unavailable": bool(
+                state.get("attendance_source_unavailable")
+            ),
+            "attendance_source_stale": bool(state.get("attendance_source_stale")),
             "on_lunch": on_lunch,
             "check_in_display": _fmt_time(state["check_in_ts"]) if state["check_in_ts"] else None,
             "scheduled_wc": scheduled_wc,
@@ -669,6 +685,7 @@ def timeclock_dashboard(request: Request, token: str):
             "sync_warning": sync_warning,
             "time_off_enabled": time_off_on,
             "pending_time_off_count": pending_time_off,
+            "location_live": location_live,
             "saturday_commitment": _saturday_commitment_context(person_id),
             **timeclock_i18n.context_for_person(p),
         },
@@ -784,6 +801,8 @@ def timeclock_pick_wc(
     p = _person_by_id(person_id)
     if not p:
         return RedirectResponse(url="/timeclock", status_code=303)
+    if _live_location_active():
+        return _location_route_gone()
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
@@ -809,7 +828,7 @@ def kiosk_clock_in(
     request: Request,
     background_tasks: BackgroundTasks,
     token: str,
-    wc_name: str = Form(...),
+    wc_name: str | None = Form(default=None),
     scheduled_wc_name: str = Form(default=""),
 ):
     person_id = _verify_token(token)
@@ -821,29 +840,33 @@ def kiosk_clock_in(
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
+    location_live = _live_location_active()
+    if not location_live and not wc_name:
+        return HTMLResponse("A work center is required.", status_code=422)
+    punch_wc = None if location_live else wc_name
     odoo_id = p["odoo_id"]
     if _approved_full_day_leave_today(odoo_id):
         return _time_off_override_confirmation(
             request,
             person=p,
             person_id=person_id,
-            wc_name=wc_name,
-            scheduled_wc_name=scheduled_wc_name,
+            wc_name=punch_wc,
+            scheduled_wc_name=None if location_live else scheduled_wc_name,
         )
-    log_id, rounded_at = _open_log_row(odoo_id, "clock_in", wc_name)
+    log_id, rounded_at = _open_log_row(odoo_id, "clock_in", punch_wc)
     # Odoo write runs after the response is sent. FastAPI runs sync `def`
     # background tasks in a threadpool, so the XML-RPC call doesn't block
     # the event loop. The 60s sweep worker remains a safety net for
     # transient failures.
     background_tasks.add_task(timeclock_sync.sync_one_by_id, log_id)
-    if scheduled_wc_name and scheduled_wc_name != wc_name:
+    if not location_live and scheduled_wc_name and scheduled_wc_name != punch_wc:
         _log_variance(odoo_id, scheduled_wc_name, wc_name)
     return templates.TemplateResponse(
         request,
         "timeclock_success.html",
         {
             "person": p,
-            "message": f"Clocked in to {wc_name}",
+            "message": "Clocked in" if location_live else f"Clocked in to {wc_name}",
             "time": _fmt_time(rounded_at),
             **timeclock_i18n.context_for_person(p),
         },
@@ -855,7 +878,7 @@ def kiosk_clock_in_confirm_time_off_override(
     request: Request,
     background_tasks: BackgroundTasks,
     token: str,
-    wc_name: str = Form(...),
+    wc_name: str | None = Form(default=None),
     scheduled_wc_name: str = Form(default=""),
 ):
     """Clear approved leave synchronously, then create the clock-in.
@@ -875,6 +898,11 @@ def kiosk_clock_in_confirm_time_off_override(
     if salaried:
         return salaried
 
+    location_live = _live_location_active()
+    if not location_live and not wc_name:
+        return HTMLResponse("A work center is required.", status_code=422)
+    punch_wc = None if location_live else wc_name
+
     odoo_id = p["odoo_id"]
     leave = _approved_full_day_leave_today(odoo_id)
     if not leave or not leave.get("odoo_leave_id"):
@@ -882,8 +910,8 @@ def kiosk_clock_in_confirm_time_off_override(
             request,
             person=p,
             person_id=person_id,
-            wc_name=wc_name,
-            scheduled_wc_name=scheduled_wc_name,
+            wc_name=punch_wc,
+            scheduled_wc_name=None if location_live else scheduled_wc_name,
             error="Your approved time off could not be confirmed. Please see a manager.",
             status_code=409,
         )
@@ -895,8 +923,8 @@ def kiosk_clock_in_confirm_time_off_override(
             request,
             person=p,
             person_id=person_id,
-            wc_name=wc_name,
-            scheduled_wc_name=scheduled_wc_name,
+            wc_name=punch_wc,
+            scheduled_wc_name=None if location_live else scheduled_wc_name,
             error="We could not clear your approved time off. No clock-in was recorded; please try again or see a manager.",
             status_code=502,
         )
@@ -910,18 +938,18 @@ def kiosk_clock_in_confirm_time_off_override(
         day=plant_today(),
         person_odoo_id=odoo_id,
         leave=leave,
-        clock_in_wc=wc_name,
+        clock_in_wc=punch_wc,
     )
-    log_id, rounded_at = _open_log_row(odoo_id, "clock_in", wc_name)
+    log_id, rounded_at = _open_log_row(odoo_id, "clock_in", punch_wc)
     background_tasks.add_task(timeclock_sync.sync_one_by_id, log_id)
-    if scheduled_wc_name and scheduled_wc_name != wc_name:
+    if not location_live and scheduled_wc_name and scheduled_wc_name != punch_wc:
         _log_variance(odoo_id, scheduled_wc_name, wc_name)
     return templates.TemplateResponse(
         request,
         "timeclock_success.html",
         {
             "person": p,
-            "message": f"Clocked in to {wc_name}",
+            "message": "Clocked in" if location_live else f"Clocked in to {wc_name}",
             "time": _fmt_time(rounded_at),
             **timeclock_i18n.context_for_person(p),
         },
@@ -1000,6 +1028,8 @@ def kiosk_transfer(
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/timeclock", status_code=303)
+    if _live_location_active():
+        return _location_route_gone()
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
@@ -1019,4 +1049,13 @@ def kiosk_transfer(
             "time": _fmt_time(in_rounded),
             **timeclock_i18n.context_for_person(p),
         },
+    )
+
+
+def _location_route_gone() -> HTMLResponse:
+    """Bilingual compatibility response for stale location-changing pages."""
+    return HTMLResponse(
+        "Use the plant-floor app to choose or change your work area. "
+        "Usa la aplicación de planta para elegir o cambiar tu área de trabajo.",
+        status_code=410,
     )

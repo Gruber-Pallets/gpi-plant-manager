@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import replace
 from datetime import date, datetime, timedelta, UTC
 from urllib.parse import urlencode
 
@@ -18,11 +20,15 @@ from .. import (
     _http_cache,
     app_settings,
     attendance,
+    attendance_location_policy,
+    attendance_mirror,
+    attendance_timeline,
     auto_schedule_capacity,
     company_holidays,
     current_schedule_validation,
     db,
     late_report,
+    live_cache,
     optional_workday,
     rotation_store,
     rotation_suggestions,
@@ -86,6 +92,98 @@ class _Phase:
 
     def __exit__(self, *_args) -> None:
         self.store[self.name] = (time.perf_counter() - self._t0) * 1000.0
+
+
+def _live_location_active() -> bool:
+    try:
+        return attendance_location_policy.live_is_active()
+    except Exception:  # noqa: BLE001 -- preserve legacy actions on unreadable rollout state
+        log.exception("Could not read attendance-location rollout state")
+        return False
+
+
+def _project_staffing_location_spans(day: date, *, as_of_utc: datetime, policy):
+    """Project one Staffing timeline from the already-frozen health policy."""
+    if policy.refreshed_at is None:
+        raise RuntimeError("attendance mirror has no verified freshness")
+    start_utc, end_utc = attendance_timeline._plant_day_bounds(day)
+    rows = attendance_mirror.rows_overlapping(start_utc, end_utc)
+    if not rows:
+        return ()
+    rows = attendance_timeline._rows_with_employee_department_fallback(rows)
+    spans = attendance_timeline.project_rows(
+        rows,
+        as_of_utc=as_of_utc,
+        verified_through_utc=policy.refreshed_at,
+        map_work_center=work_centers_store.app_work_center_name_for_odoo_id,
+        requires_work_center=attendance_timeline._department_requires_work_center_for_mirror,
+        expected_department_id=attendance_timeline._expected_department_id_for_app_work_center,
+    )
+    canonical_by_id = attendance.person_id_to_name()
+    return tuple(
+        replace(
+            span,
+            employee_name=canonical_by_id.get(
+                str(span.employee_odoo_id), span.employee_name
+            ),
+        )
+        for span in spans
+    )
+
+
+def _staffing_live_context(
+    day: date,
+    today: date,
+    planned_by_wc: Mapping[str, Sequence[str]],
+    *,
+    policy,
+    as_of_utc: datetime,
+) -> dict:
+    """Build a plan-plus-live overlay from one rollout/health/timeline snapshot."""
+    label = "Live Odoo" if policy.mode == "live" else "Odoo preview"
+    base = {
+        "staffing_live_enabled": bool(day == today and policy.mirror_owned),
+        "staffing_live_label": label,
+        "staffing_live_unavailable": False,
+        "staffing_live_fresh_at": policy.refreshed_at,
+        "staffing_live_locations": (),
+        "live_locations_by_name": {},
+        "live_unscheduled_locations": (),
+    }
+    if not base["staffing_live_enabled"]:
+        return base
+    if not policy.available:
+        return {**base, "staffing_live_unavailable": True}
+    try:
+        spans = _project_staffing_location_spans(
+            day,
+            as_of_utc=as_of_utc,
+            policy=policy,
+        )
+        locations = staffing_view.build_live_locations(
+            planned_by_wc,
+            spans,
+            as_of_utc=as_of_utc,
+        )
+        locations = tuple(
+            replace(location, source_fresh_at=policy.refreshed_at)
+            for location in locations
+        )
+    except Exception:  # noqa: BLE001 -- show visible source failure, never schedule fallback
+        log.exception("Could not build live Odoo Staffing locations for %s", day)
+        return {**base, "staffing_live_unavailable": True}
+    return {
+        **base,
+        "staffing_live_locations": locations,
+        "live_locations_by_name": {
+            location.person_name: location for location in locations
+        },
+        "live_unscheduled_locations": tuple(
+            location
+            for location in locations
+            if location.planned_work_center is None
+        ),
+    }
 
 
 def _server_timing_header(phases: dict) -> str:
@@ -1645,6 +1743,8 @@ def staffing_page(
         d = date.fromisoformat(day) if day else _next_working_day(today)
     except ValueError:
         d = _next_working_day(today)
+    staffing_live_as_of = datetime.now(UTC)
+    staffing_live_policy = live_cache.attendance_read_policy()
 
     # Every Staffing date uses the live bucket: a past recorded absence can
     # gain a PTO/review suffix after the day ends. This keeps browser freshness
@@ -1667,6 +1767,14 @@ def staffing_page(
         view_mode_normalized,
         int(publish_blocked or 0),
         publish_errors,
+        staffing_live_policy.mode,
+        staffing_live_policy.mirror_owned,
+        staffing_live_policy.available,
+        (
+            staffing_live_policy.refreshed_at.isoformat()
+            if staffing_live_policy.refreshed_at is not None
+            else None
+        ),
     )
     cached_resp = _http_cache.get_cached_response(
         response_cache_key, includes_today=cache_is_live
@@ -1806,7 +1914,20 @@ def staffing_page(
 
     # Now that the schedule is in hand, kick off attendance in parallel
     # with our render-prep work below.
-    f_attendance = pool.submit(_safe_attendance, d, sched, today)
+    # Older route tests and integrations replace this reader with the original
+    # three-argument callable. Keep that seam while the production reader gets
+    # this response's frozen mirror policy.
+    attendance_parameters = inspect.signature(_safe_attendance).parameters
+    if "attendance_policy" in attendance_parameters:
+        f_attendance = pool.submit(
+            _safe_attendance,
+            d,
+            sched,
+            today,
+            attendance_policy=staffing_live_policy,
+        )
+    else:
+        f_attendance = pool.submit(_safe_attendance, d, sched, today)
 
     # Collect Odoo time-off (already fetched in parallel above).
     with _Phase(phases, "attendance"):
@@ -1902,6 +2023,13 @@ def staffing_page(
         enabled_work_centers=enabled_auto_work_centers,
         publish_errors=publish_errors,
         training_reservations_by_center=training_picker_reservations,
+    )
+    staffing_live_context = _staffing_live_context(
+        d,
+        today,
+        sched.assignments or {},
+        policy=staffing_live_policy,
+        as_of_utc=staffing_live_as_of,
     )
     unscheduled_count = len(bay_model.get("unassigned") or ())
     auto_on_count = len(enabled_auto_work_centers)
@@ -2239,6 +2367,7 @@ def staffing_page(
                 # time_off_names/entries, partial_*_by_name, people_meta,
                 # all_active_people). See staffing_view.build_staffing_bays.
                 **bay_model,
+                **staffing_live_context,
                 "smart_defaults_by_loc": smart_defaults_by_loc,
                 "cleared_partials_today": cleared_partials_today,
                 "attendance_by_name": attendance_by_name,
@@ -2875,6 +3004,14 @@ async def staffing_attribute(request: Request):
         return JSONResponse({"ok": False, "error": "missing/invalid fields"}, status_code=400)
     if end_utc is not None and end_utc <= start_utc:
         return JSONResponse({"ok": False, "error": "end must be after start"}, status_code=400)
+    if _live_location_active():
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Use the plant-floor app to change live work areas.",
+            },
+            status_code=410,
+        )
 
     from .. import inbox_keys, inbox_log
 
@@ -2950,6 +3087,23 @@ async def staffing_attribute_with_testing(request: Request):
         return JSONResponse({"ok": False, "error": f"bad body: {e}"}, status_code=400)
     if not wc or t_end <= t_start:
         return JSONResponse({"ok": False, "error": "missing/invalid fields"}, status_code=400)
+    remainder = str(body.get("remainder_person") or "").strip()
+    try:
+        requested_remainder_end = _dt.fromisoformat(body["sensed_end_utc"])
+    except (KeyError, TypeError, ValueError):
+        requested_remainder_end = t_end
+    if (
+        remainder
+        and requested_remainder_end > t_end
+        and _live_location_active()
+    ):
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Use the plant-floor app to change live work areas.",
+            },
+            status_code=410,
+        )
 
     def _work():
         ids: list[int] = []
@@ -2965,12 +3119,8 @@ async def staffing_attribute_with_testing(request: Request):
         )
 
         transfer = {"transfer": "none"}
-        remainder = str(body.get("remainder_person") or "").strip()
         if remainder:
-            try:
-                rem_end = _dt.fromisoformat(body["sensed_end_utc"])
-            except (KeyError, TypeError, ValueError):
-                rem_end = t_end
+            rem_end = requested_remainder_end
             if rem_end > t_end:
                 ids.append(wc_attributions.add(day, wc, remainder, t_end, rem_end))
                 try:

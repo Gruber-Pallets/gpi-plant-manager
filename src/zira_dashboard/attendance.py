@@ -84,8 +84,11 @@ def status_for_day(day, ids, now_local, shift_start_local) -> dict:
     (warmer-populated), fall back to a direct Odoo pull, then compute_status
     against the supplied clock so minutes_late stays fresh."""
     from . import live_cache
-    payload, _refreshed = live_cache.read_attendance(day)
-    if payload is None:
+    source = live_cache.read_attendance_source(day)
+    payload = source.payload
+    if source.mirror_owned and not source.available:
+        return {}
+    if payload is None and not source.mirror_owned:
         payload = punches_for_day(day)
     return compute_status(payload or {}, ids, now_local, shift_start_local)
 
@@ -146,8 +149,11 @@ def derived_absent_names(day) -> set:
     name_to_id = name_to_person_id()
     # Cache-first (same pattern as status_for_day): the warmer mirrors this
     # exact payload into live_cache every ~45s, so don't hit Odoo per render.
-    punches, _refreshed = live_cache.read_attendance(day)
-    if punches is None:
+    source = live_cache.read_attendance_source(day)
+    punches = source.payload
+    if source.mirror_owned and not source.available:
+        return set()
+    if punches is None and not source.mirror_owned:
         punches = punches_for_day(day)
     punches = punches or {}
     out: set = set()

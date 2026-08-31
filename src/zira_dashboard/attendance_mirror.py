@@ -566,6 +566,49 @@ def rows_overlapping(start_utc: datetime, end_utc: datetime) -> tuple[dict, ...]
     )
 
 
+def day_presence(day: date) -> dict[str, dict[str, object]]:
+    """Return first arrival and current-open state for one plant-local day."""
+    if type(day) is not date:
+        raise TypeError("day must be a date")
+    start_local = datetime.combine(day, datetime.min.time(), tzinfo=SITE_TZ)
+    start_utc = start_local.astimezone(UTC)
+    end_utc = (start_local + timedelta(days=1)).astimezone(UTC)
+    rows = db.query(
+        "SELECT employee_odoo_id, MIN(check_in_utc) AS first_check_in, "
+        "BOOL_OR(check_out_utc IS NULL) AS currently_open "
+        "FROM odoo_attendance_mirror "
+        "WHERE deleted_at IS NULL "
+        "AND (check_out_utc IS NULL OR check_out_utc > check_in_utc) "
+        "AND check_in_utc >= %s "
+        "AND check_in_utc < %s "
+        "GROUP BY employee_odoo_id ORDER BY employee_odoo_id",
+        (start_utc, end_utc),
+    )
+    return {
+        str(_positive_int(row["employee_odoo_id"], "employee_odoo_id")): {
+            "first_check_in": _aware_utc(
+                row["first_check_in"], "first_check_in"
+            ).isoformat(),
+            "currently_open": bool(row["currently_open"]),
+        }
+        for row in rows
+    }
+
+
+def current_open_attendance() -> tuple[dict[str, Any], ...]:
+    """Return every non-deleted open row for the live-location snapshot."""
+    return tuple(
+        _utc_database_row(row)
+        for row in db.query(
+            "SELECT odoo_attendance_id, employee_odoo_id, check_in_utc, "
+            "odoo_work_center_id, odoo_work_center_name "
+            "FROM odoo_attendance_mirror "
+            "WHERE deleted_at IS NULL AND check_out_utc IS NULL "
+            "ORDER BY employee_odoo_id, check_in_utc, odoo_attendance_id"
+        )
+    )
+
+
 def rows_for_employee(
     employee_odoo_id: int,
     start_utc: datetime,
@@ -851,6 +894,8 @@ def health_snapshot() -> MirrorHealth:
 
 __all__ = [
     "MirrorHealth",
+    "current_open_attendance",
+    "day_presence",
     "enqueue_recalc",
     "health_snapshot",
     "local_days_touched",

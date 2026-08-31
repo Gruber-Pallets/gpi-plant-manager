@@ -24,11 +24,18 @@ from __future__ import annotations
 
 import logging
 
-from . import db, odoo_client
+from . import attendance_location_policy, db, odoo_client
 
 _log = logging.getLogger(__name__)
 
 _BATCH_SIZE = 50
+
+
+def _live_location_active() -> bool:
+    try:
+        return attendance_location_policy.live_is_active()
+    except Exception:
+        return False
 
 
 def retry_unsynced_punches() -> int:
@@ -76,14 +83,34 @@ def _retry_one(r: dict) -> None:
         # closes the right one, and label its WC if the punch carries one.
         existing = odoo_client.get_current_attendance(person_odoo_id)
         if existing:
-            odoo_client.set_attendance_wc(existing["id"], wc_name)
+            # Active-live day-boundary punches carry no desired work center.
+            # Adopting Luke's already-open row must not clear its location.
+            if wc_name is not None:
+                odoo_client.set_attendance_wc(existing["id"], wc_name)
             _mark_synced(r["id"], existing["id"])
             return
         att_id = odoo_client.clock_in(person_odoo_id, wc_name, ts)
         _mark_synced(r["id"], att_id)
         return
 
-    if action in ("clock_out", "transfer_out"):
+    if action == "clock_out" and _live_location_active():
+        # A day-end punch is authoritative even when bad overlapping rows
+        # exist.  The facade closes them at this exact timestamp and performs
+        # a fresh no-open-rows verification before returning.
+        closed_ids = odoo_client.close_all_open_attendance_rows(person_odoo_id, ts)
+        _mark_synced(r["id"], closed_ids[-1] if closed_ids else None)
+        return
+
+    if action == "clock_out":
+        current = odoo_client.get_current_attendance(person_odoo_id)
+        if current:
+            odoo_client.clock_out(current["id"], ts)
+            _mark_synced(r["id"], current["id"])
+        else:
+            _mark_synced(r["id"], None)
+        return
+
+    if action == "transfer_out":
         current = odoo_client.get_current_attendance(person_odoo_id)
         if current:
             odoo_client.clock_out(current["id"], ts)
