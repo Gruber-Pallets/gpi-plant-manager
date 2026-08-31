@@ -56,10 +56,61 @@ def _breakdown_windows_for_segment(breakdown_windows, segment):
     segments retain the historical ``(name, wc)`` lookup.
     """
     if segment.person_odoo_id is not None:
-        return breakdown_windows.get(
-            (segment.person_odoo_id, segment.person_name, segment.wc_name), ()
-        )
+        matched = []
+        for key, windows in breakdown_windows.items():
+            if (
+                len(key) == 3
+                and key[0] == segment.person_odoo_id
+                and key[2] == segment.wc_name
+            ):
+                matched.extend(windows)
+        return matched
     return breakdown_windows.get((segment.person_name, segment.wc_name), ())
+
+
+def _canonical_department_segments(
+    day,
+    window_start_utc,
+    window_end_utc,
+    *,
+    now_utc,
+):
+    """ID-bearing timeline segments, or ``None`` for the rollback path."""
+    from .. import (
+        assignment_windows,
+        attendance_location_policy,
+        attendance_timeline,
+        live_cache,
+    )
+
+    policy = live_cache.attendance_read_policy(now_utc=now_utc)
+    try:
+        permanently_strict = attendance_location_policy.day_is_strict(day)
+    except Exception:
+        # Preserve the established rollback behavior when settings storage is
+        # unreadable; a mirror-owned policy still fails conservatively.
+        return () if policy.mirror_owned else None
+    if not policy.mirror_owned and not permanently_strict:
+        return None
+    if policy.mirror_owned and (
+        not policy.available
+        or policy.refreshed_at is None
+        or policy.stale
+    ):
+        return ()
+    try:
+        spans = attendance_timeline.timeline_for_range(
+            window_start_utc,
+            window_end_utc,
+            as_of_utc=now_utc,
+        )
+    except Exception:
+        return ()
+    return assignment_windows.work_segments_from_timeline(
+        spans,
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+    )
 
 
 def _segment_view(score) -> dict:
@@ -295,24 +346,34 @@ def _department_day_data(
     # person signs in at the new tablet. Manual attributions are the fallback
     # for production at a WC the operator never transferred into. People with
     # no attendance records fall back to their schedule.
-    from .. import assignment_windows, wc_attributions, machine_breakdown
-    attendance_windows = timeclock_windows.attendance_windows_for_day(d)
-    if is_live_dashboard:
-        current_windows, _refreshed_at = timeclock_windows.current_attendance_windows()
-        attendance_windows = timeclock_windows.with_current_attendance_overrides(
-            attendance_windows, current_windows
-        )
-    segments = assignment_windows.resolve_segments(
-        assignments=present_assignments,
-        attributions=wc_attributions.creditable_for_day(d),
-        punch_windows=attendance_windows,
-        shift_start_utc=window_start_utc,
-        cap_utc=window_end_utc,
-        time_off_key=staffing.TIME_OFF_KEY,
-        # A tagged Odoo attendance row proves the person worked despite a
-        # stale time-off/absence marker, so Odoo wins for that person.
-        excluded_people=_absent_today - set(attendance_windows),
+    from .. import assignment_windows, machine_breakdown, wc_attributions
+
+    canonical_segments = _canonical_department_segments(
+        d,
+        window_start_utc,
+        window_end_utc,
+        now_utc=now,
     )
+    if canonical_segments is not None:
+        segments = canonical_segments
+    else:
+        attendance_windows = timeclock_windows.attendance_windows_for_day(d)
+        if is_live_dashboard:
+            current_windows, _refreshed_at = timeclock_windows.current_attendance_windows()
+            attendance_windows = timeclock_windows.with_current_attendance_overrides(
+                attendance_windows, current_windows
+            )
+        segments = assignment_windows.resolve_segments(
+            assignments=present_assignments,
+            attributions=wc_attributions.creditable_for_day(d),
+            punch_windows=attendance_windows,
+            shift_start_utc=window_start_utc,
+            cap_utc=window_end_utc,
+            time_off_key=staffing.TIME_OFF_KEY,
+            # A tagged Odoo attendance row proves the person worked despite a
+            # stale time-off/absence marker, so Odoo wins for that person.
+            excluded_people=_absent_today - set(attendance_windows),
+        )
     # Keep every resolved segment for station activation and pace math, but on
     # today's live board show a person only at the WC whose segment remains
     # open through now. Otherwise a transfer (Repair 2 -> Dismantler 2) leaves

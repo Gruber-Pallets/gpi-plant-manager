@@ -81,7 +81,17 @@ def transfer(
     # for Odoo-calling handlers (_approve_time_off_sync, _refuse_time_off_sync):
     # log and return a friendly error, no rollback.
     try:
-        result = staffing_transfer.decide_and_apply(person_name, to_wc, transfer_at)
+        if employee_odoo_id is None:
+            result = staffing_transfer.decide_and_apply(
+                person_name, to_wc, transfer_at
+            )
+        else:
+            result = staffing_transfer.decide_and_apply(
+                person_name,
+                to_wc,
+                transfer_at,
+                employee_odoo_id=employee_odoo_id,
+            )
     except Exception as e:
         return _json_error(friendly_error(e), 500)
 
@@ -137,9 +147,9 @@ def snooze(body: dict) -> JSONResponse:
 
 def dismiss(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     """Blocking half of /api/exceptions/breakdown/dismiss ("Not a
-    breakdown"): snapshots the incident's exclusion rows into the undo
-    detail BEFORE deleting them, then resolves the incident."""
-    from . import inbox_keys, inbox_log, machine_breakdown, wc_attributions
+    breakdown"): atomically resolves the incident and receives the exact
+    exclusion rows deleted under that same incident lock for undo."""
+    from . import inbox_keys, inbox_log, machine_breakdown
 
     incident_id = body.get("incident_id")
     if not incident_id:
@@ -148,16 +158,9 @@ def dismiss(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     if incident is None:
         return _json_error("incident not found", 404)
 
-    # for_day()'s SELECT does not include `day` (it's the WHERE filter, not a
-    # returned column) -- stamp it back on before storing, since undo needs
-    # the full row shape to re-insert via wc_attributions.add().
-    snapshot_rows = [
-        {**r, "day": incident["day"]}
-        for r in wc_attributions.for_day(incident["day"])
-        if r.get("breakdown_id") == incident_id
-        and r.get("source") == wc_attributions.BREAKDOWN_SOURCE
-    ]
-    machine_breakdown.dismiss_incident(incident_id)
+    snapshot_rows = machine_breakdown.dismiss_incident(incident_id)
+    if snapshot_rows is None:
+        return _json_error("incident is already resolved", 409)
 
     eid = inbox_log.log_event_safe(
         item_kind="breakdown",

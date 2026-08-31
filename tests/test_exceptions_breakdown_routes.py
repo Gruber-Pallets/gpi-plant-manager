@@ -42,8 +42,13 @@ def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
     capped = []
     monkeypatch.setattr(wc_attributions, "cap_breakdown", lambda rid, end: capped.append((rid, end)))
     applied = {}
-    def _decide_and_apply(person, wc, ts):
-        applied.update(person=person, wc=wc, ts=ts)
+    def _decide_and_apply(person, wc, ts, *, employee_odoo_id=None):
+        applied.update(
+            person=person,
+            wc=wc,
+            ts=ts,
+            employee_odoo_id=employee_odoo_id,
+        )
         return {"transfer": "moved", "person": person,
                 "closed_id": 5, "new_id": 6, "to_dept": "Recycled"}
     monkeypatch.setattr(staffing_transfer, "decide_and_apply", _decide_and_apply)
@@ -62,7 +67,12 @@ def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
 
     assert resp.status_code == 200
     assert capped == [(10, _STOP)]
-    assert applied == {"person": "Juan", "wc": "Repair 3", "ts": _STOP}
+    assert applied == {
+        "person": "Juan",
+        "wc": "Repair 3",
+        "ts": _STOP,
+        "employee_odoo_id": 101,
+    }
     assert logged[0]["item_kind"] == "breakdown"
     assert logged[0]["action"] == "transfer"
     assert logged[0]["item_key"].endswith(":odoo:101")
@@ -164,7 +174,7 @@ def test_snooze_sync_calls_snooze_operator(monkeypatch):
     assert called == [(1, "Juan", 101)]
 
 
-def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
+def test_dismiss_sync_logs_locked_snapshot_including_racing_detector_row(monkeypatch):
     from zira_dashboard import machine_breakdown, wc_attributions, inbox_log
     monkeypatch.setattr(machine_breakdown, "get_incident", lambda iid: {
         "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08", "detected_stop_utc": _STOP,
@@ -179,13 +189,12 @@ def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
          "start_utc": "2026-07-08T18:12:00+00:00",
          "end_utc": None, "source": "breakdown", "breakdown_id": 1},
     ]
-    unrelated_row = {
-        **snapshot_rows[0],
-        "id": 99,
-        "breakdown_id": 999,
-    }
     monkeypatch.setattr(
-        wc_attributions, "for_day", lambda day: [*snapshot_rows, unrelated_row]
+        wc_attributions,
+        "for_day",
+        lambda day: pytest.fail(
+            "dismiss must not snapshot before acquiring the incident lock"
+        ),
     )
     dismissed = []
     monkeypatch.setattr(wc_attributions, "delete_breakdown_rows_for_incident",
@@ -197,7 +206,7 @@ def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
     monkeypatch.setattr(
         machine_breakdown,
         "dismiss_incident",
-        lambda iid: dismissed.append(iid),
+        lambda iid: dismissed.append(iid) or snapshot_rows,
         raising=False,
     )
     logged = []
@@ -210,6 +219,33 @@ def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
     assert logged[0]["action"] == "dismiss"
     assert logged[0]["reversible"] is True
     assert logged[0]["detail"]["rows"] == snapshot_rows
+
+
+def test_dismiss_sync_does_not_audit_when_another_terminal_action_wins(monkeypatch):
+    from zira_dashboard import inbox_log, machine_breakdown
+
+    monkeypatch.setattr(
+        machine_breakdown,
+        "get_incident",
+        lambda _incident_id: {
+            "id": 1,
+            "wc_name": "Dismantler 2",
+            "day": "2026-07-08",
+            "detected_stop_utc": _STOP,
+        },
+    )
+    monkeypatch.setattr(
+        machine_breakdown, "dismiss_incident", lambda _incident_id: None
+    )
+    monkeypatch.setattr(
+        inbox_log,
+        "log_event_safe",
+        lambda **_kwargs: pytest.fail("a lost dismiss must not be reversible"),
+    )
+
+    response = exceptions_route._breakdown_dismiss_sync({"incident_id": 1})
+
+    assert response.status_code == 409
 
 
 def test_report_sync_calls_report_manual(monkeypatch):

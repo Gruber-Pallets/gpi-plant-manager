@@ -273,6 +273,121 @@ def cap_breakdown(attribution_id: int, end_utc: datetime) -> None:
     )
 
 
+def normalize_breakdown_visit(
+    stale_row_id: int,
+    breakdown_id: int,
+    person_name: str,
+    start_utc: datetime,
+    *,
+    employee_odoo_id: int | None = None,
+    end_utc: datetime | None = None,
+) -> int | None:
+    """Normalize one pre-upgrade row without colliding with an exact visit.
+
+    The incident lock is the common serialization boundary for detector adds,
+    dismissal, and recovery.  If the canonical visit already exists, discard
+    only the stale row for the same immutable identity and converge on that
+    exact row.  ``end_utc=None`` means the visit is current and must be open;
+    completed visits retain the earliest verified departure.
+    """
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM machine_breakdowns "
+            "WHERE id = %s AND resolved_at IS NULL FOR UPDATE",
+            (breakdown_id,),
+        )
+        if cur.fetchone() is None:
+            return None
+
+        if employee_odoo_id is None:
+            identity_clause = "employee_odoo_id IS NULL AND person_name = %s"
+            identity_params = (person_name,)
+        else:
+            identity_clause = "employee_odoo_id = %s"
+            identity_params = (employee_odoo_id,)
+
+        cur.execute(
+            "SELECT id FROM wc_time_attributions "
+            "WHERE breakdown_id = %s AND source = %s AND start_utc = %s "
+            f"AND {identity_clause} AND id <> %s FOR UPDATE",
+            (
+                breakdown_id,
+                BREAKDOWN_SOURCE,
+                start_utc,
+                *identity_params,
+                stale_row_id,
+            ),
+        )
+        exact = cur.fetchone()
+        if exact is not None:
+            cur.execute(
+                "DELETE FROM wc_time_attributions "
+                "WHERE id = %s AND breakdown_id = %s AND source = %s "
+                f"AND {identity_clause}",
+                (
+                    stale_row_id,
+                    breakdown_id,
+                    BREAKDOWN_SOURCE,
+                    *identity_params,
+                ),
+            )
+            if end_utc is None:
+                cur.execute(
+                    "UPDATE wc_time_attributions "
+                    "SET person_name = %s, end_utc = NULL "
+                    "WHERE id = %s AND breakdown_id = %s AND source = %s",
+                    (
+                        person_name,
+                        exact["id"],
+                        breakdown_id,
+                        BREAKDOWN_SOURCE,
+                    ),
+                )
+            else:
+                cur.execute(
+                    "UPDATE wc_time_attributions "
+                    "SET person_name = %s, "
+                    "end_utc = LEAST(COALESCE(end_utc, %s), %s) "
+                    "WHERE id = %s AND breakdown_id = %s AND source = %s",
+                    (
+                        person_name,
+                        end_utc,
+                        end_utc,
+                        exact["id"],
+                        breakdown_id,
+                        BREAKDOWN_SOURCE,
+                    ),
+                )
+            return exact["id"]
+
+        if end_utc is None:
+            update = "SET person_name = %s, start_utc = %s, end_utc = NULL "
+            update_params = (person_name, start_utc)
+        else:
+            update = (
+                "SET person_name = %s, start_utc = %s, "
+                "end_utc = LEAST(COALESCE(end_utc, %s), %s) "
+            )
+            update_params = (person_name, start_utc, end_utc, end_utc)
+        cur.execute(
+            "UPDATE wc_time_attributions "
+            f"{update}"
+            "WHERE id = %s AND breakdown_id = %s AND source = %s "
+            f"AND {identity_clause} RETURNING id",
+            (
+                *update_params,
+                stale_row_id,
+                breakdown_id,
+                BREAKDOWN_SOURCE,
+                *identity_params,
+            ),
+        )
+        normalized = cur.fetchone()
+        return normalized["id"] if normalized is not None else None
+
+
 def reopen_breakdown(attribution_id: int) -> None:
     """Undo a cap: clear end_utc so the window is open again (breakdown
     transfer-undo)."""

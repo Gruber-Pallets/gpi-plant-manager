@@ -1,6 +1,8 @@
 from datetime import date, datetime, time, timezone
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_who_by_wc_excludes_absent_people_from_schedule_and_attributions(monkeypatch):
     from zira_dashboard.routes import departments
@@ -28,8 +30,10 @@ def test_who_by_wc_excludes_absent_people_from_schedule_and_attributions(monkeyp
 def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(monkeypatch):
     """A live transfer changes the label, without losing either station's data."""
     from zira_dashboard import (
-        assignment_windows,
         attendance,
+        attendance_location_policy,
+        attendance_timeline,
+        live_cache,
         machine_breakdown,
         settings_store,
         shift_config,
@@ -93,32 +97,58 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         },
     )
     monkeypatch.setattr(
+        live_cache,
+        "attendance_read_policy",
+        lambda **_kwargs: live_cache.AttendanceReadPolicy(
+            True,
+            True,
+            datetime(2026, 6, 2, 20, tzinfo=timezone.utc),
+            mode="shadow",
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy, "day_is_strict", lambda _day: False
+    )
+
+    def canonical_spans(_start, end, **_kwargs):
+        first_start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+        transfer = datetime(2026, 6, 2, 12, 5, tzinfo=timezone.utc)
+        common = {
+            "employee_odoo_id": 101,
+            "employee_name": "Jesus G.",
+            "status": "valid",
+            "odoo_work_center_id": 41,
+            "odoo_work_center_name": "Repair #2",
+            "attendance_ids": (88,),
+            "department_repair": None,
+        }
+        return (
+            attendance_timeline.LocationSpan(
+                **common,
+                start_utc=first_start,
+                end_utc=transfer,
+                app_work_center_name="Repair 2",
+            ),
+            attendance_timeline.LocationSpan(
+                **{
+                    **common,
+                    "odoo_work_center_id": 42,
+                    "odoo_work_center_name": "Dismantler #2",
+                },
+                start_utc=transfer,
+                end_utc=end,
+                app_work_center_name="Dismantler 2",
+            ),
+        )
+
+    monkeypatch.setattr(attendance_timeline, "timeline_for_range", canonical_spans)
+    monkeypatch.setattr(
         timeclock_windows,
         "attendance_windows_for_day",
-        lambda _d: {
-            "Jesus G.": [
-                ("Repair 2", datetime(2026, 6, 2, 12, tzinfo=timezone.utc),
-                 datetime(2026, 6, 2, 12, 5, tzinfo=timezone.utc)),
-                ("Dismantler 2", datetime(2026, 6, 2, 12, 5, tzinfo=timezone.utc), None),
-            ]
-        },
+        lambda _d: pytest.fail(
+            "mirror-owned departments must keep canonical Odoo identity"
+        ),
     )
-    original_resolve = assignment_windows.resolve_segments
-
-    def identified_segments(**kwargs):
-        return [
-            assignment_windows.WorkSegment(
-                segment.wc_name,
-                segment.person_name,
-                segment.start_utc,
-                segment.end_utc,
-                segment.source,
-                person_odoo_id=101,
-            )
-            for segment in original_resolve(**kwargs)
-        ]
-
-    monkeypatch.setattr(assignment_windows, "resolve_segments", identified_segments)
     monkeypatch.setattr(wc_attributions, "creditable_for_day", lambda _d: [])
     monkeypatch.setattr(
         wc_attributions,
@@ -244,6 +274,88 @@ def test_department_breakdown_lookup_keeps_same_name_odoo_ids_separate():
     assert departments._breakdown_windows_for_segment(  # noqa: SLF001
         breakdown_windows, legacy_alex
     ) == [(start, end)]
+
+
+def test_department_breakdown_lookup_uses_odoo_id_across_display_name_change():
+    from zira_dashboard import assignment_windows
+    from zira_dashboard.routes import departments
+
+    start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+    end = start.replace(hour=13)
+    segment = assignment_windows.WorkSegment(
+        "Repair 2", "Alexandra", start, end, "odoo", person_odoo_id=101
+    )
+    windows = [(start, start.replace(minute=30))]
+
+    assert departments._breakdown_windows_for_segment(  # noqa: SLF001
+        {(101, "Alex", "Repair 2"): windows}, segment
+    ) == windows
+
+
+def test_department_canonical_segment_selection_honors_strict_day_and_staleness(
+    monkeypatch,
+):
+    from zira_dashboard import (
+        attendance_location_policy,
+        attendance_timeline,
+        live_cache,
+    )
+    from zira_dashboard.routes import departments
+
+    day = date(2026, 6, 2)
+    start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 2, 13, tzinfo=timezone.utc)
+    span = attendance_timeline.LocationSpan(
+        employee_odoo_id=202,
+        employee_name="Alex",
+        start_utc=start,
+        end_utc=end,
+        status="valid",
+        app_work_center_name="Repair 2",
+        odoo_work_center_id=41,
+        odoo_work_center_name="Repair #2",
+        attendance_ids=(88,),
+        department_repair=None,
+    )
+    policy = {"value": live_cache.AttendanceReadPolicy(False, True, None)}
+    monkeypatch.setattr(
+        live_cache, "attendance_read_policy", lambda **_kwargs: policy["value"]
+    )
+    monkeypatch.setattr(
+        attendance_location_policy, "day_is_strict", lambda _day: True
+    )
+    timeline_calls = []
+    monkeypatch.setattr(
+        attendance_timeline,
+        "timeline_for_range",
+        lambda *_args, **_kwargs: timeline_calls.append(True) or (span,),
+    )
+
+    strict_segments = departments._canonical_department_segments(  # noqa: SLF001
+        day, start, end, now_utc=end
+    )
+
+    assert [(segment.person_odoo_id, segment.person_name) for segment in strict_segments] == [
+        (202, "Alex")
+    ]
+    assert timeline_calls == [True]
+
+    policy["value"] = live_cache.AttendanceReadPolicy(
+        True,
+        True,
+        end,
+        mode="shadow",
+        stale=True,
+    )
+    monkeypatch.setattr(
+        attendance_location_policy, "day_is_strict", lambda _day: False
+    )
+    timeline_calls.clear()
+
+    assert departments._canonical_department_segments(  # noqa: SLF001
+        day, start, end, now_utc=end
+    ) == ()
+    assert timeline_calls == []
 
 def test_department_segment_display_keeps_scheduled_lunch_continuous():
     from zira_dashboard.production_segments import SegmentScore

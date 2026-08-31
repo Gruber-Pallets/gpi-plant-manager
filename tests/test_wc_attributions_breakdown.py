@@ -184,6 +184,112 @@ def test_cap_breakdown_keeps_the_earliest_concurrent_boundary(monkeypatch):
     )
 
 
+def test_normalize_breakdown_visit_locks_incident_and_converges_on_exact_row(
+    monkeypatch,
+):
+    from contextlib import contextmanager
+
+    from zira_dashboard import db
+
+    start = datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 8, 14, 2, tzinfo=timezone.utc)
+    calls = []
+    fetched = iter(({"id": 42}, {"id": 10}))
+
+    class Cursor:
+        def execute(self, sql, params):
+            calls.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return next(fetched)
+
+    @contextmanager
+    def cursor():
+        yield Cursor()
+
+    monkeypatch.setattr(db, "cursor", cursor)
+
+    row_id = wc_attributions.normalize_breakdown_visit(
+        9,
+        42,
+        "Alex Updated",
+        start,
+        employee_odoo_id=202,
+        end_utc=end,
+    )
+
+    assert row_id == 10
+    assert "machine_breakdowns" in calls[0][0]
+    assert "resolved_at IS NULL FOR UPDATE" in calls[0][0]
+    assert calls[0][1] == (42,)
+    assert "employee_odoo_id = %s" in calls[1][0]
+    assert calls[1][1] == (
+        42,
+        wc_attributions.BREAKDOWN_SOURCE,
+        start,
+        202,
+        9,
+    )
+    assert calls[2][0].startswith("DELETE FROM wc_time_attributions")
+    assert calls[2][1] == (9, 42, wc_attributions.BREAKDOWN_SOURCE, 202)
+    assert "LEAST(COALESCE(end_utc, %s), %s)" in calls[3][0]
+    assert calls[3][1] == (
+        "Alex Updated",
+        end,
+        end,
+        10,
+        42,
+        wc_attributions.BREAKDOWN_SOURCE,
+    )
+
+
+def test_normalize_breakdown_visit_retimes_legacy_row_when_no_exact_row(
+    monkeypatch,
+):
+    from contextlib import contextmanager
+
+    from zira_dashboard import db
+
+    start = datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc)
+    calls = []
+    fetched = iter(({"id": 42}, None, {"id": 9}))
+
+    class Cursor:
+        def execute(self, sql, params):
+            calls.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return next(fetched)
+
+    @contextmanager
+    def cursor():
+        yield Cursor()
+
+    monkeypatch.setattr(db, "cursor", cursor)
+
+    row_id = wc_attributions.normalize_breakdown_visit(
+        9,
+        42,
+        "Legacy Alex",
+        start,
+        employee_odoo_id=None,
+        end_utc=None,
+    )
+
+    assert row_id == 9
+    assert "employee_odoo_id IS NULL AND person_name = %s" in calls[1][0]
+    assert "start_utc = %s, end_utc = NULL" in calls[2][0]
+    assert "RETURNING id" in calls[2][0]
+    assert calls[2][1] == (
+        "Legacy Alex",
+        start,
+        9,
+        42,
+        wc_attributions.BREAKDOWN_SOURCE,
+        "Legacy Alex",
+    )
+
+
 def test_restore_breakdown_snapshot_rolls_back_partial_failure_and_retries(monkeypatch):
     from contextlib import contextmanager
 
