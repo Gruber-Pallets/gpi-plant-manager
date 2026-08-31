@@ -31,6 +31,7 @@ def _row(kind, **changes):
         "end_is_open": False,
         "units": 12.0,
         "sample_count": 3,
+        "comparison_only": False,
         "raw_work_center_labels": [],
         "odoo_work_center_ids": [],
     }
@@ -116,6 +117,24 @@ def test_attendance_cards_show_source_facts_and_actions(monkeypatch):
         "/settings?section=work_centers&amp;odoo_work_center_id=781"
         "&amp;odoo_work_center_name=ODoo+Only+%26+Special%2FCenter"
     ) in html
+
+
+def test_attendance_action_requires_literal_false_comparison_flag(monkeypatch):
+    for malformed in (None, 0, "false"):
+        snapshot = _snapshot()
+        snapshot["queue"] = [_row("production_unassigned_run", comparison_only=malformed)]
+        monkeypatch.setattr(exceptions.exception_inbox, "build_snapshot", lambda: snapshot)
+        monkeypatch.setattr(exceptions, "_active_correction_people", lambda: [])
+
+        html = TestClient(app).get("/exceptions").text
+
+        assert "data-attendance-correction-open" not in html
+
+    snapshot = _snapshot()
+    snapshot["queue"] = [_row("production_unassigned_run")]
+    snapshot["queue"][0].pop("comparison_only")
+    monkeypatch.setattr(exceptions.exception_inbox, "build_snapshot", lambda: snapshot)
+    assert "data-attendance-correction-open" not in TestClient(app).get("/exceptions").text
 
 
 def test_correction_dialog_has_accessible_people_time_target_and_confirmation_controls(

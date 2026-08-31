@@ -449,6 +449,15 @@
     output.hidden = false;
   }
 
+  function attendancePreviewIsComplete(preview) {
+    return !!(
+      preview && Array.isArray(preview.employees) && preview.employees.length &&
+      preview.employees.every(function (employee) {
+        return !!employee && employee.intervals_truncated === false;
+      })
+    );
+  }
+
   function showAttendanceRefreshConfirmation() {
     setAttendanceApplyEnabled(false);
     var wrap = attendanceEl('[data-attendance-refresh-wrap]');
@@ -471,6 +480,14 @@
         setAttendancePreviewBusy(false);
         if (!resp || !resp.ok) {
           attendanceMessage((resp && resp.error) || 'The preview could not be built.', true);
+          return;
+        }
+        if (!attendancePreviewIsComplete(resp.preview)) {
+          invalidateAttendancePreview();
+          attendanceMessage(
+            'The full attendance plan could not be shown. Choose fewer workers or a shorter time range.',
+            true
+          );
           return;
         }
         correctionPreviewToken = resp.preview_token;
@@ -531,6 +548,7 @@
     localTimeCandidates: localAttendanceTimeCandidates,
     localTimeResolution: localAttendanceTimeResolution,
     pollDecision: attendancePollDecision,
+    previewIsComplete: attendancePreviewIsComplete,
     pollJob: function (jobId) { return pollAttendanceCorrectionJob(jobId, null); },
   });
 
@@ -666,13 +684,19 @@
         attendanceCorrectionController = null;
         setAttendancePreviewBusy(false);
         if (resp && resp.code === 'source_changed') {
-          if (resp.preview_token && resp.preview) {
+          if (
+            resp.preview_token && resp.preview &&
+            attendancePreviewIsComplete(resp.preview)
+          ) {
             correctionPreviewToken = resp.preview_token;
             renderAttendancePreview(resp.preview);
             showAttendanceRefreshConfirmation();
           } else {
             invalidateAttendancePreview();
-            attendanceMessage(resp.error || 'Odoo changed. Preview again.', true);
+            attendanceMessage(
+              resp.error || 'The full attendance plan could not be shown. Preview again.',
+              true
+            );
           }
           return;
         }

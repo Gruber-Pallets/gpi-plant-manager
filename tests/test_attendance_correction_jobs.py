@@ -437,6 +437,87 @@ def test_dedupe_winner_is_validated_by_id_even_after_becoming_terminal(monkeypat
     assert any("WHERE item_key = %s" in sql and "status IN" not in sql for sql in statements)
 
 
+def test_reusable_job_binding_is_reloaded_by_id_after_becoming_terminal(monkeypatch):
+    preview = _job_preview()
+    binding = attendance_corrections.preview_job_binding(preview)
+    source_snapshot = attendance_corrections._snapshot_payload(preview)
+    plans = attendance_corrections._plans_payload(preview)
+    queries = []
+
+    def query(sql, params=()):
+        normalized = " ".join(sql.split())
+        queries.append((normalized, params))
+        if "status IN" in normalized:
+            return [{"id": 47}]
+        return [
+            {
+                "id": 47,
+                "status": "complete",
+                "item_key": preview.item_key,
+                "target_work_center_name": preview.target_work_center_name,
+                "target_odoo_work_center_id": preview.target_odoo_work_center_id,
+                "start_utc": preview.start_utc,
+                "end_utc": preview.end_utc,
+                "employee_odoo_ids": list(preview.employee_odoo_ids),
+                "source_snapshot": source_snapshot,
+                "operations": plans,
+            }
+        ]
+
+    monkeypatch.setattr(db, "query", query)
+
+    assert (
+        attendance_corrections.find_reusable_job_for_binding(
+            item_key=preview.item_key,
+            binding=binding,
+        )
+        == 47
+    )
+    assert "status IN" in queries[0][0]
+    assert "WHERE id = %s" in queries[1][0]
+    assert "status IN" not in queries[1][0]
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        _job_preview(target_name="Repair 1", target_id=82),
+        _job_preview(source_write_date=NOW + timedelta(minutes=1)),
+    ],
+    ids=("mapping", "source"),
+)
+def test_reusable_job_binding_rejects_changed_mapping_or_source(monkeypatch, changed):
+    preview = _job_preview()
+
+    def query(sql, params=()):
+        if "status IN" in sql:
+            return [{"id": 48}]
+        return [
+            {
+                "id": 48,
+                "status": "planned",
+                "item_key": changed.item_key,
+                "target_work_center_name": changed.target_work_center_name,
+                "target_odoo_work_center_id": changed.target_odoo_work_center_id,
+                "start_utc": changed.start_utc,
+                "end_utc": changed.end_utc,
+                "employee_odoo_ids": list(changed.employee_odoo_ids),
+                "source_snapshot": attendance_corrections._snapshot_payload(changed),
+                "operations": attendance_corrections._plans_payload(changed),
+            }
+        ]
+
+    monkeypatch.setattr(db, "query", query)
+
+    with pytest.raises(attendance_corrections.CorrectionRequestConflict) as conflict:
+        attendance_corrections.find_reusable_job_for_binding(
+            item_key=preview.item_key,
+            binding=attendance_corrections.preview_job_binding(preview),
+        )
+    assert conflict.value.job_id == 48
+    assert conflict.value.source_changed is True
+
+
 @pytest.mark.parametrize(
     "changed",
     [

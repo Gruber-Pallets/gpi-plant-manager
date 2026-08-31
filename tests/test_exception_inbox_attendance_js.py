@@ -67,6 +67,17 @@ def test_apply_stays_disabled_until_preview_or_refreshed_confirmation():
     assert "Review the refreshed preview" in js
 
 
+def test_incomplete_preview_never_arms_apply_even_if_a_server_regresses():
+    result = _run_attendance_hook(
+        "[null, {}, {employees: []}, {employees: [{intervals_truncated: true}]}, {employees: [{intervals_truncated: false}]}].map(window.gpiAttendanceCorrection.previewIsComplete)"
+    )
+
+    assert result == [False, False, False, False, True]
+    js = _js()
+    assert "attendancePreviewIsComplete(resp.preview)" in js
+    assert "The full attendance plan could not be shown" in js
+
+
 def test_preview_renders_safe_local_intervals_and_still_working_label():
     js = _js()
 
@@ -256,6 +267,11 @@ def test_stale_preview_apply_and_poll_callbacks_cannot_mutate_the_dialog():
             "  function padAttendanceTime(value)"
         )
     ]
+    completeness = js[
+        js.index("  function attendancePreviewIsComplete(preview)") : js.index(
+            "  function showAttendanceRefreshConfirmation()"
+        )
+    ]
     preview = js[
         js.index("  function previewAttendanceCorrection()") : js.index(
             "  function attendanceProgress(text, isError)"
@@ -321,6 +337,7 @@ function postJson() {{ return posts.shift().promise; }}
 var polls = [];
 function fetchCompat() {{ return polls.shift().promise; }}
 {state}
+{completeness}
 {preview}
 {poll}
 {apply}

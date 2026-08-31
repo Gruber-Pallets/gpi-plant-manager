@@ -122,6 +122,7 @@ _CORRECTION_APPLY_FIELDS = frozenset(("preview_token",))
 _CORRECTION_ITEM_KIND = "production_unassigned_run"
 _CORRECTION_TEXT_LIMIT = 500
 _CORRECTION_DISPLAY_INTERVAL_LIMIT = 200
+_CORRECTION_PREVIEW_TOKEN_LIMIT = 20_000
 _CORRECTION_ERROR_LIMIT = 300
 _CORRECTION_REQUEST_BODY_LIMIT = 64 * 1024
 _CORRECTION_MAX_DURATION = timedelta(days=500)
@@ -446,34 +447,7 @@ def _operation_summary(plan: attendance_corrections.CorrectionPlan) -> dict[str,
 def _preview_binding(
     preview: attendance_corrections.CorrectionPreview,
 ) -> dict[str, object]:
-    plans = []
-    for employee_id, plan in zip(preview.employee_odoo_ids, preview.plans, strict=True):
-        encoded = attendance_corrections.plan_to_json(plan)
-        assert isinstance(encoded, Mapping)
-        plans.append(
-            {
-                "employee_odoo_id": employee_id,
-                "plan_integrity": encoded["integrity"],
-                "source_versions": [
-                    {
-                        "attendance_id": version.attendance_id,
-                        "write_date": _utc_iso(version.write_date),
-                    }
-                    for version in plan.source_versions
-                ],
-            }
-        )
-    return {
-        "version": 1,
-        "request": {
-            "item_key": preview.item_key,
-            "employee_odoo_ids": list(preview.employee_odoo_ids),
-            "work_center_name": preview.target_work_center_name,
-            "start_utc": _utc_iso(preview.start_utc),
-            "end_utc": _utc_iso(preview.end_utc),
-        },
-        "plans": plans,
-    }
+    return attendance_corrections.preview_job_binding(preview)
 
 
 def _preview_serializer() -> URLSafeTimedSerializer:
@@ -481,11 +455,14 @@ def _preview_serializer() -> URLSafeTimedSerializer:
 
 
 def _preview_token(preview: attendance_corrections.CorrectionPreview) -> str:
-    return _preview_serializer().dumps(_preview_binding(preview))
+    token = _preview_serializer().dumps(_preview_binding(preview))
+    if len(token) > _CORRECTION_PREVIEW_TOKEN_LIMIT:
+        raise ValueError("preview token is too large")
+    return token
 
 
 def _load_preview_token(value: object) -> Mapping[str, object] | JSONResponse:
-    if not isinstance(value, str) or not value or len(value) > 20_000:
+    if not isinstance(value, str) or not value or len(value) > _CORRECTION_PREVIEW_TOKEN_LIMIT:
         return _correction_error(
             "invalid_preview", "Preview this correction again before applying it.", 400
         )
@@ -520,8 +497,8 @@ def _safe_preview(
     employees = []
     aggregate = {"create": 0, "update": 0, "delete": 0, "total": 0}
     for employee_id, plan in zip(preview.employee_odoo_ids, preview.plans, strict=True):
-        source_values = list(plan.source_intervals)[:_CORRECTION_DISPLAY_INTERVAL_LIMIT]
-        expected_values = list(plan.expected_intervals)[:_CORRECTION_DISPLAY_INTERVAL_LIMIT]
+        source_values = list(plan.source_intervals)
+        expected_values = list(plan.expected_intervals)
         source = [_display_interval(item, preview) for item in source_values]
         after = [_display_interval(item, preview) for item in expected_values]
         summary = _operation_summary(plan)
@@ -535,10 +512,7 @@ def _safe_preview(
                 "before_intervals": list(source),
                 "after_intervals": after,
                 "operation_summary": summary,
-                "intervals_truncated": (
-                    len(plan.source_intervals) > len(source_values)
-                    or len(plan.expected_intervals) > len(expected_values)
-                ),
+                "intervals_truncated": False,
             }
         )
     return {
@@ -603,6 +577,17 @@ def _bounded_live_preview(
             "This correction is too large to preview safely. Choose fewer workers or a shorter time range.",
             422,
         )
+    if any(
+        len(plan.source_intervals) > _CORRECTION_DISPLAY_INTERVAL_LIMIT
+        or len(plan.expected_intervals) > _CORRECTION_DISPLAY_INTERVAL_LIMIT
+        for plan in preview.plans
+    ):
+        return _correction_error(
+            "preview_too_large",
+            "This correction has too many attendance rows to review safely. "
+            "Choose fewer workers or a shorter time range.",
+            422,
+        )
     return preview
 
 
@@ -657,11 +642,20 @@ def _attendance_preview_sync(values: Mapping[str, object]) -> JSONResponse:
     preview = _bounded_live_preview(values)
     if isinstance(preview, JSONResponse):
         return preview
+    try:
+        token = _preview_token(preview)
+    except ValueError:
+        return _correction_error(
+            "preview_too_large",
+            "This correction is too large to preview safely. "
+            "Choose fewer workers or a shorter time range.",
+            422,
+        )
     return JSONResponse(
         {
             "ok": True,
             "preview": _safe_preview(preview, names),
-            "preview_token": _preview_token(preview),
+            "preview_token": token,
         }
     )
 
@@ -707,6 +701,24 @@ def _attendance_apply_sync(
             return _source_changed_without_refresh_response()
         return context
     _row, names = context
+    try:
+        reusable_job_id = attendance_corrections.find_reusable_job_for_binding(
+            item_key=values["item_key"],
+            binding=signed,
+        )
+    except attendance_corrections.CorrectionRequestConflict as error:
+        if error.source_changed:
+            return _source_changed_without_refresh_response()
+        return _correction_in_progress_response()
+    except Exception:  # noqa: BLE001 - durable details stay server-side
+        _log.exception("attendance correction durable binding lookup failed")
+        return _correction_error(
+            "apply_unavailable",
+            "The correction queue could not be checked safely. Nothing was changed.",
+            503,
+        )
+    if reusable_job_id is not None:
+        return _queued_correction_response(reusable_job_id)
     preview = _bounded_live_preview(values)
     if isinstance(preview, JSONResponse):
         if preview.status_code == 422:
@@ -714,6 +726,10 @@ def _attendance_apply_sync(
         return preview
     fresh_binding = _preview_binding(preview)
     if signed != fresh_binding:
+        try:
+            refreshed_token = _preview_token(preview)
+        except ValueError:
+            return _source_changed_without_refresh_response()
         return JSONResponse(
             {
                 "ok": False,
@@ -723,7 +739,7 @@ def _attendance_apply_sync(
                     "then confirm again."
                 ),
                 "preview": _safe_preview(preview, names),
-                "preview_token": _preview_token(preview),
+                "preview_token": refreshed_token,
             },
             status_code=409,
         )
