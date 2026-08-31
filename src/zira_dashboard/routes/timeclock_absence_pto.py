@@ -15,7 +15,6 @@ from .timeclock import _expired_redirect, _mint_token, _person_by_id, _verify_to
 
 router = APIRouter()
 
-_DUPLICATE_MESSAGE = "A PTO request already exists for this absence."
 _STATE_LABELS = {
     "pending": "Pending",
     "converting": "Processing",
@@ -93,7 +92,9 @@ def submit_past_absence(
             plant_today(),
         )
     except absence_pto.SubmissionError as error:
-        status_code = 409 if str(error) == _DUPLICATE_MESSAGE else 422
+        status_code = (
+            409 if isinstance(error, absence_pto.DuplicateSubmissionError) else 422
+        )
         return _render_list(
             request,
             person,

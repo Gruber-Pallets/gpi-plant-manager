@@ -43,7 +43,8 @@ def test_record_decision_inserts_denormalized_row(monkeypatch):
     assert params[0] == 55 and "Maria Delgado" in params
     assert 8.5 in params and 12.25 in params
     assert "deny" in params and "Coverage too thin" in params
-    assert params[-3:] == ("time_off", None, None)
+    assert params[-4:-1] == ("time_off", None, None)
+    assert params[-1] is None
 
 
 def test_record_decision_accepts_namespaced_request_and_json_detail(monkeypatch):
@@ -76,8 +77,9 @@ def test_record_decision_accepts_namespaced_request_and_json_detail(monkeypatch)
 
     sql, params = calls[0]
     assert "request_kind, request_key, detail" in sql
-    assert params[-3:-1] == ("absence_pto", "absence_pto:41")
-    assert params[-1].adapted == detail
+    assert params[-4:-2] == ("absence_pto", "absence_pto:41")
+    assert params[-2].adapted == detail
+    assert params[-1] is None
 
 
 def test_recent_decisions_queries_window(monkeypatch):

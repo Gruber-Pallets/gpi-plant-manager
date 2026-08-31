@@ -24,6 +24,7 @@ from . import page_views
 from .plant_day import today as plant_today
 from .routes import (
     admin,
+    absence_pto_admin,
     api_layout,
     auth as auth_routes,
     auto_salaried_admin,
@@ -127,6 +128,20 @@ async def _tick_odoo_attendance():
     await asyncio.to_thread(live_cache.refresh_odoo_open_attendance)
 
 
+async def _tick_attendance_mirror():
+    """Refresh the durable canonical Odoo attendance mirror."""
+    from . import attendance_sync
+
+    await asyncio.to_thread(attendance_sync.tick)
+
+
+async def _tick_attendance_recalc():
+    """Recompute one attendance-changed production day off the event loop."""
+    from . import attendance_recalc
+
+    await asyncio.to_thread(attendance_recalc.process_next)
+
+
 async def _tick_auto_lunch():
     """Drive the auto-lunch worker. No-ops while the feature is disabled
     (auto_lunch_settings.enabled defaults to FALSE)."""
@@ -172,6 +187,13 @@ async def _tick_time_off_balance():
     await asyncio.to_thread(time_off_balances.refresh_stale, 600)
 
 
+async def _tick_absence_pto_reconcile():
+    """Resume and review due PTO requests linked to recorded absences."""
+    from . import absence_pto_review
+
+    await asyncio.to_thread(absence_pto_review.reconcile_once)
+
+
 async def _tick_staffing_pages():
     """Keep the staffing day view pre-rendered in the response cache so the
     first human load (including the first after a Railway deploy) is a warm hit.
@@ -212,7 +234,21 @@ async def _tick_missing_wc():
     14 days) for the Missing-Work-Center alert. No-ops (logs once) if the Odoo
     kiosk WC field isn't configured."""
     from datetime import timedelta
-    from . import missing_wc, odoo_client
+    from . import (
+        attendance_location_policy,
+        attendance_mirror,
+        missing_wc,
+        odoo_client,
+    )
+
+    try:
+        config = attendance_location_policy.get_rollout_config()
+        if config.mode in ("shadow", "live"):
+            health = attendance_mirror.health_snapshot()
+            if health.baseline_completed_at is not None:
+                return
+    except Exception:  # noqa: BLE001 - uncertainty retains the legacy safety net
+        pass
 
     since = datetime.now(UTC) - timedelta(days=14)
     rows = await asyncio.to_thread(odoo_client.fetch_attendances_missing_wc, since)
@@ -415,12 +451,15 @@ _WARMERS = [
     ("machine breakdown", _tick_machine_breakdown, 45),
     ("kiosk sync", _tick_timeclock_sync, 60),
     ("Odoo open-attendance", _tick_odoo_attendance, 30),
+    ("attendance mirror", _tick_attendance_mirror, 30),
+    ("attendance recalculation", _tick_attendance_recalc, 15),
     ("auto-lunch", _tick_auto_lunch, 60),
     ("auto-salaried punch", _tick_auto_salaried, 60),
     ("auto-salaried reconcile", _tick_auto_salaried_reconcile, 600),
     ("time-off sync", _tick_time_off_sync, 60),
     ("time-off poll", _tick_time_off_poll, 60),
     ("time-off balance", _tick_time_off_balance, 600),
+    ("absence PTO reconcile", _tick_absence_pto_reconcile, 60),
     ("staffing pages", _tick_staffing_pages, 45),
     ("inbox warm", _tick_inbox, 20),
     ("staffing stable", _tick_staffing_stable, 300),
@@ -620,6 +659,7 @@ if auth_disabled():
 
 # Mount each feature router. URL paths are owned by the routers themselves.
 app.include_router(auth_routes.router)
+app.include_router(absence_pto_admin.router)
 app.include_router(dashboard.router)
 app.include_router(exceptions.router)
 app.include_router(departments.router)

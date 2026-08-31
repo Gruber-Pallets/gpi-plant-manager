@@ -59,5 +59,10 @@ jobs:
       - name: Lint (ruff)
         run: ruff check src tests scripts
 
+      - name: Attendance mirror transaction races (Postgres required)
+        run: |
+          test -n "$DATABASE_URL"
+          pytest tests/test_attendance_mirror.py -q
+
       - name: Tests (with Postgres)
         run: pytest -q

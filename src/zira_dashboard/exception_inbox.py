@@ -7,8 +7,10 @@ in-process or read from the local Postgres mirror.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from datetime import date, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 from . import plant_day, saturday_recruiting_store, schedule_store, shift_config, staffing
 from . import inbox_keys
@@ -92,16 +94,22 @@ def _unexpected_worker_rows(events: list[dict]) -> list[dict]:
             detail += f" · Staffing below minimum: {', '.join(shortages)}."
         else:
             detail += " · No enabled work centers are below minimum."
-        rows.append({
-            "name": event.get("person_name") or f"Worker #{event.get('person_odoo_id')}",
-            "label": "Unexpected clock-in",
-            "detail": detail,
-            "priority": "urgent",
-            "badge": "Staffing",
-            "href": f"/staffing?day={event_day.isoformat()}",
-            "row_key": _row_key("unexpected_worker", event_day.isoformat(), event.get("person_odoo_id")),
-            "item_key": inbox_keys.unexpected_worker(event_day.isoformat(), event.get("person_odoo_id")),
-        })
+        rows.append(
+            {
+                "name": event.get("person_name") or f"Worker #{event.get('person_odoo_id')}",
+                "label": "Unexpected clock-in",
+                "detail": detail,
+                "priority": "urgent",
+                "badge": "Staffing",
+                "href": f"/staffing?day={event_day.isoformat()}",
+                "row_key": _row_key(
+                    "unexpected_worker", event_day.isoformat(), event.get("person_odoo_id")
+                ),
+                "item_key": inbox_keys.unexpected_worker(
+                    event_day.isoformat(), event.get("person_odoo_id")
+                ),
+            }
+        )
     return rows
 
 
@@ -136,16 +144,18 @@ def _plant_schedule_reminder() -> tuple[int, list[dict]]:
     if sched.published:
         return 0, []
 
-    return 1, [{
-        "name": "Plant Schedule",
-        "label": target_day.strftime("%A, %b %-d"),
-        "detail": "Not published",
-        "priority": "warn",
-        "badge": "Publish",
-        "href": f"/staffing?day={target_day.isoformat()}",
-        "row_key": _row_key("plant_schedule", target_day.isoformat()),
-        "item_key": inbox_keys.plant_schedule(target_day.isoformat()),
-    }]
+    return 1, [
+        {
+            "name": "Plant Schedule",
+            "label": target_day.strftime("%A, %b %-d"),
+            "detail": "Not published",
+            "priority": "warn",
+            "badge": "Publish",
+            "href": f"/staffing?day={target_day.isoformat()}",
+            "row_key": _row_key("plant_schedule", target_day.isoformat()),
+            "item_key": inbox_keys.plant_schedule(target_day.isoformat()),
+        }
+    ]
 
 
 def _saturday_staffing_actions(today: date) -> tuple[int, list[dict]]:
@@ -155,16 +165,18 @@ def _saturday_staffing_actions(today: date) -> tuple[int, list[dict]]:
     for bundle in bundles:
         day = bundle.recruitment.day
         committed = sum(item.status == "committed" for item in bundle.commitments)
-        rows.append({
-            "name": "Saturday recruitment",
-            "label": day.strftime("%A, %b %-d"),
-            "detail": f"{committed} committed · Ready to schedule",
-            "priority": "warn",
-            "badge": "Schedule",
-            "href": f"/staffing?day={day.isoformat()}",
-            "row_key": _row_key("saturday_recruitment", day.isoformat()),
-            "item_key": inbox_keys.saturday_recruitment(day.isoformat()),
-        })
+        rows.append(
+            {
+                "name": "Saturday recruitment",
+                "label": day.strftime("%A, %b %-d"),
+                "detail": f"{committed} committed · Ready to schedule",
+                "priority": "warn",
+                "badge": "Schedule",
+                "href": f"/staffing?day={day.isoformat()}",
+                "row_key": _row_key("saturday_recruitment", day.isoformat()),
+                "item_key": inbox_keys.saturday_recruitment(day.isoformat()),
+            }
+        )
     return len(rows), rows
 
 
@@ -172,9 +184,7 @@ def _row_key(kind: str, *parts) -> str:
     return ":".join([kind, *(str(p) for p in parts if p not in (None, ""))])
 
 
-_PENDING_TIME_OFF_WHERE = (
-    "r.state IN ('draft', 'draft_edit', 'confirm', 'validate1')"
-)
+_PENDING_TIME_OFF_WHERE = "r.state IN ('draft', 'draft_edit', 'confirm', 'validate1')"
 
 
 def _pending_time_off_counts(today: date) -> tuple[int, int]:
@@ -210,28 +220,30 @@ def _pending_time_off(today: date, limit: int = 8) -> tuple[int, list[dict]]:
     shaped = []
     for r in rows:
         past_due = r["date_to"] < today
-        shaped.append({
-            "id": r["id"],
-            "person_odoo_id": r["person_odoo_id"],
-            "date_from": r["date_from"],
-            "date_to": r["date_to"],
-            "name": r["name"],
-            "label": _time_off_label(r),
-            "detail": f"{r['leave_type']} · {str(r['state']).replace('_', ' ')}",
-            "state": r["state"],
-            "sync_error": r.get("sync_error"),
-            "past_due": past_due,
-            "priority": "urgent" if past_due else "info",
-            "badge": "Past due" if past_due else "Approval",
-            "row_key": _row_key("time_off", r["id"], r["state"]),
-            "item_key": inbox_keys.time_off(r["id"]),
-            "action": {
-                "type": "time_off",
-                "request_id": r["id"],
+        shaped.append(
+            {
+                "id": r["id"],
+                "person_odoo_id": r["person_odoo_id"],
+                "date_from": r["date_from"],
+                "date_to": r["date_to"],
+                "name": r["name"],
+                "label": _time_off_label(r),
+                "detail": f"{r['leave_type']} · {str(r['state']).replace('_', ' ')}",
                 "state": r["state"],
-                "odoo_leave_id": r.get("odoo_leave_id"),
-            },
-        })
+                "sync_error": r.get("sync_error"),
+                "past_due": past_due,
+                "priority": "urgent" if past_due else "info",
+                "badge": "Past due" if past_due else "Approval",
+                "row_key": _row_key("time_off", r["id"], r["state"]),
+                "item_key": inbox_keys.time_off(r["id"]),
+                "action": {
+                    "type": "time_off",
+                    "request_id": r["id"],
+                    "state": r["state"],
+                    "odoo_leave_id": r.get("odoo_leave_id"),
+                },
+            }
+        )
     coverage = time_off_context.coverage_breakdowns_for(shaped)
     for row in shaped:
         row["coverage"] = coverage.get(row["id"])
@@ -239,6 +251,198 @@ def _pending_time_off(today: date, limit: int = 8) -> tuple[int, list[dict]]:
 
 
 _TIER_RANK = {"urgent": 0, "warn": 1, "info": 2, "normal": 2, "muted": 3}
+
+_ATTENDANCE_SECTION_META = {
+    "attendance_missing_location": ("Odoo Location Missing", "bad"),
+    "attendance_unmapped_location": ("Unknown Odoo Work Center", "bad"),
+    "attendance_conflicting_location": ("Mixed-Up Odoo Locations", "bad"),
+    "attendance_duplicate_location": ("Duplicate Odoo Location", "warn"),
+    "attendance_department_repair_failed": ("Odoo Department Repair", "bad"),
+    "attendance_source_stale": ("Odoo Location Source", "bad"),
+    "production_source_unavailable": ("Production Source", "bad"),
+    "production_unassigned_run": ("Production Without a Worker", "bad"),
+}
+
+
+def _now_utc() -> datetime:
+    value = plant_day.now()
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _attendance_snapshot(today: date, source_errors: list[dict]):
+    from . import attendance_exceptions
+
+    now_utc = _now_utc()
+    try:
+        snapshot = attendance_exceptions.build_snapshot(today, now_utc=now_utc)
+    except Exception as exc:  # noqa: BLE001 - rollout lookup must not hide legacy inbox
+        _log.warning("exception inbox attendance source failed: %s", exc, exc_info=True)
+        config, _match_state, policy_error = attendance_exceptions._policy_snapshot_for_day(
+            today,
+            now_utc=now_utc,
+        )
+        production_mode = attendance_exceptions._production_mode_for(config, _match_state)
+        issues = ()
+        attendance_sources = ["Attendance Timeline"]
+        if production_mode != "legacy":
+            reason = policy_error or str(exc) or "attendance projection is unavailable"
+            issues = (
+                attendance_exceptions._production_unavailable_issue(
+                    today,
+                    now_utc,
+                    reason,
+                    comparison_only=production_mode == "shadow",
+                ),
+            )
+            attendance_sources.append("Strict Production")
+        snapshot = attendance_exceptions.AttendanceExceptionSnapshot(
+            today,
+            config.mode,
+            production_mode,
+            False,
+            False,
+            False,
+            issues,
+            tuple(attendance_sources),
+        )
+    for source in snapshot.source_errors:
+        if not any(error.get("source") == source for error in source_errors):
+            source_errors.append({"source": source})
+    return snapshot
+
+
+def _timeline_owns_location(snapshot) -> bool:
+    return bool(snapshot.baseline_complete and snapshot.mode in ("shadow", "live"))
+
+
+def _strict_production_owns_day(snapshot) -> bool:
+    return snapshot.production_mode in ("strict", "pending")
+
+
+def _attendance_owns_location(snapshot) -> bool:
+    return _timeline_owns_location(snapshot) or _strict_production_owns_day(snapshot)
+
+
+def _attendance_sections_should_render(snapshot) -> bool:
+    return bool(snapshot.issues or _attendance_owns_location(snapshot))
+
+
+def _attendance_row_key(issue, row: dict) -> str:
+    """Return a stable content revision without polling on a moving open end."""
+    revision = {
+        key: row.get(key)
+        for key in (
+            "name",
+            "label",
+            "priority",
+            "badge",
+            "kind",
+            "employee_odoo_id",
+            "employee_name",
+            "attendance_ids",
+            "raw_work_center_labels",
+            "odoo_work_center_ids",
+            "affected_workers",
+            "app_work_center_name",
+            "units",
+            "sample_count",
+            "reason",
+            "comparison_only",
+            "target_odoo_department_id",
+            "end_is_open",
+        )
+    }
+    revision["closed_end_utc"] = None if row.get("end_is_open") else row.get("end_utc")
+    encoded = json.dumps(revision, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+    return f"{issue.item_key}:rev:{digest}"
+
+
+def _attendance_issue_row(issue) -> dict:
+    start_iso = issue.start_utc.isoformat()
+    end_iso = issue.end_utc.isoformat() if issue.end_utc is not None else None
+    end_is_open = bool(issue.end_is_open)
+    raw_labels = list(issue.raw_work_center_labels)
+    affected_workers = [
+        {"employee_odoo_id": employee_id, "employee_name": name}
+        for employee_id, name in issue.affected_workers
+    ]
+    label_by_kind = {
+        "attendance_missing_location": "No Odoo work center",
+        "attendance_unmapped_location": raw_labels[0] if raw_labels else "Unknown Odoo work center",
+        "attendance_conflicting_location": "Overlapping Odoo work centers",
+        "attendance_duplicate_location": "Duplicate Odoo work-center rows",
+        "attendance_department_repair_failed": "Department repair failed",
+        "attendance_source_stale": "Odoo location data is stale",
+        "production_source_unavailable": "Production could not be matched safely",
+        "production_unassigned_run": f"{issue.units:g} units"
+        if issue.units is not None
+        else "Unassigned production",
+    }
+    detail_parts = []
+    if issue.app_work_center_name:
+        detail_parts.append(issue.app_work_center_name)
+    if start_iso:
+        detail_parts.append(f"{start_iso} to {'open' if end_is_open else end_iso or 'open'}")
+    if raw_labels and issue.kind != "attendance_unmapped_location":
+        detail_parts.append(", ".join(raw_labels))
+    if issue.sample_count is not None:
+        detail_parts.append(_plural(issue.sample_count, "sample"))
+    row = {
+        "name": issue.employee_name or issue.app_work_center_name or "Odoo attendance",
+        "label": label_by_kind.get(issue.kind, issue.kind.replace("_", " ").title()),
+        "detail": " · ".join(detail_parts),
+        "priority": issue.priority,
+        "badge": "Shadow comparison"
+        if issue.comparison_only
+        else ("Follow-up" if issue.priority == "muted" else "Needs decision"),
+        "row_key": "",
+        "item_key": issue.item_key,
+        "action": None,
+        "kind": issue.kind,
+        "employee_odoo_id": issue.employee_odoo_id,
+        "employee_name": issue.employee_name,
+        "attendance_ids": list(issue.attendance_ids),
+        "start_utc": start_iso,
+        "end_utc": end_iso,
+        "end_is_open": end_is_open,
+        "raw_work_center_labels": raw_labels,
+        "odoo_work_center_ids": list(issue.odoo_work_center_ids),
+        "affected_workers": affected_workers,
+        "app_work_center_name": issue.app_work_center_name,
+        "units": issue.units,
+        "sample_count": issue.sample_count,
+        "reason": issue.reason,
+        "comparison_only": issue.comparison_only,
+        "target_odoo_department_id": issue.target_odoo_department_id,
+    }
+    row["row_key"] = _attendance_row_key(issue, row)
+    return row
+
+
+def _attendance_sections(snapshot) -> list[dict]:
+    if not _attendance_sections_should_render(snapshot):
+        return []
+    sections = []
+    for kind, (title, tone) in _ATTENDANCE_SECTION_META.items():
+        rows = [_attendance_issue_row(issue) for issue in snapshot.issues_for(kind)]
+        sections.append(
+            {
+                "id": kind,
+                "title": title,
+                "count": len(rows),
+                "tone": tone,
+                "action_key": None,
+                "action_label": None,
+                "empty": "All clear",
+                "context": {},
+                "complete": snapshot.complete,
+                "rows": rows,
+            }
+        )
+    return sections
 
 
 def _queue_from_sections(sections: list[dict]) -> list[dict]:
@@ -248,17 +452,19 @@ def _queue_from_sections(sections: list[dict]) -> list[dict]:
     tagged = []
     for section_order, section in enumerate(sections):
         for row_index, row in enumerate(section.get("rows") or []):
-            tagged.append((
-                _TIER_RANK.get(row.get("priority", "normal"), 2),
-                section_order,
-                row_index,
-                {
-                    **row,
-                    "section_id": section["id"],
-                    "category_label": section["title"],
-                    "tone": section["tone"],
-                },
-            ))
+            tagged.append(
+                (
+                    _TIER_RANK.get(row.get("priority", "normal"), 2),
+                    section_order,
+                    row_index,
+                    {
+                        **row,
+                        "section_id": section["id"],
+                        "category_label": section["title"],
+                        "tone": section["tone"],
+                    },
+                )
+            )
     tagged.sort(key=lambda t: (t[0], t[1], t[2]))
     return [t[3] for t in tagged]
 
@@ -276,13 +482,25 @@ def build_summary() -> dict:
 
     today = plant_day.today()
     source_errors: list[dict] = []
-    assignments = _capture(
-        source_errors, "Assignments To Do", staffing_routes.assignments_todo_payload, {}
+    attendance_snapshot = _attendance_snapshot(today, source_errors)
+    strict_production = _strict_production_owns_day(attendance_snapshot)
+    assignments = (
+        {"count": 0, "items": [], "people": []}
+        if strict_production
+        else _capture(
+            source_errors, "Assignments To Do", staffing_routes.assignments_todo_payload, {}
+        )
     )
     late = _capture(source_errors, "Late / Absence", staffing_routes.late_report_payload, {})
-    missing_rows = _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
+    missing_rows = (
+        []
+        if _attendance_owns_location(attendance_snapshot)
+        else _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
+    )
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
-    breakdown_rows = _capture(source_errors, "Machine Breakdown", machine_breakdown.current_rows, [])
+    breakdown_rows = _capture(
+        source_errors, "Machine Breakdown", machine_breakdown.current_rows, []
+    )
     unexpected_rows = _capture(
         source_errors, "Unexpected Workers", lambda: unexpected_worker.open_events(today), []
     )
@@ -310,6 +528,17 @@ def build_summary() -> dict:
     breakdown_count = len(breakdown_rows)
     roster_sync_count = int(roster_sync_alert is not None)
     auto_lunch_count = int(auto_lunch_alert is not None)
+    attendance_counts = (
+        {kind: len(attendance_snapshot.issues_for(kind)) for kind in _ATTENDANCE_SECTION_META}
+        if _attendance_sections_should_render(attendance_snapshot)
+        else {}
+    )
+    attendance_urgent_count = sum(
+        issue.priority == "urgent" for issue in attendance_snapshot.issues
+    )
+    attendance_follow_up_count = sum(
+        issue.priority == "muted" for issue in attendance_snapshot.issues
+    )
     urgent_total = (
         len(late.get("scheduled_late") or [])
         + len(late.get("unscheduled_late") or [])
@@ -320,6 +549,7 @@ def build_summary() -> dict:
         + sum(1 for r in breakdown_rows if r.get("priority") == "urgent")
         + roster_sync_count
         + auto_lunch_count
+        + attendance_urgent_count
     )
     total = (
         assignment_count
@@ -333,13 +563,14 @@ def build_summary() -> dict:
         + breakdown_count
         + roster_sync_count
         + auto_lunch_count
+        + sum(attendance_counts.values())
     )
-    return {
+    summary = {
         "today": today.isoformat(),
         "generated_at": plant_day.now().strftime("%-I:%M %p"),
         "total": total,
         "urgent_total": urgent_total,
-        "follow_up_total": len(late.get("snoozed") or []),
+        "follow_up_total": len(late.get("snoozed") or []) + attendance_follow_up_count,
         "source_errors": source_errors,
         "sections": {
             "assignments": assignment_count,
@@ -353,8 +584,12 @@ def build_summary() -> dict:
             "breakdown": breakdown_count,
             "odoo_roster_sync": roster_sync_count,
             "auto_lunch": auto_lunch_count,
+            **attendance_counts,
         },
     }
+    if _attendance_owns_location(attendance_snapshot):
+        summary["sections"].pop("missing_wc", None)
+    return summary
 
 
 def build_snapshot() -> dict:
@@ -370,13 +605,25 @@ def build_snapshot() -> dict:
 
     today = plant_day.today()
     source_errors: list[dict] = []
-    assignments = _capture(
-        source_errors, "Assignments To Do", staffing_routes.assignments_todo_payload, {}
+    attendance_snapshot = _attendance_snapshot(today, source_errors)
+    strict_production = _strict_production_owns_day(attendance_snapshot)
+    assignments = (
+        {"count": 0, "items": [], "people": []}
+        if strict_production
+        else _capture(
+            source_errors, "Assignments To Do", staffing_routes.assignments_todo_payload, {}
+        )
     )
     late = _capture(source_errors, "Late / Absence", staffing_routes.late_report_payload, {})
-    missing_rows = _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
+    missing_rows = (
+        []
+        if _attendance_owns_location(attendance_snapshot)
+        else _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
+    )
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
-    breakdown_rows = _capture(source_errors, "Machine Breakdown", machine_breakdown.current_rows, [])
+    breakdown_rows = _capture(
+        source_errors, "Machine Breakdown", machine_breakdown.current_rows, []
+    )
     unexpected_rows = _capture(
         source_errors,
         "Unexpected Workers",
@@ -411,50 +658,56 @@ def build_snapshot() -> dict:
 
     late_rows: list[dict] = []
     for item in late.get("scheduled_late") or []:
-        late_rows.append({
-            "name": item.get("name"),
-            "label": "Scheduled late",
-            "detail": _plural(int(item.get("minutes_late") or 0), "min") + " late",
-            "priority": "urgent",
-            "badge": "Needs decision",
-            "row_key": _row_key("late", "scheduled", item.get("emp_id")),
-            "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
-            "action": {
-                "type": "late_absence",
-                "kind": "scheduled",
-                "emp_id": item.get("emp_id"),
+        late_rows.append(
+            {
                 "name": item.get("name"),
-                "scheduled_wc": item.get("scheduled_wc"),
-                "scheduled_start_time": item.get("scheduled_start_time"),
-            },
-        })
+                "label": "Scheduled late",
+                "detail": _plural(int(item.get("minutes_late") or 0), "min") + " late",
+                "priority": "urgent",
+                "badge": "Needs decision",
+                "row_key": _row_key("late", "scheduled", item.get("emp_id")),
+                "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
+                "action": {
+                    "type": "late_absence",
+                    "kind": "scheduled",
+                    "emp_id": item.get("emp_id"),
+                    "name": item.get("name"),
+                    "scheduled_wc": item.get("scheduled_wc"),
+                    "scheduled_start_time": item.get("scheduled_start_time"),
+                },
+            }
+        )
     for item in late.get("unscheduled_late") or []:
-        late_rows.append({
-            "name": item.get("name"),
-            "label": "Unscheduled late",
-            "detail": "No punch yet",
-            "priority": "urgent",
-            "badge": "Needs decision",
-            "row_key": _row_key("late", "unscheduled", item.get("emp_id")),
-            "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
-            "action": {
-                "type": "late_absence",
-                "kind": "unscheduled",
-                "emp_id": item.get("emp_id"),
+        late_rows.append(
+            {
                 "name": item.get("name"),
-            },
-        })
+                "label": "Unscheduled late",
+                "detail": "No punch yet",
+                "priority": "urgent",
+                "badge": "Needs decision",
+                "row_key": _row_key("late", "unscheduled", item.get("emp_id")),
+                "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
+                "action": {
+                    "type": "late_absence",
+                    "kind": "unscheduled",
+                    "emp_id": item.get("emp_id"),
+                    "name": item.get("name"),
+                },
+            }
+        )
     for item in late.get("snoozed") or []:
         mins = int(item.get("mins_remaining") or 0)
-        late_rows.append({
-            "name": item.get("name"),
-            "label": "Snoozed",
-            "detail": f"Re-checks in {_plural(mins, 'min')}",
-            "priority": "muted",
-            "badge": "Follow-up",
-            "row_key": _row_key("late_snoozed", item.get("emp_id"), item.get("until_iso")),
-            "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
-        })
+        late_rows.append(
+            {
+                "name": item.get("name"),
+                "label": "Snoozed",
+                "detail": f"Re-checks in {_plural(mins, 'min')}",
+                "priority": "muted",
+                "badge": "Follow-up",
+                "row_key": _row_key("late_snoozed", item.get("emp_id"), item.get("until_iso")),
+                "item_key": inbox_keys.late(item.get("emp_id"), today.isoformat()),
+            }
+        )
     sections = [
         {
             "id": "odoo_roster_sync",
@@ -480,7 +733,9 @@ def build_snapshot() -> dict:
                     "row_key": _row_key("odoo_roster_sync", "active_status"),
                     "item_key": inbox_keys.odoo_roster_sync(),
                 }
-            ] if roster_sync_alert else [],
+            ]
+            if roster_sync_alert
+            else [],
         },
         {
             "id": "auto_lunch",
@@ -542,7 +797,9 @@ def build_snapshot() -> dict:
             "tone": "warn",
             "action_key": None,
             "action_label": None,
-            "href": saturday_recruiting_rows[0]["href"] if saturday_recruiting_rows else "/staffing",
+            "href": saturday_recruiting_rows[0]["href"]
+            if saturday_recruiting_rows
+            else "/staffing",
             "empty": "All clear",
             "context": {},
             "rows": saturday_recruiting_rows,
@@ -647,6 +904,10 @@ def build_snapshot() -> dict:
             "rows": pending_rows,
         },
     ]
+    if _attendance_owns_location(attendance_snapshot):
+        sections = [section for section in sections if section["id"] != "missing_wc"]
+    if _attendance_sections_should_render(attendance_snapshot):
+        sections[2:2] = _attendance_sections(attendance_snapshot)
     queue = _queue_from_sections(sections)
     total = sum(int(s["count"]) for s in sections)
     urgent_total = sum(

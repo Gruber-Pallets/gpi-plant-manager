@@ -16,11 +16,90 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **A plan is ready to mark the matching 2s improvement complete after the work is finished, checked, and saved.** If there is not one clear match, it will stop and ask for help. Nothing in the app has changed yet.
 
+### Keep Odoo source problems visible
+
+- **The Exception Inbox now keeps an Odoo source problem visible even when the live copy is not ready.** A new work-time correction also cannot be closed by an older background check.
+
+### Plan safe fixes for work times
+
+- **Plant Manager can now plan an exact Odoo time fix without covering lunch or changing time outside the chosen window.** The plan can split a record into before, fixed, and after pieces.
+
+### Keep strict exceptions safe when settings are unclear
+
+- **Plant Manager now keeps strict Odoo production fixes protected if a setting cannot load.** Closed time changes also refresh in the Exception Inbox.
+
+### Keep Odoo exception updates live
+
+- **The Exception Inbox now updates an open item when its urgency or production amount changes.** Strict Odoo days also stay strict if the source is late or the rollout setting changes.
+
+### Show each Odoo location problem once
+
+- **The Exception Inbox can now keep one clear item for each missing, unknown, or mixed-up Odoo location and each production run with no worker.** Open items keep the same identity while time moves forward.
+
+### Keep recalculated production in the right order
+
+- **Plant Manager now keeps the newest worker-location production result when two background updates overlap.** An older update cannot replace the newer answer.
+
+## 2026-08-30
+
+### Match production only to clear Odoo locations
+
+- **Plant Manager can now match production to workers only when Odoo clearly shows the same work area.** Missing or mixed-up time stays unassigned, and shared work is split evenly. The strict rule is still not live.
+
+## 2026-08-29
+
+### One clear answer for each worker's location
+
+- **Plant Manager can now turn Odoo records into one clear work-area timeline.** It keeps gaps, unknown areas, and mixed-up overlaps visible instead of guessing.
+
+### Overnight work-time checks stay steady
+
+- **A safety check for overnight work times now gives the same answer every day.** Nothing people see in Plant Manager changed.
+
+### Past PTO requests have stronger safety checks
+
+- **Plant Manager now stops a second PTO request when that missed day is already paid.** It also keeps saved results safe when a short cleanup step fails, and it stops retrying after too many failed Wendy updates.
+
 ## 2026-08-28
+
+### Keep Odoo work-time updates together
+
+- **Plant Manager now saves each Odoo work-time check in one safe step.** Two background checks cannot repeat the same hourly check, and restored or removed times keep the right note. The safe copy is still running in the background only.
+
+### Odoo time checks finish safely
+
+- **Plant Manager now keeps the newest result when two Odoo time checks finish out of order.** Removed times stay removed, and fresh times do not get erased.
+
+### Past PTO updates stay clear and fresh
+
+- **The request count now matches the requests a worker can see.** Old Staffing days also show a new PTO status within about one minute, and a missed day still stays visible if its pay status cannot load.
+
+### Workers can use PTO for a missed day
+
+#### Features
+
+- **Workers can now ask to use one PTO day for a missed day in the current pay period.** The day still counts as an absence, a manager must approve it, and unclear closed-pay cases go to Wendy for review.
+
+### Keep Odoo work-time checks safe
+
+- **Plant Manager now checks Odoo work times one at a time and double-checks empty lists.** This keeps overlapping or failed checks from hiding good work records. The safe copy is still running in the background only.
+
+### Managers can review past PTO
+
+- **Managers can now approve or deny a request to pay a missed day with PTO.** If the pay period closed, they can see that Wendy needs to review it.
+
+### Wendy gets unclear past PTO cases
+
+- **When a pay period closes or a past PTO change is unclear, Plant Manager now makes one Odoo task for Wendy.** The task explains what needs review without changing payroll again.
+- **If Odoo loses a reply, Plant Manager now checks the same task before trying again.** This keeps one review task and finishes its message safely.
 
 ### People performance dashboard build plan
 
 - **A step-by-step build plan is ready for the new People performance page.** It covers work-area moves, goals, machine stops, forklift calls, tablets, safe refreshes, and clear warnings when data is missing. Nothing in the app has changed yet.
+
+### Keep a safe copy of Odoo work times
+
+- **Plant Manager now keeps a fresh copy of Odoo work times and checks for changed or removed records.** A failed check cannot erase good records. The copy is still running in the background only.
 
 ### People performance dashboard plan
 
@@ -37,7 +116,6 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Work area settings stay safe
 
 - **Work-area settings now change all at once or not at all.** New maintenance and supervisor teams get the right choice, and a future switch away from live rules waits for a new workday. The new rules are still turned off.
-
 ### Set which teams need a work area
 
 - **Settings can now remember which teams must have a work area in Odoo.** Maintenance and supervisors can stay clocked in without one. The new Odoo location rules are still turned off.

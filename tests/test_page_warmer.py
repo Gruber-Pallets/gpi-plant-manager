@@ -369,3 +369,34 @@ def test_payroll_guard_tick_runs_blocking_work_off_event_loop(monkeypatch):
     )
     asyncio.run(app_module._tick_payroll_work_entry_guard())
     assert calls == [(payroll_work_entry_guard.run_once, ())]
+
+
+def test_absence_pto_reconciler_runs_every_minute_exactly_once():
+    from zira_dashboard import app as app_module
+
+    entries = [
+        warmer
+        for warmer in app_module._WARMERS
+        if warmer[0] == "absence PTO reconcile"
+    ]
+    assert entries == [
+        ("absence PTO reconcile", app_module._tick_absence_pto_reconcile, 60)
+    ]
+
+
+def test_absence_pto_reconcile_tick_runs_off_event_loop(monkeypatch):
+    from zira_dashboard import absence_pto_review
+    from zira_dashboard import app as app_module
+
+    calls = []
+
+    async def fake_to_thread(fn, *args):
+        calls.append((fn, args))
+        return {"scanned": 0}
+
+    monkeypatch.setattr(app_module.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(absence_pto_review, "reconcile_once", lambda: {"scanned": 0})
+
+    asyncio.run(app_module._tick_absence_pto_reconcile())
+
+    assert calls == [(absence_pto_review.reconcile_once, ())]

@@ -2330,6 +2330,10 @@ CREATE TABLE IF NOT EXISTS absence_pto_requests (
   odoo_task_id INTEGER,
   task_attempts INTEGER NOT NULL DEFAULT 0,
   task_next_at TIMESTAMPTZ,
+  task_resolution_step TEXT NOT NULL DEFAULT 'none',
+  task_resolution_attempts INTEGER NOT NULL DEFAULT 0,
+  task_resolution_next_at TIMESTAMPTZ,
+  task_resolution_error TEXT,
   lease_owner UUID,
   lease_until TIMESTAMPTZ,
   requested_by_person_id INTEGER,
@@ -2344,7 +2348,9 @@ CREATE TABLE IF NOT EXISTS absence_pto_requests (
   CONSTRAINT absence_pto_requests_state_check CHECK
     (state IN ('pending','converting','approved','denied','needs_review','resolved_manually')),
   CONSTRAINT absence_pto_requests_step_check CHECK
-    (conversion_step IN ('not_started','absence_refused','pto_created','pto_approved'))
+    (conversion_step IN ('not_started','absence_refused','pto_created','pto_approved')),
+  CONSTRAINT absence_pto_requests_resolution_step_check CHECK
+    (task_resolution_step IN ('none','message_posted','closed'))
 );
 
 -- Keep bootstrap parity if an earlier deployment created only part of the
@@ -2370,6 +2376,13 @@ ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS odoo_task_id INTEGER;
 ALTER TABLE absence_pto_requests
   ADD COLUMN IF NOT EXISTS task_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS task_next_at TIMESTAMPTZ;
+ALTER TABLE absence_pto_requests
+  ADD COLUMN IF NOT EXISTS task_resolution_step TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE absence_pto_requests
+  ADD COLUMN IF NOT EXISTS task_resolution_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE absence_pto_requests
+  ADD COLUMN IF NOT EXISTS task_resolution_next_at TIMESTAMPTZ;
+ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS task_resolution_error TEXT;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS lease_owner UUID;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
 ALTER TABLE absence_pto_requests ADD COLUMN IF NOT EXISTS requested_by_person_id INTEGER;
@@ -2416,6 +2429,8 @@ ALTER TABLE absence_pto_requests ALTER COLUMN state SET DEFAULT 'pending';
 ALTER TABLE absence_pto_requests
   ALTER COLUMN conversion_step SET DEFAULT 'not_started';
 ALTER TABLE absence_pto_requests ALTER COLUMN task_attempts SET DEFAULT 0;
+ALTER TABLE absence_pto_requests ALTER COLUMN task_resolution_step SET DEFAULT 'none';
+ALTER TABLE absence_pto_requests ALTER COLUMN task_resolution_attempts SET DEFAULT 0;
 ALTER TABLE absence_pto_requests ALTER COLUMN requested_at SET DEFAULT now();
 ALTER TABLE absence_pto_requests ALTER COLUMN created_at SET DEFAULT now();
 ALTER TABLE absence_pto_requests ALTER COLUMN updated_at SET DEFAULT now();
@@ -2457,6 +2472,15 @@ BEGIN
       ADD CONSTRAINT absence_pto_requests_step_check CHECK
       (conversion_step IN ('not_started','absence_refused','pto_created','pto_approved'));
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'absence_pto_requests'::regclass
+      AND conname = 'absence_pto_requests_resolution_step_check'
+  ) THEN
+    ALTER TABLE absence_pto_requests
+      ADD CONSTRAINT absence_pto_requests_resolution_step_check CHECK
+      (task_resolution_step IN ('none','message_posted','closed'));
+  END IF;
 END
 $absence_pto_request_constraints$;
 
@@ -2471,6 +2495,8 @@ ALTER TABLE absence_pto_requests ALTER COLUMN balance_at_submit SET NOT NULL;
 ALTER TABLE absence_pto_requests ALTER COLUMN state SET NOT NULL;
 ALTER TABLE absence_pto_requests ALTER COLUMN conversion_step SET NOT NULL;
 ALTER TABLE absence_pto_requests ALTER COLUMN task_attempts SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN task_resolution_step SET NOT NULL;
+ALTER TABLE absence_pto_requests ALTER COLUMN task_resolution_attempts SET NOT NULL;
 ALTER TABLE absence_pto_requests ALTER COLUMN requested_at SET NOT NULL;
 ALTER TABLE absence_pto_requests ALTER COLUMN created_at SET NOT NULL;
 ALTER TABLE absence_pto_requests ALTER COLUMN updated_at SET NOT NULL;
@@ -2482,4 +2508,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS absence_pto_requests_pto_leave_uniq
   ON absence_pto_requests (pto_leave_id) WHERE pto_leave_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS absence_pto_requests_due_idx
   ON absence_pto_requests (state, task_next_at, lease_until);
+CREATE INDEX IF NOT EXISTS absence_pto_requests_resolution_due_idx
+  ON absence_pto_requests (state, task_resolution_next_at, lease_until)
+  WHERE state IN ('approved', 'resolved_manually')
+    AND task_resolution_step <> 'closed';
 """

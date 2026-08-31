@@ -98,6 +98,24 @@
         </span>
       </a>
     </div>
+
+    <a href="/timeclock/time-off/past-absence/{{ token }}"
+       class="k-btn secondary"
+       style="box-sizing: border-box; width: 100%; margin-top: 1.5rem;
+              text-decoration: none; padding: 1.75rem 1.5rem; min-height: 140px;
+              min-width: unset; display: flex; flex-direction: column;
+              align-items: center; justify-content: center; gap: 0.6rem;
+              line-height: 1.2; text-align: center;">
+      <span style="font-size: 1.6rem;">{{ t("Use PTO for a Past Absence") }}</span>
+      <span style="font-size: 1rem; font-weight: 400; color: #64748b;">
+        {{ t("Ask to use one PTO day for a missed day") }}
+      </span>
+      <span style="background: #ea580c; color: white; border-radius: 999px;
+                   padding: 0.25rem 0.85rem; font-size: 1.05rem;
+                   font-weight: 700; line-height: 1.2;">
+        {{ absence_pto_count }} {{ t("available or pending") }}
+      </span>
+    </a>
   </div>
 
   {# ===== Divider ===== #}

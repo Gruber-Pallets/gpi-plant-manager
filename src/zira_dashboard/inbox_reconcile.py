@@ -8,6 +8,7 @@ row since it was first seen, and it departed more than a grace period ago. Those
 guards mean a transient source failure, a display cap, or a resolve/log race can
 never mass-log false resolutions.
 """
+
 from __future__ import annotations
 
 import logging
@@ -33,6 +34,14 @@ _SECTION_KIND = {
     "missed_punch_out": "missed_punch_out",
     "time_off": "time_off",
     "breakdown": "breakdown",
+    "attendance_missing_location": "attendance_missing_location",
+    "attendance_unmapped_location": "attendance_unmapped_location",
+    "attendance_conflicting_location": "attendance_conflicting_location",
+    "attendance_duplicate_location": "attendance_duplicate_location",
+    "attendance_department_repair_failed": "attendance_department_repair_failed",
+    "attendance_source_stale": "attendance_source_stale",
+    "production_source_unavailable": "production_source_unavailable",
+    "production_unassigned_run": "production_unassigned_run",
 }
 
 # item_kind -> the build_snapshot source label (matches _capture(...) names),
@@ -47,6 +56,21 @@ _KIND_SOURCE = {
     "missed_punch_out": "Missed Punch Out",
     "time_off": "Pending Time Off",
     "breakdown": "Machine Breakdown",
+    "attendance_missing_location": "Attendance Timeline",
+    "attendance_unmapped_location": "Attendance Timeline",
+    "attendance_conflicting_location": "Attendance Timeline",
+    "attendance_duplicate_location": "Attendance Timeline",
+    "attendance_department_repair_failed": "Attendance Timeline",
+    "attendance_source_stale": "Attendance Timeline",
+    "production_source_unavailable": "Strict Production",
+    "production_unassigned_run": "Strict Production",
+}
+
+_CORRECTION_LINKED_KINDS = {
+    "attendance_missing_location",
+    "attendance_unmapped_location",
+    "attendance_conflicting_location",
+    "production_unassigned_run",
 }
 
 
@@ -61,7 +85,8 @@ def plan_reconcile(open_now: dict, prev: dict, complete_kinds: set) -> dict:
     arrivals = [k for k in open_now if k not in prev]
     still_open = [k for k in open_now if k in prev]
     departed = [
-        key for key, row in prev.items()
+        key
+        for key, row in prev.items()
         if key not in open_now and row.get("item_kind") in complete_kinds
     ]
     return {"arrivals": arrivals, "still_open": still_open, "departed": departed}
@@ -83,6 +108,8 @@ def _complete_kinds(snapshot: dict) -> set:
     for section in snapshot.get("sections") or []:
         kind = _SECTION_KIND.get(section.get("id"))
         if kind is None:
+            continue
+        if section.get("complete") is False:
             continue
         if _KIND_SOURCE.get(kind) in errored:
             continue
@@ -115,6 +142,28 @@ def _read_mirror() -> dict:
     return {r["item_key"]: r for r in rows}
 
 
+def _correction_allows_resolution_cur(cur, item_key: str) -> bool:
+    """Lock correction inserts and recheck the newest job in this transaction."""
+    cur.execute("LOCK TABLE attendance_correction_jobs IN SHARE MODE")
+    cur.execute(
+        "SELECT status FROM attendance_correction_jobs WHERE item_key = %s "
+        "ORDER BY id DESC LIMIT 1",
+        (item_key,),
+    )
+    row = cur.fetchone()
+    return row is None or row.get("status") == "complete"
+
+
+def _correction_allows_resolution(item_key: str) -> bool:
+    """A linked correction keeps its source item open until fully complete."""
+    try:
+        with db.cursor() as cur:
+            return _correction_allows_resolution_cur(cur, item_key)
+    except Exception:  # noqa: BLE001 - uncertainty must keep the item open
+        _log.warning("could not verify correction completion for %s", item_key)
+        return False
+
+
 def _upsert(key: str, info: dict) -> None:
     db.execute(
         "INSERT INTO inbox_open_items "
@@ -123,8 +172,13 @@ def _upsert(key: str, info: dict) -> None:
         "ON CONFLICT (item_key) DO UPDATE SET last_seen = now(), "
         "person_name = EXCLUDED.person_name, "
         "category_label = EXCLUDED.category_label, priority = EXCLUDED.priority",
-        (key, info["item_kind"], info.get("person_name"),
-         info.get("category_label"), info.get("priority")),
+        (
+            key,
+            info["item_kind"],
+            info.get("person_name"),
+            info.get("category_label"),
+            info.get("priority"),
+        ),
     )
 
 
@@ -133,9 +187,12 @@ def _delete(
     last_seen: Any,
     *,
     auto_event: dict[str, Any] | None = None,
+    correction_linked: bool = False,
 ) -> dict | None:
     """Claim a departure and atomically record its automatic audit event."""
     with db.cursor() as cur:
+        if correction_linked and not _correction_allows_resolution_cur(cur, key):
+            return None
         cur.execute(
             "DELETE FROM inbox_open_items "
             "WHERE item_key = %s AND last_seen = %s "
@@ -165,7 +222,10 @@ def run_once() -> None:
     for key in actions["departed"]:
         row = prev[key]
         last_seen = row.get("last_seen")
-        if last_seen is not None and (now - last_seen).total_seconds() < _AUTO_RESOLVE_GRACE_SECONDS:
+        if (
+            last_seen is not None
+            and (now - last_seen).total_seconds() < _AUTO_RESOLVE_GRACE_SECONDS
+        ):
             continue  # departed too recently; re-check next tick (resolve/log race guard)
         try:
             has_human_event = inbox_log.has_human_event_since(key, row["first_seen"])
@@ -182,10 +242,9 @@ def run_once() -> None:
                     "actor_name": None,
                     "source": "auto",
                 }
-            _delete(
-                key,
-                last_seen,
-                auto_event=auto_event,
-            )
+            delete_kwargs: dict[str, Any] = {"auto_event": auto_event}
+            if row.get("item_kind") in _CORRECTION_LINKED_KINDS:
+                delete_kwargs["correction_linked"] = True
+            _delete(key, last_seen, **delete_kwargs)
         except Exception as e:  # noqa: BLE001 -- one bad item never aborts the sweep
             _log.warning("inbox reconcile failed for %s: %s", key, e)

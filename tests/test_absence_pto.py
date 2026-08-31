@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -11,6 +11,7 @@ TODAY = date(2026, 8, 28)
 PERIOD_START = date(2026, 8, 17)
 PERIOD_END = date(2026, 8, 30)
 ABSENCE_DAY = date(2026, 8, 20)
+LIVE_NOW = datetime(2026, 8, 28, 14, 30, tzinfo=UTC)
 
 
 def _type_row(type_id=7, **overrides):
@@ -51,6 +52,8 @@ def _wire_candidate(
             else:
                 assert params[0] == "44"
             return [{"day": absence_day, "odoo_leave_id": 91}]
+        if "FROM time_off_requests" in sql:
+            return []
         if "FROM leave_types_cache" in sql:
             return [_type_row()] if type_rows is None else type_rows
         raise AssertionError(sql)
@@ -60,6 +63,17 @@ def _wire_candidate(
         domain.absence_pto_store,
         "list_for_person",
         lambda emp_id: list(requests),
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "blocking_days_for_person",
+        lambda emp_id, start, end: {
+            request.absence_day
+            for request in requests
+            if request.state
+            in {"pending", "converting", "approved", "needs_review", "resolved_manually"}
+        },
+        raising=False,
     )
     refreshed = []
     monkeypatch.setattr(
@@ -165,6 +179,244 @@ def test_denied_request_allows_resubmission_while_still_eligible(monkeypatch):
     assert row.available_practical == 4.0
 
 
+def test_approved_exact_pto_mirror_blocks_local_only_absence_candidate(monkeypatch):
+    _wire_candidate(monkeypatch)
+    original_query = domain.db.query
+    seen = {}
+
+    def fake_query(sql, params=None):
+        if "FROM manual_absences" in sql:
+            return [{"day": ABSENCE_DAY, "odoo_leave_id": None}]
+        if "FROM time_off_requests" in sql:
+            seen.update(sql=sql, params=params)
+            return [{"day": ABSENCE_DAY}]
+        return original_query(sql, params)
+
+    monkeypatch.setattr(domain.db, "query", fake_query)
+
+    row = domain.list_candidates(44, TODAY)[0]
+
+    assert row.eligible is False
+    assert row.blocked_reason == "A PTO request already exists for this absence."
+    assert "person_odoo_id = %s" in seen["sql"]
+    assert "holiday_status_id = %s" in seen["sql"]
+    assert "shape = 'full_day'" in seen["sql"]
+    assert "state = 'validate'" in seen["sql"]
+    assert "date_from = date_to" in seen["sql"]
+    assert seen["params"] == (44, 7, PERIOD_START, TODAY)
+
+
+def test_approved_pto_mirror_query_requires_every_exact_identity_field(monkeypatch):
+    _wire_candidate(monkeypatch)
+    original_query = domain.db.query
+
+    def fake_query(sql, params=None):
+        if "FROM time_off_requests" in sql:
+            # These are the nonmatches the database must exclude: another
+            # employee, another type/day/state, and a multi-day range.
+            assert "person_odoo_id = %s" in sql
+            assert "holiday_status_id = %s" in sql
+            assert "state = 'validate'" in sql
+            assert "shape = 'full_day'" in sql
+            assert "date_from = date_to" in sql
+            assert "date_from >= %s" in sql
+            assert "date_from < %s" in sql
+            return []
+        return original_query(sql, params)
+
+    monkeypatch.setattr(domain.db, "query", fake_query)
+
+    row = domain.list_candidates(44, TODAY)[0]
+
+    assert row.eligible is True
+
+
+def test_deny_records_reason_and_actor_without_calling_odoo(monkeypatch):
+    pending = _request(state="pending")
+    denied = SimpleNamespace(
+        absence_day=pending.absence_day,
+        state="denied",
+        denial_reason="Save the PTO",
+        decided_by_upn="dale@gruberpallets.com",
+        decided_by_name="Dale",
+    )
+    calls = []
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda request_id, owner, now, lease_seconds=120: pending,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "finalize_denied",
+        lambda request_id, owner, **kwargs: calls.append(
+            (request_id, owner, kwargs)
+        )
+        or denied,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "release_claim",
+        lambda request_id, owner, now=None: True,
+    )
+    from zira_dashboard import odoo_client
+
+    monkeypatch.setattr(
+        odoo_client,
+        "refuse_leave",
+        lambda *args: pytest.fail("denial must not mutate Odoo"),
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "post_leave_message",
+        lambda *args: pytest.fail("denial must not write Odoo chatter"),
+    )
+
+    result = domain.deny(
+        41,
+        "dale@gruberpallets.com",
+        "Dale",
+        "  Save the PTO  ",
+        "page",
+    )
+
+    assert result is denied
+    assert len(calls) == 1
+    assert calls[0][0] == 41
+    assert calls[0][2]["reason"] == "Save the PTO"
+    assert calls[0][2]["actor_upn"] == "dale@gruberpallets.com"
+    assert calls[0][2]["actor_name"] == "Dale"
+    assert calls[0][2]["source"] == "page"
+
+
+def test_deny_requires_a_reason_before_claiming(monkeypatch):
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda *args: pytest.fail("blank reason must fail before a claim"),
+    )
+
+    with pytest.raises(domain.DecisionError, match="reason is required"):
+        domain.deny(41, "dale@gruberpallets.com", "Dale", " ", "page")
+
+
+def test_deny_keeps_a_supplied_workflow_time_out_of_live_lease_checks(monkeypatch):
+    workflow_now = datetime(2031, 4, 10, 14, 30, tzinfo=UTC)
+    pending = _request(state="pending")
+    seen = {}
+    monkeypatch.setattr(domain, "_clock", lambda: LIVE_NOW)
+
+    def claim(request_id, owner, now, lease_seconds=120):
+        seen["claim_now"] = now
+        return pending
+
+    def finalize(request_id, owner, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(state="denied", absence_day=ABSENCE_DAY)
+
+    def release(request_id, owner, now=None):
+        seen["release_now"] = now
+        return True
+
+    monkeypatch.setattr(domain.absence_pto_store, "claim_request", claim)
+    monkeypatch.setattr(domain.absence_pto_store, "finalize_denied", finalize)
+    monkeypatch.setattr(domain.absence_pto_store, "release_claim", release)
+
+    domain.deny(
+        41,
+        "dale@gruberpallets.com",
+        "Dale",
+        "Save the PTO",
+        "page",
+        now=workflow_now,
+    )
+
+    assert seen["claim_now"] == LIVE_NOW
+    assert seen["lease_now"] == LIVE_NOW
+    assert seen["release_now"] == LIVE_NOW
+    assert seen["workflow_now"] == workflow_now
+
+
+def test_deny_returns_committed_result_when_claim_release_raises(monkeypatch, caplog):
+    pending = _request(state="pending")
+    denied = SimpleNamespace(state="denied", absence_day=ABSENCE_DAY)
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda *args, **kwargs: pending,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "finalize_denied",
+        lambda *args, **kwargs: denied,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "release_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("release failed")),
+    )
+
+    result = domain.deny(
+        41, "dale@gruberpallets.com", "Dale", "Save the PTO", "page"
+    )
+
+    assert result is denied
+    assert "release failed" in caplog.text
+
+
+def test_deny_logs_false_claim_release_after_commit(monkeypatch, caplog):
+    pending = _request(state="pending")
+    denied = SimpleNamespace(state="denied", absence_day=ABSENCE_DAY)
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda *args, **kwargs: pending,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "finalize_denied",
+        lambda *args, **kwargs: denied,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "release_claim",
+        lambda *args, **kwargs: False,
+    )
+
+    result = domain.deny(
+        41, "dale@gruberpallets.com", "Dale", "Save the PTO", "page"
+    )
+
+    assert result is denied
+    assert "could not confirm claim release" in caplog.text
+
+
+def test_deny_release_failure_does_not_mask_primary_finalization_error(
+    monkeypatch,
+):
+    pending = _request(state="pending")
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "claim_request",
+        lambda *args, **kwargs: pending,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "finalize_denied",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("audit failed")),
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "release_claim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("release failed")),
+    )
+
+    with pytest.raises(ValueError, match="audit failed"):
+        domain.deny(
+            41, "dale@gruberpallets.com", "Dale", "Save the PTO", "page"
+        )
+
+
 @pytest.mark.parametrize("day", [TODAY, date(2026, 8, 29)])
 def test_submit_rejects_current_or_future_day_before_database_lookup(monkeypatch, day):
     monkeypatch.setattr(
@@ -230,6 +482,62 @@ def test_submit_refreshes_then_rereads_the_matching_balance(monkeypatch):
     }
 
 
+def test_submit_authoritatively_rejects_preexisting_approved_pto_mirror(
+    monkeypatch,
+):
+    _wire_candidate(monkeypatch)
+    original_query = domain.db.query
+
+    def fake_query(sql, params=None):
+        if "FROM time_off_requests" in sql:
+            return [{"day": ABSENCE_DAY}]
+        return original_query(sql, params)
+
+    monkeypatch.setattr(domain.db, "query", fake_query)
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "create_request",
+        lambda **kwargs: pytest.fail("approved PTO must block before persistence"),
+    )
+
+    with pytest.raises(domain.DuplicateSubmissionError, match="already exists"):
+        domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY)
+
+
+def test_submit_blocking_day_uses_typed_duplicate_contract(monkeypatch):
+    _wire_candidate(monkeypatch, requests=[_request(state="pending")])
+
+    with pytest.raises(domain.DuplicateSubmissionError) as caught:
+        domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY)
+
+    assert str(caught.value) == "A PTO request already exists for this absence."
+
+
+@pytest.mark.parametrize(
+    ("note", "message"),
+    [
+        (object(), "note must be text"),
+        ("x" * 1001, "1,000 characters or fewer"),
+    ],
+)
+def test_submit_validates_employee_note_before_persistence_or_remote_refresh(
+    monkeypatch, note, message
+):
+    monkeypatch.setattr(
+        domain.time_off_balances,
+        "refresh_for_employee",
+        lambda *_: pytest.fail("invalid note must fail before refresh"),
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "create_request",
+        lambda **kwargs: pytest.fail("invalid note must fail before persistence"),
+    )
+
+    with pytest.raises(domain.SubmissionError, match=message):
+        domain.submit(3, 44, "Ana", ABSENCE_DAY, note, TODAY)
+
+
 def test_submit_rejects_low_balance_after_refresh(monkeypatch):
     _wire_candidate(monkeypatch, balance=0.75)
 
@@ -253,8 +561,20 @@ def test_submit_translates_only_named_partial_unique_race(monkeypatch):
         ),
     )
 
-    with pytest.raises(domain.SubmissionError, match="already exists"):
+    with pytest.raises(domain.DuplicateSubmissionError, match="already exists"):
         domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY)
+
+
+def test_unexpected_balance_refresh_error_is_not_silently_hidden(monkeypatch):
+    _wire_candidate(monkeypatch)
+    monkeypatch.setattr(
+        domain.time_off_balances,
+        "refresh_for_employee",
+        lambda *_: (_ for _ in ()).throw(AssertionError("bad test double")),
+    )
+
+    with pytest.raises(AssertionError, match="bad test double"):
+        domain.list_candidates(44, TODAY)
 
 
 def test_submit_reraises_unrelated_database_failure(monkeypatch):
@@ -281,8 +601,73 @@ def test_employee_requests_uses_canonical_odoo_employee_key(monkeypatch):
     expected = [_request()]
     monkeypatch.setattr(
         domain.absence_pto_store,
-        "list_for_person",
-        lambda emp_id: expected if emp_id == "44" else pytest.fail(emp_id),
+        "list_history_for_person",
+        lambda emp_id, *, limit: (
+            expected if (emp_id, limit) == ("44", 25) else pytest.fail((emp_id, limit))
+        ),
+        raising=False,
     )
 
-    assert domain.employee_requests(44) is expected
+    assert domain.employee_requests(44, limit=25) is expected
+
+
+def test_employee_request_counts_use_aggregate_store_api(monkeypatch):
+    expected = SimpleNamespace(total=7, unresolved=2, actionable=1)
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "request_counts_for_person",
+        lambda emp_id: expected if emp_id == "44" else pytest.fail(emp_id),
+        raising=False,
+    )
+
+    assert domain.employee_request_counts(44) is expected
+
+
+def test_submit_invalidates_staffing_and_all_page_caches_after_commit(monkeypatch):
+    _wire_candidate(monkeypatch)
+    created = _request()
+    events = []
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "create_request",
+        lambda **kwargs: events.append("commit") or created,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_cache.staffing,
+        "invalidate_schedule_cache",
+        lambda day: events.append(("schedule", day)),
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_cache._http_cache,
+        "invalidate_all_cache",
+        lambda: events.append(("responses", None)),
+    )
+
+    assert domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY) is created
+    assert events == [
+        "commit",
+        ("schedule", ABSENCE_DAY),
+        ("responses", None),
+    ]
+
+
+def test_submit_cache_failures_cannot_overturn_committed_request(monkeypatch):
+    _wire_candidate(monkeypatch)
+    created = _request()
+    monkeypatch.setattr(
+        domain.absence_pto_store,
+        "create_request",
+        lambda **kwargs: created,
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_cache.staffing,
+        "invalidate_schedule_cache",
+        lambda day: (_ for _ in ()).throw(RuntimeError("schedule cache failed")),
+    )
+    monkeypatch.setattr(
+        domain.absence_pto_cache._http_cache,
+        "invalidate_all_cache",
+        lambda: (_ for _ in ()).throw(RuntimeError("page cache failed")),
+    )
+
+    assert domain.submit(3, 44, "Ana", ABSENCE_DAY, "", TODAY) is created

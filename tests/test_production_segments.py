@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from zira_dashboard.assignment_windows import WorkSegment
+from zira_dashboard import production_segments as production_segments_module
 from zira_dashboard.production_segments import (
     SegmentScore,
     coalesce_display_scores,
@@ -9,6 +12,13 @@ from zira_dashboard.production_segments import (
     score_work_segments,
     worker_coverage_is_split,
 )
+
+
+def unassigned_runs_for_samples(*args, **kwargs):
+    function = getattr(production_segments_module, "unassigned_runs_for_samples", None)
+    if function is None:
+        pytest.fail("unassigned_runs_for_samples is not implemented")
+    return function(*args, **kwargs)
 
 
 UTC = timezone.utc
@@ -43,43 +53,30 @@ def _score(
         runway_units=max(actual, goal),
         is_active=active,
         result=(
-            "neutral"
-            if person is None or goal <= 0
-            else "ahead" if actual >= goal else "behind"
+            "neutral" if person is None or goal <= 0 else "ahead" if actual >= goal else "behind"
         ),
     )
 
 
 def test_distinct_named_producers_counts_people_not_segments_or_unassigned():
-    humberto_morning = _score(
-        "Humberto S.", t(12), t(15), actual=200, goal=240, segment_id=0
-    )
-    unassigned = _score(
-        None, t(15), t(15), actual=3, goal=0, segment_id=1
-    )
-    empty_name = _score(
-        "", t(15), t(15), actual=0, goal=0, segment_id=4
-    )
-    humberto_afternoon = _score(
-        "Humberto S.", t(16), t(18), actual=316, goal=460, segment_id=2
-    )
-    ana = _score(
-        "Ana M.", t(18), t(19), actual=40, goal=50, segment_id=3
-    )
+    humberto_morning = _score("Humberto S.", t(12), t(15), actual=200, goal=240, segment_id=0)
+    unassigned = _score(None, t(15), t(15), actual=3, goal=0, segment_id=1)
+    empty_name = _score("", t(15), t(15), actual=0, goal=0, segment_id=4)
+    humberto_afternoon = _score("Humberto S.", t(16), t(18), actual=316, goal=460, segment_id=2)
+    ana = _score("Ana M.", t(18), t(19), actual=40, goal=50, segment_id=3)
 
     assert distinct_named_producers(
         (humberto_morning, unassigned, empty_name, humberto_afternoon)
     ) == ("Humberto S.",)
-    assert distinct_named_producers(
-        (ana, humberto_afternoon, unassigned, humberto_morning)
-    ) == ("Humberto S.", "Ana M.")
+    assert distinct_named_producers((ana, humberto_afternoon, unassigned, humberto_morning)) == (
+        "Humberto S.",
+        "Ana M.",
+    )
     assert distinct_named_producers((unassigned, empty_name)) == ()
 
 
 def test_display_scores_join_same_worker_across_scheduled_lunch():
-    morning = _score(
-        "Jesus G.", t(12), t(16), actual=311, goal=260, minutes=210
-    )
+    morning = _score("Jesus G.", t(12), t(16), actual=311, goal=260, minutes=210)
     afternoon = _score(
         "Jesus G.",
         t(16, 30),
@@ -91,9 +88,7 @@ def test_display_scores_join_same_worker_across_scheduled_lunch():
         segment_id=1,
     )
 
-    (joined,) = coalesce_display_scores(
-        (morning, afternoon), ignored_gaps=((t(16), t(16, 30)),)
-    )
+    (joined,) = coalesce_display_scores((morning, afternoon), ignored_gaps=((t(16), t(16, 30)),))
 
     assert (joined.start_utc, joined.end_utc) == (t(12), t(19, 30))
     assert (joined.actual_units, joined.goal_units) == (567, 520)
@@ -122,9 +117,10 @@ def test_display_scores_keep_productive_gap_and_lunch_transfer_split():
     )
 
     assert len(productive_gap) == 2
-    assert worker_coverage_is_split(
-        productive_gap, window_start_utc=t(12), window_end_utc=t(17)
-    ) is True
+    assert (
+        worker_coverage_is_split(productive_gap, window_start_utc=t(12), window_end_utc=t(17))
+        is True
+    )
     assert [row.person_name for row in lunch_transfer] == ["Jesus G.", "Ana M."]
 
 
@@ -142,42 +138,48 @@ def test_worker_coverage_split_policy_ignores_scheduled_break_boundaries():
         active=True,
         segment_id=1,
     )
-    overlapping_worker = _score(
-        "Ana M.", t(14), t(15), actual=50, goal=60, segment_id=3
-    )
-    unassigned = _score(
-        None, t(16, 10), t(16, 10), actual=3, goal=0, segment_id=2
-    )
+    overlapping_worker = _score("Ana M.", t(14), t(15), actual=50, goal=60, segment_id=3)
+    unassigned = _score(None, t(16, 10), t(16, 10), actual=3, goal=0, segment_id=2)
 
-    assert worker_coverage_is_split(
-        (full,), window_start_utc=t(12), window_end_utc=t(19)
-    ) is False
-    assert worker_coverage_is_split(
-        (lunch_now,),
-        window_start_utc=t(12),
-        window_end_utc=t(16, 15),
-        ignored_gaps=((t(16), t(16, 30)),),
-    ) is False
-    assert worker_coverage_is_split(
-        (left_early,), window_start_utc=t(12), window_end_utc=t(19)
-    ) is True
-    assert worker_coverage_is_split(
-        (late_start,), window_start_utc=t(12), window_end_utc=t(19)
-    ) is True
-    assert worker_coverage_is_split(
-        (lunch_now, second_worker),
-        window_start_utc=t(12),
-        window_end_utc=t(19),
-        ignored_gaps=((t(16), t(16, 30)),),
-    ) is True
-    assert worker_coverage_is_split(
-        (full, overlapping_worker),
-        window_start_utc=t(12),
-        window_end_utc=t(19),
-    ) is True
-    assert worker_coverage_is_split(
-        (full, unassigned), window_start_utc=t(12), window_end_utc=t(19)
-    ) is False
+    assert worker_coverage_is_split((full,), window_start_utc=t(12), window_end_utc=t(19)) is False
+    assert (
+        worker_coverage_is_split(
+            (lunch_now,),
+            window_start_utc=t(12),
+            window_end_utc=t(16, 15),
+            ignored_gaps=((t(16), t(16, 30)),),
+        )
+        is False
+    )
+    assert (
+        worker_coverage_is_split((left_early,), window_start_utc=t(12), window_end_utc=t(19))
+        is True
+    )
+    assert (
+        worker_coverage_is_split((late_start,), window_start_utc=t(12), window_end_utc=t(19))
+        is True
+    )
+    assert (
+        worker_coverage_is_split(
+            (lunch_now, second_worker),
+            window_start_utc=t(12),
+            window_end_utc=t(19),
+            ignored_gaps=((t(16), t(16, 30)),),
+        )
+        is True
+    )
+    assert (
+        worker_coverage_is_split(
+            (full, overlapping_worker),
+            window_start_utc=t(12),
+            window_end_utc=t(19),
+        )
+        is True
+    )
+    assert (
+        worker_coverage_is_split((full, unassigned), window_start_utc=t(12), window_end_utc=t(19))
+        is False
+    )
 
 
 def test_transfer_segments_keep_independent_actual_goal_and_runway():
@@ -226,10 +228,7 @@ def test_transfer_boundary_and_overlap_credit_each_sample_once():
         segments,
         wc_totals={"Hand Build #1": 60},
         samples_by_wc={"Hand Build #1": [(t(12, 30), 20), (t(13), 40)]},
-        productive_minutes=lambda _person, _wc, start, end: (
-            end - start
-        ).total_seconds()
-        / 60,
+        productive_minutes=lambda _person, _wc, start, end: (end - start).total_seconds() / 60,
     )["Hand Build #1"]
     assert [(row.person_name, row.actual_units) for row in credits] == [
         ("A", 10.0),
@@ -277,10 +276,7 @@ def test_remaining_total_uses_each_segment_productive_time():
         segments,
         wc_totals={"Repair 4": 90},
         samples_by_wc={},
-        productive_minutes=lambda _person, _wc, start, end: (
-            end - start
-        ).total_seconds()
-        / 60,
+        productive_minutes=lambda _person, _wc, start, end: (end - start).total_seconds() / 60,
     )["Repair 4"]
     assert [(row.person_name, row.actual_units) for row in credits] == [
         ("A", 30.0),
@@ -296,9 +292,7 @@ def test_zero_target_stays_neutral_without_false_finish_goal():
         samples_by_wc={"Repair 4": [(t(12, 30), 12)]},
         productive_minutes=lambda *_args: 60,
     )
-    (score,) = score_work_segments(
-        credits, target_per_hour={"Repair 4": 0}
-    )["Repair 4"]
+    (score,) = score_work_segments(credits, target_per_hour={"Repair 4": 0})["Repair 4"]
     assert (score.goal_units, score.runway_units, score.result) == (
         0.0,
         12.0,
@@ -327,9 +321,7 @@ def test_sequential_transfers_cover_completed_and_live_result_states():
         productive_minutes=lambda *_args: 60,
         live_cap_utc=t(16),
     )
-    scored = score_work_segments(
-        credits, target_per_hour={"Repair 4": 60}
-    )["Repair 4"]
+    scored = score_work_segments(credits, target_per_hour={"Repair 4": 60})["Repair 4"]
     assert [(row.person_name, row.result, row.is_active) for row in scored] == [
         ("A", "behind", False),
         ("B", "ahead", False),
@@ -342,3 +334,135 @@ def test_sequential_transfers_cover_completed_and_live_result_states():
         (80.0, 60.0),
         (30.0, 60.0),
     ]
+
+
+def test_odoo_identity_keeps_duplicate_display_names_distinct_and_conserves_units():
+    segments = [
+        WorkSegment("Repair 4", "Alex", t(12), t(13), "odoo", 101),
+        WorkSegment("Repair 4", "Alex", t(12), t(13), "odoo", 202),
+    ]
+
+    credits = credit_work_segments(
+        segments,
+        wc_totals={"Repair 4": 30},
+        samples_by_wc={"Repair 4": [(t(12, 15), 12), (t(12, 45), 18)]},
+        productive_minutes=lambda *_args: 60,
+        allow_total_fallback=False,
+    )["Repair 4"]
+
+    assert [row.person_odoo_id for row in credits] == [101, 202]
+    assert [row.actual_units for row in credits] == [15.0, 15.0]
+    assert sum(row.actual_units for row in credits) == pytest.approx(30.0)
+
+
+def test_strict_credit_leaves_gap_and_conflict_samples_unassigned_without_fabricating_units():
+    segments = [
+        WorkSegment("Repair 4", "Alex", t(12), t(12, 30), "odoo", 101),
+        WorkSegment("Repair 4", "Alex", t(12, 45), t(13), "odoo", 101),
+    ]
+
+    credits = credit_work_segments(
+        segments,
+        wc_totals={"Repair 4": 30},
+        samples_by_wc={"Repair 4": [(t(12, 10), 10), (t(12, 35), 12), (t(12, 50), 8)]},
+        productive_minutes=lambda *_args: 30,
+        allow_total_fallback=False,
+    )["Repair 4"]
+
+    named = sum(row.actual_units for row in credits if row.person_name is not None)
+    unassigned = sum(row.actual_units for row in credits if row.person_name is None)
+    assert (named, unassigned, named + unassigned) == (18.0, 12.0, 30.0)
+
+
+def test_disabling_total_fallback_never_allocates_total_only_output():
+    credits = credit_work_segments(
+        [WorkSegment("Repair 4", "Alex", t(12), t(13), "odoo", 101)],
+        wc_totals={"Repair 4": 20},
+        samples_by_wc={},
+        productive_minutes=lambda *_args: 60,
+        allow_total_fallback=False,
+    )["Repair 4"]
+
+    assert [(row.person_name, row.actual_units) for row in credits] == [("Alex", 0.0)]
+
+
+def test_unassigned_runs_use_original_sample_adjacency_and_active_interval_identity():
+    samples = [
+        (t(12, 5), 2),
+        (t(12, 10), 3),
+        (t(12, 15), 5),  # assigned: splits the uncovered stream
+        (t(12, 20), 7),
+        (t(12, 35), 11),  # second active interval: splits again
+        (t(12, 40), 13),
+    ]
+
+    runs = unassigned_runs_for_samples(
+        samples,
+        {t(12, 15)},
+        ((t(12), t(12, 30)), (t(12, 30), t(13))),
+        wc_name="Repair 4",
+    )
+
+    assert [
+        (run.wc_name, run.start_utc, run.end_utc, run.units, run.sample_count) for run in runs
+    ] == [
+        ("Repair 4", t(12, 5), t(12, 10), 5.0, 2),
+        ("Repair 4", t(12, 20), t(12, 20), 7.0, 1),
+        ("Repair 4", t(12, 35), t(12, 40), 24.0, 2),
+    ]
+
+
+def test_unassigned_runs_skip_samples_outside_active_intervals_and_split_groups():
+    runs = unassigned_runs_for_samples(
+        [(t(12, 5), 5), (t(12, 30), 7), (t(14, 5), 11)],
+        set(),
+        ((t(12), t(12, 10)), (t(14), t(14, 10))),
+        wc_name="Repair 4",
+    )
+
+    assert [(run.start_utc, run.end_utc, run.units, run.sample_count) for run in runs] == [
+        (t(12, 5), t(12, 5), 5.0, 1),
+        (t(14, 5), t(14, 5), 11.0, 1),
+    ]
+
+
+def test_touching_active_intervals_keep_exact_boundary_sample_in_second_run():
+    runs = unassigned_runs_for_samples(
+        [(t(12, 55), 5), (t(13), 7)],
+        set(),
+        ((t(12), t(13)), (t(13), t(14))),
+        wc_name="Repair 4",
+    )
+
+    assert [(run.start_utc, run.end_utc, run.units, run.sample_count) for run in runs] == [
+        (t(12, 55), t(12, 55), 5.0, 1),
+        (t(13), t(13), 7.0, 1),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("samples", "intervals", "message"),
+    [
+        ([(datetime(2026, 8, 20, 12), 1)], ((t(12), t(13)),), "aware UTC"),
+        ([(t(12), 0)], ((t(12), t(13)),), "positive"),
+        ([(t(12), -1)], ((t(12), t(13)),), "positive"),
+        ([(t(12), 1)], ((t(13), t(12)),), "positive"),
+        (
+            [(t(12), 1)],
+            ((t(12), t(13)), (t(12, 30), t(13, 30))),
+            "overlap",
+        ),
+    ],
+)
+def test_unassigned_runs_reject_malformed_samples_and_intervals(samples, intervals, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        unassigned_runs_for_samples(samples, set(), intervals)
+
+
+def test_unassigned_runs_require_assigned_times_to_be_aware_utc():
+    with pytest.raises((TypeError, ValueError), match="aware UTC"):
+        unassigned_runs_for_samples(
+            [(t(12), 1)],
+            {datetime(2026, 8, 20, 12)},
+            ((t(12), t(13)),),
+        )

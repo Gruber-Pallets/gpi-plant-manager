@@ -657,6 +657,13 @@ def create_attendance_interval(
     odoo_department_id: int | None,
 ) -> int:
     """Create one exact correction interval using configured Odoo fields."""
+    check_in_utc = _odoo_attendance._require_aware_utc_datetime(
+        check_in_utc, "check_in_utc"
+    )
+    if check_out_utc is not None:
+        check_out_utc = _odoo_attendance._require_aware_utc_datetime(
+            check_out_utc, "check_out_utc"
+        )
     wc_field = _require_attendance_correction_wc_field()
     payload: dict[str, object] = {
         "employee_id": int(employee_odoo_id),
@@ -679,19 +686,37 @@ def create_attendance_interval(
 
 
 def _attendance_update_payload(values: Mapping[str, object]) -> dict[str, object]:
+    allowed_fields = {
+        "employee_odoo_id",
+        "check_in_utc",
+        "check_out_utc",
+        "odoo_work_center_id",
+        "odoo_department_id",
+    }
+    unknown_fields = [key for key in values if key not in allowed_fields]
+    if unknown_fields:
+        raise ValueError(
+            f"Unsupported attendance update field: {unknown_fields[0]}"
+        )
     wc_field = _require_attendance_correction_wc_field()
     department_field = _kiosk_department_field()
     payload: dict[str, object] = {}
     for key, value in values.items():
-        if key in {"check_in", "check_in_utc"}:
-            payload["check_in"] = (
-                _to_odoo_dt(value) if isinstance(value, datetime) else value
+        if key == "check_in_utc":
+            payload["check_in"] = _to_odoo_dt(
+                _odoo_attendance._require_aware_utc_datetime(
+                    value, "check_in_utc"
+                )
             )
-        elif key in {"check_out", "check_out_utc"}:
+        elif key == "check_out_utc":
             payload["check_out"] = (
-                _to_odoo_dt(value)
-                if isinstance(value, datetime)
-                else False if value is None else value
+                False
+                if value is None
+                else _to_odoo_dt(
+                    _odoo_attendance._require_aware_utc_datetime(
+                        value, "check_out_utc"
+                    )
+                )
             )
         elif key == "employee_odoo_id":
             payload["employee_id"] = int(value)
@@ -749,6 +774,9 @@ def close_all_open_attendance_rows(
     employee_odoo_id: int, check_out_utc: datetime
 ) -> tuple[int, ...]:
     """Close and verify every open row, leaving partial work safe to retry."""
+    check_out_utc = _odoo_attendance._require_aware_utc_datetime(
+        check_out_utc, "check_out_utc"
+    )
     wc_field = _kiosk_wc_field()
     department_field = _kiosk_department_field()
     open_rows = _odoo_attendance.fetch_open_attendance_rows_for_employee(
@@ -760,24 +788,21 @@ def close_all_open_attendance_rows(
     attendance_ids = tuple(
         int(row["odoo_attendance_id"]) for row in open_rows
     )
-    if not attendance_ids:
-        return ()
     check_out_value = _to_odoo_dt(check_out_utc)
     for attendance_id in attendance_ids:
-        if not execute(
-            "hr.attendance",
-            "write",
-            [attendance_id],
-            {"check_out": check_out_value, "out_mode": "kiosk"},
-        ):
-            raise RuntimeError(f"Odoo did not close attendance {attendance_id}")
-    verified = _odoo_attendance.fetch_attendance_rows_by_ids(
+        _write_attendance_checkout(
+            attendance_id, check_out_value, mode="kiosk"
+        )
+    verified = _odoo_attendance.fetch_employee_attendance_rows_at_checkout(
         execute,
         wc_field,
         department_field,
-        attendance_ids,
+        employee_odoo_id,
+        check_out_utc,
     )
-    expected_check_out = _odoo_attendance._parse_odoo_datetime(check_out_utc)
+    expected_check_out = _odoo_attendance._parse_odoo_datetime(
+        check_out_value
+    )
     verified_by_id = {
         int(row["odoo_attendance_id"]): row for row in verified
     }
@@ -792,6 +817,9 @@ def close_all_open_attendance_rows(
             "Odoo attendance rows did not verify closed: "
             + ", ".join(str(attendance_id) for attendance_id in unverified)
         )
+    verified_ids = tuple(sorted(verified_by_id))
+    for attendance_id in verified_ids:
+        _set_attendance_overtime_status(attendance_id)
     remaining_open = _odoo_attendance.fetch_open_attendance_rows_for_employee(
         execute,
         wc_field,
@@ -806,7 +834,7 @@ def close_all_open_attendance_rows(
             "Odoo employee still has open rows: "
             + ", ".join(str(attendance_id) for attendance_id in remaining_ids)
         )
-    return attendance_ids
+    return verified_ids
 
 
 def _overtime_status_for_attendance(attendance_id: int) -> str:
@@ -821,6 +849,31 @@ def _overtime_status_for_attendance(attendance_id: int) -> str:
     except (IndexError, TypeError, ValueError):
         overtime_hours = 0
     return "to_approve" if overtime_hours > 0 else "approved"
+
+
+def _write_attendance_checkout(
+    attendance_id: int, check_out_value: str, *, mode: str
+) -> None:
+    if not execute(
+        "hr.attendance",
+        "write",
+        [attendance_id],
+        {"check_out": check_out_value, "out_mode": mode},
+    ):
+        raise RuntimeError(f"Odoo did not close attendance {attendance_id}")
+
+
+def _set_attendance_overtime_status(attendance_id: int) -> None:
+    status = _overtime_status_for_attendance(attendance_id)
+    if not execute(
+        "hr.attendance",
+        "write",
+        [attendance_id],
+        {"overtime_status": status},
+    ):
+        raise RuntimeError(
+            f"Odoo did not update overtime status for attendance {attendance_id}"
+        )
 
 
 def _attendance_create_payload(
@@ -903,19 +956,10 @@ def close_historical_attendance(attendance_id: int, ts: datetime) -> None:
 def clock_out(attendance_id: int, ts: datetime, *, mode: str = "kiosk") -> None:
     """Set check_out on an existing hr.attendance. Safe to call on an
     already-closed record — Odoo just overwrites the timestamp."""
-    execute(
-        "hr.attendance", "write",
-        [attendance_id],
-        {
-            "check_out": _to_odoo_dt(ts),
-            "out_mode": mode,
-        },
+    _write_attendance_checkout(
+        attendance_id, _to_odoo_dt(ts), mode=mode
     )
-    execute(
-        "hr.attendance", "write",
-        [attendance_id],
-        {"overtime_status": _overtime_status_for_attendance(attendance_id)},
-    )
+    _set_attendance_overtime_status(attendance_id)
 
 
 def transfer(
@@ -1321,12 +1365,26 @@ def find_active_users_by_login(login: str, limit: int = 2) -> list[dict]:
     return _odoo_feedback.find_active_users_by_login(execute, login, limit)
 
 
+def find_active_feedback_project_ids(
+    name: str = FEEDBACK_PROJECT_NAME,
+) -> list[int]:
+    return _odoo_feedback.find_active_feedback_project_ids(execute, name)
+
+
 def find_feedback_task(project_id: int, name: str) -> int | None:
     return _odoo_feedback.find_feedback_task(execute, project_id, name)
 
 
 def find_feedback_task_ids(project_id: int, name: str) -> list[int]:
     return _odoo_feedback.find_feedback_task_ids(execute, project_id, name)
+
+
+def find_active_feedback_task_ids(project_id: int, name: str) -> list[int]:
+    return _odoo_feedback.find_active_feedback_task_ids(execute, project_id, name)
+
+
+def fetch_feedback_task_identity(task_id: int) -> dict[str, Any] | None:
+    return _odoo_feedback.fetch_feedback_task_identity(execute, task_id)
 
 
 def find_feedback_attachment_ids(task_id: int, name: str) -> list[int]:
@@ -1352,8 +1410,102 @@ def create_feedback_task(
     )
 
 
+def create_review_task_user_ids(
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    tag_id: int | None,
+    deadline: str,
+) -> int:
+    return _odoo_feedback.create_review_task_user_ids(
+        execute,
+        project_id,
+        name,
+        description_html,
+        assignee_uid,
+        tag_id,
+        deadline,
+    )
+
+
+def create_review_task_user_id(
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    tag_id: int | None,
+    deadline: str,
+) -> int:
+    return _odoo_feedback.create_review_task_user_id(
+        execute,
+        project_id,
+        name,
+        description_html,
+        assignee_uid,
+        tag_id,
+        deadline,
+    )
+
+
 def update_task(task_id: int, **fields: Any) -> None:
     _odoo_feedback.update_task(execute, task_id, **fields)
+
+
+def update_feedback_task(
+    task_id: int,
+    *,
+    description_html: str,
+    assignee_uid: int,
+    deadline: str,
+    active: bool = True,
+) -> None:
+    _odoo_feedback.update_feedback_task(
+        execute,
+        task_id,
+        description_html=description_html,
+        assignee_uid=assignee_uid,
+        deadline=deadline,
+        active=active,
+    )
+
+
+def update_review_task_user_ids(
+    task_id: int,
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    deadline: str,
+) -> None:
+    _odoo_feedback.update_review_task_user_ids(
+        execute,
+        task_id,
+        project_id,
+        name,
+        description_html,
+        assignee_uid,
+        deadline,
+    )
+
+
+def update_review_task_user_id(
+    task_id: int,
+    project_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+    deadline: str,
+) -> None:
+    _odoo_feedback.update_review_task_user_id(
+        execute,
+        task_id,
+        project_id,
+        name,
+        description_html,
+        assignee_uid,
+        deadline,
+    )
 
 
 def close_task(task_id: int) -> None:
@@ -1362,6 +1514,10 @@ def close_task(task_id: int) -> None:
 
 def post_task_message(task_id: int, body: str) -> None:
     _odoo_feedback.post_task_message(execute, task_id, body)
+
+
+def find_task_message_ids(task_id: int, marker: str) -> list[int]:
+    return _odoo_feedback.find_task_message_ids(execute, task_id, marker)
 
 
 def add_task_attachment(

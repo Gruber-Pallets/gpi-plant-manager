@@ -68,21 +68,23 @@ def approve(
     source: str | None,
     now: datetime | None = None,
 ) -> ConversionResult:
-    if now is not None:
-        _now(now)
+    workflow_now = _now(now)
     owner = uuid4()
     current = store.claim_request(request_id, owner, _lease_now(), lease_seconds=120)
     if current is None:
         return ConversionResult("busy", _BUSY_MESSAGE, None)
     try:
-        return _resume_claim(current, owner, actor_upn, actor_name, source)
+        return _resume_claim(
+            current, owner, actor_upn, actor_name, source, workflow_now
+        )
     finally:
-        store.release_claim(request_id, owner, now=_lease_now())
+        store.release_claim_safely(
+            request_id, owner, now=_lease_now(), context="approval"
+        )
 
 
 def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
-    if now is not None:
-        _now(now)
+    workflow_now = _now(now)
     owner = uuid4()
     current = store.claim_request(request_id, owner, _lease_now(), lease_seconds=120)
     if current is None:
@@ -92,14 +94,17 @@ def resume(request_id: int, now: datetime | None = None) -> ConversionResult:
             return ConversionResult(
                 "pending", "This request is waiting for manager approval.", current
             )
-        return resume_claimed(current, owner)
+        return resume_claimed(current, owner, workflow_now)
     finally:
-        store.release_claim(request_id, owner, now=_lease_now())
+        store.release_claim_safely(
+            request_id, owner, now=_lease_now(), context="resume"
+        )
 
 
 def resume_claimed(
     request: store.AbsencePtoRequest,
     owner: UUID,
+    workflow_now: datetime,
 ) -> ConversionResult:
     """Resume one row already leased by the bounded reconciler claim."""
     current = store.renew_claim(request.id, owner, _lease_now(), lease_seconds=120)
@@ -109,6 +114,7 @@ def resume_claimed(
         current.decided_by_upn,
         current.decided_by_name,
         "reconciler",
+        _now(workflow_now),
     )
 
 
@@ -268,6 +274,7 @@ def _needs_review(
     request: store.AbsencePtoRequest,
     owner: UUID,
     error: Exception,
+    workflow_now: datetime,
 ) -> ConversionResult:
     message = str(error) or type(error).__name__
     if request.state in {"pending", "converting", "needs_review"}:
@@ -276,7 +283,8 @@ def _needs_review(
                 request.id,
                 owner,
                 error=message[:500],
-                now=_lease_now(),
+                workflow_now=_now(workflow_now),
+                lease_now=_lease_now(),
             )
         except store.StaleTransition:
             return ConversionResult("busy", _BUSY_MESSAGE, None)
@@ -512,6 +520,7 @@ def _compensate(
     request: store.AbsencePtoRequest,
     owner: UUID,
     error: Exception,
+    workflow_now: datetime,
 ) -> ConversionResult:
     try:
         request = _close_incomplete_pto(request, owner)
@@ -521,7 +530,7 @@ def _compensate(
         return ConversionResult("busy", _BUSY_MESSAGE, None)
     except Exception as compensation_error:  # noqa: BLE001 - fail closed to review
         combined = ConversionSafetyError(_friendly(error, compensation_error))
-        result = _needs_review(request, owner, combined)
+        result = _needs_review(request, owner, combined, workflow_now)
         return ConversionResult(result.status, _REVIEW_MESSAGE, result.request)
 
 
@@ -551,6 +560,7 @@ def _resume_claim(
     actor_upn: str | None,
     actor_name: str | None,
     source: str | None,
+    workflow_now: datetime,
 ) -> ConversionResult:
     post_refusal = request.conversion_step != "not_started"
     try:
@@ -787,7 +797,8 @@ def _resume_claim(
             actor_upn=actor_upn or request.decided_by_upn,
             actor_name=actor_name or request.decided_by_name,
             source=source,
-            now=_lease_now(),
+            workflow_now=_now(workflow_now),
+            lease_now=_lease_now(),
         )
         try:
             _invalidate_after_commit(request)
@@ -803,13 +814,13 @@ def _resume_claim(
     except _LowBalance as error:
         if request.conversion_step == "not_started" and not post_refusal:
             return _pending_for_low_balance(request, owner)
-        return _compensate(request, owner, error)
+        return _compensate(request, owner, error, workflow_now)
     except Exception as error:  # noqa: BLE001 - preserve safe durable status
         if request.state == "converting" and (
             request.conversion_step != "not_started" or post_refusal
         ):
-            return _compensate(request, owner, error)
-        return _needs_review(request, owner, error)
+            return _compensate(request, owner, error, workflow_now)
+        return _needs_review(request, owner, error, workflow_now)
 
 
 def _invalidate_after_commit(request: store.AbsencePtoRequest) -> None:
