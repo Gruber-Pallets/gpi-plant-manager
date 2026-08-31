@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # Claude Handoff — Recycled Smart Rotations
 
 ## Start here
