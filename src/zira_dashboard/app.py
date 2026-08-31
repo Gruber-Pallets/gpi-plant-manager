@@ -149,6 +149,13 @@ async def _tick_attendance_corrections():
     await asyncio.to_thread(attendance_corrections.process_next)
 
 
+async def _tick_attendance_department_repairs():
+    """Advance at most one verified work-center department repair."""
+    from . import attendance_department_repair
+
+    await asyncio.to_thread(attendance_department_repair.process_next)
+
+
 async def _tick_auto_lunch():
     """Drive the auto-lunch worker. No-ops while the feature is disabled
     (auto_lunch_settings.enabled defaults to FALSE)."""
@@ -461,6 +468,7 @@ _WARMERS = [
     ("attendance mirror", _tick_attendance_mirror, 30),
     ("attendance recalculation", _tick_attendance_recalc, 15),
     ("attendance corrections", _tick_attendance_corrections, 15),
+    ("attendance department repairs", _tick_attendance_department_repairs, 15),
     ("auto-lunch", _tick_auto_lunch, 60),
     ("auto-salaried punch", _tick_auto_salaried, 60),
     ("auto-salaried reconcile", _tick_auto_salaried_reconcile, 600),

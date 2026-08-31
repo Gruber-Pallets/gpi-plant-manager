@@ -406,6 +406,24 @@ def _sweep_is_due(state: SyncState, now: datetime) -> bool:
     return last_sweep is None or now - last_sweep >= _FULL_SWEEP_INTERVAL
 
 
+def _enqueue_department_repairs_after_sync(
+    result: SyncResult,
+    *,
+    now_utc: datetime,
+    include_current_day: bool,
+) -> int:
+    """Project only committed mirror state after a fully successful tick."""
+    if not result.success:
+        return 0
+    from . import attendance_department_repair
+
+    return attendance_department_repair.enqueue_after_successful_sync(
+        affected_days=result.affected_days,
+        now_utc=now_utc,
+        include_current_day=include_current_day,
+    )
+
+
 def tick(*, now_utc: datetime | None = None) -> SyncResult:
     """Run the live poll each tick and the safe deletion sweep once per hour."""
     requested_at = _requested_time(now_utc)
@@ -449,7 +467,7 @@ def tick(*, now_utc: datetime | None = None) -> SyncResult:
 
     success = incremental.success and (not sweep_due or sweep.success)
     error = incremental.error or sweep.error
-    return SyncResult(
+    result = SyncResult(
         success=success,
         incremental_completed=incremental.incremental_completed,
         full_sweep_completed=sweep.full_sweep_completed,
@@ -459,6 +477,19 @@ def tick(*, now_utc: datetime | None = None) -> SyncResult:
         affected_days=incremental.affected_days | sweep.affected_days,
         error=error,
     )
+    if result.success:
+        repair_scan_at = requested_at if requested_at is not None else _now_utc(None)
+        try:
+            _enqueue_department_repairs_after_sync(
+                result,
+                now_utc=repair_scan_at,
+                include_current_day=(
+                    initial_state.baseline_completed_at is None and baseline_completed
+                ),
+            )
+        except Exception:  # noqa: BLE001 - repair discovery cannot undo a good sync
+            _log.exception("could not enqueue Odoo attendance department repairs")
+    return result
 
 
 __all__ = [
