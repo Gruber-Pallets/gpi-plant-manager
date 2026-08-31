@@ -54,8 +54,7 @@ def _claim_celebration_source_generation() -> int:
 def _celebration_source_generation_is_current(cursor, generation: int) -> bool:
     """Return whether no newer source snapshot has started since this one."""
     cursor.execute(
-        "SELECT (value #>> '{}')::bigint = %s AS is_current "
-        "FROM app_settings WHERE key = %s",
+        "SELECT (value #>> '{}')::bigint = %s AS is_current FROM app_settings WHERE key = %s",
         (generation, CELEBRATION_SOURCE_GENERATION_KEY),
     )
     row = cursor.fetchone()
@@ -70,12 +69,23 @@ def _m2o_id(val):
     return None
 
 
+def _m2o_name(val) -> str | None:
+    """Return a many2one display name, or None when Odoo returns False."""
+    if isinstance(val, (list, tuple)) and len(val) > 1:
+        return str(val[1]) or None
+    return None
+
+
 def refresh_work_schedule_hours(only_ids=None) -> None:
     """Refresh the Odoo-owned name + per-weekday hours for the configured
     work_schedules overrides. Leaves the app-owned rounding windows alone.
     Best-effort: callers wrap in try/except so an Odoo hiccup never breaks
     the rest of the sync."""
-    from . import work_schedule_store, odoo_client  # local import: avoids import cycle + lets tests monkeypatch odoo_client.fetch_*
+    from . import (
+        work_schedule_store,
+        odoo_client,
+    )  # local import: avoids import cycle + lets tests monkeypatch odoo_client.fetch_*
+
     ids = [o.resource_calendar_id for o in work_schedule_store.all_overrides()]
     if only_ids is not None:
         wanted = {int(i) for i in only_ids}
@@ -130,6 +140,7 @@ def _read_last_sync() -> datetime | None:
     # (json.loads on a bare date string fails), so this keeps its own
     # dual-mode decode rather than going through the shared helper.
     from . import db
+
     rows = db.query("SELECT value FROM app_settings WHERE key = 'odoo_last_sync'")
     if not rows:
         return None
@@ -153,6 +164,7 @@ def _read_last_sync() -> datetime | None:
 
 def _write_last_sync(now: datetime) -> None:
     from . import app_settings
+
     app_settings.set_setting("odoo_last_sync", now.isoformat())
 
 
@@ -210,21 +222,16 @@ def _roster_names(employees: list[dict]) -> dict[int, str]:
     the second name token are added until it is distinct.  Remaining collisions
     use later-name initials, then the stable Odoo id as a final fallback.
     """
-    parts_by_id = {
-        int(emp["id"]): (emp.get("name") or "").strip().split()
-        for emp in employees
-    }
+    parts_by_id = {int(emp["id"]): (emp.get("name") or "").strip().split() for emp in employees}
     surname_lengths = {
-        employee_id: 1
-        for employee_id, parts in parts_by_id.items()
-        if len(parts) >= 2
+        employee_id: 1 for employee_id, parts in parts_by_id.items() if len(parts) >= 2
     }
 
     def _base_label(employee_id: int) -> str:
         parts = parts_by_id[employee_id]
         if len(parts) < 2:
             return " ".join(parts)
-        return f"{parts[0]} {parts[1][:surname_lengths[employee_id]]}."
+        return f"{parts[0]} {parts[1][: surname_lengths[employee_id]]}."
 
     def _collision_groups(labels: dict[int, str]) -> list[list[int]]:
         groups: dict[str, list[int]] = {}
@@ -233,37 +240,25 @@ def _roster_names(employees: list[dict]) -> dict[int, str]:
         return [group for group in groups.values() if len(group) > 1]
 
     while True:
-        labels = {
-            employee_id: _base_label(employee_id)
-            for employee_id in parts_by_id
-        }
+        labels = {employee_id: _base_label(employee_id) for employee_id in parts_by_id}
         expanded = False
         for group in _collision_groups(labels):
             for employee_id in group:
                 parts = parts_by_id[employee_id]
-                if (
-                    len(parts) >= 2
-                    and surname_lengths[employee_id] < len(parts[1])
-                ):
+                if len(parts) >= 2 and surname_lengths[employee_id] < len(parts[1]):
                     surname_lengths[employee_id] += 1
                     expanded = True
         if not expanded:
             break
 
-    labels = {
-        employee_id: _base_label(employee_id)
-        for employee_id in parts_by_id
-    }
+    labels = {employee_id: _base_label(employee_id) for employee_id in parts_by_id}
     for group in _collision_groups(labels):
         for employee_id in group:
             parts = parts_by_id[employee_id]
             if len(parts) > 2:
-                later_initials = " ".join(
-                    f"{part[0]}." for part in parts[2:] if part
-                )
+                later_initials = " ".join(f"{part[0]}." for part in parts[2:] if part)
                 labels[employee_id] = (
-                    f"{parts[0]} {parts[1][:surname_lengths[employee_id]]} "
-                    f"{later_initials}"
+                    f"{parts[0]} {parts[1][: surname_lengths[employee_id]]} {later_initials}"
                 )
 
     for group in _collision_groups(labels):
@@ -335,10 +330,7 @@ def _employee_snapshot_error(
             invalid_status,
         )
 
-    contradicted = sum(
-        status_by_id.get(employee_id) is not True
-        for employee_id in active_by_id
-    )
+    contradicted = sum(status_by_id.get(employee_id) is not True for employee_id in active_by_id)
     if contradicted:
         return (
             "Odoo employee status payload contradicted or omitted "
@@ -374,8 +366,11 @@ def _sync_locked(force: bool = False) -> SyncResult:
     now = datetime.now(UTC)
     if not force and last is not None and (now - last) < TTL:
         return SyncResult(
-            ok=True, refreshed=False, employee_count=0,
-            skill_column_count=0, last_sync_at=last,
+            ok=True,
+            refreshed=False,
+            employee_count=0,
+            skill_column_count=0,
+            last_sync_at=last,
         )
 
     try:
@@ -419,8 +414,12 @@ def _sync_locked(force: bool = False) -> SyncResult:
         departments = odoo_client.fetch_departments()
     except Exception as e:
         return SyncResult(
-            ok=False, refreshed=False, employee_count=0,
-            skill_column_count=0, last_sync_at=last, error=str(e),
+            ok=False,
+            refreshed=False,
+            employee_count=0,
+            skill_column_count=0,
+            last_sync_at=last,
+            error=str(e),
         )
 
     # Flex detection is best-effort and isolated: a wrong SCHEDULE_TYPE_FIELD
@@ -428,9 +427,7 @@ def _sync_locked(force: bool = False) -> SyncResult:
     # whole employee/skill/department sync. On failure, degrade to "no flex" and
     # log loudly — auto-lunch simply won't treat anyone as flexible until fixed.
     try:
-        flex_cal_ids = {
-            c["id"] for c in odoo_client.fetch_work_schedules() if c.get("is_flexible")
-        }
+        flex_cal_ids = {c["id"] for c in odoo_client.fetch_work_schedules() if c.get("is_flexible")}
     except Exception:
         log.exception(
             "auto-lunch flex detection failed (check odoo_client.SCHEDULE_TYPE_FIELD); "
@@ -438,18 +435,16 @@ def _sync_locked(force: bool = False) -> SyncResult:
         )
         flex_cal_ids = set()
 
-    from . import db, employee_celebrations
+    from . import attendance_location_policy, db, employee_celebrations
+
     columns = [c["name"] for c in columns_meta]
     type_by_skill = {c["name"]: c.get("type", "") for c in columns_meta}
     pulled_at = now
     roster_names = _roster_names(employees)
     with db.cursor() as cur:
         employee_celebrations.lock_celebration_source_sync(cur)
-        if (
-            celebration_source is not None
-            and not _celebration_source_generation_is_current(
-                cur, celebration_source_generation
-            )
+        if celebration_source is not None and not _celebration_source_generation_is_current(
+            cur, celebration_source_generation
         ):
             log.info("skipping superseded employee celebration source snapshot")
             celebration_source = None
@@ -497,34 +492,46 @@ def _sync_locked(force: bool = False) -> SyncResult:
         for emp in employees:
             # Odoo selection fields return False when unset; normalize to None.
             wage_type = emp.get("wage_type") or None
+            department_name = attendance_location_policy.effective_department_name(
+                None,
+                _m2o_name(emp.get("department_id")),
+            )
             spanish_level = int(buckets.get(spanish_level_ids.get(emp["id"]), 0))
             spanish_speaker = spanish_level > 0
             is_flex = _m2o_id(emp.get("resource_calendar_id")) in flex_cal_ids
             cur.execute(
                 "INSERT INTO people (odoo_id, name, full_name, active, wage_type, "
-                "spanish_speaker, spanish_level, resource_calendar_id, is_flexible, "
+                "department_name, spanish_speaker, spanish_level, resource_calendar_id, is_flexible, "
                 "last_pulled_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
                 "full_name = EXCLUDED.full_name, "
                 "active = EXCLUDED.active, wage_type = EXCLUDED.wage_type, "
+                "department_name = EXCLUDED.department_name, "
                 "spanish_speaker = EXCLUDED.spanish_speaker, "
                 "spanish_level = EXCLUDED.spanish_level, "
                 "resource_calendar_id = EXCLUDED.resource_calendar_id, "
                 "is_flexible = EXCLUDED.is_flexible, "
                 "last_pulled_at = EXCLUDED.last_pulled_at",
-                (emp["id"], roster_names[int(emp["id"])],
-                 (emp.get("name") or "").strip(), True,
-                 wage_type, spanish_speaker, spanish_level,
-                 _m2o_id(emp.get("resource_calendar_id")), is_flex, pulled_at),
+                (
+                    emp["id"],
+                    roster_names[int(emp["id"])],
+                    (emp.get("name") or "").strip(),
+                    True,
+                    wage_type,
+                    department_name,
+                    spanish_speaker,
+                    spanish_level,
+                    _m2o_id(emp.get("resource_calendar_id")),
+                    is_flex,
+                    pulled_at,
+                ),
             )
         if celebration_source is not None:
             for emp in employees:
                 celebration_row = celebration_source.rows_by_employee_id.get(emp["id"], {})
                 birthday = (
-                    employee_celebrations.normalize_birthday(
-                        celebration_row.get("birthday")
-                    )
+                    employee_celebrations.normalize_birthday(celebration_row.get("birthday"))
                     if celebration_source.birthday_available
                     else None
                 )
@@ -547,11 +554,7 @@ def _sync_locked(force: bool = False) -> SyncResult:
                 )
         # Only an explicit archived status can deactivate a local person.
         # Absence from either Odoo response is never treated as an instruction.
-        inactive_ids = [
-            status["id"]
-            for status in employee_statuses
-            if status["active"] is False
-        ]
+        inactive_ids = [status["id"] for status in employee_statuses if status["active"] is False]
         if inactive_ids:
             cur.execute(
                 "UPDATE people SET active = FALSE, last_pulled_at = %s "
@@ -609,6 +612,7 @@ def _sync_locked(force: bool = False) -> SyncResult:
 
     # Bust caches that depend on the freshly-synced data.
     from . import cert_lookup, staffing
+
     cert_lookup.invalidate_cache()
     staffing._invalidate_roster_cache()
     staffing.invalidate_all_schedule_caches()
@@ -621,6 +625,9 @@ def _sync_locked(force: bool = False) -> SyncResult:
         log.exception("refresh_work_schedule_hours failed during sync")
 
     return SyncResult(
-        ok=True, refreshed=True, employee_count=len(employees),
-        skill_column_count=len(columns), last_sync_at=pulled_at,
+        ok=True,
+        refreshed=True,
+        employee_count=len(employees),
+        skill_column_count=len(columns),
+        last_sync_at=pulled_at,
     )

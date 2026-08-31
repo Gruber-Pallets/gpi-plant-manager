@@ -66,7 +66,7 @@ def test_operation_order_puts_any_open_producing_update_last():
     closed = datetime(2026, 8, 31, 16, tzinfo=UTC)
     operations = (
         attendance_corrections.CorrectionOperation(
-            key="attendance-correction-v2:7:YQ:" + "1" * 64,
+            key="attendance-correction-v2:7:" + "1" * 64,
             kind="update",
             attendance_id=11,
             employee_odoo_id=7,
@@ -74,7 +74,7 @@ def test_operation_order_puts_any_open_producing_update_last():
             after={"check_out_utc": None},
         ),
         attendance_corrections.CorrectionOperation(
-            key="attendance-correction-v2:7:Yg:" + "2" * 64,
+            key="attendance-correction-v2:7:" + "2" * 64,
             kind="create",
             attendance_id=None,
             employee_odoo_id=7,
@@ -219,6 +219,62 @@ def test_source_snapshot_integrity_and_old_plan_schema_fail_closed():
         attendance_corrections._source_rows_from_json(payload, (7,))
     with pytest.raises(ValueError, match="schema"):
         attendance_corrections._plans_from_json({"schema_version": 1, "plans": []}, (7,))
+
+
+def test_job_plan_wrapper_round_trips_hardened_request_and_full_source():
+    source = {
+        **_row(),
+        "employee_name": "Display-only name",
+        "unrelated_raw_field": "kept inside the authenticated plan",
+    }
+    plan = attendance_corrections.plan_correction(
+        rows=[source],
+        employee_odoo_id=7,
+        start_utc=NOW,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+    )
+    preview = attendance_corrections.CorrectionPreview(
+        item_key="production_unassigned_run:repair-1:1",
+        employee_odoo_ids=(7,),
+        target_work_center_name="Repair 1",
+        target_odoo_work_center_id=81,
+        target_odoo_department_id=9,
+        start_utc=NOW,
+        end_utc=None,
+        plans=(plan,),
+    )
+
+    payload = attendance_corrections._plans_payload(preview)
+    decoded = attendance_corrections._plans_from_json(payload, (7,))[7]
+
+    assert attendance_corrections.plan_to_json(decoded) == payload["plans"][0]["plan"]
+    assert decoded.request == plan.request
+    assert decoded.source_intervals == plan.source_intervals
+
+
+def test_plan_wrapper_employee_must_match_authenticated_request():
+    plan = attendance_corrections.plan_correction(
+        rows=[_row()],
+        employee_odoo_id=7,
+        start_utc=NOW,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+    )
+    payload = {
+        "schema_version": 2,
+        "plans": [
+            {
+                "employee_odoo_id": 8,
+                "plan": attendance_corrections.plan_to_json(plan),
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="employee"):
+        attendance_corrections._plans_from_json(payload, (8,))
 
 
 def test_active_duplicate_returns_before_preview_or_write(monkeypatch):

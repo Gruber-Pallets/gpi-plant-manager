@@ -23,6 +23,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(autouse=True)
 def _clean_sync_state():
     from zira_dashboard import db
+
     # Wipe sync state + the test odoo_id rows so each test starts fresh.
     db.execute("DELETE FROM app_settings WHERE key = 'odoo_last_sync'")
     db.execute(
@@ -30,7 +31,9 @@ def _clean_sync_state():
         "(SELECT id FROM work_centers WHERE name = 'TestCollisionWC')"
     )
     db.execute("DELETE FROM work_centers WHERE name = 'TestCollisionWC'")
-    db.execute("DELETE FROM person_skills WHERE person_id IN (SELECT id FROM people WHERE odoo_id BETWEEN 99000 AND 99999)")
+    db.execute(
+        "DELETE FROM person_skills WHERE person_id IN (SELECT id FROM people WHERE odoo_id BETWEEN 99000 AND 99999)"
+    )
     db.execute("DELETE FROM people WHERE odoo_id BETWEEN 99000 AND 99999")
     db.execute(
         "DELETE FROM skills WHERE name IN ("
@@ -44,7 +47,9 @@ def _clean_sync_state():
         "(SELECT id FROM work_centers WHERE name = 'TestCollisionWC')"
     )
     db.execute("DELETE FROM work_centers WHERE name = 'TestCollisionWC'")
-    db.execute("DELETE FROM person_skills WHERE person_id IN (SELECT id FROM people WHERE odoo_id BETWEEN 99000 AND 99999)")
+    db.execute(
+        "DELETE FROM person_skills WHERE person_id IN (SELECT id FROM people WHERE odoo_id BETWEEN 99000 AND 99999)"
+    )
     db.execute("DELETE FROM people WHERE odoo_id BETWEEN 99000 AND 99999")
     db.execute(
         "DELETE FROM skills WHERE name IN ("
@@ -65,8 +70,7 @@ def _stub_client(
 ):
     if employee_statuses is None:
         employee_statuses = [
-            {"id": employee["id"], "active": employee.get("active")}
-            for employee in employees
+            {"id": employee["id"], "active": employee.get("active")} for employee in employees
         ]
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employees", lambda: employees)
     monkeypatch.setattr(
@@ -80,7 +84,9 @@ def _stub_client(
         "fetch_spanish_skill_level_ids",
         lambda: spanish_level_ids or {},
     )
-    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_columns_with_types", lambda: columns_meta)
+    monkeypatch.setattr(
+        odoo_sync.odoo_client, "fetch_skill_columns_with_types", lambda: columns_meta
+    )
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_level_buckets", lambda: buckets)
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_departments", lambda: [])
     monkeypatch.setattr(odoo_sync.odoo_client, "fetch_work_schedules", lambda: [])
@@ -93,13 +99,17 @@ def _stub_client(
 
 def test_sync_skips_when_within_ttl(monkeypatch):
     from zira_dashboard import db
+
     db.execute(
         "INSERT INTO app_settings (key, value, updated_at) "
         "VALUES ('odoo_last_sync', %s::jsonb, now())",
         (json.dumps(datetime.now(timezone.utc).isoformat()),),
     )
-    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employees",
-                        lambda: (_ for _ in ()).throw(AssertionError("should not call")))
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employees",
+        lambda: (_ for _ in ()).throw(AssertionError("should not call")),
+    )
     result = odoo_sync.sync(force=False)
     assert result.refreshed is False
     assert result.ok is True
@@ -130,6 +140,7 @@ def test_sync_force_refreshes_even_within_ttl(monkeypatch):
     assert result.skill_column_count == 2
     assert cleared_schedule_caches == [True]
     from zira_dashboard import db
+
     rows = db.query(
         "SELECT pe.name, ps.level, sk.name AS skill_name "
         "FROM people pe JOIN person_skills ps ON ps.person_id = pe.id "
@@ -182,11 +193,34 @@ def test_sync_persists_full_name_alongside_roster_label(monkeypatch):
 
     assert odoo_sync.sync(force=True).ok is True
 
-    rows = db.query(
-        "SELECT name, full_name FROM people WHERE odoo_id = 99006"
-    )
+    rows = db.query("SELECT name, full_name FROM people WHERE odoo_id = 99006")
     # Roster label is the compact "First L." form; full_name is the raw name.
     assert rows == [{"name": "Test F.", "full_name": "Test Fullname"}]
+
+
+def test_sync_persists_clean_employee_home_department(monkeypatch):
+    from zira_dashboard import db
+
+    _stub_client(
+        monkeypatch,
+        employees=[
+            {
+                "id": 99007,
+                "name": "Test Driver",
+                "active": True,
+                "work_email": False,
+                "department_id": [6, "06 Transportation"],
+            }
+        ],
+        skills_for={},
+        columns_meta=[],
+        buckets={},
+    )
+
+    assert odoo_sync.sync(force=True).ok is True
+    assert db.query("SELECT department_name FROM people WHERE odoo_id = 99007") == [
+        {"department_name": "Transportation"}
+    ]
 
 
 def test_sync_stores_skill_odoo_ids(monkeypatch):
@@ -218,7 +252,9 @@ def test_sync_stores_skill_odoo_ids(monkeypatch):
 def test_sync_updates_skill_name_by_stable_odoo_id(monkeypatch):
     from zira_dashboard import db
 
-    db.execute("DELETE FROM skills WHERE odoo_id = 7010 OR name IN ('TestRenameOld', 'TestRenameNew')")
+    db.execute(
+        "DELETE FROM skills WHERE odoo_id = 7010 OR name IN ('TestRenameOld', 'TestRenameNew')"
+    )
     _stub_client(
         monkeypatch,
         employees=[{"id": 99990, "name": "Test Sync", "active": True}],
@@ -244,13 +280,17 @@ def test_sync_updates_skill_name_by_stable_odoo_id(monkeypatch):
     assert result.ok is True
     rows = db.query("SELECT name, odoo_id FROM skills WHERE odoo_id = 7010")
     assert rows == [{"name": "TestRenameNew", "odoo_id": 7010}]
-    db.execute("DELETE FROM skills WHERE odoo_id = 7010 OR name IN ('TestRenameOld', 'TestRenameNew')")
+    db.execute(
+        "DELETE FROM skills WHERE odoo_id = 7010 OR name IN ('TestRenameOld', 'TestRenameNew')"
+    )
 
 
 def test_sync_hides_stale_legacy_null_id_skill_after_odoo_rename(monkeypatch):
     from zira_dashboard import db
 
-    db.execute("DELETE FROM skills WHERE odoo_id = 7011 OR name IN ('TestLegacyOld', 'TestLegacyNew')")
+    db.execute(
+        "DELETE FROM skills WHERE odoo_id = 7011 OR name IN ('TestLegacyOld', 'TestLegacyNew')"
+    )
     db.execute(
         "INSERT INTO skills (name, skill_type, sort_order) "
         "VALUES ('TestLegacyOld', 'Production Skills', 0)"
@@ -275,7 +315,9 @@ def test_sync_hides_stale_legacy_null_id_skill_after_odoo_rename(monkeypatch):
         "ORDER BY name"
     )
     assert matrix_rows == [{"name": "TestLegacyNew"}]
-    db.execute("DELETE FROM skills WHERE odoo_id = 7011 OR name IN ('TestLegacyOld', 'TestLegacyNew')")
+    db.execute(
+        "DELETE FROM skills WHERE odoo_id = 7011 OR name IN ('TestLegacyOld', 'TestLegacyNew')"
+    )
 
 
 def test_sync_merges_legacy_name_collision_before_stable_odoo_rename(monkeypatch):
@@ -286,7 +328,9 @@ def test_sync_merges_legacy_name_collision_before_stable_odoo_rename(monkeypatch
     stable_pushed_at = datetime(2026, 1, 3, tzinfo=timezone.utc)
     legacy_pushed_at = datetime(2026, 1, 4, tzinfo=timezone.utc)
 
-    db.execute("DELETE FROM skills WHERE odoo_id = 7012 OR name IN ('TestCollisionOld', 'TestCollisionNew')")
+    db.execute(
+        "DELETE FROM skills WHERE odoo_id = 7012 OR name IN ('TestCollisionOld', 'TestCollisionNew')"
+    )
     db.execute(
         "INSERT INTO skills (odoo_id, name, skill_type, sort_order) "
         "VALUES (7012, 'TestCollisionOld', 'Production Skills', 0)"
@@ -296,8 +340,7 @@ def test_sync_merges_legacy_name_collision_before_stable_odoo_rename(monkeypatch
         "VALUES ('TestCollisionNew', 'Production Skills', 1)"
     )
     db.execute(
-        "INSERT INTO people (odoo_id, name, active) "
-        "VALUES (99012, 'Test Collision Person', TRUE)"
+        "INSERT INTO people (odoo_id, name, active) VALUES (99012, 'Test Collision Person', TRUE)"
     )
     db.execute(
         "INSERT INTO person_skills "
@@ -313,10 +356,7 @@ def test_sync_merges_legacy_name_collision_before_stable_odoo_rename(monkeypatch
         "WHERE pe.odoo_id = 99012 AND sk.name = 'TestCollisionNew'",
         (legacy_pulled_at, legacy_pushed_at),
     )
-    db.execute(
-        "INSERT INTO work_centers (name, category) "
-        "VALUES ('TestCollisionWC', 'Production')"
-    )
+    db.execute("INSERT INTO work_centers (name, category) VALUES ('TestCollisionWC', 'Production')")
     db.execute(
         "INSERT INTO work_center_required_skills (wc_id, skill_id) "
         "SELECT wc.id, sk.id FROM work_centers wc, skills sk "
@@ -355,14 +395,16 @@ def test_sync_merges_legacy_name_collision_before_stable_odoo_rename(monkeypatch
         "JOIN skills sk ON sk.id = ps.skill_id "
         "WHERE pe.odoo_id = 99012"
     )
-    assert person_rows == [{
-        "odoo_id": 99012,
-        "level": 2,
-        "last_pulled_at": legacy_pulled_at,
-        "last_pushed_at": legacy_pushed_at,
-        "local_dirty": True,
-        "skill_name": "TestCollisionNew",
-    }]
+    assert person_rows == [
+        {
+            "odoo_id": 99012,
+            "level": 2,
+            "last_pulled_at": legacy_pulled_at,
+            "last_pushed_at": legacy_pushed_at,
+            "local_dirty": True,
+            "skill_name": "TestCollisionNew",
+        }
+    ]
     required_rows = db.query(
         "SELECT wc.name AS wc_name, sk.name AS skill_name "
         "FROM work_center_required_skills wrs "
@@ -373,11 +415,14 @@ def test_sync_merges_legacy_name_collision_before_stable_odoo_rename(monkeypatch
     assert required_rows == [{"wc_name": "TestCollisionWC", "skill_name": "TestCollisionNew"}]
     db.execute("DELETE FROM people WHERE odoo_id = 99012")
     db.execute("DELETE FROM work_centers WHERE name = 'TestCollisionWC'")
-    db.execute("DELETE FROM skills WHERE odoo_id = 7012 OR name IN ('TestCollisionOld', 'TestCollisionNew')")
+    db.execute(
+        "DELETE FROM skills WHERE odoo_id = 7012 OR name IN ('TestCollisionOld', 'TestCollisionNew')"
+    )
 
 
 def test_sync_preserves_local_reserve_flag(monkeypatch):
     from zira_dashboard import db
+
     # Pre-create the person with reserve=True locally.
     db.execute(
         "INSERT INTO people (odoo_id, name, active, reserve) VALUES (99002, 'TestBob', TRUE, TRUE)"
@@ -395,8 +440,11 @@ def test_sync_preserves_local_reserve_flag(monkeypatch):
 
 
 def test_sync_returns_error_on_odoo_failure(monkeypatch):
-    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employees",
-                        lambda: (_ for _ in ()).throw(odoo_sync.odoo_client.OdooAuthError("nope")))
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employees",
+        lambda: (_ for _ in ()).throw(odoo_sync.odoo_client.OdooAuthError("nope")),
+    )
     result = odoo_sync.sync(force=True)
     assert result.ok is False
     assert "nope" in (result.error or "")
@@ -421,8 +469,7 @@ def test_celebration_date_read_failure_preserves_last_safe_local_dates(monkeypat
     assert odoo_sync.sync(force=True).ok is True
 
     row = db.query(
-        "SELECT birthday_month, birthday_day, first_contract_date "
-        "FROM people WHERE odoo_id = 99002"
+        "SELECT birthday_month, birthday_day, first_contract_date FROM people WHERE odoo_id = 99002"
     )[0]
     assert row == {
         "birthday_month": 7,
@@ -454,8 +501,7 @@ def test_sync_clears_only_a_confirmed_unavailable_celebration_field(monkeypatch)
     assert odoo_sync.sync(force=True).ok is True
 
     row = db.query(
-        "SELECT birthday_month, birthday_day, first_contract_date "
-        "FROM people WHERE odoo_id = 99002"
+        "SELECT birthday_month, birthday_day, first_contract_date FROM people WHERE odoo_id = 99002"
     )[0]
     assert row == {
         "birthday_month": None,
@@ -518,9 +564,7 @@ def test_sync_upsert_does_not_clear_excluded_flag():
         (999995, "EXCLUDED Sync Test (renamed)", True, datetime.now(timezone.utc)),
     )
 
-    rows = db.query(
-        "SELECT excluded FROM people WHERE odoo_id = %s", (999995,)
-    )
+    rows = db.query("SELECT excluded FROM people WHERE odoo_id = %s", (999995,))
     assert rows[0]["excluded"] is True
 
     # Cleanup.
@@ -558,8 +602,7 @@ def test_sync_preserves_an_omitted_person_until_odoo_explicitly_archives_them(mo
     )
     assert odoo_sync.sync(force=True).ok is True
     rows = db.query(
-        "SELECT odoo_id, active FROM people "
-        "WHERE odoo_id IN (99100, 99101) ORDER BY odoo_id"
+        "SELECT odoo_id, active FROM people WHERE odoo_id IN (99100, 99101) ORDER BY odoo_id"
     )
     assert rows == [
         {"odoo_id": 99100, "active": True},
@@ -579,8 +622,7 @@ def test_sync_preserves_an_omitted_person_until_odoo_explicitly_archives_them(mo
     )
     assert odoo_sync.sync(force=True).ok is True
     rows = db.query(
-        "SELECT odoo_id, active FROM people "
-        "WHERE odoo_id IN (99100, 99101) ORDER BY odoo_id"
+        "SELECT odoo_id, active FROM people WHERE odoo_id IN (99100, 99101) ORDER BY odoo_id"
     )
     assert rows == [
         {"odoo_id": 99100, "active": True},
@@ -626,6 +668,7 @@ def test_sync_inserts_certification_at_level_3_regardless_of_bucket(monkeypatch)
     and insert at level=3 so cert_lookup finds them and staffing
     colors CDL drivers green."""
     from zira_dashboard import db
+
     db.execute("DELETE FROM skills WHERE name = 'TestDOTCert'")
     _stub_client(
         monkeypatch,
@@ -643,11 +686,17 @@ def test_sync_inserts_certification_at_level_3_regardless_of_bucket(monkeypatch)
         "FROM people pe JOIN person_skills ps ON ps.person_id = pe.id "
         "JOIN skills sk ON sk.id = ps.skill_id WHERE pe.odoo_id = 99010"
     )
-    assert rows == [{
-        "name": "TestCDLDriver", "level": 3,
-        "skill_name": "TestDOTCert", "skill_type": "Certifications",
-    }]
-    db.execute("DELETE FROM person_skills WHERE person_id IN (SELECT id FROM people WHERE odoo_id = 99010)")
+    assert rows == [
+        {
+            "name": "TestCDLDriver",
+            "level": 3,
+            "skill_name": "TestDOTCert",
+            "skill_type": "Certifications",
+        }
+    ]
+    db.execute(
+        "DELETE FROM person_skills WHERE person_id IN (SELECT id FROM people WHERE odoo_id = 99010)"
+    )
     db.execute("DELETE FROM people WHERE odoo_id = 99010")
     db.execute("DELETE FROM skills WHERE name = 'TestDOTCert'")
 
@@ -657,6 +706,7 @@ def test_sync_production_skill_still_skips_when_level_0(monkeypatch):
     for non-cert skill types. A production skill with level<=0 still
     gets skipped."""
     from zira_dashboard import db
+
     db.execute("DELETE FROM skills WHERE name = 'TestProdSkillSkip'")
     _stub_client(
         monkeypatch,

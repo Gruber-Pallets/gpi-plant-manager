@@ -264,7 +264,6 @@ def _enqueue_recalc_cur(
     days: Iterable[date],
     reason: str,
     *,
-    mark_strict: bool,
     requested_at: datetime,
 ) -> None:
     unique_days = sorted(set(days))
@@ -290,25 +289,15 @@ def _enqueue_recalc_cur(
             "last_error = NULL",
             (day, reason, requested_at),
         )
-        if mark_strict:
-            cur.execute(
-                "INSERT INTO attendance_strict_days "
-                "(day, reason, source_changed_at) VALUES (%s, %s, %s) "
-                "ON CONFLICT (day) DO UPDATE SET "
-                "reason = EXCLUDED.reason, "
-                "source_changed_at = EXCLUDED.source_changed_at",
-                (day, reason, requested_at),
-            )
 
 
-def enqueue_recalc(days: Iterable[date], reason: str, *, mark_strict: bool) -> None:
+def enqueue_recalc(days: Iterable[date], reason: str) -> None:
     requested_at = datetime.now(UTC)
     with db.cursor() as cur:
         _enqueue_recalc_cur(
             cur,
             days,
             reason,
-            mark_strict=mark_strict,
             requested_at=requested_at,
         )
 
@@ -423,7 +412,6 @@ def _upsert_rows_cur(
             cur,
             affected_days,
             "odoo_attendance_changed",
-            mark_strict=True,
             requested_at=sync_completed_at,
         )
     return affected_days
@@ -720,7 +708,6 @@ def _store_full_sweep_cur(
                 cur,
                 deleted_days,
                 "odoo_attendance_deleted",
-                mark_strict=True,
                 requested_at=completed,
             )
     cur.execute(

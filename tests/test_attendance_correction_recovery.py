@@ -22,7 +22,7 @@ def test_exact_after_state_can_be_adopted_after_update_timeout():
         "odoo_write_date": NOW,
     }
     operation = attendance_corrections.CorrectionOperation(
-        key="attendance-correction-v2:7:YQ:" + "1" * 64,
+        key="attendance-correction-v2:7:" + "1" * 64,
         kind="update",
         attendance_id=11,
         employee_odoo_id=7,
@@ -50,7 +50,7 @@ def test_source_version_or_before_change_fails_closed():
         "odoo_write_date": NOW,
     }
     operation = attendance_corrections.CorrectionOperation(
-        key="attendance-correction-v2:7:YQ:" + "1" * 64,
+        key="attendance-correction-v2:7:" + "1" * 64,
         kind="update",
         attendance_id=11,
         employee_odoo_id=7,
@@ -142,7 +142,7 @@ class _UpdateTimeoutFacade:
 def test_update_timeout_is_reread_and_adopted_without_second_write():
     facade = _UpdateTimeoutFacade()
     operation = attendance_corrections.CorrectionOperation(
-        key="attendance-correction-v2:7:YQ:" + "1" * 64,
+        key="attendance-correction-v2:7:" + "1" * 64,
         kind="update",
         attendance_id=11,
         employee_odoo_id=7,
@@ -175,7 +175,7 @@ def test_delete_timeout_adopts_exact_absence():
     facade = _DeleteTimeoutFacade()
     source = _source(end=datetime(2026, 8, 31, 16, tzinfo=UTC))
     operation = attendance_corrections.CorrectionOperation(
-        key="attendance-correction-v2:7:YQ:" + "1" * 64,
+        key="attendance-correction-v2:7:" + "1" * 64,
         kind="delete",
         attendance_id=11,
         employee_odoo_id=7,
@@ -528,7 +528,7 @@ def test_stale_source_before_first_write_makes_zero_odoo_writes():
     facade = _UpdateTimeoutFacade()
     facade.row["odoo_write_date"] = datetime(2026, 8, 31, 15, 2, tzinfo=UTC)
     operation = attendance_corrections.CorrectionOperation(
-        key="attendance-correction-v2:7:YQ:" + "1" * 64,
+        key="attendance-correction-v2:7:" + "1" * 64,
         kind="update",
         attendance_id=11,
         employee_odoo_id=7,
@@ -634,6 +634,78 @@ def test_verification_expands_to_include_split_shoulders():
     ]
 
 
+def test_verified_display_names_reach_mirror_upsert(monkeypatch):
+    from zira_dashboard import attendance_mirror, db
+
+    source = {
+        **_source(),
+        "employee_name": "Alex Smith",
+        "odoo_work_center_name": "Repair 1",
+        "odoo_department_name": "Production",
+    }
+    plan = attendance_corrections.plan_correction(
+        rows=[source],
+        employee_odoo_id=7,
+        start_utc=NOW,
+        end_utc=None,
+        odoo_work_center_id=80,
+        odoo_department_id=9,
+    )
+
+    class Facade:
+        def fetch_employee_attendance_rows(self, *_args):
+            return [dict(source)]
+
+    verified = attendance_corrections._verification_rows(Facade(), {7: plan}, (), NOW, None)
+    claim = _claim_for(plan, status="recalculating")
+    captured = []
+
+    class Cursor:
+        def __init__(self):
+            self.response = None
+
+        def execute(self, sql, _params=None):
+            if sql.startswith("SELECT status, attempt_count"):
+                self.response = {"status": "recalculating", "attempt_count": 1}
+            elif sql.startswith("UPDATE attendance_correction_jobs"):
+                self.response = {"id": 5}
+            else:
+                self.response = None
+
+        def fetchone(self):
+            response = self.response
+            self.response = None
+            return response
+
+    @contextmanager
+    def cursor():
+        yield Cursor()
+
+    monkeypatch.setattr(db, "cursor", cursor)
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_locked_sync_state",
+        lambda _cur: {"baseline_completed_at": NOW},
+    )
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_upsert_rows_cur",
+        lambda _cur, rows, **_kwargs: captured.extend(rows),
+    )
+    monkeypatch.setattr(attendance_corrections, "_append_event_cur", lambda *_a, **_k: None)
+
+    assert attendance_corrections._mirror_verified_rows(
+        claim,
+        verified,
+        {7: (source,)},
+        (),
+        completed_at=NOW,
+    )
+    assert captured[0]["employee_name"] == "Alex Smith"
+    assert captured[0]["odoo_work_center_name"] == "Repair 1"
+    assert captured[0]["odoo_department_name"] == "Production"
+
+
 def _preview_for(plan, *, start=NOW, end=None):
     return attendance_corrections.CorrectionPreview(
         item_key="production_unassigned_run:repair-1:1",
@@ -670,6 +742,105 @@ def _claim_for(plan, *, status="applying", completed=()):
         lease_until=datetime(2026, 8, 31, 15, 15, tzinfo=UTC),
         row=row,
     )
+
+
+def test_job_rejects_source_snapshot_that_disagrees_with_authenticated_plan(monkeypatch):
+    source = _source()
+    plan = attendance_corrections.plan_correction(
+        rows=[source],
+        employee_odoo_id=7,
+        start_utc=NOW,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+    )
+    changed_source = dict(source, odoo_work_center_id=82)
+    changed_plan = attendance_corrections.plan_correction(
+        rows=[changed_source],
+        employee_odoo_id=7,
+        start_utc=NOW,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+    )
+    claim = _claim_for(plan)
+    claim.row["source_snapshot"] = attendance_corrections._snapshot_payload(
+        _preview_for(changed_plan)
+    )
+    transitions = []
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_transition",
+        lambda _claim, **kwargs: transitions.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_default_facade",
+        lambda: (_ for _ in ()).throw(AssertionError("invalid job reached Odoo")),
+    )
+
+    result = attendance_corrections._process_claim(claim, now_utc=NOW)
+
+    assert result.status == "failed"
+    assert transitions[-1]["result"] == "invalid_plan"
+
+
+def test_job_request_must_match_authenticated_plan_before_odoo(monkeypatch):
+    plan = attendance_corrections.plan_correction(
+        rows=[_source()],
+        employee_odoo_id=7,
+        start_utc=NOW,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+    )
+    claim = _claim_for(plan)
+    claim.row["start_utc"] = datetime(2026, 8, 31, 15, 30, tzinfo=UTC)
+    transitions = []
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_transition",
+        lambda _claim, **kwargs: transitions.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_default_facade",
+        lambda: (_ for _ in ()).throw(AssertionError("invalid job reached Odoo")),
+    )
+
+    result = attendance_corrections._process_claim(claim, now_utc=NOW)
+
+    assert result.status == "failed"
+    assert transitions[-1]["result"] == "invalid_plan"
+
+
+def test_malformed_saved_employee_ids_fail_closed_before_odoo(monkeypatch):
+    plan = attendance_corrections.plan_correction(
+        rows=[_source()],
+        employee_odoo_id=7,
+        start_utc=NOW,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+    )
+    claim = _claim_for(plan)
+    claim.row["employee_odoo_ids"] = "{not-json"
+    transitions = []
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_transition",
+        lambda _claim, **kwargs: transitions.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_default_facade",
+        lambda: (_ for _ in ()).throw(AssertionError("invalid job reached Odoo")),
+    )
+
+    result = attendance_corrections._process_claim(claim, now_utc=NOW)
+
+    assert result.status == "failed"
+    assert transitions[-1]["result"] == "invalid_plan"
 
 
 class _OpenCorrectionFacade:
@@ -1346,7 +1517,9 @@ def test_touched_days_include_both_sides_of_plant_midnight():
     )
 
     days = attendance_corrections._touched_days(
-        {7: (source,)}, {7: plan}, open_end=local_end.astimezone(UTC)
+        {7: (source,)},
+        {7: plan},
+        open_end=local_end.astimezone(UTC),
     )
 
     assert [day.isoformat() for day in days] == ["2026-08-31", "2026-09-01"]
@@ -1520,3 +1693,32 @@ def test_real_recalc_boundary_refreshes_each_cache_once_and_audit_retry_reuses_m
     ]
     assert {item.get("stage") for item in claim.row["completed_operations"]} >= {"cache_refreshed"}
     assert len(audit_calls) == 2
+
+
+def test_touched_days_bound_open_interval_at_correction_time():
+    from zira_dashboard import shift_config
+
+    local_start = datetime(2026, 8, 30, 23, 30, tzinfo=shift_config.SITE_TZ)
+    local_now = datetime(2026, 9, 1, 0, 30, tzinfo=shift_config.SITE_TZ)
+    source = _source(end=None, write_date=local_start.astimezone(UTC))
+    source["check_in_utc"] = local_start.astimezone(UTC)
+    plan = attendance_corrections.plan_correction(
+        rows=[source],
+        employee_odoo_id=7,
+        start_utc=local_start.astimezone(UTC),
+        end_utc=None,
+        odoo_work_center_id=80,
+        odoo_department_id=9,
+    )
+
+    days = attendance_corrections._touched_days(
+        {7: (source,)},
+        {7: plan},
+        open_end=local_now.astimezone(UTC),
+    )
+
+    assert [day.isoformat() for day in days] == [
+        "2026-08-30",
+        "2026-08-31",
+        "2026-09-01",
+    ]

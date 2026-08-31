@@ -34,11 +34,15 @@ def test_department_sync_defaults_fresh_exempt_rows_without_overwriting_admin_ch
 
     odoo_sync._upsert_departments(
         cur,
-        ["Maintenance", "Supervisor", "Assembly"],
+        ["Maintenance", "Transportation", "Supervisor", "Assembly"],
     )
 
     assert cur.rows == {
         "Maintenance": {
+            "requires_work_center": False,
+            "requires_work_center_explicit": False,
+        },
+        "Transportation": {
             "requires_work_center": False,
             "requires_work_center_explicit": False,
         },

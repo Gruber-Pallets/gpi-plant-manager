@@ -295,6 +295,7 @@ def fetch_employees() -> list[dict]:
             "work_email",
             "wage_type",
             "resource_calendar_id",
+            "department_id",
         ],
     )
 
@@ -536,7 +537,12 @@ def get_current_attendance(employee_odoo_id: int) -> dict | None:
 
 
 def fetch_attendances_missing_wc(since) -> list[dict]:
-    return _odoo_attendance.fetch_attendances_missing_wc(execute, since, _kiosk_wc_field())
+    return _odoo_attendance.fetch_attendances_missing_wc(
+        execute,
+        since,
+        _kiosk_wc_field(),
+        _kiosk_department_field(),
+    )
 
 
 def fetch_open_attendances() -> list[dict]:
