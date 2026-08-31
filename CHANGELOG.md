@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Stop mixed-up time fixes
+
+- **Plant Manager now checks the whole saved time fix before using it.** If any part was changed or mixed up, it stops before touching Odoo.
+
 ### Finished work stays matched with Odoo
 
 - **The work helpers now check off the matching 2s improvement after a change is finished, checked, and saved.** They stop and ask for help if they cannot find or confirm one clear match.
