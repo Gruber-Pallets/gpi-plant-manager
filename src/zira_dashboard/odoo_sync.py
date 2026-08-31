@@ -70,6 +70,13 @@ def _m2o_id(val):
     return None
 
 
+def _m2o_name(val) -> str | None:
+    """Return a many2one display name, or None when Odoo returns False."""
+    if isinstance(val, (list, tuple)) and len(val) > 1:
+        return str(val[1]) or None
+    return None
+
+
 def refresh_work_schedule_hours(only_ids=None) -> None:
     """Refresh the Odoo-owned name + per-weekday hours for the configured
     work_schedules overrides. Leaves the app-owned rounding windows alone.
@@ -438,7 +445,7 @@ def _sync_locked(force: bool = False) -> SyncResult:
         )
         flex_cal_ids = set()
 
-    from . import db, employee_celebrations
+    from . import attendance_location_policy, db, employee_celebrations
     columns = [c["name"] for c in columns_meta]
     type_by_skill = {c["name"]: c.get("type", "") for c in columns_meta}
     pulled_at = now
@@ -497,17 +504,22 @@ def _sync_locked(force: bool = False) -> SyncResult:
         for emp in employees:
             # Odoo selection fields return False when unset; normalize to None.
             wage_type = emp.get("wage_type") or None
+            department_name = attendance_location_policy.effective_department_name(
+                None,
+                _m2o_name(emp.get("department_id")),
+            )
             spanish_level = int(buckets.get(spanish_level_ids.get(emp["id"]), 0))
             spanish_speaker = spanish_level > 0
             is_flex = _m2o_id(emp.get("resource_calendar_id")) in flex_cal_ids
             cur.execute(
                 "INSERT INTO people (odoo_id, name, full_name, active, wage_type, "
-                "spanish_speaker, spanish_level, resource_calendar_id, is_flexible, "
+                "department_name, spanish_speaker, spanish_level, resource_calendar_id, is_flexible, "
                 "last_pulled_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
                 "full_name = EXCLUDED.full_name, "
                 "active = EXCLUDED.active, wage_type = EXCLUDED.wage_type, "
+                "department_name = EXCLUDED.department_name, "
                 "spanish_speaker = EXCLUDED.spanish_speaker, "
                 "spanish_level = EXCLUDED.spanish_level, "
                 "resource_calendar_id = EXCLUDED.resource_calendar_id, "
@@ -515,7 +527,7 @@ def _sync_locked(force: bool = False) -> SyncResult:
                 "last_pulled_at = EXCLUDED.last_pulled_at",
                 (emp["id"], roster_names[int(emp["id"])],
                  (emp.get("name") or "").strip(), True,
-                 wage_type, spanish_speaker, spanish_level,
+                 wage_type, department_name, spanish_speaker, spanish_level,
                  _m2o_id(emp.get("resource_calendar_id")), is_flex, pulled_at),
             )
         if celebration_source is not None:

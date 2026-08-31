@@ -189,6 +189,29 @@ def test_sync_persists_full_name_alongside_roster_label(monkeypatch):
     assert rows == [{"name": "Test F.", "full_name": "Test Fullname"}]
 
 
+def test_sync_persists_clean_employee_home_department(monkeypatch):
+    from zira_dashboard import db
+
+    _stub_client(
+        monkeypatch,
+        employees=[{
+            "id": 99007,
+            "name": "Test Driver",
+            "active": True,
+            "work_email": False,
+            "department_id": [6, "06 Transportation"],
+        }],
+        skills_for={},
+        columns_meta=[],
+        buckets={},
+    )
+
+    assert odoo_sync.sync(force=True).ok is True
+    assert db.query(
+        "SELECT department_name FROM people WHERE odoo_id = 99007"
+    ) == [{"department_name": "Transportation"}]
+
+
 def test_sync_stores_skill_odoo_ids(monkeypatch):
     from zira_dashboard import db
 

@@ -284,7 +284,15 @@ def fetch_employees() -> list[dict]:
     return execute(
         "hr.employee", "search_read",
         [("active", "=", True)],
-        fields=["id", "name", "active", "work_email", "wage_type", "resource_calendar_id"],
+        fields=[
+            "id",
+            "name",
+            "active",
+            "work_email",
+            "wage_type",
+            "resource_calendar_id",
+            "department_id",
+        ],
     )
 
 

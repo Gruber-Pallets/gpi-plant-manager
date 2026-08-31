@@ -527,8 +527,9 @@ def test_fetch_employees_returns_active_only_with_required_fields(monkeypatch):
         {"id": 2, "name": "Bob",   "active": True, "work_email": False},
     ]
     # Search must filter to active only
-    args = calls[0][2]
+    _model, _method, args, kwargs = calls[0]
     assert ("active", "=", True) in args[0]
+    assert "department_id" in kwargs["fields"]
 
 
 def test_fetch_employee_statuses_includes_archived_records(monkeypatch):

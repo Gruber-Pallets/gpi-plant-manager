@@ -1,6 +1,12 @@
 from zira_dashboard import odoo_sync
 
 
+def test_m2o_name_returns_department_display_name_or_none():
+    assert odoo_sync._m2o_name([6, "06 Transportation"]) == "06 Transportation"
+    assert odoo_sync._m2o_name(False) is None
+    assert odoo_sync._m2o_name([6]) is None
+
+
 def test_roster_names_abbreviate_each_unique_last_name():
     labels = odoo_sync._roster_names([
         {"id": 1, "name": "Porfirio Cazares"},
