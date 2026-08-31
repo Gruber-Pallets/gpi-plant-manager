@@ -6,7 +6,11 @@ open item it resolved. Keep these stable: the Phase 4 reconciler joins the open
 set to the event log on this key, and the Phase 2b client diffs queue rows
 against archived events by it.
 """
+
 from __future__ import annotations
+
+from collections.abc import Sequence
+from datetime import datetime
 
 
 def time_off(request_id) -> str:
@@ -62,3 +66,29 @@ def odoo_roster_sync() -> str:
 def auto_lunch_setting() -> str:
     """Identity for the singleton Auto-Lunch non-Live warning."""
     return "auto_lunch:setting"
+
+
+def attendance_issue_key(
+    kind: str,
+    employee_odoo_id: int,
+    attendance_ids: Sequence[int],
+    start_utc: datetime,
+) -> str:
+    """Identity for one timeline issue, excluding its moving end time."""
+    ids = ",".join(str(value) for value in sorted(attendance_ids))
+    return f"{kind}:{employee_odoo_id}:{ids}:{start_utc.isoformat()}"
+
+
+def production_run_key(wc_name: str, start_utc: datetime) -> str:
+    """Identity for one distinct uncovered production run."""
+    return f"production_unassigned_run:{wc_name}:{start_utc.isoformat()}"
+
+
+def production_source_unavailable(day) -> str:
+    """Identity for one plant day's strict production-source failure."""
+    return f"production_source_unavailable:{day.isoformat()}"
+
+
+def attendance_source_stale_key() -> str:
+    """Singleton identity for freshness of the shared attendance mirror."""
+    return "attendance_source_stale:odoo_attendance_mirror"

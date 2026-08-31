@@ -234,7 +234,21 @@ async def _tick_missing_wc():
     14 days) for the Missing-Work-Center alert. No-ops (logs once) if the Odoo
     kiosk WC field isn't configured."""
     from datetime import timedelta
-    from . import missing_wc, odoo_client
+    from . import (
+        attendance_location_policy,
+        attendance_mirror,
+        missing_wc,
+        odoo_client,
+    )
+
+    try:
+        config = attendance_location_policy.get_rollout_config()
+        if config.mode in ("shadow", "live"):
+            health = attendance_mirror.health_snapshot()
+            if health.baseline_completed_at is not None:
+                return
+    except Exception:  # noqa: BLE001 - uncertainty retains the legacy safety net
+        pass
 
     since = datetime.now(UTC) - timedelta(days=14)
     rows = await asyncio.to_thread(odoo_client.fetch_attendances_missing_wc, since)

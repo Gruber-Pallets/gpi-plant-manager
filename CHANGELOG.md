@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Show each Odoo location problem once
+
+- **The Exception Inbox can now keep one clear item for each missing, unknown, or mixed-up Odoo location and each production run with no worker.** Open items keep the same identity while time moves forward.
+
 ### Keep recalculated production in the right order
 
 - **Plant Manager now keeps the newest worker-location production result when two background updates overlap.** An older update cannot replace the newer answer.
