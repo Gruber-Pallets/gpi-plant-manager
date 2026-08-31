@@ -21,7 +21,7 @@ DAY = date(2026, 8, 31)
 NOW = datetime(2026, 8, 31, 13, 0, tzinfo=UTC)
 
 
-def _issue(kind, key, *, priority="urgent", comparison=False):
+def _issue(kind, key, *, priority="urgent", comparison=False, end_is_open=False):
     return attendance_exceptions.AttendanceException(
         kind=kind,
         item_key=key,
@@ -40,7 +40,12 @@ def _issue(kind, key, *, priority="urgent", comparison=False):
         priority=priority,
         comparison_only=comparison,
         target_odoo_department_id=None,
+        end_is_open=end_is_open,
     )
+
+
+def _with_end_semantics(item, *, end_utc, end_is_open):
+    return replace(item, end_utc=end_utc, end_is_open=end_is_open)
 
 
 def _attendance_snapshot(*, mode="off", production_mode="legacy", issues=(), complete=True):
@@ -175,23 +180,77 @@ def test_live_strict_replaces_legacy_aggregate_with_distinct_run(monkeypatch):
     assert keys.count(issue.item_key) == 1
 
 
-def test_attendance_row_revision_changes_for_urgency_but_not_a_moving_end():
+def test_open_attendance_end_cap_advances_without_changing_row_revision():
     item = _issue(
         "attendance_missing_location",
         "attendance_missing_location:42:901:2026-08-31T13:00:00+00:00",
         priority="warn",
     )
 
-    pending = exception_inbox._attendance_issue_row(item)
-    same_visible_content = exception_inbox._attendance_issue_row(
-        replace(item, end_utc=NOW.replace(minute=4))
+    initial = exception_inbox._attendance_issue_row(
+        _with_end_semantics(item, end_utc=NOW.replace(minute=4), end_is_open=True)
     )
-    urgent = exception_inbox._attendance_issue_row(
-        replace(item, end_utc=NOW.replace(minute=5), priority="urgent")
+    advanced = exception_inbox._attendance_issue_row(
+        _with_end_semantics(item, end_utc=NOW.replace(minute=5), end_is_open=True)
     )
 
-    assert pending["item_key"] == same_visible_content["item_key"] == urgent["item_key"]
-    assert pending["row_key"] == same_visible_content["row_key"]
+    assert initial["item_key"] == advanced["item_key"]
+    assert initial["row_key"] == advanced["row_key"]
+
+
+def test_closed_attendance_end_correction_changes_row_revision():
+    item = _issue(
+        "attendance_missing_location",
+        "attendance_missing_location:42:901:2026-08-31T13:00:00+00:00",
+        priority="urgent",
+    )
+
+    initial = exception_inbox._attendance_issue_row(
+        _with_end_semantics(item, end_utc=NOW.replace(minute=4), end_is_open=False)
+    )
+    corrected = exception_inbox._attendance_issue_row(
+        _with_end_semantics(item, end_utc=NOW.replace(minute=5), end_is_open=False)
+    )
+
+    assert initial["item_key"] == corrected["item_key"]
+    assert initial["row_key"] != corrected["row_key"]
+
+
+def test_production_run_end_correction_changes_row_revision():
+    item = _issue(
+        "production_unassigned_run",
+        "production_unassigned_run:Dismantler 1:2026-08-31T13:00:00+00:00",
+    )
+
+    initial = exception_inbox._attendance_issue_row(
+        _with_end_semantics(item, end_utc=NOW.replace(minute=4), end_is_open=False)
+    )
+    corrected = exception_inbox._attendance_issue_row(
+        _with_end_semantics(item, end_utc=NOW.replace(minute=5), end_is_open=False)
+    )
+
+    assert initial["units"] == corrected["units"]
+    assert initial["sample_count"] == corrected["sample_count"]
+    assert initial["item_key"] == corrected["item_key"]
+    assert initial["row_key"] != corrected["row_key"]
+
+
+def test_attendance_row_revision_changes_when_grace_becomes_urgent():
+    item = _issue(
+        "attendance_missing_location",
+        "attendance_missing_location:42:901:2026-08-31T13:00:00+00:00",
+        priority="warn",
+    )
+
+    pending = exception_inbox._attendance_issue_row(
+        _with_end_semantics(item, end_utc=NOW.replace(minute=4), end_is_open=True)
+    )
+    urgent_item = replace(item, priority="urgent")
+    urgent = exception_inbox._attendance_issue_row(
+        _with_end_semantics(urgent_item, end_utc=NOW.replace(minute=5), end_is_open=True)
+    )
+
+    assert pending["item_key"] == urgent["item_key"]
     assert pending["row_key"] != urgent["row_key"]
 
 
