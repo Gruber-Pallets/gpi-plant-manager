@@ -12,8 +12,10 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime, UTC
 
+from . import attendance_location_policy
 from .shift_config import SITE_TZ
 
 _log = logging.getLogger(__name__)
@@ -31,6 +33,7 @@ def write_cache(rows: list[dict]) -> None:
     (~once/hour) so the table doesn't grow forever."""
     global _last_retention_at
     from . import db
+
     db.execute(
         "INSERT INTO missing_wc_cache (id, snapshot, refreshed_at) "
         "VALUES (1, %s::jsonb, now()) "
@@ -40,14 +43,12 @@ def write_cache(rows: list[dict]) -> None:
     now = time.monotonic()
     if now - _last_retention_at >= 3600:
         _last_retention_at = now
-        db.execute(
-            "DELETE FROM missing_wc_resolved "
-            "WHERE resolved_at < now() - interval '15 days'"
-        )
+        db.execute("DELETE FROM missing_wc_resolved WHERE resolved_at < now() - interval '15 days'")
 
 
 def _read_cache() -> list[dict]:
     from . import db
+
     rows = db.query("SELECT snapshot FROM missing_wc_cache WHERE id = 1")
     if not rows:
         return []
@@ -60,10 +61,12 @@ def _read_cache() -> list[dict]:
         return []
 
 
-def resolve(attendance_id, action: str, name: str | None = None,
-            wc_name: str | None = None) -> None:
+def resolve(
+    attendance_id, action: str, name: str | None = None, wc_name: str | None = None
+) -> None:
     """Suppress an attendance row from the alert (action 'assigned'|'dismissed')."""
     from . import db
+
     db.execute(
         "INSERT INTO missing_wc_resolved (attendance_id, action, name, wc_name) "
         "VALUES (%s, %s, %s, %s) "
@@ -76,6 +79,7 @@ def resolve(attendance_id, action: str, name: str | None = None,
 def unresolve(attendance_id) -> None:
     """Drop a suppression row so the attendance re-appears in the alert (undo)."""
     from . import db
+
     db.execute(
         "DELETE FROM missing_wc_resolved WHERE attendance_id = %s",
         (int(attendance_id),),
@@ -87,10 +91,14 @@ def resolved_ids() -> set[int]:
     so older resolutions are irrelevant — the filter keeps this 60s badge-poll
     read small as the table grows."""
     from . import db
-    return {int(r["attendance_id"])
-            for r in db.query(
-                "SELECT attendance_id FROM missing_wc_resolved "
-                "WHERE resolved_at > now() - interval '15 days'")}
+
+    return {
+        int(r["attendance_id"])
+        for r in db.query(
+            "SELECT attendance_id FROM missing_wc_resolved "
+            "WHERE resolved_at > now() - interval '15 days'"
+        )
+    }
 
 
 def _as_int(value) -> int | None:
@@ -131,9 +139,7 @@ def monitoring_started_at(*, now: datetime | None = None) -> datetime:
         started = started.replace(tzinfo=UTC)
     else:
         started = started.astimezone(UTC)
-    app_settings.set_setting(
-        _MONITORING_STARTED_AT_SETTING, {"at": started.isoformat()}
-    )
+    app_settings.set_setting(_MONITORING_STARTED_AT_SETTING, {"at": started.isoformat()})
     return started
 
 
@@ -160,8 +166,7 @@ def locally_unmapped_attendance_ids(attendance_ids: set[int]) -> set[int]:
         (ids,),
     )
     return {
-        att_id for row in rows
-        if (att_id := _as_int(row.get("odoo_attendance_id"))) is not None
+        att_id for row in rows if (att_id := _as_int(row.get("odoo_attendance_id"))) is not None
     }
 
 
@@ -187,6 +192,7 @@ def shape_rows(
     *,
     monitoring_started_at: datetime | None = None,
     locally_unmapped_attendance_ids: set[int] | None = None,
+    requires_work_center: Callable[[str | None], bool] = lambda _department: True,
 ) -> list[dict]:
     """Pure: cached rows + {odoo_id: {name, wage_type, active, excluded}} +
     resolved att_id set -> modal rows for ACTIVE HOURLY people, newest first.
@@ -194,7 +200,8 @@ def shape_rows(
     out: list[dict] = []
     monitoring_start = _as_utc_datetime(monitoring_started_at)
     locally_unmapped_ids = {
-        att_id for value in (locally_unmapped_attendance_ids or set())
+        att_id
+        for value in (locally_unmapped_attendance_ids or set())
         if (att_id := _as_int(value)) is not None
     }
     for r in cached:
@@ -215,13 +222,21 @@ def shape_rows(
             continue
         if not p.get("active") or p.get("excluded"):
             continue
-        out.append({
-            "attendance_id": att_id,
-            "name": p.get("name") or r.get("employee_name") or "Unknown",
-            "employee_odoo_id": employee_odoo_id,
-            "check_in": r.get("check_in"),
-            "check_in_label": _check_in_label(r.get("check_in")),
-        })
+        effective_department = attendance_location_policy.effective_department_name(
+            r.get("department_name"),
+            p.get("department_name"),
+        )
+        if not requires_work_center(effective_department):
+            continue
+        out.append(
+            {
+                "attendance_id": att_id,
+                "name": p.get("name") or r.get("employee_name") or "Unknown",
+                "employee_odoo_id": employee_odoo_id,
+                "check_in": r.get("check_in"),
+                "check_in_label": _check_in_label(r.get("check_in")),
+            }
+        )
     out.sort(key=lambda x: x.get("check_in") or "", reverse=True)
     return out
 
@@ -230,15 +245,15 @@ def current_rows() -> list[dict]:
     """Badge/modal payload: cached snapshot filtered to active hourly people,
     minus suppressed records. All local reads — no Odoo I/O."""
     from . import db
+
     cached = _read_cache()
     prows = db.query(
-        "SELECT odoo_id, name, wage_type, active, excluded FROM people "
+        "SELECT odoo_id, name, wage_type, active, excluded, department_name FROM people "
         "WHERE odoo_id IS NOT NULL"
     )
     people_by_odoo_id = {int(r["odoo_id"]): r for r in prows}
     attendance_ids = {
-        att_id for row in cached
-        if (att_id := _as_int(row.get("att_id"))) is not None
+        att_id for row in cached if (att_id := _as_int(row.get("att_id"))) is not None
     }
     return shape_rows(
         cached,
@@ -246,4 +261,5 @@ def current_rows() -> list[dict]:
         resolved_ids(),
         monitoring_started_at=monitoring_started_at(),
         locally_unmapped_attendance_ids=locally_unmapped_attendance_ids(attendance_ids),
+        requires_work_center=attendance_location_policy.department_requires_work_center,
     )

@@ -16,9 +16,21 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **When an Odoo work area and team disagree, Plant Manager can now keep the work area and safely fix the team.** It checks the record again before and after the change.
 
+### Stop false work center alerts
+
+- **Maintenance, Transportation, and Supervisor workers no longer get a work center warning when they do not need one.** If a time record loses its department, Plant Manager now checks the worker's saved Odoo department before showing a warning.
+
+### Plan for accurate work center alerts
+
+- **A step-by-step plan is ready to stop false work center warnings for Maintenance, Transportation, and Supervisor workers.** Nothing in the app has changed yet.
+
 ### Keep new Odoo work-area checks off until they are ready
 
 - **Plant Manager now waits for a full, safe production match before it turns on the new Odoo work-area checks.** Normal clock-ins will no longer fill the Exception Inbox with early warnings.
+
+### Keep each Odoo time fix safe
+
+- **Plant Manager now lets only one helper save an Odoo time fix at a time.** It keeps names and overnight work, checks the saved department again, and waits for every changed day to be ready before it says the fix is done.
 
 ### Check every Odoo time fix
 

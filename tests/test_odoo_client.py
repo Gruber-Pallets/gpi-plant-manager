@@ -259,6 +259,54 @@ def test_timeout_transports_set_socket_timeout():
     assert conn.timeout == odoo_client._XMLRPC_TIMEOUT_SECONDS
 
 
+def test_target_department_resolver_uses_saved_work_center_identity(monkeypatch):
+    monkeypatch.setattr(odoo_client, "_app_wc_name_for_odoo_id", lambda _work_center_id: "Repair 1")
+    monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda _name: 44)
+
+    assert odoo_client.target_department_id_for_work_center(81) == 44
+
+
+def test_target_department_resolver_force_refreshes_preview_time_cache(monkeypatch):
+    from zira_dashboard import staffing
+
+    calls = []
+    monkeypatch.setattr(odoo_client, "_wc_dept_id_cache", {"Repair 1": 5})
+    monkeypatch.setattr(odoo_client, "_app_wc_name_for_odoo_id", lambda _work_center_id: "Repair 1")
+    monkeypatch.setattr(
+        staffing,
+        "LOCATIONS",
+        [type("Location", (), {"name": "Repair 1", "department": "Recycled"})()],
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "execute",
+        lambda *_args, **_kwargs: calls.append(True) or [{"id": 6}],
+    )
+
+    assert odoo_client.target_department_id_for_work_center(81, force=True) == 6
+    assert calls == [True]
+    assert odoo_client._wc_dept_id_cache["Repair 1"] == 6
+
+
+def test_department_lookup_rejects_ambiguous_odoo_matches(monkeypatch):
+    from zira_dashboard import staffing
+
+    monkeypatch.setattr(odoo_client, "_wc_dept_id_cache", {})
+    monkeypatch.setattr(odoo_client, "_app_wc_name_for_odoo_id", lambda _work_center_id: "Repair 1")
+    monkeypatch.setattr(
+        staffing,
+        "LOCATIONS",
+        [type("Location", (), {"name": "Repair 1", "department": "Recycled"})()],
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "execute",
+        lambda *_args, **_kwargs: [{"id": 44}, {"id": 45}],
+    )
+
+    assert odoo_client.target_department_id_for_work_center(81) is None
+
+
 def test_server_proxy_picks_transport_for_scheme(monkeypatch):
     """https → SafeTransport subclass, http → Transport subclass; both carry
     the timeout. Mismatching transport to scheme breaks the TLS handshake."""
@@ -271,23 +319,22 @@ def test_server_proxy_picks_transport_for_scheme(monkeypatch):
     monkeypatch.setattr("xmlrpc.client.ServerProxy", fake_proxy)
     odoo_client._server_proxy("https://x/xmlrpc/2/object")
     odoo_client._server_proxy("http://x/xmlrpc/2/object")
-    assert isinstance(captured["https://x/xmlrpc/2/object"],
-                      odoo_client._TimeoutSafeTransport)
-    assert isinstance(captured["http://x/xmlrpc/2/object"],
-                      odoo_client._TimeoutTransport)
-    assert not isinstance(captured["http://x/xmlrpc/2/object"],
-                          odoo_client._TimeoutSafeTransport)
+    assert isinstance(captured["https://x/xmlrpc/2/object"], odoo_client._TimeoutSafeTransport)
+    assert isinstance(captured["http://x/xmlrpc/2/object"], odoo_client._TimeoutTransport)
+    assert not isinstance(captured["http://x/xmlrpc/2/object"], odoo_client._TimeoutSafeTransport)
 
 
 def _stub_execute(monkeypatch, responses):
     """Map (model, method) → return value. Calls not in the map raise."""
     calls = []
+
     def fake(model, method, *args, **kwargs):
         calls.append((model, method, args, kwargs))
         key = (model, method)
         if key not in responses:
             raise AssertionError(f"unexpected call: {key}")
         return responses[key]
+
     monkeypatch.setattr(odoo_client, "execute", fake)
     return calls
 
@@ -334,9 +381,9 @@ def test_fetch_skill_columns_with_types_includes_odoo_id(monkeypatch):
 def test_fetch_skill_level_buckets_rank_maps_4_levels(monkeypatch):
     responses = {
         ("hr.skill.level", "search_read"): [
-            {"id": 100, "level_progress": 0,   "skill_type_id": [1, "Production"]},
-            {"id": 101, "level_progress": 33,  "skill_type_id": [1, "Production"]},
-            {"id": 102, "level_progress": 67,  "skill_type_id": [1, "Production"]},
+            {"id": 100, "level_progress": 0, "skill_type_id": [1, "Production"]},
+            {"id": 101, "level_progress": 33, "skill_type_id": [1, "Production"]},
+            {"id": 102, "level_progress": 67, "skill_type_id": [1, "Production"]},
             {"id": 103, "level_progress": 100, "skill_type_id": [1, "Production"]},
         ],
     }
@@ -348,8 +395,8 @@ def test_fetch_skill_level_buckets_rank_maps_4_levels(monkeypatch):
 def test_fetch_skill_level_buckets_rank_maps_3_levels(monkeypatch):
     responses = {
         ("hr.skill.level", "search_read"): [
-            {"id": 200, "level_progress": 0,   "skill_type_id": [2, "Supervisor"]},
-            {"id": 201, "level_progress": 50,  "skill_type_id": [2, "Supervisor"]},
+            {"id": 200, "level_progress": 0, "skill_type_id": [2, "Supervisor"]},
+            {"id": 201, "level_progress": 50, "skill_type_id": [2, "Supervisor"]},
             {"id": 202, "level_progress": 100, "skill_type_id": [2, "Supervisor"]},
         ],
     }
@@ -368,10 +415,26 @@ def test_set_employee_skill_level_creates_missing_skill_row(monkeypatch):
             return [{"id": 10, "skill_type_id": [1, "Production Skills"]}]
         if (model, method) == ("hr.skill.level", "search_read"):
             return [
-                {"id": 100, "level_progress": 0, "skill_type_id": [1, "Production Skills"]},
-                {"id": 101, "level_progress": 33, "skill_type_id": [1, "Production Skills"]},
-                {"id": 102, "level_progress": 67, "skill_type_id": [1, "Production Skills"]},
-                {"id": 103, "level_progress": 100, "skill_type_id": [1, "Production Skills"]},
+                {
+                    "id": 100,
+                    "level_progress": 0,
+                    "skill_type_id": [1, "Production Skills"],
+                },
+                {
+                    "id": 101,
+                    "level_progress": 33,
+                    "skill_type_id": [1, "Production Skills"],
+                },
+                {
+                    "id": 102,
+                    "level_progress": 67,
+                    "skill_type_id": [1, "Production Skills"],
+                },
+                {
+                    "id": 103,
+                    "level_progress": 100,
+                    "skill_type_id": [1, "Production Skills"],
+                },
             ]
         if (model, method) == ("hr.employee.skill", "search"):
             return []
@@ -388,12 +451,14 @@ def test_set_employee_skill_level_creates_missing_skill_row(monkeypatch):
         (
             "hr.employee.skill",
             "create",
-            ({
-                "employee_id": 7,
-                "skill_id": 10,
-                "skill_type_id": 1,
-                "skill_level_id": 103,
-            },),
+            (
+                {
+                    "employee_id": 7,
+                    "skill_id": 10,
+                    "skill_type_id": 1,
+                    "skill_level_id": 103,
+                },
+            ),
             {},
         )
     ]
@@ -409,10 +474,26 @@ def test_set_employee_skill_level_deduplicates_rows_after_create_race(monkeypatc
             return [{"id": 10, "skill_type_id": [1, "Production Skills"]}]
         if (model, method) == ("hr.skill.level", "search_read"):
             return [
-                {"id": 100, "level_progress": 0, "skill_type_id": [1, "Production Skills"]},
-                {"id": 101, "level_progress": 33, "skill_type_id": [1, "Production Skills"]},
-                {"id": 102, "level_progress": 67, "skill_type_id": [1, "Production Skills"]},
-                {"id": 103, "level_progress": 100, "skill_type_id": [1, "Production Skills"]},
+                {
+                    "id": 100,
+                    "level_progress": 0,
+                    "skill_type_id": [1, "Production Skills"],
+                },
+                {
+                    "id": 101,
+                    "level_progress": 33,
+                    "skill_type_id": [1, "Production Skills"],
+                },
+                {
+                    "id": 102,
+                    "level_progress": 67,
+                    "skill_type_id": [1, "Production Skills"],
+                },
+                {
+                    "id": 103,
+                    "level_progress": 100,
+                    "skill_type_id": [1, "Production Skills"],
+                },
             ]
         if (model, method) == ("hr.employee.skill", "search"):
             return next(searches)
@@ -451,10 +532,26 @@ def test_set_employee_skill_level_updates_first_duplicate_and_unlinks_rest(monke
             return [{"id": 10, "skill_type_id": [1, "Production Skills"]}]
         if (model, method) == ("hr.skill.level", "search_read"):
             return [
-                {"id": 100, "level_progress": 0, "skill_type_id": [1, "Production Skills"]},
-                {"id": 101, "level_progress": 33, "skill_type_id": [1, "Production Skills"]},
-                {"id": 102, "level_progress": 67, "skill_type_id": [1, "Production Skills"]},
-                {"id": 103, "level_progress": 100, "skill_type_id": [1, "Production Skills"]},
+                {
+                    "id": 100,
+                    "level_progress": 0,
+                    "skill_type_id": [1, "Production Skills"],
+                },
+                {
+                    "id": 101,
+                    "level_progress": 33,
+                    "skill_type_id": [1, "Production Skills"],
+                },
+                {
+                    "id": 102,
+                    "level_progress": 67,
+                    "skill_type_id": [1, "Production Skills"],
+                },
+                {
+                    "id": 103,
+                    "level_progress": 100,
+                    "skill_type_id": [1, "Production Skills"],
+                },
             ]
         if (model, method) == ("hr.employee.skill", "search"):
             return [55, 56]
@@ -517,18 +614,19 @@ def test_fetch_employees_returns_active_only_with_required_fields(monkeypatch):
     responses = {
         ("hr.employee", "search_read"): [
             {"id": 1, "name": "Alice", "active": True, "work_email": "alice@x"},
-            {"id": 2, "name": "Bob",   "active": True, "work_email": False},
+            {"id": 2, "name": "Bob", "active": True, "work_email": False},
         ],
     }
     calls = _stub_execute(monkeypatch, responses)
     out = odoo_client.fetch_employees()
     assert out == [
         {"id": 1, "name": "Alice", "active": True, "work_email": "alice@x"},
-        {"id": 2, "name": "Bob",   "active": True, "work_email": False},
+        {"id": 2, "name": "Bob", "active": True, "work_email": False},
     ]
     # Search must filter to active only
-    args = calls[0][2]
+    _model, _method, args, kwargs = calls[0]
     assert ("active", "=", True) in args[0]
+    assert "department_id" in kwargs["fields"]
 
 
 def test_fetch_employee_statuses_includes_archived_records(monkeypatch):
@@ -550,16 +648,31 @@ def test_fetch_employee_statuses_includes_archived_records(monkeypatch):
 def test_fetch_skills_for_groups_by_employee_id(monkeypatch):
     responses = {
         ("hr.employee.skill", "search_read"): [
-            {"id": 5, "employee_id": [1, "Alice"], "skill_id": [10, "Repair"],     "skill_level_id": [103, "Expert"]},
-            {"id": 6, "employee_id": [1, "Alice"], "skill_id": [11, "Dismantler"], "skill_level_id": [101, "Beginner"]},
-            {"id": 7, "employee_id": [2, "Bob"],   "skill_id": [10, "Repair"],     "skill_level_id": [102, "Adv"]},
+            {
+                "id": 5,
+                "employee_id": [1, "Alice"],
+                "skill_id": [10, "Repair"],
+                "skill_level_id": [103, "Expert"],
+            },
+            {
+                "id": 6,
+                "employee_id": [1, "Alice"],
+                "skill_id": [11, "Dismantler"],
+                "skill_level_id": [101, "Beginner"],
+            },
+            {
+                "id": 7,
+                "employee_id": [2, "Bob"],
+                "skill_id": [10, "Repair"],
+                "skill_level_id": [102, "Adv"],
+            },
         ],
     }
     _stub_execute(monkeypatch, responses)
     out = odoo_client.fetch_skills_for([1, 2])
     assert out == {
         1: [
-            {"skill_id": 10, "skill_name": "Repair",     "level_id": 103},
+            {"skill_id": 10, "skill_name": "Repair", "level_id": 103},
             {"skill_id": 11, "skill_name": "Dismantler", "level_id": 101},
         ],
         2: [
@@ -588,8 +701,8 @@ def test_object_proxy_is_thread_local(monkeypatch):
 
     def make_proxy(url, transport=None):
         m = MagicMock(name=url)
-        m.authenticate.return_value = 7   # /common auth
-        m.execute_kw.return_value = []    # /object call
+        m.authenticate.return_value = 7  # /common auth
+        m.execute_kw.return_value = []  # /object call
         return m
 
     monkeypatch.setattr("xmlrpc.client.ServerProxy", make_proxy)
@@ -618,9 +731,12 @@ def test_reset_leave_to_confirm_writes_state(monkeypatch):
 
 
 def test_fetch_leave_state_returns_state_or_none(monkeypatch):
-    _stub_execute(monkeypatch, {
-        ("hr.leave", "search_read"): [{"id": 112, "state": "refuse"}],
-    })
+    _stub_execute(
+        monkeypatch,
+        {
+            ("hr.leave", "search_read"): [{"id": 112, "state": "refuse"}],
+        },
+    )
     assert odoo_client.fetch_leave_state(112) == "refuse"
 
     _stub_execute(monkeypatch, {("hr.leave", "search_read"): []})
@@ -737,12 +853,8 @@ def test_fetch_leave_snapshot_returns_none_when_missing(monkeypatch):
 
 
 @pytest.mark.parametrize("payload", [None, {"id": 91}])
-def test_fetch_leave_snapshot_rejects_non_list_payloads(
-    monkeypatch, payload
-):
-    monkeypatch.setattr(
-        odoo_client, "execute", MagicMock(return_value=payload)
-    )
+def test_fetch_leave_snapshot_rejects_non_list_payloads(monkeypatch, payload):
+    monkeypatch.setattr(odoo_client, "execute", MagicMock(return_value=payload))
 
     with pytest.raises(RuntimeError, match="leave payload"):
         odoo_client.fetch_leave_snapshot(91)
@@ -776,9 +888,7 @@ def test_fetch_leave_snapshot_rejects_duplicate_rows(monkeypatch):
         "request_date_to": "2026-08-20",
         "state": "validate",
     }
-    monkeypatch.setattr(
-        odoo_client, "execute", MagicMock(return_value=[row, row])
-    )
+    monkeypatch.setattr(odoo_client, "execute", MagicMock(return_value=[row, row]))
 
     with pytest.raises(RuntimeError, match="multiple rows"):
         odoo_client.fetch_leave_snapshot(91)
@@ -821,12 +931,8 @@ def test_fetch_leave_snapshot_rejects_duplicate_rows(monkeypatch):
         },
     ],
 )
-def test_fetch_leave_snapshot_rejects_malformed_or_mismatched_rows(
-    monkeypatch, row
-):
-    monkeypatch.setattr(
-        odoo_client, "execute", MagicMock(return_value=[row])
-    )
+def test_fetch_leave_snapshot_rejects_malformed_or_mismatched_rows(monkeypatch, row):
+    monkeypatch.setattr(odoo_client, "execute", MagicMock(return_value=[row]))
 
     with pytest.raises(RuntimeError, match="leave payload"):
         odoo_client.fetch_leave_snapshot(91)
@@ -854,9 +960,7 @@ def test_fetch_leave_snapshot_rejects_malformed_or_mismatched_rows(
         ("holiday_status_id", [7, ""]),
     ],
 )
-def test_fetch_leave_snapshot_rejects_malformed_record_and_m2o_ids(
-    monkeypatch, field, value
-):
+def test_fetch_leave_snapshot_rejects_malformed_record_and_m2o_ids(monkeypatch, field, value):
     row = {
         "id": 91,
         "employee_id": [44, "Ana"],
@@ -866,9 +970,7 @@ def test_fetch_leave_snapshot_rejects_malformed_record_and_m2o_ids(
         "state": "validate",
     }
     row[field] = value
-    monkeypatch.setattr(
-        odoo_client, "execute", MagicMock(return_value=[row])
-    )
+    monkeypatch.setattr(odoo_client, "execute", MagicMock(return_value=[row]))
 
     with pytest.raises(RuntimeError, match="leave payload"):
         odoo_client.fetch_leave_snapshot(91)
@@ -945,9 +1047,7 @@ def test_find_matching_leaves_excludes_terminal_states_when_requested(
     execute = MagicMock(return_value=[])
     monkeypatch.setattr(odoo_client, "execute", execute)
 
-    assert odoo_client.find_matching_leaves(
-        44, 7, date(2026, 8, 20), include_terminal=False
-    ) == []
+    assert odoo_client.find_matching_leaves(44, 7, date(2026, 8, 20), include_terminal=False) == []
     execute.assert_called_once_with(
         "hr.leave",
         "search_read",
@@ -976,9 +1076,7 @@ def test_find_matching_leaves_rejects_datetime_day(monkeypatch):
     monkeypatch.setattr(odoo_client, "execute", execute)
 
     with pytest.raises(ValueError, match="day must be a date"):
-        odoo_client.find_matching_leaves(
-            44, 7, datetime(2026, 8, 20, 12, 30)
-        )
+        odoo_client.find_matching_leaves(44, 7, datetime(2026, 8, 20, 12, 30))
     execute.assert_not_called()
 
 

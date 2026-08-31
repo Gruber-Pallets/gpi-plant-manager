@@ -83,6 +83,7 @@ ALTER TABLE people DROP CONSTRAINT IF EXISTS people_spanish_level_check;
 ALTER TABLE people ADD CONSTRAINT people_spanish_level_check
   CHECK (spanish_level BETWEEN 0 AND 3);
 ALTER TABLE people ADD COLUMN IF NOT EXISTS resource_calendar_id INTEGER;
+ALTER TABLE people ADD COLUMN IF NOT EXISTS department_name TEXT;
 -- Raw Odoo name, kept alongside the compact roster label in `name` so the
 -- leaderboards can display un-abbreviated names.
 ALTER TABLE people ADD COLUMN IF NOT EXISTS full_name TEXT;
@@ -193,7 +194,7 @@ UPDATE departments
    SET requires_work_center = FALSE
  WHERE requires_work_center_explicit = FALSE
    AND lower(regexp_replace(name, '^\\s*[0-9]+\\s*', ''))
-       IN ('maintenance', 'supervisor');
+       IN ('maintenance', 'transportation', 'supervisor');
 
 -- Durable Odoo attendance mirror + rollout state ----------------------
 
@@ -240,9 +241,38 @@ CREATE TABLE IF NOT EXISTS attendance_recalc_queue (
   requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
+  cache_started_at TIMESTAMPTZ,
+  cache_ready_at TIMESTAMPTZ,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   last_error TEXT
 );
+
+-- Older queue rows already ran the best-effort cache refresh used before the
+-- durable cache-ready fence existed. Backfill those rows exactly once while
+-- adding the two columns; fresh installs already have both columns above.
+DO $attendance_recalc_cache_columns$
+DECLARE
+  had_cache_ready BOOLEAN;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'attendance_recalc_queue'
+      AND column_name = 'cache_ready_at'
+  ) INTO had_cache_ready;
+
+  ALTER TABLE attendance_recalc_queue
+    ADD COLUMN IF NOT EXISTS cache_started_at TIMESTAMPTZ;
+  ALTER TABLE attendance_recalc_queue
+    ADD COLUMN IF NOT EXISTS cache_ready_at TIMESTAMPTZ;
+
+  IF NOT had_cache_ready THEN
+    UPDATE attendance_recalc_queue
+    SET cache_ready_at = completed_at
+    WHERE completed_at IS NOT NULL;
+  END IF;
+END
+$attendance_recalc_cache_columns$;
 
 CREATE TABLE IF NOT EXISTS attendance_strict_days (
   day DATE PRIMARY KEY,

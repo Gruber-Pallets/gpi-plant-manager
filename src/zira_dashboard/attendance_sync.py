@@ -35,6 +35,7 @@ class SyncResult:
     rows_stored: int = 0
     rows_deleted: int = 0
     affected_days: frozenset[date] = frozenset()
+    repair_attendance_ids: frozenset[int] = frozenset()
     error: str | None = None
 
 
@@ -212,9 +213,7 @@ def _normalize_source_rows(value: object, *, context: str) -> tuple[dict, ...]:
     return tuple(rows)
 
 
-def _merged_rows(
-    changed_rows: Sequence[dict], open_rows: Sequence[dict]
-) -> tuple[dict, ...]:
+def _merged_rows(changed_rows: Sequence[dict], open_rows: Sequence[dict]) -> tuple[dict, ...]:
     newest: dict[int, dict] = {}
     for row in (*changed_rows, *open_rows):
         attendance_id = row["odoo_attendance_id"]
@@ -249,12 +248,8 @@ def _run_incremental_locked(
     # Fetching all open rows is deliberately part of the same logical
     # cycle. Nothing is stored if either complete Task 2 read fails.
     raw_open_rows = _source.fetch_open_attendance_rows()
-    changes = _normalize_source_rows(
-        raw_changes, context="attendance changes"
-    )
-    open_rows = _normalize_source_rows(
-        raw_open_rows, context="open attendance"
-    )
+    changes = _normalize_source_rows(raw_changes, context="attendance changes")
+    open_rows = _normalize_source_rows(raw_open_rows, context="open attendance")
     merged = _merged_rows(changes, open_rows)
     cursor_write_date, cursor_id = _cursor_for(changes)
     affected = run_backend.store_incremental_cycle(
@@ -269,6 +264,7 @@ def _run_incremental_locked(
         incremental_completed=True,
         rows_stored=len(merged),
         affected_days=frozenset(affected),
+        repair_attendance_ids=frozenset(row["odoo_attendance_id"] for row in merged),
     )
 
 
@@ -283,6 +279,14 @@ def run_incremental_sync(*, now_utc: datetime | None = None) -> SyncResult:
                 completed_at,
                 observed_at=observed_at,
             )
+        try:
+            _enqueue_department_repairs_after_sync(
+                result,
+                now_utc=completed_at,
+                include_current_day=True,
+            )
+        except Exception:  # noqa: BLE001 - discovery cannot relabel a committed sync
+            _log.exception("could not enqueue Odoo attendance department repairs")
         return result
     except Exception as exc:  # noqa: BLE001 - rollback before failure recording
         _record_failure_safely("incremental", exc)
@@ -299,11 +303,7 @@ def _validated_sweep_snapshot(value: object) -> set[int]:
         raise RuntimeError("Odoo attendance ID sweep IDs must be a sequence")
     ids: list[int] = []
     for value_id in raw_ids:
-        if (
-            isinstance(value_id, bool)
-            or not isinstance(value_id, int)
-            or value_id <= 0
-        ):
+        if isinstance(value_id, bool) or not isinstance(value_id, int) or value_id <= 0:
             raise RuntimeError("Odoo attendance ID sweep contained an invalid id")
         ids.append(value_id)
     if len(ids) != len(set(ids)):
@@ -320,9 +320,7 @@ def _read_rows_by_ids(ids: set[int], *, require_all: bool) -> tuple[dict, ...]:
     for offset in range(0, len(requested_ids), _DIRECT_ID_CHUNK_SIZE):
         chunk = requested_ids[offset : offset + _DIRECT_ID_CHUNK_SIZE]
         raw_rows = _source.fetch_attendance_rows_by_ids(chunk)
-        normalized = _normalize_source_rows(
-            raw_rows, context="attendance rows by ID"
-        )
+        normalized = _normalize_source_rows(raw_rows, context="attendance rows by ID")
         normalized_ids = [row["odoo_attendance_id"] for row in normalized]
         if len(normalized_ids) != len(set(normalized_ids)):
             raise RuntimeError("Odoo attendance rows by ID contained duplicate ids")
@@ -346,16 +344,12 @@ def _run_full_sweep_locked(
     state = run_backend.sync_state()
     if only_if_due and not _sweep_is_due(state, completed_at):
         return SyncResult(success=True)
-    ids = _validated_sweep_snapshot(
-        _source.fetch_complete_attendance_id_sweep()
-    )
+    ids = _validated_sweep_snapshot(_source.fetch_complete_attendance_id_sweep())
     active_ids = run_backend.active_attendance_ids()
     if not ids and active_ids:
         confirmation_rows = _read_rows_by_ids(active_ids, require_all=False)
         if confirmation_rows:
-            raise RuntimeError(
-                "Odoo empty attendance sweep contradicted direct ID confirmation"
-            )
+            raise RuntimeError("Odoo empty attendance sweep contradicted direct ID confirmation")
     recovery_ids = run_backend.tombstoned_attendance_ids(ids)
     recovery_rows = _read_rows_by_ids(recovery_ids, require_all=True)
     generation = state.full_sweep_generation + 1
@@ -369,14 +363,14 @@ def _run_full_sweep_locked(
     return SyncResult(
         success=True,
         full_sweep_completed=True,
+        baseline_completed=state.baseline_completed_at is not None,
         rows_deleted=committed.deleted_count,
         affected_days=frozenset(committed.affected_days),
+        repair_attendance_ids=frozenset(row["odoo_attendance_id"] for row in recovery_rows),
     )
 
 
-def _run_full_sweep(
-    requested_at: datetime | None, *, only_if_due: bool
-) -> SyncResult:
+def _run_full_sweep(requested_at: datetime | None, *, only_if_due: bool) -> SyncResult:
     try:
         with _backend.logical_run() as run_backend:
             completed_at, observed_at = _locked_run_times(requested_at)
@@ -386,6 +380,15 @@ def _run_full_sweep(
                 observed_at=observed_at,
                 only_if_due=only_if_due,
             )
+        if result.full_sweep_completed:
+            try:
+                _enqueue_department_repairs_after_sync(
+                    result,
+                    now_utc=completed_at,
+                    include_current_day=False,
+                )
+            except Exception:  # noqa: BLE001 - discovery cannot relabel a committed sweep
+                _log.exception("could not enqueue Odoo attendance department repairs")
         return result
     except Exception as exc:  # noqa: BLE001 - rollback before failure recording
         _record_failure_safely("sweep", exc)
@@ -412,15 +415,17 @@ def _enqueue_department_repairs_after_sync(
     now_utc: datetime,
     include_current_day: bool,
 ) -> int:
-    """Project only committed mirror state after a fully successful tick."""
+    """Project only committed mirror state after a successful source pass."""
     if not result.success:
         return 0
     from . import attendance_department_repair
 
     return attendance_department_repair.enqueue_after_successful_sync(
         affected_days=result.affected_days,
+        attendance_ids=result.repair_attendance_ids,
         now_utc=now_utc,
         include_current_day=include_current_day,
+        include_baseline=result.baseline_completed,
     )
 
 
@@ -436,21 +441,17 @@ def tick(*, now_utc: datetime | None = None) -> SyncResult:
 
     sweep_due = _sweep_is_due(initial_state, initial_now)
     incremental = run_incremental_sync(now_utc=requested_at)
-    sweep = (
-        _run_full_sweep_if_due(requested_at)
-        if sweep_due
-        else SyncResult(success=True)
-    )
+    sweep = _run_full_sweep_if_due(requested_at) if sweep_due else SyncResult(success=True)
 
     baseline_completed = initial_state.baseline_completed_at is not None
+    baseline_became_complete = False
     can_complete_baseline = incremental.success and (not sweep_due or sweep.success)
     if can_complete_baseline:
         try:
-            baseline_completed_at = (
-                requested_at if requested_at is not None else _now_utc(None)
-            )
-            baseline_completed = _backend.complete_baseline_if_ready(
-                baseline_completed_at
+            baseline_completed_at = requested_at if requested_at is not None else _now_utc(None)
+            baseline_completed = _backend.complete_baseline_if_ready(baseline_completed_at)
+            baseline_became_complete = (
+                initial_state.baseline_completed_at is None and baseline_completed
             )
         except Exception as exc:  # noqa: BLE001 - baseline must remain incomplete
             _record_failure_safely("baseline", exc)
@@ -462,6 +463,9 @@ def tick(*, now_utc: datetime | None = None) -> SyncResult:
                 rows_stored=incremental.rows_stored,
                 rows_deleted=sweep.rows_deleted,
                 affected_days=incremental.affected_days | sweep.affected_days,
+                repair_attendance_ids=(
+                    incremental.repair_attendance_ids | sweep.repair_attendance_ids
+                ),
                 error=_error_text(exc),
             )
 
@@ -475,20 +479,18 @@ def tick(*, now_utc: datetime | None = None) -> SyncResult:
         rows_stored=incremental.rows_stored,
         rows_deleted=sweep.rows_deleted,
         affected_days=incremental.affected_days | sweep.affected_days,
+        repair_attendance_ids=(incremental.repair_attendance_ids | sweep.repair_attendance_ids),
         error=error,
     )
-    if result.success:
-        repair_scan_at = requested_at if requested_at is not None else _now_utc(None)
+    if result.success and baseline_became_complete:
         try:
             _enqueue_department_repairs_after_sync(
                 result,
-                now_utc=repair_scan_at,
-                include_current_day=(
-                    initial_state.baseline_completed_at is None and baseline_completed
-                ),
+                now_utc=requested_at if requested_at is not None else _now_utc(None),
+                include_current_day=False,
             )
-        except Exception:  # noqa: BLE001 - repair discovery cannot undo a good sync
-            _log.exception("could not enqueue Odoo attendance department repairs")
+        except Exception:  # noqa: BLE001 - discovery cannot relabel baseline completion
+            _log.exception("could not enqueue baseline Odoo attendance department repairs")
     return result
 
 

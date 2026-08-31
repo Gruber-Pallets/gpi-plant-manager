@@ -347,3 +347,107 @@ def test_oldest_claim_uses_skip_locked_attempt_fence_and_durable_event(monkeypat
         and "manager@example.com" not in str(params)
         for sql, params in statements
     )
+
+
+def test_default_odoo_facade_resolves_target_department_and_plan_never_clears_it(
+    monkeypatch,
+):
+    from zira_dashboard import db, odoo_client
+
+    source = _row(work_center=80)
+    monkeypatch.setattr(
+        db,
+        "query",
+        lambda *_args, **_kwargs: [
+            {"odoo_work_center_id": 81, "odoo_work_center_name": "Odoo Repair 1"}
+        ],
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "fetch_manufacturing_work_centers",
+        lambda **_kwargs: [{"id": 81, "name": "Odoo Repair 1"}],
+    )
+    monkeypatch.setattr(odoo_client, "fetch_employee_statuses", lambda: [{"id": 7, "active": True}])
+    monkeypatch.setattr(
+        odoo_client,
+        "fetch_employee_attendance_rows",
+        lambda *_args: [dict(source)],
+    )
+    monkeypatch.setattr(odoo_client, "_app_wc_name_for_odoo_id", lambda _wc_id: "Repair 1")
+    monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda _name, **_kwargs: 44)
+    monkeypatch.setattr(attendance_corrections, "_default_facade", lambda: odoo_client)
+
+    preview = attendance_corrections.correction_preview(
+        item_key="production_unassigned_run:repair-1:1",
+        employee_odoo_ids=[7],
+        target_work_center_name="Repair 1",
+        start_utc=NOW,
+        end_utc=None,
+    )
+
+    assert preview.target_odoo_department_id == 44
+    updates = [operation for operation in preview.plans[0].operations if operation.kind == "update"]
+    assert updates
+    assert all(operation.after.get("odoo_department_id") == 44 for operation in updates)
+
+
+def test_missing_target_department_fails_before_source_read_or_job_persistence(
+    monkeypatch,
+):
+    from zira_dashboard import db, odoo_client
+
+    source_reads = []
+    monkeypatch.setattr(
+        db,
+        "query",
+        lambda *_args, **_kwargs: [
+            {"odoo_work_center_id": 81, "odoo_work_center_name": "Odoo Repair 1"}
+        ],
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "fetch_manufacturing_work_centers",
+        lambda **_kwargs: [{"id": 81, "name": "Odoo Repair 1"}],
+    )
+    monkeypatch.setattr(odoo_client, "fetch_employee_statuses", lambda: [{"id": 7, "active": True}])
+    monkeypatch.setattr(
+        odoo_client,
+        "fetch_employee_attendance_rows",
+        lambda *_args: source_reads.append(True) or [],
+    )
+    monkeypatch.setattr(odoo_client, "_app_wc_name_for_odoo_id", lambda _wc_id: "Repair 1")
+    monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda _name, **_kwargs: None)
+    monkeypatch.setattr(attendance_corrections, "_default_facade", lambda: odoo_client)
+
+    with pytest.raises(ValueError, match="department"):
+        attendance_corrections.correction_preview(
+            item_key="production_unassigned_run:repair-1:1",
+            employee_odoo_ids=[7],
+            target_work_center_name="Repair 1",
+            start_utc=NOW,
+            end_utc=None,
+        )
+
+    assert source_reads == []
+
+
+def test_active_operation_reservation_is_not_reported_as_completed_progress():
+    claim = attendance_corrections._JobClaim(
+        job_id=5,
+        attempt_count=2,
+        lease_until=NOW + timedelta(minutes=15),
+        row={
+            "completed_operations": [
+                {
+                    "operation_key": "attendance-correction-v2:7:YQ:" + "1" * 64,
+                    "reservation_token": "a" * 32,
+                    "reservation_attempt_count": 2,
+                    "reservation_until": "2026-08-31T15:15:00Z",
+                }
+            ]
+        },
+    )
+
+    result = attendance_corrections._result(claim, "recoverable")
+
+    assert result.completed_operation_count == 0

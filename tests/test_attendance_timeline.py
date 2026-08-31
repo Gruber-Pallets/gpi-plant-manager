@@ -940,6 +940,16 @@ def test_timeline_for_range_normalizes_numbered_odoo_department_for_saved_policy
         lambda _start, _end: (source,),
     )
     monkeypatch.setattr(
+        attendance_timeline,
+        "db",
+        type(
+            "NoFallbackDb",
+            (),
+            {"query": staticmethod(lambda *_args: pytest.fail("fallback queried"))},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
         attendance_timeline.attendance_location_policy,
         "department_requires_work_center",
         lambda name: seen_departments.append(name) or name != "Maintenance",
@@ -949,6 +959,56 @@ def test_timeline_for_range_normalizes_numbered_odoo_department_for_saved_policy
 
     assert seen_departments
     assert set(seen_departments) == {"Maintenance"}
+    assert spans == (expected_span(at(), at(minutes=10), "exempt_no_location"),)
+
+
+def test_timeline_uses_employee_department_when_attendance_department_is_blank(
+    monkeypatch,
+):
+    source = row(
+        check_out=at(minutes=10),
+        work_center_id=None,
+        work_center_name=None,
+        department_id=None,
+        department_name=None,
+    )
+    monkeypatch.setattr(
+        attendance_timeline.attendance_mirror,
+        "health_snapshot",
+        lambda: attendance_mirror.MirrorHealth(at(minutes=10), at(), at(), None, None),
+    )
+    monkeypatch.setattr(
+        attendance_timeline.attendance_mirror,
+        "rows_overlapping",
+        lambda _start, _end: (source,),
+    )
+    monkeypatch.setattr(
+        attendance_timeline,
+        "db",
+        type(
+            "EmployeeDepartmentDb",
+            (),
+            {
+                "query": staticmethod(
+                    lambda _sql, _params: [
+                        {
+                            "odoo_id": 41,
+                            "department_name": "Transportation",
+                        }
+                    ]
+                )
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        attendance_timeline.attendance_location_policy,
+        "department_requires_work_center",
+        attendance_timeline.attendance_location_policy.default_department_requires_work_center,
+    )
+
+    spans = attendance_timeline.timeline_for_range(at(), at(minutes=10), as_of_utc=at(minutes=10))
+
     assert spans == (expected_span(at(), at(minutes=10), "exempt_no_location"),)
 
 

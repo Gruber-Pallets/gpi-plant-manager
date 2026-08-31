@@ -12,6 +12,7 @@ from typing import Literal, TypeAlias
 from . import (
     attendance_location_policy,
     attendance_mirror,
+    db,
     shift_config,
     work_centers_store,
 )
@@ -577,6 +578,37 @@ def _department_requires_work_center_for_mirror(
     )
 
 
+def _rows_with_employee_department_fallback(
+    rows: Sequence[Mapping[str, object]],
+) -> tuple[Mapping[str, object], ...]:
+    missing_ids = sorted(
+        {
+            int(row["employee_odoo_id"])
+            for row in rows
+            if not str(row.get("odoo_department_name") or "").strip()
+        }
+    )
+    if not missing_ids:
+        return tuple(rows)
+    home_rows = db.query(
+        "SELECT odoo_id, department_name FROM people WHERE odoo_id = ANY(%s)",
+        (missing_ids,),
+    )
+    home_by_id = {int(row["odoo_id"]): row.get("department_name") for row in home_rows}
+    enriched = []
+    for row in rows:
+        if str(row.get("odoo_department_name") or "").strip():
+            enriched.append(row)
+            continue
+        employee_department = home_by_id.get(int(row["employee_odoo_id"]))
+        effective = attendance_location_policy.effective_department_name(
+            None,
+            employee_department,
+        )
+        enriched.append({**row, "odoo_department_name": effective})
+    return tuple(enriched)
+
+
 def timeline_for_range(
     start_utc: datetime,
     end_utc: datetime,
@@ -598,6 +630,7 @@ def timeline_for_range(
     rows = attendance_mirror.rows_overlapping(context_start, end)
     if not rows:
         return ()
+    rows = _rows_with_employee_department_fallback(rows)
     if verified_through is None:
         raise RuntimeError("attendance mirror has no verified freshness")
 

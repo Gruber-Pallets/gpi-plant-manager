@@ -73,9 +73,7 @@ def _parse_config(raw: object) -> RolloutConfig:
         if not isinstance(digest, str) or not digest:
             raise ValueError("invalid live gate digest")
         checked_at = _parse_datetime(raw_gate.get("checked_at"))
-        activated_at = _parse_datetime(
-            raw_gate.get("activated_at"), optional=True
-        )
+        activated_at = _parse_datetime(raw_gate.get("activated_at"), optional=True)
         assert checked_at is not None
         live_gate = LiveGate(
             checked_at=checked_at,
@@ -144,9 +142,7 @@ def set_rollout_config(config: RolloutConfig, *, cur=None) -> None:
             raise ValueError("rollback_future_boundary_required")
     value = {
         "mode": config.mode,
-        "cutover_at": (
-            config.cutover_at.isoformat() if config.cutover_at is not None else None
-        ),
+        "cutover_at": (config.cutover_at.isoformat() if config.cutover_at is not None else None),
         "live_gate": None,
     }
     if config.live_gate is not None:
@@ -171,11 +167,7 @@ def _aware_utc(value: datetime | None) -> datetime:
 
 def _live_is_active(config: RolloutConfig, now_utc: datetime) -> bool:
     gate = config.live_gate
-    if (
-        gate is None
-        or gate.activated_at is None
-        or gate.activated_at.astimezone(UTC) > now_utc
-    ):
+    if gate is None or gate.activated_at is None or gate.activated_at.astimezone(UTC) > now_utc:
         return False
     if config.mode == "live":
         return True
@@ -207,16 +199,12 @@ def day_is_strict(day: date) -> bool:
     if config.mode == "shadow":
         assert config.live_gate is not None
         assert config.live_gate.activated_at is not None
-        activated_day = config.live_gate.activated_at.astimezone(
-            shift_config.SITE_TZ
-        ).date()
+        activated_day = config.live_gate.activated_at.astimezone(shift_config.SITE_TZ).date()
         return activated_day <= day < cutover_day
     return day >= cutover_day
 
 
-def match_state_for_day(
-    day: date, *, now_utc: datetime | None = None
-) -> MatchState:
+def match_state_for_day(day: date, *, now_utc: datetime | None = None) -> MatchState:
     """Resolve whether recomputation should use, wait for, or avoid strict matching."""
     if day in strict_days():
         return "strict"
@@ -258,9 +246,7 @@ def _match_state_from_config(
     return "pending"
 
 
-def match_state_for_day_cur(
-    day: date, *, cur, now_utc: datetime | None = None
-) -> MatchState:
+def match_state_for_day_cur(day: date, *, cur, now_utc: datetime | None = None) -> MatchState:
     """Resolve match state from rows locked by the caller's transaction."""
     cur.execute(
         "SELECT 1 FROM attendance_strict_days WHERE day = %s",
@@ -279,22 +265,37 @@ def match_state_for_day_cur(
         config = None
     return _match_state_from_config(
         day,
-        config=config
-        or RolloutConfig(mode="off", cutover_at=None, live_gate=None),
+        config=config or RolloutConfig(mode="off", cutover_at=None, live_gate=None),
         now_utc=now_utc,
     )
 
 
-def _normalized_department_name(department_name: str | None) -> str:
+def _clean_department_name(department_name: str | None) -> str | None:
     if not department_name:
-        return ""
-    return _NUMBERED_DEPARTMENT_PREFIX.sub("", department_name).strip().lower()
+        return None
+    cleaned = _NUMBERED_DEPARTMENT_PREFIX.sub("", department_name).strip()
+    return cleaned or None
+
+
+def _normalized_department_name(department_name: str | None) -> str:
+    return (_clean_department_name(department_name) or "").lower()
+
+
+def effective_department_name(
+    attendance_department_name: str | None,
+    employee_department_name: str | None,
+) -> str | None:
+    """Attendance department wins; employee department is fallback-only."""
+    return _clean_department_name(attendance_department_name) or _clean_department_name(
+        employee_department_name
+    )
 
 
 def default_department_requires_work_center(department_name: str | None) -> bool:
     """Default for a department that has not received an explicit choice."""
     return _normalized_department_name(department_name) not in {
         "maintenance",
+        "transportation",
         "supervisor",
     }
 
@@ -312,9 +313,7 @@ def department_requires_work_center(department_name: str | None) -> bool:
     return default_department_requires_work_center(department_name)
 
 
-def set_department_requirement(
-    department_name: str, required: bool, *, cur=None
-) -> None:
+def set_department_requirement(department_name: str, required: bool, *, cur=None) -> None:
     """Save an explicit administrator choice that bootstrap will not replace."""
     name = department_name.strip()
     if not name:
