@@ -12,8 +12,10 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime, UTC
 
+from . import attendance_location_policy
 from .shift_config import SITE_TZ
 
 _log = logging.getLogger(__name__)
@@ -187,6 +189,7 @@ def shape_rows(
     *,
     monitoring_started_at: datetime | None = None,
     locally_unmapped_attendance_ids: set[int] | None = None,
+    requires_work_center: Callable[[str | None], bool] = lambda _department: True,
 ) -> list[dict]:
     """Pure: cached rows + {odoo_id: {name, wage_type, active, excluded}} +
     resolved att_id set -> modal rows for ACTIVE HOURLY people, newest first.
@@ -215,6 +218,12 @@ def shape_rows(
             continue
         if not p.get("active") or p.get("excluded"):
             continue
+        effective_department = attendance_location_policy.effective_department_name(
+            r.get("department_name"),
+            p.get("department_name"),
+        )
+        if not requires_work_center(effective_department):
+            continue
         out.append({
             "attendance_id": att_id,
             "name": p.get("name") or r.get("employee_name") or "Unknown",
@@ -232,7 +241,7 @@ def current_rows() -> list[dict]:
     from . import db
     cached = _read_cache()
     prows = db.query(
-        "SELECT odoo_id, name, wage_type, active, excluded FROM people "
+        "SELECT odoo_id, name, wage_type, active, excluded, department_name FROM people "
         "WHERE odoo_id IS NOT NULL"
     )
     people_by_odoo_id = {int(r["odoo_id"]): r for r in prows}
@@ -246,4 +255,5 @@ def current_rows() -> list[dict]:
         resolved_ids(),
         monitoring_started_at=monitoring_started_at(),
         locally_unmapped_attendance_ids=locally_unmapped_attendance_ids(attendance_ids),
+        requires_work_center=attendance_location_policy.department_requires_work_center,
     )

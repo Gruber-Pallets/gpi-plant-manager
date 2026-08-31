@@ -7,15 +7,22 @@ from zira_dashboard import odoo_client
 
 def test_returns_shaped_rows_when_wc_field_configured(monkeypatch):
     monkeypatch.setattr(odoo_client, "_kiosk_wc_field", lambda: "x_kiosk_wc")
+    monkeypatch.setattr(
+        odoo_client,
+        "_kiosk_department_field",
+        lambda: "x_kiosk_department",
+    )
     captured = {}
 
     def fake_execute(model, method, *args, **kwargs):
         captured["model"] = model
         captured["method"] = method
         captured["domain"] = args[0]
+        captured["fields"] = kwargs["fields"]
         return [{
             "id": 55, "employee_id": [7, "Maria Lopez"],
             "check_in": "2026-06-02 11:58:00", "check_out": False,
+            "x_kiosk_department": [8, "00 Maintenance"],
         }]
 
     monkeypatch.setattr(odoo_client, "execute", fake_execute)
@@ -24,15 +31,18 @@ def test_returns_shaped_rows_when_wc_field_configured(monkeypatch):
     assert captured["model"] == "hr.attendance"
     assert captured["method"] == "search_read"
     assert ("x_kiosk_wc", "=", False) in captured["domain"]
+    assert "x_kiosk_department" in captured["fields"]
     assert rows == [{
         "att_id": 55, "employee_odoo_id": 7, "employee_name": "Maria Lopez",
         "check_in": rows[0]["check_in"], "check_out": None,
+        "department_name": "00 Maintenance",
     }]
     assert rows[0]["check_in"]  # ISO string, non-empty
 
 
 def test_returns_empty_when_wc_field_not_configured(monkeypatch):
     monkeypatch.setattr(odoo_client, "_kiosk_wc_field", lambda: None)
+    monkeypatch.setattr(odoo_client, "_kiosk_department_field", lambda: None)
     called = {"execute": False}
     monkeypatch.setattr(odoo_client, "execute",
                         lambda *a, **k: called.__setitem__("execute", True) or [])

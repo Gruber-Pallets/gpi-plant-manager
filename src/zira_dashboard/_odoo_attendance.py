@@ -617,7 +617,10 @@ def get_current_attendance(
 
 
 def fetch_attendances_missing_wc(
-    execute_fn: Callable[..., Any], since, wc_field: str | None
+    execute_fn: Callable[..., Any],
+    since,
+    wc_field: str | None,
+    department_field: str | None,
 ) -> list[dict]:
     """Return attendance since ``since`` without a kiosk work-center tag."""
     if not wc_field:
@@ -625,17 +628,21 @@ def fetch_attendances_missing_wc(
             "ODOO_KIOSK_WC_FIELD not configured; missing-work-center alert disabled"
         )
         return []
+    fields = ["id", "employee_id", "check_in", "check_out"]
+    if department_field:
+        fields.append(department_field)
     rows = execute_fn(
         "hr.attendance",
         "search_read",
         [("check_in", ">=", to_odoo_dt(since)), (wc_field, "=", False)],
-        fields=["id", "employee_id", "check_in", "check_out"],
+        fields=fields,
         order="check_in desc",
         limit=500,
     )
     out: list[dict] = []
     for row in rows:
         employee = row.get("employee_id")
+        department = row.get(department_field) if department_field else None
         out.append(
             {
                 "att_id": row["id"],
@@ -647,6 +654,11 @@ def fetch_attendances_missing_wc(
                 ),
                 "check_in": odoo_dt_to_iso(row.get("check_in")),
                 "check_out": odoo_dt_to_iso(row.get("check_out")),
+                "department_name": (
+                    department[1]
+                    if isinstance(department, (list, tuple)) and len(department) > 1
+                    else None
+                ),
             }
         )
     return out

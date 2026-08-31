@@ -498,7 +498,10 @@ def get_current_attendance(employee_odoo_id: int) -> dict | None:
 
 def fetch_attendances_missing_wc(since) -> list[dict]:
     return _odoo_attendance.fetch_attendances_missing_wc(
-        execute, since, _kiosk_wc_field()
+        execute,
+        since,
+        _kiosk_wc_field(),
+        _kiosk_department_field(),
     )
 
 

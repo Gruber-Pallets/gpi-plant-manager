@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from zira_dashboard import missing_wc
+from zira_dashboard import attendance_location_policy, missing_wc
 
 
 # ---- pure shaping (no DB) ----
@@ -69,6 +69,49 @@ def test_shape_ignores_pre_rollout_and_known_unmapped_kiosk_attendances():
     )
 
     assert [row["attendance_id"] for row in rows] == [3]
+
+
+def test_shape_suppresses_exempt_attendance_and_employee_departments():
+    people = {
+        7: {
+            "name": "Trent",
+            "wage_type": "hourly",
+            "active": True,
+            "excluded": False,
+            "department_name": "Supervisor",
+        },
+        8: {
+            "name": "Gerald",
+            "wage_type": "hourly",
+            "active": True,
+            "excluded": False,
+            "department_name": "Transportation",
+        },
+        9: {
+            "name": "Producer",
+            "wage_type": "hourly",
+            "active": True,
+            "excluded": False,
+            "department_name": "Recycled",
+        },
+    }
+    cached = [
+        {"att_id": 1, "employee_odoo_id": 7, "department_name": "Maintenance"},
+        {"att_id": 2, "employee_odoo_id": 7, "department_name": "Supervisor"},
+        {"att_id": 3, "employee_odoo_id": 8, "department_name": None},
+        {"att_id": 4, "employee_odoo_id": 9, "department_name": None},
+    ]
+
+    rows = missing_wc.shape_rows(
+        cached,
+        people,
+        resolved=set(),
+        requires_work_center=(
+            attendance_location_policy.default_department_requires_work_center
+        ),
+    )
+
+    assert [row["attendance_id"] for row in rows] == [4]
 
 
 def test_monitoring_started_at_records_a_one_time_rollout_boundary(monkeypatch):
