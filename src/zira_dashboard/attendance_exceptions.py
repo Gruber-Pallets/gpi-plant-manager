@@ -25,6 +25,7 @@ _SOURCE_STALE_AFTER = timedelta(seconds=90)
 _FIRST_LOCATION_GRACE = timedelta(minutes=5)
 _TIMELINE_SOURCE = "Attendance Timeline"
 _PRODUCTION_SOURCE = "Strict Production"
+_DATABASE_URL_MISSING = "DATABASE_URL is not set. Postgres connection cannot be initialized."
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class AttendanceException:
     priority: ExceptionPriority
     comparison_only: bool
     target_odoo_department_id: int | None
+    end_is_open: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,11 +77,48 @@ def _plant_day_bounds(day: date) -> tuple[datetime, datetime]:
     return start.astimezone(UTC), end.astimezone(UTC)
 
 
-def _safe_rollout_config() -> attendance_location_policy.RolloutConfig:
+def _is_database_less(exc: Exception) -> bool:
+    return str(exc) == _DATABASE_URL_MISSING
+
+
+def _policy_snapshot_for_day(
+    day: date,
+    *,
+    now_utc: datetime,
+) -> tuple[
+    attendance_location_policy.RolloutConfig,
+    attendance_location_policy.MatchState,
+    str | None,
+]:
+    """Read policy inputs once and derive one immutable day decision."""
+    policy_error: str | None = None
     try:
-        return attendance_location_policy.get_rollout_config()
-    except Exception:  # noqa: BLE001 - a missing local store must leave rollout off
-        return attendance_location_policy.RolloutConfig("off", None, None)
+        config = attendance_location_policy.get_rollout_config()
+    except Exception as exc:  # noqa: BLE001 - uncertainty must stay actionable
+        config = attendance_location_policy.RolloutConfig("off", None, None)
+        if not _is_database_less(exc):
+            policy_error = str(exc) or "attendance rollout config is unavailable"
+
+    try:
+        strict_day = day in attendance_location_policy.strict_days()
+    except Exception as exc:  # noqa: BLE001 - uncertainty must stay actionable
+        strict_day = False
+        if not _is_database_less(exc) and policy_error is None:
+            policy_error = str(exc) or "attendance strict-day marker is unavailable"
+
+    if policy_error is not None:
+        return config, "pending", policy_error
+    if strict_day:
+        return config, "strict", None
+    try:
+        match_state = attendance_location_policy._match_state_from_config(  # noqa: SLF001
+            day,
+            config=config,
+            now_utc=now_utc,
+        )
+    except Exception as exc:  # noqa: BLE001 - uncertainty must stay actionable
+        return config, "pending", str(exc) or "attendance rollout state is unavailable"
+    return config, match_state, None
 
 
 def _raw_by_attendance_id(rows: Sequence[Mapping]) -> dict[int, Mapping]:
@@ -115,12 +154,20 @@ def _issue_for_span(
     raw_by_id: Mapping[int, Mapping],
     reason: str,
     priority: ExceptionPriority,
+    now_utc: datetime,
 ) -> AttendanceException:
     labels, work_center_ids = _raw_identity(span.attendance_ids, raw_by_id)
     if span.odoo_work_center_name and span.odoo_work_center_name not in labels:
         labels = tuple(sorted((*labels, span.odoo_work_center_name)))
     if span.odoo_work_center_id is not None and span.odoo_work_center_id not in work_center_ids:
         work_center_ids = tuple(sorted((*work_center_ids, span.odoo_work_center_id)))
+    end_is_open = bool(
+        span.end_utc >= now_utc
+        and any(
+            (row := raw_by_id.get(attendance_id)) is not None and row.get("check_out_utc") is None
+            for attendance_id in span.attendance_ids
+        )
+    )
     return AttendanceException(
         kind=kind,
         item_key=inbox_keys.attendance_issue_key(
@@ -141,6 +188,7 @@ def _issue_for_span(
         priority=priority,
         comparison_only=False,
         target_odoo_department_id=None,
+        end_is_open=end_is_open,
     )
 
 
@@ -204,6 +252,7 @@ def _missing_location_issues(
                     else "first_required_work_center_missing"
                 ),
                 priority="urgent" if urgent else "warn",
+                now_utc=now_utc,
             )
             issues.append(issue)
     return issues
@@ -225,6 +274,7 @@ def _timeline_issues(
                     raw_by_id=raw_by_id,
                     reason="odoo_work_center_is_not_mapped",
                     priority="urgent",
+                    now_utc=now_utc,
                 )
             )
         elif span.status == "conflicting_location":
@@ -235,6 +285,7 @@ def _timeline_issues(
                     raw_by_id=raw_by_id,
                     reason="different_work_centers_overlap",
                     priority="urgent",
+                    now_utc=now_utc,
                 )
             )
         elif span.status == "valid" and span.odoo_work_center_id is not None:
@@ -255,6 +306,7 @@ def _timeline_issues(
                     raw_by_id=raw_by_id,
                     reason="same_work_center_duplicate_overlap",
                     priority="muted",
+                    now_utc=now_utc,
                 )
             )
     return issues
@@ -318,6 +370,7 @@ def _repair_issues(rows: Sequence[Mapping]) -> list[AttendanceException]:
                 priority="urgent",
                 comparison_only=False,
                 target_odoo_department_id=int(row["target_odoo_department_id"]),
+                end_is_open=end is None,
             )
         )
     return issues
@@ -350,6 +403,7 @@ def _stale_issue(
         priority="urgent",
         comparison_only=False,
         target_odoo_department_id=None,
+        end_is_open=True,
     )
 
 
@@ -365,6 +419,18 @@ def _production_issues(
     if match_state == "legacy":
         if config.mode != "shadow":
             return "legacy", [], None
+        try:
+            runs = wc_attributions.shadow_unassigned_runs_for_day(
+                day, production_client, now_utc=now_utc
+            )
+        except Exception as exc:  # noqa: BLE001 - failed comparison stays visible
+            reason = str(exc) or "strict shadow production source is unavailable"
+            return (
+                "shadow",
+                [_production_unavailable_issue(day, now_utc, reason, comparison_only=True)],
+                reason,
+            )
+        return "shadow", _run_issues(runs, spans=spans, comparison=True), None
     if match_state == "pending":
         error = f"strict production cutover is pending for {day.isoformat()}"
         return (
@@ -373,10 +439,20 @@ def _production_issues(
             error,
         )
 
-    comparison = match_state == "legacy"
-    production_mode: ProductionMode = "shadow" if comparison else "strict"
-    runs = wc_attributions.shadow_unassigned_runs_for_day(day, production_client, now_utc=now_utc)
-    return production_mode, _run_issues(runs, spans=spans, comparison=comparison), None
+    # Once the day has a strict marker it remains authoritative even if the
+    # rollout setting is later moved back to shadow or off.
+    try:
+        runs = wc_attributions.shadow_unassigned_runs_for_day(
+            day, production_client, now_utc=now_utc
+        )
+    except Exception as exc:  # noqa: BLE001 - any strict read failure is actionable
+        reason = str(exc) or "strict production source is unavailable"
+        return (
+            "strict",
+            [_production_unavailable_issue(day, now_utc, reason, comparison_only=False)],
+            reason,
+        )
+    return "strict", _run_issues(runs, spans=spans, comparison=False), None
 
 
 def _run_issues(
@@ -420,6 +496,7 @@ def _run_issues(
                 priority="urgent",
                 comparison_only=comparison,
                 target_odoo_department_id=None,
+                end_is_open=False,
             )
         )
     return issues
@@ -450,6 +527,7 @@ def _production_unavailable_issue(
         priority="urgent",
         comparison_only=comparison_only,
         target_odoo_department_id=None,
+        end_is_open=True,
     )
 
 
@@ -468,28 +546,6 @@ def _production_mode_for(
     if match_state == "pending":
         return "pending"
     return "shadow" if config.mode == "shadow" else "legacy"
-
-
-def _production_context_for_day(
-    day: date,
-    *,
-    now_utc: datetime,
-    config: attendance_location_policy.RolloutConfig,
-) -> tuple[attendance_location_policy.MatchState, ProductionMode, str | None]:
-    """Freeze rollout authority once for the complete snapshot attempt."""
-    policy_error: str | None = None
-    try:
-        match_state = attendance_location_policy.match_state_for_day(
-            day,
-            now_utc=now_utc,
-        )
-    except Exception as exc:  # noqa: BLE001 - active uncertainty cannot select legacy
-        if config.mode == "off":
-            match_state = "legacy"
-        else:
-            match_state = "pending"
-            policy_error = str(exc) or "attendance rollout state is unavailable"
-    return match_state, _production_mode_for(config, match_state), policy_error
 
 
 def _strict_source_problem(
@@ -515,12 +571,8 @@ def build_snapshot(
     if not isinstance(day, date) or isinstance(day, datetime):
         raise TypeError("day must be a date")
     now = _aware_utc(now_utc, "now_utc")
-    config = _safe_rollout_config()
-    match_state, production_mode, policy_error = _production_context_for_day(
-        day,
-        now_utc=now,
-        config=config,
-    )
+    config, match_state, policy_error = _policy_snapshot_for_day(day, now_utc=now)
+    production_mode = _production_mode_for(config, match_state)
     if config.mode == "off" and match_state == "legacy":
         return AttendanceExceptionSnapshot(day, "off", "legacy", False, False, False, (), ())
 

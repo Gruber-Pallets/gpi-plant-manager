@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Keep strict exceptions safe when settings are unclear
+
+- **Plant Manager now keeps strict Odoo production fixes protected if a setting cannot load.** Closed time changes also refresh in the Exception Inbox.
+
 ### Keep Odoo exception updates live
 
 - **The Exception Inbox now updates an open item when its urgency or production amount changes.** Strict Odoo days also stay strict if the source is late or the rollout setting changes.

@@ -279,14 +279,11 @@ def _attendance_snapshot(today: date, source_errors: list[dict]):
         snapshot = attendance_exceptions.build_snapshot(today, now_utc=now_utc)
     except Exception as exc:  # noqa: BLE001 - rollout lookup must not hide legacy inbox
         _log.warning("exception inbox attendance source failed: %s", exc, exc_info=True)
-        config = attendance_exceptions._safe_rollout_config()
-        _match_state, production_mode, policy_error = (
-            attendance_exceptions._production_context_for_day(
-                today,
-                now_utc=now_utc,
-                config=config,
-            )
+        config, _match_state, policy_error = attendance_exceptions._policy_snapshot_for_day(
+            today,
+            now_utc=now_utc,
         )
+        production_mode = attendance_exceptions._production_mode_for(config, _match_state)
         issues = ()
         attendance_sources = ["Attendance Timeline"]
         if production_mode != "legacy":
@@ -350,8 +347,10 @@ def _attendance_row_key(issue, row: dict) -> str:
             "reason",
             "comparison_only",
             "target_odoo_department_id",
+            "end_is_open",
         )
     }
+    revision["closed_end_utc"] = None if row.get("end_is_open") else row.get("end_utc")
     encoded = json.dumps(revision, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
     return f"{issue.item_key}:rev:{digest}"
@@ -360,6 +359,7 @@ def _attendance_row_key(issue, row: dict) -> str:
 def _attendance_issue_row(issue) -> dict:
     start_iso = issue.start_utc.isoformat()
     end_iso = issue.end_utc.isoformat() if issue.end_utc is not None else None
+    end_is_open = bool(issue.end_is_open)
     raw_labels = list(issue.raw_work_center_labels)
     affected_workers = [
         {"employee_odoo_id": employee_id, "employee_name": name}
@@ -381,7 +381,7 @@ def _attendance_issue_row(issue) -> dict:
     if issue.app_work_center_name:
         detail_parts.append(issue.app_work_center_name)
     if start_iso:
-        detail_parts.append(f"{start_iso} to {end_iso or 'open'}")
+        detail_parts.append(f"{start_iso} to {'open' if end_is_open else end_iso or 'open'}")
     if raw_labels and issue.kind != "attendance_unmapped_location":
         detail_parts.append(", ".join(raw_labels))
     if issue.sample_count is not None:
@@ -403,6 +403,7 @@ def _attendance_issue_row(issue) -> dict:
         "attendance_ids": list(issue.attendance_ids),
         "start_utc": start_iso,
         "end_utc": end_iso,
+        "end_is_open": end_is_open,
         "raw_work_center_labels": raw_labels,
         "odoo_work_center_ids": list(issue.odoo_work_center_ids),
         "affected_workers": affected_workers,
