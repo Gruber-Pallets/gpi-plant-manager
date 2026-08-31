@@ -16,6 +16,7 @@ already leans on and that the staffing tests monkeypatch.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -33,6 +34,9 @@ class StaffingPersonLocation:
     status: LocationStatus
     since_utc: datetime
     source_fresh_at: datetime | None
+    source_stale: bool = False
+    profile_person_name: str | None = None
+    identity_disambiguator: str | None = None
 
     @property
     def working_elsewhere(self) -> bool:
@@ -70,11 +74,14 @@ def build_live_locations(
     *,
     as_of_utc: datetime,
     planned_employee_ids: Mapping[str, int] | None = None,
+    current_attendance_ids: frozenset[int] = frozenset(),
+    known_local_people_by_id: Mapping[int, str] | None = None,
 ) -> tuple[StaffingPersonLocation, ...]:
     """Overlay one current projected location without moving planned seats."""
     if as_of_utc.utcoffset() is None:
         raise ValueError("as_of_utc must be timezone-aware")
     planned_employee_ids = planned_employee_ids or {}
+    known_local_people_by_id = known_local_people_by_id or {}
     planned_by_id: dict[int, str] = {}
     planned_name_by_id: dict[int, str] = {}
     planned_order: list[int] = []
@@ -88,7 +95,12 @@ def build_live_locations(
 
     current_by_id: dict[int, LocationSpan] = {}
     for span in spans:
-        if not span.start_utc <= as_of_utc < span.end_utc:
+        contains_as_of = span.start_utc <= as_of_utc < span.end_utc
+        verified_open_at_cap = bool(
+            span.start_utc <= as_of_utc == span.end_utc
+            and current_attendance_ids.intersection(span.attendance_ids)
+        )
+        if not contains_as_of and not verified_open_at_cap:
             continue
         previous = current_by_id.get(span.employee_odoo_id)
         if previous is None or (span.start_utc, span.end_utc) > (
@@ -108,6 +120,20 @@ def build_live_locations(
             employee_id,
         ),
     )
+    display_names = {
+        employee_id: planned_name_by_id.get(
+            employee_id,
+            known_local_people_by_id.get(
+                employee_id, current_by_id[employee_id].employee_name
+            ),
+        )
+        for employee_id in employee_ids
+        if employee_id in current_by_id
+    }
+    name_counts = Counter(display_names.values())
+    planned_names = {
+        name for names in planned_by_wc.values() for name in names
+    }
     result = []
     for employee_id in employee_ids:
         span = current_by_id.get(employee_id)
@@ -116,13 +142,27 @@ def build_live_locations(
         result.append(
             StaffingPersonLocation(
                 employee_odoo_id=employee_id,
-                person_name=planned_name_by_id.get(employee_id, span.employee_name),
+                person_name=display_names[employee_id],
                 planned_work_center=planned_by_id.get(employee_id),
                 live_work_center=span.app_work_center_name,
                 raw_odoo_work_center=span.odoo_work_center_name,
                 status=span.status,
                 since_utc=span.start_utc,
                 source_fresh_at=as_of_utc,
+                profile_person_name=(
+                    planned_name_by_id.get(employee_id)
+                    or known_local_people_by_id.get(employee_id)
+                ),
+                identity_disambiguator=(
+                    f"Odoo employee #{employee_id}"
+                    if employee_id not in planned_by_id
+                    and employee_id not in known_local_people_by_id
+                    and (
+                        name_counts[display_names[employee_id]] > 1
+                        or display_names[employee_id] in planned_names
+                    )
+                    else None
+                ),
             )
         )
     return tuple(result)

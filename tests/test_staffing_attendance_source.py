@@ -184,3 +184,35 @@ def test_stale_owned_snapshot_is_frozen_for_direct_staffing_reader(monkeypatch):
     assert source_calls == [(d, policy)]
     assert pkg["by_id"]["1"]["status"] == "on_time"
     assert "2" not in pkg["by_id"]
+
+
+def test_frozen_staffing_snapshot_does_not_apply_a_later_local_clock_in(monkeypatch):
+    day = date(2026, 6, 1)
+    cap = datetime(2026, 6, 1, 18, 0, tzinfo=UTC)
+    later_local = cap + timedelta(seconds=1)
+    source = SimpleNamespace(
+        payload={},
+        refreshed_at=cap,
+        mirror_owned=True,
+        available=True,
+        frozen=True,
+    )
+    monkeypatch.setattr(
+        attendance_state,
+        "latest_punches_bulk",
+        lambda _ids: {
+            1: {
+                "action": "clock_in",
+                "wc_name": None,
+                "occurred_at": later_local,
+                "synced_to_odoo": False,
+                "synced_at": None,
+            }
+        },
+    )
+
+    punches = staffing_attendance._attendance_with_fallback(
+        day, ["1"], source=source
+    )
+
+    assert punches == {}

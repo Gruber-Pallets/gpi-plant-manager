@@ -86,9 +86,11 @@
       <h3>{{ staffing_live_label }} · Not scheduled <span class="count">{{ live_unscheduled_locations|length }}</span></h3>
       <ul>
         {% for live in live_unscheduled_locations %}
-          <li data-name="{{ live.person_name }}">
-            <a href="/staffing/people/{{ live.person_name|urlencode }}" class="person-card-link">{{ live.person_name }}</a>
+          <li data-name="{{ live.person_name }}" data-odoo-employee-id="{{ live.employee_odoo_id }}">
+            {% if live.profile_person_name %}<a href="/staffing/people/{{ live.profile_person_name|urlencode }}" class="person-card-link">{{ live.person_name }}</a>{% else %}<span class="live-person-name">{{ live.person_name }}</span>{% endif %}
+            {% if live.identity_disambiguator %}<span class="live-identity-note">{{ live.identity_disambiguator }}</span>{% endif %}
             <span class="live-location-badge status-{{ live.status }}">{% if live.status == 'unmapped_location' %}{{ live.raw_odoo_work_center or 'Unknown Odoo location' }} · Odoo only — mapping needed{% else %}{{ live.display_text }}{% endif %}</span>
+            {% if live.source_stale %}<span class="live-source-stale">Source stale</span>{% endif %}
           </li>
         {% endfor %}
       </ul>
@@ -381,11 +383,12 @@
                   {% for planned in row.assigned %}
                     {% set live = live_locations_by_employee_id.get(planned.employee_odoo_id) %}
                     {% if live %}
-                      <span class="planned-live-person" data-person="{{ planned.name }}">
+                      <span class="planned-live-person" data-person="{{ planned.name }}" data-odoo-employee-id="{{ live.employee_odoo_id }}">
                         <span class="planned-live-name">{{ planned.name }}</span>
                         <span class="live-location-badge status-{{ live.status }}{% if live.working_elsewhere %} working-elsewhere{% endif %}">
                           {% if live.working_elsewhere %}Working elsewhere · {% endif %}{% if live.status == 'unmapped_location' %}{{ live.raw_odoo_work_center or 'Unknown Odoo location' }} · Odoo only — mapping needed{% else %}{{ live.display_text }}{% endif %}
                         </span>
+                        {% if live.source_stale %}<span class="live-source-stale">Source stale</span>{% endif %}
                       </span>
                     {% endif %}
                   {% endfor %}

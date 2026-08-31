@@ -713,6 +713,12 @@
   .live-location-badge.status-pending_first_location,
   .live-location-badge.status-exempt_no_location { border-style: dashed; color: var(--muted); }
   .live-unscheduled li { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+  .live-identity-note { color: var(--muted); font-size: 0.68rem; }
+  .live-source-stale {
+    border: 1px solid var(--warn); border-radius: 999px;
+    color: var(--warn); background: var(--warn-dim);
+    padding: 0.06rem 0.35rem; font-size: 0.64rem; font-weight: 700;
+  }
 
   /* Per-WC notes column */
   .wc-note-cell textarea {

@@ -117,6 +117,8 @@ def _attendance_with_fallback(day, ids, *, policy=None, source=None):
     # the same reconciliation rule that keeps the kiosk from flashing the
     # wrong punch action just after a tap.
     try:
+        if getattr(source, "frozen", False):
+            return punches
         for emp_id, latest in attendance_state.latest_punches_bulk(wanted).items():
             if not attendance_state.trust_local(latest, refreshed_at):
                 continue

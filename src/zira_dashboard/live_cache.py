@@ -42,26 +42,32 @@ class AttendanceSourceSnapshot:
     available: bool
     error: str | None = None
     stale: bool = False
+    frozen: bool = False
 
 
-def attendance_read_policy(*, now_utc: datetime | None = None) -> AttendanceReadPolicy:
-    """Freeze the rollout and mirror-health decision for one source read."""
+def _frozen_now(now_utc: datetime | None) -> datetime:
     frozen_now = now_utc or datetime.now(UTC)
     if frozen_now.utcoffset() is None:
         raise ValueError("now_utc must be timezone-aware")
-    frozen_now = frozen_now.astimezone(UTC)
-    try:
-        config = attendance_location_policy.get_rollout_config()
-    except Exception as exc:  # Existing rollback path when settings cannot be read.
-        return AttendanceReadPolicy(False, True, None, str(exc), "off")
-    if config.mode == "off":
+    return frozen_now.astimezone(UTC)
+
+
+def attendance_read_policy_from_health(
+    mode: str,
+    health: attendance_mirror.MirrorHealth | None,
+    *,
+    now_utc: datetime | None = None,
+) -> AttendanceReadPolicy:
+    """Build one read policy from already-frozen rollout and mirror health."""
+    frozen_now = _frozen_now(now_utc)
+    if mode == "off":
         return AttendanceReadPolicy(False, True, None, mode="off")
-    try:
-        health = attendance_mirror.health_snapshot()
-    except Exception as exc:  # Saved shadow/live must never fall through to legacy.
-        return AttendanceReadPolicy(True, False, None, str(exc), config.mode)
+    if health is None:
+        return AttendanceReadPolicy(
+            True, False, None, "attendance mirror health is unavailable", mode
+        )
     if health.baseline_completed_at is None:
-        return AttendanceReadPolicy(False, True, None, mode=config.mode)
+        return AttendanceReadPolicy(False, True, None, mode=mode)
     refreshed_at = health.last_incremental_completed_at
     if refreshed_at is None:
         return AttendanceReadPolicy(
@@ -69,15 +75,35 @@ def attendance_read_policy(*, now_utc: datetime | None = None) -> AttendanceRead
             False,
             None,
             health.last_error or "attendance mirror has no verified refresh",
-            config.mode,
+            mode,
         )
     return AttendanceReadPolicy(
         True,
         True,
         refreshed_at,
         health.last_error,
-        config.mode,
+        mode,
         frozen_now - refreshed_at.astimezone(UTC) > STALE_THRESHOLD,
+    )
+
+
+def attendance_read_policy(*, now_utc: datetime | None = None) -> AttendanceReadPolicy:
+    """Freeze the rollout and mirror-health decision for one source read."""
+    frozen_now = _frozen_now(now_utc)
+    try:
+        config = attendance_location_policy.get_rollout_config()
+    except Exception as exc:  # Existing rollback path when settings cannot be read.
+        return AttendanceReadPolicy(False, True, None, str(exc), "off")
+    if config.mode == "off":
+        return attendance_read_policy_from_health(
+            "off", None, now_utc=frozen_now
+        )
+    try:
+        health = attendance_mirror.health_snapshot()
+    except Exception as exc:  # Saved shadow/live must never fall through to legacy.
+        return AttendanceReadPolicy(True, False, None, str(exc), config.mode)
+    return attendance_read_policy_from_health(
+        config.mode, health, now_utc=frozen_now
     )
 
 
