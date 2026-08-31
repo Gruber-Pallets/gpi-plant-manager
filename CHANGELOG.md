@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Keep Odoo source problems visible
+
+- **The Exception Inbox now keeps an Odoo source problem visible even when the live copy is not ready.** A new work-time correction also cannot be closed by an older background check.
+
 ### Plan safe fixes for work times
 
 - **Plant Manager can now plan an exact Odoo time fix without covering lunch or changing time outside the chosen window.** The plan can split a record into before, fixed, and after pieces.
