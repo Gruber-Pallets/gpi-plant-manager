@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Keep new Odoo work-area checks off until they are ready
+
+- **Plant Manager now waits for a full, safe production match before it turns on the new Odoo work-area checks.** Normal clock-ins will no longer fill the Exception Inbox with early warnings.
+
 ### Finished work stays matched with Odoo
 
 - **The work helpers now check off the matching 2s improvement after a change is finished, checked, and saved.** They stop and ask for help if they cannot find or confirm one clear match.
