@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Odoo completion rule build plan
+
+- **A step-by-step build plan is ready so the work helpers can check off the matching 2s improvement after finished work.** They will stop and ask for help when there is not one clear match. Nothing in the app has changed yet.
+
 ### Keep finished work and Odoo together
 
 - **A plan is ready to mark the matching 2s improvement complete after the work is finished, checked, and saved.** If there is not one clear match, it will stop and ask for help. Nothing in the app has changed yet.
