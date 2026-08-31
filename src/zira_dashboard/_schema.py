@@ -292,11 +292,39 @@ CREATE TABLE IF NOT EXISTS attendance_department_repairs (
   odoo_attendance_id BIGINT PRIMARY KEY,
   expected_write_date TIMESTAMPTZ NOT NULL,
   target_odoo_department_id BIGINT NOT NULL,
+  expected_odoo_work_center_id BIGINT NOT NULL,
+  target_projected_at TIMESTAMPTZ NOT NULL,
+  successor_expected_write_date TIMESTAMPTZ,
+  successor_target_odoo_department_id BIGINT,
+  successor_expected_odoo_work_center_id BIGINT,
+  successor_target_projected_at TIMESTAMPTZ,
   status TEXT NOT NULL CHECK (status IN ('pending', 'applying', 'complete', 'failed')),
   attempt_count INTEGER NOT NULL DEFAULT 0,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_error TEXT
 );
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS expected_odoo_work_center_id BIGINT;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS target_projected_at TIMESTAMPTZ;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS successor_expected_write_date TIMESTAMPTZ;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS successor_target_odoo_department_id BIGINT;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS successor_expected_odoo_work_center_id BIGINT;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS successor_target_projected_at TIMESTAMPTZ;
+UPDATE attendance_department_repairs r
+   SET expected_odoo_work_center_id = m.odoo_work_center_id
+  FROM odoo_attendance_mirror m
+ WHERE r.expected_odoo_work_center_id IS NULL
+   AND m.odoo_attendance_id = r.odoo_attendance_id;
+UPDATE attendance_department_repairs
+   SET target_projected_at = updated_at
+ WHERE target_projected_at IS NULL;
+ALTER TABLE attendance_department_repairs
+  ALTER COLUMN target_projected_at SET NOT NULL;
 
 -- App-specific (not mirrored anywhere) ---------------------------------
 

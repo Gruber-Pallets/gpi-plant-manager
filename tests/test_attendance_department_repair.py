@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 import os
+from threading import Barrier
 
 import pytest
 
@@ -71,9 +74,13 @@ class FakeBackend:
         self.finishes = []
         self.failures = []
         self.claim_calls = []
+        self.renewals = []
+        self.renewed = True
+        self.observations = ()
 
-    def enqueue(self, candidates, *, now_utc):
+    def enqueue(self, candidates, observations=(), *, now_utc):
         self.candidates = tuple(candidates)
+        self.observations = tuple(observations)
         return len(self.candidates)
 
     def claim_next(self, *, now_utc):
@@ -84,6 +91,10 @@ class FakeBackend:
     def refresh_expected(self, claim, row, *, now_utc):
         self.refreshes.append((claim, row, now_utc))
         return True
+
+    def renew_claim(self, claim, *, now_utc):
+        self.renewals.append((claim, now_utc))
+        return self.renewed
 
     def discard(self, claim, *, now_utc, reason):
         self.discards.append((claim, now_utc, reason))
@@ -99,9 +110,16 @@ class FakeBackend:
 
 
 class FakeFacade:
-    def __init__(self, reads, *, write_error: Exception | None = None):
+    def __init__(
+        self,
+        reads,
+        *,
+        write_error: Exception | None = None,
+        target_department_id: int | None = 8,
+    ):
         self.reads = list(reads)
         self.write_error = write_error
+        self.target_department_id = target_department_id
         self.events = []
 
     def fetch_attendance_rows_by_ids(self, ids):
@@ -115,6 +133,9 @@ class FakeFacade:
         self.events.append(("write", attendance_id, department_id))
         if self.write_error is not None:
             raise self.write_error
+
+    def target_department_id_for_app_work_center(self, _app_work_center_name):
+        return self.target_department_id
 
 
 @pytest.fixture
@@ -146,6 +167,13 @@ def test_enqueue_keeps_one_valid_candidate_per_attendance_and_expected_version(
 ):
     backend = FakeBackend()
     monkeypatch.setattr(repair, "_backend", backend)
+    monkeypatch.setattr(repair, "_facade", FakeFacade(()))
+    real_now_utc = repair._now_utc
+    monkeypatch.setattr(
+        repair,
+        "_now_utc",
+        lambda value: NOW if value is None else real_now_utc(value),
+    )
     candidate = _span()
 
     count = repair.enqueue_from_spans(
@@ -164,6 +192,7 @@ def test_enqueue_keeps_one_valid_candidate_per_attendance_and_expected_version(
             expected_write_date=VERSION,
             target_department_id=8,
             expected_work_center_id=72,
+            target_projected_at=NOW,
         ),
     )
 
@@ -171,6 +200,7 @@ def test_enqueue_keeps_one_valid_candidate_per_attendance_and_expected_version(
 def test_enqueue_drops_ambiguous_candidates_instead_of_guessing(monkeypatch):
     backend = FakeBackend()
     monkeypatch.setattr(repair, "_backend", backend)
+    monkeypatch.setattr(repair, "_facade", FakeFacade(()))
 
     count = repair.enqueue_from_spans(
         (
@@ -248,10 +278,17 @@ def test_already_correct_row_is_verified_and_mirrored_without_write(installed):
     assert backend.finishes == [(_claim(), current, NOW)]
 
 
-def test_success_writes_only_department_then_rereads_and_mirrors(installed):
+def test_success_writes_only_department_then_rereads_and_mirrors(installed, monkeypatch):
     before = _row()
     verified = _row(department_id=8, write_date=NEW_VERSION)
     backend, facade = installed(claim=_claim(), reads=([before], [verified]))
+    write_time = NOW + timedelta(seconds=30)
+    real_now_utc = repair._now_utc
+    monkeypatch.setattr(
+        repair,
+        "_now_utc",
+        lambda value: write_time if value is None else real_now_utc(value),
+    )
 
     result = repair.process_next(now_utc=NOW)
 
@@ -261,7 +298,35 @@ def test_success_writes_only_department_then_rereads_and_mirrors(installed):
         ("write", 901, 8),
         ("read", (901,)),
     ]
+    assert backend.renewals == [(_claim(), write_time)]
     assert backend.finishes == [(_claim(), verified, NOW)]
+
+
+def test_lost_claim_is_renewed_and_fenced_before_the_odoo_write(installed):
+    backend, facade = installed(claim=_claim(), reads=([_row()],))
+    backend.renewed = False
+
+    result = repair.process_next(now_utc=NOW)
+
+    assert result is None
+    assert [renewal[0] for renewal in backend.renewals] == [_claim()]
+    assert facade.events == [("read", (901,))]
+
+
+def test_over_budget_recovered_claim_can_fail_but_cannot_write(installed):
+    claim = _claim(attempt_count=repair.MAX_ATTEMPTS + 1)
+    backend, facade = installed(claim=claim, reads=([_row()],))
+
+    result = repair.process_next(now_utc=NOW)
+
+    assert result == repair.RepairResult(
+        901,
+        "failed",
+        repair.MAX_ATTEMPTS + 1,
+        "Odoo department repair exceeded its maximum attempts",
+    )
+    assert facade.events == [("read", (901,))]
+    assert backend.renewals == []
 
 
 def test_timeout_is_adopted_only_after_exact_reread(installed):
@@ -437,6 +502,7 @@ def test_postgres_queue_deduplicates_expected_version_and_reopens_for_new_versio
             )
             == 1
         )
+        assert repair.enqueue_from_spans((_span(),)) == 0
         rows = db.query(
             "SELECT expected_write_date, target_odoo_department_id, status, attempt_count "
             "FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
@@ -486,7 +552,13 @@ def test_postgres_worker_verifies_and_upserts_the_repaired_row(monkeypatch):
         monkeypatch.setattr(repair, "_backend", repair._PostgresBackend())
         monkeypatch.setattr(repair, "_facade", FakeFacade(([before], [verified])))
         monkeypatch.setattr(repair, "_live_enabled", lambda *, now_utc: True)
-        assert repair.enqueue_from_spans((span,)) == 1
+        assert (
+            repair._enqueue_projected_spans(
+                (span,),
+                projected_at_utc=NOW + timedelta(seconds=1),
+            )
+            == 1
+        )
 
         result = repair.process_next(now_utc=NOW)
 
@@ -563,7 +635,13 @@ def test_postgres_worker_stops_after_three_failed_verifications_and_is_visible(
         monkeypatch.setattr(repair, "_backend", repair._PostgresBackend())
         monkeypatch.setattr(repair, "_facade", facade)
         monkeypatch.setattr(repair, "_live_enabled", lambda *, now_utc: True)
-        assert repair.enqueue_from_spans((span,)) == 1
+        assert (
+            repair._enqueue_projected_spans(
+                (span,),
+                projected_at_utc=NOW + timedelta(seconds=1),
+            )
+            == 1
+        )
 
         results = tuple(
             repair.process_next(now_utc=NOW + timedelta(seconds=index)) for index in range(3)
@@ -590,6 +668,950 @@ def test_postgres_worker_stops_after_three_failed_verifications_and_is_visible(
             NOW + timedelta(hours=1),
         )
         assert [row["odoo_attendance_id"] for row in visible] == [attendance_id]
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_concurrent_first_enqueue_is_conflict_safe(monkeypatch):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 979
+    before = _row(attendance_id=attendance_id)
+    candidate = repair.RepairCandidate(
+        attendance_id=attendance_id,
+        expected_write_date=VERSION,
+        target_department_id=8,
+        expected_work_center_id=72,
+        target_projected_at=NOW,
+    )
+    real_cursor = db.cursor
+    both_ready_to_insert = Barrier(2)
+
+    @contextmanager
+    def synchronized_cursor():
+        with real_cursor() as cursor:
+
+            class SyncCursor:
+                def __init__(self):
+                    self.first_insert = True
+
+                def execute(self, sql, params=None):
+                    if self.first_insert and sql.startswith(
+                        "INSERT INTO attendance_department_repairs"
+                    ):
+                        self.first_insert = False
+                        both_ready_to_insert.wait(timeout=2)
+                    return cursor.execute(sql, params)
+
+                def __getattr__(self, name):
+                    return getattr(cursor, name)
+
+            yield SyncCursor()
+
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((before,), sync_completed_at=NOW)
+        monkeypatch.setattr(repair.db, "cursor", synchronized_cursor)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(
+                    repair._PostgresBackend().enqueue,
+                    (candidate,),
+                    now_utc=NOW,
+                )
+                for _ in range(2)
+            ]
+            results = [future.result(timeout=3) for future in futures]
+
+        assert sum(results) == 1
+        assert db.query(
+            "SELECT COUNT(*) AS count FROM attendance_department_repairs "
+            "WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [{"count": 1}]
+    finally:
+        monkeypatch.setattr(repair.db, "cursor", real_cursor)
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_reclaimed_old_worker_cannot_renew_or_write(monkeypatch):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 904
+    before = _row(attendance_id=attendance_id)
+    verified = _row(
+        attendance_id=attendance_id,
+        department_id=8,
+        write_date=NEW_VERSION,
+    )
+    span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 8, VERSION),
+    )
+    backend = repair._PostgresBackend()
+
+    class ReclaimingFacade(FakeFacade):
+        def __init__(self):
+            super().__init__(([before], [verified]))
+            self.reclaimed = None
+
+        def fetch_attendance_rows_by_ids(self, ids):
+            rows = super().fetch_attendance_rows_by_ids(ids)
+            if self.reclaimed is None:
+                self.reclaimed = backend.claim_next(
+                    now_utc=NOW + repair._CLAIM_TIMEOUT,
+                )
+            return rows
+
+    facade = ReclaimingFacade()
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((before,), sync_completed_at=NOW)
+        monkeypatch.setattr(repair, "_backend", backend)
+        monkeypatch.setattr(repair, "_facade", facade)
+        monkeypatch.setattr(repair, "_live_enabled", lambda *, now_utc: True)
+        assert repair.enqueue_from_spans((span,)) == 1
+
+        assert repair.process_next(now_utc=NOW) is None
+
+        assert facade.reclaimed is not None
+        assert facade.reclaimed.attempt_count == 2
+        assert not [event for event in facade.events if event[0] == "write"]
+        assert db.query(
+            "SELECT status, attempt_count FROM attendance_department_repairs "
+            "WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [{"status": "applying", "attempt_count": 2}]
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_over_budget_stale_claim_fails_without_a_fourth_write(monkeypatch):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 980
+    before = _row(attendance_id=attendance_id)
+    span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 8, VERSION),
+    )
+    facade = FakeFacade(([before],))
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((before,), sync_completed_at=NOW)
+        monkeypatch.setattr(repair, "_backend", repair._PostgresBackend())
+        monkeypatch.setattr(repair, "_facade", facade)
+        monkeypatch.setattr(repair, "_live_enabled", lambda *, now_utc: True)
+        assert repair.enqueue_from_spans((span,)) == 1
+        db.execute(
+            "UPDATE attendance_department_repairs SET status = 'applying', "
+            "attempt_count = %s, updated_at = %s WHERE odoo_attendance_id = %s",
+            (
+                repair.MAX_ATTEMPTS,
+                NOW - repair._CLAIM_TIMEOUT,
+                attendance_id,
+            ),
+        )
+
+        result = repair.process_next(now_utc=NOW)
+
+        assert result == repair.RepairResult(
+            attendance_id,
+            "failed",
+            repair.MAX_ATTEMPTS + 1,
+            "Odoo department repair exceeded its maximum attempts",
+        )
+        assert not [event for event in facade.events if event[0] == "write"]
+        assert db.query(
+            "SELECT status, attempt_count FROM attendance_department_repairs "
+            "WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [
+            {
+                "status": "failed",
+                "attempt_count": repair.MAX_ATTEMPTS + 1,
+            }
+        ]
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_mirror_advance_after_read_blocks_write_before_enqueue(monkeypatch):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 982
+    v2 = _row(attendance_id=attendance_id)
+    v3_version = VERSION + timedelta(seconds=1)
+    v3 = _row(
+        attendance_id=attendance_id,
+        department_id=8,
+        write_date=v3_version,
+    )
+    v4 = _row(
+        attendance_id=attendance_id,
+        department_id=9,
+        write_date=VERSION + timedelta(seconds=2),
+    )
+    v2_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 8, VERSION),
+    )
+    v3_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 9, v3_version),
+    )
+    backend = repair._PostgresBackend()
+
+    class MirrorAdvanceAfterReadFacade(FakeFacade):
+        def __init__(self):
+            super().__init__(([v2],))
+            self.advanced = False
+
+        def fetch_attendance_rows_by_ids(self, ids):
+            rows = super().fetch_attendance_rows_by_ids(ids)
+            if not self.advanced:
+                self.advanced = True
+                attendance_mirror.upsert_rows(
+                    (v3,),
+                    sync_completed_at=NOW + timedelta(seconds=1),
+                )
+            return rows
+
+    facade = MirrorAdvanceAfterReadFacade()
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((v2,), sync_completed_at=NOW)
+        monkeypatch.setattr(repair, "_backend", backend)
+        monkeypatch.setattr(repair, "_facade", facade)
+        monkeypatch.setattr(repair, "_live_enabled", lambda *, now_utc: True)
+        assert (
+            repair._enqueue_projected_spans(
+                (v2_span,),
+                projected_at_utc=NOW,
+            )
+            == 1
+        )
+
+        assert repair.process_next(now_utc=NOW) is None
+
+        assert not [event for event in facade.events if event[0] == "write"]
+        assert db.query(
+            "SELECT status FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [{"status": "complete"}]
+
+        assert (
+            repair._enqueue_projected_spans(
+                (v3_span,),
+                projected_at_utc=NOW + timedelta(seconds=1),
+            )
+            == 1
+        )
+        next_facade = FakeFacade(([v3], [v4]))
+        monkeypatch.setattr(repair, "_facade", next_facade)
+        assert repair.process_next(now_utc=NOW + timedelta(seconds=2)) == (
+            repair.RepairResult(attendance_id, "repaired", 1, None)
+        )
+        assert ("write", attendance_id, 9) in next_facade.events
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_successor_after_read_is_promoted_before_any_stale_write(monkeypatch):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 981
+    v2 = _row(attendance_id=attendance_id)
+    v3_version = VERSION + timedelta(seconds=1)
+    v3 = _row(
+        attendance_id=attendance_id,
+        department_id=8,
+        write_date=v3_version,
+    )
+    v4 = _row(
+        attendance_id=attendance_id,
+        department_id=9,
+        write_date=VERSION + timedelta(seconds=2),
+    )
+    v2_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 8, VERSION),
+    )
+    v3_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 9, v3_version),
+    )
+    backend = repair._PostgresBackend()
+
+    class SuccessorAfterReadFacade(FakeFacade):
+        def __init__(self):
+            super().__init__(([v2],))
+            self.enqueued = False
+
+        def fetch_attendance_rows_by_ids(self, ids):
+            rows = super().fetch_attendance_rows_by_ids(ids)
+            if not self.enqueued:
+                self.enqueued = True
+                attendance_mirror.upsert_rows(
+                    (v3,),
+                    sync_completed_at=NOW + timedelta(seconds=1),
+                )
+                assert repair.enqueue_from_spans((v3_span,)) == 1
+            return rows
+
+    facade = SuccessorAfterReadFacade()
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((v2,), sync_completed_at=NOW)
+        monkeypatch.setattr(repair, "_backend", backend)
+        monkeypatch.setattr(repair, "_facade", facade)
+        monkeypatch.setattr(repair, "_live_enabled", lambda *, now_utc: True)
+        assert repair.enqueue_from_spans((v2_span,)) == 1
+
+        assert repair.process_next(now_utc=NOW) is None
+
+        assert not [event for event in facade.events if event[0] == "write"]
+        assert db.query(
+            "SELECT expected_write_date, target_odoo_department_id, status, "
+            "attempt_count FROM attendance_department_repairs "
+            "WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [
+            {
+                "expected_write_date": v3_version,
+                "target_odoo_department_id": 9,
+                "status": "pending",
+                "attempt_count": 0,
+            }
+        ]
+
+        next_facade = FakeFacade(([v3], [v4]))
+        monkeypatch.setattr(repair, "_facade", next_facade)
+        assert repair.process_next(now_utc=NOW + timedelta(seconds=2)) == (
+            repair.RepairResult(attendance_id, "repaired", 1, None)
+        )
+        assert ("write", attendance_id, 9) in next_facade.events
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_successor_arriving_before_settlement_is_processed_without_new_sync(
+    monkeypatch,
+):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 905
+    v2 = _row(attendance_id=attendance_id)
+    v3_version = VERSION + timedelta(seconds=2)
+    v3 = _row(
+        attendance_id=attendance_id,
+        department_id=8,
+        write_date=v3_version,
+    )
+    v4_after_v2_write = _row(
+        attendance_id=attendance_id,
+        department_id=8,
+        write_date=VERSION + timedelta(seconds=3),
+    )
+    v5 = _row(
+        attendance_id=attendance_id,
+        department_id=9,
+        write_date=VERSION + timedelta(seconds=4),
+    )
+    v2_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 8, VERSION),
+    )
+    v3_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 9, v3_version),
+    )
+    backend = repair._PostgresBackend()
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((v2,), sync_completed_at=NOW)
+        monkeypatch.setattr(repair, "_backend", backend)
+        assert (
+            repair._enqueue_projected_spans(
+                (v2_span,),
+                projected_at_utc=NOW,
+            )
+            == 1
+        )
+        claim = backend.claim_next(now_utc=NOW)
+        assert claim is not None
+
+        attendance_mirror.upsert_rows((v3,), sync_completed_at=NOW + timedelta(seconds=2))
+        assert (
+            repair._enqueue_projected_spans(
+                (v3_span,),
+                projected_at_utc=NOW + timedelta(seconds=2),
+            )
+            == 1
+        )
+        assert backend.finish_verified(
+            claim,
+            v4_after_v2_write,
+            now_utc=NOW + timedelta(seconds=3),
+        )
+        assert db.query(
+            "SELECT expected_write_date, target_odoo_department_id, "
+            "expected_odoo_work_center_id, status, attempt_count, "
+            "successor_expected_write_date "
+            "FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [
+            {
+                "expected_write_date": v4_after_v2_write["odoo_write_date"],
+                "target_odoo_department_id": 9,
+                "expected_odoo_work_center_id": 72,
+                "status": "pending",
+                "attempt_count": 0,
+                "successor_expected_write_date": None,
+            }
+        ]
+
+        facade = FakeFacade(([v4_after_v2_write], [v5]))
+        monkeypatch.setattr(repair, "_facade", facade)
+        monkeypatch.setattr(repair, "_live_enabled", lambda *, now_utc: True)
+        assert repair.process_next(now_utc=NOW + timedelta(seconds=4)) == (
+            repair.RepairResult(attendance_id, "repaired", 1, None)
+        )
+        assert ("write", attendance_id, 9) in facade.events
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_newer_target_token_rebases_older_applying_successor(monkeypatch):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 985
+    v3_version = VERSION + timedelta(seconds=1)
+    v4_version = VERSION + timedelta(seconds=2)
+    v4 = _row(
+        attendance_id=attendance_id,
+        department_id=7,
+        write_date=v4_version,
+    )
+    v5 = _row(
+        attendance_id=attendance_id,
+        department_id=9,
+        write_date=VERSION + timedelta(seconds=3),
+    )
+    active_v4_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 8, v4_version),
+    )
+    delayed_v3_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 9, v3_version),
+    )
+    backend = repair._PostgresBackend()
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((v4,), sync_completed_at=NOW)
+        monkeypatch.setattr(repair, "_backend", backend)
+        assert (
+            repair._enqueue_projected_spans(
+                (active_v4_span,),
+                projected_at_utc=NOW + timedelta(seconds=1),
+            )
+            == 1
+        )
+        claim = backend.claim_next(now_utc=NOW + timedelta(seconds=1))
+        assert claim is not None
+
+        assert (
+            repair._enqueue_projected_spans(
+                (delayed_v3_span,),
+                projected_at_utc=NOW + timedelta(seconds=2),
+            )
+            == 1
+        )
+        assert (
+            backend.renew_claim(
+                claim,
+                now_utc=NOW + timedelta(seconds=3),
+            )
+            is False
+        )
+        assert db.query(
+            "SELECT expected_write_date, target_odoo_department_id, status, "
+            "attempt_count FROM attendance_department_repairs "
+            "WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [
+            {
+                "expected_write_date": v4_version,
+                "target_odoo_department_id": 9,
+                "status": "pending",
+                "attempt_count": 0,
+            }
+        ]
+
+        facade = FakeFacade(([v4], [v5]))
+        monkeypatch.setattr(repair, "_facade", facade)
+        monkeypatch.setattr(repair, "_live_enabled", lambda *, now_utc: True)
+        assert repair.process_next(now_utc=NOW + timedelta(seconds=4)) == (
+            repair.RepairResult(attendance_id, "repaired", 1, None)
+        )
+        assert ("write", attendance_id, 9) in facade.events
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_projected_successor_enqueued_after_settlement_keeps_new_target(
+    monkeypatch,
+):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 983
+    v2 = _row(attendance_id=attendance_id)
+    v3_version = VERSION + timedelta(seconds=1)
+    v3 = _row(
+        attendance_id=attendance_id,
+        department_id=8,
+        write_date=v3_version,
+    )
+    v4_after_v2_write = _row(
+        attendance_id=attendance_id,
+        department_id=8,
+        write_date=VERSION + timedelta(seconds=2),
+    )
+    v5 = _row(
+        attendance_id=attendance_id,
+        department_id=9,
+        write_date=VERSION + timedelta(seconds=3),
+    )
+    v2_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 8, VERSION),
+    )
+    projected_v3_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 9, v3_version),
+    )
+    backend = repair._PostgresBackend()
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((v2,), sync_completed_at=NOW)
+        monkeypatch.setattr(repair, "_backend", backend)
+        assert (
+            repair._enqueue_projected_spans(
+                (v2_span,),
+                projected_at_utc=NOW,
+            )
+            == 1
+        )
+        claim = backend.claim_next(now_utc=NOW)
+        assert claim is not None
+
+        attendance_mirror.upsert_rows(
+            (v3,),
+            sync_completed_at=NOW + timedelta(seconds=1),
+        )
+        assert backend.finish_verified(
+            claim,
+            v4_after_v2_write,
+            now_utc=NOW + timedelta(seconds=2),
+        )
+
+        assert (
+            repair._enqueue_projected_spans(
+                (projected_v3_span,),
+                projected_at_utc=NOW + timedelta(seconds=1),
+            )
+            == 1
+        )
+        assert db.query(
+            "SELECT expected_write_date, target_odoo_department_id, "
+            "expected_odoo_work_center_id, status, attempt_count "
+            "FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [
+            {
+                "expected_write_date": v4_after_v2_write["odoo_write_date"],
+                "target_odoo_department_id": 9,
+                "expected_odoo_work_center_id": 72,
+                "status": "pending",
+                "attempt_count": 0,
+            }
+        ]
+
+        facade = FakeFacade(([v4_after_v2_write], [v5]))
+        monkeypatch.setattr(repair, "_facade", facade)
+        monkeypatch.setattr(repair, "_live_enabled", lambda *, now_utc: True)
+        assert repair.process_next(now_utc=NOW + timedelta(seconds=3)) == (
+            repair.RepairResult(attendance_id, "repaired", 1, None)
+        )
+        assert ("write", attendance_id, 9) in facade.events
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_older_target_observation_cannot_reverse_completed_repair(monkeypatch):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 984
+    v3_version = VERSION + timedelta(seconds=1)
+    v3 = _row(
+        attendance_id=attendance_id,
+        department_id=8,
+        write_date=v3_version,
+    )
+    v4 = _row(
+        attendance_id=attendance_id,
+        department_id=9,
+        write_date=VERSION + timedelta(seconds=2),
+    )
+    v3_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 9, v3_version),
+    )
+    stale_v2_span = _span(
+        attendance_id=attendance_id,
+        repair_value=(attendance_id, 8, VERSION),
+    )
+    backend = repair._PostgresBackend()
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((v3,), sync_completed_at=NOW)
+        monkeypatch.setattr(repair, "_backend", backend)
+        assert (
+            repair._enqueue_projected_spans(
+                (v3_span,),
+                projected_at_utc=NOW + timedelta(seconds=2),
+            )
+            == 1
+        )
+        claim = backend.claim_next(now_utc=NOW + timedelta(seconds=2))
+        assert claim is not None
+        assert backend.finish_verified(
+            claim,
+            v4,
+            now_utc=NOW + timedelta(seconds=3),
+        )
+
+        assert (
+            repair._enqueue_projected_spans(
+                (stale_v2_span,),
+                projected_at_utc=NOW + timedelta(seconds=1),
+            )
+            == 0
+        )
+        assert db.query(
+            "SELECT expected_write_date, target_odoo_department_id, status "
+            "FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [
+            {
+                "expected_write_date": v4["odoo_write_date"],
+                "target_odoo_department_id": 9,
+                "status": "complete",
+            }
+        ]
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+def test_postgres_older_correct_observation_cannot_clear_newer_failed_target(monkeypatch):
+    from zira_dashboard import attendance_mirror, db
+
+    attendance_id = 986
+    current = _row(
+        attendance_id=attendance_id,
+        department_id=8,
+        write_date=VERSION + timedelta(seconds=2),
+    )
+    stale_correct_span = _span(
+        attendance_id=attendance_id,
+        repair_value=None,
+    )
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((current,), sync_completed_at=NOW)
+        db.execute(
+            "INSERT INTO attendance_department_repairs "
+            "(odoo_attendance_id, expected_write_date, target_odoo_department_id, "
+            "expected_odoo_work_center_id, target_projected_at, status, "
+            "attempt_count, updated_at, last_error) "
+            "VALUES (%s, %s, 9, 72, %s, 'failed', 3, %s, 'newer failure')",
+            (
+                attendance_id,
+                VERSION,
+                NOW + timedelta(seconds=2),
+                NOW + timedelta(seconds=2),
+            ),
+        )
+        monkeypatch.setattr(repair, "_backend", repair._PostgresBackend())
+        monkeypatch.setattr(repair, "_facade", FakeFacade((), target_department_id=8))
+
+        assert (
+            repair._enqueue_projected_spans(
+                (stale_correct_span,),
+                projected_at_utc=NOW + timedelta(seconds=1),
+            )
+            == 0
+        )
+        assert db.query(
+            "SELECT status, target_odoo_department_id, last_error "
+            "FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [
+            {
+                "status": "failed",
+                "target_odoo_department_id": 9,
+                "last_error": "newer failure",
+            }
+        ]
+    finally:
+        db.execute(
+            "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        db.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
+@pytest.mark.parametrize(
+    ("current_work_center_id", "current_department_id"),
+    ((72, 8), (73, 11)),
+)
+def test_successful_projection_clears_obsolete_failed_exception_without_write(
+    monkeypatch,
+    current_work_center_id,
+    current_department_id,
+):
+    from zira_dashboard import attendance_exceptions, attendance_mirror, db
+
+    attendance_id = 906 + current_work_center_id
+    current_version = VERSION + timedelta(seconds=1)
+    current = _row(
+        attendance_id=attendance_id,
+        work_center_id=current_work_center_id,
+        department_id=current_department_id,
+        write_date=current_version,
+    )
+    span = _span(
+        attendance_id=attendance_id,
+        work_center_id=current_work_center_id,
+        repair_value=None,
+    )
+    facade = FakeFacade((), target_department_id=current_department_id)
+    db.bootstrap_schema()
+    db.execute(
+        "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    db.execute(
+        "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+        (attendance_id,),
+    )
+    try:
+        attendance_mirror.upsert_rows((current,), sync_completed_at=NOW)
+        db.execute(
+            "INSERT INTO attendance_department_repairs "
+            "(odoo_attendance_id, expected_write_date, target_odoo_department_id, "
+            "expected_odoo_work_center_id, target_projected_at, status, attempt_count, "
+            "updated_at, last_error) "
+            "VALUES (%s, %s, 8, 72, %s, 'failed', 3, %s, 'old failure')",
+            (attendance_id, VERSION, NOW, NOW),
+        )
+        monkeypatch.setattr(repair, "_backend", repair._PostgresBackend())
+        monkeypatch.setattr(repair, "_facade", facade)
+        assert [
+            row["odoo_attendance_id"]
+            for row in attendance_exceptions._failed_department_repairs(
+                NOW - timedelta(hours=3),
+                NOW + timedelta(hours=1),
+            )
+        ] == [attendance_id]
+
+        assert (
+            repair._enqueue_projected_spans(
+                (span,),
+                projected_at_utc=NOW + timedelta(seconds=1),
+            )
+            == 1
+        )
+
+        assert db.query(
+            "SELECT status, last_error FROM attendance_department_repairs "
+            "WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        ) == [{"status": "complete", "last_error": None}]
+        assert (
+            attendance_exceptions._failed_department_repairs(
+                NOW - timedelta(hours=3),
+                NOW + timedelta(hours=1),
+            )
+            == ()
+        )
+        assert facade.events == []
     finally:
         db.execute(
             "DELETE FROM attendance_department_repairs WHERE odoo_attendance_id = %s",
