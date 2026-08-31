@@ -16,6 +16,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Plant Manager now waits for a full, safe production match before it turns on the new Odoo work-area checks.** Normal clock-ins will no longer fill the Exception Inbox with early warnings.
 
+### Check every Odoo time fix
+
+- **Plant Manager can now save a manager's time fix, finish it safely after a connection problem, and check Odoo before calling it done.** Production is counted again only after the fix is confirmed.
+
+### Stop mixed-up time fixes
+
+- **Plant Manager now checks the whole saved time fix before using it.** If any part was changed or mixed up, it stops before touching Odoo.
+
 ### Finished work stays matched with Odoo
 
 - **The work helpers now check off the matching 2s improvement after a change is finished, checked, and saved.** They stop and ask for help if they cannot find or confirm one clear match.

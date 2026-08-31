@@ -142,6 +142,13 @@ async def _tick_attendance_recalc():
     await asyncio.to_thread(attendance_recalc.process_next)
 
 
+async def _tick_attendance_corrections():
+    """Advance at most one durable, verified Odoo correction job."""
+    from . import attendance_corrections
+
+    await asyncio.to_thread(attendance_corrections.process_next)
+
+
 async def _tick_auto_lunch():
     """Drive the auto-lunch worker. No-ops while the feature is disabled
     (auto_lunch_settings.enabled defaults to FALSE)."""
@@ -453,6 +460,7 @@ _WARMERS = [
     ("Odoo open-attendance", _tick_odoo_attendance, 30),
     ("attendance mirror", _tick_attendance_mirror, 30),
     ("attendance recalculation", _tick_attendance_recalc, 15),
+    ("attendance corrections", _tick_attendance_corrections, 15),
     ("auto-lunch", _tick_auto_lunch, 60),
     ("auto-salaried punch", _tick_auto_salaried, 60),
     ("auto-salaried reconcile", _tick_auto_salaried_reconcile, 600),
