@@ -47,14 +47,22 @@
 </div>
 {% endif %}
 {% if staffing_live_enabled %}
-<div class="staffing-live-banner{% if staffing_live_unavailable %} unavailable{% endif %}"
+<div class="staffing-live-banner{% if staffing_live_unavailable %} unavailable{% elif staffing_live_stale or staffing_live_error %} stale{% endif %}"
      {% if staffing_live_fresh_at %}data-live-source-fresh-at="{{ staffing_live_fresh_at.isoformat() }}"{% endif %}>
   <strong>{% if staffing_live_label == "Live Odoo" %}Live Odoo{% else %}Odoo preview{% endif %}</strong>
   {% if staffing_live_unavailable %}
     <span>Live Odoo locations are unavailable. Planned seats are still shown.</span>
   {% else %}
-    <span>Planned seats stay in place. The badges show Odoo's current location.</span>
-    {% if staffing_live_fresh_at %}<span class="staffing-live-fresh">Source checked {{ staffing_live_fresh_at.strftime('%-I:%M %p') }}</span>{% endif %}
+    {% if staffing_live_stale %}
+      <span>Odoo location data is stale. These are the last verified locations.</span>
+    {% elif staffing_live_error %}
+      <span>Odoo location sync reported a problem. These are the last verified locations.</span>
+    {% else %}
+      <span>Planned seats stay in place. The badges show Odoo's current location.</span>
+    {% endif %}
+  {% endif %}
+  {% if staffing_live_fresh_at and staffing_live_fresh_local %}
+    <span class="staffing-live-fresh">Source checked <time datetime="{{ staffing_live_fresh_at.isoformat() }}">{{ staffing_live_fresh_local.strftime('%-I:%M %p %Z') }}</time> · Plant time</span>
   {% endif %}
 </div>
 {% endif %}
@@ -370,8 +378,8 @@
               </details>
               {% if staffing_live_enabled %}
                 <div class="planned-live-locations" aria-label="{{ staffing_live_label }} locations">
-                  {% for planned in row.present_assigned %}
-                    {% set live = live_locations_by_name.get(planned.name) %}
+                  {% for planned in row.assigned %}
+                    {% set live = live_locations_by_employee_id.get(planned.employee_odoo_id) %}
                     {% if live %}
                       <span class="planned-live-person" data-person="{{ planned.name }}">
                         <span class="planned-live-name">{{ planned.name }}</span>

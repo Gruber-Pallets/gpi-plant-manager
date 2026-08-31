@@ -9,7 +9,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, UTC
 from urllib.parse import urlencode
 
@@ -72,6 +72,15 @@ class _ScheduleMetadataConflict(RuntimeError):
     """A metadata write could not prove a stable optional-workday identity."""
 
 
+@dataclass(frozen=True)
+class _StaffingMirrorSnapshot:
+    """One mirror row version projected into both Staffing consumers."""
+
+    attendance_source: live_cache.AttendanceSourceSnapshot | None
+    spans: tuple[attendance_timeline.LocationSpan, ...]
+    location_as_of_utc: datetime
+
+
 class _Phase:
     """Tiny context manager that records milliseconds elapsed under a name.
 
@@ -102,18 +111,25 @@ def _live_location_active() -> bool:
         return False
 
 
-def _project_staffing_location_spans(day: date, *, as_of_utc: datetime, policy):
+def _project_staffing_location_spans(
+    day: date,
+    *,
+    as_of_utc: datetime,
+    policy,
+    rows: Sequence[Mapping[str, object]] | None = None,
+):
     """Project one Staffing timeline from the already-frozen health policy."""
     if policy.refreshed_at is None:
         raise RuntimeError("attendance mirror has no verified freshness")
     start_utc, end_utc = attendance_timeline._plant_day_bounds(day)
-    rows = attendance_mirror.rows_overlapping(start_utc, end_utc)
+    if rows is None:
+        rows = attendance_mirror.rows_overlapping(start_utc, end_utc)
     if not rows:
         return ()
     rows = attendance_timeline._rows_with_employee_department_fallback(rows)
     spans = attendance_timeline.project_rows(
         rows,
-        as_of_utc=as_of_utc,
+        as_of_utc=min(as_of_utc, policy.refreshed_at),
         verified_through_utc=policy.refreshed_at,
         map_work_center=work_centers_store.app_work_center_name_for_odoo_id,
         requires_work_center=attendance_timeline._department_requires_work_center_for_mirror,
@@ -123,11 +139,100 @@ def _project_staffing_location_spans(day: date, *, as_of_utc: datetime, policy):
     return tuple(
         replace(
             span,
+            end_utc=min(span.end_utc, policy.refreshed_at),
             employee_name=canonical_by_id.get(
                 str(span.employee_odoo_id), span.employee_name
             ),
         )
         for span in spans
+        if span.start_utc < policy.refreshed_at
+    )
+
+
+def _rows_at_verified_cap(
+    rows: Sequence[Mapping[str, object]], verified_cap: datetime
+) -> tuple[Mapping[str, object], ...]:
+    """Freeze rows at the health timestamp even if a later sync just committed."""
+    frozen = []
+    for row in rows:
+        check_in = row["check_in_utc"]
+        if not isinstance(check_in, datetime) or check_in >= verified_cap:
+            continue
+        check_out = row.get("check_out_utc")
+        frozen.append(
+            {
+                **row,
+                "check_out_utc": (
+                    None
+                    if isinstance(check_out, datetime) and check_out > verified_cap
+                    else check_out
+                ),
+            }
+        )
+    return tuple(frozen)
+
+
+def _read_staffing_mirror_snapshot(
+    day: date, *, as_of_utc: datetime, policy
+) -> _StaffingMirrorSnapshot:
+    """Read one mirror tuple and derive attendance plus locations from it."""
+    if not policy.mirror_owned:
+        return _StaffingMirrorSnapshot(None, (), as_of_utc)
+    verified_cap = (
+        min(as_of_utc, policy.refreshed_at)
+        if policy.refreshed_at is not None
+        else as_of_utc
+    )
+    location_as_of = verified_cap - timedelta(microseconds=1)
+    if not policy.available or policy.refreshed_at is None:
+        return _StaffingMirrorSnapshot(
+            live_cache.AttendanceSourceSnapshot(
+                None,
+                policy.refreshed_at,
+                True,
+                False,
+                policy.error,
+                policy.stale,
+            ),
+            (),
+            location_as_of,
+        )
+    try:
+        start_utc, end_utc = attendance_timeline._plant_day_bounds(day)
+        rows = attendance_mirror.rows_overlapping(start_utc, end_utc)
+        rows = _rows_at_verified_cap(rows, verified_cap)
+        payload = attendance_mirror.day_presence_from_rows(day, rows)
+        spans = _project_staffing_location_spans(
+            day,
+            as_of_utc=as_of_utc,
+            policy=policy,
+            rows=rows,
+        )
+    except Exception as exc:  # noqa: BLE001 -- one failed snapshot stays unavailable
+        log.exception("Could not read the frozen Staffing mirror snapshot for %s", day)
+        return _StaffingMirrorSnapshot(
+            live_cache.AttendanceSourceSnapshot(
+                None,
+                policy.refreshed_at,
+                True,
+                False,
+                str(exc),
+                policy.stale,
+            ),
+            (),
+            location_as_of,
+        )
+    return _StaffingMirrorSnapshot(
+        live_cache.AttendanceSourceSnapshot(
+            payload,
+            policy.refreshed_at,
+            True,
+            True,
+            policy.error,
+            policy.stale,
+        ),
+        spans,
+        location_as_of,
     )
 
 
@@ -138,6 +243,8 @@ def _staffing_live_context(
     *,
     policy,
     as_of_utc: datetime,
+    spans: Sequence[attendance_timeline.LocationSpan] = (),
+    planned_employee_ids: Mapping[str, int] | None = None,
 ) -> dict:
     """Build a plan-plus-live overlay from one rollout/health/timeline snapshot."""
     label = "Live Odoo" if policy.mode == "live" else "Odoo preview"
@@ -145,9 +252,16 @@ def _staffing_live_context(
         "staffing_live_enabled": bool(day == today and policy.mirror_owned),
         "staffing_live_label": label,
         "staffing_live_unavailable": False,
+        "staffing_live_stale": bool(policy.stale),
+        "staffing_live_error": policy.error,
         "staffing_live_fresh_at": policy.refreshed_at,
+        "staffing_live_fresh_local": (
+            policy.refreshed_at.astimezone(shift_config.SITE_TZ)
+            if policy.refreshed_at is not None
+            else None
+        ),
         "staffing_live_locations": (),
-        "live_locations_by_name": {},
+        "live_locations_by_employee_id": {},
         "live_unscheduled_locations": (),
     }
     if not base["staffing_live_enabled"]:
@@ -155,28 +269,29 @@ def _staffing_live_context(
     if not policy.available:
         return {**base, "staffing_live_unavailable": True}
     try:
-        spans = _project_staffing_location_spans(
-            day,
-            as_of_utc=as_of_utc,
-            policy=policy,
-        )
         locations = staffing_view.build_live_locations(
             planned_by_wc,
             spans,
             as_of_utc=as_of_utc,
+            planned_employee_ids=planned_employee_ids or {},
         )
         locations = tuple(
             replace(location, source_fresh_at=policy.refreshed_at)
             for location in locations
         )
+        if policy.stale:
+            locations = tuple(
+                replace(location, status="stale_open_location")
+                for location in locations
+            )
     except Exception:  # noqa: BLE001 -- show visible source failure, never schedule fallback
         log.exception("Could not build live Odoo Staffing locations for %s", day)
         return {**base, "staffing_live_unavailable": True}
     return {
         **base,
         "staffing_live_locations": locations,
-        "live_locations_by_name": {
-            location.person_name: location for location in locations
+        "live_locations_by_employee_id": {
+            location.employee_odoo_id: location for location in locations
         },
         "live_unscheduled_locations": tuple(
             location
@@ -1744,7 +1859,9 @@ def staffing_page(
     except ValueError:
         d = _next_working_day(today)
     staffing_live_as_of = datetime.now(UTC)
-    staffing_live_policy = live_cache.attendance_read_policy()
+    staffing_live_policy = live_cache.attendance_read_policy(
+        now_utc=staffing_live_as_of
+    )
 
     # Every Staffing date uses the live bucket: a past recorded absence can
     # gain a PTO/review suffix after the day ends. This keeps browser freshness
@@ -1770,6 +1887,8 @@ def staffing_page(
         staffing_live_policy.mode,
         staffing_live_policy.mirror_owned,
         staffing_live_policy.available,
+        staffing_live_policy.stale,
+        staffing_live_policy.error,
         (
             staffing_live_policy.refreshed_at.isoformat()
             if staffing_live_policy.refreshed_at is not None
@@ -1781,6 +1900,16 @@ def staffing_page(
     )
     if cached_resp is not None:
         return cached_resp
+
+    staffing_mirror_snapshot = (
+        _read_staffing_mirror_snapshot(
+            d,
+            as_of_utc=staffing_live_as_of,
+            policy=staffing_live_policy,
+        )
+        if d == today
+        else _StaffingMirrorSnapshot(None, (), staffing_live_as_of)
+    )
 
     holidays_synced = _holiday_mirror_has_synced()
     optional_day_unresolved = False
@@ -1918,16 +2047,14 @@ def staffing_page(
     # three-argument callable. Keep that seam while the production reader gets
     # this response's frozen mirror policy.
     attendance_parameters = inspect.signature(_safe_attendance).parameters
+    attendance_kwargs = {}
     if "attendance_policy" in attendance_parameters:
-        f_attendance = pool.submit(
-            _safe_attendance,
-            d,
-            sched,
-            today,
-            attendance_policy=staffing_live_policy,
+        attendance_kwargs["attendance_policy"] = staffing_live_policy
+    if "attendance_source" in attendance_parameters:
+        attendance_kwargs["attendance_source"] = (
+            staffing_mirror_snapshot.attendance_source
         )
-    else:
-        f_attendance = pool.submit(_safe_attendance, d, sched, today)
+    f_attendance = pool.submit(_safe_attendance, d, sched, today, **attendance_kwargs)
 
     # Collect Odoo time-off (already fetched in parallel above).
     with _Phase(phases, "attendance"):
@@ -2024,12 +2151,29 @@ def staffing_page(
         publish_errors=publish_errors,
         training_reservations_by_center=training_picker_reservations,
     )
+    staffing_context_policy = staffing_live_policy
+    if (
+        staffing_mirror_snapshot.attendance_source is not None
+        and not staffing_mirror_snapshot.attendance_source.available
+    ):
+        staffing_context_policy = replace(
+            staffing_live_policy,
+            available=False,
+            error=staffing_mirror_snapshot.attendance_source.error,
+            stale=staffing_mirror_snapshot.attendance_source.stale,
+        )
     staffing_live_context = _staffing_live_context(
         d,
         today,
         sched.assignments or {},
-        policy=staffing_live_policy,
-        as_of_utc=staffing_live_as_of,
+        policy=staffing_context_policy,
+        as_of_utc=staffing_mirror_snapshot.location_as_of_utc,
+        spans=staffing_mirror_snapshot.spans,
+        planned_employee_ids={
+            person.name: person.employee_id
+            for person in roster
+            if person.employee_id is not None
+        },
     )
     unscheduled_count = len(bay_model.get("unassigned") or ())
     auto_on_count = len(enabled_auto_work_centers)

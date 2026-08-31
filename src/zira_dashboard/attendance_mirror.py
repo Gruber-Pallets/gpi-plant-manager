@@ -595,6 +595,41 @@ def day_presence(day: date) -> dict[str, dict[str, object]]:
     }
 
 
+def day_presence_from_rows(
+    day: date, rows: Sequence[Mapping[str, Any]]
+) -> dict[str, dict[str, object]]:
+    """Derive day presence from an already-frozen mirror row snapshot."""
+    if type(day) is not date:
+        raise TypeError("day must be a date")
+    start_local = datetime.combine(day, datetime.min.time(), tzinfo=SITE_TZ)
+    start_utc = start_local.astimezone(UTC)
+    end_utc = (start_local + timedelta(days=1)).astimezone(UTC)
+    by_employee: dict[int, dict[str, object]] = {}
+    for raw in rows:
+        employee_id = _positive_int(raw["employee_odoo_id"], "employee_odoo_id")
+        check_in = _aware_utc(raw["check_in_utc"], "check_in_utc")
+        if not start_utc <= check_in < end_utc:
+            continue
+        current = by_employee.get(employee_id)
+        if current is None:
+            by_employee[employee_id] = {
+                "first_check_in": check_in,
+                "currently_open": raw.get("check_out_utc") is None,
+            }
+            continue
+        current["first_check_in"] = min(current["first_check_in"], check_in)
+        current["currently_open"] = bool(current["currently_open"]) or (
+            raw.get("check_out_utc") is None
+        )
+    return {
+        str(employee_id): {
+            "first_check_in": value["first_check_in"].isoformat(),
+            "currently_open": bool(value["currently_open"]),
+        }
+        for employee_id, value in sorted(by_employee.items())
+    }
+
+
 def current_open_attendance() -> tuple[dict[str, Any], ...]:
     """Return every non-deleted open row for the live-location snapshot."""
     return tuple(
@@ -896,6 +931,7 @@ __all__ = [
     "MirrorHealth",
     "current_open_attendance",
     "day_presence",
+    "day_presence_from_rows",
     "enqueue_recalc",
     "health_snapshot",
     "local_days_touched",

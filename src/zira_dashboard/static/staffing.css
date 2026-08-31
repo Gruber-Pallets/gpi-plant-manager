@@ -688,6 +688,9 @@
   .staffing-live-banner.unavailable {
     border-color: var(--warn); background: var(--warn-dim);
   }
+  .staffing-live-banner.stale {
+    border-color: var(--warn); background: var(--warn-dim);
+  }
   .staffing-live-fresh { margin-left: auto; color: var(--muted); }
   .planned-live-locations { margin-top: 0.3rem; display: grid; gap: 0.2rem; }
   .planned-live-person { display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }

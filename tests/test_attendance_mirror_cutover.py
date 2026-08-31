@@ -32,13 +32,18 @@ def _config(mode: str):
     return SimpleNamespace(mode=mode)
 
 
-def _health(*, complete: bool = True):
+def _health(
+    *,
+    complete: bool = True,
+    refreshed_at: datetime | None = FRESH_AT,
+    error: str | None = None,
+):
     return attendance_mirror.MirrorHealth(
-        last_incremental_completed_at=FRESH_AT,
+        last_incremental_completed_at=refreshed_at,
         last_full_sweep_completed_at=FRESH_AT,
         baseline_completed_at=FRESH_AT if complete else None,
         oldest_recalc_requested_at=None,
-        last_error=None,
+        last_error=error,
     )
 
 
@@ -200,6 +205,47 @@ def test_mirror_health_failure_in_shadow_stays_unavailable(monkeypatch):
     assert source.payload is None
 
 
+def test_mirror_policy_distinguishes_stale_age_and_health_error(monkeypatch):
+    now = FRESH_AT + live_cache.STALE_THRESHOLD + timedelta(seconds=1)
+    monkeypatch.setattr(
+        live_cache.attendance_location_policy,
+        "get_rollout_config",
+        lambda: _config("shadow"),
+    )
+    monkeypatch.setattr(
+        live_cache.attendance_mirror,
+        "health_snapshot",
+        lambda: _health(error="incremental sync failed"),
+    )
+
+    policy = live_cache.attendance_read_policy(now_utc=now)
+
+    assert policy.mirror_owned is True
+    assert policy.available is True
+    assert policy.stale is True
+    assert policy.error == "incremental sync failed"
+
+
+def test_health_read_failure_is_unavailable_not_merely_stale(monkeypatch):
+    monkeypatch.setattr(
+        live_cache.attendance_location_policy,
+        "get_rollout_config",
+        lambda: _config("shadow"),
+    )
+    monkeypatch.setattr(
+        live_cache.attendance_mirror,
+        "health_snapshot",
+        lambda: (_ for _ in ()).throw(RuntimeError("health unavailable")),
+    )
+
+    policy = live_cache.attendance_read_policy(now_utc=FRESH_AT)
+
+    assert policy.mirror_owned is True
+    assert policy.available is False
+    assert policy.stale is False
+    assert policy.error == "health unavailable"
+
+
 def test_migrated_day_readers_use_mirror_source_and_never_fetch_odoo(monkeypatch):
     source = SimpleNamespace(
         payload={"5": {"first_check_in": FIRST_IN.isoformat(), "currently_open": True}},
@@ -260,8 +306,68 @@ def test_migrated_open_readers_share_mirror_freshness_without_refresh(monkeypatc
     windows, refreshed_at = timeclock_windows.current_attendance_windows()
 
     assert state["current_wc"] == "Bay 8"
-    assert windows == {"Maria": [("Bay 8", FIRST_IN, None)]}
+    assert windows == {"Maria": [("Bay 8", FIRST_IN, FRESH_AT)]}
     assert refreshed_at == FRESH_AT
+
+
+def test_mirror_owned_current_windows_cap_at_frozen_freshness_downstream(monkeypatch):
+    from zira_dashboard import assignment_windows
+
+    source = SimpleNamespace(
+        payload={
+            "5": {
+                "att_id": 90,
+                "check_in": FIRST_IN.isoformat(),
+                "wc_name": "Bay 8",
+                "raw_odoo_wc_name": "Luke Bay 8",
+            }
+        },
+        refreshed_at=FRESH_AT,
+        mirror_owned=True,
+        available=True,
+        stale=True,
+        error="sync stalled",
+    )
+    monkeypatch.setattr(live_cache, "read_open_attendance_source", lambda: source)
+    monkeypatch.setattr(attendance, "person_id_to_name", lambda: {"5": "Maria"})
+
+    windows, refreshed_at = timeclock_windows.current_attendance_windows()
+    segments = assignment_windows.resolve_segments(
+        assignments={},
+        attributions=[],
+        punch_windows=windows,
+        shift_start_utc=FIRST_IN,
+        cap_utc=FRESH_AT + timedelta(hours=1),
+    )
+
+    assert refreshed_at == FRESH_AT
+    assert windows == {"Maria": [("Bay 8", FIRST_IN, FRESH_AT)]}
+    assert len(segments) == 1
+    assert segments[0].end_utc == FRESH_AT
+
+
+def test_legacy_current_windows_preserve_open_end(monkeypatch):
+    source = SimpleNamespace(
+        payload={
+            "5": {
+                "att_id": 90,
+                "check_in": FIRST_IN.isoformat(),
+                "wc_name": "Bay 8",
+            }
+        },
+        refreshed_at=FRESH_AT,
+        mirror_owned=False,
+        available=True,
+        stale=False,
+        error=None,
+    )
+    monkeypatch.setattr(live_cache, "read_open_attendance_source", lambda: source)
+    monkeypatch.setattr(live_cache, "is_stale", lambda _at: False)
+    monkeypatch.setattr(attendance, "person_id_to_name", lambda: {"5": "Maria"})
+
+    windows, _ = timeclock_windows.current_attendance_windows()
+
+    assert windows == {"Maria": [("Bay 8", FIRST_IN, None)]}
 
 
 def test_owned_unavailable_open_source_is_not_replaced_by_synced_local_log(monkeypatch):
@@ -329,6 +435,34 @@ def test_owned_stale_open_source_keeps_last_verified_odoo_state(monkeypatch):
     state = attendance_state.current_state(5)
 
     assert state["is_clocked_in"] is True
+    assert state["current_wc"] == "Bay 8"
+    assert state["attendance_source_stale"] is True
+
+
+def test_owned_open_state_uses_the_frozen_source_stale_decision(monkeypatch):
+    monkeypatch.setattr(
+        live_cache,
+        "read_open_attendance_source",
+        lambda: SimpleNamespace(
+            payload={
+                "5": {
+                    "att_id": 91,
+                    "check_in": FIRST_IN.isoformat(),
+                    "wc_name": "Bay 8",
+                }
+            },
+            refreshed_at=FRESH_AT,
+            mirror_owned=True,
+            available=True,
+            stale=True,
+            error="sync stalled",
+        ),
+    )
+    monkeypatch.setattr(live_cache, "is_stale", lambda _at: False)
+    monkeypatch.setattr(attendance_state, "latest_punch", lambda _person_id: None)
+
+    state = attendance_state.current_state(5)
+
     assert state["current_wc"] == "Bay 8"
     assert state["attendance_source_stale"] is True
 

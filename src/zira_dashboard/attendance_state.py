@@ -102,19 +102,25 @@ def current_state(person_odoo_id: int, snapshot: dict | None = None,
     """
     mirror_owned = False
     source_available = True
+    source_stale: bool | None = None
+    source_error: str | None = None
     if snapshot is None:
         source = live_cache.read_open_attendance_source()
         snapshot, refreshed_at = source.payload, source.refreshed_at
         mirror_owned = source.mirror_owned
         source_available = source.available
+        source_stale = getattr(source, "stale", None)
+        source_error = getattr(source, "error", None)
     latest = latest_punch(person_odoo_id) if latest is _UNSET else latest
     if mirror_owned:
-        source_stale = live_cache.is_stale(refreshed_at)
+        if source_stale is None:
+            source_stale = live_cache.is_stale(refreshed_at)
         if trust_local(latest, refreshed_at):
             return {
                 **state_from_log(latest),
                 "attendance_source_unavailable": not source_available,
                 "attendance_source_stale": source_stale,
+                "attendance_source_error": source_error,
             }
         if not source_available or snapshot is None:
             return {
@@ -124,6 +130,7 @@ def current_state(person_odoo_id: int, snapshot: dict | None = None,
                 "open_odoo_attendance_id": None,
                 "attendance_source_unavailable": True,
                 "attendance_source_stale": source_stale,
+                "attendance_source_error": source_error,
             }
         entry = snapshot.get(str(person_odoo_id))
         if not entry:
@@ -145,6 +152,7 @@ def current_state(person_odoo_id: int, snapshot: dict | None = None,
             **state,
             "attendance_source_unavailable": False,
             "attendance_source_stale": source_stale,
+            "attendance_source_error": source_error,
         }
     if snapshot is None or live_cache.is_stale(refreshed_at):
         return state_from_log(latest)
