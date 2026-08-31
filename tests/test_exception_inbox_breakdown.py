@@ -73,6 +73,7 @@ def _live_breakdown_snapshot():
             "incident_id": 1,
             "person_name": "Juan",
             "wc_name": "Dismantler 2",
+            "employee_odoo_id": 101,
         },
     }
     return {
@@ -107,7 +108,16 @@ def test_live_breakdown_ui_hides_transfer_but_keeps_snooze_and_guidance(monkeypa
     assert "js-breakdown-transfer" not in response.text
     assert 'aria-label="Work center to transfer to"' not in response.text
     assert "js-breakdown-snooze" in response.text
+    assert 'data-employee-odoo-id="101"' in response.text
     assert "Use Luke's floor app to move this worker." in response.text
+
+
+def test_breakdown_snooze_javascript_sends_employee_identity():
+    from pathlib import Path
+
+    js = Path("src/zira_dashboard/static/exceptions.js").read_text()
+
+    assert "employee_odoo_id: employeeOdooId" in js
 
 
 def test_live_breakdown_transfer_route_returns_410_before_delegation(monkeypatch):
@@ -169,8 +179,6 @@ def test_pending_live_breakdown_transfer_route_keeps_legacy_delegation(monkeypat
         "dale@gruberpallets.com",
         "Dale",
     )
-
-
 def test_incomplete_operator_source_marks_breakdown_section_incomplete(monkeypatch):
     from zira_dashboard import machine_breakdown
 

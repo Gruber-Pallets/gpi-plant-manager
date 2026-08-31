@@ -1425,7 +1425,7 @@ def _event_detail(ev: dict[str, Any]) -> dict:
 
 def _reverse_event(ev: dict[str, Any]) -> None:
     """Reverse a resolved inbox action. Assumes (item_kind, action) is undoable."""
-    from .. import absence_sync, late_report, machine_breakdown, missing_wc, odoo_client, wc_attributions
+    from .. import absence_sync, late_report, missing_wc, odoo_client, wc_attributions
 
     kind, action, key = ev["item_kind"], ev["action"], ev["item_key"]
     if kind == "missing_wc":
@@ -1453,14 +1453,9 @@ def _reverse_event(ev: dict[str, Any]) -> None:
                 wc_attributions.reopen_breakdown(attribution_id)
         elif action == "dismiss":
             incident_id = detail.get("incident_id")
-            machine_breakdown.reopen_incident(incident_id)
-            for row in detail.get("rows") or []:
-                wc_attributions.add(
-                    day=row["day"], wc_name=row["wc_name"], person_name=row["person_name"],
-                    start_utc=row["start_utc"], end_utc=row.get("end_utc"),
-                    source=wc_attributions.BREAKDOWN_SOURCE, breakdown_id=incident_id,
-                    employee_odoo_id=row.get("employee_odoo_id"),
-                )
+            wc_attributions.restore_breakdown_snapshot(
+                detail.get("rows") or [], incident_id
+            )
 
 
 def _undo_sync(

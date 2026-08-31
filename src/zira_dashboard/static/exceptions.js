@@ -1304,7 +1304,7 @@
     var empId = row.dataset.empId || '';
     var incidentId = row.dataset.incidentId;
     var breakdownWc = row.dataset.wcName;
-    var breakdownEmployeeId = asInt(row.dataset.employeeOdooId);
+    var employeeOdooId = asInt(row.dataset.employeeOdooId);
 
     if (rowBtn.classList.contains('js-assign')) {
       var person = row.querySelector('.js-person').value;
@@ -1447,7 +1447,7 @@
       postJson('/api/exceptions/breakdown/transfer', {
         incident_id: incidentId,
         person_name: personName,
-        employee_odoo_id: breakdownEmployeeId,
+        employee_odoo_id: employeeOdooId,
         to_wc: toWc,
       }).then(function (resp) {
         if (resp && resp.ok) resolveRow(row, 'Transferred', resp.event_id);
@@ -1466,7 +1466,7 @@
       postJson('/api/exceptions/breakdown/snooze', {
         incident_id: incidentId,
         person_name: personName,
-        employee_odoo_id: breakdownEmployeeId,
+        employee_odoo_id: employeeOdooId,
       }).then(function (resp) {
         if (resp && resp.ok) resolveRow(row, 'Snoozed');
         else failRow(row, (resp && resp.error) || 'Snooze failed.');

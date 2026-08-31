@@ -1,7 +1,10 @@
 """machine_breakdowns / breakdown_snoozes store (Postgres). Mirrors
 tests/test_inbox_open_items.py's fixture pattern."""
 import os
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from threading import Event, Thread, current_thread
 
 import pytest
 
@@ -103,3 +106,109 @@ def test_same_name_workers_have_independent_snoozes():
     assert machine_breakdown.active_snooze_until(
         incident_id, "Alex", employee_odoo_id=202
     ) is None
+
+
+def test_dismissed_incident_wins_against_blocked_recovery(monkeypatch):
+    """Recovery must re-check openness under the same incident row lock."""
+    from zira_dashboard import wc_attributions
+
+    now = datetime.now(timezone.utc)
+    stop = now - timedelta(hours=1)
+    resume = now - timedelta(minutes=10)
+    incident_id = machine_breakdown.open_incident(
+        WC, now.date(), stop, source="auto"
+    )
+    db.execute(
+        "INSERT INTO wc_time_attributions "
+        "(day, wc_name, person_name, employee_odoo_id, start_utc, end_utc, "
+        "source, breakdown_id) VALUES (%s, %s, %s, %s, %s, NULL, %s, %s)",
+        (
+            now.date(),
+            WC,
+            "Alex",
+            101,
+            stop,
+            wc_attributions.BREAKDOWN_SOURCE,
+            incident_id,
+        ),
+    )
+    incident = machine_breakdown.get_incident(incident_id)
+    source = machine_breakdown.OperatorSourceSnapshot(
+        (), (), False, True, False
+    )
+    monkeypatch.setattr(
+        machine_breakdown, "_last_output_after", lambda *_args, **_kwargs: resume
+    )
+
+    original_cursor = db.cursor
+    dismiss_uncommitted = Event()
+    allow_dismiss_commit = Event()
+    recovery_app = f"task12-recovery-{incident_id}"
+
+    @contextmanager
+    def coordinated_cursor():
+        with original_cursor() as cur:
+            role = current_thread().name
+            if role == "task12-recovery":
+                cur.execute("SET LOCAL application_name = %s", (recovery_app,))
+            yield cur
+            if role == "task12-dismiss":
+                dismiss_uncommitted.set()
+                if not allow_dismiss_commit.wait(timeout=5):
+                    raise TimeoutError("recovery never reached the incident lock")
+
+    monkeypatch.setattr(db, "cursor", coordinated_cursor)
+    errors = []
+    recovery_results = []
+
+    def dismiss():
+        try:
+            machine_breakdown.dismiss_incident(incident_id)
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def recover():
+        try:
+            recovery_results.append(
+                machine_breakdown._maybe_auto_resolve(
+                    incident, now.date(), now, source
+                )
+            )
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    dismiss_thread = Thread(target=dismiss, name="task12-dismiss")
+    recovery_thread = Thread(target=recover, name="task12-recovery")
+    dismiss_thread.start()
+    assert dismiss_uncommitted.wait(timeout=5)
+    recovery_thread.start()
+
+    deadline = time.monotonic() + 5
+    blocked = False
+    try:
+        while time.monotonic() < deadline:
+            if db.query(
+                "SELECT 1 FROM pg_stat_activity "
+                "WHERE application_name = %s AND wait_event_type = 'Lock'",
+                (recovery_app,),
+            ):
+                blocked = True
+                break
+            time.sleep(0.01)
+    finally:
+        allow_dismiss_commit.set()
+        dismiss_thread.join(timeout=5)
+        recovery_thread.join(timeout=5)
+
+    assert blocked is True
+    assert not dismiss_thread.is_alive()
+    assert not recovery_thread.is_alive()
+    assert errors == []
+    assert recovery_results == [False]
+    saved = machine_breakdown.get_incident(incident_id)
+    assert saved["resolution"] == "dismissed"
+    assert saved["resume_utc"] is None
+    assert db.query(
+        "SELECT id FROM wc_time_attributions WHERE breakdown_id = %s",
+        (incident_id,),
+    ) == []

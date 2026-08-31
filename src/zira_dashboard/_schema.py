@@ -2376,6 +2376,35 @@ CREATE TABLE IF NOT EXISTS breakdown_snoozes (
   PRIMARY KEY (breakdown_id, person_name)
 );
 
+-- 2026-08-31: canonical location spans identify people by immutable Odoo id.
+-- Keep the display name for old rows and audit/UI labels, while allowing two
+-- people with the same name to own independent snoozes. One effective-identity
+-- expression covers both ID-backed and legacy name-backed rows.
+ALTER TABLE breakdown_snoozes
+  ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
+ALTER TABLE breakdown_snoozes
+  DROP CONSTRAINT IF EXISTS breakdown_snoozes_pkey;
+-- A partially deployed legacy database may already contain duplicate rows.
+-- Preserve the longest active snooze before installing the canonical key.
+WITH ranked_breakdown_snoozes AS (
+  SELECT ctid, ROW_NUMBER() OVER (
+    PARTITION BY breakdown_id,
+      COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name)
+    ORDER BY until_utc DESC, created_at DESC, ctid DESC
+  ) AS snooze_rank
+  FROM breakdown_snoozes
+)
+DELETE FROM breakdown_snoozes AS snooze
+USING ranked_breakdown_snoozes AS ranked
+WHERE snooze.ctid = ranked.ctid AND ranked.snooze_rank > 1;
+DROP INDEX IF EXISTS breakdown_snoozes_odoo_identity_uniq;
+DROP INDEX IF EXISTS breakdown_snoozes_legacy_identity_uniq;
+CREATE UNIQUE INDEX IF NOT EXISTS breakdown_snoozes_operator_identity_idx
+  ON breakdown_snoozes (
+    breakdown_id,
+    (COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name))
+  );
+
 -- 2026-07-08: link wc_time_attributions rows back to the machine_breakdowns
 -- incident that created them, so a dismiss ("Not a breakdown") can delete
 -- exactly this incident's exclusion rows without touching a different,
@@ -2387,17 +2416,64 @@ ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS breakdown_id BIGINT;
 ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
 CREATE INDEX IF NOT EXISTS wc_time_attributions_breakdown_idx
   ON wc_time_attributions (breakdown_id) WHERE breakdown_id IS NOT NULL;
-
-ALTER TABLE breakdown_snoozes ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
--- The original primary key used display names and collapsed same-name Odoo
--- workers. Keep name identity for legacy rows and use the durable Odoo id when
--- it is known.
-ALTER TABLE breakdown_snoozes DROP CONSTRAINT IF EXISTS breakdown_snoozes_pkey;
-CREATE UNIQUE INDEX IF NOT EXISTS breakdown_snoozes_operator_identity_idx
-  ON breakdown_snoozes (
+-- Older warmers could insert the same worker visit more than once. Preserve
+-- the oldest row and its earliest known cap before installing durable keys.
+WITH breakdown_visit_groups AS (
+  SELECT MIN(id) AS keep_id, MIN(end_utc) AS earliest_end
+  FROM wc_time_attributions
+  WHERE source = 'breakdown' AND breakdown_id IS NOT NULL
+  GROUP BY breakdown_id,
+    COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name),
+    start_utc
+  HAVING COUNT(*) > 1
+)
+UPDATE wc_time_attributions AS attribution
+SET end_utc = grouped.earliest_end
+FROM breakdown_visit_groups AS grouped
+WHERE attribution.id = grouped.keep_id;
+WITH ranked_breakdown_visits AS (
+  SELECT id, ROW_NUMBER() OVER (
+    PARTITION BY breakdown_id,
+      COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name),
+      start_utc
+    ORDER BY id
+  ) AS visit_rank
+  FROM wc_time_attributions
+  WHERE source = 'breakdown' AND breakdown_id IS NOT NULL
+)
+DELETE FROM wc_time_attributions AS attribution
+USING ranked_breakdown_visits AS ranked
+WHERE attribution.id = ranked.id AND ranked.visit_rank > 1;
+-- If old data contains more than one open return visit, close each older
+-- visit at the next personal start and leave only the newest one open.
+WITH ordered_open_breakdown_visits AS (
+  SELECT id, LEAD(start_utc) OVER (
+    PARTITION BY breakdown_id,
+      COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name)
+    ORDER BY start_utc, id
+  ) AS next_start_utc
+  FROM wc_time_attributions
+  WHERE source = 'breakdown' AND breakdown_id IS NOT NULL AND end_utc IS NULL
+)
+UPDATE wc_time_attributions AS attribution
+SET end_utc = ordered.next_start_utc
+FROM ordered_open_breakdown_visits AS ordered
+WHERE attribution.id = ordered.id AND ordered.next_start_utc IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_odoo_open_uniq
+  ON wc_time_attributions (breakdown_id, employee_odoo_id)
+  WHERE source = 'breakdown' AND end_utc IS NULL
+    AND employee_odoo_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_legacy_open_uniq
+  ON wc_time_attributions (breakdown_id, person_name)
+  WHERE source = 'breakdown' AND end_utc IS NULL
+    AND employee_odoo_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_operator_visit_uniq
+  ON wc_time_attributions (
     breakdown_id,
-    (COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name))
-  );
+    (COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name)),
+    start_utc
+  )
+  WHERE source = 'breakdown' AND breakdown_id IS NOT NULL;
 
 -- 2026-07-08: per-record minutes excluded from a person's expected due to a
 -- machine breakdown (source='breakdown' wc_time_attributions windows). Written

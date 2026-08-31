@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta, UTC
 
 from fastapi import APIRouter, Query, Request
@@ -46,6 +47,88 @@ router = APIRouter()
 # this one lives for the process. Cap at 4 workers so we don't starve the DB
 # pool (maxconn=20) or hammer the Zira API on multi-month ranges.
 _RANGE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="dept-range")
+
+
+@dataclass(frozen=True)
+class _CanonicalDepartmentProjection:
+    segments: tuple
+    cap_utc: datetime
+
+
+def _breakdown_windows_for_segment(breakdown_windows, segment):
+    """Return breakdown windows for exactly one immutable worker visit.
+
+    ID-backed segments never consume a name-only row because duplicate display
+    names would apply one worker's exclusion to another. Legacy segments retain
+    their exact historical ``(name, work center)`` lookup.
+    """
+    if segment.person_odoo_id is None:
+        return breakdown_windows.get((segment.person_name, segment.wc_name), ())
+
+    matched = []
+    for key, windows in breakdown_windows.items():
+        if len(key) != 3:
+            continue
+        employee_odoo_id, _display_name, wc_name = key
+        if employee_odoo_id == segment.person_odoo_id and wc_name == segment.wc_name:
+            matched.extend(windows)
+    return matched
+
+
+def _canonical_department_segments(
+    day,
+    window_start_utc,
+    window_end_utc,
+    *,
+    now_utc,
+):
+    """Return ID-backed Odoo segments and their cap, or ``None`` for rollback.
+
+    Mirror-owned reads reuse Task 11's single atomic staffing snapshot. A
+    permanently strict historical day remains canonical after rollback.
+    Unavailable or stale canonical data fails closed instead of collapsing
+    duplicate employees into the legacy name-only map.
+    """
+    from .. import assignment_windows, attendance_location_policy, attendance_timeline
+    from . import staffing as staffing_routes
+
+    snapshot = staffing_routes._read_staffing_response_snapshot(  # noqa: SLF001
+        day, as_of_utc=now_utc
+    )
+    policy = snapshot.policy
+    if policy.mirror_owned:
+        canonical_cap = max(
+            window_start_utc,
+            min(window_end_utc, snapshot.verified_cap_utc),
+        )
+        if not policy.available or policy.refreshed_at is None or policy.stale:
+            return _CanonicalDepartmentProjection((), canonical_cap)
+        spans = snapshot.spans
+    else:
+        try:
+            permanently_strict = attendance_location_policy.day_is_strict(day)
+        except Exception:
+            return None
+        if not permanently_strict:
+            return None
+        try:
+            spans = attendance_timeline.timeline_for_range(
+                window_start_utc,
+                window_end_utc,
+                as_of_utc=now_utc,
+            )
+        except Exception:
+            return _CanonicalDepartmentProjection((), window_end_utc)
+        canonical_cap = window_end_utc
+
+    return _CanonicalDepartmentProjection(
+        assignment_windows.work_segments_from_timeline(
+            spans,
+            window_start_utc=window_start_utc,
+            window_end_utc=canonical_cap,
+        ),
+        canonical_cap,
+    )
 
 
 def _segment_view(score) -> dict:
@@ -281,24 +364,36 @@ def _department_day_data(
     # person signs in at the new tablet. Manual attributions are the fallback
     # for production at a WC the operator never transferred into. People with
     # no attendance records fall back to their schedule.
-    from .. import assignment_windows, wc_attributions, machine_breakdown
-    attendance_windows = timeclock_windows.attendance_windows_for_day(d)
-    if is_live_dashboard:
-        current_windows, _refreshed_at = timeclock_windows.current_attendance_windows()
-        attendance_windows = timeclock_windows.with_current_attendance_overrides(
-            attendance_windows, current_windows
-        )
-    segments = assignment_windows.resolve_segments(
-        assignments=present_assignments,
-        attributions=wc_attributions.creditable_for_day(d),
-        punch_windows=attendance_windows,
-        shift_start_utc=window_start_utc,
-        cap_utc=window_end_utc,
-        time_off_key=staffing.TIME_OFF_KEY,
-        # A tagged Odoo attendance row proves the person worked despite a
-        # stale time-off/absence marker, so Odoo wins for that person.
-        excluded_people=_absent_today - set(attendance_windows),
+    from .. import assignment_windows, machine_breakdown, wc_attributions
+
+    canonical_projection = _canonical_department_segments(
+        d,
+        window_start_utc,
+        window_end_utc,
+        now_utc=now,
     )
+    if canonical_projection is not None:
+        segments = canonical_projection.segments
+        segment_cap_utc = canonical_projection.cap_utc
+    else:
+        segment_cap_utc = window_end_utc
+        attendance_windows = timeclock_windows.attendance_windows_for_day(d)
+        if is_live_dashboard:
+            current_windows, _refreshed_at = timeclock_windows.current_attendance_windows()
+            attendance_windows = timeclock_windows.with_current_attendance_overrides(
+                attendance_windows, current_windows
+            )
+        segments = assignment_windows.resolve_segments(
+            assignments=present_assignments,
+            attributions=wc_attributions.creditable_for_day(d),
+            punch_windows=attendance_windows,
+            shift_start_utc=window_start_utc,
+            cap_utc=window_end_utc,
+            time_off_key=staffing.TIME_OFF_KEY,
+            # A tagged Odoo attendance row proves the person worked despite a
+            # stale time-off/absence marker, so Odoo wins for that person.
+            excluded_people=_absent_today - set(attendance_windows),
+        )
     # Keep every resolved segment for station activation and pace math, but on
     # today's live board show a person only at the WC whose segment remains
     # open through now. Otherwise a transfer (Repair 2 -> Dismantler 2) leaves
@@ -306,7 +401,7 @@ def _department_day_data(
     historical_who_by_wc = assignment_windows.who_by_wc(segments)
     who_by_wc = assignment_windows.dashboard_who_by_wc(
         segments,
-        cap_utc=window_end_utc,
+        cap_utc=segment_cap_utc,
         is_live=is_live_dashboard,
     )
 
@@ -486,25 +581,18 @@ def _department_day_data(
     breakdown_windows = wc_attributions.breakdown_windows_for_day(d)
 
     def _productive_minutes_less_breakdown(name, wc_name, s_utc, e_utc):
+        # Identity-safe callers use the segment-aware callback below. This
+        # legacy callback has no employee ID, so it must not guess among
+        # duplicate names.
         raw = shift_config.productive_minutes_in_window(d, s_utc, e_utc)
-        excluded = machine_breakdown.excluded_minutes_overlapping(
-            breakdown_windows.get((name, wc_name), []),
-            s_utc, e_utc, now, d,
-            shift_config.productive_minutes_in_window,
-        )
-        return max(0.0, raw - excluded)
+        return max(0.0, raw)
 
     def _productive_minutes_for_segment(segment):
         raw = shift_config.productive_minutes_in_window(
             d, segment.start_utc, segment.end_utc
         )
-        identity = (
-            (segment.person_odoo_id, segment.person_name)
-            if segment.person_odoo_id is not None
-            else segment.person_name
-        )
         excluded = machine_breakdown.excluded_minutes_overlapping(
-            breakdown_windows.get((identity, segment.wc_name), []),
+            _breakdown_windows_for_segment(breakdown_windows, segment),
             segment.start_utc,
             segment.end_utc,
             now,
@@ -534,7 +622,7 @@ def _department_day_data(
             },
             productive_minutes=_productive_minutes_less_breakdown,
             productive_minutes_for_segment=_productive_minutes_for_segment,
-            live_cap_utc=window_end_utc if is_live_dashboard else None,
+            live_cap_utc=segment_cap_utc if is_live_dashboard else None,
         )
         scored = production_segments.score_work_segments(
             credits,
@@ -549,7 +637,7 @@ def _department_day_data(
             scored,
             break_windows=breaks_utc,
             window_start_utc=window_start_utc,
-            window_end_utc=window_end_utc,
+            window_end_utc=segment_cap_utc,
             is_live=is_live_dashboard,
         )
     except Exception:

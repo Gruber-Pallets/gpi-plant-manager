@@ -352,6 +352,12 @@ def credit_work_segments(
             if units <= 0:
                 continue
             sampled_units[wc_name] = sampled_units.get(wc_name, 0.0) + units
+            # A live staffing snapshot is only authoritative through its
+            # verified cap. Count later samples as sampled so total fallback
+            # cannot re-credit them, but do not attach them to a worker or an
+            # unassigned row outside that coherent snapshot.
+            if live_cap_utc is not None and timestamp >= live_cap_utc:
+                continue
             active_by_person: dict[PersonAttributionKey, int] = {}
             for index in wc_indices:
                 row = rows[index]

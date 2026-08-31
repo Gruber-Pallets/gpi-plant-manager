@@ -15,7 +15,7 @@ def test_exceptions_js_has_breakdown_snooze_handler():
     js = (STATIC_DIR / "exceptions.js").read_text(encoding="utf-8")
     assert "js-breakdown-snooze" in js
     assert "/api/exceptions/breakdown/snooze" in js
-    assert "employee_odoo_id: breakdownEmployeeId" in js
+    assert "employee_odoo_id: employeeOdooId" in js
 
 
 def test_exceptions_js_has_breakdown_dismiss_handler():

@@ -1,6 +1,8 @@
 from datetime import date, datetime, time, timezone
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_who_by_wc_excludes_absent_people_from_schedule_and_attributions(monkeypatch):
     from zira_dashboard.routes import departments
@@ -29,6 +31,8 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     """A live transfer changes the label, without losing either station's data."""
     from zira_dashboard import (
         attendance,
+        attendance_timeline,
+        live_cache,
         machine_breakdown,
         settings_store,
         shift_config,
@@ -36,10 +40,11 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         timeclock_windows,
         wc_attributions,
     )
-    from zira_dashboard.routes import departments
+    from zira_dashboard.routes import departments, staffing as staffing_routes
     from zira_dashboard.stations import Station
 
     day = date(2026, 6, 2)
+    verified_cap = datetime(2026, 6, 2, 18, 59, tzinfo=timezone.utc)
     repair = Station("repair-2", "Repair 2", "Repair", "Recycling")
     dismantler = Station("dismantler-2", "Dismantler 2", "Dismantler", "Recycling")
     rows = [
@@ -53,11 +58,14 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         ),
         SimpleNamespace(
             station=dismantler,
-            units=384,
+            units=391,
             downtime_minutes=0,
             active_intervals=(),
             last_reading_at=None,
-            samples=((datetime(2026, 6, 2, 12, 10, tzinfo=timezone.utc), 384),),
+            samples=(
+                (datetime(2026, 6, 2, 12, 10, tzinfo=timezone.utc), 384),
+                (datetime(2026, 6, 2, 18, 59, 30, tzinfo=timezone.utc), 7),
+            ),
         ),
     ]
 
@@ -91,23 +99,66 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
             ]
         },
     )
+
+    def canonical_spans(_start, end, **_kwargs):
+        first_start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+        transfer = datetime(2026, 6, 2, 12, 5, tzinfo=timezone.utc)
+        common = {
+            "employee_odoo_id": 101,
+            "employee_name": "Jesus G.",
+            "status": "valid",
+            "odoo_work_center_id": 41,
+            "odoo_work_center_name": "Repair #2",
+            "attendance_ids": (88,),
+            "department_repair": None,
+        }
+        return (
+            attendance_timeline.LocationSpan(
+                **common,
+                start_utc=first_start,
+                end_utc=transfer,
+                app_work_center_name="Repair 2",
+            ),
+            attendance_timeline.LocationSpan(
+                **{
+                    **common,
+                    "odoo_work_center_id": 42,
+                    "odoo_work_center_name": "Dismantler #2",
+                },
+                start_utc=transfer,
+                end_utc=end,
+                app_work_center_name="Dismantler 2",
+            ),
+        )
+
+    monkeypatch.setattr(attendance_timeline, "timeline_for_range", canonical_spans)
+    monkeypatch.setattr(
+        staffing_routes,
+        "_read_staffing_response_snapshot",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            policy=live_cache.AttendanceReadPolicy(
+                True,
+                True,
+                verified_cap,
+                mode="shadow",
+            ),
+            spans=canonical_spans(None, verified_cap),
+            verified_cap_utc=verified_cap,
+        ),
+    )
     monkeypatch.setattr(
         timeclock_windows,
         "attendance_windows_for_day",
-        lambda _d: {
-            "Jesus G.": [
-                ("Repair 2", datetime(2026, 6, 2, 12, tzinfo=timezone.utc),
-                 datetime(2026, 6, 2, 12, 5, tzinfo=timezone.utc)),
-                ("Dismantler 2", datetime(2026, 6, 2, 12, 5, tzinfo=timezone.utc), None),
-            ]
-        },
+        lambda _d: pytest.fail(
+            "mirror-owned departments must keep canonical Odoo identity"
+        ),
     )
     monkeypatch.setattr(wc_attributions, "creditable_for_day", lambda _d: [])
     monkeypatch.setattr(
         wc_attributions,
         "breakdown_windows_for_day",
         lambda _d: {
-            ("Jesus G.", "Repair 2"): [
+            (101, "Jesus G.", "Repair 2"): [
                 (
                     datetime(2026, 6, 2, 12, tzinfo=timezone.utc),
                     datetime(2026, 6, 2, 12, 2, tzinfo=timezone.utc),
@@ -135,7 +186,7 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     }
     assert live["active_wc_names"] == {"Repair 2", "Dismantler 2"}
     assert live["total_recycling_people"] == 1
-    assert live["total_man_hours"] == 6.5
+    assert live["total_man_hours"] == pytest.approx(389 / 60)
 
     repair_score = live["per_wc_segments"]["Repair 2"][0]
     assert repair_score["person_name"] == "Jesus G."
@@ -145,15 +196,16 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     assert repair_score["time_label"] == "7-7:05a"
 
     dismantler_score = live["per_wc_segments"]["Dismantler 2"][0]
+    assert len(live["per_wc_segments"]["Dismantler 2"]) == 1
     assert dismantler_score["person_name"] == "Jesus G."
     assert dismantler_score["actual_units"] == 384.0
-    assert dismantler_score["goal_units"] == 415.0
+    assert dismantler_score["goal_units"] == 414.0
     assert dismantler_score["is_active"] is True
     assert dismantler_score["time_label"] == "since 7:05a"
     assert live["is_live_dashboard"] is True
     assert live["per_wc_expected"] == {
         "Repair 2": 3.0,
-        "Dismantler 2": 415.0,
+        "Dismantler 2": 414.0,
     }
     assert live["per_wc_segment_display"] == {
         "Repair 2": True,
@@ -192,7 +244,131 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         group_categories=("Repair", "Dismantler"),
     )
     assert fallback["per_wc_segments"] == {}
-    assert fallback["per_wc_units"] == {"Repair 2": 34, "Dismantler 2": 384}
+    assert fallback["per_wc_units"] == {"Repair 2": 34, "Dismantler 2": 391}
+
+
+def test_department_breakdown_lookup_keeps_same_name_odoo_ids_separate():
+    from zira_dashboard import assignment_windows
+    from zira_dashboard.routes import departments
+
+    start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+    end = start.replace(hour=13)
+    alex_101 = assignment_windows.WorkSegment(
+        "Repair 2", "Alex", start, end, "odoo", person_odoo_id=101
+    )
+    alex_202 = assignment_windows.WorkSegment(
+        "Repair 2", "Alex", start, end, "odoo", person_odoo_id=202
+    )
+    legacy_alex = assignment_windows.WorkSegment(
+        "Repair 2", "Alex", start, end, "schedule"
+    )
+    windows_101 = [(start, start.replace(minute=30))]
+    windows_202 = [(start.replace(minute=30), end)]
+    breakdown_windows = {
+        (101, "Alex", "Repair 2"): windows_101,
+        (202, "Alex", "Repair 2"): windows_202,
+        ("Alex", "Repair 2"): [(start, end)],
+    }
+
+    assert departments._breakdown_windows_for_segment(  # noqa: SLF001
+        breakdown_windows, alex_101
+    ) == windows_101
+    assert departments._breakdown_windows_for_segment(  # noqa: SLF001
+        breakdown_windows, alex_202
+    ) == windows_202
+    assert departments._breakdown_windows_for_segment(  # noqa: SLF001
+        breakdown_windows, legacy_alex
+    ) == [(start, end)]
+
+
+def test_department_breakdown_lookup_uses_odoo_id_across_display_name_change():
+    from zira_dashboard import assignment_windows
+    from zira_dashboard.routes import departments
+
+    start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+    end = start.replace(hour=13)
+    segment = assignment_windows.WorkSegment(
+        "Repair 2", "Alexandra", start, end, "odoo", person_odoo_id=101
+    )
+    windows = [(start, start.replace(minute=30))]
+
+    assert departments._breakdown_windows_for_segment(  # noqa: SLF001
+        {(101, "Alex", "Repair 2"): windows}, segment
+    ) == windows
+
+
+def test_department_canonical_segment_selection_honors_strict_day_and_staleness(
+    monkeypatch,
+):
+    from zira_dashboard import (
+        attendance_location_policy,
+        attendance_timeline,
+        live_cache,
+    )
+    from zira_dashboard.routes import departments, staffing as staffing_routes
+
+    day = date(2026, 6, 2)
+    start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 2, 13, tzinfo=timezone.utc)
+    span = attendance_timeline.LocationSpan(
+        employee_odoo_id=202,
+        employee_name="Alex",
+        start_utc=start,
+        end_utc=end,
+        status="valid",
+        app_work_center_name="Repair 2",
+        odoo_work_center_id=41,
+        odoo_work_center_name="Repair #2",
+        attendance_ids=(88,),
+        department_repair=None,
+    )
+    policy = {"value": live_cache.AttendanceReadPolicy(False, True, None)}
+    monkeypatch.setattr(
+        staffing_routes,
+        "_read_staffing_response_snapshot",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            policy=policy["value"], spans=(span,), verified_cap_utc=end
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy, "day_is_strict", lambda _day: True
+    )
+    timeline_calls = []
+    monkeypatch.setattr(
+        attendance_timeline,
+        "timeline_for_range",
+        lambda *_args, **_kwargs: timeline_calls.append(True) or (span,),
+    )
+
+    strict_projection = departments._canonical_department_segments(  # noqa: SLF001
+        day, start, end, now_utc=end
+    )
+
+    assert [
+        (segment.person_odoo_id, segment.person_name)
+        for segment in strict_projection.segments
+    ] == [(202, "Alex")]
+    assert strict_projection.cap_utc == end
+    assert timeline_calls == [True]
+
+    policy["value"] = live_cache.AttendanceReadPolicy(
+        True,
+        True,
+        end,
+        mode="shadow",
+        stale=True,
+    )
+    monkeypatch.setattr(
+        attendance_location_policy, "day_is_strict", lambda _day: False
+    )
+    timeline_calls.clear()
+
+    stale_projection = departments._canonical_department_segments(  # noqa: SLF001
+        day, start, end, now_utc=end
+    )
+    assert stale_projection.segments == ()
+    assert stale_projection.cap_utc == end
+    assert timeline_calls == []
 
 
 def test_department_segment_display_keeps_scheduled_lunch_continuous():
