@@ -31,6 +31,7 @@ class AttendanceReadPolicy:
     refreshed_at: datetime | None
     error: str | None = None
     mode: str = "off"
+    stale: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,10 +41,15 @@ class AttendanceSourceSnapshot:
     mirror_owned: bool
     available: bool
     error: str | None = None
+    stale: bool = False
 
 
-def attendance_read_policy() -> AttendanceReadPolicy:
+def attendance_read_policy(*, now_utc: datetime | None = None) -> AttendanceReadPolicy:
     """Freeze the rollout and mirror-health decision for one source read."""
+    frozen_now = now_utc or datetime.now(UTC)
+    if frozen_now.utcoffset() is None:
+        raise ValueError("now_utc must be timezone-aware")
+    frozen_now = frozen_now.astimezone(UTC)
     try:
         config = attendance_location_policy.get_rollout_config()
     except Exception as exc:  # Existing rollback path when settings cannot be read.
@@ -56,12 +62,22 @@ def attendance_read_policy() -> AttendanceReadPolicy:
         return AttendanceReadPolicy(True, False, None, str(exc), config.mode)
     if health.baseline_completed_at is None:
         return AttendanceReadPolicy(False, True, None, mode=config.mode)
+    refreshed_at = health.last_incremental_completed_at
+    if refreshed_at is None:
+        return AttendanceReadPolicy(
+            True,
+            False,
+            None,
+            health.last_error or "attendance mirror has no verified refresh",
+            config.mode,
+        )
     return AttendanceReadPolicy(
         True,
         True,
-        health.last_incremental_completed_at,
+        refreshed_at,
         health.last_error,
         config.mode,
+        frozen_now - refreshed_at.astimezone(UTC) > STALE_THRESHOLD,
     )
 
 
@@ -106,19 +122,21 @@ def read_attendance_source(
     policy = policy or attendance_read_policy()
     if not policy.mirror_owned:
         payload, refreshed_at = read_attendance(day)
-        return AttendanceSourceSnapshot(payload, refreshed_at, False, True, policy.error)
+        return AttendanceSourceSnapshot(
+            payload, refreshed_at, False, True, policy.error, policy.stale
+        )
     if not policy.available:
         return AttendanceSourceSnapshot(
-            None, policy.refreshed_at, True, False, policy.error
+            None, policy.refreshed_at, True, False, policy.error, policy.stale
         )
     try:
         payload = attendance_mirror.day_presence(day)
     except Exception as exc:
         return AttendanceSourceSnapshot(
-            None, policy.refreshed_at, True, False, str(exc)
+            None, policy.refreshed_at, True, False, str(exc), policy.stale
         )
     return AttendanceSourceSnapshot(
-        payload, policy.refreshed_at, True, True, policy.error
+        payload, policy.refreshed_at, True, True, policy.error, policy.stale
     )
 
 
@@ -168,10 +186,12 @@ def read_open_attendance_source(
     policy = policy or attendance_read_policy()
     if not policy.mirror_owned:
         payload, refreshed_at = read_open_attendance()
-        return AttendanceSourceSnapshot(payload, refreshed_at, False, True, policy.error)
+        return AttendanceSourceSnapshot(
+            payload, refreshed_at, False, True, policy.error, policy.stale
+        )
     if not policy.available:
         return AttendanceSourceSnapshot(
-            None, policy.refreshed_at, True, False, policy.error
+            None, policy.refreshed_at, True, False, policy.error, policy.stale
         )
     try:
         rows = attendance_mirror.current_open_attendance()
@@ -200,10 +220,10 @@ def read_open_attendance_source(
                 snapshot[person_id] = candidate
     except Exception as exc:
         return AttendanceSourceSnapshot(
-            None, policy.refreshed_at, True, False, str(exc)
+            None, policy.refreshed_at, True, False, str(exc), policy.stale
         )
     return AttendanceSourceSnapshot(
-        snapshot, policy.refreshed_at, True, True, policy.error
+        snapshot, policy.refreshed_at, True, True, policy.error, policy.stale
     )
 
 

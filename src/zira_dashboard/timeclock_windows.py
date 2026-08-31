@@ -134,10 +134,11 @@ def current_attendance_windows() -> tuple[
             live_cache.refresh_odoo_open_attendance()
             refreshed = live_cache.read_open_attendance_source()
             snapshot, refreshed_at = refreshed.payload, refreshed.refreshed_at
-        # refresh_odoo_open_attendance deliberately keeps the previous good
-        # row when Odoo is unavailable. Recheck its age so that fail-soft
-        # behavior never turns an old station into today's live truth.
-        if live_cache.is_stale(refreshed_at):
+        # The legacy snapshot is an open-ended cache, so an old row must not
+        # become current truth. Mirror-owned rows instead stop exactly at the
+        # response's last verified refresh; downstream interval consumers may
+        # display that bounded history without crediting time after it.
+        if not source.mirror_owned and live_cache.is_stale(refreshed_at):
             return {}, refreshed_at
         if not snapshot:
             return {}, refreshed_at
@@ -156,7 +157,10 @@ def current_attendance_windows() -> tuple[
             started_at = datetime.fromisoformat(check_in)
         except (TypeError, ValueError):
             continue
-        out[name] = [(wc_name, started_at, None)]
+        ended_at = refreshed_at if source.mirror_owned else None
+        if ended_at is not None and started_at >= ended_at:
+            continue
+        out[name] = [(wc_name, started_at, ended_at)]
     return out, refreshed_at
 
 

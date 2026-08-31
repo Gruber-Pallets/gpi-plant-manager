@@ -75,7 +75,7 @@ def _safe_time_off_entries(d):
         return []
 
 
-def _attendance_with_fallback(day, ids, *, policy=None):
+def _attendance_with_fallback(day, ids, *, policy=None, source=None):
     """Return today's per-id Odoo punch dict, filtered to `ids`.
 
     The cache holds punches for ALL employees; we filter here so callers
@@ -85,11 +85,12 @@ def _attendance_with_fallback(day, ids, *, policy=None):
     """
     from . import attendance_state, live_cache
     wanted = {str(i) for i in ids}
-    source = (
-        live_cache.read_attendance_source(day, policy=policy)
-        if policy is not None
-        else live_cache.read_attendance_source(day)
-    )
+    if source is None:
+        source = (
+            live_cache.read_attendance_source(day, policy=policy)
+            if policy is not None
+            else live_cache.read_attendance_source(day)
+        )
     payload, refreshed_at = source.payload, source.refreshed_at
     if source.mirror_owned and not source.available:
         return None
@@ -150,7 +151,9 @@ def _timeoff_names_with_fallback(day):
         return set()
 
 
-def _safe_attendance(d, sched, today, attendance_policy=None):
+def _safe_attendance(
+    d, sched, today, attendance_policy=None, attendance_source=None
+):
     """Wrap the Odoo attendance/status lookup. Returns
     {by_name, by_id, name_to_id, scheduled_ids, unscheduled_ids}.
 
@@ -209,11 +212,12 @@ def _safe_attendance(d, sched, today, attendance_policy=None):
 
         all_ids = list({*scheduled_ids, *unscheduled_ids})
         id_to_name = attendance.person_id_to_name(name_to_id)
-        punches = (
-            _attendance_with_fallback(d, all_ids, policy=attendance_policy)
-            if attendance_policy is not None
-            else _attendance_with_fallback(d, all_ids)
-        )
+        attendance_kwargs = {}
+        if attendance_policy is not None:
+            attendance_kwargs["policy"] = attendance_policy
+        if attendance_source is not None:
+            attendance_kwargs["source"] = attendance_source
+        punches = _attendance_with_fallback(d, all_ids, **attendance_kwargs)
         if punches is None:
             return empty
         attendance_by_id = attendance.compute_status(

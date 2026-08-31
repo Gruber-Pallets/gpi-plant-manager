@@ -25,6 +25,7 @@ from .attendance_timeline import LocationSpan, LocationStatus
 
 @dataclass(frozen=True)
 class StaffingPersonLocation:
+    employee_odoo_id: int
     person_name: str
     planned_work_center: str | None
     live_work_center: str | None
@@ -68,42 +69,55 @@ def build_live_locations(
     spans: Sequence[LocationSpan],
     *,
     as_of_utc: datetime,
+    planned_employee_ids: Mapping[str, int] | None = None,
 ) -> tuple[StaffingPersonLocation, ...]:
     """Overlay one current projected location without moving planned seats."""
     if as_of_utc.utcoffset() is None:
         raise ValueError("as_of_utc must be timezone-aware")
-    planned_by_name: dict[str, str] = {}
-    planned_order: list[str] = []
+    planned_employee_ids = planned_employee_ids or {}
+    planned_by_id: dict[int, str] = {}
+    planned_name_by_id: dict[int, str] = {}
+    planned_order: list[int] = []
     for work_center, names in planned_by_wc.items():
         for name in names:
-            if name not in planned_by_name:
-                planned_by_name[name] = work_center
-                planned_order.append(name)
+            employee_id = planned_employee_ids.get(name)
+            if employee_id is not None and employee_id not in planned_by_id:
+                planned_by_id[employee_id] = work_center
+                planned_name_by_id[employee_id] = name
+                planned_order.append(employee_id)
 
-    current_by_name: dict[str, LocationSpan] = {}
+    current_by_id: dict[int, LocationSpan] = {}
     for span in spans:
-        if span.start_utc > as_of_utc or span.end_utc < as_of_utc:
+        if not span.start_utc <= as_of_utc < span.end_utc:
             continue
-        previous = current_by_name.get(span.employee_name)
+        previous = current_by_id.get(span.employee_odoo_id)
         if previous is None or (span.start_utc, span.end_utc) > (
             previous.start_utc,
             previous.end_utc,
         ):
-            current_by_name[span.employee_name] = span
+            current_by_id[span.employee_odoo_id] = span
 
-    names = planned_order + sorted(
-        (name for name in current_by_name if name not in planned_by_name),
-        key=str.lower,
+    employee_ids = planned_order + sorted(
+        (
+            employee_id
+            for employee_id in current_by_id
+            if employee_id not in planned_by_id
+        ),
+        key=lambda employee_id: (
+            current_by_id[employee_id].employee_name.lower(),
+            employee_id,
+        ),
     )
     result = []
-    for name in names:
-        span = current_by_name.get(name)
+    for employee_id in employee_ids:
+        span = current_by_id.get(employee_id)
         if span is None:
             continue
         result.append(
             StaffingPersonLocation(
-                person_name=name,
-                planned_work_center=planned_by_name.get(name),
+                employee_odoo_id=employee_id,
+                person_name=planned_name_by_id.get(employee_id, span.employee_name),
+                planned_work_center=planned_by_id.get(employee_id),
                 live_work_center=span.app_work_center_name,
                 raw_odoo_work_center=span.odoo_work_center_name,
                 status=span.status,
@@ -294,7 +308,14 @@ def build_staffing_bays(
             else:
                 lvl = 0
                 color = staffing.skill_color(0)
-            assigned.append({"name": n, "level": lvl, "color": color})
+            assigned.append(
+                {
+                    "name": n,
+                    "employee_odoo_id": getattr(p, "employee_id", None),
+                    "level": lvl,
+                    "color": color,
+                }
+            )
         # Filter out anyone in Time Off — they shouldn't appear in any WC's
         # picker. The "currently-assigned safety net" below re-adds anyone
         # already historically assigned to this WC, so dirty data won't be
