@@ -22,15 +22,26 @@
         });
       };
       xhr.onerror = function () { reject(new Error('network error')); };
+      if (opts && opts.signal) {
+        if (opts.signal.aborted) {
+          reject(new Error('request aborted'));
+          return;
+        }
+        opts.signal.addEventListener('abort', function () {
+          xhr.abort();
+          reject(new Error('request aborted'));
+        }, {once: true});
+      }
       xhr.send((opts && opts.body) || null);
     });
   }
 
-  function postJson(url, payload) {
+  function postJson(url, payload, signal) {
     return fetchCompat(url, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload || {}),
+      signal: signal,
     }).then(function (r) { return r.json(); });
   }
 
@@ -41,6 +52,9 @@
   var attendanceCorrectionRow = null;
   var correctionPreviewToken = null;
   var attendancePollTimer = null;
+  var attendanceCorrectionEpoch = 0;
+  var attendanceCorrectionController = null;
+  var attendancePollController = null;
 
   function attendanceEl(selector) {
     return attendanceCorrectionDialog && attendanceCorrectionDialog.querySelector(selector);
@@ -77,7 +91,35 @@
     if (wrap) wrap.hidden = true;
   }
 
+  function cancelAttendanceCorrectionRequests() {
+    attendanceCorrectionEpoch += 1;
+    if (attendanceCorrectionController) attendanceCorrectionController.abort();
+    if (attendancePollController) attendancePollController.abort();
+    attendanceCorrectionController = null;
+    attendancePollController = null;
+    if (attendancePollTimer) clearTimeout(attendancePollTimer);
+    attendancePollTimer = null;
+  }
+
+  function attendanceResponseIsCurrent(epoch) {
+    return !!(
+      attendanceCorrectionDialog && attendanceCorrectionDialog.open &&
+      attendanceCorrectionRow && epoch === attendanceCorrectionEpoch
+    );
+  }
+
+  function beginAttendanceCorrectionRequest() {
+    cancelAttendanceCorrectionRequests();
+    attendanceCorrectionController = typeof AbortController === 'function'
+      ? new AbortController() : null;
+    return {
+      epoch: attendanceCorrectionEpoch,
+      signal: attendanceCorrectionController ? attendanceCorrectionController.signal : undefined,
+    };
+  }
+
   function invalidateAttendancePreview() {
+    cancelAttendanceCorrectionRequests();
     correctionPreviewToken = null;
     setAttendanceApplyEnabled(false);
     hideAttendanceRefreshConfirmation();
@@ -129,17 +171,34 @@
       Number(match[1]), Number(match[2]) - 1, Number(match[3]),
       Number(match[4]), Number(match[5])
     );
-    var guess = desired;
-    for (var attempt = 0; attempt < 4; attempt += 1) {
-      var parts = plantAttendanceParts(new Date(guess));
+    var desiredDate = new Date(desired);
+    if (
+      desiredDate.getUTCFullYear() !== Number(match[1]) ||
+      desiredDate.getUTCMonth() !== Number(match[2]) - 1 ||
+      desiredDate.getUTCDate() !== Number(match[3]) ||
+      desiredDate.getUTCHours() !== Number(match[4]) ||
+      desiredDate.getUTCMinutes() !== Number(match[5])
+    ) return null;
+    var candidates = {};
+    for (var hour = -36; hour <= 36; hour += 1) {
+      var probe = desired + (hour * 60 * 60 * 1000);
+      var parts = plantAttendanceParts(new Date(probe));
       var observed = Date.UTC(
         parts.year, parts.month - 1, parts.day, parts.hour, parts.minute
       );
-      var adjustment = desired - observed;
-      guess += adjustment;
-      if (!adjustment) break;
+      var candidate = desired - (observed - probe);
+      var candidateParts = plantAttendanceParts(new Date(candidate));
+      if (
+        candidateParts.year === Number(match[1]) &&
+        candidateParts.month === Number(match[2]) &&
+        candidateParts.day === Number(match[3]) &&
+        candidateParts.hour === Number(match[4]) &&
+        candidateParts.minute === Number(match[5])
+      ) candidates[candidate] = true;
     }
-    var value = new Date(guess);
+    var matches = Object.keys(candidates);
+    if (matches.length !== 1) return null;
+    var value = new Date(Number(matches[0]));
     return Number.isNaN(value.getTime()) ? null : value.toISOString();
   }
 
@@ -256,10 +315,14 @@
     var payload = attendanceCorrectionPayload();
     if (!payload) return;
     invalidateAttendancePreview();
+    var request = beginAttendanceCorrectionRequest();
     setAttendancePreviewBusy(true);
     attendanceMessage('Reading the latest attendance from Odoo…', false);
-    postJson('/api/exceptions/attendance-correction/preview', payload)
+    postJson('/api/exceptions/attendance-correction/preview', payload, request.signal)
       .then(function (resp) {
+        var epoch = request.epoch;
+        if (!attendanceResponseIsCurrent(epoch)) return;
+        attendanceCorrectionController = null;
         setAttendancePreviewBusy(false);
         if (!resp || !resp.ok) {
           attendanceMessage((resp && resp.error) || 'The preview could not be built.', true);
@@ -271,6 +334,9 @@
         attendanceMessage('Preview ready. Review it before applying.', false);
       })
       .catch(function () {
+        var epoch = request.epoch;
+        if (!attendanceResponseIsCurrent(epoch)) return;
+        attendanceCorrectionController = null;
         setAttendancePreviewBusy(false);
         attendanceMessage('Network error. Nothing was changed.', true);
       });
@@ -284,27 +350,41 @@
     progress.classList.toggle('is-error', !!isError);
   }
 
-  function scheduleAttendancePoll(jobId, requestedDelay) {
+  function scheduleAttendancePoll(jobId, requestedDelay, epoch) {
+    if (!attendanceResponseIsCurrent(epoch)) return;
     if (attendancePollTimer) clearTimeout(attendancePollTimer);
     var delay = Math.max(1000, Math.min(Number(requestedDelay) || 2000, 10000));
-    attendancePollTimer = setTimeout(function () { pollAttendanceCorrectionJob(jobId); }, delay);
+    attendancePollTimer = setTimeout(function () {
+      if (attendanceResponseIsCurrent(epoch)) pollAttendanceCorrectionJob(jobId, epoch);
+    }, delay);
   }
 
-  function pollAttendanceCorrectionJob(jobId) {
+  function pollAttendanceCorrectionJob(jobId, epoch) {
+    if (!attendanceResponseIsCurrent(epoch)) return;
+    if (attendancePollController) attendancePollController.abort();
+    attendancePollController = typeof AbortController === 'function'
+      ? new AbortController() : null;
     fetchCompat(
       '/api/exceptions/attendance-correction/' + encodeURIComponent(jobId),
-      {headers: {'Accept': 'application/json'}}
+      {
+        headers: {'Accept': 'application/json'},
+        signal: attendancePollController ? attendancePollController.signal : undefined,
+      }
     )
       .then(function (response) { return response.json(); })
       .then(function (resp) {
+        if (!attendanceResponseIsCurrent(epoch)) return;
+        attendancePollController = null;
         if (!resp || !resp.ok) {
           attendanceProgress((resp && resp.error) || 'Waiting for correction status…', true);
-          scheduleAttendancePoll(jobId, 3000);
+          scheduleAttendancePoll(jobId, 3000, epoch);
           return;
         }
         if (resp.status === 'complete') {
           attendanceProgress('Correction complete. Refreshing the inbox…', false);
-          setTimeout(function () { window.location.reload(); }, 900);
+          setTimeout(function () {
+            if (attendanceResponseIsCurrent(epoch)) window.location.reload();
+          }, 900);
           return;
         }
         if (resp.retryable) {
@@ -317,21 +397,31 @@
           'Correction in progress · ' + Number(resp.completed_operation_count || 0) + ' Odoo changes saved',
           false
         );
-        scheduleAttendancePoll(jobId, resp.poll_after_ms);
+        scheduleAttendancePoll(jobId, resp.poll_after_ms, epoch);
       })
       .catch(function () {
+        if (!attendanceResponseIsCurrent(epoch)) return;
+        attendancePollController = null;
         attendanceProgress('Connection lost. Checking again safely…', true);
-        scheduleAttendancePoll(jobId, 3000);
+        scheduleAttendancePoll(jobId, 3000, epoch);
       });
   }
 
   function applyAttendanceCorrection() {
     if (!correctionPreviewToken) return;
+    var request = beginAttendanceCorrectionRequest();
     setAttendanceApplyEnabled(false);
     setAttendancePreviewBusy(true);
     attendanceMessage('Queueing the verified Odoo correction…', false);
-    postJson('/api/exceptions/attendance-correction/apply', {preview_token: correctionPreviewToken})
+    postJson(
+      '/api/exceptions/attendance-correction/apply',
+      {preview_token: correctionPreviewToken},
+      request.signal
+    )
       .then(function (resp) {
+        var epoch = request.epoch;
+        if (!attendanceResponseIsCurrent(epoch)) return;
+        attendanceCorrectionController = null;
         setAttendancePreviewBusy(false);
         if (resp && resp.code === 'source_changed') {
           correctionPreviewToken = resp.preview_token;
@@ -346,9 +436,12 @@
         correctionPreviewToken = null;
         attendanceMessage('Correction queued. Plant Manager is checking Odoo.', false);
         attendanceProgress('Starting the correction…', false);
-        pollAttendanceCorrectionJob(resp.job_id);
+        pollAttendanceCorrectionJob(resp.job_id, epoch);
       })
       .catch(function () {
+        var epoch = request.epoch;
+        if (!attendanceResponseIsCurrent(epoch)) return;
+        attendanceCorrectionController = null;
         setAttendancePreviewBusy(false);
         attendanceMessage('Network error. Check status before trying again.', true);
       });
@@ -359,8 +452,7 @@
     attendanceCorrectionOpener = button;
     attendanceCorrectionRow = button.closest('.exception-row');
     if (!attendanceCorrectionRow) return;
-    if (attendancePollTimer) clearTimeout(attendancePollTimer);
-    attendancePollTimer = null;
+    cancelAttendanceCorrectionRequests();
     attendanceCorrectionForm.querySelectorAll('input[name="employee_odoo_ids"]').forEach(function (input) {
       input.checked = false;
     });
@@ -387,6 +479,7 @@
 
   function closeAttendanceCorrection() {
     if (!attendanceCorrectionDialog || !attendanceCorrectionDialog.open) return;
+    cancelAttendanceCorrectionRequests();
     attendanceCorrectionDialog.close();
   }
 
@@ -421,6 +514,7 @@
       closeAttendanceCorrection();
     });
     attendanceCorrectionDialog.addEventListener('close', function () {
+      cancelAttendanceCorrectionRequests();
       if (attendanceCorrectionOpener && typeof attendanceCorrectionOpener.focus === 'function') {
         attendanceCorrectionOpener.focus();
       }

@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 
 JS = Path("src/zira_dashboard/static/exceptions.js")
@@ -59,15 +60,40 @@ def test_datetime_inputs_convert_with_the_plant_timezone_not_browser_timezone():
     assert "value.getHours()" not in js
 
 
+def test_datetime_conversion_rejects_nonexistent_and_ambiguous_plant_times():
+    js = _js()
+    start = js.index("  function attendancePlantTimezone()")
+    end = js.index("  function attendanceCorrectionPayload()")
+    functions = js[start:end]
+    harness = f"""
+var attendanceCorrectionDialog = {{dataset: {{plantTimezone: 'America/Chicago'}}}};
+{functions}
+function assertEqual(actual, expected, label) {{
+  if (actual !== expected) throw new Error(label + ': ' + actual + ' !== ' + expected);
+}}
+assertEqual(
+  plantAttendanceUtcValue({{value: '2026-08-28T11:55'}}),
+  '2026-08-28T16:55:00.000Z',
+  'ordinary time'
+);
+assertEqual(plantAttendanceUtcValue({{value: '2026-03-08T02:30'}}), null, 'spring gap');
+assertEqual(plantAttendanceUtcValue({{value: '2026-11-01T01:30'}}), null, 'fall overlap');
+"""
+
+    result = subprocess.run(
+        ["node", "--eval", harness], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_job_polling_is_retry_safe_and_never_advances_the_worker():
     js = _js()
 
-    assert "function pollAttendanceCorrectionJob(jobId)" in js
-    assert (
-        "'/api/exceptions/attendance-correction/' + encodeURIComponent(jobId)" in js
-    )
+    assert "function pollAttendanceCorrectionJob(jobId, epoch)" in js
+    assert "'/api/exceptions/attendance-correction/' + encodeURIComponent(jobId)" in js
     assert "resp.poll_after_ms" in js
-    assert "setTimeout(function () { pollAttendanceCorrectionJob(jobId); }, delay)" in js
+    assert "pollAttendanceCorrectionJob(jobId, epoch)" in js
     assert "process_job" not in js
     assert "resp.status === 'complete'" in js
     assert "resp.retryable" in js
@@ -81,3 +107,46 @@ def test_dialog_supports_escape_close_and_returns_focus_to_the_card_action():
     assert "attendanceCorrectionOpener.focus()" in js
     assert "attendanceCorrectionDialog.addEventListener('cancel'" in js
     assert "attendanceCorrectionDialog.addEventListener('close'" in js
+
+
+def test_dialog_uses_abortable_epochs_for_preview_apply_and_poll_responses():
+    js = _js()
+
+    assert "attendanceCorrectionEpoch" in js
+    assert "new AbortController()" in js
+    assert "function cancelAttendanceCorrectionRequests()" in js
+    assert "function attendanceResponseIsCurrent(epoch)" in js
+    assert "if (!attendanceResponseIsCurrent(epoch)) return;" in js
+    assert "pollAttendanceCorrectionJob(jobId, epoch)" in js
+    assert "scheduleAttendancePoll(jobId, requestedDelay, epoch)" in js
+    assert "cancelAttendanceCorrectionRequests();" in js
+    assert "signal:" in js
+
+
+def test_request_epoch_runtime_aborts_and_invalidates_old_dialog_work():
+    js = _js()
+    start = js.index("  var attendanceCorrectionEpoch = 0;")
+    end = js.index("  function padAttendanceTime(value)")
+    functions = js[start:end]
+    harness = f"""
+var attendanceCorrectionDialog = {{open: true}};
+var attendanceCorrectionRow = {{item: 'first'}};
+var correctionPreviewToken = 'signed';
+var attendancePollTimer = null;
+{functions}
+var request = beginAttendanceCorrectionRequest();
+if (!attendanceResponseIsCurrent(request.epoch)) throw new Error('new request not current');
+if (request.signal.aborted) throw new Error('new request started aborted');
+cancelAttendanceCorrectionRequests();
+if (!request.signal.aborted) throw new Error('old request was not aborted');
+if (attendanceResponseIsCurrent(request.epoch)) throw new Error('old response stayed current');
+var next = beginAttendanceCorrectionRequest();
+attendanceCorrectionDialog.open = false;
+if (attendanceResponseIsCurrent(next.epoch)) throw new Error('closed dialog accepted response');
+"""
+
+    result = subprocess.run(
+        ["node", "--eval", harness], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr

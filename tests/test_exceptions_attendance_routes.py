@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Request
@@ -109,9 +111,7 @@ def client(monkeypatch):
         db,
         "query",
         lambda sql, params=(): (
-            [{"odoo_id": 44, "name": "Maria Worker"}]
-            if "FROM people" in sql
-            else []
+            [{"odoo_id": 44, "name": "Maria Worker"}] if "FROM people" in sql else []
         ),
     )
     return TestClient(test_app, follow_redirects=False)
@@ -157,9 +157,7 @@ def test_preview_requires_both_manager_upn_and_display_name(client):
         (_run_row(kind="attendance_missing_location"), ITEM_KEY),
     ],
 )
-def test_preview_rejects_stale_key_or_another_exception_kind(
-    client, monkeypatch, row, item_key
-):
+def test_preview_rejects_stale_key_or_another_exception_kind(client, monkeypatch, row, item_key):
     monkeypatch.setattr(exception_inbox, "build_snapshot", lambda: _snapshot(row))
     monkeypatch.setattr(
         attendance_corrections,
@@ -170,6 +168,29 @@ def test_preview_rejects_stale_key_or_another_exception_kind(
     response = client.post(
         "/api/exceptions/attendance-correction/preview",
         json=_payload(item_key=item_key),
+        headers=MANAGER_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "stale_item"
+
+
+@pytest.mark.parametrize("comparison_only", [True, 0, None])
+def test_preview_rejects_shadow_comparison_items_before_odoo(client, monkeypatch, comparison_only):
+    monkeypatch.setattr(
+        exception_inbox,
+        "build_snapshot",
+        lambda: _snapshot(_run_row(comparison_only=comparison_only)),
+    )
+    monkeypatch.setattr(
+        attendance_corrections,
+        "correction_preview",
+        lambda **kwargs: pytest.fail(f"shadow item reached Odoo: {kwargs}"),
+    )
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/preview",
+        json=_payload(),
         headers=MANAGER_HEADERS,
     )
 
@@ -231,6 +252,51 @@ def test_preview_rejects_invalid_time_range_before_odoo(client, monkeypatch):
     assert response.json()["code"] == "invalid_time_range"
 
 
+def test_preview_rejects_duration_over_task8_horizon_before_odoo(client, monkeypatch):
+    monkeypatch.setattr(
+        attendance_corrections,
+        "correction_preview",
+        lambda **kwargs: pytest.fail(f"oversized duration reached Odoo: {kwargs}"),
+    )
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/preview",
+        json={
+            **_payload(),
+            "end_utc": (START + timedelta(days=501)).isoformat(),
+        },
+        headers=MANAGER_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_time_range"
+
+
+def test_preview_rejects_more_than_task8_operation_limit(client, monkeypatch):
+    preview = object.__new__(attendance_corrections.CorrectionPreview)
+    for name, value in {
+        "item_key": ITEM_KEY,
+        "employee_odoo_ids": (44,),
+        "target_work_center_name": "Dismantler 1",
+        "target_odoo_work_center_id": 91,
+        "target_odoo_department_id": 3,
+        "start_utc": START,
+        "end_utc": END,
+        "plans": (SimpleNamespace(operations=(None,) * 1001),),
+    }.items():
+        object.__setattr__(preview, name, value)
+    monkeypatch.setattr(attendance_corrections, "correction_preview", lambda **_kwargs: preview)
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/preview",
+        json=_payload(),
+        headers=MANAGER_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "preview_too_large"
+
+
 def test_preview_rejects_employee_not_active_in_local_people(client, monkeypatch):
     monkeypatch.setattr(
         attendance_corrections,
@@ -241,6 +307,23 @@ def test_preview_rejects_employee_not_active_in_local_people(client, monkeypatch
     response = client.post(
         "/api/exceptions/attendance-correction/preview",
         json=_payload(employee_ids=[99]),
+        headers=MANAGER_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_employee"
+
+
+def test_preview_rejects_more_than_task8_employee_limit_before_odoo(client, monkeypatch):
+    monkeypatch.setattr(
+        attendance_corrections,
+        "correction_preview",
+        lambda **kwargs: pytest.fail(f"oversized employee list reached Odoo: {kwargs}"),
+    )
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/preview",
+        json=_payload(employee_ids=list(range(1, 102))),
         headers=MANAGER_HEADERS,
     )
 
@@ -270,7 +353,9 @@ def test_preview_returns_bounded_json_when_fresh_inbox_is_unavailable(client, mo
     assert "secret" not in response.text
 
 
-@pytest.mark.parametrize(("end", "open_label"), [(END, "8/28/2026 12:10 PM"), (None, "Still working")])
+@pytest.mark.parametrize(
+    ("end", "open_label"), [(END, "8/28/2026 12:10 PM"), (None, "Still working")]
+)
 def test_preview_returns_display_safe_live_odoo_plan_in_plant_time(
     client, monkeypatch, end, open_label
 ):
@@ -290,9 +375,7 @@ def test_preview_returns_display_safe_live_odoo_plan_in_plant_time(
     body = response.json()
     assert body["ok"] is True
     assert body["preview_token"]
-    assert body["preview"]["selected_people"] == [
-        {"employee_odoo_id": 44, "name": "Maria Worker"}
-    ]
+    assert body["preview"]["selected_people"] == [{"employee_odoo_id": 44, "name": "Maria Worker"}]
     assert body["preview"]["start_utc"] == "2026-08-28T16:55:00+00:00"
     assert body["preview"]["start_label"] == "8/28/2026 11:55 AM"
     assert body["preview"]["end_label"] == open_label
@@ -318,6 +401,14 @@ def test_apply_rejects_client_operations_and_tampered_token(client):
     response = client.post(
         "/api/exceptions/attendance-correction/apply",
         json={"preview_token": "not-signed"},
+        headers=MANAGER_HEADERS,
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_preview"
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/apply",
+        json={"preview_token": "x" * 20_001},
         headers=MANAGER_HEADERS,
     )
     assert response.status_code == 400
@@ -356,6 +447,63 @@ def test_apply_rebuilds_changed_source_and_requires_second_confirmation(client, 
     assert body["preview"]["selected_people"][0]["name"] == "Maria Worker"
 
 
+def test_apply_rejects_item_that_became_shadow_comparison_before_odoo(client, monkeypatch):
+    monkeypatch.setattr(
+        attendance_corrections,
+        "correction_preview",
+        lambda **kwargs: pytest.fail(f"shadow apply reached Odoo: {kwargs}"),
+    )
+    monkeypatch.setattr(
+        exception_inbox,
+        "build_snapshot",
+        lambda: _snapshot(_run_row(comparison_only=True)),
+    )
+    token = exceptions._preview_token(_live_preview())
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/apply",
+        json={"preview_token": token},
+        headers=MANAGER_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "stale_item"
+
+
+def test_apply_persists_the_exact_revalidated_preview_without_third_odoo_read(client, monkeypatch):
+    preview = _live_preview()
+    reads = []
+    monkeypatch.setattr(
+        attendance_corrections,
+        "correction_preview",
+        lambda **kwargs: reads.append(kwargs) or preview,
+    )
+    persisted = []
+    monkeypatch.setattr(
+        attendance_corrections,
+        "create_job_from_preview",
+        lambda *, preview, actor_email, actor_name: (
+            persisted.append((preview, actor_email, actor_name)) or 177
+        ),
+        raising=False,
+    )
+    preview_response = client.post(
+        "/api/exceptions/attendance-correction/preview",
+        json=_payload(),
+        headers=MANAGER_HEADERS,
+    )
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/apply",
+        json={"preview_token": preview_response.json()["preview_token"]},
+        headers=MANAGER_HEADERS,
+    )
+
+    assert response.status_code == 202
+    assert len(reads) == 2
+    assert persisted == [(preview, "manager@gruberpallets.com", "Floor Manager")]
+
+
 def test_duplicate_apply_returns_same_active_job_and_passes_authenticated_actor(
     client, monkeypatch
 ):
@@ -366,31 +514,12 @@ def test_duplicate_apply_returns_same_active_job_and_passes_authenticated_actor(
         lambda **kwargs: preview,
     )
     calls = []
-    active = False
-
-    def query(sql, params=()):
-        if "FROM people" in sql:
-            return [{"odoo_id": 44, "name": "Maria Worker"}]
-        if "FROM attendance_correction_jobs" in sql and active:
-            return [
-                {
-                    "id": 77,
-                    "target_work_center_name": "Dismantler 1",
-                    "start_utc": START,
-                    "end_utc": END,
-                    "employee_odoo_ids": [44],
-                }
-            ]
-        return []
 
     def create_job(**kwargs):
-        nonlocal active
         calls.append(kwargs)
-        active = True
         return 77
 
-    monkeypatch.setattr(db, "query", query)
-    monkeypatch.setattr(attendance_corrections, "create_job", create_job)
+    monkeypatch.setattr(attendance_corrections, "create_job_from_preview", create_job)
     preview_response = client.post(
         "/api/exceptions/attendance-correction/preview",
         json=_payload(),
@@ -411,41 +540,26 @@ def test_duplicate_apply_returns_same_active_job_and_passes_authenticated_actor(
 
     assert first.status_code == duplicate.status_code == 202
     assert first.json()["job_id"] == duplicate.json()["job_id"] == 77
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0]["actor_email"] == "manager@gruberpallets.com"
     assert calls[0]["actor_name"] == "Floor Manager"
+    assert calls[0]["preview"] is preview
     assert "operations" not in calls[0]
 
 
-def test_apply_does_not_reuse_active_item_job_for_different_request(
-    client, monkeypatch
-):
+def test_apply_does_not_reuse_active_item_job_for_different_request(client, monkeypatch):
     monkeypatch.setattr(
         attendance_corrections,
         "correction_preview",
         lambda **kwargs: _live_preview(),
     )
 
-    def query(sql, params=()):
-        if "FROM people" in sql:
-            return [{"odoo_id": 44, "name": "Maria Worker"}]
-        if "FROM attendance_correction_jobs" in sql:
-            return [
-                {
-                    "id": 78,
-                    "target_work_center_name": "Repair 1",
-                    "start_utc": START,
-                    "end_utc": END,
-                    "employee_odoo_ids": [44],
-                }
-            ]
-        return []
-
-    monkeypatch.setattr(db, "query", query)
     monkeypatch.setattr(
         attendance_corrections,
-        "create_job",
-        lambda **kwargs: pytest.fail(f"different active request reused: {kwargs}"),
+        "create_job_from_preview",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            attendance_corrections.CorrectionRequestConflict(78)
+        ),
     )
     preview_response = client.post(
         "/api/exceptions/attendance-correction/preview",
@@ -473,29 +587,13 @@ def test_apply_checks_concurrent_dedupe_winner_matches_request(client, monkeypat
         "correction_preview",
         lambda **kwargs: _live_preview(),
     )
-    active_reads = 0
+    calls = []
 
-    def query(sql, params=()):
-        nonlocal active_reads
-        if "FROM people" in sql:
-            return [{"odoo_id": 44, "name": "Maria Worker"}]
-        if "FROM attendance_correction_jobs" in sql:
-            active_reads += 1
-            if active_reads == 1:
-                return []
-            return [
-                {
-                    "id": 79,
-                    "target_work_center_name": "Repair 1",
-                    "start_utc": START,
-                    "end_utc": END,
-                    "employee_odoo_ids": [44],
-                }
-            ]
-        return []
+    def lose_race(**kwargs):
+        calls.append(kwargs)
+        raise attendance_corrections.CorrectionRequestConflict(79)
 
-    monkeypatch.setattr(db, "query", query)
-    monkeypatch.setattr(attendance_corrections, "create_job", lambda **kwargs: 79)
+    monkeypatch.setattr(attendance_corrections, "create_job_from_preview", lose_race)
     preview_response = client.post(
         "/api/exceptions/attendance-correction/preview",
         json=_payload(),
@@ -510,7 +608,8 @@ def test_apply_checks_concurrent_dedupe_winner_matches_request(client, monkeypat
 
     assert response.status_code == 409
     assert response.json()["code"] == "correction_in_progress"
-    assert active_reads == 2
+    assert len(calls) == 1
+    assert calls[0]["preview"].target_odoo_work_center_id == 91
 
 
 def test_job_status_is_read_only_bounded_and_requires_manager_identity(client, monkeypatch):
@@ -539,9 +638,7 @@ def test_job_status_is_read_only_bounded_and_requires_manager_identity(client, m
     )
 
     signed_out = client.get("/api/exceptions/attendance-correction/77")
-    response = client.get(
-        "/api/exceptions/attendance-correction/77", headers=MANAGER_HEADERS
-    )
+    response = client.get("/api/exceptions/attendance-correction/77", headers=MANAGER_HEADERS)
 
     assert signed_out.status_code == 401
     assert response.status_code == 200
@@ -554,20 +651,14 @@ def test_job_status_is_read_only_bounded_and_requires_manager_identity(client, m
     assert "operations" not in body
 
 
-def test_job_status_returns_bounded_json_when_durable_state_is_unavailable(
-    client, monkeypatch
-):
+def test_job_status_returns_bounded_json_when_durable_state_is_unavailable(client, monkeypatch):
     monkeypatch.setattr(
         db,
         "query",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("secret durable trace")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("secret durable trace")),
     )
 
-    response = client.get(
-        "/api/exceptions/attendance-correction/77", headers=MANAGER_HEADERS
-    )
+    response = client.get("/api/exceptions/attendance-correction/77", headers=MANAGER_HEADERS)
 
     assert response.status_code == 503
     assert response.json() == {
@@ -576,3 +667,82 @@ def test_job_status_returns_bounded_json_when_durable_state_is_unavailable(
         "error": "Correction status is not available right now. Checking again is safe.",
     }
     assert "secret" not in response.text
+
+
+def test_correction_request_body_is_rejected_before_unbounded_json_buffering(client, monkeypatch):
+    monkeypatch.setattr(
+        exception_inbox,
+        "build_snapshot",
+        lambda: pytest.fail("oversized body reached synchronous work"),
+    )
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/preview",
+        content=b"{" + b'"padding":"' + (b"x" * 70_000) + b'"}',
+        headers={**MANAGER_HEADERS, "content-type": "application/json"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["code"] == "request_too_large"
+
+
+def test_correction_request_stream_failure_returns_bounded_invalid_json():
+    class BrokenRequest:
+        headers = {}
+
+        async def stream(self):
+            raise RuntimeError("private transport detail")
+            yield b""  # pragma: no cover - makes this an async generator
+
+    response = asyncio.run(exceptions._correction_json(BrokenRequest()))
+
+    assert isinstance(response, exceptions.JSONResponse)
+    assert response.status_code == 400
+    assert b"private" not in response.body
+
+
+def test_preview_and_apply_move_snapshot_database_and_odoo_work_to_threads(client, monkeypatch):
+    preview = _live_preview()
+    monkeypatch.setattr(attendance_corrections, "correction_preview", lambda **_kwargs: preview)
+    monkeypatch.setattr(
+        attendance_corrections,
+        "create_job_from_preview",
+        lambda **_kwargs: 188,
+        raising=False,
+    )
+    calls = []
+
+    async def to_thread(function, *args, **kwargs):
+        calls.append(function.__name__)
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(exceptions.asyncio, "to_thread", to_thread)
+
+    preview_response = client.post(
+        "/api/exceptions/attendance-correction/preview",
+        json=_payload(),
+        headers=MANAGER_HEADERS,
+    )
+    apply_response = client.post(
+        "/api/exceptions/attendance-correction/apply",
+        json={"preview_token": preview_response.json()["preview_token"]},
+        headers=MANAGER_HEADERS,
+    )
+
+    assert preview_response.status_code == 200
+    assert apply_response.status_code == 202
+    assert calls == ["_attendance_preview_sync", "_attendance_apply_sync"]
+
+
+def test_preview_tokens_expire_and_fail_after_session_secret_rotation(monkeypatch):
+    token = exceptions._preview_token(_live_preview())
+    monkeypatch.setattr(exceptions, "_CORRECTION_PREVIEW_MAX_AGE", -1)
+    expired = exceptions._load_preview_token(token)
+    assert isinstance(expired, exceptions.JSONResponse)
+    assert expired.status_code == 409
+
+    monkeypatch.setattr(exceptions, "_CORRECTION_PREVIEW_MAX_AGE", 600)
+    monkeypatch.setattr(exceptions.auth, "_session_secret", lambda: "rotated-secret")
+    rotated = exceptions._load_preview_token(token)
+    assert isinstance(rotated, exceptions.JSONResponse)
+    assert rotated.status_code == 400
