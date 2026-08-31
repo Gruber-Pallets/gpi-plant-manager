@@ -201,7 +201,7 @@ def _merged_active_intervals(
     for start, end in sorted(intervals):
         if end < start:
             continue
-        if merged and start <= merged[-1][1]:
+        if merged and start < merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
             merged.append((start, end))
@@ -238,10 +238,14 @@ def unassigned_runs_for_samples(
             previous_was_unassigned = False
             continue
         sample_run_index = run_index(timestamp)
+        if sample_run_index is None:
+            current = None
+            current_run_index = None
+            previous_was_unassigned = False
+            continue
         if (
             current is not None
             and previous_was_unassigned
-            and sample_run_index is not None
             and sample_run_index == current_run_index
         ):
             current = UnassignedRun(

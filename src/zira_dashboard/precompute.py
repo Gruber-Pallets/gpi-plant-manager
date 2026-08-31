@@ -19,7 +19,7 @@ unaffected.
 from __future__ import annotations
 
 from datetime import date
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TypeAlias
 
 
@@ -75,6 +75,7 @@ def upsert_production_daily(
     *,
     replace_days: Iterable[date] = (),
     strict_days: Iterable[date] = (),
+    expected_match_states: Mapping[date, str] | None = None,
 ) -> int:
     """UPSERT a batch of rows into production_daily. Returns count written.
 
@@ -92,7 +93,8 @@ def upsert_production_daily(
     rows = list(rows)
     days_to_replace = sorted(set(replace_days))
     days_to_mark_strict = sorted(set(strict_days))
-    if not rows and not days_to_replace and not days_to_mark_strict:
+    expected_states = dict(expected_match_states or {})
+    if not rows and not days_to_replace and not days_to_mark_strict and not expected_states:
         return 0
     sql = """
         INSERT INTO production_daily (
@@ -109,6 +111,27 @@ def upsert_production_daily(
             computed_at      = now()
     """
     with db.cursor() as cur:
+        if expected_states:
+            from . import attendance_location_policy, production_history
+
+            # These tables are the complete strict/rollout decision boundary.
+            # Holding write-conflicting locks through snapshot replacement
+            # prevents a missing marker or setting row from changing in the
+            # final gap between recomputation and commit.
+            cur.execute(
+                "LOCK TABLE app_settings, attendance_strict_days "
+                "IN SHARE ROW EXCLUSIVE MODE"
+            )
+            for day, expected_state in sorted(expected_states.items()):
+                actual_state = attendance_location_policy.match_state_for_day_cur(
+                    day, cur=cur
+                )
+                if actual_state != expected_state:
+                    raise production_history.ProductionSourceUnavailable(
+                        "Production attribution state changed before snapshot "
+                        f"commit for {day.isoformat()}; saved production was "
+                        "left unchanged"
+                    )
         for day in days_to_mark_strict:
             cur.execute(
                 "INSERT INTO attendance_strict_days "
@@ -154,6 +177,7 @@ def precompute_day(day: date, client) -> dict:
     name_to_emp_id = attendance.name_to_person_id()
     rows = flatten_attribution(day, attribution, name_to_emp_id)
     kwargs = {"replace_days": (day,)}
+    kwargs["expected_match_states"] = {day: initial_match_state}
     if initial_match_state == "strict":
         kwargs["strict_days"] = (day,)
     written = upsert_production_daily(rows, **kwargs)

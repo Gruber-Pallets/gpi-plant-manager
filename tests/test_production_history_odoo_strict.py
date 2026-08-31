@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, time
+import os
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +27,11 @@ from zira_dashboard.assignment_windows import WorkSegment
 
 
 DAY = date(2026, 8, 20)
+
+
+_needs_postgres = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"), reason="needs local Postgres"
+)
 
 
 def at(hour: int, minute: int = 0) -> datetime:
@@ -383,6 +391,48 @@ def test_unassigned_runs_for_day_uses_strict_timeline_and_meter_run_boundaries(
     )
 
 
+@pytest.mark.parametrize("excluded_by", ["testing", "breakdown"])
+def test_unassigned_runs_for_day_does_not_restore_excluded_samples(
+    monkeypatch, strict_sources, excluded_by
+):
+    sample_time = at(12, 15)
+    monkeypatch.setattr(
+        attendance_timeline, "timeline_for_range", lambda *_args, **_kwargs: ()
+    )
+    monkeypatch.setattr(
+        production_history,
+        "_metered_leaderboard",
+        lambda *_args: [
+            SimpleNamespace(
+                station=SimpleNamespace(name="Repair 4"),
+                samples=((sample_time, 9),),
+                active_intervals=((at(12), at(13)),),
+            )
+        ],
+    )
+    monkeypatch.setattr(shift_config, "breaks_for", lambda _day: ())
+    monkeypatch.setattr(
+        wc_attributions,
+        "testing_windows_for_day",
+        lambda _day: (
+            {"Repair 4": [(at(12), at(12, 30))]}
+            if excluded_by == "testing"
+            else {}
+        ),
+    )
+    monkeypatch.setattr(
+        wc_attributions,
+        "breakdown_windows_for_day",
+        lambda _day: (
+            {("Alex", "Repair 4"): [(at(12), at(12, 30))]}
+            if excluded_by == "breakdown"
+            else {}
+        ),
+    )
+
+    assert production_history.unassigned_runs_for_day(DAY, object()) == ()
+
+
 def test_strict_testing_offsets_and_breakdown_exclusions_remain(
     monkeypatch, strict_sources
 ):
@@ -571,4 +621,83 @@ def test_precompute_marks_strict_recalculation_for_atomic_upsert(monkeypatch):
     assert captured["kwargs"] == {
         "replace_days": (DAY,),
         "strict_days": (DAY,),
+        "expected_match_states": {DAY: "strict"},
     }
+
+
+@_needs_postgres
+def test_cutover_flip_in_final_write_gap_preserves_prior_snapshot(monkeypatch):
+    from zira_dashboard import attendance, db
+
+    test_day = date(2098, 8, 20)
+    prior = {
+        "day": test_day,
+        "emp_id": "old",
+        "name": "Prior",
+        "wc_name": "Repair 4",
+        "units": 7,
+        "downtime": 0,
+        "hours": 1,
+        "days_worked": 1,
+    }
+    db.init_pool()
+    db.bootstrap_schema()
+    db.execute("DELETE FROM attendance_strict_days WHERE day = %s", (test_day,))
+    db.execute("DELETE FROM production_daily WHERE day = %s", (test_day,))
+    precompute.upsert_production_daily([prior], replace_days=(test_day,))
+    monkeypatch.setattr(
+        production_history,
+        "attribution_for",
+        lambda _day, _client: {
+            "New": {
+                "Repair 4": {
+                    "units": 99,
+                    "downtime": 0,
+                    "hours": 1,
+                    "days_worked": 1,
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(attendance, "name_to_person_id", lambda: {"New": "new"})
+    real_upsert = precompute.upsert_production_daily
+    write_gap_open = Event()
+    release_write = Event()
+
+    def blocked_upsert(rows, **kwargs):
+        write_gap_open.set()
+        if not release_write.wait(timeout=5):
+            raise TimeoutError("final write was not released")
+        return real_upsert(rows, **kwargs)
+
+    monkeypatch.setattr(precompute, "upsert_production_daily", blocked_upsert)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(precompute.precompute_day, test_day, object())
+            assert write_gap_open.wait(timeout=5)
+            db.execute(
+                "INSERT INTO attendance_strict_days "
+                "(day, reason, source_changed_at) VALUES (%s, %s, %s)",
+                (test_day, "concurrent cutover", at(12)),
+            )
+            release_write.set()
+            with pytest.raises(
+                production_history.ProductionSourceUnavailable,
+                match="changed before snapshot commit",
+            ):
+                pending.result(timeout=5)
+
+        stored = db.query(
+            "SELECT emp_id, name, units FROM production_daily WHERE day = %s",
+            (test_day,),
+        )
+        assert [dict(row) for row in stored] == [
+            {"emp_id": "old", "name": "Prior", "units": 7}
+        ]
+        assert db.query(
+            "SELECT day FROM attendance_strict_days WHERE day = %s", (test_day,)
+        ) == [{"day": test_day}]
+    finally:
+        release_write.set()
+        db.execute("DELETE FROM production_daily WHERE day = %s", (test_day,))
+        db.execute("DELETE FROM attendance_strict_days WHERE day = %s", (test_day,))

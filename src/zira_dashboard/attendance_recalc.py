@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Literal
@@ -84,46 +85,60 @@ def _claim_next(now_utc: datetime) -> _ClaimedJob | None:
     )
 
 
-def _mark_failed(job: _ClaimedJob, error: str, failed_at: datetime) -> None:
+def _mark_failed(job: _ClaimedJob, error: str, failed_at: datetime) -> bool:
     with db.cursor() as cur:
         cur.execute(
             "UPDATE attendance_recalc_queue SET last_error = %s, "
             "started_at = %s, completed_at = NULL "
-            "WHERE day = %s AND (started_at = %s OR started_at IS NULL)",
+            "WHERE day = %s AND started_at = %s AND completed_at IS NULL",
             (error[:500], failed_at, job.day, job.claimed_at),
         )
+        return cur.rowcount == 1
 
 
-def _mark_completed(job: _ClaimedJob, completed_at: datetime) -> None:
+def _mark_completed(job: _ClaimedJob, completed_at: datetime) -> bool:
     with db.cursor() as cur:
         cur.execute(
             "UPDATE attendance_recalc_queue SET completed_at = %s, "
             "started_at = NULL, last_error = NULL "
-            "WHERE day = %s AND started_at = %s",
+            "WHERE day = %s AND started_at = %s AND completed_at IS NULL",
             (completed_at, job.day, job.claimed_at),
         )
+        return cur.rowcount == 1
+
+
+def _resolve_production_client():
+    from . import deps
+
+    return deps.client
+
+
+def _finished_at(clock: Callable[[], datetime] | None) -> datetime:
+    return _aware_utc(clock() if clock is not None else None)
 
 
 def process_next(
     *,
     production_client=None,
     now_utc: datetime | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> RecalcResult | None:
     """Recalculate the oldest eligible local day and persist its outcome."""
     now = _aware_utc(now_utc)
     job = _claim_next(now)
     if job is None:
         return None
-    if production_client is None:
-        from .deps import client as production_client
-    from . import _http_cache, precompute
-
     try:
+        if production_client is None:
+            production_client = _resolve_production_client()
+        from . import _http_cache, precompute
+
         result = precompute.precompute_day(job.day, production_client)
         _http_cache.invalidate_all_cache()
     except Exception as exc:  # noqa: BLE001 - failure is durable and retryable
         error = str(exc) or exc.__class__.__name__
-        _mark_failed(job, error, now)
+        if not _mark_failed(job, error, _finished_at(clock)):
+            error = "recalculation claim was lost before failure could be recorded"
         return RecalcResult(
             day=job.day,
             status="failed",
@@ -131,7 +146,14 @@ def process_next(
             rows_written=0,
             error=error[:500],
         )
-    _mark_completed(job, now)
+    if not _mark_completed(job, _finished_at(clock)):
+        return RecalcResult(
+            day=job.day,
+            status="failed",
+            attempt_count=job.attempt_count,
+            rows_written=0,
+            error="recalculation claim was lost before completion could be recorded",
+        )
     return RecalcResult(
         day=job.day,
         status="completed",

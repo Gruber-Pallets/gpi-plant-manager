@@ -316,6 +316,44 @@ def test_unassigned_samples_remain_separate_across_run_and_assigned_boundaries()
     )
 
 
+def test_samples_outside_active_intervals_are_not_unassigned_runs():
+    runs = production_segments.unassigned_runs_for_samples(
+        [
+            (t(12, 5), 5),
+            (t(12, 30), 7),
+            (t(14, 5), 11),
+        ],
+        assigned_sample_times=set(),
+        active_intervals=((t(12), t(12, 10)), (t(14), t(14, 10))),
+        wc_name="Repair 4",
+    )
+
+    assert runs == (
+        production_segments.UnassignedRun(
+            "Repair 4", t(12, 5), t(12, 5), 5, 1
+        ),
+        production_segments.UnassignedRun(
+            "Repair 4", t(14, 5), t(14, 5), 11, 1
+        ),
+    )
+
+
+def test_touching_active_intervals_remain_distinct_unassigned_runs():
+    runs = production_segments.unassigned_runs_for_samples(
+        [(t(12, 55), 5), (t(13), 7)],
+        assigned_sample_times=set(),
+        active_intervals=((t(12), t(13)), (t(13), t(14))),
+        wc_name="Repair 4",
+    )
+
+    assert runs == (
+        production_segments.UnassignedRun(
+            "Repair 4", t(12, 55), t(12, 55), 5, 1
+        ),
+        production_segments.UnassignedRun("Repair 4", t(13), t(13), 7, 1),
+    )
+
+
 def test_remaining_total_uses_each_segment_productive_time():
     segments = [
         WorkSegment("Repair 4", "A", t(12), t(13), "punch"),

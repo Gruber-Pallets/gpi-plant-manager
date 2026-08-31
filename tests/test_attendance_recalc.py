@@ -5,18 +5,26 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
+import os
 
 import pytest
 
 
 DAY = date(2026, 8, 20)
 NOW = datetime(2026, 8, 21, 12, tzinfo=UTC)
+FINISHED = NOW + timedelta(minutes=20)
+
+
+_needs_postgres = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"), reason="needs local Postgres"
+)
 
 
 class FakeCursor:
     def __init__(self, row=None):
         self.row = row
         self.executed = []
+        self.rowcount = 1
 
     def execute(self, sql, params=None):
         self.executed.append((" ".join(sql.split()), params))
@@ -123,6 +131,53 @@ def test_failed_job_records_error_and_remains_retryable(monkeypatch):
     assert failure_params[0] == "Zira unavailable"
 
 
+def test_failed_job_backoff_starts_at_actual_finish_time(monkeypatch):
+    from zira_dashboard import attendance_recalc, db, precompute
+
+    fake_db = FakeDatabase([queue_row()])
+    monkeypatch.setattr(db, "cursor", fake_db.cursor)
+    monkeypatch.setattr(
+        precompute,
+        "precompute_day",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("late failure")),
+    )
+
+    attendance_recalc.process_next(
+        production_client=object(), now_utc=NOW, clock=lambda: FINISHED
+    )
+
+    failure_params = next(
+        params
+        for sql, params in fake_db.statements
+        if "last_error = %s" in sql
+    )
+    assert failure_params[1] == FINISHED
+
+
+def test_completed_job_uses_actual_finish_time(monkeypatch):
+    from zira_dashboard import _http_cache, attendance_recalc, db, precompute
+
+    fake_db = FakeDatabase([queue_row()])
+    monkeypatch.setattr(db, "cursor", fake_db.cursor)
+    monkeypatch.setattr(
+        precompute,
+        "precompute_day",
+        lambda day, _client: {"day": day.isoformat(), "rows_written": 1},
+    )
+    monkeypatch.setattr(_http_cache, "invalidate_all_cache", lambda: None)
+
+    attendance_recalc.process_next(
+        production_client=object(), now_utc=NOW, clock=lambda: FINISHED
+    )
+
+    completion_params = next(
+        params
+        for sql, params in fake_db.statements
+        if "completed_at = %s" in sql
+    )
+    assert completion_params[0] == FINISHED
+
+
 def test_cache_refresh_failure_is_recorded_for_retry(monkeypatch):
     from zira_dashboard import _http_cache, attendance_recalc, db, precompute
 
@@ -196,6 +251,79 @@ def test_default_client_is_lazy_zira_dependency(monkeypatch):
     attendance_recalc.process_next(now_utc=NOW)
 
     assert seen == [(DAY, expected_client)]
+
+
+def test_default_client_resolution_failure_is_recorded_for_retry(monkeypatch):
+    from zira_dashboard import attendance_recalc, db, precompute
+
+    fake_db = FakeDatabase([queue_row()])
+    monkeypatch.setattr(db, "cursor", fake_db.cursor)
+    monkeypatch.setattr(
+        attendance_recalc,
+        "_resolve_production_client",
+        lambda: (_ for _ in ()).throw(RuntimeError("dependency resolution failed")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        precompute,
+        "precompute_day",
+        lambda *_args: pytest.fail("unresolved dependency reached precompute"),
+    )
+
+    result = attendance_recalc.process_next(now_utc=NOW, clock=lambda: FINISHED)
+
+    assert result is not None and result.status == "failed"
+    assert result.error == "dependency resolution failed"
+    assert any("last_error = %s" in sql for sql, _params in fake_db.statements)
+
+
+@_needs_postgres
+def test_stale_failure_cannot_reopen_replacement_completion():
+    from zira_dashboard import attendance_recalc, db
+
+    test_day = date(2098, 8, 21)
+    requested_at = NOW - timedelta(hours=1)
+    replacement_completed_at = NOW + timedelta(minutes=5)
+    db.init_pool()
+    db.bootstrap_schema()
+    db.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (test_day,))
+    db.execute(
+        "INSERT INTO attendance_recalc_queue "
+        "(day, reason, requested_at, started_at, completed_at, attempt_count) "
+        "VALUES (%s, %s, %s, %s, NULL, 1)",
+        (test_day, "test", requested_at, NOW),
+    )
+    stale_job = attendance_recalc._ClaimedJob(
+        day=test_day,
+        reason="test",
+        requested_at=requested_at,
+        attempt_count=1,
+        claimed_at=NOW,
+    )
+    try:
+        db.execute(
+            "UPDATE attendance_recalc_queue SET started_at = NULL, "
+            "completed_at = %s, last_error = NULL WHERE day = %s",
+            (replacement_completed_at, test_day),
+        )
+
+        updated = attendance_recalc._mark_failed(
+            stale_job, "stale worker failed", FINISHED
+        )
+
+        assert updated is False
+        stored = db.query(
+            "SELECT started_at, completed_at, last_error "
+            "FROM attendance_recalc_queue WHERE day = %s",
+            (test_day,),
+        )[0]
+        assert stored == {
+            "started_at": None,
+            "completed_at": replacement_completed_at,
+            "last_error": None,
+        }
+    finally:
+        db.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (test_day,))
 
 
 def test_recalculation_warmer_is_registered_every_fifteen_seconds(monkeypatch):
