@@ -1508,6 +1508,14 @@ async def undo_inbox_event(event_id: int, request: Request):
 
 
 def _breakdown_transfer_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
+    if breakdown_actions.live_transfer_is_disabled():
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": breakdown_actions.LIVE_TRANSFER_MESSAGE,
+            },
+            status_code=410,
+        )
     return breakdown_actions.transfer(
         body,
         actor_upn,

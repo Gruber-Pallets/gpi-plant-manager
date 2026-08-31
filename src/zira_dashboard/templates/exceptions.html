@@ -193,13 +193,17 @@
             <input type="text" class="inline-input js-time-off-reason" aria-label="Reason to deny time off" placeholder="Reason to deny" hidden>
             <button type="button" class="row-btn danger js-time-off-refuse">Deny</button>
           {% elif action and action.type == 'breakdown' %}
-            <select class="inline-select js-wc" aria-label="Work center to transfer to">
-              <option value="">Transfer to...</option>
-              {% for wc in work_centers if wc != action.wc_name %}
-                <option value="{{ wc }}">{{ wc }}</option>
-              {% endfor %}
-            </select>
-            <button type="button" class="row-btn primary js-breakdown-transfer">Transfer</button>
+            {% if snapshot.get('breakdown_transfer_enabled', True) %}
+              <select class="inline-select js-wc" aria-label="Work center to transfer to">
+                <option value="">Transfer to...</option>
+                {% for wc in work_centers if wc != action.wc_name %}
+                  <option value="{{ wc }}">{{ wc }}</option>
+                {% endfor %}
+              </select>
+              <button type="button" class="row-btn primary js-breakdown-transfer">Transfer</button>
+            {% else %}
+              <span class="exception-action-note">Use Luke's floor app to move this worker.</span>
+            {% endif %}
             <button type="button" class="row-btn js-breakdown-snooze">Snooze 15m</button>
           {% elif dismiss_action and dismiss_action.type == 'breakdown_dismiss' %}
             <button type="button" class="row-btn js-breakdown-dismiss">Not a breakdown</button>

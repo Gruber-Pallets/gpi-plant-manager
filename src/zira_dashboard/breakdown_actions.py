@@ -4,9 +4,21 @@ from collections.abc import Callable
 
 from fastapi.responses import JSONResponse
 
+LIVE_TRANSFER_MESSAGE = "Use Luke's floor app to move this worker."
+
 
 def _json_error(message: str, status_code: int) -> JSONResponse:
     return JSONResponse({"ok": False, "error": message}, status_code=status_code)
+
+
+def live_transfer_is_disabled() -> bool:
+    """Suppress this legacy action only after positive live activation."""
+    from . import attendance_location_policy
+
+    try:
+        return attendance_location_policy.live_is_active()
+    except Exception:  # noqa: BLE001 - unreadable rollout state stays pre-live
+        return False
 
 
 def transfer(
@@ -18,7 +30,16 @@ def transfer(
     """Blocking half of /api/exceptions/breakdown/transfer: caps the
     operator's breakdown exclusion at the detected stop time, then runs the
     normal transfer chokepoint from that same timestamp."""
-    from . import inbox_keys, inbox_log, machine_breakdown, staffing_transfer, wc_attributions
+    from . import (
+        inbox_keys,
+        inbox_log,
+        machine_breakdown,
+        staffing_transfer,
+        wc_attributions,
+    )
+
+    if live_transfer_is_disabled():
+        return _json_error(LIVE_TRANSFER_MESSAGE, 410)
 
     incident_id = body.get("incident_id")
     person_name = str(body.get("person_name") or "").strip()
