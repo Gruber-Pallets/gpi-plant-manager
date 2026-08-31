@@ -297,8 +297,13 @@ def _mirror_attendance_windows_for_day(
         if not name or not isinstance(check_in, datetime):
             continue
         check_out = row.get("check_out_utc")
-        verified_end = min(check_out, verified_through_utc) if check_out else verified_through_utc
-        if verified_end <= check_in:
+        clipped_start = max(check_in, start_utc)
+        verified_end = min(
+            check_out or verified_through_utc,
+            verified_through_utc,
+            end_utc,
+        )
+        if verified_end <= clipped_start:
             continue
         wc_name = work_centers_store.app_work_center_name_for_odoo_id(
             row.get("odoo_work_center_id")
@@ -306,7 +311,7 @@ def _mirror_attendance_windows_for_day(
         by_person.setdefault(name, []).append(
             {
                 "wc_name": wc_name,
-                "start": check_in,
+                "start": clipped_start,
                 "end": verified_end,
             }
         )

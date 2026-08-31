@@ -1196,6 +1196,32 @@ CREATE TABLE IF NOT EXISTS work_schedules (
 ALTER TABLE timeclock_punches_log
   ADD COLUMN IF NOT EXISTS rounded_at TIMESTAMPTZ;
 
+-- Freeze day-end ownership when a punch is accepted. A queued punch keeps
+-- the same single-row/close-all behavior even if rollout activates or rolls
+-- back before its asynchronous Odoo retry runs.
+ALTER TABLE timeclock_punches_log
+  ADD COLUMN IF NOT EXISTS close_all_open_rows BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE timeclock_punches_log
+  DROP CONSTRAINT IF EXISTS timeclock_punches_log_close_all_action_check;
+ALTER TABLE timeclock_punches_log
+  ADD CONSTRAINT timeclock_punches_log_close_all_action_check
+  CHECK (close_all_open_rows = FALSE OR action = 'clock_out');
+
+CREATE OR REPLACE FUNCTION prevent_timeclock_close_all_intent_change()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.close_all_open_rows IS DISTINCT FROM OLD.close_all_open_rows THEN
+    RAISE EXCEPTION 'timeclock clock-out ownership intent is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS timeclock_close_all_intent_immutable
+  ON timeclock_punches_log;
+CREATE TRIGGER timeclock_close_all_intent_immutable
+BEFORE UPDATE OF close_all_open_rows ON timeclock_punches_log
+FOR EACH ROW EXECUTE FUNCTION prevent_timeclock_close_all_intent_change();
+
 -- Expression index for the effective punch time. timeclock_windows
 -- filters/orders on COALESCE(rounded_at, occurred_at); must live after the
 -- rounded_at ALTER above so fresh installs have the column.

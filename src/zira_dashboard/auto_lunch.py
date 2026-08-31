@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 from . import shift_config, db, live_cache, attendance_state, auto_lunch_settings, timeclock_sync
 
@@ -151,10 +151,12 @@ def _day_bounds(day: date) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-def _first_clock_in(person_odoo_id: int, day: date) -> datetime | None:
+def _first_clock_in(
+    person_odoo_id: int, day: date, *, source=None
+) -> datetime | None:
     """The person's earliest clock_in on `day` (their morning punch). Used as
     the flex elapsed-time anchor."""
-    source = live_cache.read_attendance_source(day)
+    source = source or live_cache.read_attendance_source(day)
     if source.mirror_owned:
         entry = (source.payload or {}).get(str(person_odoo_id))
         raw = entry.get("first_check_in") if entry else None
@@ -171,13 +173,13 @@ def _first_clock_in(person_odoo_id: int, day: date) -> datetime | None:
     return rows[0]["first_in"] if rows and rows[0]["first_in"] else None
 
 
-def _latest_in_wc(person_odoo_id: int, day: date) -> str | None:
+def _latest_in_wc(person_odoo_id: int, day: date, *, source=None) -> str | None:
     """Work center on the employee's most recent clock_in/transfer_in punch
     today, from the local log. Fallback for the sign-out WC capture when the
     reconciled state carries no work center (e.g. the open-attendance cache
     doesn't surface it) — so the auto sign-in still restores the WC and its
     Kiosk Department, matching the regular timeclock."""
-    source = live_cache.read_open_attendance_source()
+    source = source or live_cache.read_open_attendance_source()
     if source.mirror_owned:
         entry = (source.payload or {}).get(str(person_odoo_id))
         return entry.get("wc_name") if entry else None
@@ -273,13 +275,26 @@ def _stored_window(run) -> Window | None:
     return Window(out_at, in_at)
 
 
-def _window_for(person_odoo_id, kind, today, fixed_window, settings, *, run=None) -> Window | None:
+def _window_for(
+    person_odoo_id,
+    kind,
+    today,
+    fixed_window,
+    settings,
+    *,
+    run=None,
+    first_clock_in=_UNSET,
+) -> Window | None:
     stored = _stored_window(run)
     if stored is not None:
         return stored
     if kind == "scheduled":
         return fixed_window
-    first_in = _first_clock_in(person_odoo_id, today)
+    first_in = (
+        _first_clock_in(person_odoo_id, today)
+        if first_clock_in is _UNSET
+        else first_clock_in
+    )
     if first_in is None:
         return None
     return flex_window(first_in, settings.flex_after_hours, settings.flex_minutes)
@@ -311,13 +326,17 @@ def _fixed_windows_for_candidates(today, person_ids, app_fixed_window):
     return windows
 
 
-def _apply(person_odoo_id, today, kind, run, t, state, window, settings) -> None:
+def _apply(
+    person_odoo_id, today, kind, run, t, state, window, settings, *, source=None
+) -> None:
     if t.action == "clock_out":
         # Capture the WC to restore at sign-in. Prefer the reconciled current
         # WC; fall back to the WC on the employee's own latest in-punch so the
         # afternoon record still carries the work center (and its Kiosk
         # Department) even when the open-attendance cache doesn't surface it.
-        wc_name = state["current_wc"] or _latest_in_wc(person_odoo_id, today)
+        wc_name = state["current_wc"] or _latest_in_wc(
+            person_odoo_id, today, source=source
+        )
         _log.info("auto-lunch %s: person %s clock_out @ %s (wc=%s)",
                   "OBSERVE" if settings.observe_only else "LIVE",
                   person_odoo_id, t.at, wc_name)
@@ -355,7 +374,8 @@ def _apply(person_odoo_id, today, kind, run, t, state, window, settings) -> None
 
 
 def _advance_person(person_odoo_id, today, now, fixed_window, flex_ids, settings, *,
-                    run=_UNSET, snapshot=None, refreshed_at=None, latest=_UNSET) -> None:
+                    run=_UNSET, snapshot=None, refreshed_at=None, latest=_UNSET,
+                    first_clock_in=_UNSET, source=None) -> None:
     # run_tick passes the per-person inputs it already batch-read (run row,
     # open-attendance snapshot, latest punch); when omitted, each is fetched
     # here so the per-person behavior is unchanged for direct callers.
@@ -364,14 +384,27 @@ def _advance_person(person_odoo_id, today, now, fixed_window, flex_ids, settings
     # Classify once: a run's kind is fixed when the row is first created, so a
     # mid-day is_flexible change in Odoo can't reclassify an in-progress run.
     kind = run["kind"] if run else ("flex" if person_odoo_id in flex_ids else "scheduled")
-    window = _window_for(person_odoo_id, kind, today, fixed_window, settings, run=run)
+    window = _window_for(
+        person_odoo_id,
+        kind,
+        today,
+        fixed_window,
+        settings,
+        run=run,
+        first_clock_in=first_clock_in,
+    )
     if window is None:
         return
     run_state = run["state"] if run else "pending"
     if run_state in TERMINAL:
         return
     state = attendance_state.current_state(
-        person_odoo_id, snapshot=snapshot, refreshed_at=refreshed_at, latest=latest)
+        person_odoo_id,
+        snapshot=snapshot,
+        refreshed_at=refreshed_at,
+        latest=latest,
+        source=source,
+    )
     is_in = state["is_clocked_in"]
     # Observe-only simulation: we never actually clocked them out, so the real
     # state still reads clocked-in. Pretend clocked-out after an observed
@@ -381,7 +414,17 @@ def _advance_person(person_odoo_id, today, now, fixed_window, flex_ids, settings
     t = decide(run_state, is_in, window, now)
     if t.new_state == run_state and t.action is None:
         return
-    _apply(person_odoo_id, today, kind, run, t, state, window, settings)
+    _apply(
+        person_odoo_id,
+        today,
+        kind,
+        run,
+        t,
+        state,
+        window,
+        settings,
+        source=source,
+    )
 
 
 def run_tick(now: datetime | None = None) -> None:
@@ -397,9 +440,15 @@ def run_tick(now: datetime | None = None) -> None:
     if shift_config.is_workday(today):
         fixed_window = lunch_window_for_day(shift_config.breaks_for(today), today)
 
-    source = live_cache.read_open_attendance_source()
+    policy = live_cache.attendance_read_policy(now_utc=now.astimezone(UTC))
+    source = live_cache.read_open_attendance_source(policy=policy)
     snapshot, refreshed_at = source.payload, source.refreshed_at
-    if not source.available or snapshot is None or live_cache.is_stale(refreshed_at):
+    source_stale = (
+        bool(getattr(source, "stale", False))
+        if source.mirror_owned
+        else live_cache.is_stale(refreshed_at)
+    )
+    if not source.available or snapshot is None or source_stale:
         _log.info("auto-lunch: open-attendance cache missing/stale; skipping tick")
         return
 
@@ -417,6 +466,24 @@ def run_tick(now: datetime | None = None) -> None:
     # three sources per person.
     runs = _get_runs_bulk(today, candidates)
     latest_by_pid = attendance_state.latest_punches_bulk(candidates)
+    flex_candidates = {
+        pid for pid in candidates if _kind_for(pid, runs.get(pid), flex_ids) == "flex"
+    }
+    first_clock_ins: dict[int, datetime | None] = {}
+    if source.mirror_owned and flex_candidates:
+        day_source = live_cache.read_attendance_source(today, policy=policy)
+        if not day_source.available or day_source.payload is None:
+            _log.info("auto-lunch: day attendance mirror unavailable; skipping tick")
+            return
+        for pid in flex_candidates:
+            entry = day_source.payload.get(str(pid)) or {}
+            raw_first = entry.get("first_check_in")
+            try:
+                first_clock_ins[pid] = (
+                    datetime.fromisoformat(raw_first) if raw_first else None
+                )
+            except (TypeError, ValueError):
+                first_clock_ins[pid] = None
     scheduled_candidates = {
         pid for pid in candidates
         if _kind_for(pid, runs.get(pid), flex_ids) == "scheduled"
@@ -427,7 +494,13 @@ def run_tick(now: datetime | None = None) -> None:
             _advance_person(pid, today, now, fixed_windows.get(pid, fixed_window), flex_ids, settings,
                             run=runs.get(pid), snapshot=snapshot,
                             refreshed_at=refreshed_at,
-                            latest=latest_by_pid.get(pid))
+                            latest=latest_by_pid.get(pid),
+                            first_clock_in=(
+                                first_clock_ins.get(pid)
+                                if source.mirror_owned and pid in flex_candidates
+                                else _UNSET
+                            ),
+                            source=source)
         except Exception as e:  # noqa: BLE001 — one person never kills the tick
             _log.warning("auto-lunch: failed for person %s: %s", pid, e)
 
