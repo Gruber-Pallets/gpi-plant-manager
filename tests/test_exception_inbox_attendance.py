@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, date, datetime
 
 from zira_dashboard import (
@@ -172,6 +173,59 @@ def test_live_strict_replaces_legacy_aggregate_with_distinct_run(monkeypatch):
     assert sections["production_unassigned_run"]["count"] == 1
     keys = [row["item_key"] for row in snapshot["queue"]]
     assert keys.count(issue.item_key) == 1
+
+
+def test_attendance_row_revision_changes_for_urgency_but_not_a_moving_end():
+    item = _issue(
+        "attendance_missing_location",
+        "attendance_missing_location:42:901:2026-08-31T13:00:00+00:00",
+        priority="warn",
+    )
+
+    pending = exception_inbox._attendance_issue_row(item)
+    same_visible_content = exception_inbox._attendance_issue_row(
+        replace(item, end_utc=NOW.replace(minute=4))
+    )
+    urgent = exception_inbox._attendance_issue_row(
+        replace(item, end_utc=NOW.replace(minute=5), priority="urgent")
+    )
+
+    assert pending["item_key"] == same_visible_content["item_key"] == urgent["item_key"]
+    assert pending["row_key"] == same_visible_content["row_key"]
+    assert pending["row_key"] != urgent["row_key"]
+
+
+def test_production_row_revision_changes_with_units_and_sample_count():
+    item = _issue(
+        "production_unassigned_run",
+        "production_unassigned_run:Dismantler 1:2026-08-31T13:00:00+00:00",
+    )
+
+    initial = exception_inbox._attendance_issue_row(item)
+    repeated = exception_inbox._attendance_issue_row(item)
+    changed = exception_inbox._attendance_issue_row(replace(item, units=12.5, sample_count=4))
+
+    assert initial["item_key"] == changed["item_key"]
+    assert initial["row_key"] == repeated["row_key"]
+    assert initial["row_key"] != changed["row_key"]
+
+
+def test_stale_strict_day_never_restores_legacy_assignment_actions(monkeypatch):
+    _empty_legacy(monkeypatch, assignments=(_legacy_assignment(),))
+    stale_strict = _attendance_snapshot(mode="shadow", production_mode="strict", complete=False)
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "build_snapshot",
+        lambda *_a, **_k: stale_strict,
+    )
+
+    snapshot = exception_inbox.build_snapshot()
+    assignments = next(
+        section for section in snapshot["sections"] if section["id"] == "assignments"
+    )
+
+    assert assignments["count"] == 0
+    assert assignments["rows"] == []
 
 
 def test_summary_and_snapshot_count_the_same_attendance_items(monkeypatch):

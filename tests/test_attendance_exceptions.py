@@ -327,6 +327,24 @@ def test_stale_source_is_one_stable_urgent_item_and_snapshot_is_incomplete(sourc
     assert first.fresh is False
 
 
+def test_stale_mirror_preserves_frozen_strict_day_ownership(source, monkeypatch):
+    source["health"] = _health(verified=NOW - timedelta(seconds=91))
+    calls = {"match": 0}
+
+    def strict_once(*_args, **_kwargs):
+        calls["match"] += 1
+        return "strict"
+
+    monkeypatch.setattr(attendance_location_policy, "match_state_for_day", strict_once)
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+
+    assert calls["match"] == 1
+    assert snapshot.production_mode == "strict"
+    assert "Attendance Timeline" in snapshot.source_errors
+    assert _one(snapshot, "production_source_unavailable").comparison_only is False
+
+
 def test_strict_production_source_failure_becomes_urgent_without_aggregate_guess(
     source, monkeypatch
 ):
@@ -402,6 +420,71 @@ def test_already_strict_day_in_shadow_is_not_labeled_as_a_comparison(source, mon
     snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
     issue = _one(snapshot, "production_unassigned_run")
 
+    assert snapshot.production_mode == "strict"
+    assert issue.comparison_only is False
+
+
+def test_snapshot_freezes_match_state_once_and_uses_pure_strict_run_path(source, monkeypatch):
+    run = UnassignedRun(
+        "Dismantler 1", NOW - timedelta(minutes=5), NOW - timedelta(minutes=4), 2.0, 1
+    )
+    calls = {"match": 0}
+
+    def mutating_match(*_args, **_kwargs):
+        calls["match"] += 1
+        return "strict" if calls["match"] == 1 else "legacy"
+
+    monkeypatch.setattr(attendance_location_policy, "match_state_for_day", mutating_match)
+    monkeypatch.setattr(
+        wc_attributions,
+        "shadow_unassigned_runs_for_day",
+        lambda *_a, **_k: (run,),
+    )
+    monkeypatch.setattr(
+        production_history,
+        "unassigned_runs_for_day",
+        lambda *_a, **_k: pytest.fail("strict projection re-resolved rollout policy"),
+    )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+    issue = _one(snapshot, "production_unassigned_run")
+
+    assert calls["match"] == 1
+    assert snapshot.production_mode == "strict"
+    assert issue.comparison_only is False
+
+
+def test_pending_cutover_does_not_acquire_a_production_client(source, monkeypatch):
+    monkeypatch.setattr(
+        attendance_location_policy, "match_state_for_day", lambda *_a, **_k: "pending"
+    )
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "_shared_production_client",
+        lambda: (_ for _ in ()).throw(RuntimeError("client must not be read")),
+    )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+    issue = _one(snapshot, "production_source_unavailable")
+
+    assert snapshot.production_mode == "pending"
+    assert issue.reason == "strict production cutover is pending for 2026-08-31"
+
+
+def test_strict_failure_during_shadow_rollback_is_not_a_comparison(source, monkeypatch):
+    monkeypatch.setattr(
+        attendance_location_policy, "match_state_for_day", lambda *_a, **_k: "strict"
+    )
+    monkeypatch.setattr(
+        production_history,
+        "unassigned_runs_for_day",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("Zira unavailable")),
+    )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+    issue = _one(snapshot, "production_source_unavailable")
+
+    assert snapshot.mode == "shadow"
     assert snapshot.production_mode == "strict"
     assert issue.comparison_only is False
 
@@ -486,6 +569,24 @@ def test_unexpected_strict_read_failure_still_creates_source_unavailable_item(so
     issue = _one(snapshot, "production_source_unavailable")
     assert issue.reason == "Zira cache unavailable"
     assert snapshot.complete is False
+
+
+def test_unexpected_strict_client_setup_failure_is_an_actionable_source_item(source, monkeypatch):
+    monkeypatch.setattr(
+        attendance_location_policy, "match_state_for_day", lambda *_a, **_k: "strict"
+    )
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "_shared_production_client",
+        lambda: (_ for _ in ()).throw(RuntimeError("Zira client unavailable")),
+    )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+    issue = _one(snapshot, "production_source_unavailable")
+
+    assert snapshot.production_mode == "strict"
+    assert issue.reason == "Zira client unavailable"
+    assert issue.comparison_only is False
 
 
 def test_failed_repairs_are_scoped_to_the_requested_day(monkeypatch):

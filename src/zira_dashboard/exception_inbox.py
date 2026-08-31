@@ -7,6 +7,8 @@ in-process or read from the local Postgres mirror.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import UTC, date, datetime, time, timedelta
 
@@ -296,6 +298,43 @@ def _timeline_owns_location(snapshot) -> bool:
     return bool(snapshot.baseline_complete and snapshot.mode in ("shadow", "live"))
 
 
+def _strict_production_owns_day(snapshot) -> bool:
+    return snapshot.production_mode in ("strict", "pending")
+
+
+def _attendance_sections_are_active(snapshot) -> bool:
+    return _timeline_owns_location(snapshot) or _strict_production_owns_day(snapshot)
+
+
+def _attendance_row_key(issue, row: dict) -> str:
+    """Return a stable content revision without polling on a moving open end."""
+    revision = {
+        key: row.get(key)
+        for key in (
+            "name",
+            "label",
+            "priority",
+            "badge",
+            "kind",
+            "employee_odoo_id",
+            "employee_name",
+            "attendance_ids",
+            "raw_work_center_labels",
+            "odoo_work_center_ids",
+            "affected_workers",
+            "app_work_center_name",
+            "units",
+            "sample_count",
+            "reason",
+            "comparison_only",
+            "target_odoo_department_id",
+        )
+    }
+    encoded = json.dumps(revision, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+    return f"{issue.item_key}:rev:{digest}"
+
+
 def _attendance_issue_row(issue) -> dict:
     start_iso = issue.start_utc.isoformat()
     end_iso = issue.end_utc.isoformat() if issue.end_utc is not None else None
@@ -325,7 +364,7 @@ def _attendance_issue_row(issue) -> dict:
         detail_parts.append(", ".join(raw_labels))
     if issue.sample_count is not None:
         detail_parts.append(_plural(issue.sample_count, "sample"))
-    return {
+    row = {
         "name": issue.employee_name or issue.app_work_center_name or "Odoo attendance",
         "label": label_by_kind.get(issue.kind, issue.kind.replace("_", " ").title()),
         "detail": " · ".join(detail_parts),
@@ -333,7 +372,7 @@ def _attendance_issue_row(issue) -> dict:
         "badge": "Shadow comparison"
         if issue.comparison_only
         else ("Follow-up" if issue.priority == "muted" else "Needs decision"),
-        "row_key": issue.item_key,
+        "row_key": "",
         "item_key": issue.item_key,
         "action": None,
         "kind": issue.kind,
@@ -352,10 +391,12 @@ def _attendance_issue_row(issue) -> dict:
         "comparison_only": issue.comparison_only,
         "target_odoo_department_id": issue.target_odoo_department_id,
     }
+    row["row_key"] = _attendance_row_key(issue, row)
+    return row
 
 
 def _attendance_sections(snapshot) -> list[dict]:
-    if not _timeline_owns_location(snapshot):
+    if not _attendance_sections_are_active(snapshot):
         return []
     sections = []
     for kind, (title, tone) in _ATTENDANCE_SECTION_META.items():
@@ -415,7 +456,7 @@ def build_summary() -> dict:
     today = plant_day.today()
     source_errors: list[dict] = []
     attendance_snapshot = _attendance_snapshot(today, source_errors)
-    strict_production = attendance_snapshot.production_mode == "strict"
+    strict_production = _strict_production_owns_day(attendance_snapshot)
     assignments = (
         {"count": 0, "items": [], "people": []}
         if strict_production
@@ -426,7 +467,7 @@ def build_summary() -> dict:
     late = _capture(source_errors, "Late / Absence", staffing_routes.late_report_payload, {})
     missing_rows = (
         []
-        if _timeline_owns_location(attendance_snapshot)
+        if _attendance_sections_are_active(attendance_snapshot)
         else _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
     )
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
@@ -462,7 +503,7 @@ def build_summary() -> dict:
     auto_lunch_count = int(auto_lunch_alert is not None)
     attendance_counts = (
         {kind: len(attendance_snapshot.issues_for(kind)) for kind in _ATTENDANCE_SECTION_META}
-        if _timeline_owns_location(attendance_snapshot)
+        if _attendance_sections_are_active(attendance_snapshot)
         else {}
     )
     attendance_urgent_count = sum(
@@ -519,7 +560,7 @@ def build_summary() -> dict:
             **attendance_counts,
         },
     }
-    if _timeline_owns_location(attendance_snapshot):
+    if _attendance_sections_are_active(attendance_snapshot):
         summary["sections"].pop("missing_wc", None)
     return summary
 
@@ -538,7 +579,7 @@ def build_snapshot() -> dict:
     today = plant_day.today()
     source_errors: list[dict] = []
     attendance_snapshot = _attendance_snapshot(today, source_errors)
-    strict_production = attendance_snapshot.production_mode == "strict"
+    strict_production = _strict_production_owns_day(attendance_snapshot)
     assignments = (
         {"count": 0, "items": [], "people": []}
         if strict_production
@@ -549,7 +590,7 @@ def build_snapshot() -> dict:
     late = _capture(source_errors, "Late / Absence", staffing_routes.late_report_payload, {})
     missing_rows = (
         []
-        if _timeline_owns_location(attendance_snapshot)
+        if _attendance_sections_are_active(attendance_snapshot)
         else _capture(source_errors, "Missing Work Center", missing_wc.current_rows, [])
     )
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
@@ -836,7 +877,7 @@ def build_snapshot() -> dict:
             "rows": pending_rows,
         },
     ]
-    if _timeline_owns_location(attendance_snapshot):
+    if _attendance_sections_are_active(attendance_snapshot):
         sections = [section for section in sections if section["id"] != "missing_wc"]
         sections[2:2] = _attendance_sections(attendance_snapshot)
     queue = _queue_from_sections(sections)
