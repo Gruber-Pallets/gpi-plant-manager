@@ -136,7 +136,7 @@ async def _tick_attendance_mirror():
 
 
 async def _tick_attendance_recalc():
-    """Recompute one attendance-changed production day from the Zira source."""
+    """Recompute one attendance-changed production day off the event loop."""
     from . import attendance_recalc
 
     await asyncio.to_thread(attendance_recalc.process_next)
@@ -438,7 +438,7 @@ _WARMERS = [
     ("kiosk sync", _tick_timeclock_sync, 60),
     ("Odoo open-attendance", _tick_odoo_attendance, 30),
     ("attendance mirror", _tick_attendance_mirror, 30),
-    ("attendance production recalc", _tick_attendance_recalc, 15),
+    ("attendance recalculation", _tick_attendance_recalc, 15),
     ("auto-lunch", _tick_auto_lunch, 60),
     ("auto-salaried punch", _tick_auto_salaried, 60),
     ("auto-salaried reconcile", _tick_auto_salaried_reconcile, 600),

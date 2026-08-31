@@ -17,12 +17,12 @@ shift start; ends capped to `cap_utc`; non-positive segments dropped.
 
 Pure -- no DB, no network. The route supplies already-loaded inputs.
 """
+
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -45,7 +45,11 @@ def work_segments_from_timeline(
     window_start_utc: datetime,
     window_end_utc: datetime,
 ) -> tuple[WorkSegment, ...]:
-    """Convert only verified, mapped Odoo spans into production segments."""
+    """Convert only valid Odoo location spans into clipped work segments."""
+    if window_start_utc.utcoffset() is None or window_end_utc.utcoffset() is None:
+        raise TypeError("timeline window boundaries must be timezone-aware")
+    if window_end_utc <= window_start_utc:
+        raise ValueError("timeline window must have positive duration")
     segments: list[WorkSegment] = []
     for span in spans:
         if span.status != "valid" or not span.app_work_center_name:
@@ -56,8 +60,8 @@ def work_segments_from_timeline(
             continue
         segments.append(
             WorkSegment(
-                person_name=span.employee_name,
                 wc_name=span.app_work_center_name,
+                person_name=span.employee_name,
                 start_utc=start,
                 end_utc=end,
                 source="odoo",
@@ -104,13 +108,13 @@ def resolve_segments(
 
     # 2. Odoo attendance windows -- authoritative for the people who have them.
     for person, windows in punch_windows.items():
-        for (wc, start, end) in windows:
+        for wc, start, end in windows:
             if not wc:
                 continue
             _add(person, wc, start, end, "punch")
 
     # 3. Attributions -- only for people WITHOUT punches.
-    for a in (attributions or []):
+    for a in attributions or []:
         person = a["person_name"]
         if person in punched:
             continue
@@ -146,16 +150,19 @@ def resolve_segments(
             schedule_cursor = shift_start_utc
             for attribution in resolved_attributions:
                 if schedule_cursor < attribution.start_utc:
-                    out.append(WorkSegment(
-                        schedule_wc, person, schedule_cursor,
-                        attribution.start_utc, "schedule",
-                    ))
+                    out.append(
+                        WorkSegment(
+                            schedule_wc,
+                            person,
+                            schedule_cursor,
+                            attribution.start_utc,
+                            "schedule",
+                        )
+                    )
                 out.append(attribution)
                 schedule_cursor = max(schedule_cursor, attribution.end_utc)
             if schedule_cursor < cap_utc:
-                out.append(WorkSegment(
-                    schedule_wc, person, schedule_cursor, cap_utc, "schedule"
-                ))
+                out.append(WorkSegment(schedule_wc, person, schedule_cursor, cap_utc, "schedule"))
             continue
 
         for i, (wc, start, end, source) in enumerate(items):
@@ -207,9 +214,7 @@ def who_by_wc(segments: list[WorkSegment]) -> dict[str, str]:
     return {wc: " + ".join(ns) for wc, ns in order.items()}
 
 
-def current_who_by_wc(
-    segments: list[WorkSegment], *, cap_utc: datetime
-) -> dict[str, str]:
+def current_who_by_wc(segments: list[WorkSegment], *, cap_utc: datetime) -> dict[str, str]:
     """Live operator labels for work segments still open at ``cap_utc``.
 
     ``resolve_segments`` closes an otherwise-open current segment at ``cap_utc``

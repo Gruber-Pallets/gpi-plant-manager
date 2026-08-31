@@ -187,11 +187,11 @@ def test_precompute_day_flattens_and_upserts(monkeypatch):
     def fake_name_map():
         return {"Alice": "E1", "Bob": "E2"}
 
-    def fake_upsert(rows, *, replace_days=(), expected_match_states=None):
-        calls["upsert"].extend(rows)
-        calls["replace_days"] = tuple(replace_days)
-        calls["expected_match_states"] = expected_match_states
-        return len(rows)
+    def fake_store(prepared):
+        calls["upsert"].extend(prepared.rows)
+        calls["replace_days"] = (prepared.day,)
+        calls["expected_match_state"] = prepared.expected_match_state
+        return len(prepared.rows)
 
     monkeypatch.setattr(
         "zira_dashboard.production_history.attribution_for", fake_attribution
@@ -199,14 +199,14 @@ def test_precompute_day_flattens_and_upserts(monkeypatch):
     monkeypatch.setattr(
         "zira_dashboard.attendance.name_to_person_id", fake_name_map
     )
-    monkeypatch.setattr(precompute, "upsert_production_daily", fake_upsert)
+    monkeypatch.setattr(precompute, "store_prepared_day", fake_store)
 
     result = precompute.precompute_day(date(2026, 5, 1), client=None)
 
     assert result == {"day": "2026-05-01", "rows_written": 2}
     assert calls["attribution"] == 1
     assert calls["replace_days"] == (date(2026, 5, 1),)
-    assert calls["expected_match_states"] == {date(2026, 5, 1): "legacy"}
+    assert calls["expected_match_state"] == "legacy"
     assert {r["name"] for r in calls["upsert"]} == {"Alice", "Bob"}
 
 

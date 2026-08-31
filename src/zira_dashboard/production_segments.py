@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Literal
+from datetime import UTC, datetime, timedelta
+import math
+from numbers import Real
+from typing import Literal, TypeAlias
 
 from .assignment_windows import WorkSegment
 
 
 SegmentResult = Literal["ahead", "behind", "neutral"]
+PersonAttributionKey: TypeAlias = str | tuple[int, str]
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,117 @@ class UnassignedRun:
     end_utc: datetime
     units: float
     sample_count: int
+
+
+def attribution_key(credit: SegmentCredit) -> PersonAttributionKey:
+    """Use durable Odoo identity for strict credit and names for legacy credit."""
+    if credit.person_name is None:
+        raise ValueError("unassigned credit has no person attribution key")
+    if credit.person_odoo_id is None:
+        return credit.person_name
+    return (credit.person_odoo_id, credit.person_name)
+
+
+def _aware_utc(value: object, field_name: str) -> datetime:
+    if not isinstance(value, datetime) or value.utcoffset() is None:
+        raise TypeError(f"{field_name} must be an aware UTC datetime")
+    if value.utcoffset() != timedelta(0):
+        raise ValueError(f"{field_name} must be an aware UTC datetime")
+    return value.astimezone(UTC)
+
+
+def unassigned_runs_for_samples(
+    samples: Sequence[tuple[datetime, float]],
+    assigned_sample_times: set[datetime],
+    active_intervals: Sequence[tuple[datetime, datetime]],
+    *,
+    wc_name: str = "",
+) -> tuple[UnassignedRun, ...]:
+    """Group adjacent uncovered positive samples inside one production run.
+
+    A run's boundaries are the first and last sample timestamps. A one-sample
+    run therefore has equal start and end timestamps. Adjacency is evaluated
+    against the original sample order, so an assigned sample always splits two
+    uncovered groups even when all three timestamps share an active interval.
+    """
+    normalized_intervals: list[tuple[datetime, datetime]] = []
+    for raw_start, raw_end in active_intervals:
+        start = _aware_utc(raw_start, "active interval start")
+        end = _aware_utc(raw_end, "active interval end")
+        if end <= start:
+            raise ValueError("active intervals must have positive duration")
+        normalized_intervals.append((start, end))
+    normalized_intervals.sort()
+    for previous, current in zip(normalized_intervals, normalized_intervals[1:], strict=False):
+        if current[0] < previous[1]:
+            raise ValueError("active intervals cannot overlap")
+
+    assigned = {
+        _aware_utc(timestamp, "assigned sample time") for timestamp in assigned_sample_times
+    }
+    normalized_samples: list[tuple[datetime, float]] = []
+    for raw_timestamp, raw_units in samples:
+        timestamp = _aware_utc(raw_timestamp, "sample timestamp")
+        if isinstance(raw_units, bool) or not isinstance(raw_units, Real):
+            raise TypeError("sample units must be positive numbers")
+        units = float(raw_units)
+        if not math.isfinite(units) or units <= 0:
+            raise ValueError("sample units must be positive")
+        normalized_samples.append((timestamp, units))
+    if any(
+        right[0] < left[0]
+        for left, right in zip(normalized_samples, normalized_samples[1:], strict=False)
+    ):
+        raise ValueError("samples must be ordered by timestamp")
+
+    runs: list[UnassignedRun] = []
+    current_start: datetime | None = None
+    current_end: datetime | None = None
+    current_units = 0.0
+    current_count = 0
+    current_interval: int | None = None
+
+    def finish() -> None:
+        nonlocal current_start, current_end, current_units, current_count
+        nonlocal current_interval
+        if current_start is not None and current_end is not None:
+            runs.append(
+                UnassignedRun(
+                    wc_name=wc_name,
+                    start_utc=current_start,
+                    end_utc=current_end,
+                    units=current_units,
+                    sample_count=current_count,
+                )
+            )
+        current_start = None
+        current_end = None
+        current_units = 0.0
+        current_count = 0
+        current_interval = None
+
+    for timestamp, units in normalized_samples:
+        interval_index = next(
+            (
+                index
+                for index, (start, end) in enumerate(normalized_intervals)
+                if start <= timestamp < end
+            ),
+            None,
+        )
+        if timestamp in assigned or interval_index is None:
+            finish()
+            continue
+        if current_start is not None and interval_index != current_interval:
+            finish()
+        if current_start is None:
+            current_start = timestamp
+            current_interval = interval_index
+        current_end = timestamp
+        current_units += units
+        current_count += 1
+    finish()
+    return tuple(runs)
 
 
 @dataclass(frozen=True)
@@ -75,10 +189,7 @@ def _gap_is_ignored(
 ) -> bool:
     if end_utc <= start_utc:
         return True
-    return any(
-        gap_start <= start_utc and end_utc <= gap_end
-        for gap_start, gap_end in ignored_gaps
-    )
+    return any(gap_start <= start_utc and end_utc <= gap_end for gap_start, gap_end in ignored_gaps)
 
 
 def _can_join_display_scores(
@@ -103,14 +214,8 @@ def _join_display_scores(left: SegmentScore, right: SegmentScore) -> SegmentScor
         segment_id=min(left.segment_id, right.segment_id),
         wc_name=left.wc_name,
         person_name=left.person_name,
-        start_utc=min(
-            value
-            for value in (left.start_utc, right.start_utc)
-            if value is not None
-        ),
-        end_utc=max(
-            value for value in (left.end_utc, right.end_utc) if value is not None
-        ),
+        start_utc=min(value for value in (left.start_utc, right.start_utc) if value is not None),
+        end_utc=max(value for value in (left.end_utc, right.end_utc) if value is not None),
         source=left.source if left.source == right.source else "mixed",
         productive_minutes=left.productive_minutes + right.productive_minutes,
         actual_units=actual,
@@ -189,85 +294,8 @@ def _ordered_segments(segments: Sequence[WorkSegment]) -> list[WorkSegment]:
             segment.end_utc.timestamp(),
             segment.wc_name,
             segment.person_name,
-            segment.person_odoo_id or 0,
         ),
     )
-
-
-def _merged_active_intervals(
-    intervals: Sequence[tuple[datetime, datetime]],
-) -> tuple[tuple[datetime, datetime], ...]:
-    merged: list[tuple[datetime, datetime]] = []
-    for start, end in sorted(intervals):
-        if end < start:
-            continue
-        if merged and start < merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return tuple(merged)
-
-
-def unassigned_runs_for_samples(
-    samples: Sequence[tuple[datetime, float]],
-    assigned_sample_times: set[datetime],
-    active_intervals: Sequence[tuple[datetime, datetime]],
-    *,
-    wc_name: str = "",
-) -> tuple[UnassignedRun, ...]:
-    """Group adjacent uncovered positive samples without bridging run stops."""
-    intervals = _merged_active_intervals(active_intervals)
-
-    def run_index(timestamp: datetime) -> int | None:
-        for index, (start, end) in enumerate(intervals):
-            if start <= timestamp < end:
-                return index
-        return None
-
-    runs: list[UnassignedRun] = []
-    current: UnassignedRun | None = None
-    current_run_index: int | None = None
-    previous_was_unassigned = False
-    for timestamp, raw_units in sorted(samples, key=lambda item: item[0]):
-        units = float(raw_units or 0)
-        if units <= 0:
-            continue
-        if timestamp in assigned_sample_times:
-            current = None
-            current_run_index = None
-            previous_was_unassigned = False
-            continue
-        sample_run_index = run_index(timestamp)
-        if sample_run_index is None:
-            current = None
-            current_run_index = None
-            previous_was_unassigned = False
-            continue
-        if (
-            current is not None
-            and previous_was_unassigned
-            and sample_run_index == current_run_index
-        ):
-            current = UnassignedRun(
-                wc_name=wc_name,
-                start_utc=current.start_utc,
-                end_utc=timestamp,
-                units=current.units + units,
-                sample_count=current.sample_count + 1,
-            )
-            runs[-1] = current
-        else:
-            current = UnassignedRun(
-                wc_name=wc_name,
-                start_utc=timestamp,
-                end_utc=timestamp,
-                units=units,
-                sample_count=1,
-            )
-            runs.append(current)
-        current_run_index = sample_run_index
-        previous_was_unassigned = True
-    return tuple(runs)
 
 
 def credit_work_segments(
@@ -302,11 +330,10 @@ def credit_work_segments(
             "start_utc": segment.start_utc,
             "end_utc": segment.end_utc,
             "source": segment.source,
+            "person_odoo_id": segment.person_odoo_id,
             "productive_minutes": minutes,
             "actual_units": 0.0,
-            "is_active": live_cap_utc is not None
-            and segment.end_utc == live_cap_utc,
-            "person_odoo_id": segment.person_odoo_id,
+            "is_active": live_cap_utc is not None and segment.end_utc == live_cap_utc,
         }
         indices_by_wc.setdefault(segment.wc_name, []).append(len(rows))
         rows.append(row)
@@ -320,14 +347,14 @@ def credit_work_segments(
             if units <= 0:
                 continue
             sampled_units[wc_name] = sampled_units.get(wc_name, 0.0) + units
-            active_by_person: dict[tuple[str, object], int] = {}
+            active_by_person: dict[PersonAttributionKey, int] = {}
             for index in wc_indices:
                 row = rows[index]
                 if row["start_utc"] <= timestamp < row["end_utc"]:
-                    identity = (
-                        ("odoo", row["person_odoo_id"])
+                    identity: PersonAttributionKey = (
+                        (row["person_odoo_id"], row["person_name"])
                         if row["person_odoo_id"] is not None
-                        else ("legacy", row["person_name"])
+                        else row["person_name"]
                     )
                     active_by_person.setdefault(identity, index)
             if active_by_person:
@@ -383,10 +410,10 @@ def credit_work_segments(
                 "start_utc": bucket["start_utc"],
                 "end_utc": bucket["end_utc"],
                 "source": "unassigned",
+                "person_odoo_id": None,
                 "productive_minutes": 0.0,
                 "actual_units": bucket["actual_units"],
                 "is_active": False,
-                "person_odoo_id": None,
             }
         )
 
@@ -398,9 +425,7 @@ def credit_work_segments(
         wc_rows.sort(
             key=lambda row: (
                 row.start_utc is None,
-                row.start_utc.timestamp()
-                if row.start_utc is not None
-                else float("inf"),
+                row.start_utc.timestamp() if row.start_utc is not None else float("inf"),
                 row.segment_id,
             )
         )
