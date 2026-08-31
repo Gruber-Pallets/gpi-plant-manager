@@ -34,6 +34,407 @@
     }).then(function (r) { return r.json(); });
   }
 
+  // ---- Verified Odoo attendance correction -------------------------------
+  var attendanceCorrectionDialog = document.querySelector('[data-attendance-correction-dialog]');
+  var attendanceCorrectionForm = document.querySelector('[data-attendance-correction-form]');
+  var attendanceCorrectionOpener = null;
+  var attendanceCorrectionRow = null;
+  var correctionPreviewToken = null;
+  var attendancePollTimer = null;
+
+  function attendanceEl(selector) {
+    return attendanceCorrectionDialog && attendanceCorrectionDialog.querySelector(selector);
+  }
+
+  function attendanceMessage(text, isError) {
+    var el = attendanceEl('[data-attendance-message]');
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.toggle('is-error', !!isError);
+  }
+
+  function setAttendanceApplyEnabled(enabled) {
+    var btn = attendanceEl('[data-attendance-apply]');
+    if (btn) btn.disabled = !enabled;
+  }
+
+  function setAttendancePreviewBusy(busy) {
+    var btn = attendanceEl('[data-attendance-preview]');
+    if (!btn) return;
+    btn.disabled = !!busy;
+    btn.textContent = busy ? 'Building preview…' : 'Preview Odoo change';
+  }
+
+  function clearAttendancePreview() {
+    var output = attendanceEl('[data-attendance-preview-output]');
+    if (!output) return;
+    output.replaceChildren();
+    output.hidden = true;
+  }
+
+  function hideAttendanceRefreshConfirmation() {
+    var wrap = attendanceEl('[data-attendance-refresh-wrap]');
+    if (wrap) wrap.hidden = true;
+  }
+
+  function invalidateAttendancePreview() {
+    correctionPreviewToken = null;
+    setAttendanceApplyEnabled(false);
+    hideAttendanceRefreshConfirmation();
+    clearAttendancePreview();
+  }
+
+  function padAttendanceTime(value) {
+    return String(value).padStart(2, '0');
+  }
+
+  function attendancePlantTimezone() {
+    return (attendanceCorrectionDialog && attendanceCorrectionDialog.dataset.plantTimezone) || 'America/Chicago';
+  }
+
+  function plantAttendanceParts(value) {
+    var parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: attendancePlantTimezone(),
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(value);
+    var result = {};
+    parts.forEach(function (part) {
+      if (part.type !== 'literal') result[part.type] = Number(part.value);
+    });
+    return result;
+  }
+
+  function localAttendanceInputValue(iso) {
+    if (!iso) return '';
+    var value = new Date(iso);
+    if (Number.isNaN(value.getTime())) return '';
+    var parts = plantAttendanceParts(value);
+    return [
+      parts.year, '-', padAttendanceTime(parts.month), '-',
+      padAttendanceTime(parts.day), 'T', padAttendanceTime(parts.hour), ':',
+      padAttendanceTime(parts.minute),
+    ].join('');
+  }
+
+  function plantAttendanceUtcValue(input) {
+    if (!input || !input.value) return null;
+    var match = input.value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    var desired = Date.UTC(
+      Number(match[1]), Number(match[2]) - 1, Number(match[3]),
+      Number(match[4]), Number(match[5])
+    );
+    var guess = desired;
+    for (var attempt = 0; attempt < 4; attempt += 1) {
+      var parts = plantAttendanceParts(new Date(guess));
+      var observed = Date.UTC(
+        parts.year, parts.month - 1, parts.day, parts.hour, parts.minute
+      );
+      var adjustment = desired - observed;
+      guess += adjustment;
+      if (!adjustment) break;
+    }
+    var value = new Date(guess);
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+
+  function attendanceCorrectionPayload() {
+    if (!attendanceCorrectionRow) return null;
+    var employeeIds = Array.from(
+      attendanceCorrectionForm.querySelectorAll('input[name="employee_odoo_ids"]:checked')
+    ).map(function (input) { return asInt(input.value); }).filter(function (value) {
+      return value !== null && value > 0;
+    });
+    var startInput = attendanceEl('[data-attendance-start]');
+    var endInput = attendanceEl('[data-attendance-end]');
+    var openInput = attendanceEl('[data-attendance-open-ended]');
+    var target = attendanceEl('[data-attendance-work-center]');
+    var startUtc = plantAttendanceUtcValue(startInput);
+    var endUtc = openInput && openInput.checked ? null : plantAttendanceUtcValue(endInput);
+    if (!employeeIds.length) {
+      attendanceMessage('Choose at least one worker.', true);
+      return null;
+    }
+    if (!startUtc) {
+      attendanceMessage('Enter an exact start time.', true);
+      return null;
+    }
+    if (!openInput.checked && !endUtc) {
+      attendanceMessage('Enter an end time or choose Still working.', true);
+      return null;
+    }
+    if (endUtc && new Date(endUtc) <= new Date(startUtc)) {
+      attendanceMessage('The end time must be later than the start time.', true);
+      return null;
+    }
+    if (!target || !target.value) {
+      attendanceMessage('Choose a target work center.', true);
+      return null;
+    }
+    return {
+      item_key: attendanceCorrectionRow.dataset.correctionItemKey,
+      employee_odoo_ids: employeeIds,
+      work_center_name: target.value,
+      start_utc: startUtc,
+      end_utc: endUtc,
+    };
+  }
+
+  function textElement(tag, className, textValue) {
+    var element = document.createElement(tag);
+    if (className) element.className = className;
+    element.textContent = textValue || '';
+    return element;
+  }
+
+  function renderAttendanceIntervals(parent, title, intervals) {
+    var group = document.createElement('div');
+    group.className = 'attendance-preview-group';
+    group.appendChild(textElement('span', 'attendance-preview-group-title', title));
+    if (!intervals || !intervals.length) {
+      group.appendChild(textElement('p', 'attendance-preview-summary', 'No attendance rows'));
+    } else {
+      intervals.forEach(function (interval) {
+        var row = document.createElement('div');
+        row.className = 'attendance-preview-interval';
+        row.appendChild(textElement('span', '', interval.work_center_name));
+        row.appendChild(textElement(
+          'span', '', interval.start_label + ' to ' + (interval.end_label || 'Still working')
+        ));
+        group.appendChild(row);
+      });
+    }
+    parent.appendChild(group);
+  }
+
+  function operationSummaryText(summary) {
+    summary = summary || {};
+    return [
+      Number(summary.create || 0) + ' create',
+      Number(summary.update || 0) + ' change',
+      Number(summary.delete || 0) + ' remove',
+    ].join(' · ');
+  }
+
+  function renderAttendancePreview(preview) {
+    var output = attendanceEl('[data-attendance-preview-output]');
+    if (!output || !preview) return;
+    output.replaceChildren();
+    output.appendChild(textElement(
+      'h3', 'attendance-preview-heading',
+      preview.target_work_center_name + ' · ' + preview.start_label + ' to ' + preview.end_label
+    ));
+    (preview.employees || []).forEach(function (employee) {
+      var person = document.createElement('section');
+      person.className = 'attendance-preview-person';
+      person.appendChild(textElement('h3', '', employee.name));
+      renderAttendanceIntervals(person, 'Odoo source rows', employee.source_intervals);
+      renderAttendanceIntervals(person, 'Before', employee.before_intervals);
+      renderAttendanceIntervals(person, 'After', employee.after_intervals);
+      person.appendChild(textElement(
+        'p', 'attendance-preview-summary',
+        'Odoo plan: ' + operationSummaryText(employee.operation_summary)
+      ));
+      output.appendChild(person);
+    });
+    output.hidden = false;
+  }
+
+  function showAttendanceRefreshConfirmation() {
+    setAttendanceApplyEnabled(false);
+    var wrap = attendanceEl('[data-attendance-refresh-wrap]');
+    if (wrap) wrap.hidden = false;
+    attendanceMessage('Review the refreshed preview. Confirm it before applying.', true);
+  }
+
+  function previewAttendanceCorrection() {
+    var payload = attendanceCorrectionPayload();
+    if (!payload) return;
+    invalidateAttendancePreview();
+    setAttendancePreviewBusy(true);
+    attendanceMessage('Reading the latest attendance from Odoo…', false);
+    postJson('/api/exceptions/attendance-correction/preview', payload)
+      .then(function (resp) {
+        setAttendancePreviewBusy(false);
+        if (!resp || !resp.ok) {
+          attendanceMessage((resp && resp.error) || 'The preview could not be built.', true);
+          return;
+        }
+        correctionPreviewToken = resp.preview_token;
+        renderAttendancePreview(resp.preview);
+        setAttendanceApplyEnabled(true);
+        attendanceMessage('Preview ready. Review it before applying.', false);
+      })
+      .catch(function () {
+        setAttendancePreviewBusy(false);
+        attendanceMessage('Network error. Nothing was changed.', true);
+      });
+  }
+
+  function attendanceProgress(text, isError) {
+    var progress = attendanceEl('[data-attendance-progress]');
+    if (!progress) return;
+    progress.hidden = false;
+    progress.textContent = text || '';
+    progress.classList.toggle('is-error', !!isError);
+  }
+
+  function scheduleAttendancePoll(jobId, requestedDelay) {
+    if (attendancePollTimer) clearTimeout(attendancePollTimer);
+    var delay = Math.max(1000, Math.min(Number(requestedDelay) || 2000, 10000));
+    attendancePollTimer = setTimeout(function () { pollAttendanceCorrectionJob(jobId); }, delay);
+  }
+
+  function pollAttendanceCorrectionJob(jobId) {
+    fetchCompat(
+      '/api/exceptions/attendance-correction/' + encodeURIComponent(jobId),
+      {headers: {'Accept': 'application/json'}}
+    )
+      .then(function (response) { return response.json(); })
+      .then(function (resp) {
+        if (!resp || !resp.ok) {
+          attendanceProgress((resp && resp.error) || 'Waiting for correction status…', true);
+          scheduleAttendancePoll(jobId, 3000);
+          return;
+        }
+        if (resp.status === 'complete') {
+          attendanceProgress('Correction complete. Refreshing the inbox…', false);
+          setTimeout(function () { window.location.reload(); }, 900);
+          return;
+        }
+        if (resp.retryable) {
+          attendanceProgress(resp.error || 'Odoo could not finish. Preview and try again.', true);
+          setAttendancePreviewBusy(false);
+          invalidateAttendancePreview();
+          return;
+        }
+        attendanceProgress(
+          'Correction in progress · ' + Number(resp.completed_operation_count || 0) + ' Odoo changes saved',
+          false
+        );
+        scheduleAttendancePoll(jobId, resp.poll_after_ms);
+      })
+      .catch(function () {
+        attendanceProgress('Connection lost. Checking again safely…', true);
+        scheduleAttendancePoll(jobId, 3000);
+      });
+  }
+
+  function applyAttendanceCorrection() {
+    if (!correctionPreviewToken) return;
+    setAttendanceApplyEnabled(false);
+    setAttendancePreviewBusy(true);
+    attendanceMessage('Queueing the verified Odoo correction…', false);
+    postJson('/api/exceptions/attendance-correction/apply', {preview_token: correctionPreviewToken})
+      .then(function (resp) {
+        setAttendancePreviewBusy(false);
+        if (resp && resp.code === 'source_changed') {
+          correctionPreviewToken = resp.preview_token;
+          renderAttendancePreview(resp.preview);
+          showAttendanceRefreshConfirmation();
+          return;
+        }
+        if (!resp || !resp.ok) {
+          attendanceMessage((resp && resp.error) || 'The correction could not be queued.', true);
+          return;
+        }
+        correctionPreviewToken = null;
+        attendanceMessage('Correction queued. Plant Manager is checking Odoo.', false);
+        attendanceProgress('Starting the correction…', false);
+        pollAttendanceCorrectionJob(resp.job_id);
+      })
+      .catch(function () {
+        setAttendancePreviewBusy(false);
+        attendanceMessage('Network error. Check status before trying again.', true);
+      });
+  }
+
+  function openAttendanceCorrection(button) {
+    if (!attendanceCorrectionDialog || !attendanceCorrectionForm) return;
+    attendanceCorrectionOpener = button;
+    attendanceCorrectionRow = button.closest('.exception-row');
+    if (!attendanceCorrectionRow) return;
+    if (attendancePollTimer) clearTimeout(attendancePollTimer);
+    attendancePollTimer = null;
+    attendanceCorrectionForm.querySelectorAll('input[name="employee_odoo_ids"]').forEach(function (input) {
+      input.checked = false;
+    });
+    var start = attendanceEl('[data-attendance-start]');
+    var end = attendanceEl('[data-attendance-end]');
+    var openEnded = attendanceEl('[data-attendance-open-ended]');
+    var target = attendanceEl('[data-attendance-work-center]');
+    start.value = localAttendanceInputValue(attendanceCorrectionRow.dataset.correctionStartUtc);
+    end.value = localAttendanceInputValue(attendanceCorrectionRow.dataset.correctionEndUtc);
+    openEnded.checked = attendanceCorrectionRow.dataset.correctionEndOpen === 'true';
+    end.disabled = openEnded.checked;
+    target.value = attendanceCorrectionRow.dataset.correctionWorkCenter || '';
+    var progress = attendanceEl('[data-attendance-progress]');
+    if (progress) {
+      progress.hidden = true;
+      progress.textContent = '';
+    }
+    invalidateAttendancePreview();
+    attendanceMessage('', false);
+    attendanceCorrectionDialog.showModal();
+    var firstPerson = attendanceCorrectionForm.querySelector('input[name="employee_odoo_ids"]');
+    if (firstPerson) firstPerson.focus();
+  }
+
+  function closeAttendanceCorrection() {
+    if (!attendanceCorrectionDialog || !attendanceCorrectionDialog.open) return;
+    attendanceCorrectionDialog.close();
+  }
+
+  function initAttendanceCorrection() {
+    if (!attendanceCorrectionDialog || !attendanceCorrectionForm) return;
+    document.querySelectorAll('[data-attendance-correction-open]').forEach(function (button) {
+      button.addEventListener('click', function () { openAttendanceCorrection(button); });
+    });
+    attendanceCorrectionDialog.querySelectorAll('[data-attendance-close]').forEach(function (button) {
+      button.addEventListener('click', closeAttendanceCorrection);
+    });
+    attendanceEl('[data-attendance-preview]').addEventListener('click', previewAttendanceCorrection);
+    attendanceEl('[data-attendance-apply]').addEventListener('click', applyAttendanceCorrection);
+    attendanceEl('[data-attendance-refresh-confirm]').addEventListener('click', function () {
+      hideAttendanceRefreshConfirmation();
+      setAttendanceApplyEnabled(true);
+      attendanceMessage('Refreshed preview confirmed. Apply when ready.', false);
+    });
+    attendanceCorrectionForm.addEventListener('change', function (event) {
+      if (event.target.matches('[data-attendance-open-ended]')) {
+        var end = attendanceEl('[data-attendance-end]');
+        end.disabled = event.target.checked;
+        if (event.target.checked) end.value = '';
+      }
+      invalidateAttendancePreview();
+    });
+    attendanceCorrectionForm.addEventListener('input', function () {
+      invalidateAttendancePreview();
+    });
+    attendanceCorrectionDialog.addEventListener('cancel', function (event) {
+      event.preventDefault();
+      closeAttendanceCorrection();
+    });
+    attendanceCorrectionDialog.addEventListener('close', function () {
+      if (attendanceCorrectionOpener && typeof attendanceCorrectionOpener.focus === 'function') {
+        attendanceCorrectionOpener.focus();
+      }
+      attendanceCorrectionOpener = null;
+      attendanceCorrectionRow = null;
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && attendanceCorrectionDialog.open) {
+        event.preventDefault();
+        closeAttendanceCorrection();
+      }
+    });
+  }
+
   function openAlert(key) {
     var api = window.gpiAlertBadges && window.gpiAlertBadges[key];
     if (api && typeof api.openModal === 'function') {
@@ -243,6 +644,7 @@
   }
 
   function hasInlineWorkInProgress() {
+    if (attendanceCorrectionDialog && attendanceCorrectionDialog.open) return true;
     var active = document.activeElement;
     if (active && active.closest && active.closest('.row-actions')) return true;
     if (document.querySelector('.exception-row.is-error')) return true;
@@ -841,6 +1243,7 @@
   }
 
   try { currentFocus = sessionStorage.getItem('exceptions_focus') || 'all'; } catch (e) {}
+  initAttendanceCorrection();
   applyFocus(currentFocus);
   updateQueueEmpty();
   window.setInterval(pollFreshness, POLL_MS);

@@ -69,6 +69,13 @@
            data-row-key="{{ row.get('row_key', '') }}"
            data-item-key="{{ row.get('item_key', '') }}"
            data-person-name="{{ row.name }}"
+           {% if row.get('kind') == 'production_unassigned_run' %}
+             data-correction-item-key="{{ row.get('item_key', '') }}"
+             data-correction-work-center="{{ row.get('app_work_center_name', '') }}"
+             data-correction-start-utc="{{ row.get('start_utc', '') }}"
+             data-correction-end-utc="{{ row.get('end_utc') or '' }}"
+             data-correction-end-open="{{ 'true' if row.get('end_is_open') else 'false' }}"
+           {% endif %}
            {% if action and action.type == 'assignment' %}
              data-day="{{ action.day or '' }}"
              data-wc-name="{{ action.wc_name or '' }}"
@@ -96,9 +103,47 @@
             {% endif %}
           </div>
           <div class="exception-detail">{{ row.label }}{% if row.detail %} · {{ row.detail }}{% endif %}{% if row.coverage %} · {% include "_inbox_coverage.html" %}{% endif %}</div>
+          {% if row.get('kind') == 'production_unassigned_run' %}
+            <div class="attendance-source-facts" aria-label="Odoo production source details">
+              <span>Odoo status: Unassigned production</span>
+              <span>Production run: {{ row.get('app_work_center_name') }}</span>
+              {% if row.get('units') is not none %}<span>{{ row.get('units') | int if row.get('units') == row.get('units') | int else row.get('units') }} units</span>{% endif %}
+              {% if row.get('sample_count') is not none %}<span>{{ row.get('sample_count') }} source reading{{ '' if row.get('sample_count') == 1 else 's' }}</span>{% endif %}
+              <span>
+                Source time:
+                <time datetime="{{ row.get('start_utc') }}">{{ row.get('start_utc') }}</time>
+                to
+                {% if row.get('end_is_open') %}
+                  Still working
+                {% else %}
+                  <time datetime="{{ row.get('end_utc') }}">{{ row.get('end_utc') }}</time>
+                {% endif %}
+              </span>
+            </div>
+          {% elif row.get('kind') == 'attendance_unmapped_location' %}
+            <div class="attendance-source-facts" aria-label="Odoo attendance source details">
+              <span>Odoo status: Unknown work center</span>
+              {% if row.get('raw_work_center_labels') %}
+                <span>Odoo work center: {{ row.get('raw_work_center_labels') | join(', ') }}</span>
+              {% endif %}
+              <span>
+                Source time:
+                <time datetime="{{ row.get('start_utc') }}">{{ row.get('start_utc') }}</time>
+                to {{ 'Still working' if row.get('end_is_open') else row.get('end_utc') }}
+              </span>
+            </div>
+          {% endif %}
         </div>
         <div class="row-actions">
-          {% if action and action.type == 'assignment' %}
+          {% if row.get('kind') == 'production_unassigned_run' and not row.get('comparison_only') %}
+            <button type="button" class="row-btn primary js-attendance-correction-open" data-attendance-correction-open>
+              Choose workers and times
+            </button>
+          {% elif row.get('kind') == 'attendance_unmapped_location' and can_manage_work_centers and row.get('odoo_work_center_ids') and row.get('raw_work_center_labels') %}
+            <a class="row-btn" href="/settings?{{ {'section': 'work_centers', 'odoo_work_center_id': row.get('odoo_work_center_ids')[0], 'odoo_work_center_name': row.get('raw_work_center_labels')[0]} | urlencode }}">
+              Map this Odoo work center
+            </a>
+          {% elif action and action.type == 'assignment' %}
             <select class="inline-select js-person" aria-label="Person to assign">
               <option value="">Person...</option>
               {% for person in people %}
@@ -186,6 +231,81 @@
       <button type="button" class="refresh-btn small archive-more" data-archive-more hidden>Show earlier</button>
     </div>
   </div>
+
+  <dialog id="attendance-correction-dialog"
+          class="attendance-correction-dialog"
+          aria-labelledby="attendance-correction-title"
+          aria-describedby="attendance-correction-help"
+          data-plant-timezone="{{ plant_timezone }}"
+          data-attendance-correction-dialog>
+    <form class="attendance-correction-form" data-attendance-correction-form>
+      <div class="attendance-correction-head">
+        <div>
+          <p class="attendance-correction-kicker">Odoo attendance correction</p>
+          <h2 id="attendance-correction-title">Choose workers and times</h2>
+          <p id="attendance-correction-help">
+            Preview the exact Odoo timeline before anything is saved. Times use {{ plant_timezone }} plant time.
+          </p>
+        </div>
+        <button type="button" class="attendance-dialog-close" aria-label="Close attendance correction" data-attendance-close>×</button>
+      </div>
+
+      <div class="attendance-correction-fields">
+        <fieldset class="attendance-people-fieldset">
+          <legend>Who did this production?</legend>
+          <div class="attendance-people-list">
+            {% for person in correction_people if person.employee_odoo_id > 0 %}
+              <label class="attendance-person-choice">
+                <input type="checkbox" name="employee_odoo_ids" value="{{ person.employee_odoo_id }}">
+                <span>{{ person.name }}</span>
+              </label>
+            {% else %}
+              <p class="attendance-empty-choice">No active Odoo workers are available.</p>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        <div class="attendance-time-grid">
+          <label>
+            <span>Exact start</span>
+            <input type="datetime-local" required data-attendance-start>
+          </label>
+          <label>
+            <span>Exact end</span>
+            <input type="datetime-local" data-attendance-end>
+          </label>
+        </div>
+        <label class="attendance-open-choice">
+          <input type="checkbox" data-attendance-open-ended>
+          <span>Still working</span>
+        </label>
+
+        <label class="attendance-target-field">
+          <span>Target work center</span>
+          <select required data-attendance-work-center>
+            <option value="">Choose a work center...</option>
+            {% for wc in work_centers %}
+              <option value="{{ wc }}">{{ wc }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+
+      <div class="attendance-correction-message" role="status" aria-live="polite" data-attendance-message></div>
+      <div class="attendance-preview-output" data-attendance-preview-output hidden></div>
+      <div class="attendance-refresh-confirm" role="alert" data-attendance-refresh-wrap hidden>
+        <p>Odoo changed. Review the refreshed preview, then confirm it before Apply is available.</p>
+        <button type="button" class="row-btn" data-attendance-refresh-confirm>Use refreshed preview</button>
+      </div>
+      <div class="attendance-progress" role="status" aria-live="polite" data-attendance-progress hidden></div>
+
+      <div class="attendance-correction-actions">
+        <button type="button" class="row-btn" data-attendance-close>Cancel</button>
+        <button type="button" class="row-btn" data-attendance-preview>Preview Odoo change</button>
+        <button type="button" class="row-btn primary" data-attendance-apply disabled>Apply correction</button>
+      </div>
+    </form>
+  </dialog>
 {% endblock %}
 {% block scripts %}
 <script src="/static/exceptions.js?v={{ static_v('exceptions.js') }}"></script>
