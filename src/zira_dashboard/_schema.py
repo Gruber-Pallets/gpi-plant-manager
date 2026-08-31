@@ -2322,13 +2322,37 @@ CREATE TABLE IF NOT EXISTS breakdown_snoozes (
   PRIMARY KEY (breakdown_id, person_name)
 );
 
+-- 2026-08-31: canonical location spans identify people by immutable Odoo id.
+-- Keep the display name for old rows and audit/UI labels, while allowing two
+-- people with the same name to own independent snoozes. The two partial
+-- indexes preserve the old name-keyed behavior for rows without an Odoo id.
+ALTER TABLE breakdown_snoozes
+  ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS breakdown_snoozes_odoo_identity_uniq
+  ON breakdown_snoozes (breakdown_id, employee_odoo_id)
+  WHERE employee_odoo_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS breakdown_snoozes_legacy_identity_uniq
+  ON breakdown_snoozes (breakdown_id, person_name)
+  WHERE employee_odoo_id IS NULL;
+ALTER TABLE breakdown_snoozes
+  DROP CONSTRAINT IF EXISTS breakdown_snoozes_pkey;
+
 -- 2026-07-08: link wc_time_attributions rows back to the machine_breakdowns
 -- incident that created them, so a dismiss ("Not a breakdown") can delete
 -- exactly this incident's exclusion rows without touching a different,
 -- already-resolved incident on the same machine/day.
 ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS breakdown_id BIGINT;
+ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
 CREATE INDEX IF NOT EXISTS wc_time_attributions_breakdown_idx
   ON wc_time_attributions (breakdown_id) WHERE breakdown_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_odoo_open_uniq
+  ON wc_time_attributions (breakdown_id, employee_odoo_id)
+  WHERE source = 'breakdown' AND end_utc IS NULL
+    AND employee_odoo_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_legacy_open_uniq
+  ON wc_time_attributions (breakdown_id, person_name)
+  WHERE source = 'breakdown' AND end_utc IS NULL
+    AND employee_odoo_id IS NULL;
 
 -- 2026-07-08: per-record minutes excluded from a person's expected due to a
 -- machine breakdown (source='breakdown' wc_time_attributions windows). Written

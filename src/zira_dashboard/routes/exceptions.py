@@ -1466,6 +1466,7 @@ def _reverse_event(ev: dict[str, Any]) -> None:
                     day=row["day"], wc_name=row["wc_name"], person_name=row["person_name"],
                     start_utc=row["start_utc"], end_utc=row.get("end_utc"),
                     source=wc_attributions.BREAKDOWN_SOURCE, breakdown_id=incident_id,
+                    employee_odoo_id=row.get("employee_odoo_id"),
                 )
 
 
@@ -1515,6 +1516,14 @@ async def undo_inbox_event(event_id: int, request: Request):
 
 
 def _breakdown_transfer_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
+    if breakdown_actions.live_transfer_is_disabled():
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": breakdown_actions.LIVE_TRANSFER_MESSAGE,
+            },
+            status_code=410,
+        )
     return breakdown_actions.transfer(
         body,
         actor_upn,

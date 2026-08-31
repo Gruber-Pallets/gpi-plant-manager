@@ -1,6 +1,7 @@
 """Pure-logic tests for machine_breakdown.detect() and departed_at()."""
 from datetime import datetime, timedelta, timezone
 
+from zira_dashboard import machine_breakdown
 from zira_dashboard.machine_breakdown import StationSignal, BreakdownCandidate, detect, departed_at
 
 SHIFT_START = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)   # 7:00 AM Central
@@ -106,3 +107,23 @@ def test_departed_at_none_when_no_windows_for_wc():
     stop = datetime(2026, 7, 8, 18, 0, tzinfo=timezone.utc)
     punch_windows = {"Juan": [("Repair 1", SHIFT_START, None)]}
     assert departed_at("Juan", "Dismantler 2", punch_windows, stop) is None
+
+
+def test_personal_breakdown_start_is_station_stop_when_worker_was_already_there():
+    station_stop = SHIFT_START + timedelta(hours=2)
+    arrival = station_stop - timedelta(minutes=45)
+
+    assert machine_breakdown.personal_breakdown_start(
+        station_stop_utc=station_stop,
+        arrival_utc=arrival,
+    ) == station_stop
+
+
+def test_personal_breakdown_start_is_arrival_when_worker_reaches_stopped_station_later():
+    station_stop = SHIFT_START + timedelta(hours=2)
+    arrival = station_stop + timedelta(minutes=20)
+
+    assert machine_breakdown.personal_breakdown_start(
+        station_stop_utc=station_stop,
+        arrival_utc=arrival,
+    ) == arrival

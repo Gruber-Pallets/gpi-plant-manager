@@ -61,6 +61,29 @@ def test_breakdown_snoozes_round_trips():
     assert fetched[0]["person_name"] == "Test Person"
 
 
+def test_same_name_breakdown_snoozes_round_trip_by_odoo_identity():
+    now = datetime.now(timezone.utc)
+    incident_id = db.query(
+        "INSERT INTO machine_breakdowns (wc_name, day, detected_stop_utc, source) "
+        "VALUES (%s, %s, %s, %s) RETURNING id",
+        ("Test WC", now.date(), now, "auto"),
+    )[0]["id"]
+    db.execute(
+        "INSERT INTO breakdown_snoozes "
+        "(breakdown_id, person_name, employee_odoo_id, until_utc) "
+        "VALUES (%s, %s, %s, %s), (%s, %s, %s, %s)",
+        (incident_id, "Test Person", 101, now, incident_id, "Test Person", 202, now),
+    )
+
+    fetched = db.query(
+        "SELECT employee_odoo_id FROM breakdown_snoozes WHERE breakdown_id = %s "
+        "ORDER BY employee_odoo_id",
+        (incident_id,),
+    )
+
+    assert fetched == [{"employee_odoo_id": 101}, {"employee_odoo_id": 202}]
+
+
 def test_production_daily_has_excluded_minutes_column():
     db.execute(
         "INSERT INTO production_daily (day, emp_id, name, wc_name, units, downtime, "
@@ -88,4 +111,23 @@ def test_wc_time_attributions_has_breakdown_id_column():
         "AND person_name = 'Test Person'"
     )
     assert fetched[0]["breakdown_id"] == 999
+    db.execute("DELETE FROM wc_time_attributions WHERE wc_name = 'Test WC'")
+
+
+def test_wc_time_attributions_round_trips_breakdown_employee_identity():
+    now = datetime.now(timezone.utc)
+    db.execute("DELETE FROM wc_time_attributions WHERE wc_name = 'Test WC'")
+    db.execute(
+        "INSERT INTO wc_time_attributions "
+        "(day, wc_name, person_name, employee_odoo_id, start_utc, source, breakdown_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (now.date(), "Test WC", "Test Person", 101, now, "breakdown", 999),
+    )
+
+    fetched = db.query(
+        "SELECT person_name, employee_odoo_id FROM wc_time_attributions "
+        "WHERE wc_name = 'Test WC'"
+    )
+
+    assert fetched == [{"person_name": "Test Person", "employee_odoo_id": 101}]
     db.execute("DELETE FROM wc_time_attributions WHERE wc_name = 'Test WC'")

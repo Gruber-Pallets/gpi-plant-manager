@@ -28,6 +28,17 @@ def _capture(errors: list[dict], source: str, call, fallback):
         return fallback
 
 
+def _breakdown_transfer_enabled() -> bool:
+    """Keep the legacy action unless live activation is positively known."""
+    from . import attendance_location_policy
+
+    try:
+        return not attendance_location_policy.live_is_active()
+    except Exception:  # noqa: BLE001 - unreadable rollout state stays pre-live
+        _log.exception("Could not read live activation for breakdown actions")
+        return True
+
+
 def _auto_lunch_alert(errors: list[dict], current_snapshot):
     snapshot = _capture(
         errors,
@@ -933,4 +944,5 @@ def build_snapshot() -> dict:
         "queue": queue,
         "work_centers": work_centers,
         "people": assignments.get("people") or [],
+        "breakdown_transfer_enabled": _breakdown_transfer_enabled(),
     }

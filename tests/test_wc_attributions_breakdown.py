@@ -5,6 +5,25 @@ from datetime import date, datetime, timezone
 from zira_dashboard import wc_attributions
 
 
+def test_breakdown_identity_schema_is_additive_and_idempotent():
+    from zira_dashboard._schema import SCHEMA_DDL
+
+    ddl = " ".join(SCHEMA_DDL.split())
+
+    assert (
+        "ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS "
+        "employee_odoo_id INTEGER" in ddl
+    )
+    assert (
+        "ALTER TABLE breakdown_snoozes ADD COLUMN IF NOT EXISTS "
+        "employee_odoo_id INTEGER" in ddl
+    )
+    assert "breakdown_snoozes_odoo_identity_uniq" in ddl
+    assert "WHERE employee_odoo_id IS NOT NULL" in ddl
+    assert "breakdown_snoozes_legacy_identity_uniq" in ddl
+    assert "WHERE employee_odoo_id IS NULL" in ddl
+
+
 def test_breakdown_source_excluded_from_people_by_wc():
     rows = [
         {"id": 1, "wc_name": "Dismantler 2", "person_name": "Juan",
@@ -41,6 +60,37 @@ def test_breakdown_windows_for_day_groups_by_person_and_wc():
     assert out == {("Juan", "Dismantler 2"): [(s1, e1)]}
 
 
+def test_breakdown_windows_keep_same_name_odoo_identities_separate():
+    start = datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc)
+    rows = [
+        {
+            "id": 1,
+            "wc_name": "Dismantler 2",
+            "person_name": "Alex",
+            "employee_odoo_id": 101,
+            "start_utc": start,
+            "end_utc": None,
+            "source": wc_attributions.BREAKDOWN_SOURCE,
+        },
+        {
+            "id": 2,
+            "wc_name": "Dismantler 2",
+            "person_name": "Alex",
+            "employee_odoo_id": 202,
+            "start_utc": start,
+            "end_utc": None,
+            "source": wc_attributions.BREAKDOWN_SOURCE,
+        },
+    ]
+
+    out = wc_attributions.breakdown_windows_for_day("2026-07-08", rows=rows)
+
+    assert out == {
+        (101, "Alex", "Dismantler 2"): [(start, None)],
+        (202, "Alex", "Dismantler 2"): [(start, None)],
+    }
+
+
 def test_add_breakdown_and_cap_and_reopen(monkeypatch):
     from zira_dashboard import db
     calls = {}
@@ -56,7 +106,16 @@ def test_add_breakdown_and_cap_and_reopen(monkeypatch):
     assert row_id == 5
     sql, params = calls["insert"]
     assert "source" in sql.lower()
-    assert params == (day, "Dismantler 2", "Juan", start, None, wc_attributions.BREAKDOWN_SOURCE, 42)
+    assert params == (
+        day,
+        "Dismantler 2",
+        "Juan",
+        start,
+        None,
+        wc_attributions.BREAKDOWN_SOURCE,
+        42,
+        None,
+    )
 
     def fake_execute(sql, params):
         calls["cap"] = (sql, params)
@@ -68,6 +127,125 @@ def test_add_breakdown_and_cap_and_reopen(monkeypatch):
 
     wc_attributions.reopen_breakdown(5)
     assert calls["cap"][1] == (5, wc_attributions.BREAKDOWN_SOURCE)  # last _execute call was reopen
+
+
+def test_add_and_open_breakdown_use_odoo_identity_without_changing_display_name(
+    monkeypatch,
+):
+    from zira_dashboard import db
+
+    calls = []
+    start = datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc)
+
+    def fake_query(sql, params):
+        calls.append((sql, params))
+        return [{"id": 7, "start_utc": start}]
+
+    monkeypatch.setattr(db, "query", fake_query)
+
+    wc_attributions.add_breakdown(
+        date(2026, 7, 8),
+        "Dismantler 2",
+        "Alex",
+        start,
+        breakdown_id=42,
+        employee_odoo_id=202,
+    )
+    row = wc_attributions.open_breakdown_row(
+        date(2026, 7, 8), "Dismantler 2", "Alex", employee_odoo_id=202
+    )
+
+    insert_sql, insert_params = calls[0]
+    assert "employee_odoo_id" in insert_sql
+    assert insert_params[-1] == 202
+    lookup_sql, lookup_params = calls[1]
+    assert "employee_odoo_id = %s" in lookup_sql
+    assert lookup_params == (
+        date(2026, 7, 8),
+        "Dismantler 2",
+        202,
+        wc_attributions.BREAKDOWN_SOURCE,
+    )
+    assert row == {"id": 7, "start_utc": start}
+
+
+def test_legacy_open_breakdown_lookup_only_adopts_null_identity_rows(monkeypatch):
+    from zira_dashboard import db
+
+    seen = {}
+    monkeypatch.setattr(
+        db,
+        "query",
+        lambda sql, params: seen.update(sql=sql, params=params) or [],
+    )
+
+    wc_attributions.open_breakdown_row(
+        date(2026, 7, 8), "Dismantler 2", "Alex"
+    )
+
+    assert "employee_odoo_id IS NULL" in seen["sql"]
+    assert seen["params"] == (
+        date(2026, 7, 8),
+        "Dismantler 2",
+        "Alex",
+        wc_attributions.BREAKDOWN_SOURCE,
+    )
+
+
+def test_odoo_lookup_can_adopt_one_legacy_null_identity_row(monkeypatch):
+    from zira_dashboard import db
+
+    start = datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc)
+    calls = []
+
+    def fake_query(sql, params):
+        calls.append((sql, params))
+        return [] if len(calls) == 1 else [{"id": 7, "start_utc": start}]
+
+    monkeypatch.setattr(db, "query", fake_query)
+
+    row = wc_attributions.open_breakdown_row(
+        date(2026, 7, 8),
+        "Dismantler 2",
+        "Alex",
+        employee_odoo_id=202,
+        allow_legacy_fallback=True,
+    )
+
+    assert row == {"id": 7, "start_utc": start}
+    assert "employee_odoo_id = %s" in calls[0][0]
+    assert "employee_odoo_id IS NULL" in calls[1][0]
+    assert "UPDATE wc_time_attributions" in calls[2][0]
+    assert calls[2][1] == (202, 7)
+
+
+def test_add_breakdown_adopts_concurrent_idempotent_insert(monkeypatch):
+    from zira_dashboard import db
+
+    start = datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc)
+    calls = []
+
+    def fake_query(sql, params):
+        calls.append((sql, params))
+        if sql.startswith("INSERT"):
+            return []
+        return [{"id": 8, "start_utc": start}]
+
+    monkeypatch.setattr(db, "query", fake_query)
+
+    row_id = wc_attributions.add_breakdown(
+        date(2026, 7, 8),
+        "Dismantler 2",
+        "Alex",
+        start,
+        42,
+        employee_odoo_id=202,
+    )
+
+    assert row_id == 8
+    assert "ON CONFLICT" in calls[0][0]
+    assert "employee_odoo_id" in calls[0][0]
+
 
 
 def test_open_breakdown_row(monkeypatch):

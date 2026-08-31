@@ -128,6 +128,7 @@ def test_undo_breakdown_transfer_reverses_and_reopens_exclusion(monkeypatch):
 def test_undo_breakdown_dismiss_reopens_incident_and_recreates_rows(monkeypatch):
     from zira_dashboard import machine_breakdown, wc_attributions
     snapshot_rows = [{"day": "2026-07-08", "wc_name": "Dismantler 2", "person_name": "Juan",
+                      "employee_odoo_id": 101,
                       "start_utc": "2026-07-08T18:02:00+00:00", "end_utc": None}]
     monkeypatch.setattr(inbox_log, "get_event", lambda eid: _ev(
         id=eid, item_kind="breakdown", item_key="breakdown:Dismantler 2:x", action="dismiss",
@@ -147,4 +148,5 @@ def test_undo_breakdown_dismiss_reopens_incident_and_recreates_rows(monkeypatch)
     assert calls["reopen_incident"] == 1
     assert len(added) == 1
     assert added[0]["person_name"] == "Juan"
+    assert added[0]["employee_odoo_id"] == 101
     assert added[0]["breakdown_id"] == 1

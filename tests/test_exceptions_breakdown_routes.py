@@ -36,7 +36,7 @@ def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
         "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08", "detected_stop_utc": _STOP,
     })
     monkeypatch.setattr(wc_attributions, "open_breakdown_row",
-                        lambda day, wc, person: {"id": 10})
+                        lambda day, wc, person, **_kwargs: {"id": 10})
     capped = []
     monkeypatch.setattr(wc_attributions, "cap_breakdown", lambda rid, end: capped.append((rid, end)))
     applied = {}
@@ -49,7 +49,12 @@ def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 42)
 
     resp = exceptions_route._breakdown_transfer_sync(
-        {"incident_id": 1, "person_name": "Juan", "to_wc": "Repair 3"},
+        {
+            "incident_id": 1,
+            "person_name": "Juan",
+            "employee_odoo_id": 101,
+            "to_wc": "Repair 3",
+        },
         actor_upn="dale@gruberpallets.com", actor_name="Dale",
     )
 
@@ -58,10 +63,53 @@ def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
     assert applied == {"person": "Juan", "wc": "Repair 3", "ts": _STOP}
     assert logged[0]["item_kind"] == "breakdown"
     assert logged[0]["action"] == "transfer"
+    assert logged[0]["item_key"].endswith(":odoo:101")
     assert logged[0]["reversible"] is True
     assert logged[0]["detail"]["closed_id"] == 5
     assert logged[0]["detail"]["new_id"] == 6
     assert logged[0]["detail"]["attribution_id"] == 10
+
+
+def test_legacy_transfer_never_caps_worker_exclusion_before_personal_start(
+    monkeypatch,
+):
+    from zira_dashboard import inbox_log, machine_breakdown, staffing_transfer, wc_attributions
+
+    personal_start = _STOP.replace(minute=12)
+    monkeypatch.setattr(
+        machine_breakdown,
+        "get_incident",
+        lambda _incident_id: {
+            "id": 1,
+            "wc_name": "Dismantler 2",
+            "day": "2026-07-08",
+            "detected_stop_utc": _STOP,
+        },
+    )
+    monkeypatch.setattr(
+        wc_attributions,
+        "open_breakdown_row",
+        lambda *_args, **_kwargs: {"id": 10, "start_utc": personal_start},
+    )
+    capped = []
+    monkeypatch.setattr(
+        wc_attributions,
+        "cap_breakdown",
+        lambda row_id, end: capped.append((row_id, end)),
+    )
+    monkeypatch.setattr(
+        staffing_transfer,
+        "decide_and_apply",
+        lambda *_args: {"closed_id": 5, "new_id": 6, "transfer": "moved"},
+    )
+    monkeypatch.setattr(inbox_log, "log_event_safe", lambda **_kwargs: 42)
+
+    response = exceptions_route._breakdown_transfer_sync(
+        {"incident_id": 1, "person_name": "Juan", "to_wc": "Repair 3"}
+    )
+
+    assert response.status_code == 200
+    assert capped == [(10, personal_start)]
 
 
 def test_transfer_sync_500_with_friendly_error_when_decide_and_apply_raises(monkeypatch):
@@ -71,7 +119,7 @@ def test_transfer_sync_500_with_friendly_error_when_decide_and_apply_raises(monk
         "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08", "detected_stop_utc": _STOP,
     })
     monkeypatch.setattr(wc_attributions, "open_breakdown_row",
-                        lambda day, wc, person: {"id": 10})
+                        lambda day, wc, person, **_kwargs: {"id": 10})
     monkeypatch.setattr(wc_attributions, "cap_breakdown", lambda rid, end: None)
 
     def _raise(person, wc, ts):
@@ -102,10 +150,16 @@ def test_snooze_sync_calls_snooze_operator(monkeypatch):
     from zira_dashboard import machine_breakdown
     called = []
     monkeypatch.setattr(machine_breakdown, "snooze_operator",
-                        lambda iid, person: called.append((iid, person)))
-    resp = exceptions_route._breakdown_snooze_sync({"incident_id": 1, "person_name": "Juan"})
+                        lambda iid, person, employee_odoo_id=None: called.append(
+                            (iid, person, employee_odoo_id)
+                        ))
+    resp = exceptions_route._breakdown_snooze_sync({
+        "incident_id": 1,
+        "person_name": "Juan",
+        "employee_odoo_id": 101,
+    })
     assert resp.status_code == 200
-    assert called == [(1, "Juan")]
+    assert called == [(1, "Juan", 101)]
 
 
 def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
@@ -113,10 +167,24 @@ def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
     monkeypatch.setattr(machine_breakdown, "get_incident", lambda iid: {
         "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08", "detected_stop_utc": _STOP,
     })
-    snapshot_rows = [{"id": 10, "day": "2026-07-08", "wc_name": "Dismantler 2",
-                      "person_name": "Juan", "start_utc": "2026-07-08T18:02:00+00:00",
-                      "end_utc": None, "source": "breakdown"}]
-    monkeypatch.setattr(wc_attributions, "for_day", lambda day: snapshot_rows)
+    snapshot_rows = [
+        {"id": 10, "day": "2026-07-08", "wc_name": "Dismantler 2",
+         "person_name": "Alex", "employee_odoo_id": 101,
+         "start_utc": "2026-07-08T18:02:00+00:00",
+         "end_utc": None, "source": "breakdown", "breakdown_id": 1},
+        {"id": 11, "day": "2026-07-08", "wc_name": "Dismantler 2",
+         "person_name": "Alex", "employee_odoo_id": 202,
+         "start_utc": "2026-07-08T18:12:00+00:00",
+         "end_utc": None, "source": "breakdown", "breakdown_id": 1},
+    ]
+    unrelated_row = {
+        **snapshot_rows[0],
+        "id": 99,
+        "breakdown_id": 999,
+    }
+    monkeypatch.setattr(
+        wc_attributions, "for_day", lambda day: [*snapshot_rows, unrelated_row]
+    )
     deleted = []
     monkeypatch.setattr(wc_attributions, "delete_breakdown_rows_for_incident",
                         lambda iid: deleted.append(iid))

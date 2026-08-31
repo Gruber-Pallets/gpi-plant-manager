@@ -67,3 +67,60 @@ def test_effective_now_clamps_to_shift_end(monkeypatch):
     late_now = datetime(2026, 7, 9, 2, 0, tzinfo=timezone.utc)  # well past shift end
     effective = production_history._effective_now(day, late_now)
     assert effective < late_now
+
+
+def test_identity_safe_exclusions_keep_same_name_odoo_workers_separate():
+    from types import SimpleNamespace
+
+    segments = (
+        SimpleNamespace(person_odoo_id=101, person_name="Alex", wc_name="Repair 4"),
+        SimpleNamespace(person_odoo_id=202, person_name="Alex", wc_name="Repair 4"),
+    )
+    excluded = {
+        (101, "Alex"): {"Repair 4": 12.0},
+        (202, "Alex"): {"Repair 4": 27.0},
+    }
+
+    assert production_history._identity_safe_excluded_minutes(segments, excluded) == excluded
+
+
+def test_identity_safe_exclusions_follow_odoo_id_across_display_name_change():
+    from types import SimpleNamespace
+
+    segments = (
+        SimpleNamespace(
+            person_odoo_id=101,
+            person_name="Alexandra",
+            wc_name="Repair 4",
+        ),
+    )
+    stored = {(101, "Alex"): {"Repair 4": 12.0}}
+
+    assert production_history._identity_safe_excluded_minutes(
+        segments, stored
+    ) == {(101, "Alexandra"): {"Repair 4": 12.0}}
+
+
+def test_identity_safe_exclusions_preserve_unique_legacy_name_rows():
+    from types import SimpleNamespace
+
+    segments = (
+        SimpleNamespace(person_odoo_id=101, person_name="Ana", wc_name="Repair 4"),
+    )
+
+    assert production_history._identity_safe_excluded_minutes(
+        segments, {"Ana": {"Repair 4": 30.0}}
+    ) == {(101, "Ana"): {"Repair 4": 30.0}}
+
+
+def test_legacy_projection_keeps_id_backed_breakdown_minutes_by_display_name():
+    identity_minutes = {
+        (101, "Alex"): {"Repair 4": 12.0},
+        (202, "Alex"): {"Repair 4": 27.0},
+        "Ana": {"Repair 4": 30.0},
+    }
+
+    assert production_history._legacy_name_excluded_minutes(identity_minutes) == {
+        "Alex": {"Repair 4": 39.0},
+        "Ana": {"Repair 4": 30.0},
+    }

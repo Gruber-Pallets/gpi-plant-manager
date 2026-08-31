@@ -54,7 +54,7 @@ class _StrictDayInputs:
     excluded_minutes: dict[PersonAttributionKey, dict[str, float]]
     break_windows: tuple[tuple[datetime, datetime], ...]
     testing_windows: dict[str, list[tuple[datetime, datetime]]]
-    breakdown_windows: dict[tuple[str, str], list[tuple[datetime, datetime | None]]]
+    breakdown_windows: dict[tuple, list[tuple[datetime, datetime | None]]]
 
 
 def attribute_for_day(
@@ -325,7 +325,18 @@ def _effective_now(day: date, now: datetime) -> datetime:
     return min(now, shift_end_utc)
 
 
-def _excluded_minutes_by_person_wc(day: date, now: datetime) -> dict[str, dict[str, float]]:
+def _breakdown_window_identity(key: tuple) -> tuple[int | None, str, str]:
+    """Normalize new ID-backed and legacy name-backed breakdown keys."""
+    if len(key) == 3:
+        employee_odoo_id, person_name, wc_name = key
+        return employee_odoo_id, person_name, wc_name
+    person_name, wc_name = key
+    return None, person_name, wc_name
+
+
+def _excluded_minutes_by_person_wc(
+    day: date, now: datetime
+) -> dict[PersonAttributionKey, dict[str, float]]:
     """{person: {wc_name: minutes}} of machine-breakdown-excluded minutes for
     `day`. Open breakdown windows are capped at `now` (already clamped to
     shift end by the caller) so a live in-progress breakdown is reflected
@@ -335,14 +346,20 @@ def _excluded_minutes_by_person_wc(day: date, now: datetime) -> dict[str, dict[s
     from .shift_config import productive_minutes_in_window
 
     windows_by_key = wc_attributions.breakdown_windows_for_day(day)
-    out: dict[str, dict[str, float]] = {}
-    for (person, wc), windows in windows_by_key.items():
+    out: dict[PersonAttributionKey, dict[str, float]] = {}
+    for raw_key, windows in windows_by_key.items():
+        employee_odoo_id, person, wc = _breakdown_window_identity(raw_key)
         closed = [(s, e if e is not None else now) for (s, e) in windows]
         minutes = machine_breakdown.excluded_minutes_for_windows(
             closed, day, productive_minutes_in_window
         )
         if minutes > 0:
-            out.setdefault(person, {})[wc] = minutes
+            identity: PersonAttributionKey = (
+                (employee_odoo_id, person)
+                if employee_odoo_id is not None
+                else person
+            )
+            out.setdefault(identity, {})[wc] = minutes
     return out
 
 
@@ -481,7 +498,7 @@ def _validate_strict_sample_totals(
 
 def _identity_safe_excluded_minutes(
     segments: Sequence,
-    excluded_by_name: Mapping[str, Mapping[str, float]],
+    excluded_by_identity: Mapping[PersonAttributionKey, Mapping[str, float]],
 ) -> dict[PersonAttributionKey, dict[str, float]]:
     ids_by_name_wc: dict[tuple[str, str], set[int]] = {}
     for segment in segments:
@@ -490,7 +507,34 @@ def _identity_safe_excluded_minutes(
                 segment.person_odoo_id
             )
     safe: dict[PersonAttributionKey, dict[str, float]] = {}
-    for name, wc_map in excluded_by_name.items():
+    segment_identities_by_id_wc: dict[
+        tuple[int, str], set[PersonAttributionKey]
+    ] = {}
+    for segment in segments:
+        if segment.person_odoo_id is None:
+            continue
+        segment_identities_by_id_wc.setdefault(
+            (segment.person_odoo_id, segment.wc_name), set()
+        ).add((segment.person_odoo_id, segment.person_name))
+    for identity, wc_map in excluded_by_identity.items():
+        if isinstance(identity, tuple):
+            employee_odoo_id, _stored_name = identity
+            for wc_name, minutes in wc_map.items():
+                candidates = segment_identities_by_id_wc.get(
+                    (employee_odoo_id, wc_name), set()
+                )
+                target = (
+                    identity
+                    if identity in candidates
+                    else next(iter(candidates))
+                    if len(candidates) == 1
+                    else None
+                )
+                if target is not None:
+                    wc_out = safe.setdefault(target, {})
+                    wc_out[wc_name] = wc_out.get(wc_name, 0.0) + float(minutes)
+            continue
+        name = identity
         for wc_name, minutes in wc_map.items():
             employee_ids = ids_by_name_wc.get((name, wc_name), set())
             if len(employee_ids) != 1:
@@ -498,6 +542,19 @@ def _identity_safe_excluded_minutes(
             employee_id = next(iter(employee_ids))
             safe.setdefault((employee_id, name), {})[wc_name] = float(minutes)
     return safe
+
+
+def _legacy_name_excluded_minutes(
+    excluded_by_identity: Mapping[PersonAttributionKey, Mapping[str, float]],
+) -> dict[str, dict[str, float]]:
+    """Project ID-backed rows onto the legacy matcher's name-only identity."""
+    projected: dict[str, dict[str, float]] = {}
+    for identity, wc_map in excluded_by_identity.items():
+        person_name = identity[1] if isinstance(identity, tuple) else identity
+        for wc_name, minutes in wc_map.items():
+            wc_out = projected.setdefault(person_name, {})
+            wc_out[wc_name] = wc_out.get(wc_name, 0.0) + float(minutes)
+    return projected
 
 
 def _strict_inputs_for_day(
@@ -543,10 +600,12 @@ def _strict_inputs_for_day(
     _validate_strict_sample_totals(wc_totals, samples_by_wc)
 
     try:
-        excluded_by_name = _excluded_minutes_by_person_wc(day, _effective_now(day, now_utc))
+        excluded_by_identity = _excluded_minutes_by_person_wc(
+            day, _effective_now(day, now_utc)
+        )
     except Exception:
-        excluded_by_name = {}
-    excluded = _identity_safe_excluded_minutes(segments, excluded_by_name)
+        excluded_by_identity = {}
+    excluded = _identity_safe_excluded_minutes(segments, excluded_by_identity)
     breakdown = wc_attributions.breakdown_windows_for_day(day)
     return _StrictDayInputs(
         segments=tuple(segments),
@@ -631,7 +690,10 @@ def unassigned_runs_for_day(
     for wc_name, samples in inputs.samples_by_wc.items():
         exclusions = [*inputs.break_windows]
         exclusions.extend(inputs.testing_windows.get(wc_name, ()))
-        for (_person_name, breakdown_wc), windows in inputs.breakdown_windows.items():
+        for raw_key, windows in inputs.breakdown_windows.items():
+            _employee_odoo_id, _person_name, breakdown_wc = (
+                _breakdown_window_identity(raw_key)
+            )
             if breakdown_wc != wc_name:
                 continue
             exclusions.extend(
@@ -745,6 +807,7 @@ def _legacy_attribution_for(d: date, client) -> Attribution:
             excluded = _excluded_minutes_by_person_wc(d, _effective_now(d, datetime.now(UTC)))
         except Exception:
             excluded = {}
+        excluded = _legacy_name_excluded_minutes(excluded)
         return attribute_for_segments(
             segments,
             wc_totals=wc_totals,
@@ -766,6 +829,7 @@ def _legacy_attribution_for(d: date, client) -> Attribution:
         excluded = _excluded_minutes_by_person_wc(d, _effective_now(d, datetime.now(UTC)))
     except Exception:
         excluded = {}
+    excluded = _legacy_name_excluded_minutes(excluded)
     return attribute_for_day(
         sched.assignments,
         wc_totals,
