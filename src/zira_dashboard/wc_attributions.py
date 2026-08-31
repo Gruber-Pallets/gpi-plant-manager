@@ -488,40 +488,40 @@ def breakdown_row_for_visit(
     return rows[0] if rows else None
 
 
-def restore_breakdown_snapshot(rows: list[dict], breakdown_id: int) -> None:
-    """Restore a dismiss snapshot atomically and exactly.
+def _restore_breakdown_snapshot(cursor, rows: list[dict], breakdown_id: int) -> None:
+    """Insert an exact dismiss snapshot through the caller's transaction."""
+    for row in rows:
+        row_breakdown_id = row.get("breakdown_id", breakdown_id)
+        if row_breakdown_id != breakdown_id:
+            raise ValueError("breakdown snapshot contains another incident")
+        source = row.get("source", BREAKDOWN_SOURCE)
+        if source != BREAKDOWN_SOURCE:
+            raise ValueError("breakdown snapshot contains another source")
+        cursor.execute(
+            "INSERT INTO wc_time_attributions "
+            "(day, wc_name, person_name, start_utc, end_utc, source, "
+            "breakdown_id, employee_odoo_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT DO NOTHING",
+            (
+                row["day"],
+                row["wc_name"],
+                row["person_name"],
+                row["start_utc"],
+                row.get("end_utc"),
+                source,
+                breakdown_id,
+                row.get("employee_odoo_id"),
+            ),
+        )
 
-    A failure on any row rolls the whole transaction back.  Exact-visit
-    conflicts are harmless on retry, so an earlier successful restore whose
-    later incident/event step failed also converges without duplicates.
-    """
+
+def restore_breakdown_snapshot(rows: list[dict], breakdown_id: int) -> None:
+    """Restore an exact snapshot in one transaction for legacy callers."""
     from . import db
 
     with db.cursor() as cursor:
-        for row in rows:
-            row_breakdown_id = row.get("breakdown_id", breakdown_id)
-            if row_breakdown_id != breakdown_id:
-                raise ValueError("breakdown snapshot contains another incident")
-            source = row.get("source", BREAKDOWN_SOURCE)
-            if source != BREAKDOWN_SOURCE:
-                raise ValueError("breakdown snapshot contains another source")
-            cursor.execute(
-                "INSERT INTO wc_time_attributions "
-                "(day, wc_name, person_name, start_utc, end_utc, source, "
-                "breakdown_id, employee_odoo_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-                "ON CONFLICT DO NOTHING",
-                (
-                    row["day"],
-                    row["wc_name"],
-                    row["person_name"],
-                    row["start_utc"],
-                    row.get("end_utc"),
-                    source,
-                    breakdown_id,
-                    row.get("employee_odoo_id"),
-                ),
-            )
+        _restore_breakdown_snapshot(cursor, rows, breakdown_id)
 
 
 def open_breakdown_rows_for_incident(breakdown_id: int) -> list[dict]:

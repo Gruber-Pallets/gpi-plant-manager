@@ -257,6 +257,57 @@ def dismiss_incident(incident_id: int) -> list[dict] | None:
         return list(cursor.fetchall())
 
 
+def undo_dismiss_incident(incident_id: int, snapshot_rows: list[dict]) -> bool:
+    """Restore a dismiss snapshot and reopen its incident atomically.
+
+    The dismissed incident is locked first. A replacement open incident for
+    the same station/day makes the undo conflict; a concurrent replacement is
+    serialized by the partial unique index when the old row is reopened. Any
+    such conflict rolls the snapshot inserts back with the transaction.
+    """
+    from psycopg2.errors import UniqueViolation
+
+    from . import db, wc_attributions
+
+    try:
+        with db.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, wc_name, day, resolved_at, resolution "
+                "FROM machine_breakdowns WHERE id = %s FOR UPDATE",
+                (incident_id,),
+            )
+            incident = cursor.fetchone()
+            if (
+                incident is None
+                or incident.get("resolved_at") is None
+                or incident.get("resolution") != "dismissed"
+            ):
+                return False
+            cursor.execute(
+                "SELECT id FROM machine_breakdowns "
+                "WHERE wc_name = %s AND day = %s AND id <> %s "
+                "AND resolved_at IS NULL FOR UPDATE",
+                (incident["wc_name"], incident["day"], incident_id),
+            )
+            if cursor.fetchone() is not None:
+                return False
+            wc_attributions._restore_breakdown_snapshot(
+                cursor, snapshot_rows, incident_id
+            )
+            cursor.execute(
+                "UPDATE machine_breakdowns SET resolved_at = NULL, "
+                "resolution = NULL, resume_utc = NULL "
+                "WHERE id = %s AND resolved_at IS NOT NULL "
+                "AND resolution = 'dismissed' RETURNING id",
+                (incident_id,),
+            )
+            return cursor.fetchone() is not None
+    except UniqueViolation:
+        # A replacement incident won the partial open-incident unique key.
+        # The cursor context has already rolled the snapshot restoration back.
+        return False
+
+
 def finalize_recovered_incident(
     incident_id: int, resume_utc: datetime
 ) -> bool:

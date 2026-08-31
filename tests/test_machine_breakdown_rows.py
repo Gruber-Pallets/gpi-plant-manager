@@ -221,6 +221,83 @@ def test_dismiss_incident_returns_none_when_locked_incident_is_not_open(monkeypa
     assert "resolved_at IS NULL" in statements[0][0]
 
 
+def test_undo_dismiss_rolls_back_snapshot_when_reopen_hits_unique_conflict(
+    monkeypatch,
+):
+    from contextlib import contextmanager
+
+    from psycopg2.errors import UniqueViolation
+
+    from zira_dashboard import db, wc_attributions
+
+    day = date(2026, 7, 8)
+    snapshot = [
+        {
+            "day": day,
+            "wc_name": "Dismantler 2",
+            "person_name": "Alex",
+            "employee_odoo_id": 101,
+            "start_utc": _now() - timedelta(minutes=20),
+            "end_utc": None,
+            "source": wc_attributions.BREAKDOWN_SOURCE,
+            "breakdown_id": 42,
+        }
+    ]
+    statements = []
+    committed_rows = []
+    fetches = iter(
+        (
+            {
+                "id": 42,
+                "wc_name": "Dismantler 2",
+                "day": day,
+                "resolved_at": _now(),
+                "resolution": "dismissed",
+            },
+            None,
+        )
+    )
+
+    class Cursor:
+        def __init__(self, pending):
+            self.pending = pending
+
+        def execute(self, sql, params):
+            normalized = " ".join(sql.split())
+            statements.append((normalized, params))
+            if normalized.startswith("INSERT INTO wc_time_attributions"):
+                self.pending.append(params)
+            if (
+                normalized.startswith("UPDATE machine_breakdowns")
+                and "resolved_at = NULL" in normalized
+            ):
+                raise UniqueViolation("replacement incident owns the open key")
+
+        def fetchone(self):
+            return next(fetches)
+
+    @contextmanager
+    def cursor():
+        pending = []
+        try:
+            yield Cursor(pending)
+        except Exception:
+            raise
+        else:
+            committed_rows.extend(pending)
+
+    monkeypatch.setattr(db, "cursor", cursor)
+
+    restored = machine_breakdown.undo_dismiss_incident(42, snapshot)
+
+    assert restored is False
+    assert committed_rows == []
+    assert "FOR UPDATE" in statements[0][0]
+    assert "resolved_at IS NULL" in statements[1][0]
+    assert statements[2][0].startswith("INSERT INTO wc_time_attributions")
+    assert "resolved_at = NULL" in statements[3][0]
+
+
 def test_detect_tick_keeps_existing_incident_when_a_coworker_is_present(monkeypatch):
     incident = {
         "id": 1, "wc_name": "Repair 1", "day": date(2026, 7, 8),

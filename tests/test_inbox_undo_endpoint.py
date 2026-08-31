@@ -1,4 +1,6 @@
 """POST /api/exceptions/undo/{event_id}: reverse the four undoable actions."""
+import pytest
+
 from zira_dashboard import inbox_log
 from zira_dashboard.routes import exceptions as exceptions_route
 
@@ -152,21 +154,25 @@ def test_undo_breakdown_dismiss_reopens_incident_and_recreates_rows(monkeypatch)
     monkeypatch.setattr(inbox_log, "get_event", lambda eid: _ev(
         id=eid, item_kind="breakdown", item_key="breakdown:Dismantler 2:x", action="dismiss",
         detail={"rows": snapshot_rows, "incident_id": 1}))
-    calls = {}
-    monkeypatch.setattr(machine_breakdown, "reopen_incident",
-                        lambda iid: calls.setdefault("reopen_incident", iid))
-    restored = []
+    atomic_undos = []
     monkeypatch.setattr(
-        wc_attributions,
-        "restore_breakdown_snapshot",
-        lambda rows, incident_id: restored.append((rows, incident_id)),
+        machine_breakdown,
+        "undo_dismiss_incident",
+        lambda incident_id, rows: atomic_undos.append((incident_id, rows)) or True,
         raising=False,
     )
     monkeypatch.setattr(
         wc_attributions,
-        "add",
-        lambda **_kw: (_ for _ in ()).throw(
-            AssertionError("dismiss undo must use atomic exact snapshot restore")
+        "restore_breakdown_snapshot",
+        lambda *_args, **_kwargs: pytest.fail(
+            "snapshot restore must share the reopen transaction"
+        ),
+    )
+    monkeypatch.setattr(
+        machine_breakdown,
+        "reopen_incident",
+        lambda *_args, **_kwargs: pytest.fail(
+            "incident reopen must share the snapshot transaction"
         ),
     )
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: 99)
@@ -176,5 +182,68 @@ def test_undo_breakdown_dismiss_reopens_incident_and_recreates_rows(monkeypatch)
     resp = exceptions_route._undo_sync(7, None, None)
 
     assert resp.status_code == 200
-    assert calls["reopen_incident"] == 1
-    assert restored == [(snapshot_rows, 1)]
+    assert atomic_undos == [(1, snapshot_rows)]
+
+
+def test_undo_breakdown_dismiss_conflict_returns_409_without_partial_restore(
+    monkeypatch,
+):
+    from zira_dashboard import machine_breakdown, wc_attributions
+
+    snapshot_rows = [
+        {
+            "day": "2026-07-08",
+            "wc_name": "Dismantler 2",
+            "person_name": "Alex",
+            "employee_odoo_id": 101,
+            "start_utc": "2026-07-08T18:02:00+00:00",
+            "end_utc": None,
+            "source": "breakdown",
+            "breakdown_id": 1,
+        }
+    ]
+    monkeypatch.setattr(
+        inbox_log,
+        "get_event",
+        lambda event_id: _ev(
+            id=event_id,
+            item_kind="breakdown",
+            item_key="breakdown:Dismantler 2:x",
+            action="dismiss",
+            detail={"rows": snapshot_rows, "incident_id": 1},
+        ),
+    )
+    monkeypatch.setattr(
+        machine_breakdown,
+        "undo_dismiss_incident",
+        lambda _incident_id, _rows: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        wc_attributions,
+        "restore_breakdown_snapshot",
+        lambda *_args, **_kwargs: pytest.fail(
+            "snapshot restore must share the reopen transaction"
+        ),
+    )
+    monkeypatch.setattr(
+        machine_breakdown,
+        "reopen_incident",
+        lambda *_args, **_kwargs: pytest.fail(
+            "incident reopen must share the snapshot transaction"
+        ),
+    )
+    monkeypatch.setattr(
+        inbox_log,
+        "log_event_safe",
+        lambda **_kwargs: pytest.fail("conflicted undo must not be audited"),
+    )
+    monkeypatch.setattr(
+        inbox_log,
+        "mark_undone",
+        lambda *_args: pytest.fail("conflicted undo must not be marked"),
+    )
+
+    response = exceptions_route._undo_sync(7, None, None)
+
+    assert response.status_code == 409
