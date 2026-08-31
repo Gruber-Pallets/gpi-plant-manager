@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 import importlib
 
@@ -26,6 +27,11 @@ class QueueCursor:
     def execute(self, sql, params=()):
         normalized = " ".join(sql.split())
         self.store.sql.append((normalized, params))
+        if normalized.startswith("SELECT day, attempt_count, started_at, completed_at"):
+            self.result = self.store.rows.get(params[0])
+            if self.result is not None:
+                self.result = dict(self.result)
+            return
         if normalized.startswith("SELECT day, attempt_count"):
             now = params[0]
             eligible = sorted(
@@ -50,9 +56,16 @@ class QueueCursor:
             self.result = dict(row)
             return
         if "SET completed_at = %s" in normalized:
-            completed_at, day, attempt_count = params
+            completed_at, day, attempt_count, lease_until = params
+            if self.store.fail_completion:
+                self.result = None
+                return
             row = self.store.rows[day]
-            if row["attempt_count"] != attempt_count or row["completed_at"] is not None:
+            if (
+                row["attempt_count"] != attempt_count
+                or row["started_at"] != lease_until
+                or row["completed_at"] is not None
+            ):
                 self.result = None
             else:
                 row["completed_at"] = completed_at
@@ -61,16 +74,28 @@ class QueueCursor:
                 self.result = {"day": day}
             return
         if "SET started_at = %s, last_error = %s" in normalized:
-            retry_at, error, day, attempt_count = params
+            retry_at, error, day, attempt_count, lease_until = params
             if self.store.fail_failure_recording:
                 raise RuntimeError("queue write failed")
             row = self.store.rows[day]
-            if row["attempt_count"] != attempt_count or row["completed_at"] is not None:
+            if (
+                row["attempt_count"] != attempt_count
+                or row["started_at"] != lease_until
+                or row["completed_at"] is not None
+            ):
                 self.result = None
             else:
                 row["started_at"] = retry_at
                 row["last_error"] = error
                 self.result = {"day": day}
+            return
+        if normalized.startswith("INSERT INTO attendance_strict_days"):
+            self.store.strict_days.add(params[0])
+            self.result = None
+            return
+        if normalized.startswith("DELETE FROM production_daily"):
+            self.store.production.pop(params[0], None)
+            self.result = None
             return
         raise AssertionError(f"unexpected SQL: {normalized}")
 
@@ -79,11 +104,26 @@ class QueueCursor:
 
 
 class QueueStore:
-    def __init__(self, rows, *, fail_failure_recording=False):
+    def __init__(
+        self,
+        rows,
+        *,
+        fail_completion=False,
+        fail_failure_recording=False,
+        strict_days=(),
+    ):
         self.rows = {row["day"]: dict(row) for row in rows}
+        self.production = {}
+        self.strict_days = set(strict_days)
         self.sql = []
         self.events = []
+        self.fail_completion = fail_completion
         self.fail_failure_recording = fail_failure_recording
+
+    def execute_values(self, cur, sql, values, template=None):
+        del cur, sql, template
+        for value in values:
+            self.production.setdefault(value[0], []).append(tuple(value))
 
     def cursor(self):
         store = self
@@ -91,10 +131,17 @@ class QueueStore:
         class Transaction:
             def __enter__(self):
                 store.events.append("begin")
+                self.before = (
+                    deepcopy(store.rows),
+                    deepcopy(store.production),
+                    set(store.strict_days),
+                )
                 self.cursor = QueueCursor(store)
                 return self.cursor
 
             def __exit__(self, exc_type, exc, tb):
+                if exc_type:
+                    store.rows, store.production, store.strict_days = self.before
                 store.events.append("rollback" if exc_type else "commit")
                 return False
 
@@ -125,6 +172,27 @@ def install_queue(monkeypatch, store):
     from zira_dashboard import db
 
     monkeypatch.setattr(db, "cursor", store.cursor)
+    monkeypatch.setattr(db, "execute_values", store.execute_values)
+
+
+def prepared_snapshot(day, *units, strict=False):
+    from zira_dashboard.precompute import PreparedProductionDay
+
+    rows = tuple(
+        {
+            "day": day,
+            "emp_id": str(index),
+            "name": f"Worker {index}",
+            "wc_name": "Repair 1",
+            "units": value,
+            "downtime": 0,
+            "hours": 1,
+            "days_worked": 1,
+            "excluded_minutes": 0,
+        }
+        for index, value in enumerate(units, start=1)
+    )
+    return PreparedProductionDay(day=day, rows=rows, strict_day=day if strict else None)
 
 
 def test_claims_oldest_eligible_day_with_skip_locked_and_durable_lease(monkeypatch):
@@ -209,15 +277,17 @@ def test_success_marks_completed_keeps_historical_strict_marker_and_invalidates_
     monkeypatch,
 ):
     module = recalc()
-    store = QueueStore([queue_row(DAY_1, requested_at=NOW - timedelta(hours=1))])
+    store = QueueStore(
+        [queue_row(DAY_1, requested_at=NOW - timedelta(hours=1))],
+        strict_days={DAY_1},
+    )
     install_queue(monkeypatch, store)
     events = store.events
-    strict_days = {DAY_1}
     monkeypatch.setattr(
-        "zira_dashboard.precompute.precompute_day",
+        "zira_dashboard.precompute.prepare_day",
         lambda day, client: (
             events.append(("precompute", day, client))
-            or {"day": day.isoformat(), "rows_written": 2}
+            or prepared_snapshot(day, 10, 20, strict=True)
         ),
     )
     monkeypatch.setattr(
@@ -231,10 +301,73 @@ def test_success_marks_completed_keeps_historical_strict_marker_and_invalidates_
     assert result.status == "completed"
     assert result.rows_written == 2
     assert store.rows[DAY_1]["completed_at"] == NOW
-    assert strict_days == {DAY_1}
+    assert store.strict_days == {DAY_1}
+    precompute_event = events.index(("precompute", DAY_1, "zira"))
+    assert events[precompute_event - 1] == "commit"
+    assert events[precompute_event + 1] == "begin"
     complete_commit = max(i for i, event in enumerate(events) if event == "commit")
     invalidate = events.index(("invalidate", DAY_1))
     assert complete_commit < invalidate
+
+
+def test_expired_older_worker_cannot_overwrite_newer_completed_snapshot(monkeypatch):
+    module = recalc()
+    store = QueueStore([queue_row(DAY_1, requested_at=NOW - timedelta(hours=1))])
+    install_queue(monkeypatch, store)
+    nested_results = []
+
+    def interleaved_prepare(day, client):
+        if client == "older":
+            nested_results.append(
+                module.process_next(
+                    production_client="newer",
+                    now_utc=NOW + module.CLAIM_LEASE,
+                )
+            )
+            return prepared_snapshot(day, 10, strict=True)
+        return prepared_snapshot(day, 20, strict=True)
+
+    monkeypatch.setattr(
+        "zira_dashboard.precompute.prepare_day",
+        interleaved_prepare,
+    )
+    monkeypatch.setattr(module, "_refresh_caches", lambda day: None)
+
+    older_result = module.process_next(production_client="older", now_utc=NOW)
+
+    assert nested_results[0].status == "completed"
+    assert older_result.status == "superseded"
+    assert [row[4] for row in store.production[DAY_1]] == [20]
+    assert store.strict_days == {DAY_1}
+    assert store.rows[DAY_1]["attempt_count"] == 2
+    assert store.rows[DAY_1]["completed_at"] == NOW + module.CLAIM_LEASE
+    fenced_transactions = [sql for sql, _params in store.sql if "attendance_recalc_queue" in sql]
+    assert any("FOR UPDATE" in sql for sql in fenced_transactions)
+
+
+def test_completion_failure_rolls_back_marker_snapshot_and_queue_together(monkeypatch):
+    module = recalc()
+    store = QueueStore(
+        [queue_row(DAY_1, requested_at=NOW - timedelta(hours=1))],
+        fail_completion=True,
+    )
+    old_row = (DAY_1, "old", "Old Worker", "Repair 1", 5, 0, 1, 1, 0)
+    store.production[DAY_1] = [old_row]
+    install_queue(monkeypatch, store)
+    claim = module._claim_next(NOW)
+
+    with pytest.raises(RuntimeError, match="changed while completing"):
+        module._complete_claim(
+            claim,
+            prepared_snapshot(DAY_1, 20, strict=True),
+            NOW,
+        )
+
+    assert store.production[DAY_1] == [old_row]
+    assert store.strict_days == set()
+    assert store.rows[DAY_1]["completed_at"] is None
+    assert store.rows[DAY_1]["started_at"] == claim.lease_until
+    assert store.events[-1] == "rollback"
 
 
 def test_failure_stays_retryable_and_never_invalidates_cache(monkeypatch):
@@ -242,7 +375,7 @@ def test_failure_stays_retryable_and_never_invalidates_cache(monkeypatch):
     store = QueueStore([queue_row(DAY_1, requested_at=NOW - timedelta(hours=1))])
     install_queue(monkeypatch, store)
     monkeypatch.setattr(
-        "zira_dashboard.precompute.precompute_day",
+        "zira_dashboard.precompute.prepare_day",
         lambda day, client: (_ for _ in ()).throw(RuntimeError("zira unavailable")),
     )
     monkeypatch.setattr(
@@ -268,7 +401,7 @@ def test_failure_recording_failure_reports_original_and_releases_by_lease(monkey
     )
     install_queue(monkeypatch, store)
     monkeypatch.setattr(
-        "zira_dashboard.precompute.precompute_day",
+        "zira_dashboard.precompute.prepare_day",
         lambda day, client: (_ for _ in ()).throw(RuntimeError("original failure")),
     )
 
@@ -297,10 +430,8 @@ def test_lazy_zira_client_is_loaded_only_after_a_job_is_claimed(monkeypatch):
     monkeypatch.setattr(module, "_default_production_client", lambda: sentinel)
     seen = []
     monkeypatch.setattr(
-        "zira_dashboard.precompute.precompute_day",
-        lambda day, client: (
-            seen.append((day, client)) or {"day": day.isoformat(), "rows_written": 0}
-        ),
+        "zira_dashboard.precompute.prepare_day",
+        lambda day, client: seen.append((day, client)) or prepared_snapshot(day),
     )
     monkeypatch.setattr(module, "_refresh_caches", lambda day: None)
 

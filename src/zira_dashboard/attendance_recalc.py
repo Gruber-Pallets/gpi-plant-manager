@@ -28,7 +28,7 @@ class RecalcClaim:
 @dataclass(frozen=True)
 class RecalcResult:
     day: date
-    status: Literal["completed", "failed"]
+    status: Literal["completed", "failed", "superseded"]
     attempt_count: int
     rows_written: int = 0
     error: str | None = None
@@ -93,9 +93,32 @@ def _claim_next(now_utc: datetime) -> RecalcClaim | None:
     )
 
 
-def _record_success(claim: RecalcClaim, completed_at: datetime) -> None:
+def _complete_claim(claim: RecalcClaim, prepared, completed_at: datetime) -> int | None:
+    """Atomically fence, write, and complete the current recalculation claim."""
+    from . import precompute
+
     completed = _aware_utc(completed_at)
+    if prepared.day != claim.day:
+        raise ValueError("prepared production day does not match recalculation claim")
     with db.cursor() as cur:
+        cur.execute(
+            """
+            SELECT day, attempt_count, started_at, completed_at
+            FROM attendance_recalc_queue
+            WHERE day = %s
+            FOR UPDATE
+            """,
+            (claim.day,),
+        )
+        row = cur.fetchone()
+        if (
+            row is None
+            or row["completed_at"] is not None
+            or int(row["attempt_count"] or 0) != claim.attempt_count
+            or row["started_at"] != claim.lease_until
+        ):
+            return None
+        rows_written = precompute.store_prepared_day(prepared, cur=cur)
         cur.execute(
             """
             UPDATE attendance_recalc_queue
@@ -103,12 +126,14 @@ def _record_success(claim: RecalcClaim, completed_at: datetime) -> None:
             WHERE day = %s
               AND completed_at IS NULL
               AND attempt_count = %s
+              AND started_at = %s
             RETURNING day
             """,
-            (completed, claim.day, claim.attempt_count),
+            (completed, claim.day, claim.attempt_count, claim.lease_until),
         )
         if cur.fetchone() is None:
-            raise RuntimeError("attendance recalculation claim was superseded")
+            raise RuntimeError("attendance recalculation claim changed while completing")
+        return rows_written
 
 
 def _record_failure(
@@ -127,9 +152,10 @@ def _record_failure(
             WHERE day = %s
               AND completed_at IS NULL
               AND attempt_count = %s
+              AND started_at = %s
             RETURNING day
             """,
-            (retry_at, error_text, claim.day, claim.attempt_count),
+            (retry_at, error_text, claim.day, claim.attempt_count, claim.lease_until),
         )
         if cur.fetchone() is None:
             raise RuntimeError("attendance recalculation failure claim was superseded")
@@ -181,9 +207,8 @@ def process_next(
         client = production_client
         if client is None:
             client = _default_production_client()
-        result = precompute.precompute_day(claim.day, client)
-        rows_written = int(result.get("rows_written", 0))
-        _record_success(claim, now)
+        prepared = precompute.prepare_day(claim.day, client)
+        rows_written = _complete_claim(claim, prepared, now)
     except Exception as error:  # noqa: BLE001 - every failure remains retryable
         retry_at = None
         record_error = None
@@ -204,6 +229,13 @@ def process_next(
             error=str(error) or type(error).__name__,
             record_error=record_error,
             retry_at=retry_at,
+        )
+
+    if rows_written is None:
+        return RecalcResult(
+            day=claim.day,
+            status="superseded",
+            attempt_count=claim.attempt_count,
         )
 
     try:

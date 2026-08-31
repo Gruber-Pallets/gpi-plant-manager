@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-08-31
+
+### Keep recalculated production in the right order
+
+- **Plant Manager now keeps the newest worker-location production result when two background updates overlap.** An older update cannot replace the newer answer.
+
 ## 2026-08-30
 
 ### Match production only to clear Odoo locations

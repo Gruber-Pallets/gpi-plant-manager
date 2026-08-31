@@ -19,12 +19,22 @@ unaffected.
 
 from __future__ import annotations
 
-from datetime import date
 from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import date
 import logging
 
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PreparedProductionDay:
+    """A computed daily snapshot that has not been written yet."""
+
+    day: date
+    rows: tuple[dict, ...]
+    strict_day: date | None
 
 
 def flatten_attribution(
@@ -82,6 +92,73 @@ def flatten_attribution(
     return rows
 
 
+def _upsert_production_daily_cur(
+    cur,
+    rows: Iterable[dict],
+    *,
+    replace_days: Iterable[date] = (),
+    strict_day: date | None = None,
+) -> int:
+    """Write a production snapshot using the caller's transaction."""
+    from . import db
+
+    rows = list(rows)
+    days_to_replace = sorted(set(replace_days))
+    if strict_day is not None and strict_day not in days_to_replace:
+        raise ValueError("strict_day must be replaced in the same transaction")
+    if not rows and not days_to_replace and strict_day is None:
+        return 0
+    sql = """
+        INSERT INTO production_daily (
+            day, emp_id, name, wc_name,
+            units, downtime, hours, days_worked, excluded_minutes, computed_at
+        ) VALUES %s
+        ON CONFLICT (day, emp_id, wc_name) DO UPDATE SET
+            name             = EXCLUDED.name,
+            units            = EXCLUDED.units,
+            downtime         = EXCLUDED.downtime,
+            hours            = EXCLUDED.hours,
+            days_worked      = EXCLUDED.days_worked,
+            excluded_minutes = EXCLUDED.excluded_minutes,
+            computed_at      = now()
+    """
+    if strict_day is not None:
+        cur.execute(
+            "INSERT INTO attendance_strict_days "
+            "(day, reason, source_changed_at) "
+            "VALUES (%s, %s, now()) "
+            "ON CONFLICT (day) DO NOTHING",
+            (strict_day, "strict_production_attribution"),
+        )
+    for day in days_to_replace:
+        cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
+    if not rows:
+        return 0
+    # execute_values folds every row into one statement — a single
+    # round-trip instead of executemany's one per row (this runs
+    # every 45s from the live warmer).
+    db.execute_values(
+        cur,
+        sql,
+        [
+            (
+                r["day"],
+                r["emp_id"],
+                r["name"],
+                r["wc_name"],
+                r["units"],
+                r["downtime"],
+                r["hours"],
+                r["days_worked"],
+                r.get("excluded_minutes", 0),
+            )
+            for r in rows
+        ],
+        template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, now())",
+    )
+    return len(rows)
+
+
 def upsert_production_daily(
     rows: Iterable[dict],
     *,
@@ -108,56 +185,47 @@ def upsert_production_daily(
         raise ValueError("strict_day must be replaced in the same transaction")
     if not rows and not days_to_replace and strict_day is None:
         return 0
-    sql = """
-        INSERT INTO production_daily (
-            day, emp_id, name, wc_name,
-            units, downtime, hours, days_worked, excluded_minutes, computed_at
-        ) VALUES %s
-        ON CONFLICT (day, emp_id, wc_name) DO UPDATE SET
-            name             = EXCLUDED.name,
-            units            = EXCLUDED.units,
-            downtime         = EXCLUDED.downtime,
-            hours            = EXCLUDED.hours,
-            days_worked      = EXCLUDED.days_worked,
-            excluded_minutes = EXCLUDED.excluded_minutes,
-            computed_at      = now()
-    """
     with db.cursor() as cur:
-        if strict_day is not None:
-            cur.execute(
-                "INSERT INTO attendance_strict_days "
-                "(day, reason, source_changed_at) "
-                "VALUES (%s, %s, now()) "
-                "ON CONFLICT (day) DO NOTHING",
-                (strict_day, "strict_production_attribution"),
-            )
-        for day in days_to_replace:
-            cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
-        if not rows:
-            return 0
-        # execute_values folds every row into one statement — a single
-        # round-trip instead of executemany's one per row (this runs
-        # every 45s from the live warmer).
-        db.execute_values(
+        return _upsert_production_daily_cur(
             cur,
-            sql,
-            [
-                (
-                    r["day"],
-                    r["emp_id"],
-                    r["name"],
-                    r["wc_name"],
-                    r["units"],
-                    r["downtime"],
-                    r["hours"],
-                    r["days_worked"],
-                    r.get("excluded_minutes", 0),
-                )
-                for r in rows
-            ],
-            template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, now())",
+            rows,
+            replace_days=days_to_replace,
+            strict_day=strict_day,
         )
-    return len(rows)
+
+
+def prepare_day(day: date, client) -> PreparedProductionDay:
+    """Compute a daily production snapshot without opening a write transaction."""
+    from . import attendance, production_history
+
+    attribution = production_history.attribution_for(day, client)
+    name_to_emp_id = attendance.name_to_person_id()
+    rows = flatten_attribution(day, attribution, name_to_emp_id)
+    strict_day = day if getattr(attribution, "is_strict", False) else None
+    return PreparedProductionDay(day=day, rows=tuple(rows), strict_day=strict_day)
+
+
+def store_prepared_day(prepared: PreparedProductionDay, *, cur=None) -> int:
+    """Store a prepared snapshot, optionally inside a caller-owned transaction."""
+    if not isinstance(prepared, PreparedProductionDay):
+        raise TypeError("prepared must be a PreparedProductionDay")
+    if cur is None:
+        if prepared.strict_day is None:
+            return upsert_production_daily(
+                prepared.rows,
+                replace_days=(prepared.day,),
+            )
+        return upsert_production_daily(
+            prepared.rows,
+            replace_days=(prepared.day,),
+            strict_day=prepared.strict_day,
+        )
+    return _upsert_production_daily_cur(
+        cur,
+        prepared.rows,
+        replace_days=(prepared.day,),
+        strict_day=prepared.strict_day,
+    )
 
 
 def precompute_day(day: date, client) -> dict:
@@ -165,17 +233,11 @@ def precompute_day(day: date, client) -> dict:
 
     Returns {"day": iso, "rows_written": int}. Idempotent; safe to re-run.
     """
-    from . import attendance, attendance_mirror, production_history
+    from . import attendance_mirror
 
     try:
-        attribution = production_history.attribution_for(day, client)
-        name_to_emp_id = attendance.name_to_person_id()
-        rows = flatten_attribution(day, attribution, name_to_emp_id)
-        strict_day = day if getattr(attribution, "is_strict", False) else None
-        if strict_day is None:
-            written = upsert_production_daily(rows, replace_days=(day,))
-        else:
-            written = upsert_production_daily(rows, replace_days=(day,), strict_day=strict_day)
+        prepared = prepare_day(day, client)
+        written = store_prepared_day(prepared)
         return {"day": day.isoformat(), "rows_written": written}
     except Exception:
         try:
