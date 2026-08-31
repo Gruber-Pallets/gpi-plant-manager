@@ -36,9 +36,15 @@
       The state below is the last verified state.
       / La asistencia de Odoo está atrasada. Este es el último estado verificado.
     </div>
+  {% elif attendance_source_error %}
+    <div class="k-warning" style="max-width: 720px; text-align: left;">
+      <strong>Odoo attendance sync reported a problem.</strong>
+      The state below is the last verified state.
+      / La sincronización de asistencia de Odoo informó un problema. Este es el último estado verificado.
+    </div>
   {% endif %}
 
-  {% if attendance_source_unavailable and is_clocked_in is none %}
+  {% if is_clocked_in is none %}
     <h2>Clock state unavailable / Estado del reloj no disponible</h2>
   {% elif is_clocked_in %}
     <h2>{% if current_wc %}{{ t("You're clocked in on") }}{% else %}{{ t("You're clocked in") }}{% endif %}</h2>

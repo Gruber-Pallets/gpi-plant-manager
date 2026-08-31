@@ -105,7 +105,6 @@ def test_active_live_clock_in_retry_adopts_open_row_without_rewriting_lukes_work
 def test_active_live_clock_out_closes_all_open_rows_at_one_timestamp_before_sync(
     monkeypatch,
 ):
-    monkeypatch.setattr(timeclock_sync, "_live_location_active", lambda: True)
     order = []
     monkeypatch.setattr(
         timeclock_sync.odoo_client,
@@ -125,6 +124,7 @@ def test_active_live_clock_out_closes_all_open_rows_at_one_timestamp_before_sync
             "action": "clock_out",
             "wc_name": None,
             "occurred_at": PUNCH_AT,
+            "close_all_open_rows": True,
         }
     )
 
@@ -137,7 +137,6 @@ def test_active_live_clock_out_closes_all_open_rows_at_one_timestamp_before_sync
 def test_active_live_clock_out_stays_unsynced_when_close_all_verification_fails(
     monkeypatch,
 ):
-    monkeypatch.setattr(timeclock_sync, "_live_location_active", lambda: True)
     monkeypatch.setattr(
         timeclock_sync.odoo_client,
         "close_all_open_attendance_rows",
@@ -154,6 +153,7 @@ def test_active_live_clock_out_stays_unsynced_when_close_all_verification_fails(
                 "action": "clock_out",
                 "wc_name": None,
                 "occurred_at": PUNCH_AT,
+                "close_all_open_rows": True,
             }
         )
 
@@ -161,7 +161,6 @@ def test_active_live_clock_out_stays_unsynced_when_close_all_verification_fails(
 
 
 def test_pre_activation_clock_out_keeps_legacy_single_current_row(monkeypatch):
-    monkeypatch.setattr(timeclock_sync, "_live_location_active", lambda: False)
     monkeypatch.setattr(
         timeclock_sync.odoo_client,
         "get_current_attendance",
@@ -190,11 +189,84 @@ def test_pre_activation_clock_out_keeps_legacy_single_current_row(monkeypatch):
             "action": "clock_out",
             "wc_name": None,
             "occurred_at": PUNCH_AT,
+            "close_all_open_rows": False,
         }
     )
 
     assert closed == [(81, PUNCH_AT)]
     assert marked == [(72, 81)]
+
+
+@pytest.mark.parametrize(
+    ("accepted_live", "rollout_after_enqueue", "expected_close_all"),
+    [(True, False, True), (False, True, False)],
+)
+def test_clock_out_retry_keeps_the_ownership_intent_from_punch_acceptance(
+    monkeypatch, accepted_live, rollout_after_enqueue, expected_close_all
+):
+    """Activation or rollback after enqueue must not change punch semantics."""
+    from zira_dashboard import rounding
+
+    _wire_person(monkeypatch, active=accepted_live)
+    inserted = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            inserted.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return {"id": 72, "occurred_at": PUNCH_AT}
+
+    monkeypatch.setattr(timeclock.db, "cursor", lambda: Cursor())
+    monkeypatch.setattr(timeclock.db, "query", lambda *_args: [])
+    monkeypatch.setattr(timeclock.db, "execute", lambda *_args: None)
+    monkeypatch.setattr(timeclock, "_fmt_time", lambda _value: "7:00 AM")
+    monkeypatch.setattr(timeclock, "_approved_full_day_leave_today", lambda _id: None)
+    monkeypatch.setattr(timeclock, "_sync_error_warning", lambda _id: None)
+    monkeypatch.setattr(timeclock, "_windows_for_day", lambda *_args: object())
+    monkeypatch.setattr(timeclock, "_hours_for_punch", lambda *_args: (None, None))
+    monkeypatch.setattr(timeclock, "_effective_punch_wc", lambda *_args: None)
+    monkeypatch.setattr(rounding, "apply_rounding", lambda *_args: PUNCH_AT)
+
+    log_id, _ = timeclock._open_log_row(
+        5,
+        "clock_out",
+        None,
+        close_all_open_rows=accepted_live,
+    )
+    punch_insert = inserted[0]
+    persisted_intent = punch_insert[1][-1]
+    assert persisted_intent is expected_close_all
+    assert rollout_after_enqueue is not accepted_live
+
+    close_all = MagicMock(return_value=(81, 82))
+    single = MagicMock(return_value={"id": 81})
+    monkeypatch.setattr(
+        timeclock_sync.odoo_client, "close_all_open_attendance_rows", close_all
+    )
+    monkeypatch.setattr(timeclock_sync.odoo_client, "get_current_attendance", single)
+    monkeypatch.setattr(timeclock_sync.odoo_client, "clock_out", MagicMock())
+    monkeypatch.setattr(timeclock_sync, "_mark_synced", MagicMock())
+
+    timeclock_sync._retry_one(
+        {
+            "id": log_id,
+            "person_odoo_id": 5,
+            "action": "clock_out",
+            "wc_name": None,
+            "occurred_at": PUNCH_AT,
+            "close_all_open_rows": persisted_intent,
+        }
+    )
+
+    assert close_all.called is expected_close_all
+    assert single.called is (not expected_close_all)
 
 
 @pytest.mark.parametrize("clocked_in", [False, True])
@@ -235,6 +307,52 @@ def test_active_live_dashboard_shows_owned_source_unavailable_without_punch_choi
     assert "Odoo attendance is unavailable" in response.text
     assert "/timeclock/clock-in/" not in response.text
     assert "/timeclock/clock-out/" not in response.text
+
+
+def test_active_live_dashboard_shows_stale_unknown_without_punch_choice(monkeypatch):
+    _wire_dashboard(monkeypatch, active=True, clocked_in=False)
+    monkeypatch.setattr(
+        timeclock,
+        "_current_state",
+        lambda _odoo_id: {
+            "is_clocked_in": None,
+            "current_wc": None,
+            "check_in_ts": None,
+            "attendance_source_unavailable": False,
+            "attendance_source_stale": True,
+            "attendance_source_error": "incremental sync failed",
+        },
+    )
+
+    response = client.get("/timeclock/dashboard/token")
+
+    assert response.status_code == 200
+    assert "Odoo attendance is stale" in response.text
+    assert "Clock state unavailable" in response.text
+    assert "/timeclock/clock-in/" not in response.text
+    assert "/timeclock/clock-out/" not in response.text
+
+
+def test_active_live_dashboard_exposes_fresh_source_error(monkeypatch):
+    _wire_dashboard(monkeypatch, active=True, clocked_in=True)
+    monkeypatch.setattr(
+        timeclock,
+        "_current_state",
+        lambda _odoo_id: {
+            "is_clocked_in": True,
+            "current_wc": "Bay 8",
+            "check_in_ts": PUNCH_AT,
+            "attendance_source_unavailable": False,
+            "attendance_source_stale": False,
+            "attendance_source_error": "incremental sync failed",
+        },
+    )
+
+    response = client.get("/timeclock/dashboard/token")
+
+    assert response.status_code == 200
+    assert "Odoo attendance sync reported a problem" in response.text
+    assert "last verified state" in response.text
 
 
 @pytest.mark.parametrize("rollout", ["off", "shadow", "pending-live"])

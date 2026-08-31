@@ -90,7 +90,14 @@ def status_for_day(day, ids, now_local, shift_start_local) -> dict:
         return {}
     if payload is None and not source.mirror_owned:
         payload = punches_for_day(day)
-    return compute_status(payload or {}, ids, now_local, shift_start_local)
+    payload = payload or {}
+    status_ids = ids
+    if source.mirror_owned and bool(getattr(source, "stale", False)):
+        # A stale positive row is still a bounded, last-verified fact.  A
+        # missing row is not proof that the employee never arrived, because
+        # the stopped sync may simply not have observed their punch yet.
+        status_ids = [raw for raw in ids if str(raw) in payload]
+    return compute_status(payload, status_ids, now_local, shift_start_local)
 
 
 def name_to_person_id() -> dict:
@@ -152,6 +159,8 @@ def derived_absent_names(day) -> set:
     source = live_cache.read_attendance_source(day)
     punches = source.payload
     if source.mirror_owned and not source.available:
+        return set()
+    if source.mirror_owned and bool(getattr(source, "stale", False)):
         return set()
     if punches is None and not source.mirror_owned:
         punches = punches_for_day(day)

@@ -75,10 +75,13 @@ class RepairCandidate:
     expected_write_date: datetime
     target_department_id: int
     expected_work_center_id: int
+    target_projected_at: datetime
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "attendance_id", _positive_int(self.attendance_id, "attendance_id")
+            self,
+            "attendance_id",
+            _positive_int(self.attendance_id, "attendance_id"),
         )
         object.__setattr__(
             self,
@@ -95,6 +98,11 @@ class RepairCandidate:
             "expected_work_center_id",
             _positive_int(self.expected_work_center_id, "expected_work_center_id"),
         )
+        object.__setattr__(
+            self,
+            "target_projected_at",
+            _aware_utc(self.target_projected_at, "target_projected_at"),
+        )
 
 
 @dataclass(frozen=True)
@@ -104,6 +112,7 @@ class RepairProjectionProof:
     work_center_id: int
     department_id: int | None
     target_department_id: int
+    target_projected_at: datetime
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -130,6 +139,11 @@ class RepairProjectionProof:
             "target_department_id",
             _positive_int(self.target_department_id, "target_department_id"),
         )
+        object.__setattr__(
+            self,
+            "target_projected_at",
+            _aware_utc(self.target_projected_at, "target_projected_at"),
+        )
 
 
 @dataclass(frozen=True)
@@ -143,7 +157,9 @@ class RepairClaim:
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "attendance_id", _positive_int(self.attendance_id, "attendance_id")
+            self,
+            "attendance_id",
+            _positive_int(self.attendance_id, "attendance_id"),
         )
         object.__setattr__(
             self,
@@ -159,7 +175,10 @@ class RepairClaim:
             object.__setattr__(
                 self,
                 "expected_work_center_id",
-                _positive_int(self.expected_work_center_id, "expected_work_center_id"),
+                _positive_int(
+                    self.expected_work_center_id,
+                    "expected_work_center_id",
+                ),
             )
         object.__setattr__(
             self,
@@ -228,27 +247,161 @@ class _PostgresBackend:
         cur.execute(
             "INSERT INTO attendance_department_repairs "
             "(odoo_attendance_id, expected_write_date, "
-            "target_odoo_department_id, status, attempt_count, updated_at, last_error) "
-            "VALUES (%s, %s, %s, 'pending', 0, %s, NULL) "
-            "ON CONFLICT (odoo_attendance_id) DO UPDATE SET "
-            "expected_write_date = EXCLUDED.expected_write_date, "
-            "target_odoo_department_id = EXCLUDED.target_odoo_department_id, "
-            "status = 'pending', attempt_count = 0, "
-            "updated_at = EXCLUDED.updated_at, last_error = NULL "
-            "WHERE attendance_department_repairs.status <> 'applying' AND ("
-            "attendance_department_repairs.expected_write_date "
-            "IS DISTINCT FROM EXCLUDED.expected_write_date "
-            "OR attendance_department_repairs.target_odoo_department_id "
-            "IS DISTINCT FROM EXCLUDED.target_odoo_department_id) "
+            "target_odoo_department_id, expected_odoo_work_center_id, "
+            "target_projected_at, status, attempt_count, updated_at, last_error) "
+            "VALUES (%s, %s, %s, %s, %s, 'pending', 0, %s, NULL) "
+            "ON CONFLICT (odoo_attendance_id) DO NOTHING "
             "RETURNING odoo_attendance_id",
             (
                 candidate.attendance_id,
                 candidate.expected_write_date,
                 candidate.target_department_id,
+                candidate.expected_work_center_id,
+                candidate.target_projected_at,
                 now_utc,
             ),
         )
-        return cur.fetchone() is not None
+        if cur.fetchone() is not None:
+            return True
+        cur.execute(
+            "SELECT expected_write_date, target_odoo_department_id, "
+            "expected_odoo_work_center_id, target_projected_at, status, "
+            "successor_expected_write_date, successor_target_odoo_department_id, "
+            "successor_expected_odoo_work_center_id, successor_target_projected_at "
+            "FROM attendance_department_repairs "
+            "WHERE odoo_attendance_id = %s FOR UPDATE",
+            (candidate.attendance_id,),
+        )
+        existing = cur.fetchone()
+        if existing is None:
+            raise RuntimeError("department repair disappeared during enqueue")
+        candidate_value = (
+            candidate.expected_write_date,
+            candidate.target_department_id,
+            candidate.expected_work_center_id,
+            candidate.target_projected_at,
+        )
+        active_value = (
+            existing["expected_write_date"],
+            int(existing["target_odoo_department_id"]),
+            (
+                int(existing["expected_odoo_work_center_id"])
+                if existing["expected_odoo_work_center_id"] is not None
+                else None
+            ),
+            existing["target_projected_at"],
+        )
+        successor_raw = (
+            existing["successor_expected_write_date"],
+            existing["successor_target_odoo_department_id"],
+            existing["successor_expected_odoo_work_center_id"],
+            existing["successor_target_projected_at"],
+        )
+        if any(value is not None for value in successor_raw) and not all(
+            value is not None for value in successor_raw
+        ):
+            raise RuntimeError("department repair successor is incomplete")
+        successor_value = (
+            (
+                successor_raw[0],
+                int(successor_raw[1]),
+                int(successor_raw[2]),
+                successor_raw[3],
+            )
+            if successor_raw[0] is not None
+            else None
+        )
+        if existing["status"] == "applying":
+            latest_projected_at = (
+                successor_value[3] if successor_value is not None else active_value[3]
+            )
+            if candidate.target_projected_at <= latest_projected_at:
+                return False
+            newest_version = (
+                max(active_value[0], successor_value[0])
+                if successor_value is not None
+                else active_value[0]
+            )
+            if candidate.expected_write_date < newest_version:
+                cur.execute(
+                    "SELECT odoo_write_date, odoo_work_center_id "
+                    "FROM odoo_attendance_mirror "
+                    "WHERE odoo_attendance_id = %s AND deleted_at IS NULL",
+                    (candidate.attendance_id,),
+                )
+                mirror = cur.fetchone()
+                if (
+                    mirror is None
+                    or mirror["odoo_write_date"] < newest_version
+                    or mirror["odoo_work_center_id"] != candidate.expected_work_center_id
+                ):
+                    return False
+                candidate_value = (
+                    mirror["odoo_write_date"],
+                    candidate.target_department_id,
+                    candidate.expected_work_center_id,
+                    candidate.target_projected_at,
+                )
+            if successor_value is None and candidate_value[:3] == active_value[:3]:
+                cur.execute(
+                    "UPDATE attendance_department_repairs SET target_projected_at = %s "
+                    "WHERE odoo_attendance_id = %s",
+                    (candidate.target_projected_at, candidate.attendance_id),
+                )
+                return False
+            cur.execute(
+                "UPDATE attendance_department_repairs SET "
+                "successor_expected_write_date = %s, "
+                "successor_target_odoo_department_id = %s, "
+                "successor_expected_odoo_work_center_id = %s, "
+                "successor_target_projected_at = %s "
+                "WHERE odoo_attendance_id = %s",
+                (*candidate_value, candidate.attendance_id),
+            )
+            return cur.rowcount == 1
+
+        if candidate.target_projected_at <= active_value[3]:
+            return False
+        if candidate.expected_write_date < active_value[0]:
+            cur.execute(
+                "SELECT odoo_write_date, odoo_work_center_id "
+                "FROM odoo_attendance_mirror "
+                "WHERE odoo_attendance_id = %s AND deleted_at IS NULL",
+                (candidate.attendance_id,),
+            )
+            mirror = cur.fetchone()
+            if (
+                mirror is None
+                or mirror["odoo_write_date"] < active_value[0]
+                or mirror["odoo_work_center_id"] != candidate.expected_work_center_id
+            ):
+                return False
+            candidate_value = (
+                mirror["odoo_write_date"],
+                candidate.target_department_id,
+                candidate.expected_work_center_id,
+                candidate.target_projected_at,
+            )
+        if candidate_value[:3] == active_value[:3]:
+            cur.execute(
+                "UPDATE attendance_department_repairs SET target_projected_at = %s "
+                "WHERE odoo_attendance_id = %s",
+                (candidate.target_projected_at, candidate.attendance_id),
+            )
+            return False
+        cur.execute(
+            "UPDATE attendance_department_repairs SET "
+            "expected_write_date = %s, target_odoo_department_id = %s, "
+            "expected_odoo_work_center_id = %s, target_projected_at = %s, "
+            "status = 'pending', attempt_count = 0, updated_at = %s, "
+            "last_error = NULL, successor_expected_write_date = NULL, "
+            "successor_target_odoo_department_id = NULL, "
+            "successor_expected_odoo_work_center_id = NULL, "
+            "successor_target_projected_at = NULL "
+            "WHERE odoo_attendance_id = %s",
+            (*candidate_value, now_utc, candidate.attendance_id),
+        )
+        return cur.rowcount == 1
 
     def enqueue(
         self,
@@ -283,6 +436,7 @@ class _PostgresBackend:
                 candidate.expected_write_date != proof.write_date
                 or candidate.expected_work_center_id != proof.work_center_id
                 or candidate.target_department_id != proof.target_department_id
+                or candidate.target_projected_at != proof.target_projected_at
             ):
                 raise ValueError("repair candidate does not match its projection proof")
         changed = 0
@@ -310,11 +464,20 @@ class _PostgresBackend:
                     (attendance_id,),
                 )
                 mirror = cur.fetchone()
-                if mirror is None or (
-                    mirror["odoo_write_date"] != proof.write_date
-                    or mirror["odoo_work_center_id"] != proof.work_center_id
-                    or mirror["odoo_department_id"] != proof.department_id
-                ):
+                if mirror is None:
+                    continue
+                exact_projection = (
+                    mirror["odoo_write_date"] == proof.write_date
+                    and mirror["odoo_work_center_id"] == proof.work_center_id
+                    and mirror["odoo_department_id"] == proof.department_id
+                )
+                delayed_candidate = (
+                    attendance_id in candidates_by_id
+                    and attendance_id in existing_repair_ids
+                    and mirror["odoo_write_date"] > proof.write_date
+                    and mirror["odoo_work_center_id"] == proof.work_center_id
+                )
+                if not exact_projection and not delayed_candidate:
                     continue
                 current_ids.add(attendance_id)
             for attendance_id, candidate in candidates_by_id.items():
@@ -332,18 +495,51 @@ class _PostgresBackend:
                         raise ValueError(
                             "candidate-free projection cannot prove the row is correct"
                         )
-                cur.execute(
-                    "UPDATE attendance_department_repairs SET "
-                    "status = 'complete', updated_at = %s, last_error = NULL "
-                    "WHERE odoo_attendance_id = ANY(%s) AND status <> 'applying' "
-                    "AND (status <> 'complete' OR last_error IS NOT NULL)",
-                    (now_utc, obsolete_ids),
-                )
+                    cur.execute(
+                        "UPDATE attendance_department_repairs SET "
+                        "expected_write_date = %s, "
+                        "target_odoo_department_id = %s, "
+                        "expected_odoo_work_center_id = %s, "
+                        "target_projected_at = %s, status = 'complete', "
+                        "updated_at = %s, last_error = NULL "
+                        "WHERE odoo_attendance_id = %s AND status <> 'applying' "
+                        "AND %s > target_projected_at "
+                        "AND (status <> 'complete' OR last_error IS NOT NULL)",
+                        (
+                            proof.write_date,
+                            proof.target_department_id,
+                            proof.work_center_id,
+                            proof.target_projected_at,
+                            now_utc,
+                            attendance_id,
+                            proof.target_projected_at,
+                        ),
+                    )
         return changed
 
     def claim_next(self, *, now_utc: datetime) -> RepairClaim | None:
         stale_before = now_utc - _LEASE
         with db.cursor() as cur:
+            cur.execute(
+                "UPDATE attendance_department_repairs SET "
+                "expected_write_date = successor_expected_write_date, "
+                "target_odoo_department_id = successor_target_odoo_department_id, "
+                "expected_odoo_work_center_id = "
+                "successor_expected_odoo_work_center_id, "
+                "target_projected_at = successor_target_projected_at, "
+                "status = 'pending', attempt_count = 0, updated_at = %s, "
+                "last_error = NULL, successor_expected_write_date = NULL, "
+                "successor_target_odoo_department_id = NULL, "
+                "successor_expected_odoo_work_center_id = NULL, "
+                "successor_target_projected_at = NULL "
+                "WHERE status = 'applying' AND updated_at <= %s "
+                "AND attempt_count >= %s "
+                "AND successor_expected_write_date IS NOT NULL "
+                "AND successor_target_odoo_department_id IS NOT NULL "
+                "AND successor_expected_odoo_work_center_id IS NOT NULL "
+                "AND successor_target_projected_at IS NOT NULL",
+                (now_utc, stale_before, MAX_ATTEMPTS),
+            )
             cur.execute(
                 "UPDATE attendance_department_repairs SET status = 'failed', "
                 "updated_at = %s, last_error = %s "
@@ -358,8 +554,7 @@ class _PostgresBackend:
             cur.execute(
                 "SELECT r.odoo_attendance_id, r.expected_write_date, "
                 "r.target_odoo_department_id, r.attempt_count, "
-                "CASE WHEN m.deleted_at IS NULL THEN m.odoo_work_center_id END "
-                "AS expected_work_center_id, "
+                "r.expected_odoo_work_center_id, "
                 "CASE WHEN m.deleted_at IS NULL THEN m.odoo_write_date END "
                 "AS mirror_write_date "
                 "FROM attendance_department_repairs r "
@@ -386,8 +581,8 @@ class _PostgresBackend:
             expected_write_date=row["expected_write_date"],
             target_department_id=int(row["target_odoo_department_id"]),
             expected_work_center_id=(
-                int(row["expected_work_center_id"])
-                if row["expected_work_center_id"] is not None
+                int(row["expected_odoo_work_center_id"])
+                if row["expected_odoo_work_center_id"] is not None
                 else None
             ),
             mirror_write_date=row["mirror_write_date"],
@@ -395,52 +590,153 @@ class _PostgresBackend:
         )
 
     @staticmethod
-    def _fence_owned(cur, claim: RepairClaim) -> bool:
+    def _lock_owned(cur, claim: RepairClaim) -> Mapping[str, object] | None:
         cur.execute(
-            "SELECT odoo_attendance_id FROM attendance_department_repairs "
-            "WHERE odoo_attendance_id = %s AND expected_write_date = %s "
-            "AND target_odoo_department_id = %s AND status = 'applying' "
-            "AND attempt_count = %s FOR UPDATE",
-            (
-                claim.attendance_id,
-                claim.expected_write_date,
-                claim.target_department_id,
-                claim.attempt_count,
-            ),
+            "SELECT status, attempt_count, expected_write_date, "
+            "target_odoo_department_id, expected_odoo_work_center_id, "
+            "target_projected_at, "
+            "successor_expected_write_date, "
+            "successor_target_odoo_department_id, "
+            "successor_expected_odoo_work_center_id, "
+            "successor_target_projected_at "
+            "FROM attendance_department_repairs "
+            "WHERE odoo_attendance_id = %s FOR UPDATE",
+            (claim.attendance_id,),
         )
-        return cur.fetchone() is not None
+        row = cur.fetchone()
+        owned = bool(
+            row is not None
+            and row["status"] == "applying"
+            and int(row["attempt_count"]) == claim.attempt_count
+            and row["expected_write_date"] == claim.expected_write_date
+            and int(row["target_odoo_department_id"]) == claim.target_department_id
+            and (
+                int(row["expected_odoo_work_center_id"])
+                if row["expected_odoo_work_center_id"] is not None
+                else None
+            )
+            == claim.expected_work_center_id
+        )
+        return row if owned else None
 
-    def reserve_for_write(self, claim: RepairClaim, *, now_utc: datetime) -> bool:
-        reserved_at = _aware_utc(now_utc, "now_utc")
+    @staticmethod
+    def _successor(
+        row: Mapping[str, object],
+    ) -> tuple[datetime, int, int, datetime] | None:
+        raw = (
+            row["successor_expected_write_date"],
+            row["successor_target_odoo_department_id"],
+            row["successor_expected_odoo_work_center_id"],
+            row["successor_target_projected_at"],
+        )
+        if all(value is None for value in raw):
+            return None
+        if not all(value is not None for value in raw):
+            raise RuntimeError("department repair successor is incomplete")
+        return (
+            _aware_utc(raw[0], "successor_expected_write_date"),
+            _positive_int(raw[1], "successor_target_odoo_department_id"),
+            _positive_int(raw[2], "successor_expected_odoo_work_center_id"),
+            _aware_utc(raw[3], "successor_target_projected_at"),
+        )
+
+    @staticmethod
+    def _claim_fence(claim: RepairClaim) -> tuple[object, ...]:
+        return (
+            claim.attendance_id,
+            claim.attempt_count,
+            claim.expected_write_date,
+            claim.target_department_id,
+            claim.expected_work_center_id,
+        )
+
+    def _promote_successor(
+        self,
+        cur,
+        claim: RepairClaim,
+        owned: Mapping[str, object],
+        *,
+        now_utc: datetime,
+        observed_row: Mapping[str, object] | None = None,
+    ) -> bool:
+        successor = self._successor(owned)
+        if successor is None:
+            return False
+        if (
+            observed_row is not None
+            and observed_row["odoo_work_center_id"] == successor[2]
+            and observed_row["odoo_write_date"] > successor[0]
+        ):
+            successor = (
+                _aware_utc(observed_row["odoo_write_date"], "odoo_write_date"),
+                successor[1],
+                successor[2],
+                successor[3],
+            )
+        cur.execute(
+            "UPDATE attendance_department_repairs SET "
+            "expected_write_date = %s, target_odoo_department_id = %s, "
+            "expected_odoo_work_center_id = %s, target_projected_at = %s, "
+            "status = 'pending', "
+            "attempt_count = 0, updated_at = %s, last_error = NULL, "
+            "successor_expected_write_date = NULL, "
+            "successor_target_odoo_department_id = NULL, "
+            "successor_expected_odoo_work_center_id = NULL, "
+            "successor_target_projected_at = NULL "
+            "WHERE odoo_attendance_id = %s AND status = 'applying' "
+            "AND attempt_count = %s AND expected_write_date = %s "
+            "AND target_odoo_department_id = %s "
+            "AND expected_odoo_work_center_id IS NOT DISTINCT FROM %s",
+            (*successor, now_utc, *self._claim_fence(claim)),
+        )
+        return cur.rowcount == 1
+
+    def renew_claim(self, claim: RepairClaim, *, now_utc: datetime) -> bool:
         with db.cursor() as cur:
-            if not self._fence_owned(cur, claim):
+            owned = self._lock_owned(cur, claim)
+            if owned is None:
+                return False
+            if self._promote_successor(
+                cur,
+                claim,
+                owned,
+                now_utc=now_utc,
+            ):
                 return False
             cur.execute(
-                "SELECT odoo_attendance_id FROM odoo_attendance_mirror "
-                "WHERE odoo_attendance_id = %s AND deleted_at IS NULL "
-                "AND odoo_write_date = %s AND odoo_work_center_id = %s",
-                (
-                    claim.attendance_id,
-                    claim.expected_write_date,
-                    claim.expected_work_center_id,
-                ),
+                "SELECT odoo_write_date, odoo_work_center_id "
+                "FROM odoo_attendance_mirror "
+                "WHERE odoo_attendance_id = %s AND deleted_at IS NULL",
+                (claim.attendance_id,),
             )
-            if cur.fetchone() is None:
+            mirror = cur.fetchone()
+            if (
+                mirror is None
+                or mirror["odoo_write_date"] != claim.expected_write_date
+                or mirror["odoo_work_center_id"] != claim.expected_work_center_id
+            ):
+                cur.execute(
+                    "UPDATE attendance_department_repairs SET "
+                    "status = 'complete', updated_at = %s, last_error = NULL "
+                    "WHERE odoo_attendance_id = %s AND status = 'applying' "
+                    "AND attempt_count = %s AND expected_write_date = %s "
+                    "AND target_odoo_department_id = %s "
+                    "AND expected_odoo_work_center_id IS NOT DISTINCT FROM %s",
+                    (now_utc, *self._claim_fence(claim)),
+                )
                 return False
             cur.execute(
                 "UPDATE attendance_department_repairs SET updated_at = %s "
-                "WHERE odoo_attendance_id = %s AND expected_write_date = %s "
-                "AND target_odoo_department_id = %s AND status = 'applying' "
-                "AND attempt_count = %s",
-                (
-                    reserved_at,
-                    claim.attendance_id,
-                    claim.expected_write_date,
-                    claim.target_department_id,
-                    claim.attempt_count,
-                ),
+                "WHERE odoo_attendance_id = %s AND status = 'applying' "
+                "AND attempt_count = %s AND expected_write_date = %s "
+                "AND target_odoo_department_id = %s "
+                "AND expected_odoo_work_center_id IS NOT DISTINCT FROM %s",
+                (now_utc, *self._claim_fence(claim)),
             )
             return cur.rowcount == 1
+
+    def reserve_for_write(self, claim: RepairClaim, *, now_utc: datetime) -> bool:
+        return self.renew_claim(claim, now_utc=_aware_utc(now_utc, "now_utc"))
 
     @staticmethod
     def _verified_row_is_current(cur, claim: RepairClaim, row: Mapping[str, object]) -> bool:
@@ -472,7 +768,8 @@ class _PostgresBackend:
         if normalized["odoo_attendance_id"] != claim.attendance_id:
             raise ValueError("verified row does not match the repair claim")
         with db.cursor() as cur:
-            if not self._fence_owned(cur, claim):
+            owned = self._lock_owned(cur, claim)
+            if owned is None:
                 return False
             sync_state = attendance_mirror._locked_sync_state(cur)  # noqa: SLF001
             if not self._verified_row_is_current(cur, claim, normalized):
@@ -483,19 +780,34 @@ class _PostgresBackend:
                 now_utc=now_utc,
                 sync_state=sync_state,
             )
+            successor = self._successor(owned)
+            if successor is not None and (
+                successor[0] >= normalized["odoo_write_date"]
+                or successor[2] == normalized["odoo_work_center_id"]
+            ):
+                return self._promote_successor(
+                    cur,
+                    claim,
+                    owned,
+                    now_utc=now_utc,
+                    observed_row=normalized,
+                )
             cur.execute(
                 "UPDATE attendance_department_repairs SET "
-                "expected_write_date = %s, status = 'pending', updated_at = %s, "
-                "last_error = NULL WHERE odoo_attendance_id = %s "
-                "AND expected_write_date = %s AND target_odoo_department_id = %s "
-                "AND status = 'applying' AND attempt_count = %s",
+                "expected_write_date = %s, status = 'pending', "
+                "attempt_count = 0, updated_at = %s, last_error = NULL, "
+                "successor_expected_write_date = NULL, "
+                "successor_target_odoo_department_id = NULL, "
+                "successor_expected_odoo_work_center_id = NULL, "
+                "successor_target_projected_at = NULL "
+                "WHERE odoo_attendance_id = %s AND status = 'applying' "
+                "AND attempt_count = %s AND expected_write_date = %s "
+                "AND target_odoo_department_id = %s "
+                "AND expected_odoo_work_center_id IS NOT DISTINCT FROM %s",
                 (
                     normalized["odoo_write_date"],
                     now_utc,
-                    claim.attendance_id,
-                    claim.expected_write_date,
-                    claim.target_department_id,
-                    claim.attempt_count,
+                    *self._claim_fence(claim),
                 ),
             )
             return cur.rowcount == 1
@@ -509,44 +821,51 @@ class _PostgresBackend:
     ) -> bool:
         target = _positive_int(target_department_id, "target_department_id")
         with db.cursor() as cur:
-            if not self._fence_owned(cur, claim):
+            owned = self._lock_owned(cur, claim)
+            if owned is None:
                 return False
+            if self._promote_successor(cur, claim, owned, now_utc=now_utc):
+                return True
             cur.execute(
                 "UPDATE attendance_department_repairs SET "
-                "target_odoo_department_id = %s, status = 'pending', "
+                "target_odoo_department_id = %s, target_projected_at = "
+                "GREATEST(target_projected_at, %s), status = 'pending', "
                 "attempt_count = 0, updated_at = %s, last_error = NULL "
-                "WHERE odoo_attendance_id = %s AND expected_write_date = %s "
-                "AND target_odoo_department_id = %s AND status = 'applying' "
-                "AND attempt_count = %s",
-                (
-                    target,
-                    now_utc,
-                    claim.attendance_id,
-                    claim.expected_write_date,
-                    claim.target_department_id,
-                    claim.attempt_count,
-                ),
+                "WHERE odoo_attendance_id = %s AND status = 'applying' "
+                "AND attempt_count = %s AND expected_write_date = %s "
+                "AND target_odoo_department_id = %s "
+                "AND expected_odoo_work_center_id IS NOT DISTINCT FROM %s",
+                (target, now_utc, now_utc, *self._claim_fence(claim)),
             )
             return cur.rowcount == 1
 
-    def discard(self, claim: RepairClaim, *, now_utc: datetime, reason: str) -> bool:
+    def discard(
+        self,
+        claim: RepairClaim,
+        *,
+        now_utc: datetime,
+        reason: str,
+    ) -> bool:
         del reason
         with db.cursor() as cur:
-            if not self._fence_owned(cur, claim):
+            owned = self._lock_owned(cur, claim)
+            if owned is None:
                 return False
+            if self._promote_successor(
+                cur,
+                claim,
+                owned,
+                now_utc=now_utc,
+            ):
+                return True
             cur.execute(
                 "UPDATE attendance_department_repairs SET "
                 "status = 'complete', updated_at = %s, last_error = NULL "
-                "WHERE odoo_attendance_id = %s AND expected_write_date = %s "
-                "AND target_odoo_department_id = %s AND status = 'applying' "
-                "AND attempt_count = %s",
-                (
-                    now_utc,
-                    claim.attendance_id,
-                    claim.expected_write_date,
-                    claim.target_department_id,
-                    claim.attempt_count,
-                ),
+                "WHERE odoo_attendance_id = %s AND status = 'applying' "
+                "AND attempt_count = %s AND expected_write_date = %s "
+                "AND target_odoo_department_id = %s "
+                "AND expected_odoo_work_center_id IS NOT DISTINCT FROM %s",
+                (now_utc, *self._claim_fence(claim)),
             )
             return cur.rowcount == 1
 
@@ -561,7 +880,8 @@ class _PostgresBackend:
         if normalized["odoo_attendance_id"] != claim.attendance_id:
             raise ValueError("verified row does not match the repair claim")
         with db.cursor() as cur:
-            if not self._fence_owned(cur, claim):
+            owned = self._lock_owned(cur, claim)
+            if owned is None:
                 return False
             sync_state = attendance_mirror._locked_sync_state(cur)  # noqa: SLF001
             if not self._verified_row_is_current(cur, claim, normalized):
@@ -572,20 +892,26 @@ class _PostgresBackend:
                 now_utc=now_utc,
                 sync_state=sync_state,
             )
+            if self._promote_successor(
+                cur,
+                claim,
+                owned,
+                now_utc=now_utc,
+                observed_row=normalized,
+            ):
+                return True
             cur.execute(
                 "UPDATE attendance_department_repairs SET "
                 "expected_write_date = %s, status = 'complete', "
                 "updated_at = %s, last_error = NULL "
-                "WHERE odoo_attendance_id = %s AND expected_write_date = %s "
-                "AND target_odoo_department_id = %s AND status = 'applying' "
-                "AND attempt_count = %s",
+                "WHERE odoo_attendance_id = %s AND status = 'applying' "
+                "AND attempt_count = %s AND expected_write_date = %s "
+                "AND target_odoo_department_id = %s "
+                "AND expected_odoo_work_center_id IS NOT DISTINCT FROM %s",
                 (
                     normalized["odoo_write_date"],
                     now_utc,
-                    claim.attendance_id,
-                    claim.expected_write_date,
-                    claim.target_department_id,
-                    claim.attempt_count,
+                    *self._claim_fence(claim),
                 ),
             )
             return cur.rowcount == 1
@@ -605,7 +931,8 @@ class _PostgresBackend:
         )
         failed = claim.attempt_count >= MAX_ATTEMPTS
         with db.cursor() as cur:
-            if not self._fence_owned(cur, claim):
+            owned = self._lock_owned(cur, claim)
+            if owned is None:
                 return None
             if normalized is not None:
                 if normalized["odoo_attendance_id"] != claim.attendance_id:
@@ -619,22 +946,28 @@ class _PostgresBackend:
                     now_utc=now_utc,
                     sync_state=sync_state,
                 )
+            if self._promote_successor(
+                cur,
+                claim,
+                owned,
+                now_utc=now_utc,
+                observed_row=normalized,
+            ):
+                return None
             cur.execute(
                 "UPDATE attendance_department_repairs SET "
                 "expected_write_date = COALESCE(%s, expected_write_date), "
                 "status = %s, updated_at = %s, last_error = %s "
-                "WHERE odoo_attendance_id = %s AND expected_write_date = %s "
-                "AND target_odoo_department_id = %s AND status = 'applying' "
-                "AND attempt_count = %s",
+                "WHERE odoo_attendance_id = %s AND status = 'applying' "
+                "AND attempt_count = %s AND expected_write_date = %s "
+                "AND target_odoo_department_id = %s "
+                "AND expected_odoo_work_center_id IS NOT DISTINCT FROM %s",
                 (
                     normalized["odoo_write_date"] if normalized is not None else None,
                     "failed" if failed else "pending",
                     now_utc,
                     _error_text(error),
-                    claim.attendance_id,
-                    claim.expected_write_date,
-                    claim.target_department_id,
-                    claim.attempt_count,
+                    *self._claim_fence(claim),
                 ),
             )
             return failed if cur.rowcount == 1 else None
@@ -645,7 +978,11 @@ _backend = _PostgresBackend()
 _live_enabled = attendance_location_policy.live_is_active
 
 
-def _candidate_for_span(span: attendance_timeline.LocationSpan) -> RepairCandidate | None:
+def _candidate_for_span(
+    span: attendance_timeline.LocationSpan,
+    *,
+    projected_at_utc: datetime,
+) -> RepairCandidate | None:
     if (
         span.status != "valid"
         or span.odoo_work_center_id is None
@@ -659,14 +996,18 @@ def _candidate_for_span(span: attendance_timeline.LocationSpan) -> RepairCandida
         expected_write_date=expected_write_date,
         target_department_id=target_department_id,
         expected_work_center_id=span.odoo_work_center_id,
+        target_projected_at=projected_at_utc,
     )
 
 
 def _candidates_from_spans(
     spans: Sequence[attendance_timeline.LocationSpan],
+    *,
+    projected_at_utc: datetime,
 ) -> tuple[RepairCandidate, ...] | None:
     if isinstance(spans, (str, bytes)) or not isinstance(spans, Sequence):
         raise TypeError("spans must be a sequence")
+    projected_at = _aware_utc(projected_at_utc, "projected_at_utc")
     by_id: dict[int, RepairCandidate] = {}
     ambiguous: set[int] = set()
     for span in spans:
@@ -676,7 +1017,7 @@ def _candidates_from_spans(
             _positive_int(attendance_id, "span attendance id")
             for attendance_id in span.attendance_ids
         }
-        candidate = _candidate_for_span(span)
+        candidate = _candidate_for_span(span, projected_at_utc=projected_at)
         if candidate is None:
             continue
         if candidate.attendance_id not in covered_ids:
@@ -689,12 +1030,28 @@ def _candidates_from_spans(
     return tuple(by_id[attendance_id] for attendance_id in sorted(by_id))
 
 
-def enqueue_from_spans(spans: Sequence[attendance_timeline.LocationSpan]) -> int:
-    """Queue one unambiguous candidate for each source attendance ID."""
-    candidates = _candidates_from_spans(spans)
+def _enqueue_projected_spans(
+    spans: Sequence[attendance_timeline.LocationSpan],
+    *,
+    projected_at_utc: datetime,
+) -> int:
+    """Queue one projection using its pre-enqueue observation order token."""
+    projected_at = _aware_utc(projected_at_utc, "projected_at_utc")
+    candidates = _candidates_from_spans(spans, projected_at_utc=projected_at)
     if not candidates:
         return 0
     return _backend.enqueue(candidates, now_utc=_now_utc(None))
+
+
+def enqueue_from_spans(
+    spans: Sequence[attendance_timeline.LocationSpan],
+) -> int:
+    """Queue one unambiguous candidate for each source attendance ID."""
+    projected_at = _now_utc(None)
+    candidates = _candidates_from_spans(spans, projected_at_utc=projected_at)
+    if not candidates:
+        return 0
+    return _backend.enqueue(candidates, now_utc=projected_at)
 
 
 def _read_one(attendance_id: int) -> dict[str, object] | None:
@@ -798,6 +1155,13 @@ def process_next(*, now_utc: datetime | None = None) -> RepairResult | None:
         return _result(claim, "target_refreshed")
     if current["odoo_department_id"] == claim.target_department_id:
         return _finish(claim, current, now_utc=now, outcome="already_correct")
+    if claim.attempt_count > MAX_ATTEMPTS:
+        return _fail(
+            claim,
+            "Odoo department repair exceeded its maximum attempts",
+            now_utc=now,
+            current_row=current,
+        )
     if current["odoo_write_date"] != claim.expected_write_date:
         if claim.attempt_count >= MAX_ATTEMPTS:
             return _fail(
@@ -952,7 +1316,7 @@ def enqueue_after_successful_sync(
         ),
         expected_department_id=expected_department_id,
     )
-    candidates = _candidates_from_spans(spans)
+    candidates = _candidates_from_spans(spans, projected_at_utc=now)
     if candidates is None:
         return 0
     raw_by_id = {int(row["odoo_attendance_id"]): row for row in raw_rows}
@@ -977,6 +1341,7 @@ def enqueue_after_successful_sync(
                 work_center_id=span.odoo_work_center_id,
                 department_id=raw["odoo_department_id"],
                 target_department_id=target_department_id,
+                target_projected_at=now,
             )
             existing = proofs_by_id.setdefault(attendance_id, proof)
             if existing != proof:

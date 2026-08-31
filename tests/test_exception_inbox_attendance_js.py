@@ -67,6 +67,17 @@ def test_apply_stays_disabled_until_preview_or_refreshed_confirmation():
     assert "Review the refreshed preview" in js
 
 
+def test_incomplete_preview_never_arms_apply_even_if_a_server_regresses():
+    result = _run_attendance_hook(
+        "[null, {}, {employees: []}, {employees: [{intervals_truncated: true}]}, {employees: [{intervals_truncated: false}]}].map(window.gpiAttendanceCorrection.previewIsComplete)"
+    )
+
+    assert result == [False, False, False, False, True]
+    js = _js()
+    assert "attendancePreviewIsComplete(resp.preview)" in js
+    assert "The full attendance plan could not be shown" in js
+
+
 def test_preview_renders_safe_local_intervals_and_still_working_label():
     js = _js()
 
@@ -92,7 +103,9 @@ def test_datetime_inputs_convert_with_the_plant_timezone_not_browser_timezone():
 
 
 def test_clock_change_resolution_rejects_gap_and_requires_both_fall_choices():
-    result = _run_attendance_hook("({gap: window.gpiAttendanceCorrection.localTimeResolution('2026-03-08T02:30', 'America/Chicago', null), fall: window.gpiAttendanceCorrection.localTimeCandidates('2026-11-01T01:30', 'America/Chicago'), first: window.gpiAttendanceCorrection.localTimeResolution('2026-11-01T01:30', 'America/Chicago', '2026-11-01T06:30:00.000Z'), second: window.gpiAttendanceCorrection.localTimeResolution('2026-11-01T01:30', 'America/Chicago', '2026-11-01T07:30:00.000Z')})")
+    result = _run_attendance_hook(
+        "({gap: window.gpiAttendanceCorrection.localTimeResolution('2026-03-08T02:30', 'America/Chicago', null), fall: window.gpiAttendanceCorrection.localTimeCandidates('2026-11-01T01:30', 'America/Chicago'), first: window.gpiAttendanceCorrection.localTimeResolution('2026-11-01T01:30', 'America/Chicago', '2026-11-01T06:30:00.000Z'), second: window.gpiAttendanceCorrection.localTimeResolution('2026-11-01T01:30', 'America/Chicago', '2026-11-01T07:30:00.000Z')})"
+    )
 
     assert result["gap"]["status"] == "nonexistent"
     assert result["fall"] == [
@@ -125,19 +138,19 @@ def test_each_dialog_open_clears_an_old_clock_occurrence_choice():
 def test_job_polling_is_retry_safe_and_never_advances_the_worker():
     js = _js()
 
-    assert "function pollAttendanceCorrectionJob(jobId)" in js
-    assert (
-        "'/api/exceptions/attendance-correction/' + encodeURIComponent(jobId)" in js
-    )
+    assert "function pollAttendanceCorrectionJob(jobId, epoch)" in js
+    assert "'/api/exceptions/attendance-correction/' + encodeURIComponent(jobId)" in js
     assert "resp.poll_after_ms" in js
-    assert "setTimeout(function () { pollAttendanceCorrectionJob(jobId); }, delay)" in js
+    assert "pollAttendanceCorrectionJob(jobId, epoch)" in js
     assert "process_job" not in js
     assert "resp.status === 'complete'" in js
     assert "resp.retryable" in js
 
 
 def test_job_polling_retries_only_network_and_503_responses():
-    decisions = _run_attendance_hook("[503, 401, 403, 404, 500].map(function (status) { return window.gpiAttendanceCorrection.pollDecision(status, false, true); }).concat([window.gpiAttendanceCorrection.pollDecision(503, false, false), window.gpiAttendanceCorrection.pollDecision(200, true, false)])")
+    decisions = _run_attendance_hook(
+        "[503, 401, 403, 404, 500].map(function (status) { return window.gpiAttendanceCorrection.pollDecision(status, false, true); }).concat([window.gpiAttendanceCorrection.pollDecision(503, false, false), window.gpiAttendanceCorrection.pollDecision(200, true, false)])"
+    )
 
     assert [item["retry"] for item in decisions] == [
         True,
@@ -202,3 +215,184 @@ def test_dialog_supports_escape_close_and_returns_focus_to_the_card_action():
     assert "attendanceCorrectionOpener.focus()" in js
     assert "attendanceCorrectionDialog.addEventListener('cancel'" in js
     assert "attendanceCorrectionDialog.addEventListener('close'" in js
+
+
+def test_dialog_uses_abortable_epochs_for_preview_apply_and_poll_responses():
+    js = _js()
+
+    assert "attendanceCorrectionEpoch" in js
+    assert "new AbortController()" in js
+    assert "function cancelAttendanceCorrectionRequests()" in js
+    assert "function attendanceResponseIsCurrent(epoch)" in js
+    assert "if (!attendanceResponseIsCurrent(epoch)) return;" in js
+    assert "pollAttendanceCorrectionJob(jobId, epoch)" in js
+    assert "scheduleAttendancePoll(jobId, requestedDelay, epoch)" in js
+    assert "cancelAttendanceCorrectionRequests();" in js
+    assert "signal:" in js
+
+
+def test_request_epoch_runtime_aborts_and_invalidates_old_dialog_work():
+    js = _js()
+    start = js.index("  var attendanceCorrectionEpoch = 0;")
+    end = js.index("  function padAttendanceTime(value)")
+    functions = js[start:end]
+    harness = f"""
+var attendanceCorrectionDialog = {{open: true}};
+var attendanceCorrectionRow = {{item: 'first'}};
+var correctionPreviewToken = 'signed';
+var attendancePollTimer = null;
+{functions}
+var request = beginAttendanceCorrectionRequest();
+if (!attendanceResponseIsCurrent(request.epoch)) throw new Error('new request not current');
+if (request.signal.aborted) throw new Error('new request started aborted');
+cancelAttendanceCorrectionRequests();
+if (!request.signal.aborted) throw new Error('old request was not aborted');
+if (attendanceResponseIsCurrent(request.epoch)) throw new Error('old response stayed current');
+var next = beginAttendanceCorrectionRequest();
+attendanceCorrectionDialog.open = false;
+if (attendanceResponseIsCurrent(next.epoch)) throw new Error('closed dialog accepted response');
+"""
+
+    result = subprocess.run(
+        ["node", "--eval", harness], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_stale_preview_apply_and_poll_callbacks_cannot_mutate_the_dialog():
+    js = _js()
+    state = js[
+        js.index("  var attendanceCorrectionEpoch = 0;") : js.index(
+            "  function padAttendanceTime(value)"
+        )
+    ]
+    completeness = js[
+        js.index("  function attendancePreviewIsComplete(preview)") : js.index(
+            "  function showAttendanceRefreshConfirmation()"
+        )
+    ]
+    preview = js[
+        js.index("  function previewAttendanceCorrection()") : js.index(
+            "  function attendanceProgress(text, isError)"
+        )
+    ]
+    poll = js[
+        js.index("  function attendanceProgress(text, isError)") : js.index(
+            "  function applyAttendanceCorrection()"
+        )
+    ]
+    apply = js[
+        js.index("  function applyAttendanceCorrection()") : js.index(
+            "  function openAttendanceCorrection(button)"
+        )
+    ]
+    harness = f"""
+function deferred() {{
+  var resolve;
+  var promise = new Promise(function (done) {{ resolve = done; }});
+  return {{promise: promise, resolve: resolve}};
+}}
+function element() {{
+  return {{
+    hidden: false, disabled: false, textContent: '',
+    classList: {{toggle: function () {{}}}},
+    replaceChildren: function () {{}},
+  }};
+}}
+var elements = {{
+  message: element(), progress: element(), preview: element(), apply: element(),
+  output: element(), refresh: element(),
+}};
+var attendanceCorrectionDialog = {{
+  open: true,
+  querySelector: function (selector) {{
+    if (selector.indexOf('message') !== -1) return elements.message;
+    if (selector.indexOf('progress') !== -1) return elements.progress;
+    if (selector.indexOf('preview-output') !== -1) return elements.output;
+    if (selector.indexOf('refresh-wrap') !== -1) return elements.refresh;
+    if (selector.indexOf('attendance-preview]') !== -1) return elements.preview;
+    if (selector.indexOf('attendance-apply') !== -1) return elements.apply;
+    return element();
+  }},
+}};
+var attendanceCorrectionForm = {{}};
+var attendanceCorrectionRow = {{item: 'current'}};
+var correctionPreviewToken = null;
+var attendancePollTimer = null;
+var effects = [];
+var scheduled = 0;
+function setTimeout() {{ scheduled += 1; return scheduled; }}
+function clearTimeout() {{}}
+var window = {{
+  location: {{reload: function () {{ effects.push('reload'); }}}},
+}};
+function attendanceCorrectionPayload() {{ return {{item_key: 'current'}}; }}
+function renderAttendancePreview() {{ effects.push('render'); }}
+function showAttendanceRefreshConfirmation() {{ effects.push('confirm'); }}
+function localAttendanceTimeCandidates() {{ return []; }}
+function localAttendanceTimeResolution() {{ return {{status: 'nonexistent'}}; }}
+var posts = [];
+function postJson() {{ return posts.shift().promise; }}
+var polls = [];
+function fetchCompat() {{ return polls.shift().promise; }}
+{state}
+{completeness}
+{preview}
+{poll}
+{apply}
+(async function () {{
+  var oldPreview = deferred();
+  posts.push(oldPreview);
+  previewAttendanceCorrection();
+  cancelAttendanceCorrectionRequests();
+  oldPreview.resolve({{ok: true, preview_token: 'old', preview: {{}}}});
+  await Promise.resolve();
+  await Promise.resolve();
+  if (effects.length) throw new Error('stale preview rendered');
+  if (correctionPreviewToken !== null) throw new Error('stale preview restored token');
+  if (elements.message.textContent !== 'Reading the latest attendance from Odoo…') {{
+    throw new Error('stale preview changed message');
+  }}
+
+  correctionPreviewToken = 'signed';
+  var oldApply = deferred();
+  posts.push(oldApply);
+  applyAttendanceCorrection();
+  cancelAttendanceCorrectionRequests();
+  oldApply.resolve({{ok: true, job_id: 9}});
+  await Promise.resolve();
+  await Promise.resolve();
+  if (effects.length) throw new Error('stale apply mutated dialog');
+  if (correctionPreviewToken !== 'signed') throw new Error('stale apply changed token');
+  if (elements.message.textContent !== 'Queueing the verified Odoo correction…') {{
+    throw new Error('stale apply changed message');
+  }}
+
+  var oldPoll = deferred();
+  polls.push(oldPoll);
+  var epoch = attendanceCorrectionEpoch;
+  elements.progress.textContent = 'unchanged';
+  var pendingPoll = pollAttendanceCorrectionJob(9, epoch);
+  cancelAttendanceCorrectionRequests();
+  oldPoll.resolve({{
+    status: 503,
+    ok: false,
+    json: function () {{ return Promise.resolve({{ok: false}}); }},
+  }});
+  await pendingPoll;
+  if (elements.progress.textContent !== 'unchanged') {{
+    throw new Error('stale poll changed progress');
+  }}
+  if (scheduled !== 0) throw new Error('stale poll scheduled another request');
+}})().catch(function (error) {{
+  process.stderr.write(String(error.stack || error));
+  process.exitCode = 1;
+}});
+"""
+
+    result = subprocess.run(
+        ["node", "--eval", harness], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr

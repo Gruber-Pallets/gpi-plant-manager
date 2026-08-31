@@ -82,8 +82,14 @@ def trust_local(latest: dict | None, refreshed_at: datetime | None) -> bool:
     return refreshed_at <= synced_at
 
 
-def current_state(person_odoo_id: int, snapshot: dict | None = None,
-                  refreshed_at: datetime | None = None, latest=_UNSET) -> dict:
+def current_state(
+    person_odoo_id: int,
+    snapshot: dict | None = None,
+    refreshed_at: datetime | None = None,
+    latest=_UNSET,
+    *,
+    source=None,
+) -> dict:
     """The kiosk's view of an employee's current attendance state, reconciled
     against Odoo. Still a fast all-local read — no XML-RPC on the hot path.
 
@@ -104,7 +110,13 @@ def current_state(person_odoo_id: int, snapshot: dict | None = None,
     source_available = True
     source_stale: bool | None = None
     source_error: str | None = None
-    if snapshot is None:
+    if source is not None:
+        snapshot, refreshed_at = source.payload, source.refreshed_at
+        mirror_owned = source.mirror_owned
+        source_available = source.available
+        source_stale = getattr(source, "stale", None)
+        source_error = getattr(source, "error", None)
+    elif snapshot is None:
         source = live_cache.read_open_attendance_source()
         snapshot, refreshed_at = source.payload, source.refreshed_at
         mirror_owned = source.mirror_owned
@@ -134,12 +146,21 @@ def current_state(person_odoo_id: int, snapshot: dict | None = None,
             }
         entry = snapshot.get(str(person_odoo_id))
         if not entry:
-            state = {
-                "is_clocked_in": False,
-                "current_wc": None,
-                "check_in_ts": None,
-                "open_odoo_attendance_id": None,
-            }
+            state = (
+                {
+                    "is_clocked_in": None,
+                    "current_wc": None,
+                    "check_in_ts": None,
+                    "open_odoo_attendance_id": None,
+                }
+                if source_stale
+                else {
+                    "is_clocked_in": False,
+                    "current_wc": None,
+                    "check_in_ts": None,
+                    "open_odoo_attendance_id": None,
+                }
+            )
         else:
             check_in = entry.get("check_in")
             state = {

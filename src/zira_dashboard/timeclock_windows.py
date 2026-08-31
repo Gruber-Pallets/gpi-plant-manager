@@ -133,7 +133,12 @@ def current_attendance_windows() -> tuple[
         ):
             live_cache.refresh_odoo_open_attendance()
             refreshed = live_cache.read_open_attendance_source()
+            source = refreshed
             snapshot, refreshed_at = refreshed.payload, refreshed.refreshed_at
+            if not source.available:
+                return {}, refreshed_at
+        if source.mirror_owned and refreshed_at is None:
+            return {}, None
         # The legacy snapshot is an open-ended cache, so an old row must not
         # become current truth. Mirror-owned rows instead stop exactly at the
         # response's last verified refresh; downstream interval consumers may
@@ -297,8 +302,13 @@ def _mirror_attendance_windows_for_day(
         if not name or not isinstance(check_in, datetime):
             continue
         check_out = row.get("check_out_utc")
-        verified_end = min(check_out, verified_through_utc) if check_out else verified_through_utc
-        if verified_end <= check_in:
+        clipped_start = max(check_in, start_utc)
+        verified_end = min(
+            check_out or verified_through_utc,
+            verified_through_utc,
+            end_utc,
+        )
+        if verified_end <= clipped_start:
             continue
         wc_name = work_centers_store.app_work_center_name_for_odoo_id(
             row.get("odoo_work_center_id")
@@ -306,7 +316,7 @@ def _mirror_attendance_windows_for_day(
         by_person.setdefault(name, []).append(
             {
                 "wc_name": wc_name,
-                "start": check_in,
+                "start": clipped_start,
                 "end": verified_end,
             }
         )

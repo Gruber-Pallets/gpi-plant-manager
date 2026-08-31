@@ -76,6 +76,116 @@ def test_recent_local_clock_in_overrides_older_attendance_cache(monkeypatch):
     }
 
 
+def test_stale_owned_snapshot_keeps_positive_status_without_missing_no_punch(
+    monkeypatch,
+):
+    d = date(2026, 6, 1)
+    now_local = datetime.combine(d, time(12, 0), tzinfo=shift_config.SITE_TZ)
+    source = live_cache.AttendanceSourceSnapshot(
+        payload={
+            "1": {
+                "first_check_in": datetime(2026, 6, 1, 11, 0, tzinfo=UTC).isoformat(),
+                "currently_open": True,
+            }
+        },
+        refreshed_at=datetime(2026, 6, 1, 16, 0, tzinfo=UTC),
+        mirror_owned=True,
+        available=True,
+        error="incremental sync failed",
+        stale=True,
+    )
+    monkeypatch.setattr(plant_day, "now", lambda: now_local)
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(6, 0))
+    monkeypatch.setattr(
+        attendance, "name_to_person_id", lambda: {"Ana": "1", "Bob": "2"}
+    )
+    monkeypatch.setattr(
+        staffing_attendance, "_timeoff_names_with_fallback", lambda _day: set()
+    )
+    monkeypatch.setattr(
+        staffing,
+        "load_roster",
+        lambda: [
+            SimpleNamespace(name="Ana", active=True, reserve=False),
+            SimpleNamespace(name="Bob", active=True, reserve=False),
+        ],
+    )
+
+    pkg = staffing_attendance._safe_attendance(
+        d,
+        SimpleNamespace(assignments={"Baler": ["Ana", "Bob"]}),
+        d,
+        attendance_source=source,
+    )
+
+    assert pkg["by_id"]["1"]["status"] == "on_time"
+    assert "2" not in pkg["by_id"]
+    assert "Bob" not in pkg["by_name"]
+
+
+def test_stale_owned_snapshot_is_frozen_for_direct_staffing_reader(monkeypatch):
+    d = date(2026, 6, 1)
+    now_local = datetime.combine(d, time(12, 0), tzinfo=shift_config.SITE_TZ)
+    policy = live_cache.AttendanceReadPolicy(
+        mirror_owned=True,
+        available=True,
+        refreshed_at=datetime(2026, 6, 1, 16, 0, tzinfo=UTC),
+        error="incremental sync failed",
+        mode="live",
+        stale=True,
+    )
+    source = live_cache.AttendanceSourceSnapshot(
+        payload={
+            "1": {
+                "first_check_in": datetime(2026, 6, 1, 11, 0, tzinfo=UTC).isoformat(),
+                "currently_open": True,
+            }
+        },
+        refreshed_at=policy.refreshed_at,
+        mirror_owned=True,
+        available=True,
+        error=policy.error,
+        stale=True,
+    )
+    policy_calls = []
+    source_calls = []
+    monkeypatch.setattr(plant_day, "now", lambda: now_local)
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(6, 0))
+    monkeypatch.setattr(
+        attendance, "name_to_person_id", lambda: {"Ana": "1", "Bob": "2"}
+    )
+    monkeypatch.setattr(
+        staffing_attendance, "_timeoff_names_with_fallback", lambda _day: set()
+    )
+    monkeypatch.setattr(
+        staffing,
+        "load_roster",
+        lambda: [
+            SimpleNamespace(name="Ana", active=True, reserve=False),
+            SimpleNamespace(name="Bob", active=True, reserve=False),
+        ],
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "attendance_read_policy",
+        lambda: policy_calls.append(True) or policy,
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "read_attendance_source",
+        lambda day, **kwargs: source_calls.append((day, kwargs["policy"])) or source,
+    )
+
+    pkg = staffing_attendance._safe_attendance(
+        d, SimpleNamespace(assignments={"Baler": ["Ana", "Bob"]}), d
+    )
+
+    assert policy_calls == [True]
+    assert source_calls == [(d, policy)]
+    assert pkg["by_id"]["1"]["status"] == "on_time"
+    assert "2" not in pkg["by_id"]
+
+
 def test_frozen_staffing_snapshot_does_not_apply_a_later_local_clock_in(monkeypatch):
     day = date(2026, 6, 1)
     cap = datetime(2026, 6, 1, 18, 0, tzinfo=UTC)

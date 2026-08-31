@@ -322,11 +322,39 @@ CREATE TABLE IF NOT EXISTS attendance_department_repairs (
   odoo_attendance_id BIGINT PRIMARY KEY,
   expected_write_date TIMESTAMPTZ NOT NULL,
   target_odoo_department_id BIGINT NOT NULL,
+  expected_odoo_work_center_id BIGINT NOT NULL,
+  target_projected_at TIMESTAMPTZ NOT NULL,
+  successor_expected_write_date TIMESTAMPTZ,
+  successor_target_odoo_department_id BIGINT,
+  successor_expected_odoo_work_center_id BIGINT,
+  successor_target_projected_at TIMESTAMPTZ,
   status TEXT NOT NULL CHECK (status IN ('pending', 'applying', 'complete', 'failed')),
   attempt_count INTEGER NOT NULL DEFAULT 0,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_error TEXT
 );
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS expected_odoo_work_center_id BIGINT;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS target_projected_at TIMESTAMPTZ;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS successor_expected_write_date TIMESTAMPTZ;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS successor_target_odoo_department_id BIGINT;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS successor_expected_odoo_work_center_id BIGINT;
+ALTER TABLE attendance_department_repairs
+  ADD COLUMN IF NOT EXISTS successor_target_projected_at TIMESTAMPTZ;
+UPDATE attendance_department_repairs r
+   SET expected_odoo_work_center_id = m.odoo_work_center_id
+  FROM odoo_attendance_mirror m
+ WHERE r.expected_odoo_work_center_id IS NULL
+   AND m.odoo_attendance_id = r.odoo_attendance_id;
+UPDATE attendance_department_repairs
+   SET target_projected_at = updated_at
+ WHERE target_projected_at IS NULL;
+ALTER TABLE attendance_department_repairs
+  ALTER COLUMN target_projected_at SET NOT NULL;
 
 -- App-specific (not mirrored anywhere) ---------------------------------
 
@@ -1167,6 +1195,32 @@ CREATE TABLE IF NOT EXISTS work_schedules (
 -- timeclock_punches_log already exists in production.
 ALTER TABLE timeclock_punches_log
   ADD COLUMN IF NOT EXISTS rounded_at TIMESTAMPTZ;
+
+-- Freeze day-end ownership when a punch is accepted. A queued punch keeps
+-- the same single-row/close-all behavior even if rollout activates or rolls
+-- back before its asynchronous Odoo retry runs.
+ALTER TABLE timeclock_punches_log
+  ADD COLUMN IF NOT EXISTS close_all_open_rows BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE timeclock_punches_log
+  DROP CONSTRAINT IF EXISTS timeclock_punches_log_close_all_action_check;
+ALTER TABLE timeclock_punches_log
+  ADD CONSTRAINT timeclock_punches_log_close_all_action_check
+  CHECK (close_all_open_rows = FALSE OR action = 'clock_out');
+
+CREATE OR REPLACE FUNCTION prevent_timeclock_close_all_intent_change()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.close_all_open_rows IS DISTINCT FROM OLD.close_all_open_rows THEN
+    RAISE EXCEPTION 'timeclock clock-out ownership intent is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS timeclock_close_all_intent_immutable
+  ON timeclock_punches_log;
+CREATE TRIGGER timeclock_close_all_intent_immutable
+BEFORE UPDATE OF close_all_open_rows ON timeclock_punches_log
+FOR EACH ROW EXECUTE FUNCTION prevent_timeclock_close_all_intent_change();
 
 -- Expression index for the effective punch time. timeclock_windows
 -- filters/orders on COALESCE(rounded_at, occurred_at); must live after the

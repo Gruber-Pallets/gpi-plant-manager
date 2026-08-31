@@ -364,7 +364,13 @@ def _windows_for_day(person_name, local_date, effective_wc, is_flexible=False):
     return RoundingSettings(0, 0, 0, 0)
 
 
-def _open_log_row(person_odoo_id: int, action: str, wc_name: str | None) -> tuple[int, datetime]:
+def _open_log_row(
+    person_odoo_id: int,
+    action: str,
+    wc_name: str | None,
+    *,
+    close_all_open_rows: bool | None = None,
+) -> tuple[int, datetime]:
     """Insert a timeclock_punches_log row (synced=FALSE), compute the rounded
     timestamp using current rounding settings, write it back to the row,
     and return (id, rounded_at). Both occurred_at (raw) and rounded_at
@@ -378,12 +384,18 @@ def _open_log_row(person_odoo_id: int, action: str, wc_name: str | None) -> tupl
     """
     from .. import rounding
 
+    if close_all_open_rows is None:
+        close_all_open_rows = bool(action == "clock_out" and _live_location_active())
+    elif action != "clock_out" and close_all_open_rows:
+        raise ValueError("close-all intent is valid only for clock-out punches")
+
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO timeclock_punches_log "
-            "(person_odoo_id, action, wc_name) VALUES (%s, %s, %s) "
+            "(person_odoo_id, action, wc_name, close_all_open_rows) "
+            "VALUES (%s, %s, %s, %s) "
             "RETURNING id, occurred_at",
-            (person_odoo_id, action, wc_name),
+            (person_odoo_id, action, wc_name, bool(close_all_open_rows)),
         )
         row = cur.fetchone()
     log_id = row["id"]
@@ -678,6 +690,7 @@ def timeclock_dashboard(request: Request, token: str):
                 state.get("attendance_source_unavailable")
             ),
             "attendance_source_stale": bool(state.get("attendance_source_stale")),
+            "attendance_source_error": state.get("attendance_source_error"),
             "on_lunch": on_lunch,
             "check_in_display": _fmt_time(state["check_in_ts"]) if state["check_in_ts"] else None,
             "scheduled_wc": scheduled_wc,

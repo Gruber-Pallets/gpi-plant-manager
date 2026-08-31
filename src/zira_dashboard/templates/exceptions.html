@@ -148,7 +148,7 @@
           {% endif %}
         </div>
         <div class="row-actions">
-          {% if row.get('kind') == 'production_unassigned_run' and not row.get('comparison_only') %}
+          {% if row.get('kind') == 'production_unassigned_run' and row.get('comparison_only') is sameas false %}
             <button type="button" class="row-btn primary js-attendance-correction-open" data-attendance-correction-open>
               Choose workers and times
             </button>

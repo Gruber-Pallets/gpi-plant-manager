@@ -6,6 +6,7 @@ yields an empty panel, not a 500. Extracted from routes/staffing.py.
 
 from __future__ import annotations
 
+import inspect
 import time as _time
 from datetime import datetime
 from threading import RLock
@@ -214,16 +215,38 @@ def _safe_attendance(
 
         all_ids = list({*scheduled_ids, *unscheduled_ids})
         id_to_name = attendance.person_id_to_name(name_to_id)
+        attendance_parameters = inspect.signature(
+            _attendance_with_fallback
+        ).parameters
+        supports_source = "source" in attendance_parameters
+        if attendance_source is None and supports_source:
+            from . import live_cache
+
+            attendance_policy = (
+                attendance_policy or live_cache.attendance_read_policy()
+            )
+            attendance_source = live_cache.read_attendance_source(
+                d, policy=attendance_policy
+            )
         attendance_kwargs = {}
-        if attendance_policy is not None:
+        if attendance_policy is not None and "policy" in attendance_parameters:
             attendance_kwargs["policy"] = attendance_policy
-        if attendance_source is not None:
+        if attendance_source is not None and supports_source:
             attendance_kwargs["source"] = attendance_source
         punches = _attendance_with_fallback(d, all_ids, **attendance_kwargs)
         if punches is None:
             return empty
+        status_ids = all_ids
+        if (
+            attendance_source is not None
+            and attendance_source.mirror_owned
+            and bool(getattr(attendance_source, "stale", False))
+        ):
+            # Keep verified positive attendance visible, but a worker missing
+            # from a stale snapshot is unknown—not a no-punch absence.
+            status_ids = [emp_id for emp_id in all_ids if str(emp_id) in punches]
         attendance_by_id = attendance.compute_status(
-            punches, all_ids, now_local, shift_start_local
+            punches, status_ids, now_local, shift_start_local
         )
         by_name: dict[str, dict] = {}
         for emp_id, info in attendance_by_id.items():

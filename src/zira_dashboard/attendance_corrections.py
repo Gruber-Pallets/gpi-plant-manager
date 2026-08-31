@@ -1644,6 +1644,17 @@ class _StaleClaim(RuntimeError):
     pass
 
 
+class CorrectionRequestConflict(RuntimeError):
+    """A concurrent job for the inbox item does not match the verified preview."""
+
+    def __init__(self, job_id: int, *, source_changed: bool = False) -> None:
+        if not isinstance(source_changed, bool):
+            raise TypeError("source_changed must be a boolean")
+        self.job_id = _positive_int(job_id, "job_id")
+        self.source_changed = source_changed
+        super().__init__("another correction request already owns this inbox item")
+
+
 def _bounded_text(value: object, field_name: str, limit: int) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be text")
@@ -2232,19 +2243,12 @@ def _append_event_cur(
     )
 
 
-def _active_job_id(item_key: str) -> int | None:
-    from . import db
-
-    rows = db.query(
-        "SELECT id FROM attendance_correction_jobs WHERE item_key = %s "
-        "AND status IN ('planned','applying','verifying','recalculating') "
-        "ORDER BY id DESC LIMIT 1",
-        (item_key,),
-    )
-    return int(rows[0]["id"]) if rows else None
-
-
-def _validated_job_preview(preview: CorrectionPreview) -> CorrectionPreview:
+def _preview_job_payloads(
+    preview: CorrectionPreview,
+    *,
+    now_utc: datetime | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Validate the same bounds used by the worker before exposing or saving a preview."""
     if not isinstance(preview, CorrectionPreview):
         raise TypeError("preview must be a CorrectionPreview")
     key, employees, target, start, end = _validated_request(
@@ -2254,37 +2258,226 @@ def _validated_job_preview(preview: CorrectionPreview) -> CorrectionPreview:
         start_utc=preview.start_utc,
         end_utc=preview.end_utc,
     )
-    if len(preview.plans) != len(employees):
-        raise ValueError("preview must contain one plan per employee")
-    for employee_id, plan in zip(employees, preview.plans, strict=True):
-        request = plan.request
-        if (
-            request["employee_odoo_id"] != employee_id
-            or request["start_utc"] != start
-            or request["end_utc"] != end
-            or request["odoo_work_center_id"] != preview.target_odoo_work_center_id
-            or request["odoo_department_id"] != preview.target_odoo_department_id
-        ):
-            raise ValueError("preview plan does not match its validated request")
     if (
-        preview.item_key != key
-        or preview.employee_odoo_ids != employees
-        or preview.target_work_center_name != target
-        or preview.start_utc != start
-        or preview.end_utc != end
+        key != preview.item_key
+        or employees != preview.employee_odoo_ids
+        or target != preview.target_work_center_name
+        or start != preview.start_utc
+        or end != preview.end_utc
+        or len(preview.plans) != len(employees)
     ):
         raise ValueError("preview request is not canonical")
+    if sum(len(plan.operations) for plan in preview.plans) > _MAX_OPERATIONS:
+        raise ValueError("correction job contains too many operations")
+
+    source_snapshot = _snapshot_payload(preview)
+    plans_payload = _plans_payload(preview)
+    source_rows = _source_rows_from_json(source_snapshot, employees)
+    plans = _plans_from_json(plans_payload, employees)
+    _validate_saved_job_plans(
+        {
+            "start_utc": start,
+            "end_utc": end,
+            "target_odoo_work_center_id": preview.target_odoo_work_center_id,
+        },
+        employees,
+        source_rows,
+        plans,
+    )
+    open_end = _aware_utc(now_utc or datetime.now(UTC), "now_utc")
+    if len(_touched_days(source_rows, plans, open_end=open_end)) > _MAX_RECALC_HORIZON_DAYS:
+        raise ValueError("correction recalculation horizon is too large")
+    return source_snapshot, plans_payload
+
+
+def validate_preview_for_job(
+    preview: CorrectionPreview, *, now_utc: datetime | None = None
+) -> None:
+    """Fail closed when a manager preview exceeds Task 8's durable job limits."""
+    _preview_job_payloads(preview, now_utc=now_utc)
+
+
+def preview_job_binding(preview: CorrectionPreview) -> dict[str, object]:
+    """Return the complete signed identity of one validated immutable preview."""
+    _preview_job_payloads(preview)
+    plans = []
+    for employee_id, plan in zip(preview.employee_odoo_ids, preview.plans, strict=True):
+        encoded = plan_to_json(plan)
+        assert isinstance(encoded, Mapping)
+        plans.append(
+            {
+                "employee_odoo_id": employee_id,
+                "plan_integrity": encoded["integrity"],
+                "source_versions": [
+                    {
+                        "attendance_id": version.attendance_id,
+                        "write_date": version.write_date.isoformat(),
+                    }
+                    for version in plan.source_versions
+                ],
+            }
+        )
+    return {
+        "version": 1,
+        "request": {
+            "item_key": preview.item_key,
+            "employee_odoo_ids": list(preview.employee_odoo_ids),
+            "work_center_name": preview.target_work_center_name,
+            "start_utc": preview.start_utc.isoformat(),
+            "end_utc": preview.end_utc.isoformat() if preview.end_utc is not None else None,
+        },
+        "plans": plans,
+    }
+
+
+def _preview_from_persisted_job(row: Mapping[str, object]) -> CorrectionPreview:
+    item_key = _bounded_text(row.get("item_key"), "item_key", _ITEM_KEY_LIMIT)
+    employee_value = _decode_json_column(row.get("employee_odoo_ids"), "employee_odoo_ids")
+    if not isinstance(employee_value, list):
+        raise TypeError("employee_odoo_ids must be a JSON list")
+    employees = _employee_ids(employee_value)
+    if employee_value != list(employees):
+        raise ValueError("saved employee IDs are not canonical")
+    target_name = _bounded_text(
+        row.get("target_work_center_name"),
+        "target_work_center_name",
+        _TEXT_LIMIT,
+    )
+    target_id = _positive_int(row.get("target_odoo_work_center_id"), "target_odoo_work_center_id")
+    start = _aware_utc(row.get("start_utc"), "start_utc")
+    end = _optional_aware_utc(row.get("end_utc"), "end_utc")
+    source_rows = _source_rows_from_json(row.get("source_snapshot"), employees)
+    plans = _plans_from_json(row.get("operations"), employees)
+    _validate_saved_job_plans(
+        {
+            "start_utc": start,
+            "end_utc": end,
+            "target_odoo_work_center_id": target_id,
+        },
+        employees,
+        source_rows,
+        plans,
+    )
+    department_ids = {plans[employee_id].request["odoo_department_id"] for employee_id in employees}
+    if len(department_ids) != 1:
+        raise ValueError("saved plans disagree on target department")
+    preview = CorrectionPreview(
+        item_key=item_key,
+        employee_odoo_ids=employees,
+        target_work_center_name=target_name,
+        target_odoo_work_center_id=target_id,
+        target_odoo_department_id=department_ids.pop(),  # type: ignore[arg-type]
+        start_utc=start,
+        end_utc=end,
+        plans=tuple(plans[employee_id] for employee_id in employees),
+    )
+    source_snapshot, operations = _preview_job_payloads(preview)
+    if not _json_column_matches(row.get("source_snapshot"), source_snapshot):
+        raise ValueError("saved source snapshot is not canonical")
+    if not _json_column_matches(row.get("operations"), operations):
+        raise ValueError("saved correction plans are not canonical")
     return preview
 
 
-def _persist_preview_job(
+def find_reusable_job_for_binding(*, item_key: str, binding: Mapping[str, object]) -> int | None:
+    """Authenticate an active job against a signed preview without rereading Odoo."""
+    key = _bounded_text(item_key, "item_key", _ITEM_KEY_LIMIT)
+    if not isinstance(binding, Mapping) or set(binding) != {"version", "request", "plans"}:
+        raise ValueError("preview binding is invalid")
+    request = binding.get("request")
+    if (
+        binding.get("version") != 1
+        or not isinstance(request, Mapping)
+        or request.get("item_key") != key
+        or not isinstance(binding.get("plans"), list)
+    ):
+        raise ValueError("preview binding is invalid")
+
+    from . import db
+
+    active = db.query(
+        "SELECT id FROM attendance_correction_jobs WHERE item_key = %s "
+        "AND status IN ('planned','applying','verifying','recalculating') "
+        "ORDER BY id DESC LIMIT 1",
+        (key,),
+    )
+    if not active:
+        return None
+    job_id = _positive_int(active[0].get("id"), "job_id")
+    # Reload by immutable identity, not active status: a worker may finish after
+    # discovery, and that race winner still must be authenticated before reuse.
+    rows = db.query(
+        "SELECT id, status, item_key, target_work_center_name, "
+        "target_odoo_work_center_id, start_utc, end_utc, employee_odoo_ids, "
+        "source_snapshot, operations FROM attendance_correction_jobs WHERE id = %s",
+        (job_id,),
+    )
+    if len(rows) != 1:
+        raise RuntimeError("correction dedupe winner disappeared")
+    persisted = preview_job_binding(_preview_from_persisted_job(rows[0]))
+    if persisted != binding:
+        raise CorrectionRequestConflict(
+            job_id,
+            source_changed=persisted.get("request") == request,
+        )
+    return job_id
+
+
+def _json_column_matches(value: object, expected: object) -> bool:
+    try:
+        return _decode_json_column(value, "job value") == expected
+    except (TypeError, ValueError):
+        return False
+
+
+def _job_row_matches_preview(
+    row: Mapping[str, object],
     preview: CorrectionPreview,
+    source_snapshot: Mapping[str, object],
+    plans: Mapping[str, object],
+) -> bool:
+    if not _job_row_request_matches_preview(row, preview):
+        return False
+    try:
+        row_work_center_id = _positive_int(
+            row.get("target_odoo_work_center_id"), "target_odoo_work_center_id"
+        )
+    except (TypeError, ValueError):
+        return False
+    return (
+        row_work_center_id == preview.target_odoo_work_center_id
+        and _json_column_matches(row.get("source_snapshot"), source_snapshot)
+        and _json_column_matches(row.get("operations"), plans)
+    )
+
+
+def _job_row_request_matches_preview(row: Mapping[str, object], preview: CorrectionPreview) -> bool:
+    try:
+        row_employees = _employee_ids(
+            _decode_json_column(row.get("employee_odoo_ids"), "employee_odoo_ids")
+        )
+        row_start = _aware_utc(row.get("start_utc"), "start_utc")
+        row_end = _optional_aware_utc(row.get("end_utc"), "end_utc")
+    except (TypeError, ValueError):
+        return False
+    return (
+        row.get("target_work_center_name") == preview.target_work_center_name
+        and row_start == preview.start_utc
+        and row_end == preview.end_utc
+        and row_employees == preview.employee_odoo_ids
+    )
+
+
+def create_job_from_preview(
     *,
+    preview: CorrectionPreview,
     actor_email: str | None,
     actor_name: str | None,
 ) -> int:
-    source_snapshot = _snapshot_payload(preview)
-    plans = _plans_payload(preview)
+    """Persist exactly one verified preview and authenticate any dedupe winner."""
+    source_snapshot, plans = _preview_job_payloads(preview)
+    email = _optional_bounded_text(actor_email, "actor_email", _ACTOR_LIMIT)
+    name = _optional_bounded_text(actor_name, "actor_name", _ACTOR_LIMIT)
     from . import db
 
     with db.cursor() as cur:
@@ -2307,8 +2500,8 @@ def _persist_preview_job(
                 json.dumps(list(preview.employee_odoo_ids)),
                 json.dumps(source_snapshot, separators=(",", ":")),
                 json.dumps(plans, separators=(",", ":")),
-                actor_email,
-                actor_name,
+                email,
+                name,
             ),
         )
         row = cur.fetchone()
@@ -2326,36 +2519,27 @@ def _persist_preview_job(
                 ),
             )
             return job_id
+
+        # Do not filter on status here. The row that won the partial-unique
+        # race may become terminal before this lock is acquired, but its exact
+        # canonical request still has to be authenticated before returning it.
         cur.execute(
-            "SELECT id FROM attendance_correction_jobs WHERE item_key = %s "
-            "AND status IN ('planned','applying','verifying','recalculating') "
-            "ORDER BY id DESC LIMIT 1 FOR UPDATE",
+            "SELECT id, status, target_work_center_name, "
+            "target_odoo_work_center_id, start_utc, end_utc, employee_odoo_ids, "
+            "source_snapshot, operations FROM attendance_correction_jobs "
+            "WHERE item_key = %s ORDER BY id DESC LIMIT 1 FOR UPDATE",
             (preview.item_key,),
         )
         duplicate = cur.fetchone()
         if duplicate is None:
-            raise RuntimeError("active correction dedupe winner disappeared")
-        return int(duplicate["id"])
-
-
-def create_job_from_preview(
-    *,
-    preview: CorrectionPreview,
-    actor_email: str | None,
-    actor_name: str | None,
-) -> int:
-    """Persist this exact validated preview without another Odoo source read."""
-    exact_preview = _validated_job_preview(preview)
-    email = _optional_bounded_text(actor_email, "actor_email", _ACTOR_LIMIT)
-    name = _optional_bounded_text(actor_name, "actor_name", _ACTOR_LIMIT)
-    existing = _active_job_id(exact_preview.item_key)
-    if existing is not None:
-        return existing
-    return _persist_preview_job(
-        exact_preview,
-        actor_email=email,
-        actor_name=name,
-    )
+            raise RuntimeError("correction dedupe winner disappeared")
+        job_id = int(duplicate["id"])
+        if not _job_row_matches_preview(duplicate, preview, source_snapshot, plans):
+            raise CorrectionRequestConflict(
+                job_id,
+                source_changed=_job_row_request_matches_preview(duplicate, preview),
+            )
+        return job_id
 
 
 def create_job(
@@ -2376,11 +2560,6 @@ def create_job(
         start_utc=start_utc,
         end_utc=end_utc,
     )
-    email = _optional_bounded_text(actor_email, "actor_email", _ACTOR_LIMIT)
-    name = _optional_bounded_text(actor_name, "actor_name", _ACTOR_LIMIT)
-    existing = _active_job_id(key)
-    if existing is not None:
-        return existing
     preview = _build_preview(
         item_key=key,
         employee_odoo_ids=employees,
@@ -2388,7 +2567,11 @@ def create_job(
         start_utc=start,
         end_utc=end,
     )
-    return _persist_preview_job(preview, actor_email=email, actor_name=name)
+    return create_job_from_preview(
+        preview=preview,
+        actor_email=actor_email,
+        actor_name=actor_name,
+    )
 
 
 def _claim_job(*, job_id: int | None, now_utc: datetime) -> _JobClaim | None:
@@ -4187,12 +4370,15 @@ __all__ = [
     "CorrectionOperation",
     "CorrectionPlan",
     "CorrectionPreview",
+    "CorrectionRequestConflict",
     "SourceVersion",
     "correction_preview",
     "create_job",
+    "create_job_from_preview",
     "plan_correction",
     "plan_from_json",
     "plan_to_json",
     "process_job",
     "process_next",
+    "validate_preview_for_job",
 ]

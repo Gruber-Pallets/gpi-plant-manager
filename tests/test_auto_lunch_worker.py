@@ -20,6 +20,11 @@ def _setup(monkeypatch):
     db.bootstrap_schema()
     db.execute("DELETE FROM auto_lunch_runs WHERE person_odoo_id = %s", (PID,))
     db.execute("DELETE FROM timeclock_punches_log WHERE person_odoo_id = %s", (PID,))
+    db.execute("DELETE FROM auto_lunch_runs WHERE person_odoo_id = %s", (SALARIED_PID,))
+    db.execute(
+        "DELETE FROM timeclock_punches_log WHERE person_odoo_id = %s",
+        (SALARIED_PID,),
+    )
     db.execute("DELETE FROM people WHERE odoo_id = %s", (SALARIED_PID,))
     als.save(als.Settings(enabled=True, observe_only=False,
                           flex_after_hours=5.0, flex_minutes=30))
@@ -195,3 +200,28 @@ def test_signout_wc_falls_back_to_local_punch_when_cache_lacks_it(monkeypatch):
     run = db.query("SELECT wc_name FROM auto_lunch_runs WHERE person_odoo_id=%s",
                    (PID,))[0]
     assert run["wc_name"] == "Repair 1"  # captured from the local punch, not lost
+
+
+def test_legacy_attendance_inputs_are_prefetched_for_multiple_people():
+    day = datetime.now(shift_config.SITE_TZ).date()
+    first = datetime.combine(day, time(7, 0), tzinfo=shift_config.SITE_TZ)
+    transferred = first + timedelta(hours=2)
+    second_first = first + timedelta(minutes=15)
+    for person_id, action, wc_name, at in (
+        (PID, "clock_in", "Bay 3", first),
+        (PID, "transfer_in", "Repair 1", transferred),
+        (SALARIED_PID, "clock_in", "Sustaining", second_first),
+    ):
+        db.execute(
+            "INSERT INTO timeclock_punches_log "
+            "(person_odoo_id, action, wc_name, occurred_at, rounded_at, source) "
+            "VALUES (%s, %s, %s, %s, %s, 'employee')",
+            (person_id, action, wc_name, at, at),
+        )
+
+    first_clock_ins, latest_in_wcs = al._legacy_attendance_inputs_bulk(
+        {PID, SALARIED_PID}, day
+    )
+
+    assert first_clock_ins == {PID: first, SALARIED_PID: second_first}
+    assert latest_in_wcs == {PID: "Repair 1", SALARIED_PID: "Sustaining"}

@@ -24,18 +24,11 @@ from __future__ import annotations
 
 import logging
 
-from . import attendance_location_policy, db, odoo_client
+from . import db, odoo_client
 
 _log = logging.getLogger(__name__)
 
 _BATCH_SIZE = 50
-
-
-def _live_location_active() -> bool:
-    try:
-        return attendance_location_policy.live_is_active()
-    except Exception:
-        return False
 
 
 def retry_unsynced_punches() -> int:
@@ -45,7 +38,7 @@ def retry_unsynced_punches() -> int:
     Order: chronological by occurred_at, then by id (so a transfer's
     transfer_out is retried before its transfer_in)."""
     rows = db.query(
-        "SELECT id, person_odoo_id, action, wc_name, "
+        "SELECT id, person_odoo_id, action, wc_name, close_all_open_rows, "
         "COALESCE(rounded_at, occurred_at) AS occurred_at "
         "FROM timeclock_punches_log "
         "WHERE synced_to_odoo = FALSE "
@@ -93,7 +86,7 @@ def _retry_one(r: dict) -> None:
         _mark_synced(r["id"], att_id)
         return
 
-    if action == "clock_out" and _live_location_active():
+    if action == "clock_out" and bool(r.get("close_all_open_rows")):
         # A day-end punch is authoritative even when bad overlapping rows
         # exist.  The facade closes them at this exact timestamp and performs
         # a fresh no-open-rows verification before returning.
@@ -151,7 +144,7 @@ def sync_one_by_id(log_id: int) -> None:
     next tick. So this function is "best-effort fast path" — the safety
     net always runs."""
     rows = db.query(
-        "SELECT id, person_odoo_id, action, wc_name, "
+        "SELECT id, person_odoo_id, action, wc_name, close_all_open_rows, "
         "COALESCE(rounded_at, occurred_at) AS occurred_at "
         "FROM timeclock_punches_log WHERE id = %s",
         (log_id,),

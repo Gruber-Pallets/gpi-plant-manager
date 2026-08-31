@@ -31,6 +31,7 @@ def _row(kind, **changes):
         "end_is_open": False,
         "units": 12.0,
         "sample_count": 3,
+        "comparison_only": False,
         "raw_work_center_labels": [],
         "odoo_work_center_ids": [],
     }
@@ -105,7 +106,7 @@ def test_attendance_cards_show_source_facts_and_actions(monkeypatch):
     assert "Maria Worker, José Worker" in html
     assert "Reason: Positive production has no valid Odoo worker" in html
     assert "Choose workers and times" in html
-    assert 'data-attendance-correction-open' in html
+    assert "data-attendance-correction-open" in html
     assert 'data-correction-item-key="' + ITEM_KEY + '"' in html
     assert "Odoo status: Unknown work center" in html
     assert "Odoo work center: ODoo Only &amp; Special/Center" in html
@@ -116,6 +117,24 @@ def test_attendance_cards_show_source_facts_and_actions(monkeypatch):
         "/settings?section=work_centers&amp;odoo_work_center_id=781"
         "&amp;odoo_work_center_name=ODoo+Only+%26+Special%2FCenter"
     ) in html
+
+
+def test_attendance_action_requires_literal_false_comparison_flag(monkeypatch):
+    for malformed in (None, 0, "false"):
+        snapshot = _snapshot()
+        snapshot["queue"] = [_row("production_unassigned_run", comparison_only=malformed)]
+        monkeypatch.setattr(exceptions.exception_inbox, "build_snapshot", lambda: snapshot)
+        monkeypatch.setattr(exceptions, "_active_correction_people", lambda: [])
+
+        html = TestClient(app).get("/exceptions").text
+
+        assert "data-attendance-correction-open" not in html
+
+    snapshot = _snapshot()
+    snapshot["queue"] = [_row("production_unassigned_run")]
+    snapshot["queue"][0].pop("comparison_only")
+    monkeypatch.setattr(exceptions.exception_inbox, "build_snapshot", lambda: snapshot)
+    assert "data-attendance-correction-open" not in TestClient(app).get("/exceptions").text
 
 
 def test_correction_dialog_has_accessible_people_time_target_and_confirmation_controls(
@@ -141,24 +160,24 @@ def test_correction_dialog_has_accessible_people_time_target_and_confirmation_co
     assert 'name="employee_odoo_ids" value="44"' in html
     assert 'name="employee_odoo_ids" value="57"' in html
     assert 'name="employee_odoo_ids" value="0"' not in html
-    assert 'data-attendance-start' in html
-    assert 'data-attendance-end' in html
-    assert '<legend>Which start time?</legend>' in html
-    assert 'data-attendance-start-occurrence' in html
-    assert '<legend>Which end time?</legend>' in html
-    assert 'data-attendance-end-occurrence' in html
-    assert 'data-attendance-open-ended' in html
+    assert "data-attendance-start" in html
+    assert "data-attendance-end" in html
+    assert "<legend>Which start time?</legend>" in html
+    assert "data-attendance-start-occurrence" in html
+    assert "<legend>Which end time?</legend>" in html
+    assert "data-attendance-end-occurrence" in html
+    assert "data-attendance-open-ended" in html
     assert "Still working" in html
-    assert 'data-attendance-work-center' in html
+    assert "data-attendance-work-center" in html
     assert 'value="Dismantler 1"' in html
     assert 'value="Repair 1"' in html
-    assert 'data-attendance-preview' in html
-    assert 'data-attendance-apply' in html
-    assert 'data-attendance-apply' in html and "disabled" in html
-    assert 'data-attendance-refresh-confirm' in html
-    assert 'data-attendance-progress' in html
+    assert "data-attendance-preview" in html
+    assert "data-attendance-apply" in html
+    assert "data-attendance-apply" in html and "disabled" in html
+    assert "data-attendance-refresh-confirm" in html
+    assert "data-attendance-progress" in html
     assert 'aria-live="polite"' in html
-    assert 'data-attendance-preview-output' in html
+    assert "data-attendance-preview-output" in html
 
 
 def test_attendance_card_distinguishes_both_fall_back_occurrences(monkeypatch):
