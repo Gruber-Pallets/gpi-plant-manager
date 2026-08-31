@@ -10,13 +10,14 @@ from __future__ import annotations
 import base64
 import binascii
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 import hashlib
 import json
 import math
 import re
+import secrets
 from types import MappingProxyType
 import logging
 from typing import Any, Literal, TypeAlias
@@ -34,6 +35,7 @@ _KEY_PATTERN = re.compile(
 _INTEGRITY_PREFIX = "attendance-correction-plan-v1:"
 _INTEGRITY_PATTERN = re.compile(r"^attendance-correction-plan-v1:[0-9a-f]{64}$")
 _UTC_TEXT_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?Z$")
+_RESERVATION_TOKEN_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 _KINDS = frozenset(("create", "update", "delete"))
 _MUTABLE_FIELDS = (
     "employee_odoo_id",
@@ -63,6 +65,7 @@ _ACTOR_LIMIT = 320
 _MAX_EMPLOYEES = 100
 _MAX_OPERATIONS = 1000
 _MAX_EVENT_IDS = 100
+_MAX_RECALC_HORIZON_DAYS = 500
 _EVENT_DETAIL_FIELDS = frozenset(
     (
         "job_id",
@@ -83,8 +86,11 @@ _EVENT_DETAIL_FIELDS = frozenset(
 _EVENT_OUTCOMES = frozenset(
     (
         ("planning", "created"),
+        ("planning", "horizon_frozen"),
+        ("planning", "horizon_failed"),
         ("planning", "invalid_plan"),
         ("claim", "claimed"),
+        ("applying", "reserved"),
         ("applying", "source_changed"),
         ("applying", "odoo_failure"),
         ("applying", "confirmed"),
@@ -109,6 +115,11 @@ _EVENT_OUTCOMES = frozenset(
 _SOURCE_SNAPSHOT_SCHEMA = 1
 _PLANS_WRAPPER_SCHEMA = 2
 _SOURCE_INTEGRITY_PREFIX = "attendance-correction-source-v1:"
+_MIRROR_DISPLAY_FIELDS = (
+    "employee_name",
+    "odoo_work_center_name",
+    "odoo_department_name",
+)
 _log = logging.getLogger(__name__)
 
 
@@ -1487,11 +1498,24 @@ class _JobClaim:
     row: Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class _OperationReservation:
+    job_id: int
+    attempt_count: int
+    operation_key: str
+    token: str
+    reserved_until: datetime
+
+
 class _SourceChanged(RuntimeError):
     pass
 
 
 class _RecoverableWrite(RuntimeError):
+    pass
+
+
+class _StaleClaim(RuntimeError):
     pass
 
 
@@ -1548,12 +1572,22 @@ def _default_facade():
     return odoo_client
 
 
-def _resolve_mapping(target_name: str, facade) -> tuple[int, int | None]:
+def _before_remote(callback: Callable[[], None] | None) -> None:
+    if callback is not None:
+        callback()
+
+
+def _resolve_mapping(
+    target_name: str,
+    facade,
+    *,
+    before_remote_call: Callable[[], None] | None = None,
+) -> tuple[int, int | None]:
     """Resolve an explicit saved mapping and confirm the Odoo row is active.
 
-    Department identity is optional unless the injected facade exposes an exact
-    work-center-to-department resolver.  We intentionally do not name-match an
-    Odoo department here; Task 9 owns verified department repair.
+    The facade owns the exact work-center-to-department rule. A correction
+    cannot safely create or update an interval when that identity is missing or
+    ambiguous, because ``None`` would omit or clear a known department.
     """
     from . import db
 
@@ -1566,6 +1600,7 @@ def _resolve_mapping(target_name: str, facade) -> tuple[int, int | None]:
     work_center_id = _positive_int(
         int(rows[0]["odoo_work_center_id"]), "target_odoo_work_center_id"
     )
+    _before_remote(before_remote_call)
     catalog = facade.fetch_manufacturing_work_centers(force=True)
     active = [
         row for row in catalog if isinstance(row, Mapping) and row.get("id") == work_center_id
@@ -1577,11 +1612,14 @@ def _resolve_mapping(target_name: str, facade) -> tuple[int, int | None]:
     if saved_odoo_name and active_name != saved_odoo_name:
         raise ValueError("saved Odoo work-center mapping is stale")
     resolver = getattr(facade, "target_department_id_for_work_center", None)
-    department_id = None
-    if resolver is not None:
-        department_id = _optional_positive_int(
-            resolver(work_center_id), "target_odoo_department_id"
-        )
+    if resolver is None:
+        raise ValueError("target Odoo department resolver is unavailable")
+    _before_remote(before_remote_call)
+    department_id = _optional_positive_int(
+        resolver(work_center_id, force=True), "target_odoo_department_id"
+    )
+    if department_id is None:
+        raise ValueError("target Odoo department is missing or ambiguous")
     return work_center_id, department_id
 
 
@@ -1596,6 +1634,24 @@ def _canonical_source_row(row: Mapping[str, object], employee_id: int) -> dict[s
         "odoo_department_id": source.department_id,
         "odoo_write_date": source.write_date,
     }
+
+
+def _normalized_verification_row(row: Mapping[str, object], employee_id: int) -> dict[str, object]:
+    """Keep validated Odoo labels for mirror storage, separate from comparison."""
+    source = _normalize_source_row(row, employee_id)
+    normalized = _canonical_source_row(source.values, employee_id)
+    for field in _MIRROR_DISPLAY_FIELDS:
+        value = source.values.get(field)
+        if value is None:
+            normalized[field] = None
+            continue
+        if not isinstance(value, str):
+            raise TypeError(f"{field} must be text or None")
+        clean = value.strip()
+        if len(clean) > _TEXT_LIMIT:
+            raise ValueError(f"{field} is too long")
+        normalized[field] = clean or None
+    return normalized
 
 
 def _build_preview(
@@ -1851,7 +1907,13 @@ def _validated_completed_records(
         operation.key: operation for plan in plans.values() for operation in plan.operations
     }
     allowed_stages = frozenset(
-        ("mirror_complete", "recalc_enqueued", "recalc_complete", "cache_refreshed")
+        (
+            "recalc_horizon",
+            "mirror_complete",
+            "recalc_enqueued",
+            "recalc_complete",
+            "cache_refreshed",
+        )
     )
     stage_order = (
         "mirror_complete",
@@ -1862,10 +1924,32 @@ def _validated_completed_records(
     seen: set[str] = set()
     seen_operation_keys: set[str] = set()
     seen_stages: list[str] = []
-    for record in records:
+    horizon_ids: list[str] | None = None
+    enqueued_ids: list[str] | None = None
+    reservation_key: str | None = None
+    for index, record in enumerate(records):
         operation_key = record.get("operation_key")
         stage = record.get("stage")
-        if isinstance(operation_key, str):
+        if "reservation_token" in record:
+            if set(record) != {
+                "operation_key",
+                "reservation_token",
+                "reservation_attempt_count",
+                "reservation_until",
+            }:
+                raise ValueError("operation reservation has unknown fields")
+            if not isinstance(operation_key, str) or operation_key not in operations:
+                raise ValueError("operation reservation does not match the saved plan")
+            token = record["reservation_token"]
+            if not isinstance(token, str) or not _RESERVATION_TOKEN_PATTERN.fullmatch(token):
+                raise ValueError("operation reservation token is invalid")
+            _positive_int(record["reservation_attempt_count"], "reservation_attempt_count")
+            _parse_utc_text(record["reservation_until"], "reservation_until")
+            if reservation_key is not None or index != len(records) - 1:
+                raise ValueError("operation reservation must be the final unique record")
+            reservation_key = operation_key
+            identity = "reservation"
+        elif isinstance(operation_key, str):
             if set(record) != {"operation_key", "kind", "attendance_id"}:
                 raise ValueError("completed operation has unknown fields")
             operation = operations.get(operation_key)
@@ -1877,22 +1961,38 @@ def _validated_completed_records(
             identity = "operation:" + operation_key
             seen_operation_keys.add(operation_key)
         elif isinstance(stage, str):
-            allowed = {"stage", "recalc_ids"} if stage == "recalc_enqueued" else {"stage"}
+            has_recalc_ids = stage in ("recalc_horizon", "recalc_enqueued")
+            allowed = {"stage", "recalc_ids"} if has_recalc_ids else {"stage"}
             if set(record) != allowed or stage not in allowed_stages:
                 raise ValueError("completed stage is invalid")
-            if stage == "recalc_enqueued":
+            if has_recalc_ids:
                 recalc_ids = record["recalc_ids"]
                 if (
                     isinstance(recalc_ids, (str, bytes))
                     or not isinstance(recalc_ids, list)
-                    or len(recalc_ids) > 500
+                    or len(recalc_ids) > _MAX_RECALC_HORIZON_DAYS
                     or not all(
                         isinstance(item, str) and 1 <= len(item) <= 20 for item in recalc_ids
                     )
                 ):
                     raise ValueError("completed recalculation IDs are invalid")
+                try:
+                    parsed_days = [date.fromisoformat(item) for item in recalc_ids]
+                except ValueError as error:
+                    raise ValueError("completed recalculation IDs are invalid") from error
+                if [day.isoformat() for day in parsed_days] != recalc_ids or parsed_days != sorted(
+                    set(parsed_days)
+                ):
+                    raise ValueError("completed recalculation IDs are not canonical")
+                if stage == "recalc_horizon":
+                    if index != 0:
+                        raise ValueError("recalculation horizon must be the first record")
+                    horizon_ids = recalc_ids
+                else:
+                    enqueued_ids = recalc_ids
             identity = "stage:" + stage
-            seen_stages.append(stage)
+            if stage != "recalc_horizon":
+                seen_stages.append(stage)
         else:
             raise ValueError("completed record omitted its identity")
         if identity in seen:
@@ -1903,6 +2003,11 @@ def _validated_completed_records(
             raise ValueError("downstream stages began before every operation completed")
         if tuple(seen_stages) != stage_order[: len(seen_stages)]:
             raise ValueError("completed stages are out of order")
+    if reservation_key is not None:
+        if reservation_key in seen_operation_keys or seen_stages:
+            raise ValueError("operation reservation conflicts with durable progress")
+    if horizon_ids is not None and enqueued_ids is not None and horizon_ids != enqueued_ids:
+        raise ValueError("enqueued recalculation days changed from the frozen horizon")
     return records
 
 
@@ -2163,7 +2268,10 @@ def _complete_record(
     key = record.get("operation_key") or record.get("stage")
     if any((item.get("operation_key") or item.get("stage")) == key for item in completed):
         return True
-    completed.append(dict(record))
+    if record.get("stage") == "recalc_horizon":
+        completed.insert(0, dict(record))
+    else:
+        completed.append(dict(record))
     with db.cursor() as cur:
         cur.execute(
             "UPDATE attendance_correction_jobs SET completed_operations = %s::jsonb, "
@@ -2194,6 +2302,255 @@ def _claim_is_current(claim: _JobClaim) -> bool:
         (claim.job_id, claim.attempt_count),
     )
     return bool(rows)
+
+
+def _reservation_from_record(record: Mapping[str, object]) -> _OperationReservation:
+    if set(record) != {
+        "operation_key",
+        "reservation_token",
+        "reservation_attempt_count",
+        "reservation_until",
+    }:
+        raise ValueError("operation reservation has unknown fields")
+    operation_key = record["operation_key"]
+    token = record["reservation_token"]
+    if not isinstance(operation_key, str) or not _KEY_PATTERN.fullmatch(operation_key):
+        raise ValueError("operation reservation key is invalid")
+    if not isinstance(token, str) or not _RESERVATION_TOKEN_PATTERN.fullmatch(token):
+        raise ValueError("operation reservation token is invalid")
+    return _OperationReservation(
+        job_id=0,
+        attempt_count=_positive_int(
+            record["reservation_attempt_count"], "reservation_attempt_count"
+        ),
+        operation_key=operation_key,
+        token=token,
+        reserved_until=_parse_utc_text(record["reservation_until"], "reservation_until"),
+    )
+
+
+def _reservation_record(reservation: _OperationReservation) -> dict[str, object]:
+    return {
+        "operation_key": reservation.operation_key,
+        "reservation_token": reservation.token,
+        "reservation_attempt_count": reservation.attempt_count,
+        "reservation_until": _utc_text(reservation.reserved_until),
+    }
+
+
+def _heartbeat_claim(claim: _JobClaim, *, now_utc: datetime | None = None) -> datetime:
+    """Renew the durable job lease immediately before one Odoo call."""
+    from . import db
+
+    now = _aware_utc(now_utc or datetime.now(UTC), "now_utc")
+    lease_until = now + _CLAIM_LEASE
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET updated_at = %s "
+            "WHERE id = %s AND attempt_count = %s "
+            "AND status IN ('applying','verifying','recalculating') RETURNING id",
+            (lease_until, claim.job_id, claim.attempt_count),
+        )
+        if cur.fetchone() is None:
+            raise _StaleClaim("correction claim was superseded")
+    return lease_until
+
+
+def _reserve_operation(
+    claim: _JobClaim,
+    operation: CorrectionOperation,
+    *,
+    now_utc: datetime | None = None,
+) -> _OperationReservation:
+    """Persist exclusive ownership of one unconfirmed Odoo mutation."""
+    from . import db
+
+    now = _aware_utc(now_utc or datetime.now(UTC), "now_utc")
+    reserved_until = now + _CLAIM_LEASE
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT status, attempt_count, completed_operations FROM "
+            "attendance_correction_jobs WHERE id = %s FOR UPDATE",
+            (claim.job_id,),
+        )
+        locked = cur.fetchone()
+        if (
+            locked is None
+            or locked["status"] != "applying"
+            or int(locked["attempt_count"]) != claim.attempt_count
+        ):
+            raise _StaleClaim("correction claim was superseded")
+        records = _json_list(locked.get("completed_operations", []), "completed_operations")
+        if any(item.get("operation_key") == operation.key and "kind" in item for item in records):
+            raise _StaleClaim("correction operation is already complete")
+        existing_records = [item for item in records if "reservation_token" in item]
+        if len(existing_records) > 1:
+            raise ValueError("multiple operation reservations are invalid")
+        if existing_records:
+            existing = _reservation_from_record(existing_records[0])
+            if existing.reserved_until > now:
+                raise _StaleClaim("correction operation is still reserved")
+            records = [item for item in records if "reservation_token" not in item]
+        reservation = _OperationReservation(
+            job_id=claim.job_id,
+            attempt_count=claim.attempt_count,
+            operation_key=operation.key,
+            token=secrets.token_hex(16),
+            reserved_until=reserved_until,
+        )
+        records.append(_reservation_record(reservation))
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET completed_operations = %s::jsonb, "
+            "updated_at = %s WHERE id = %s AND attempt_count = %s "
+            "AND status = 'applying' RETURNING id",
+            (
+                json.dumps(records, separators=(",", ":")),
+                reserved_until,
+                claim.job_id,
+                claim.attempt_count,
+            ),
+        )
+        if cur.fetchone() is None:
+            raise _StaleClaim("correction claim was superseded")
+        _append_event_cur(
+            cur,
+            claim.job_id,
+            "applying",
+            "reserved",
+            _event_detail(
+                job_id=claim.job_id,
+                operation_key=operation.key,
+                operation_kind=operation.kind,
+                employee_odoo_id=operation.employee_odoo_id,
+            ),
+        )
+    claim.row["completed_operations"] = records  # type: ignore[index]
+    return reservation
+
+
+def _renew_operation_reservation(
+    claim: _JobClaim,
+    reservation: _OperationReservation,
+    *,
+    now_utc: datetime | None = None,
+) -> _OperationReservation:
+    """Fence and extend the reservation immediately before remote I/O."""
+    from . import db
+
+    now = _aware_utc(now_utc or datetime.now(UTC), "now_utc")
+    renewed = _OperationReservation(
+        job_id=reservation.job_id,
+        attempt_count=reservation.attempt_count,
+        operation_key=reservation.operation_key,
+        token=reservation.token,
+        reserved_until=now + _CLAIM_LEASE,
+    )
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT status, attempt_count, completed_operations FROM "
+            "attendance_correction_jobs WHERE id = %s FOR UPDATE",
+            (claim.job_id,),
+        )
+        locked = cur.fetchone()
+        if (
+            locked is None
+            or locked["status"] != "applying"
+            or int(locked["attempt_count"]) != claim.attempt_count
+        ):
+            raise _StaleClaim("correction claim was superseded")
+        records = _json_list(locked.get("completed_operations", []), "completed_operations")
+        matched = False
+        next_records: list[dict[str, object]] = []
+        for item in records:
+            if item.get("reservation_token") == reservation.token:
+                parsed = _reservation_from_record(item)
+                if (
+                    parsed.operation_key != reservation.operation_key
+                    or parsed.attempt_count != reservation.attempt_count
+                ):
+                    raise _StaleClaim("correction reservation changed")
+                next_records.append(_reservation_record(renewed))
+                matched = True
+            else:
+                next_records.append(item)
+        if not matched:
+            raise _StaleClaim("correction reservation changed")
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET completed_operations = %s::jsonb, "
+            "updated_at = %s WHERE id = %s AND attempt_count = %s "
+            "AND status = 'applying' RETURNING id",
+            (
+                json.dumps(next_records, separators=(",", ":")),
+                renewed.reserved_until,
+                claim.job_id,
+                claim.attempt_count,
+            ),
+        )
+        if cur.fetchone() is None:
+            raise _StaleClaim("correction claim was superseded")
+    claim.row["completed_operations"] = next_records  # type: ignore[index]
+    return renewed
+
+
+def _complete_reserved_operation(
+    claim: _JobClaim,
+    reservation: _OperationReservation,
+    record: Mapping[str, object],
+    *,
+    result: str,
+    detail: Mapping[str, object],
+) -> bool:
+    """Atomically replace the owned reservation with confirmed progress."""
+    from . import db
+
+    if record.get("operation_key") != reservation.operation_key:
+        raise ValueError("completed operation does not match its reservation")
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT status, attempt_count, completed_operations FROM "
+            "attendance_correction_jobs WHERE id = %s FOR UPDATE",
+            (claim.job_id,),
+        )
+        locked = cur.fetchone()
+        if (
+            locked is None
+            or locked["status"] != "applying"
+            or int(locked["attempt_count"]) != claim.attempt_count
+        ):
+            return False
+        records = _json_list(locked.get("completed_operations", []), "completed_operations")
+        found = False
+        next_records: list[dict[str, object]] = []
+        for item in records:
+            if item.get("reservation_token") == reservation.token:
+                parsed = _reservation_from_record(item)
+                if (
+                    parsed.operation_key != reservation.operation_key
+                    or parsed.attempt_count != reservation.attempt_count
+                ):
+                    return False
+                found = True
+                continue
+            next_records.append(item)
+        if not found:
+            return False
+        next_records.append(dict(record))
+        cur.execute(
+            "UPDATE attendance_correction_jobs SET completed_operations = %s::jsonb, "
+            "updated_at = %s WHERE id = %s AND attempt_count = %s "
+            "AND status = 'applying' RETURNING id",
+            (
+                json.dumps(next_records, separators=(",", ":")),
+                max(claim.lease_until, reservation.reserved_until),
+                claim.job_id,
+                claim.attempt_count,
+            ),
+        )
+        if cur.fetchone() is None:
+            return False
+        _append_event_cur(cur, claim.job_id, "applying", result, detail)
+    claim.row["completed_operations"] = next_records  # type: ignore[index]
+    return True
 
 
 def _operation_source_state(
@@ -2286,10 +2643,37 @@ def _ordered_operations(
     )
 
 
+def _validate_operation_progress(
+    completed: Sequence[Mapping[str, object]],
+    ordered_operations: Sequence[CorrectionOperation],
+    *,
+    current_attempt_count: int,
+) -> None:
+    """Require durable write progress to be one exact global safe-order prefix."""
+    ordered_keys = [operation.key for operation in ordered_operations]
+    completed_keys = [
+        str(item["operation_key"]) for item in completed if item.get("kind") in _KINDS
+    ]
+    if completed_keys != ordered_keys[: len(completed_keys)]:
+        raise ValueError("completed operations are not an Odoo-safe ordered prefix")
+    reservations = [item for item in completed if "reservation_token" in item]
+    if not reservations:
+        return
+    if len(reservations) != 1 or len(completed_keys) >= len(ordered_keys):
+        raise ValueError("operation reservation has no valid next operation")
+    reservation = _reservation_from_record(reservations[0])
+    if reservation.operation_key != ordered_keys[len(completed_keys)]:
+        raise ValueError("operation reservation is not the next safe operation")
+    if reservation.attempt_count >= current_attempt_count:
+        raise ValueError("operation reservation attempt is not recoverable")
+
+
 def _preflight_operations(
     facade,
     operations: Sequence[CorrectionOperation],
     source_rows: Sequence[Mapping[str, object]],
+    *,
+    before_remote_call: Callable[[], None] | None = None,
 ) -> None:
     """Prove the whole remaining preview is safe before its first new write.
 
@@ -2306,7 +2690,7 @@ def _preflight_operations(
     for source in source_rows:
         attendance_id = int(source["odoo_attendance_id"])
         operation = operation_by_source.get(attendance_id)
-        current = _read_one(facade, attendance_id)
+        current = _read_one(facade, attendance_id, before_remote_call=before_remote_call)
         if operation is None:
             if current is None:
                 raise _SourceChanged("unoperated source row disappeared")
@@ -2332,7 +2716,7 @@ def _preflight_operations(
         if operation.kind != "create":
             continue
         assert operation.after is not None
-        candidates = _create_candidates(facade, operation)
+        candidates = _create_candidates(facade, operation, before_remote_call=before_remote_call)
         outsiders = [row for row in candidates if int(row["odoo_attendance_id"]) not in source_ids]
         exact_outsiders = [row for row in outsiders if _exact_mutable(row, operation.after)]
         if len(exact_outsiders) > 1 or any(row not in exact_outsiders for row in outsiders):
@@ -2341,7 +2725,13 @@ def _preflight_operations(
             raise _SourceChanged("create interval has ambiguous Odoo state")
 
 
-def _read_one(facade, attendance_id: int) -> Mapping[str, object] | None:
+def _read_one(
+    facade,
+    attendance_id: int,
+    *,
+    before_remote_call: Callable[[], None] | None = None,
+) -> Mapping[str, object] | None:
+    _before_remote(before_remote_call)
     rows = facade.fetch_attendance_rows_by_ids([attendance_id])
     if len(rows) > 1:
         raise _SourceChanged("duplicate source attendance identity")
@@ -2359,10 +2749,16 @@ def _exact_mutable(row: Mapping[str, object], values: Mapping[str, object]) -> b
     return all(row.get(field) == values[field] for field in _MUTABLE_FIELDS)
 
 
-def _create_candidates(facade, operation: CorrectionOperation) -> tuple[Mapping[str, object], ...]:
+def _create_candidates(
+    facade,
+    operation: CorrectionOperation,
+    *,
+    before_remote_call: Callable[[], None] | None = None,
+) -> tuple[Mapping[str, object], ...]:
     assert operation.after is not None
     start = _aware_utc(operation.after["check_in_utc"], "check_in_utc")
     end = _optional_aware_utc(operation.after["check_out_utc"], "check_out_utc")
+    _before_remote(before_remote_call)
     rows = facade.fetch_employee_attendance_rows(operation.employee_odoo_id, start, end)
     return tuple(row for row in rows if _interval_overlaps(row, start, end))
 
@@ -2371,11 +2767,13 @@ def _perform_operation(
     facade,
     operation: CorrectionOperation,
     source_rows: Sequence[Mapping[str, object]],
+    *,
+    before_remote_call: Callable[[], None] | None = None,
 ) -> tuple[dict[str, object], str]:
     """Apply or safely adopt one operation, returning its durable record."""
     if operation.kind == "create":
         assert operation.after is not None
-        candidates = _create_candidates(facade, operation)
+        candidates = _create_candidates(facade, operation, before_remote_call=before_remote_call)
         exact = [row for row in candidates if _exact_mutable(row, operation.after)]
         if len(exact) == 1 and len(candidates) == 1:
             attendance_id = _positive_int(exact[0]["odoo_attendance_id"], "odoo_attendance_id")
@@ -2387,6 +2785,7 @@ def _perform_operation(
         if exact or candidates:
             raise _SourceChanged("create interval overlaps changed Odoo state")
         try:
+            _before_remote(before_remote_call)
             attendance_id = facade.create_attendance_interval(
                 employee_odoo_id=operation.employee_odoo_id,
                 check_in_utc=operation.after["check_in_utc"],
@@ -2394,8 +2793,12 @@ def _perform_operation(
                 odoo_work_center_id=operation.after["odoo_work_center_id"],
                 odoo_department_id=operation.after["odoo_department_id"],
             )
+        except _StaleClaim:
+            raise
         except Exception as error:  # noqa: BLE001 - ambiguous timeout needs reread
-            candidates = _create_candidates(facade, operation)
+            candidates = _create_candidates(
+                facade, operation, before_remote_call=before_remote_call
+            )
             exact = [row for row in candidates if _exact_mutable(row, operation.after)]
             if len(exact) == 1 and len(candidates) == 1:
                 return {
@@ -2408,7 +2811,11 @@ def _perform_operation(
             if exact or candidates:
                 raise _SourceChanged("create outcome is ambiguous") from error
             raise _RecoverableWrite(str(error) or type(error).__name__) from error
-        confirmed = _read_one(facade, _positive_int(attendance_id, "attendance_id"))
+        confirmed = _read_one(
+            facade,
+            _positive_int(attendance_id, "attendance_id"),
+            before_remote_call=before_remote_call,
+        )
         if confirmed is None or not _exact_mutable(confirmed, operation.after):
             raise _RecoverableWrite("created attendance is not yet exactly visible")
         return {
@@ -2419,7 +2826,7 @@ def _perform_operation(
 
     assert operation.attendance_id is not None
     source = _source_row_by_id(source_rows, operation.attendance_id)
-    current = _read_one(facade, operation.attendance_id)
+    current = _read_one(facade, operation.attendance_id, before_remote_call=before_remote_call)
     state = _operation_source_state(operation, source_row=source, current_row=current)
     if state == "after":
         return {
@@ -2432,11 +2839,15 @@ def _perform_operation(
     try:
         if operation.kind == "update":
             assert operation.after is not None
+            _before_remote(before_remote_call)
             facade.update_attendance_interval(operation.attendance_id, values=dict(operation.after))
         else:
+            _before_remote(before_remote_call)
             facade.delete_attendance_interval(operation.attendance_id)
+    except _StaleClaim:
+        raise
     except Exception as error:  # noqa: BLE001 - ambiguous timeout needs reread
-        current = _read_one(facade, operation.attendance_id)
+        current = _read_one(facade, operation.attendance_id, before_remote_call=before_remote_call)
         state = _operation_source_state(operation, source_row=source, current_row=current)
         if state == "after":
             return {
@@ -2447,7 +2858,7 @@ def _perform_operation(
         if state == "source_changed":
             raise _SourceChanged("Odoo write outcome conflicts with the plan") from error
         raise _RecoverableWrite(str(error) or type(error).__name__) from error
-    current = _read_one(facade, operation.attendance_id)
+    current = _read_one(facade, operation.attendance_id, before_remote_call=before_remote_call)
     if _operation_source_state(operation, source_row=source, current_row=current) != "after":
         raise _RecoverableWrite("Odoo write was not exactly visible")
     return {
@@ -2491,6 +2902,8 @@ def _verification_rows(
     completed: Sequence[Mapping[str, object]],
     start: datetime,
     end: datetime | None,
+    *,
+    before_remote_call: Callable[[], None] | None = None,
 ) -> tuple[dict[str, object], ...]:
     verified: list[dict[str, object]] = []
     for employee_id in sorted(plans):
@@ -2502,12 +2915,13 @@ def _verification_rows(
             if any(value is None for value in expected_ends)
             else max(expected_ends, default=end)
         )
+        _before_remote(before_remote_call)
         actual = facade.fetch_employee_attendance_rows(
             employee_id, verification_start, verification_end
         )
         normalized_actual = tuple(
             sorted(
-                (_canonical_source_row(row, employee_id) for row in actual),
+                (_normalized_verification_row(row, employee_id) for row in actual),
                 key=lambda row: (row["check_in_utc"], row["odoo_attendance_id"]),
             )
         )
@@ -2539,21 +2953,58 @@ def _verification_rows(
 def _touched_days(
     source_rows: Mapping[int, Sequence[Mapping[str, object]]],
     plans: Mapping[int, CorrectionPlan],
+    *,
+    open_end: datetime,
 ) -> tuple[date, ...]:
     from . import attendance_mirror
 
+    effective_open_end = _aware_utc(open_end, "open_end")
     days: set[date] = set()
     for rows in source_rows.values():
         for row in rows:
-            days.update(
-                attendance_mirror.local_days_touched(row["check_in_utc"], row["check_out_utc"])
-            )
+            end = row["check_out_utc"] or effective_open_end
+            days.update(attendance_mirror.local_days_touched(row["check_in_utc"], end))
     for plan in plans.values():
         for row in plan.expected_intervals:
-            days.update(
-                attendance_mirror.local_days_touched(row["check_in_utc"], row["check_out_utc"])
-            )
+            end = row["check_out_utc"] or effective_open_end
+            days.update(attendance_mirror.local_days_touched(row["check_in_utc"], end))
     return tuple(sorted(days))
+
+
+def _durable_recalc_days(
+    completed: Sequence[Mapping[str, object]],
+) -> tuple[date, ...] | None:
+    for wanted_stage in ("recalc_horizon", "recalc_enqueued"):
+        for item in completed:
+            if item.get("stage") != wanted_stage:
+                continue
+            recalc_ids = item.get("recalc_ids")
+            if not isinstance(recalc_ids, list):
+                raise ValueError("completed recalculation IDs are invalid")
+            return tuple(date.fromisoformat(str(value)) for value in recalc_ids)
+    return None
+
+
+def _freeze_recalc_horizon(
+    claim: _JobClaim,
+    days: Sequence[date],
+) -> bool:
+    """Persist one bounded downstream day set before any remote mutation."""
+    recalc_ids = [day.isoformat() for day in days]
+    marker: dict[str, object] = {
+        "stage": "recalc_horizon",
+        "recalc_ids": recalc_ids,
+    }
+    return _complete_record(
+        claim,
+        marker,
+        phase="planning",
+        result="horizon_frozen",
+        detail=_event_detail(
+            job_id=claim.job_id,
+            recalc_ids=recalc_ids[:_MAX_EVENT_IDS],
+        ),
+    )
 
 
 def _mirror_verified_rows(
@@ -2698,7 +3149,7 @@ def _enqueue_recalculation(
             "enqueued",
             _event_detail(
                 job_id=claim.job_id,
-                recalc_ids=[day.isoformat() for day in days],
+                recalc_ids=[day.isoformat() for day in days][:_MAX_EVENT_IDS],
             ),
         )
     claim.row["completed_operations"] = next_completed  # type: ignore[index]
@@ -2711,10 +3162,12 @@ def _recalc_complete(days: Sequence[date]) -> bool:
     if not days:
         return True
     rows = db.query(
-        "SELECT day, completed_at FROM attendance_recalc_queue WHERE day = ANY(%s)",
+        "SELECT day, completed_at, cache_ready_at FROM attendance_recalc_queue WHERE day = ANY(%s)",
         (list(days),),
     )
-    return len(rows) == len(days) and all(row["completed_at"] is not None for row in rows)
+    return len(rows) == len(days) and all(
+        row["completed_at"] is not None and row["cache_ready_at"] is not None for row in rows
+    )
 
 
 def _run_recalculation(days: Sequence[date]) -> bool:
@@ -2727,14 +3180,6 @@ def _run_recalculation(days: Sequence[date]) -> bool:
         if result is None or result.status == "failed":
             break
     return _recalc_complete(days)
-
-
-def _refresh_after_correction(days: Sequence[date]) -> None:
-    from . import _http_cache, staffing
-
-    for day in days:
-        staffing.invalidate_schedule_cache(day)
-    _http_cache.invalidate_all_cache()
 
 
 def _complete_with_audit(
@@ -2842,22 +3287,90 @@ def _retry_at(attempt_count: int, now: datetime) -> datetime:
     return now + timedelta(seconds=seconds)
 
 
+def _saved_target_department_id(
+    *,
+    plans: Mapping[int, CorrectionPlan],
+    source_rows: Mapping[int, Sequence[Mapping[str, object]]],
+    target_work_center_id: int,
+    start_utc: datetime,
+    end_utc: datetime | None,
+) -> int:
+    """Derive one exact positive target department from the saved plans."""
+    operation_departments: set[int] = set()
+    expected_departments: set[int] = set()
+    for employee_id, plan in plans.items():
+        for operation in plan.operations:
+            if operation.kind == "delete":
+                continue
+            if operation.kind == "create":
+                source: Mapping[str, object] = {}
+            else:
+                assert operation.attendance_id is not None
+                source = _source_row_by_id(source_rows[employee_id], operation.attendance_id)
+            effective = _operation_effective_row(operation, source)
+            assert effective is not None
+            if effective["odoo_work_center_id"] == target_work_center_id and _interval_overlaps(
+                effective, start_utc, end_utc
+            ):
+                operation_departments.add(
+                    _positive_int(
+                        effective["odoo_department_id"],
+                        "saved_target_odoo_department_id",
+                    )
+                )
+        for expected in plan.expected_intervals:
+            if expected["odoo_work_center_id"] == target_work_center_id and _interval_overlaps(
+                expected, start_utc, end_utc
+            ):
+                expected_departments.add(
+                    _positive_int(
+                        expected["odoo_department_id"],
+                        "saved_target_odoo_department_id",
+                    )
+                )
+    if len(expected_departments) != 1:
+        raise _SourceChanged("saved plan target department is absent or inconsistent")
+    if operation_departments and operation_departments != expected_departments:
+        raise _SourceChanged("saved operation target departments are inconsistent")
+    return next(iter(expected_departments))
+
+
 def _validate_applying_targets(
-    row: Mapping[str, object], employee_ids: tuple[int, ...], facade
+    row: Mapping[str, object],
+    employee_ids: tuple[int, ...],
+    plans: Mapping[int, CorrectionPlan],
+    source_rows: Mapping[int, Sequence[Mapping[str, object]]],
+    facade,
+    *,
+    before_remote_call: Callable[[], None] | None = None,
 ) -> None:
+    target_work_center_id = _positive_int(
+        row["target_odoo_work_center_id"], "target_odoo_work_center_id"
+    )
+    saved_department_id = _saved_target_department_id(
+        plans=plans,
+        source_rows=source_rows,
+        target_work_center_id=target_work_center_id,
+        start_utc=_aware_utc(row["start_utc"], "start_utc"),
+        end_utc=_optional_aware_utc(row.get("end_utc"), "end_utc"),
+    )
     try:
-        mapped_id, _department_id = _resolve_mapping(
+        mapped_id, department_id = _resolve_mapping(
             _bounded_text(
                 row["target_work_center_name"],
                 "target_work_center_name",
                 _TEXT_LIMIT,
             ),
             facade,
+            before_remote_call=before_remote_call,
         )
     except ValueError as error:
         raise _SourceChanged(str(error)) from error
-    if mapped_id != _positive_int(row["target_odoo_work_center_id"], "target_odoo_work_center_id"):
+    if mapped_id != target_work_center_id:
         raise _SourceChanged("saved work-center mapping changed after preview")
+    if department_id != saved_department_id:
+        raise _SourceChanged("saved target department changed after preview")
+    _before_remote(before_remote_call)
     roster = facade.fetch_employee_statuses()
     active_ids = {
         int(item["id"])
@@ -2889,7 +3402,9 @@ def _result(
         error=error,
         retry_at=retry_at,
         completed_operation_count=sum(
-            1 for item in completed if item.get("operation_key") is not None
+            1
+            for item in completed
+            if item.get("operation_key") is not None and item.get("kind") in _KINDS
         ),
     )
 
@@ -2912,6 +3427,31 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             }
             if plan_versions != source_versions:
                 raise ValueError("source snapshot does not match schema-v2 plan")
+        all_operations = list(
+            _ordered_operations(
+                tuple(
+                    operation
+                    for employee_id in employee_ids
+                    for operation in plans[employee_id].operations
+                ),
+                source_rows=tuple(
+                    source for employee_id in employee_ids for source in source_rows[employee_id]
+                ),
+            )
+        )
+        _validate_operation_progress(
+            completed,
+            all_operations,
+            current_attempt_count=claim.attempt_count,
+        )
+        durable_days = _durable_recalc_days(completed)
+        days = (
+            durable_days
+            if durable_days is not None
+            else _touched_days(source_rows, plans, open_end=now)
+        )
+        if len(days) > _MAX_RECALC_HORIZON_DAYS:
+            raise ValueError("correction recalculation horizon is too large")
     except Exception as error:  # noqa: BLE001 - corrupt durable plans fail closed
         _transition(
             claim,
@@ -2923,14 +3463,51 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
         )
         return _result(claim, "failed", error=str(error))
 
+    if not any(item.get("stage") == "recalc_horizon" for item in completed):
+        try:
+            frozen = _freeze_recalc_horizon(claim, days)
+        except Exception as error:  # noqa: BLE001 - no Odoo work has started
+            retry_at = _retry_at(claim.attempt_count, now)
+            _transition(
+                claim,
+                phase="planning",
+                result="horizon_failed",
+                detail=_event_detail(
+                    job_id=claim.job_id,
+                    reason_code="horizon_persistence_failed",
+                ),
+                last_error=str(error),
+                retry_at=retry_at,
+            )
+            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+        if not frozen:
+            return _result(claim, "superseded")
+        horizon_marker = {
+            "stage": "recalc_horizon",
+            "recalc_ids": [day.isoformat() for day in days],
+        }
+        completed.insert(0, horizon_marker)
+
     facade = _default_facade()
     completed_keys = {
-        item["operation_key"] for item in completed if isinstance(item.get("operation_key"), str)
+        item["operation_key"]
+        for item in completed
+        if isinstance(item.get("operation_key"), str) and item.get("kind") in _KINDS
     }
 
     if row["status"] == "applying":
+        heartbeat = lambda: _heartbeat_claim(claim)
         try:
-            _validate_applying_targets(row, employee_ids, facade)
+            _validate_applying_targets(
+                row,
+                employee_ids,
+                plans,
+                source_rows,
+                facade,
+                before_remote_call=heartbeat,
+            )
+        except _StaleClaim:
+            return _result(claim, "superseded")
         except _SourceChanged as error:
             _transition(
                 claim,
@@ -2958,24 +3535,6 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                 retry_at=retry_at,
             )
             return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
-        all_operations: list[CorrectionOperation] = []
-        for employee_id in employee_ids:
-            all_operations.extend(
-                _ordered_operations(
-                    plans[employee_id].operations,
-                    source_rows=source_rows[employee_id],
-                )
-            )
-        # Re-sort across people by the same Odoo-safe phase while preserving
-        # independence. This keeps every open-producing operation last.
-        all_operations = list(
-            _ordered_operations(
-                all_operations,
-                source_rows=tuple(
-                    source for employee_id in employee_ids for source in source_rows[employee_id]
-                ),
-            )
-        )
         try:
             _preflight_operations(
                 facade,
@@ -2983,7 +3542,10 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                 tuple(
                     source for employee_id in employee_ids for source in source_rows[employee_id]
                 ),
+                before_remote_call=heartbeat,
             )
+        except _StaleClaim:
+            return _result(claim, "superseded")
         except _SourceChanged as error:
             _transition(
                 claim,
@@ -3017,9 +3579,23 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             if not _claim_is_current(claim):
                 return _result(claim, "superseded")
             try:
+                reservation = _reserve_operation(claim, operation)
+            except _StaleClaim:
+                return _result(claim, "superseded")
+            reservation_box = [reservation]
+
+            def renew_operation() -> None:
+                reservation_box[0] = _renew_operation_reservation(claim, reservation_box[0])
+
+            try:
                 record, confirmation = _perform_operation(
-                    facade, operation, source_rows[operation.employee_odoo_id]
+                    facade,
+                    operation,
+                    source_rows[operation.employee_odoo_id],
+                    before_remote_call=renew_operation,
                 )
+            except _StaleClaim:
+                return _result(claim, "superseded")
             except _SourceChanged as error:
                 _transition(
                     claim,
@@ -3037,7 +3613,10 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                 )
                 return _result(claim, "failed", error=str(error))
             except _RecoverableWrite as error:
-                retry_at = _retry_at(claim.attempt_count, now)
+                retry_at = max(
+                    _retry_at(claim.attempt_count, now),
+                    reservation_box[0].reserved_until,
+                )
                 _transition(
                     claim,
                     phase="applying",
@@ -3054,7 +3633,10 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                 )
                 return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
             except Exception as error:  # noqa: BLE001 - source reads can fail too
-                retry_at = _retry_at(claim.attempt_count, now)
+                retry_at = max(
+                    _retry_at(claim.attempt_count, now),
+                    reservation_box[0].reserved_until,
+                )
                 _transition(
                     claim,
                     phase="applying",
@@ -3070,10 +3652,10 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                     retry_at=retry_at,
                 )
                 return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
-            if not _complete_record(
+            if not _complete_reserved_operation(
                 claim,
+                reservation_box[0],
                 record,
-                phase="applying",
                 result=confirmation,
                 detail=_event_detail(
                     job_id=claim.job_id,
@@ -3107,7 +3689,10 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                 completed,
                 _aware_utc(row["start_utc"], "start_utc"),
                 _optional_aware_utc(row.get("end_utc"), "end_utc"),
+                before_remote_call=lambda: _heartbeat_claim(claim),
             )
+        except _StaleClaim:
+            return _result(claim, "superseded")
         except _SourceChanged as error:  # exact mismatch is terminal
             _transition(
                 claim,
@@ -3160,7 +3745,10 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                 completed,
                 _aware_utc(row["start_utc"], "start_utc"),
                 _optional_aware_utc(row.get("end_utc"), "end_utc"),
+                before_remote_call=lambda: _heartbeat_claim(claim),
             )
+        except _StaleClaim:
+            return _result(claim, "superseded")
         except _SourceChanged as error:
             _transition(
                 claim,
@@ -3191,7 +3779,9 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
 
     stages = {str(item["stage"]) for item in completed if isinstance(item.get("stage"), str)}
-    days = _touched_days(source_rows, plans)
+    # ``days`` came from the pre-I/O durable horizon above. Later claims wait
+    # on this same bounded set rather than expanding an open interval past days
+    # that were never enqueued.
     if "mirror_complete" not in stages:
         try:
             mirror_complete = _mirror_verified_rows(
@@ -3242,7 +3832,10 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
         if not enqueued:
             return _result(claim, "superseded")
-        marker = {"stage": "recalc_enqueued", "recalc_ids": [day.isoformat() for day in days]}
+        marker = {
+            "stage": "recalc_enqueued",
+            "recalc_ids": [day.isoformat() for day in days],
+        }
         completed.append(marker)
         stages.add("recalc_enqueued")
 
@@ -3276,7 +3869,7 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             result="complete",
             detail=_event_detail(
                 job_id=claim.job_id,
-                recalc_ids=[day.isoformat() for day in days],
+                recalc_ids=[day.isoformat() for day in days][:_MAX_EVENT_IDS],
             ),
         ):
             return _result(claim, "superseded")
@@ -3286,19 +3879,10 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
     if "cache_refreshed" not in stages:
         if not _claim_is_current(claim):
             return _result(claim, "superseded")
-        try:
-            _refresh_after_correction(days)
-        except Exception as error:  # noqa: BLE001 - do not audit/complete
-            retry_at = _retry_at(claim.attempt_count, now)
-            _transition(
-                claim,
-                phase="cache",
-                result="failed",
-                detail=_event_detail(job_id=claim.job_id, reason_code="cache_refresh_failed"),
-                last_error=str(error),
-                retry_at=retry_at,
-            )
-            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
+        # Whichever durable recalculation worker completes each queue day owns
+        # its one post-commit cache refresh. This job only records that every
+        # target day reached that boundary; refreshing here would do it twice
+        # and would race a normal recalc warmer that completed the same day.
         marker = {"stage": "cache_refreshed"}
         if not _complete_record(
             claim,
@@ -3357,7 +3941,7 @@ def process_job(job_id: int) -> CorrectionJobResult:
             completed_operation_count=sum(
                 1
                 for item in _json_list(row.get("completed_operations", []), "completed_operations")
-                if item.get("operation_key") is not None
+                if item.get("operation_key") is not None and item.get("kind") in _KINDS
             ),
         )
     return _process_claim(claim, now_utc=now)

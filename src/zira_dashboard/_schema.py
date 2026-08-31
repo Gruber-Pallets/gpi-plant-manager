@@ -240,9 +240,38 @@ CREATE TABLE IF NOT EXISTS attendance_recalc_queue (
   requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
+  cache_started_at TIMESTAMPTZ,
+  cache_ready_at TIMESTAMPTZ,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   last_error TEXT
 );
+
+-- Older queue rows already ran the best-effort cache refresh used before the
+-- durable cache-ready fence existed. Backfill those rows exactly once while
+-- adding the two columns; fresh installs already have both columns above.
+DO $attendance_recalc_cache_columns$
+DECLARE
+  had_cache_ready BOOLEAN;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'attendance_recalc_queue'
+      AND column_name = 'cache_ready_at'
+  ) INTO had_cache_ready;
+
+  ALTER TABLE attendance_recalc_queue
+    ADD COLUMN IF NOT EXISTS cache_started_at TIMESTAMPTZ;
+  ALTER TABLE attendance_recalc_queue
+    ADD COLUMN IF NOT EXISTS cache_ready_at TIMESTAMPTZ;
+
+  IF NOT had_cache_ready THEN
+    UPDATE attendance_recalc_queue
+    SET cache_ready_at = completed_at
+    WHERE completed_at IS NOT NULL;
+  END IF;
+END
+$attendance_recalc_cache_columns$;
 
 CREATE TABLE IF NOT EXISTS attendance_strict_days (
   day DATE PRIMARY KEY,

@@ -104,17 +104,14 @@ def _encode_error_state(errors: Mapping[str, str]) -> str | None:
         return None
     per_owner_limit = _ERROR_LIMIT
     while True:
-        bounded = {
-            owner: value[:per_owner_limit] for owner, value in values.items()
-        }
+        bounded = {owner: value[:per_owner_limit] for owner, value in values.items()}
         encoded = json.dumps(bounded, separators=(",", ":"), sort_keys=True)
         if len(encoded) <= _ERROR_LIMIT:
             return encoded
         excess = len(encoded) - _ERROR_LIMIT
         per_owner_limit = max(
             1,
-            per_owner_limit
-            - ((excess + len(bounded) - 1) // len(bounded)),
+            per_owner_limit - ((excess + len(bounded) - 1) // len(bounded)),
         )
 
 
@@ -145,9 +142,7 @@ def _format_error_state(raw: object) -> str | None:
         return None
     errors = _decode_error_state(raw)
     formatted = "; ".join(
-        f"{owner}: {errors[owner]}"
-        for owner in _ERROR_DISPLAY_ORDER
-        if owner in errors
+        f"{owner}: {errors[owner]}" for owner in _ERROR_DISPLAY_ORDER if owner in errors
     )
     if set(errors) == {"legacy"} and not str(raw).lstrip().startswith("{"):
         return errors["legacy"][:_ERROR_LIMIT]
@@ -191,20 +186,14 @@ def _normalize_row(row: Mapping[str, Any]) -> dict[str, Any]:
         raise TypeError("attendance row must be a mapping")
     missing = [field for field in _ROW_FIELDS if field not in row]
     if missing:
-        raise ValueError(
-            "attendance row omitted required field(s): " + ", ".join(missing)
-        )
+        raise ValueError("attendance row omitted required field(s): " + ", ".join(missing))
     check_in = _aware_utc(row["check_in_utc"], "check_in_utc")
     check_out = _optional_aware_utc(row["check_out_utc"], "check_out_utc")
     if check_out is not None and check_out < check_in:
         raise ValueError("check_out_utc cannot be before check_in_utc")
     return {
-        "odoo_attendance_id": _positive_int(
-            row["odoo_attendance_id"], "odoo_attendance_id"
-        ),
-        "employee_odoo_id": _positive_int(
-            row["employee_odoo_id"], "employee_odoo_id"
-        ),
+        "odoo_attendance_id": _positive_int(row["odoo_attendance_id"], "odoo_attendance_id"),
+        "employee_odoo_id": _positive_int(row["employee_odoo_id"], "employee_odoo_id"),
         "employee_name": _optional_text(row["employee_name"], "employee_name"),
         "check_in_utc": check_in,
         "check_out_utc": check_out,
@@ -217,12 +206,8 @@ def _normalize_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "odoo_department_id": _optional_positive_int(
             row["odoo_department_id"], "odoo_department_id"
         ),
-        "odoo_department_name": _optional_text(
-            row["odoo_department_name"], "odoo_department_name"
-        ),
-        "odoo_write_date": _aware_utc(
-            row["odoo_write_date"], "odoo_write_date"
-        ),
+        "odoo_department_name": _optional_text(row["odoo_department_name"], "odoo_department_name"),
+        "odoo_write_date": _aware_utc(row["odoo_write_date"], "odoo_write_date"),
     }
 
 
@@ -239,9 +224,7 @@ def _normalized_rows(rows: Sequence[dict]) -> tuple[dict[str, Any], ...]:
     return tuple(newest[key] for key in sorted(newest))
 
 
-def local_days_touched(
-    start_utc: datetime, end_utc: datetime | None
-) -> set[date]:
+def local_days_touched(start_utc: datetime, end_utc: datetime | None) -> set[date]:
     """Return plant calendar days intersected by the half-open UTC interval."""
     start = _aware_utc(start_utc, "start_utc")
     end = _optional_aware_utc(end_utc, "end_utc")
@@ -262,20 +245,14 @@ def local_days_touched(
 
 
 def _row_days(row: Mapping[str, Any], open_end: datetime) -> set[date]:
-    return local_days_touched(
-        row["check_in_utc"], row["check_out_utc"] or open_end
-    )
+    return local_days_touched(row["check_in_utc"], row["check_out_utc"] or open_end)
 
 
-def _materially_different(
-    existing: Mapping[str, Any], incoming: Mapping[str, Any]
-) -> bool:
+def _materially_different(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> bool:
     return any(existing[field] != incoming[field] for field in _MATERIAL_FIELDS)
 
 
-def _observation_can_revive(
-    *, observed_at: datetime, deleted_at: datetime | None
-) -> bool:
+def _observation_can_revive(*, observed_at: datetime, deleted_at: datetime | None) -> bool:
     """Return whether an observation is newer than a confirmed deletion."""
     observed = _aware_utc(observed_at, "observed_at")
     deleted = _optional_aware_utc(deleted_at, "deleted_at")
@@ -297,7 +274,8 @@ def _enqueue_recalc_cur(
         cur.execute(
             "INSERT INTO attendance_recalc_queue "
             "(day, reason, requested_at, started_at, completed_at, "
-            "attempt_count, last_error) VALUES (%s, %s, %s, NULL, NULL, 0, NULL) "
+            "cache_started_at, cache_ready_at, attempt_count, last_error) "
+            "VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, 0, NULL) "
             "ON CONFLICT (day) DO UPDATE SET "
             "reason = EXCLUDED.reason, "
             "requested_at = CASE "
@@ -305,6 +283,7 @@ def _enqueue_recalc_cur(
             "THEN LEAST(attendance_recalc_queue.requested_at, EXCLUDED.requested_at) "
             "ELSE EXCLUDED.requested_at END, "
             "started_at = NULL, completed_at = NULL, "
+            "cache_started_at = NULL, cache_ready_at = NULL, "
             "attempt_count = CASE "
             "WHEN attendance_recalc_queue.completed_at IS NULL "
             "THEN attendance_recalc_queue.attempt_count ELSE 0 END, "
@@ -322,9 +301,7 @@ def _enqueue_recalc_cur(
             )
 
 
-def enqueue_recalc(
-    days: Iterable[date], reason: str, *, mark_strict: bool
-) -> None:
+def enqueue_recalc(days: Iterable[date], reason: str, *, mark_strict: bool) -> None:
     requested_at = datetime.now(UTC)
     with db.cursor() as cur:
         _enqueue_recalc_cur(
@@ -351,9 +328,7 @@ def _locked_sync_state(cur) -> Mapping[str, Any]:
 
 def _sync_state_from_row(row: Mapping[str, Any]) -> SyncState:
     return SyncState(
-        cursor_write_date=_optional_aware_utc(
-            row["cursor_write_date"], "cursor_write_date"
-        ),
+        cursor_write_date=_optional_aware_utc(row["cursor_write_date"], "cursor_write_date"),
         cursor_id=row["cursor_id"],
         last_incremental_completed_at=_optional_aware_utc(
             row["last_incremental_completed_at"],
@@ -404,16 +379,13 @@ def _upsert_rows_cur(
                 "odoo_department_name, odoo_write_date, first_seen_at, "
                 "last_seen_at, deleted_at) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL)",
-                tuple(incoming[field] for field in _ROW_FIELDS)
-                + (observed_at, observed_at),
+                tuple(incoming[field] for field in _ROW_FIELDS) + (observed_at, observed_at),
             )
             if baseline_completed:
                 affected_days.update(_row_days(incoming, sync_completed_at))
             continue
 
-        incoming_is_stale = (
-            incoming["odoo_write_date"] < existing["odoo_write_date"]
-        )
+        incoming_is_stale = incoming["odoo_write_date"] < existing["odoo_write_date"]
         if incoming_is_stale:
             # An older raw Odoo version cannot confirm current existence. It
             # must not revive a tombstone or move last_seen_at.
@@ -443,8 +415,7 @@ def _upsert_rows_cur(
             "odoo_department_name = %s, odoo_write_date = %s, "
             "last_seen_at = GREATEST(last_seen_at, %s), deleted_at = NULL "
             "WHERE odoo_attendance_id = %s",
-            tuple(source[field] for field in _ROW_FIELDS[1:])
-            + (observed_at, attendance_id),
+            tuple(source[field] for field in _ROW_FIELDS[1:]) + (observed_at, attendance_id),
         )
 
     if affected_days:
@@ -496,11 +467,7 @@ def _store_incremental_cycle_cur(
     observed_at: datetime | None = None,
 ) -> set[date]:
     completed = _aware_utc(completed_at, "completed_at")
-    observed = (
-        completed
-        if observed_at is None
-        else _aware_utc(observed_at, "observed_at")
-    )
+    observed = completed if observed_at is None else _aware_utc(observed_at, "observed_at")
     normalized = _normalized_rows(rows)
     if cursor_write_date is not None:
         cursor_write_date = _aware_utc(cursor_write_date, "cursor_write_date")
@@ -556,9 +523,7 @@ def _store_incremental_cycle(
         )
 
 
-def upsert_rows(
-    rows: Sequence[dict], *, sync_completed_at: datetime
-) -> set[date]:
+def upsert_rows(rows: Sequence[dict], *, sync_completed_at: datetime) -> set[date]:
     """Upsert one complete poll and advance its cursor in the same transaction."""
     completed = _aware_utc(sync_completed_at, "sync_completed_at")
     normalized = _normalized_rows(rows)
@@ -596,9 +561,7 @@ def _utc_database_row(row: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def rows_overlapping(
-    start_utc: datetime, end_utc: datetime
-) -> tuple[dict, ...]:
+def rows_overlapping(start_utc: datetime, end_utc: datetime) -> tuple[dict, ...]:
     start, end = _validate_range(start_utc, end_utc)
     assert end is not None
     return tuple(
@@ -659,10 +622,7 @@ def _active_attendance_ids_cur(cur) -> set[int]:
         "SELECT odoo_attendance_id FROM odoo_attendance_mirror "
         "WHERE deleted_at IS NULL ORDER BY odoo_attendance_id"
     )
-    return {
-        int(row["odoo_attendance_id"])
-        for row in cur.fetchall()
-    }
+    return {int(row["odoo_attendance_id"]) for row in cur.fetchall()}
 
 
 def _active_attendance_ids() -> set[int]:
@@ -680,10 +640,7 @@ def _tombstoned_attendance_ids_cur(cur, ids: set[int]) -> set[int]:
         "ORDER BY odoo_attendance_id",
         (sorted(requested),),
     )
-    return {
-        int(row["odoo_attendance_id"])
-        for row in cur.fetchall()
-    }
+    return {int(row["odoo_attendance_id"]) for row in cur.fetchall()}
 
 
 def _tombstoned_attendance_ids(ids: set[int]) -> set[int]:
@@ -702,18 +659,12 @@ def _store_full_sweep_cur(
 ) -> _FullSweepStoreResult:
     present_ids = _validated_ids(ids)
     normalized_recovery = _normalized_rows(recovery_rows)
-    recovery_ids = {
-        row["odoo_attendance_id"] for row in normalized_recovery
-    }
+    recovery_ids = {row["odoo_attendance_id"] for row in normalized_recovery}
     if not recovery_ids <= present_ids:
         raise ValueError("recovery rows must be present in the completed sweep")
     sweep_generation = _positive_int(generation, "generation")
     completed = _aware_utc(completed_at, "completed_at")
-    observed = (
-        completed
-        if observed_at is None
-        else _aware_utc(observed_at, "observed_at")
-    )
+    observed = completed if observed_at is None else _aware_utc(observed_at, "observed_at")
     state = _locked_sync_state(cur)
     if sweep_generation != int(state["full_sweep_generation"]) + 1:
         raise ValueError("full sweep generation is stale")
@@ -724,9 +675,7 @@ def _store_full_sweep_cur(
             "AND odoo_attendance_id = ANY(%s) FOR UPDATE",
             (sorted(recovery_ids),),
         )
-        locked_recovery_ids = {
-            int(row["odoo_attendance_id"]) for row in cur.fetchall()
-        }
+        locked_recovery_ids = {int(row["odoo_attendance_id"]) for row in cur.fetchall()}
         if locked_recovery_ids != recovery_ids:
             raise RuntimeError("tombstone recovery state changed before commit")
     recovered_days = _upsert_rows_cur(
@@ -812,9 +761,7 @@ def _store_full_sweep(
         )
 
 
-def mark_deleted_after_successful_sweep(
-    ids: set[int], generation: int
-) -> set[date]:
+def mark_deleted_after_successful_sweep(ids: set[int], generation: int) -> set[date]:
     result = _store_full_sweep(
         ids,
         generation=generation,
@@ -855,8 +802,7 @@ def _record_failure(owner: str, error: object) -> None:
     with db.cursor() as cur:
         state = _locked_sync_state(cur)
         cur.execute(
-            "UPDATE odoo_attendance_sync_state SET last_error = %s "
-            "WHERE singleton = TRUE",
+            "UPDATE odoo_attendance_sync_state SET last_error = %s WHERE singleton = TRUE",
             (_error_with_failure(state["last_error"], owner, error),),
         )
 

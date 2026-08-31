@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Keep each Odoo time fix safe
+
+- **Plant Manager now lets only one helper save an Odoo time fix at a time.** It keeps names and overnight work, checks the saved department again, and waits for every changed day to be ready before it says the fix is done.
+
 ### Check every Odoo time fix
 
 - **Plant Manager can now save a manager's time fix, finish it safely after a connection problem, and check Odoo before calling it done.** Production is counted again only after the fix is confirmed.

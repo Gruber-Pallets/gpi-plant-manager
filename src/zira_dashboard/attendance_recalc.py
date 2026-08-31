@@ -27,6 +27,14 @@ class RecalcClaim:
 
 
 @dataclass(frozen=True)
+class CacheRefreshClaim:
+    day: date
+    attempt_count: int
+    completed_at: datetime
+    lease_until: datetime
+
+
+@dataclass(frozen=True)
 class RecalcResult:
     day: date
     status: Literal["completed", "failed", "superseded"]
@@ -94,6 +102,51 @@ def _claim_next(now_utc: datetime) -> RecalcClaim | None:
     )
 
 
+def _claim_pending_cache(now_utc: datetime) -> CacheRefreshClaim | None:
+    """Claim one completed production day whose cache refresh needs recovery."""
+    now = _aware_utc(now_utc)
+    with db.cursor() as cur:
+        cur.execute(
+            """
+            SELECT day, attempt_count, completed_at
+            FROM attendance_recalc_queue
+            WHERE completed_at IS NOT NULL
+              AND cache_ready_at IS NULL
+              AND (cache_started_at IS NULL OR cache_started_at <= %s)
+            ORDER BY completed_at ASC, requested_at ASC, day ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """,
+            (now,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        day = row["day"]
+        attempt_count = int(row["attempt_count"] or 0)
+        completed_at = _aware_utc(row["completed_at"])
+        lease_until = now + CLAIM_LEASE
+        cur.execute(
+            """
+            UPDATE attendance_recalc_queue
+            SET cache_started_at = %s
+            WHERE day = %s
+              AND completed_at = %s
+              AND cache_ready_at IS NULL
+            RETURNING day
+            """,
+            (lease_until, day, completed_at),
+        )
+        if cur.fetchone() is None:
+            raise RuntimeError("attendance cache refresh claim disappeared")
+    return CacheRefreshClaim(
+        day=day,
+        attempt_count=attempt_count,
+        completed_at=completed_at,
+        lease_until=lease_until,
+    )
+
+
 def _complete_claim(claim: RecalcClaim, prepared, completed_at: datetime) -> int | None:
     """Atomically fence, write, and complete the current recalculation claim."""
     from . import precompute
@@ -123,18 +176,55 @@ def _complete_claim(claim: RecalcClaim, prepared, completed_at: datetime) -> int
         cur.execute(
             """
             UPDATE attendance_recalc_queue
-            SET completed_at = %s, started_at = NULL, last_error = NULL
+            SET completed_at = %s, started_at = NULL,
+                cache_started_at = %s, cache_ready_at = NULL,
+                last_error = NULL
             WHERE day = %s
               AND completed_at IS NULL
               AND attempt_count = %s
               AND started_at = %s
             RETURNING day
             """,
-            (completed, claim.day, claim.attempt_count, claim.lease_until),
+            (
+                completed,
+                completed + CLAIM_LEASE,
+                claim.day,
+                claim.attempt_count,
+                claim.lease_until,
+            ),
         )
         if cur.fetchone() is None:
             raise RuntimeError("attendance recalculation claim changed while completing")
         return rows_written
+
+
+def _mark_cache_ready(
+    claim: CacheRefreshClaim,
+    ready_at: datetime,
+) -> bool:
+    """Fence cache readiness to the worker that owns this refresh lease."""
+    ready = _aware_utc(ready_at)
+    with db.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE attendance_recalc_queue
+            SET cache_started_at = NULL, cache_ready_at = %s
+            WHERE day = %s
+              AND completed_at = %s
+              AND attempt_count = %s
+              AND cache_ready_at IS NULL
+              AND cache_started_at = %s
+            RETURNING day
+            """,
+            (
+                ready,
+                claim.day,
+                claim.completed_at,
+                claim.attempt_count,
+                claim.lease_until,
+            ),
+        )
+        return cur.fetchone() is not None
 
 
 def _record_failure(
@@ -185,9 +275,11 @@ def _refresh_caches(day: date) -> None:
     """Refresh attribution-dependent views after the queue commit succeeds."""
     from . import _http_cache, staffing
 
+    errors: list[Exception] = []
     try:
         staffing.invalidate_schedule_cache(day)
-    except Exception:
+    except Exception as error:
+        errors.append(error)
         _log.warning(
             "attendance recalculation staffing cache refresh failed for %s",
             day,
@@ -195,12 +287,53 @@ def _refresh_caches(day: date) -> None:
         )
     try:
         _http_cache.invalidate_all_cache()
-    except Exception:
+    except Exception as error:
+        errors.append(error)
         _log.warning(
             "attendance recalculation HTTP cache refresh failed for %s",
             day,
             exc_info=True,
         )
+    if errors:
+        raise RuntimeError("attendance recalculation cache refresh did not finish") from errors[0]
+
+
+def _finish_cache_refresh(
+    claim: CacheRefreshClaim,
+    *,
+    rows_written: int,
+    clock: Callable[[], datetime] | None,
+) -> RecalcResult:
+    """Refresh once for this lease and durably publish cache readiness."""
+    try:
+        _refresh_caches(claim.day)
+    except Exception as error:  # noqa: BLE001 - lease expiry owns crash recovery
+        _log.warning(
+            "attendance recalculation cache refresh remains pending for %s",
+            claim.day,
+            exc_info=True,
+        )
+        return RecalcResult(
+            day=claim.day,
+            status="failed",
+            attempt_count=claim.attempt_count,
+            rows_written=rows_written,
+            error=str(error) or type(error).__name__,
+            retry_at=claim.lease_until,
+        )
+    if not _mark_cache_ready(claim, _finished_at(clock)):
+        return RecalcResult(
+            day=claim.day,
+            status="superseded",
+            attempt_count=claim.attempt_count,
+            rows_written=rows_written,
+        )
+    return RecalcResult(
+        day=claim.day,
+        status="completed",
+        attempt_count=claim.attempt_count,
+        rows_written=rows_written,
+    )
 
 
 def process_next(
@@ -211,6 +344,9 @@ def process_next(
 ) -> RecalcResult | None:
     """Claim, recompute, and complete one queue day, or return ``None``."""
     now = _aware_utc(now_utc)
+    cache_claim = _claim_pending_cache(now)
+    if cache_claim is not None:
+        return _finish_cache_refresh(cache_claim, rows_written=0, clock=clock)
     claim = _claim_next(now)
     if claim is None:
         return None
@@ -220,7 +356,8 @@ def process_next(
         if client is None:
             client = _default_production_client()
         prepared = precompute.prepare_day(claim.day, client)
-        rows_written = _complete_claim(claim, prepared, _finished_at(clock))
+        completed_at = _finished_at(clock)
+        rows_written = _complete_claim(claim, prepared, completed_at)
     except Exception as error:  # noqa: BLE001 - every failure remains retryable
         retry_at = None
         record_error = None
@@ -250,20 +387,13 @@ def process_next(
             attempt_count=claim.attempt_count,
         )
 
-    try:
-        _refresh_caches(claim.day)
-    except Exception:  # pragma: no cover - injected replacements may still fail
-        _log.warning(
-            "attendance recalculation cache refresh failed for %s",
-            claim.day,
-            exc_info=True,
-        )
-    return RecalcResult(
+    cache_claim = CacheRefreshClaim(
         day=claim.day,
-        status="completed",
         attempt_count=claim.attempt_count,
-        rows_written=rows_written,
+        completed_at=completed_at,
+        lease_until=completed_at + CLAIM_LEASE,
     )
+    return _finish_cache_refresh(cache_claim, rows_written=rows_written, clock=clock)
 
 
 __all__ = ["RecalcResult", "process_next"]

@@ -5,12 +5,21 @@ from zira_dashboard._schema import SCHEMA_DDL
 
 def test_attendance_location_schema_is_idempotent_and_versioned():
     ddl = SCHEMA_DDL
+    normalized = " ".join(ddl.split())
     assert "ADD COLUMN IF NOT EXISTS requires_work_center" in ddl
     assert "ADD COLUMN IF NOT EXISTS requires_work_center_explicit" in ddl
     assert "CREATE TABLE IF NOT EXISTS odoo_attendance_mirror" in ddl
     assert "odoo_attendance_id BIGINT PRIMARY KEY" in ddl
     assert "CREATE TABLE IF NOT EXISTS odoo_attendance_sync_state" in ddl
     assert "CREATE TABLE IF NOT EXISTS attendance_recalc_queue" in ddl
+    assert "cache_started_at TIMESTAMPTZ" in ddl
+    assert "cache_ready_at TIMESTAMPTZ" in ddl
+    assert (
+        "ALTER TABLE attendance_recalc_queue ADD COLUMN IF NOT EXISTS cache_started_at TIMESTAMPTZ"
+    ) in normalized
+    assert (
+        "ALTER TABLE attendance_recalc_queue ADD COLUMN IF NOT EXISTS cache_ready_at TIMESTAMPTZ"
+    ) in normalized
     assert "CREATE TABLE IF NOT EXISTS attendance_strict_days" in ddl
     assert "CREATE TABLE IF NOT EXISTS attendance_correction_jobs" in ddl
     assert "CREATE TABLE IF NOT EXISTS attendance_correction_job_events" in ddl

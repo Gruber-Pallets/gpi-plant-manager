@@ -39,6 +39,20 @@ class QueueCursor:
             if self.result is not None:
                 self.result = dict(self.result)
             return
+        if normalized.startswith("SELECT day, attempt_count, completed_at"):
+            now = params[0]
+            eligible = sorted(
+                (
+                    row
+                    for row in self.store.rows.values()
+                    if row["completed_at"] is not None
+                    and row["cache_ready_at"] is None
+                    and (row["cache_started_at"] is None or row["cache_started_at"] <= now)
+                ),
+                key=lambda row: (row["completed_at"], row["requested_at"], row["day"]),
+            )
+            self.result = dict(eligible[0]) if eligible else None
+            return
         if normalized.startswith("SELECT day, attempt_count"):
             now = params[0]
             eligible = sorted(
@@ -62,8 +76,17 @@ class QueueCursor:
             row["attempt_count"] = attempt_count
             self.result = dict(row)
             return
+        if normalized.startswith("UPDATE attendance_recalc_queue SET cache_started_at = %s"):
+            lease_until, day, completed_at = params
+            row = self.store.rows[day]
+            if row["completed_at"] != completed_at or row["cache_ready_at"] is not None:
+                self.result = None
+            else:
+                row["cache_started_at"] = lease_until
+                self.result = {"day": day}
+            return
         if "SET completed_at = %s" in normalized:
-            completed_at, day, attempt_count, lease_until = params
+            completed_at, cache_lease, day, attempt_count, lease_until = params
             if self.store.fail_completion:
                 self.result = None
                 return
@@ -77,7 +100,24 @@ class QueueCursor:
             else:
                 row["completed_at"] = completed_at
                 row["started_at"] = None
+                row["cache_started_at"] = cache_lease
+                row["cache_ready_at"] = None
                 row["last_error"] = None
+                self.result = {"day": day}
+            return
+        if normalized.startswith("UPDATE attendance_recalc_queue SET cache_started_at = NULL"):
+            ready_at, day, completed_at, attempt_count, cache_lease = params
+            row = self.store.rows[day]
+            if (
+                row["completed_at"] != completed_at
+                or row["attempt_count"] != attempt_count
+                or row["cache_ready_at"] is not None
+                or row["cache_started_at"] != cache_lease
+            ):
+                self.result = None
+            else:
+                row["cache_started_at"] = None
+                row["cache_ready_at"] = ready_at
                 self.result = {"day": day}
             return
         if "SET started_at = %s, last_error = %s" in normalized:
@@ -161,6 +201,8 @@ def queue_row(
     requested_at,
     started_at=None,
     completed_at=None,
+    cache_started_at=None,
+    cache_ready_at=None,
     attempt_count=0,
     last_error=None,
 ):
@@ -170,6 +212,8 @@ def queue_row(
         "requested_at": requested_at,
         "started_at": started_at,
         "completed_at": completed_at,
+        "cache_started_at": cache_started_at,
+        "cache_ready_at": cache_ready_at,
         "attempt_count": attempt_count,
         "last_error": last_error,
     }
@@ -312,9 +356,204 @@ def test_success_marks_completed_keeps_historical_strict_marker_and_invalidates_
     precompute_event = events.index(("precompute", DAY_1, "zira"))
     assert events[precompute_event - 1] == "commit"
     assert events[precompute_event + 1] == "begin"
-    complete_commit = max(i for i, event in enumerate(events) if event == "commit")
     invalidate = events.index(("invalidate", DAY_1))
-    assert complete_commit < invalidate
+    assert "commit" in events[:invalidate]
+    assert "commit" in events[invalidate + 1 :]
+
+
+def test_correction_waits_in_recalc_commit_to_cache_ready_gap(monkeypatch):
+    module = recalc()
+    from zira_dashboard import attendance_corrections, db
+
+    store = QueueStore(
+        [queue_row(DAY_1, requested_at=NOW - timedelta(hours=1))],
+        strict_days={DAY_1},
+    )
+    install_queue(monkeypatch, store)
+    monkeypatch.setattr(
+        "zira_dashboard.precompute.prepare_day",
+        lambda day, _client: prepared_snapshot(day, 10, strict=True),
+    )
+
+    def query_queue(_sql, _params):
+        return [dict(store.rows[DAY_1])]
+
+    monkeypatch.setattr(db, "query", query_queue)
+    refreshes = []
+
+    def paused_refresh(day):
+        # This callback is the deterministic pause after the production write
+        # commits and before cache invalidation returns.
+        assert store.events[-1] == "commit"
+        assert store.rows[day]["completed_at"] == NOW
+        assert store.rows[day]["cache_ready_at"] is None
+        assert attendance_corrections._recalc_complete([day]) is False
+        refreshes.append(day)
+
+    monkeypatch.setattr(module, "_refresh_caches", paused_refresh)
+
+    result = module.process_next(
+        production_client="zira",
+        now_utc=NOW,
+        clock=lambda: NOW,
+    )
+
+    assert result.status == "completed"
+    assert refreshes == [DAY_1]
+    assert store.rows[DAY_1]["cache_started_at"] is None
+    assert store.rows[DAY_1]["cache_ready_at"] == NOW
+    assert attendance_corrections._recalc_complete([DAY_1]) is True
+
+
+def test_crash_after_recalc_commit_recovers_cache_once_at_lease_boundary(monkeypatch):
+    module = recalc()
+    cache_lease = NOW + module.CLAIM_LEASE
+    store = QueueStore(
+        [
+            queue_row(
+                DAY_1,
+                requested_at=NOW - timedelta(hours=1),
+                completed_at=NOW,
+                cache_started_at=cache_lease,
+                attempt_count=1,
+            )
+        ]
+    )
+    install_queue(monkeypatch, store)
+    refreshes = []
+    monkeypatch.setattr(module, "_refresh_caches", lambda day: refreshes.append(day))
+    monkeypatch.setattr(
+        module,
+        "_precompute_module",
+        lambda: pytest.fail("cache recovery recomputed production"),
+    )
+
+    assert module.process_next(now_utc=cache_lease - timedelta(microseconds=1)) is None
+    result = module.process_next(now_utc=cache_lease, clock=lambda: FINISHED)
+
+    assert result.status == "completed"
+    assert result.rows_written == 0
+    assert refreshes == [DAY_1]
+    assert store.rows[DAY_1]["cache_started_at"] is None
+    assert store.rows[DAY_1]["cache_ready_at"] == FINISHED
+    assert module.process_next(now_utc=FINISHED) is None
+
+
+def test_expired_cache_recovery_runs_before_new_production_claim(monkeypatch):
+    module = recalc()
+    store = QueueStore(
+        [
+            queue_row(
+                DAY_1,
+                requested_at=NOW - timedelta(hours=1),
+                completed_at=NOW - timedelta(minutes=30),
+                cache_started_at=NOW,
+                attempt_count=1,
+            ),
+            queue_row(DAY_2, requested_at=NOW - timedelta(hours=2)),
+        ]
+    )
+    install_queue(monkeypatch, store)
+    refreshes = []
+    monkeypatch.setattr(module, "_refresh_caches", lambda day: refreshes.append(day))
+    monkeypatch.setattr(
+        module,
+        "_precompute_module",
+        lambda: pytest.fail("new production delayed expired cache recovery"),
+    )
+
+    result = module.process_next(now_utc=NOW, clock=lambda: FINISHED)
+
+    assert result.day == DAY_1
+    assert result.status == "completed"
+    assert result.rows_written == 0
+    assert refreshes == [DAY_1]
+    assert store.rows[DAY_2]["attempt_count"] == 0
+
+
+def test_cache_refresh_failure_stays_pending_until_lease_recovery(monkeypatch):
+    module = recalc()
+    store = QueueStore(
+        [
+            queue_row(
+                DAY_1,
+                requested_at=NOW - timedelta(hours=1),
+                completed_at=NOW - timedelta(minutes=30),
+                cache_started_at=NOW,
+                attempt_count=1,
+            )
+        ]
+    )
+    install_queue(monkeypatch, store)
+    monkeypatch.setattr(
+        module,
+        "_refresh_caches",
+        lambda _day: (_ for _ in ()).throw(RuntimeError("cache unavailable")),
+    )
+
+    failed = module.process_next(now_utc=NOW, clock=lambda: NOW)
+
+    assert failed.status == "failed"
+    assert failed.retry_at == NOW + module.CLAIM_LEASE
+    assert store.rows[DAY_1]["cache_ready_at"] is None
+    assert store.rows[DAY_1]["cache_started_at"] == failed.retry_at
+    assert module.process_next(now_utc=failed.retry_at - timedelta(microseconds=1)) is None
+
+    monkeypatch.setattr(module, "_refresh_caches", lambda _day: None)
+    recovered = module.process_next(now_utc=failed.retry_at, clock=lambda: FINISHED)
+
+    assert recovered.status == "completed"
+    assert store.rows[DAY_1]["cache_ready_at"] == FINISHED
+
+
+def test_stale_cache_owner_cannot_publish_newer_workers_readiness(monkeypatch):
+    module = recalc()
+    newer_lease = FINISHED + module.CLAIM_LEASE
+    store = QueueStore(
+        [
+            queue_row(
+                DAY_1,
+                requested_at=NOW - timedelta(hours=1),
+                completed_at=NOW,
+                cache_started_at=newer_lease,
+                attempt_count=1,
+            )
+        ]
+    )
+    install_queue(monkeypatch, store)
+    stale = module.CacheRefreshClaim(
+        day=DAY_1,
+        attempt_count=1,
+        completed_at=NOW,
+        lease_until=NOW + module.CLAIM_LEASE,
+    )
+
+    assert module._mark_cache_ready(stale, FINISHED) is False
+    assert store.rows[DAY_1]["cache_ready_at"] is None
+    assert store.rows[DAY_1]["cache_started_at"] == newer_lease
+
+
+def test_two_cache_recovery_workers_cannot_claim_the_same_day(monkeypatch):
+    module = recalc()
+    store = QueueStore(
+        [
+            queue_row(
+                DAY_1,
+                requested_at=NOW - timedelta(hours=1),
+                completed_at=NOW - timedelta(minutes=30),
+                cache_started_at=NOW,
+                attempt_count=1,
+            )
+        ]
+    )
+    install_queue(monkeypatch, store)
+
+    first = module._claim_pending_cache(NOW)
+    second = module._claim_pending_cache(NOW)
+
+    assert first.day == DAY_1
+    assert first.lease_until == NOW + module.CLAIM_LEASE
+    assert second is None
 
 
 def test_expired_older_worker_cannot_overwrite_newer_completed_snapshot(monkeypatch):
@@ -571,7 +810,9 @@ def test_refreshes_staffing_and_http_caches_after_success(monkeypatch):
 
     events = []
     monkeypatch.setattr(
-        staffing, "invalidate_schedule_cache", lambda day: events.append(("staffing", day))
+        staffing,
+        "invalidate_schedule_cache",
+        lambda day: events.append(("staffing", day)),
     )
     monkeypatch.setattr(_http_cache, "invalidate_all_cache", lambda: events.append(("http", None)))
 

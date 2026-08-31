@@ -94,8 +94,7 @@ def _server_proxy(url: str) -> xmlrpc.client.ServerProxy:
     """ServerProxy with a socket timeout, picking Transport vs SafeTransport
     to match the URL scheme (ODOO_URL is https in prod; http covers local
     dev against a bare Odoo container)."""
-    transport = (_TimeoutSafeTransport() if url.startswith("https")
-                 else _TimeoutTransport())
+    transport = _TimeoutSafeTransport() if url.startswith("https") else _TimeoutTransport()
     return xmlrpc.client.ServerProxy(url, transport=transport)
 
 
@@ -128,10 +127,16 @@ def _config() -> tuple[str, str, str, str]:
     db = os.environ.get("ODOO_DB", "")
     login = os.environ.get("ODOO_LOGIN", "")
     key = os.environ.get("ODOO_API_KEY", "")
-    missing = [k for k, v in (
-        ("ODOO_URL", url), ("ODOO_DB", db),
-        ("ODOO_LOGIN", login), ("ODOO_API_KEY", key),
-    ) if not v]
+    missing = [
+        k
+        for k, v in (
+            ("ODOO_URL", url),
+            ("ODOO_DB", db),
+            ("ODOO_LOGIN", login),
+            ("ODOO_API_KEY", key),
+        )
+        if not v
+    ]
     if missing:
         raise OdooConfigError(f"Missing env vars: {', '.join(missing)}")
     return url, db, login, key
@@ -155,9 +160,7 @@ def execute(model: str, method: str, *args: Any, **kwargs: Any) -> Any:
     per-thread object proxy (and its connection) across calls."""
     _url, db, _login, key = _config()
     uid = authenticate()
-    return _object_proxy_for_thread().execute_kw(
-        db, uid, key, model, method, list(args), kwargs
-    )
+    return _object_proxy_for_thread().execute_kw(db, uid, key, model, method, list(args), kwargs)
 
 
 SKILL_TYPE_NAMES = _odoo_skills.SKILL_TYPE_NAMES
@@ -204,8 +207,10 @@ def fetch_departments() -> list[str]:
 
     Inactive (archived) departments are skipped."""
     import re
+
     rows = execute(
-        "hr.department", "search_read",
+        "hr.department",
+        "search_read",
         [("active", "=", True)],
         fields=["id", "name"],
     )
@@ -231,9 +236,7 @@ def fetch_departments() -> list[str]:
 
 _float_to_hhmm = _odoo_calendars.float_to_hhmm
 _calendar_hours_from_lines = _odoo_calendars.calendar_hours_from_lines
-_calendar_lunch_windows_from_lines = (
-    _odoo_calendars.calendar_lunch_windows_from_lines
-)
+_calendar_lunch_windows_from_lines = _odoo_calendars.calendar_lunch_windows_from_lines
 
 
 # Odoo "Schedule Type" on resource.calendar. Confirmed against live Odoo
@@ -282,9 +285,17 @@ def fetch_employees() -> list[dict]:
     flexible start times.
     """
     return execute(
-        "hr.employee", "search_read",
+        "hr.employee",
+        "search_read",
         [("active", "=", True)],
-        fields=["id", "name", "active", "work_email", "wage_type", "resource_calendar_id"],
+        fields=[
+            "id",
+            "name",
+            "active",
+            "work_email",
+            "wage_type",
+            "resource_calendar_id",
+        ],
     )
 
 
@@ -302,11 +313,7 @@ def fetch_employee_celebration_dates() -> EmployeeCelebrationSource:
     metadata = execute("hr.employee", "fields_get", [], attributes=["type"])
     if not isinstance(metadata, dict):
         raise RuntimeError("Odoo employee field metadata was malformed")
-    available = {
-        name
-        for name in ("birthday", "first_contract_date")
-        if name in metadata
-    }
+    available = {name for name in ("birthday", "first_contract_date") if name in metadata}
     if not available:
         return EmployeeCelebrationSource(False, False, {})
     rows = execute(
@@ -364,8 +371,11 @@ def fetch_manufacturing_work_centers(*, force: bool = False) -> list[dict]:
     ):
         return _manufacturing_work_centers_cache[0]
     rows = execute(
-        "mrp.workcenter", "search_read", [("active", "=", True)],
-        fields=["id", "name"], order="name",
+        "mrp.workcenter",
+        "search_read",
+        [("active", "=", True)],
+        fields=["id", "name"],
+        order="name",
     )
     result = [
         {"id": int(row["id"]), "name": str(row.get("name") or "").strip()}
@@ -373,7 +383,8 @@ def fetch_manufacturing_work_centers(*, force: bool = False) -> list[dict]:
         if row.get("id") and str(row.get("name") or "").strip()
     ]
     _manufacturing_work_centers_cache = (
-        result, now + _MANUFACTURING_WORK_CENTERS_TTL_SECONDS
+        result,
+        now + _MANUFACTURING_WORK_CENTERS_TTL_SECONDS,
     )
     return result
 
@@ -429,7 +440,7 @@ _wc_dept_id_cache: dict[str, int | None] = {}
 _VIRTUAL_WC_DEPARTMENTS: dict[str, str] = {"sustaining": "Sustaining"}
 
 
-def _department_id_for_wc(wc_name: str | None) -> int | None:
+def _department_id_for_wc(wc_name: str | None, *, force: bool = False) -> int | None:
     """Resolve a kiosk WC name (e.g. "Repair 1") to an Odoo
     hr.department.id, going via the WC's `department` attribute in
     staffing.LOCATIONS (e.g. "Recycled") and a case-insensitive
@@ -440,9 +451,10 @@ def _department_id_for_wc(wc_name: str | None) -> int | None:
     matching Odoo department exists."""
     if not wc_name:
         return None
-    if wc_name in _wc_dept_id_cache:
+    if not force and wc_name in _wc_dept_id_cache:
         return _wc_dept_id_cache[wc_name]
     from . import staffing
+
     dept_name: str | None = None
     for loc in staffing.LOCATIONS:
         if loc.name == wc_name:
@@ -451,16 +463,26 @@ def _department_id_for_wc(wc_name: str | None) -> int | None:
     if not dept_name:
         dept_name = _VIRTUAL_WC_DEPARTMENTS.get(wc_name.strip().lower())
     if not dept_name:
-        _wc_dept_id_cache[wc_name] = None
+        if force:
+            _wc_dept_id_cache.pop(wc_name, None)
+        else:
+            _wc_dept_id_cache[wc_name] = None
         return None
     rows = execute(
-        "hr.department", "search_read",
+        "hr.department",
+        "search_read",
         [("name", "ilike", dept_name)],
         fields=["id"],
-        limit=1,
+        limit=2,
     )
-    dept_id = rows[0]["id"] if rows else None
-    _wc_dept_id_cache[wc_name] = dept_id
+    # A substring can match more than one prefixed department. Corrections
+    # must never guess which identity to write, so only one exact result is
+    # usable by the shared resolver.
+    dept_id = rows[0]["id"] if len(rows) == 1 else None
+    if dept_id is None and force:
+        _wc_dept_id_cache.pop(wc_name, None)
+    else:
+        _wc_dept_id_cache[wc_name] = dept_id
     return dept_id
 
 
@@ -472,6 +494,31 @@ def _odoo_work_center_id_for_wc(wc_name: str | None) -> int | None:
 def _app_wc_name_for_odoo_id(odoo_id: int | None) -> str | None:
     """Return the app work-center name for a locally configured Odoo ID."""
     return work_centers_store.app_work_center_name_for_odoo_id(odoo_id)
+
+
+def target_department_id_for_work_center(
+    odoo_work_center_id: int,
+    *,
+    force: bool = False,
+) -> int | None:
+    """Resolve one saved Odoo work-center ID to its unambiguous department.
+
+    This is the narrow identity boundary used by correction and repair jobs.
+    It deliberately routes through the saved app work-center mapping and the
+    facade-owned department rule instead of guessing from a raw Odoo label.
+    """
+    if (
+        isinstance(odoo_work_center_id, bool)
+        or not isinstance(odoo_work_center_id, int)
+        or odoo_work_center_id <= 0
+    ):
+        return None
+    app_name = _app_wc_name_for_odoo_id(odoo_work_center_id)
+    if not app_name:
+        return None
+    if force:
+        return _department_id_for_wc(app_name, force=True)
+    return _department_id_for_wc(app_name)
 
 
 _to_odoo_dt = _odoo_attendance.to_odoo_dt
@@ -489,9 +536,7 @@ def get_current_attendance(employee_odoo_id: int) -> dict | None:
 
 
 def fetch_attendances_missing_wc(since) -> list[dict]:
-    return _odoo_attendance.fetch_attendances_missing_wc(
-        execute, since, _kiosk_wc_field()
-    )
+    return _odoo_attendance.fetch_attendances_missing_wc(execute, since, _kiosk_wc_field())
 
 
 def fetch_open_attendances() -> list[dict]:
@@ -531,9 +576,7 @@ def fetch_open_attendance_rows(*, page_size: int = 250) -> list[dict]:
 
 
 def fetch_all_attendance_ids(*, page_size: int = 500) -> list[int]:
-    return _odoo_attendance.fetch_all_attendance_ids(
-        execute, page_size=page_size
-    )
+    return _odoo_attendance.fetch_all_attendance_ids(execute, page_size=page_size)
 
 
 def fetch_attendance_rows_by_ids(ids: Sequence[int]) -> list[dict]:
@@ -565,9 +608,7 @@ def fetch_attendances_for_day(day) -> list[dict]:
 
 
 def fetch_employee_attendances_for_day(employee_odoo_id: int, day) -> list[dict]:
-    return _odoo_attendance.fetch_employee_attendances_for_day(
-        execute, employee_odoo_id, day
-    )
+    return _odoo_attendance.fetch_employee_attendances_for_day(execute, employee_odoo_id, day)
 
 
 def fetch_attendance_intervals_for_day(day) -> list[dict]:
@@ -642,9 +683,7 @@ def delete_attendances(attendance_ids: list[int]) -> None:
 def _require_attendance_correction_wc_field() -> str:
     wc_field = _kiosk_wc_field()
     if not wc_field:
-        raise OdooConfigError(
-            "Odoo attendance correction requires a configured work-center field"
-        )
+        raise OdooConfigError("Odoo attendance correction requires a configured work-center field")
     return wc_field
 
 
@@ -657,13 +696,9 @@ def create_attendance_interval(
     odoo_department_id: int | None,
 ) -> int:
     """Create one exact correction interval using configured Odoo fields."""
-    check_in_utc = _odoo_attendance._require_aware_utc_datetime(
-        check_in_utc, "check_in_utc"
-    )
+    check_in_utc = _odoo_attendance._require_aware_utc_datetime(check_in_utc, "check_in_utc")
     if check_out_utc is not None:
-        check_out_utc = _odoo_attendance._require_aware_utc_datetime(
-            check_out_utc, "check_out_utc"
-        )
+        check_out_utc = _odoo_attendance._require_aware_utc_datetime(check_out_utc, "check_out_utc")
     wc_field = _require_attendance_correction_wc_field()
     payload: dict[str, object] = {
         "employee_id": int(employee_odoo_id),
@@ -695,27 +730,21 @@ def _attendance_update_payload(values: Mapping[str, object]) -> dict[str, object
     }
     unknown_fields = [key for key in values if key not in allowed_fields]
     if unknown_fields:
-        raise ValueError(
-            f"Unsupported attendance update field: {unknown_fields[0]}"
-        )
+        raise ValueError(f"Unsupported attendance update field: {unknown_fields[0]}")
     wc_field = _require_attendance_correction_wc_field()
     department_field = _kiosk_department_field()
     payload: dict[str, object] = {}
     for key, value in values.items():
         if key == "check_in_utc":
             payload["check_in"] = _to_odoo_dt(
-                _odoo_attendance._require_aware_utc_datetime(
-                    value, "check_in_utc"
-                )
+                _odoo_attendance._require_aware_utc_datetime(value, "check_in_utc")
             )
         elif key == "check_out_utc":
             payload["check_out"] = (
                 False
                 if value is None
                 else _to_odoo_dt(
-                    _odoo_attendance._require_aware_utc_datetime(
-                        value, "check_out_utc"
-                    )
+                    _odoo_attendance._require_aware_utc_datetime(value, "check_out_utc")
                 )
             )
         elif key == "employee_odoo_id":
@@ -733,9 +762,7 @@ def _attendance_update_payload(values: Mapping[str, object]) -> dict[str, object
     return payload
 
 
-def update_attendance_interval(
-    attendance_id: int, *, values: Mapping[str, object]
-) -> None:
+def update_attendance_interval(attendance_id: int, *, values: Mapping[str, object]) -> None:
     """Update one correction interval, translating canonical field aliases."""
     payload = _attendance_update_payload(values)
     if not payload:
@@ -756,27 +783,21 @@ def set_attendance_department_id(attendance_id: int, department_id: int) -> None
     _require_attendance_correction_wc_field()
     department_field = _kiosk_department_field()
     if not department_field:
-        raise OdooConfigError(
-            "Odoo attendance correction requires a configured department field"
-        )
+        raise OdooConfigError("Odoo attendance correction requires a configured department field")
     if not execute(
         "hr.attendance",
         "write",
         [int(attendance_id)],
         {department_field: int(department_id)},
     ):
-        raise RuntimeError(
-            f"Odoo did not update attendance department {attendance_id}"
-        )
+        raise RuntimeError(f"Odoo did not update attendance department {attendance_id}")
 
 
 def close_all_open_attendance_rows(
     employee_odoo_id: int, check_out_utc: datetime
 ) -> tuple[int, ...]:
     """Close and verify every open row, leaving partial work safe to retry."""
-    check_out_utc = _odoo_attendance._require_aware_utc_datetime(
-        check_out_utc, "check_out_utc"
-    )
+    check_out_utc = _odoo_attendance._require_aware_utc_datetime(check_out_utc, "check_out_utc")
     wc_field = _kiosk_wc_field()
     department_field = _kiosk_department_field()
     open_rows = _odoo_attendance.fetch_open_attendance_rows_for_employee(
@@ -785,14 +806,10 @@ def close_all_open_attendance_rows(
         department_field,
         employee_odoo_id,
     )
-    attendance_ids = tuple(
-        int(row["odoo_attendance_id"]) for row in open_rows
-    )
+    attendance_ids = tuple(int(row["odoo_attendance_id"]) for row in open_rows)
     check_out_value = _to_odoo_dt(check_out_utc)
     for attendance_id in attendance_ids:
-        _write_attendance_checkout(
-            attendance_id, check_out_value, mode="kiosk"
-        )
+        _write_attendance_checkout(attendance_id, check_out_value, mode="kiosk")
     verified = _odoo_attendance.fetch_employee_attendance_rows_at_checkout(
         execute,
         wc_field,
@@ -800,17 +817,12 @@ def close_all_open_attendance_rows(
         employee_odoo_id,
         check_out_utc,
     )
-    expected_check_out = _odoo_attendance._parse_odoo_datetime(
-        check_out_value
-    )
-    verified_by_id = {
-        int(row["odoo_attendance_id"]): row for row in verified
-    }
+    expected_check_out = _odoo_attendance._parse_odoo_datetime(check_out_value)
+    verified_by_id = {int(row["odoo_attendance_id"]): row for row in verified}
     unverified = [
         attendance_id
         for attendance_id in attendance_ids
-        if verified_by_id.get(attendance_id, {}).get("check_out_utc")
-        != expected_check_out
+        if verified_by_id.get(attendance_id, {}).get("check_out_utc") != expected_check_out
     ]
     if unverified:
         raise RuntimeError(
@@ -827,9 +839,7 @@ def close_all_open_attendance_rows(
         employee_odoo_id,
     )
     if remaining_open:
-        remaining_ids = sorted(
-            int(row["odoo_attendance_id"]) for row in remaining_open
-        )
+        remaining_ids = sorted(int(row["odoo_attendance_id"]) for row in remaining_open)
         raise RuntimeError(
             "Odoo employee still has open rows: "
             + ", ".join(str(attendance_id) for attendance_id in remaining_ids)
@@ -839,7 +849,8 @@ def close_all_open_attendance_rows(
 
 def _overtime_status_for_attendance(attendance_id: int) -> str:
     rows = execute(
-        "hr.attendance", "search_read",
+        "hr.attendance",
+        "search_read",
         [("id", "=", attendance_id)],
         fields=["overtime_hours"],
         limit=1,
@@ -851,9 +862,7 @@ def _overtime_status_for_attendance(attendance_id: int) -> str:
     return "to_approve" if overtime_hours > 0 else "approved"
 
 
-def _write_attendance_checkout(
-    attendance_id: int, check_out_value: str, *, mode: str
-) -> None:
+def _write_attendance_checkout(attendance_id: int, check_out_value: str, *, mode: str) -> None:
     if not execute(
         "hr.attendance",
         "write",
@@ -871,9 +880,7 @@ def _set_attendance_overtime_status(attendance_id: int) -> None:
         [attendance_id],
         {"overtime_status": status},
     ):
-        raise RuntimeError(
-            f"Odoo did not update overtime status for attendance {attendance_id}"
-        )
+        raise RuntimeError(f"Odoo did not update overtime status for attendance {attendance_id}")
 
 
 def _attendance_create_payload(
@@ -914,7 +921,9 @@ def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
     hours by department attribute kiosk-created attendance correctly
     even when an employee transfers between departments mid-shift."""
     return execute(
-        "hr.attendance", "create", _attendance_create_payload(employee_odoo_id, wc_name, ts)
+        "hr.attendance",
+        "create",
+        _attendance_create_payload(employee_odoo_id, wc_name, ts),
     )
 
 
@@ -943,7 +952,8 @@ def close_historical_attendance(attendance_id: int, ts: datetime) -> None:
     the same write is sufficient and avoids extra network calls per repair.
     """
     execute(
-        "hr.attendance", "write",
+        "hr.attendance",
+        "write",
         [attendance_id],
         {
             "check_out": _to_odoo_dt(ts),
@@ -956,9 +966,7 @@ def close_historical_attendance(attendance_id: int, ts: datetime) -> None:
 def clock_out(attendance_id: int, ts: datetime, *, mode: str = "kiosk") -> None:
     """Set check_out on an existing hr.attendance. Safe to call on an
     already-closed record — Odoo just overwrites the timestamp."""
-    _write_attendance_checkout(
-        attendance_id, _to_odoo_dt(ts), mode=mode
-    )
+    _write_attendance_checkout(attendance_id, _to_odoo_dt(ts), mode=mode)
     _set_attendance_overtime_status(attendance_id)
 
 
@@ -976,10 +984,9 @@ def transfer(
     Callers that just fetched the live current row may pass it as ``current``
     to avoid a second XML-RPC lookup and guarantee the same row is closed."""
     if current is None:
-        current = (
-            _cached_current_attendance_for_transfer(employee_odoo_id)
-            or get_current_attendance(employee_odoo_id)
-        )
+        current = _cached_current_attendance_for_transfer(
+            employee_odoo_id
+        ) or get_current_attendance(employee_odoo_id)
     closed_id: int | None = None
     if current:
         clock_out(current["id"], ts)
@@ -997,6 +1004,7 @@ def _cached_current_attendance_for_transfer(employee_odoo_id: int) -> dict | Non
     """
     try:
         from . import live_cache
+
         snapshot, refreshed_at = live_cache.read_open_attendance()
         if snapshot is None or live_cache.is_stale(refreshed_at):
             return None
@@ -1096,14 +1104,14 @@ def fetch_resource_calendar(employee_odoo_id: int) -> dict | None:
         return cached[0]
     result = _fetch_resource_calendar_uncached(employee_odoo_id)
     _resource_calendar_cache[employee_odoo_id] = (
-        result, now + _RESOURCE_CALENDAR_TTL_SECONDS)
+        result,
+        now + _RESOURCE_CALENDAR_TTL_SECONDS,
+    )
     return result
 
 
 def _fetch_resource_calendar_uncached(employee_odoo_id: int) -> dict | None:
-    return _odoo_calendars.fetch_resource_calendar(
-        execute, unwrap_m2o, employee_odoo_id
-    )
+    return _odoo_calendars.fetch_resource_calendar(execute, unwrap_m2o, employee_odoo_id)
 
 
 _ALLOCATION_STATE_VALIDATED = _odoo_time_off._ALLOCATION_STATE_VALIDATED
@@ -1152,9 +1160,7 @@ def fetch_balances_for_many(employee_odoo_ids: list[int]) -> dict[int, list[dict
 def _aggregate_balances(
     types: list[dict], allocations: list[dict], leaves: list[dict]
 ) -> list[dict]:
-    return _odoo_time_off._aggregate_balances(
-        types, allocations, leaves, unwrap_m2o
-    )
+    return _odoo_time_off._aggregate_balances(types, allocations, leaves, unwrap_m2o)
 
 
 # ---------- Time-off writes (2026-05-27) ----------
@@ -1268,9 +1274,7 @@ def find_matching_leaves(
     include_terminal: bool = True,
 ) -> list[dict]:
     """Return up to two exact employee/type/day leave snapshots."""
-    return _odoo_time_off.find_matching_leaves(
-        execute, employee_id, type_id, day, include_terminal
-    )
+    return _odoo_time_off.find_matching_leaves(execute, employee_id, type_id, day, include_terminal)
 
 
 def post_leave_message(leave_id: int, body: str) -> None:
@@ -1322,7 +1326,9 @@ def fetch_public_holidays(start_d, end_d) -> list[dict]:
     for k in [k for k, (_, exp) in _public_holidays_cache.items() if exp <= now]:
         del _public_holidays_cache[k]
     _public_holidays_cache[(start_d, end_d)] = (
-        rows, now + _PUBLIC_HOLIDAYS_TTL_SECONDS)
+        rows,
+        now + _PUBLIC_HOLIDAYS_TTL_SECONDS,
+    )
     return rows
 
 
@@ -1520,12 +1526,8 @@ def find_task_message_ids(task_id: int, marker: str) -> list[int]:
     return _odoo_feedback.find_task_message_ids(execute, task_id, marker)
 
 
-def add_task_attachment(
-    task_id: int, filename: str, mimetype: str | None, raw_bytes: bytes
-) -> int:
-    return _odoo_feedback.add_task_attachment(
-        execute, task_id, filename, mimetype, raw_bytes
-    )
+def add_task_attachment(task_id: int, filename: str, mimetype: str | None, raw_bytes: bytes) -> int:
+    return _odoo_feedback.add_task_attachment(execute, task_id, filename, mimetype, raw_bytes)
 
 
 def fetch_task_stage_names(task_ids) -> dict[int, str | None]:
@@ -1545,9 +1547,7 @@ def fetch_payroll_inputs(employee_ids, start_day, end_day):
 
 
 def fetch_payroll_work_entries(employee_ids, start_day, end_day):
-    return _odoo_payroll.fetch_work_entries_for_range(
-        execute, employee_ids, start_day, end_day
-    )
+    return _odoo_payroll.fetch_work_entries_for_range(execute, employee_ids, start_day, end_day)
 
 
 def fetch_employee_departments(employee_ids):
