@@ -50,6 +50,14 @@ class MirrorHealth:
 
 
 @dataclass(frozen=True)
+class AttendanceMirrorSnapshot:
+    """Detached health and attendance rows from one locked DB generation."""
+
+    health: MirrorHealth
+    rows: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
 class SyncState:
     cursor_write_date: datetime | None
     cursor_id: int | None
@@ -566,6 +574,27 @@ def rows_overlapping(start_utc: datetime, end_utc: datetime) -> tuple[dict, ...]
     )
 
 
+def snapshot_overlapping(
+    start_utc: datetime, end_utc: datetime
+) -> AttendanceMirrorSnapshot:
+    """Read health and bounded rows under Task 3's sync transaction lock."""
+    start, end = _validate_range(start_utc, end_utc)
+    assert end is not None
+    with _logical_run_lock() as cur:
+        health = _health_snapshot_cur(cur)
+        cur.execute(
+            "SELECT * FROM odoo_attendance_mirror "
+            "WHERE deleted_at IS NULL "
+            "AND (check_out_utc IS NULL OR check_out_utc > check_in_utc) "
+            "AND check_in_utc < %s "
+            "AND (check_out_utc IS NULL OR check_out_utc > %s) "
+            "ORDER BY check_in_utc, odoo_attendance_id",
+            (end, start),
+        )
+        rows = tuple(_utc_database_row(row) for row in cur.fetchall())
+    return AttendanceMirrorSnapshot(health=health, rows=rows)
+
+
 def day_presence(day: date) -> dict[str, dict[str, object]]:
     """Return first arrival and current-open state for one plant-local day."""
     if type(day) is not date:
@@ -596,7 +625,10 @@ def day_presence(day: date) -> dict[str, dict[str, object]]:
 
 
 def day_presence_from_rows(
-    day: date, rows: Sequence[Mapping[str, Any]]
+    day: date,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    as_of_utc: datetime | None = None,
 ) -> dict[str, dict[str, object]]:
     """Derive day presence from an already-frozen mirror row snapshot."""
     if type(day) is not date:
@@ -604,23 +636,28 @@ def day_presence_from_rows(
     start_local = datetime.combine(day, datetime.min.time(), tzinfo=SITE_TZ)
     start_utc = start_local.astimezone(UTC)
     end_utc = (start_local + timedelta(days=1)).astimezone(UTC)
+    as_of = _optional_aware_utc(as_of_utc, "as_of_utc")
     by_employee: dict[int, dict[str, object]] = {}
     for raw in rows:
         employee_id = _positive_int(raw["employee_odoo_id"], "employee_odoo_id")
         check_in = _aware_utc(raw["check_in_utc"], "check_in_utc")
-        if not start_utc <= check_in < end_utc:
+        if not start_utc <= check_in < end_utc or (
+            as_of is not None and check_in > as_of
+        ):
             continue
+        check_out = _optional_aware_utc(raw.get("check_out_utc"), "check_out_utc")
+        currently_open = check_out is None or (
+            as_of is not None and as_of < check_out
+        )
         current = by_employee.get(employee_id)
         if current is None:
             by_employee[employee_id] = {
                 "first_check_in": check_in,
-                "currently_open": raw.get("check_out_utc") is None,
+                "currently_open": currently_open,
             }
             continue
         current["first_check_in"] = min(current["first_check_in"], check_in)
-        current["currently_open"] = bool(current["currently_open"]) or (
-            raw.get("check_out_utc") is None
-        )
+        current["currently_open"] = bool(current["currently_open"]) or currently_open
     return {
         str(employee_id): {
             "first_check_in": value["first_check_in"].isoformat(),
@@ -896,18 +933,9 @@ def _complete_baseline_if_ready(completed_at: datetime) -> bool:
     return baseline_completed_at is not None
 
 
-def health_snapshot() -> MirrorHealth:
-    rows = db.query(
-        "SELECT s.last_incremental_completed_at, "
-        "s.last_full_sweep_completed_at, s.baseline_completed_at, "
-        "(SELECT MIN(requested_at) FROM attendance_recalc_queue "
-        " WHERE completed_at IS NULL) AS oldest_recalc_requested_at, "
-        "s.last_error FROM odoo_attendance_sync_state s "
-        "WHERE s.singleton = TRUE"
-    )
-    if not rows:
+def _health_from_row(row: Mapping[str, Any] | None) -> MirrorHealth:
+    if row is None:
         return MirrorHealth(None, None, None, None, "sync state is missing")
-    row = rows[0]
     return MirrorHealth(
         last_incremental_completed_at=_optional_aware_utc(
             row["last_incremental_completed_at"],
@@ -927,8 +955,33 @@ def health_snapshot() -> MirrorHealth:
     )
 
 
+def _health_snapshot_cur(cur) -> MirrorHealth:
+    cur.execute(
+        "SELECT s.last_incremental_completed_at, "
+        "s.last_full_sweep_completed_at, s.baseline_completed_at, "
+        "(SELECT MIN(requested_at) FROM attendance_recalc_queue "
+        " WHERE completed_at IS NULL) AS oldest_recalc_requested_at, "
+        "s.last_error FROM odoo_attendance_sync_state s "
+        "WHERE s.singleton = TRUE"
+    )
+    return _health_from_row(cur.fetchone())
+
+
+def health_snapshot() -> MirrorHealth:
+    rows = db.query(
+        "SELECT s.last_incremental_completed_at, "
+        "s.last_full_sweep_completed_at, s.baseline_completed_at, "
+        "(SELECT MIN(requested_at) FROM attendance_recalc_queue "
+        " WHERE completed_at IS NULL) AS oldest_recalc_requested_at, "
+        "s.last_error FROM odoo_attendance_sync_state s "
+        "WHERE s.singleton = TRUE"
+    )
+    return _health_from_row(rows[0] if rows else None)
+
+
 __all__ = [
     "MirrorHealth",
+    "AttendanceMirrorSnapshot",
     "current_open_attendance",
     "day_presence",
     "day_presence_from_rows",
@@ -938,5 +991,6 @@ __all__ = [
     "mark_deleted_after_successful_sweep",
     "rows_for_employee",
     "rows_overlapping",
+    "snapshot_overlapping",
     "upsert_rows",
 ]

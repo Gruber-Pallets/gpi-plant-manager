@@ -16,6 +16,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **When the new Odoo location rule is turned on, workers will use Plant Manager only to clock in and out.** The plant-floor app will choose work areas and move people during the day, while Staffing can already show both the plan and the live Odoo location.
 - **Staffing now labels old Odoo location data clearly and keeps workers with the same name separate.** This helps managers spot an old location and prevents one worker from being mixed up with another.
+- **Staffing now keeps one exact Odoo snapshot and will not mix up people with the same name.** The clock state and live location come from the same check, so the page tells one clear story.
 
 ### Fix unassigned production from the inbox
 

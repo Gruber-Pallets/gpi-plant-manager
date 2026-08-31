@@ -269,6 +269,93 @@ def test_logical_run_lock_uses_transaction_scoped_postgres_advisory_lock(
     assert events[2:] == [("held",), ("commit_exit",)]
 
 
+@pytest.mark.parametrize(
+    ("change_kind", "before_rows", "after_rows"),
+    [
+        (
+            "update",
+            (_row(work_center_id=72, work_center_name="Old Bay"),),
+            (_row(work_center_id=73, work_center_name="New Bay"),),
+        ),
+        ("insert", (), (_row(attendance_id=902),)),
+        (
+            "checkout",
+            (_row(check_out=None),),
+            (_row(check_out=SYNCED_AT + timedelta(minutes=1)),),
+        ),
+        ("tombstone", (_row(),), ()),
+    ],
+)
+def test_bounded_snapshot_keeps_health_and_rows_in_one_locked_generation(
+    monkeypatch, change_kind, before_rows, after_rows
+):
+    start = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
+    end = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
+    generation_one = SYNCED_AT
+    generation_two = SYNCED_AT + timedelta(minutes=2)
+    events = []
+
+    health_row = {
+        "last_incremental_completed_at": generation_one,
+        "last_full_sweep_completed_at": generation_one,
+        "baseline_completed_at": generation_one,
+        "oldest_recalc_requested_at": None,
+        "last_error": None,
+    }
+
+    class Cursor:
+        def __init__(self):
+            self.one = None
+            self.many = ()
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            events.append((normalized, params))
+            if "pg_advisory_xact_lock" in normalized:
+                return
+            if "FROM odoo_attendance_sync_state" in normalized:
+                self.one = health_row
+                return
+            if "FROM odoo_attendance_mirror" in normalized:
+                self.many = before_rows
+                return
+            raise AssertionError(f"unexpected snapshot SQL: {normalized}")
+
+        def fetchone(self):
+            return self.one
+
+        def fetchall(self):
+            return self.many
+
+    @contextmanager
+    def cursor():
+        events.append(("transaction_enter", change_kind))
+        yield Cursor()
+        events.append(("transaction_exit_then_sync_commits", change_kind))
+
+    monkeypatch.setattr(attendance_mirror.db, "cursor", cursor)
+    monkeypatch.setattr(
+        attendance_mirror.db,
+        "query",
+        lambda *_args, **_kwargs: pytest.fail(
+            f"{change_kind} generation leaked outside the locked cursor: "
+            f"{generation_two!s}, {after_rows!r}"
+        ),
+    )
+
+    snapshot = attendance_mirror.snapshot_overlapping(start, end)
+
+    assert snapshot.health.last_incremental_completed_at == generation_one
+    assert snapshot.rows == tuple(
+        attendance_mirror._utc_database_row(row) for row in before_rows
+    )
+    assert events[0] == ("transaction_enter", change_kind)
+    assert "pg_advisory_xact_lock" in events[1][0]
+    assert "odoo_attendance_sync_state" in events[2][0]
+    assert "odoo_attendance_mirror" in events[3][0]
+    assert events[4] == ("transaction_exit_then_sync_commits", change_kind)
+
+
 def test_owned_error_success_clear_preserves_foreign_failures():
     stored = attendance_mirror._error_with_failure(None, "incremental", "change page failed")
     stored = attendance_mirror._error_with_failure(stored, "sweep", "ID page failed")

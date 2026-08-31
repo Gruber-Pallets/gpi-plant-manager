@@ -24,6 +24,7 @@ def _span(
     start_minutes: int = 30,
     employee_id: int | None = None,
     end_utc: datetime | None = None,
+    attendance_ids: tuple[int, ...] = (91,),
 ) -> LocationSpan:
     return LocationSpan(
         employee_odoo_id=employee_id or abs(hash(name)) % 10000 + 1,
@@ -34,7 +35,7 @@ def _span(
         app_work_center_name=app_wc,
         odoo_work_center_id=8 if (app_wc or raw_wc) else None,
         odoo_work_center_name=raw_wc,
-        attendance_ids=(91,),
+        attendance_ids=attendance_ids,
         department_repair=None,
     )
 
@@ -161,27 +162,116 @@ def test_span_ending_exactly_at_as_of_is_not_live():
     assert locations == ()
 
 
+def test_exact_cap_current_selection_uses_contributing_raw_interval_identity():
+    from zira_dashboard.routes import staffing as staffing_routes
+
+    cap = NOW
+    rows = (
+        {
+            "odoo_attendance_id": 1,
+            "check_in_utc": cap - timedelta(hours=1),
+            "check_out_utc": None,
+        },
+        {
+            "odoo_attendance_id": 2,
+            "check_in_utc": cap - timedelta(hours=1),
+            "check_out_utc": cap + timedelta(minutes=1),
+        },
+        {
+            "odoo_attendance_id": 3,
+            "check_in_utc": cap - timedelta(hours=1),
+            "check_out_utc": cap,
+        },
+        {
+            "odoo_attendance_id": 4,
+            "check_in_utc": cap,
+            "check_out_utc": None,
+        },
+    )
+    spans = (
+        _span(
+            "Open",
+            "valid",
+            app_wc="Bay 1",
+            employee_id=101,
+            end_utc=cap,
+            attendance_ids=(1,),
+        ),
+        _span(
+            "Closes after",
+            "valid",
+            app_wc="Bay 2",
+            employee_id=102,
+            end_utc=cap,
+            attendance_ids=(2,),
+        ),
+        _span(
+            "Closes exact",
+            "valid",
+            app_wc="Bay 3",
+            employee_id=103,
+            end_utc=cap,
+            attendance_ids=(3,),
+        ),
+        _span(
+            "Mixed",
+            "conflicting_location",
+            employee_id=104,
+            end_utc=cap,
+            attendance_ids=(3, 4),
+        ),
+    )
+
+    current_attendance_ids = staffing_routes._current_attendance_ids_at(rows, cap)
+    locations = staffing_view.build_live_locations(
+        {},
+        spans,
+        as_of_utc=cap,
+        current_attendance_ids=current_attendance_ids,
+    )
+
+    assert current_attendance_ids == frozenset({1, 2, 4})
+    assert {item.employee_odoo_id for item in locations} == {101, 102, 104}
+    assert next(item for item in locations if item.employee_odoo_id == 104).status == (
+        "conflicting_location"
+    )
+
+
 def test_staffing_snapshot_survives_sync_commit_interleaving(monkeypatch):
+    from zira_dashboard import attendance_mirror
     from zira_dashboard.routes import staffing as staffing_routes
 
     first_row = {
+        "odoo_attendance_id": 91,
         "employee_odoo_id": 101,
         "check_in_utc": NOW - timedelta(hours=1),
         "check_out_utc": None,
     }
-    second_row = {
-        "employee_odoo_id": 202,
-        "check_in_utc": NOW - timedelta(minutes=10),
-        "check_out_utc": None,
-    }
-    versions = [(first_row,), (second_row,)]
     calls = []
 
-    def rows_overlapping(*_args):
+    def snapshot_overlapping(*_args):
         calls.append(len(calls) + 1)
-        return versions.pop(0)
+        return SimpleNamespace(
+            health=attendance_mirror.MirrorHealth(
+                last_incremental_completed_at=NOW - timedelta(seconds=10),
+                last_full_sweep_completed_at=NOW - timedelta(seconds=10),
+                baseline_completed_at=NOW - timedelta(seconds=10),
+                oldest_recalc_requested_at=None,
+                last_error=None,
+            ),
+            rows=(first_row,),
+        )
 
-    monkeypatch.setattr(staffing_routes.attendance_mirror, "rows_overlapping", rows_overlapping)
+    monkeypatch.setattr(
+        staffing_routes.attendance_location_policy,
+        "get_rollout_config",
+        lambda: SimpleNamespace(mode="shadow"),
+    )
+    monkeypatch.setattr(
+        staffing_routes.attendance_mirror,
+        "snapshot_overlapping",
+        snapshot_overlapping,
+    )
     monkeypatch.setattr(
         staffing_routes.attendance_timeline,
         "_plant_day_bounds",
@@ -205,17 +295,8 @@ def test_staffing_snapshot_survives_sync_commit_interleaving(monkeypatch):
         ),
     )
     monkeypatch.setattr(staffing_routes.attendance, "person_id_to_name", lambda: {"101": "Alex"})
-    policy = SimpleNamespace(
-        mode="shadow",
-        mirror_owned=True,
-        available=True,
-        refreshed_at=NOW - timedelta(seconds=10),
-        stale=False,
-        error=None,
-    )
-
-    snapshot = staffing_routes._read_staffing_mirror_snapshot(
-        NOW.date(), as_of_utc=NOW, policy=policy
+    snapshot = staffing_routes._read_staffing_response_snapshot(
+        NOW.date(), as_of_utc=NOW
     )
 
     assert calls == [1]
@@ -223,14 +304,90 @@ def test_staffing_snapshot_survives_sync_commit_interleaving(monkeypatch):
     assert snapshot.spans[0].employee_odoo_id == 101
 
 
-def test_staffing_snapshot_caps_open_span_and_uses_half_open_selection(monkeypatch):
+def test_staffing_response_derives_policy_presence_and_spans_from_atomic_snapshot(
+    monkeypatch,
+):
+    from zira_dashboard import attendance_mirror
     from zira_dashboard.routes import staffing as staffing_routes
 
     verified_at = NOW - timedelta(seconds=10)
-    row = {
+    raw_row = {
+        "odoo_attendance_id": 91,
         "employee_odoo_id": 101,
         "check_in_utc": NOW - timedelta(hours=1),
         "check_out_utc": None,
+    }
+    atomic = SimpleNamespace(
+        health=attendance_mirror.MirrorHealth(
+            last_incremental_completed_at=verified_at,
+            last_full_sweep_completed_at=verified_at,
+            baseline_completed_at=verified_at,
+            oldest_recalc_requested_at=None,
+            last_error=None,
+        ),
+        rows=(raw_row,),
+    )
+    atomic_calls = []
+    monkeypatch.setattr(
+        staffing_routes.attendance_location_policy,
+        "get_rollout_config",
+        lambda: SimpleNamespace(mode="shadow"),
+    )
+    monkeypatch.setattr(
+        staffing_routes.attendance_mirror,
+        "snapshot_overlapping",
+        lambda *args: atomic_calls.append(args) or atomic,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        staffing_routes.live_cache,
+        "attendance_read_policy",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Staffing must not perform a separate health read")
+        ),
+    )
+    monkeypatch.setattr(
+        staffing_routes.attendance_timeline,
+        "_plant_day_bounds",
+        lambda _day: (NOW - timedelta(hours=16), NOW + timedelta(hours=8)),
+    )
+    monkeypatch.setattr(
+        staffing_routes,
+        "_project_staffing_location_spans",
+        lambda _day, **_kwargs: (
+            _span("Alex", "valid", app_wc="Bay 3", employee_id=101, end_utc=verified_at),
+        ),
+    )
+
+    snapshot = staffing_routes._read_staffing_response_snapshot(
+        NOW.date(), as_of_utc=NOW
+    )
+
+    assert len(atomic_calls) == 1
+    assert snapshot.policy.mirror_owned is True
+    assert snapshot.policy.refreshed_at == verified_at
+    assert snapshot.attendance_source.payload["101"]["currently_open"] is True
+    assert snapshot.spans[0].employee_odoo_id == 101
+    assert snapshot.current_attendance_ids == frozenset({91})
+
+
+def test_staffing_snapshot_caps_open_span_and_uses_half_open_selection(monkeypatch):
+    from zira_dashboard import attendance_mirror
+    from zira_dashboard.routes import staffing as staffing_routes
+
+    verified_at = NOW
+    health_refreshed_at = NOW + timedelta(seconds=10)
+    row = {
+        "odoo_attendance_id": 91,
+        "employee_odoo_id": 101,
+        "check_in_utc": NOW - timedelta(hours=1),
+        "check_out_utc": None,
+    }
+    closed_row = {
+        "odoo_attendance_id": 92,
+        "employee_odoo_id": 202,
+        "check_in_utc": NOW - timedelta(hours=1),
+        "check_out_utc": verified_at,
     }
     projected_as_of = []
     monkeypatch.setattr(
@@ -239,9 +396,23 @@ def test_staffing_snapshot_caps_open_span_and_uses_half_open_selection(monkeypat
         lambda _day: (NOW - timedelta(hours=16), NOW + timedelta(hours=8)),
     )
     monkeypatch.setattr(
+        staffing_routes.attendance_location_policy,
+        "get_rollout_config",
+        lambda: SimpleNamespace(mode="shadow"),
+    )
+    monkeypatch.setattr(
         staffing_routes.attendance_mirror,
-        "rows_overlapping",
-        lambda *_args: (row,),
+        "snapshot_overlapping",
+        lambda *_args: SimpleNamespace(
+            health=attendance_mirror.MirrorHealth(
+                last_incremental_completed_at=health_refreshed_at,
+                last_full_sweep_completed_at=health_refreshed_at,
+                baseline_completed_at=health_refreshed_at,
+                oldest_recalc_requested_at=None,
+                last_error=None,
+            ),
+            rows=(row, closed_row),
+        ),
     )
     monkeypatch.setattr(
         staffing_routes.attendance_timeline,
@@ -251,7 +422,13 @@ def test_staffing_snapshot_caps_open_span_and_uses_half_open_selection(monkeypat
 
     def project_rows(_rows, **kwargs):
         projected_as_of.append(kwargs["as_of_utc"])
-        span = _span("Alex", "valid", app_wc="Bay 3", employee_id=101)
+        span = _span(
+            "Alex",
+            "valid",
+            app_wc="Bay 3",
+            employee_id=101,
+            attendance_ids=(91,),
+        )
         return (
             LocationSpan(
                 **{
@@ -268,38 +445,36 @@ def test_staffing_snapshot_caps_open_span_and_uses_half_open_selection(monkeypat
         "person_id_to_name",
         lambda: {"101": "Alex"},
     )
-    policy = SimpleNamespace(
-        mode="shadow",
-        mirror_owned=True,
-        available=True,
-        refreshed_at=verified_at,
-        stale=False,
-        error=None,
-    )
-
-    snapshot = staffing_routes._read_staffing_mirror_snapshot(
-        NOW.date(), as_of_utc=NOW, policy=policy
+    snapshot = staffing_routes._read_staffing_response_snapshot(
+        NOW.date(), as_of_utc=NOW
     )
     closed_at_selection = _span(
         "Closed",
         "valid",
         app_wc="Bay 8",
         employee_id=202,
-        end_utc=snapshot.location_as_of_utc,
+        end_utc=snapshot.verified_cap_utc,
+        attendance_ids=(92,),
     )
     context = staffing_routes._staffing_live_context(
         NOW.date(),
         NOW.date(),
         {"Bay 3": ["Alex"], "Bay 8": ["Closed"]},
-        policy=policy,
-        as_of_utc=snapshot.location_as_of_utc,
+        policy=snapshot.policy,
+        as_of_utc=snapshot.verified_cap_utc,
         spans=(*snapshot.spans, closed_at_selection),
         planned_employee_ids={"Alex": 101, "Closed": 202},
+        current_attendance_ids=snapshot.current_attendance_ids,
     )
 
     assert projected_as_of == [verified_at]
     assert snapshot.spans[0].end_utc == verified_at
-    assert snapshot.location_as_of_utc == verified_at - timedelta(microseconds=1)
+    assert snapshot.verified_cap_utc == verified_at
+    assert snapshot.policy.refreshed_at == verified_at
+    assert snapshot.attendance_source.refreshed_at == verified_at
+    assert snapshot.attendance_source.payload["101"]["currently_open"] is True
+    assert snapshot.attendance_source.payload["202"]["currently_open"] is False
+    assert snapshot.current_attendance_ids == frozenset({91})
     assert set(context["live_locations_by_employee_id"]) == {101}
     assert context["live_locations_by_employee_id"][101].source_fresh_at == verified_at
     assert context["staffing_live_fresh_at"] == verified_at
@@ -440,7 +615,112 @@ def test_staffing_live_context_keeps_last_verified_rows_with_stale_error_label()
     assert context["staffing_live_unavailable"] is False
     assert context["staffing_live_stale"] is True
     assert context["staffing_live_error"] == "incremental sync failed"
-    assert context["live_locations_by_employee_id"][101].display_text == "Bay 8 · stale"
+    location = context["live_locations_by_employee_id"][101]
+    assert location.status == "valid"
+    assert location.source_stale is True
+    assert location.display_text == "Bay 8"
+
+
+def test_stale_source_preserves_every_location_status_and_unmapped_text():
+    from zira_dashboard.routes import staffing as staffing_routes
+
+    expected = {
+        101: ("valid", "Bay 1"),
+        102: ("unmapped_location", "Odoo Mystery 99 · Odoo only — mapping needed"),
+        103: ("pending_first_location", "Waiting for Odoo location"),
+        104: ("missing_required_location", "Location missing"),
+        105: ("conflicting_location", "Location conflict"),
+        106: ("exempt_no_location", "Outside work-center bays"),
+    }
+    spans = (
+        _span("Valid", "valid", app_wc="Bay 1", employee_id=101),
+        _span(
+            "Unmapped",
+            "unmapped_location",
+            raw_wc="Odoo Mystery 99",
+            employee_id=102,
+        ),
+        _span("Pending", "pending_first_location", employee_id=103),
+        _span("Missing", "missing_required_location", employee_id=104),
+        _span("Conflict", "conflicting_location", employee_id=105),
+        _span("Driver", "exempt_no_location", employee_id=106),
+    )
+    policy = SimpleNamespace(
+        mode="live",
+        mirror_owned=True,
+        available=True,
+        refreshed_at=NOW - timedelta(minutes=4),
+        stale=True,
+        error="sync stalled",
+    )
+
+    context = staffing_routes._staffing_live_context(
+        NOW.date(),
+        NOW.date(),
+        {},
+        policy=policy,
+        as_of_utc=NOW,
+        spans=spans,
+    )
+
+    by_id = context["live_locations_by_employee_id"]
+    assert {
+        employee_id: (item.status, item.display_text)
+        for employee_id, item in by_id.items()
+    } == expected
+    assert all(item.source_stale is True for item in by_id.values())
+    assert "Odoo only — mapping needed" in Path(
+        "src/zira_dashboard/templates/staffing.html"
+    ).read_text()
+    assert "Source stale" in Path("src/zira_dashboard/templates/staffing.html").read_text()
+
+
+def test_unscheduled_identity_links_only_exact_known_local_people():
+    planned_by_wc = {"Bay 3": ["Alex"]}
+    spans = (
+        _span(
+            "Alex",
+            "unmapped_location",
+            raw_wc="Odoo Other Alex",
+            employee_id=202,
+        ),
+        _span("Unknown", "unmapped_location", raw_wc="Odoo A", employee_id=303),
+        _span("Unknown", "unmapped_location", raw_wc="Odoo B", employee_id=404),
+        _span("Known", "valid", app_wc="Bay 8", employee_id=505),
+    )
+
+    locations = staffing_view.build_live_locations(
+        planned_by_wc,
+        spans,
+        as_of_utc=NOW,
+        planned_employee_ids={"Alex": 101},
+        known_local_people_by_id={101: "Alex", 505: "Known"},
+    )
+    by_id = {item.employee_odoo_id: item for item in locations}
+    rendered = _render_template_fragment(
+        '<div class="section live-unscheduled">',
+        "</div>",
+        staffing_live_enabled=True,
+        staffing_live_label="Live Odoo",
+        live_unscheduled_locations=locations,
+    )
+
+    assert by_id[202].profile_person_name is None
+    assert by_id[303].profile_person_name is None
+    assert by_id[404].profile_person_name is None
+    assert by_id[505].profile_person_name == "Known"
+    assert by_id[202].identity_disambiguator == "Odoo employee #202"
+    assert by_id[303].identity_disambiguator == "Odoo employee #303"
+    assert by_id[404].identity_disambiguator == "Odoo employee #404"
+    assert 'href="/staffing/people/Alex"' not in rendered
+    assert 'href="/staffing/people/Unknown"' not in rendered
+    assert 'href="/staffing/people/Known"' in rendered
+    assert 'data-odoo-employee-id="202"' in rendered
+    assert 'data-odoo-employee-id="303"' in rendered
+    assert 'data-odoo-employee-id="404"' in rendered
+    assert "Odoo employee #202" in rendered
+    assert "Odoo employee #303" in rendered
+    assert "Odoo employee #404" in rendered
 
 
 def test_staffing_live_context_labels_live_and_preserves_unavailability(monkeypatch):
