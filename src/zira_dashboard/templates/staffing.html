@@ -46,6 +46,18 @@
   </p>
 </div>
 {% endif %}
+{% if staffing_live_enabled %}
+<div class="staffing-live-banner{% if staffing_live_unavailable %} unavailable{% endif %}"
+     {% if staffing_live_fresh_at %}data-live-source-fresh-at="{{ staffing_live_fresh_at.isoformat() }}"{% endif %}>
+  <strong>{% if staffing_live_label == "Live Odoo" %}Live Odoo{% else %}Odoo preview{% endif %}</strong>
+  {% if staffing_live_unavailable %}
+    <span>Live Odoo locations are unavailable. Planned seats are still shown.</span>
+  {% else %}
+    <span>Planned seats stay in place. The badges show Odoo's current location.</span>
+    {% if staffing_live_fresh_at %}<span class="staffing-live-fresh">Source checked {{ staffing_live_fresh_at.strftime('%-I:%M %p') }}</span>{% endif %}
+  {% endif %}
+</div>
+{% endif %}
 <div class="layout">
 
   <!-- LEFT: Unscheduled + Time Off -->
@@ -60,6 +72,20 @@
         {% endif %}
       </ul>
     </div>
+
+    {% if staffing_live_enabled and live_unscheduled_locations %}
+    <div class="section live-unscheduled">
+      <h3>{{ staffing_live_label }} · Not scheduled <span class="count">{{ live_unscheduled_locations|length }}</span></h3>
+      <ul>
+        {% for live in live_unscheduled_locations %}
+          <li data-name="{{ live.person_name }}">
+            <a href="/staffing/people/{{ live.person_name|urlencode }}" class="person-card-link">{{ live.person_name }}</a>
+            <span class="live-location-badge status-{{ live.status }}">{% if live.status == 'unmapped_location' %}{{ live.raw_odoo_work_center or 'Unknown Odoo location' }} · Odoo only — mapping needed{% else %}{{ live.display_text }}{% endif %}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
 
     {% if is_saturday_recruiting %}
     <div class="section saturday-off">
@@ -342,6 +368,21 @@
                   {% if not row.pool %}<div class="dd-empty">— no trained operators —</div>{% endif %}
                 </div>
               </details>
+              {% if staffing_live_enabled %}
+                <div class="planned-live-locations" aria-label="{{ staffing_live_label }} locations">
+                  {% for planned in row.present_assigned %}
+                    {% set live = live_locations_by_name.get(planned.name) %}
+                    {% if live %}
+                      <span class="planned-live-person" data-person="{{ planned.name }}">
+                        <span class="planned-live-name">{{ planned.name }}</span>
+                        <span class="live-location-badge status-{{ live.status }}{% if live.working_elsewhere %} working-elsewhere{% endif %}">
+                          {% if live.working_elsewhere %}Working elsewhere · {% endif %}{% if live.status == 'unmapped_location' %}{{ live.raw_odoo_work_center or 'Unknown Odoo location' }} · Odoo only — mapping needed{% else %}{{ live.display_text }}{% endif %}
+                        </span>
+                      </span>
+                    {% endif %}
+                  {% endfor %}
+                </div>
+              {% endif %}
             </td>
             <td class="wc-note-cell">
               <textarea name="wc_note__{{ row.loc.name }}" rows="1" placeholder="—" maxlength="500"{% if viewing_posted %} readonly{% endif %}>{{ row.wc_note }}</textarea>

@@ -124,10 +124,16 @@ def current_attendance_windows() -> tuple[
     try:
         from . import attendance, live_cache
 
-        snapshot, refreshed_at = live_cache.read_open_attendance()
-        if snapshot is None or live_cache.is_stale(refreshed_at):
+        source = live_cache.read_open_attendance_source()
+        snapshot, refreshed_at = source.payload, source.refreshed_at
+        if not source.available:
+            return {}, refreshed_at
+        if not source.mirror_owned and (
+            snapshot is None or live_cache.is_stale(refreshed_at)
+        ):
             live_cache.refresh_odoo_open_attendance()
-            snapshot, refreshed_at = live_cache.read_open_attendance()
+            refreshed = live_cache.read_open_attendance_source()
+            snapshot, refreshed_at = refreshed.payload, refreshed.refreshed_at
         # refresh_odoo_open_attendance deliberately keeps the previous good
         # row when Odoo is unavailable. Recheck its age so that fail-soft
         # behavior never turns an old station into today's live truth.
@@ -192,10 +198,18 @@ def attendance_windows_for_day_with_availability(
     transient Odoo outage can't poison a past day's entry.
     """
     try:
-        from . import shift_config
+        from . import live_cache, shift_config
         today = datetime.now(shift_config.SITE_TZ).date()
     except Exception:
         return {}, False
+    policy = live_cache.attendance_read_policy()
+    if policy.mirror_owned:
+        if not policy.available or policy.refreshed_at is None:
+            return {}, False
+        return _mirror_attendance_windows_for_day(
+            day,
+            verified_through_utc=policy.refreshed_at,
+        )
     is_past = day < today
     with _cache_lock:
         if is_past:
@@ -246,6 +260,57 @@ def attendance_windows_for_day_with_availability(
             for k in stale:
                 del _today_cache[k]
             _today_cache[day] = (now_mono, out)
+    return out, True
+
+
+def _mirror_attendance_windows_for_day(
+    day: date,
+    *,
+    verified_through_utc: datetime,
+) -> tuple[dict[str, list[tuple[str, datetime, datetime | None]]], bool]:
+    """Build legacy window shape from one bounded canonical mirror query."""
+    try:
+        from . import (
+            attendance,
+            attendance_mirror,
+            shift_config,
+            work_centers_store,
+        )
+        from datetime import datetime as _dt, time as _clock, timedelta as _td
+
+        start_local = _dt.combine(day, _clock.min, tzinfo=shift_config.SITE_TZ)
+        start_utc = start_local.astimezone(UTC)
+        end_utc = (start_local + _td(days=1)).astimezone(UTC)
+        rows = attendance_mirror.rows_overlapping(start_utc, end_utc)
+        id_to_name = attendance.person_id_to_name()
+    except Exception:
+        return {}, False
+
+    by_person: dict[str, list[dict]] = {}
+    for row in rows:
+        name = id_to_name.get(str(row.get("employee_odoo_id")))
+        check_in = row.get("check_in_utc")
+        if not name or not isinstance(check_in, datetime):
+            continue
+        check_out = row.get("check_out_utc")
+        verified_end = min(check_out, verified_through_utc) if check_out else verified_through_utc
+        if verified_end <= check_in:
+            continue
+        wc_name = work_centers_store.app_work_center_name_for_odoo_id(
+            row.get("odoo_work_center_id")
+        )
+        by_person.setdefault(name, []).append(
+            {
+                "wc_name": wc_name,
+                "start": check_in,
+                "end": verified_end,
+            }
+        )
+    out: dict[str, list[tuple[str, datetime, datetime | None]]] = {}
+    for name, records in by_person.items():
+        windows = _windows_from_intervals(records)
+        if windows:
+            out[name] = windows
     return out, True
 
 

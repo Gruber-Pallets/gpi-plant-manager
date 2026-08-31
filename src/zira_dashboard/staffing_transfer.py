@@ -9,6 +9,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from . import attendance_location_policy
+
+
+def _live_location_active() -> bool:
+    try:
+        return attendance_location_policy.live_is_active()
+    except Exception:  # Preserve the rollback behavior if settings are unreadable.
+        return False
+
 
 def _wc_department_label(wc_name: str) -> str | None:
     """The human department label for a WC (e.g. 'New'), from staffing
@@ -46,6 +55,13 @@ def decide_and_apply(
       * Unknown current dept or unknown WC dept (either id is None) -> treated as "differs", so the transfer/open proceeds (reversible via undo).
       * No open punch -> open a fresh punch at the WC's department.
     """
+    if _live_location_active():
+        return {
+            "transfer": "blocked_live",
+            "person": person_name,
+            "error": "Use the plant-floor app to change live work areas.",
+        }
+
     from . import odoo_client
 
     emp_id = _employee_id_for(person_name)

@@ -676,6 +676,41 @@
     transform: scale(1.2);
   }
 
+  /* Planned Staffing and live Odoo location are deliberately separate facts. */
+  .staffing-live-banner {
+    max-width: 1100px; margin: 0 auto 0.75rem; padding: 0.55rem 0.8rem;
+    display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;
+    border: 1px solid #2563eb; border-radius: 8px;
+    background: rgba(37, 99, 235, 0.1); color: var(--fg);
+    font-size: 0.82rem;
+  }
+  .staffing-live-banner strong { color: #60a5fa; }
+  .staffing-live-banner.unavailable {
+    border-color: var(--warn); background: var(--warn-dim);
+  }
+  .staffing-live-fresh { margin-left: auto; color: var(--muted); }
+  .planned-live-locations { margin-top: 0.3rem; display: grid; gap: 0.2rem; }
+  .planned-live-person { display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
+  .planned-live-name { color: var(--muted); font-size: 0.7rem; }
+  .live-location-badge {
+    display: inline-flex; align-items: center; max-width: 100%;
+    border-radius: 999px; padding: 0.08rem 0.45rem;
+    border: 1px solid #2563eb; color: #93c5fd;
+    background: rgba(37, 99, 235, 0.12); font-size: 0.7rem; font-weight: 700;
+  }
+  .live-location-badge.working-elsewhere,
+  .live-location-badge.status-unmapped_location,
+  .live-location-badge.status-stale_open_location {
+    border-color: var(--warn); color: var(--warn); background: var(--warn-dim);
+  }
+  .live-location-badge.status-conflicting_location,
+  .live-location-badge.status-missing_required_location {
+    border-color: #ef4444; color: #fca5a5; background: rgba(239, 68, 68, 0.12);
+  }
+  .live-location-badge.status-pending_first_location,
+  .live-location-badge.status-exempt_no_location { border-style: dashed; color: var(--muted); }
+  .live-unscheduled li { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+
   /* Per-WC notes column */
   .wc-note-cell textarea {
     width: 100%;

@@ -2,6 +2,8 @@
 staffing_transfer, and odoo_client are stubbed so no DB / Odoo is touched."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 
 from zira_dashboard.app import app
@@ -198,3 +200,86 @@ def test_attribute_transfer_error_does_not_fail_credit(monkeypatch):
     body = resp.json()
     assert body["ok"] is True and body["id"] == 77
     assert body["transfer"]["transfer"] == "error"
+
+
+def test_active_live_real_person_attribute_is_gone_without_write_or_transfer(monkeypatch):
+    monkeypatch.setattr(staffing_routes.attendance_location_policy, "live_is_active", lambda: True)
+    monkeypatch.setattr(
+        wc_attributions,
+        "add",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("blocked real-person attribution must not save")
+        ),
+    )
+    monkeypatch.setattr(
+        staffing_transfer,
+        "decide_and_apply",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("Odoo transfer forbidden")),
+    )
+
+    response = client.post(
+        "/api/staffing/attribute",
+        json={
+            "day": "2026-06-02",
+            "wc_name": "Junior #2",
+            "person_name": "Lauro",
+            "start_utc": "2026-06-02T13:00:00+00:00",
+            "end_utc": "2026-06-02T16:00:00+00:00",
+        },
+    )
+
+    assert response.status_code == 410
+    assert "plant-floor app" in response.json()["error"]
+
+
+def test_active_live_testing_annotation_still_saves_without_transfer(monkeypatch):
+    monkeypatch.setattr(staffing_routes.attendance_location_policy, "live_is_active", lambda: True)
+    added = []
+    monkeypatch.setattr(
+        wc_attributions,
+        "add",
+        lambda day, wc, person, start, end, source="manual": added.append(
+            (person, source)
+        )
+        or 1,
+    )
+    monkeypatch.setattr(
+        staffing_transfer,
+        "decide_and_apply",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("Odoo transfer forbidden")),
+    )
+    monkeypatch.setattr(staffing_routes, "invalidate_today_cache", lambda: None)
+
+    response = client.post(
+        "/api/staffing/attribute-with-testing",
+        json={
+            "day": "2026-06-02",
+            "wc_name": "Junior #2",
+            "testing_start_utc": "2026-06-02T13:00:00+00:00",
+            "testing_end_utc": "2026-06-02T14:00:00+00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert added == [(wc_attributions.TESTING_PERSON, "testing")]
+
+
+def test_active_live_transfer_chokepoint_never_calls_odoo(monkeypatch):
+    monkeypatch.setattr(staffing_transfer, "_live_location_active", lambda: True)
+    monkeypatch.setattr(
+        staffing_transfer,
+        "_employee_id_for",
+        lambda _person: (_ for _ in ()).throw(AssertionError("must stop before lookup")),
+    )
+
+    result = staffing_transfer.decide_and_apply(
+        "Lauro",
+        "Junior #2",
+        datetime.fromisoformat("2026-06-02T13:00:00+00:00"),
+    )
+
+    assert result == {
+        "transfer": "blocked_live",
+        "person": "Lauro",
+        "error": "Use the plant-floor app to change live work areas.",
+    }

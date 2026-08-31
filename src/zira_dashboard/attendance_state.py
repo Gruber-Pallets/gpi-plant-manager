@@ -77,6 +77,8 @@ def trust_local(latest: dict | None, refreshed_at: datetime | None) -> bool:
     synced_at = latest.get("synced_at")
     if synced_at is None:
         return True
+    if refreshed_at is None:
+        return False
     return refreshed_at <= synced_at
 
 
@@ -98,9 +100,52 @@ def current_state(person_odoo_id: int, snapshot: dict | None = None,
 
     See docs/superpowers/specs/2026-06-01-timeclock-odoo-state-reconciliation-design.md.
     """
+    mirror_owned = False
+    source_available = True
     if snapshot is None:
-        snapshot, refreshed_at = live_cache.read_open_attendance()
+        source = live_cache.read_open_attendance_source()
+        snapshot, refreshed_at = source.payload, source.refreshed_at
+        mirror_owned = source.mirror_owned
+        source_available = source.available
     latest = latest_punch(person_odoo_id) if latest is _UNSET else latest
+    if mirror_owned:
+        source_stale = live_cache.is_stale(refreshed_at)
+        if trust_local(latest, refreshed_at):
+            return {
+                **state_from_log(latest),
+                "attendance_source_unavailable": not source_available,
+                "attendance_source_stale": source_stale,
+            }
+        if not source_available or snapshot is None:
+            return {
+                "is_clocked_in": None,
+                "current_wc": None,
+                "check_in_ts": None,
+                "open_odoo_attendance_id": None,
+                "attendance_source_unavailable": True,
+                "attendance_source_stale": source_stale,
+            }
+        entry = snapshot.get(str(person_odoo_id))
+        if not entry:
+            state = {
+                "is_clocked_in": False,
+                "current_wc": None,
+                "check_in_ts": None,
+                "open_odoo_attendance_id": None,
+            }
+        else:
+            check_in = entry.get("check_in")
+            state = {
+                "is_clocked_in": True,
+                "current_wc": entry.get("wc_name"),
+                "check_in_ts": datetime.fromisoformat(check_in) if check_in else None,
+                "open_odoo_attendance_id": entry.get("att_id"),
+            }
+        return {
+            **state,
+            "attendance_source_unavailable": False,
+            "attendance_source_stale": source_stale,
+        }
     if snapshot is None or live_cache.is_stale(refreshed_at):
         return state_from_log(latest)
     if trust_local(latest, refreshed_at):

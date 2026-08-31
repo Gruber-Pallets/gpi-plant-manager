@@ -11,13 +11,21 @@
   {% if error %}
     <div class="k-warning" style="max-width: 720px; text-align: left;">{{ error }}</div>
   {% else %}
-    <p style="font-size: 1.3rem; color: #64748b; max-width: 680px; text-align: center; margin-bottom: 2rem;">
-      You selected <strong>{{ wc_name }}</strong>. Confirming will cancel today's approved time off in Odoo and clock you in.
-    </p>
+    {% if location_live %}
+      <p style="font-size: 1.3rem; color: #64748b; max-width: 680px; text-align: center; margin-bottom: 2rem;">
+        Confirming will cancel today's approved time off in Odoo and clock you in.
+      </p>
+    {% else %}
+      <p style="font-size: 1.3rem; color: #64748b; max-width: 680px; text-align: center; margin-bottom: 2rem;">
+        You selected <strong>{{ wc_name }}</strong>. Confirming will cancel today's approved time off in Odoo and clock you in.
+      </p>
+    {% endif %}
   {% endif %}
   <form method="post" action="/timeclock/clock-in/confirm/{{ token }}" class="k-punch-form" style="margin: 0;">
-    <input type="hidden" name="wc_name" value="{{ wc_name }}" />
-    <input type="hidden" name="scheduled_wc_name" value="{{ scheduled_wc_name }}" />
+    {% if not location_live %}
+      <input type="hidden" name="wc_name" value="{{ wc_name }}" />
+      <input type="hidden" name="scheduled_wc_name" value="{{ scheduled_wc_name }}" />
+    {% endif %}
     <button type="submit" class="k-btn success" aria-busy="false">Confirm — Clock In</button>
   </form>
 </div>

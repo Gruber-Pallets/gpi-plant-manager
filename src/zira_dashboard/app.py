@@ -102,7 +102,8 @@ async def _tick_live_cache():
     from . import live_cache
 
     today = plant_today()
-    await asyncio.to_thread(live_cache.refresh_attendance, today)
+    if not live_cache.mirror_owns_attendance_reads():
+        await asyncio.to_thread(live_cache.refresh_attendance, today)
     await asyncio.to_thread(live_cache.refresh_production, today, _zira_client())
 
 
@@ -125,7 +126,8 @@ async def _tick_odoo_attendance():
     punch screen reflects out-of-band Odoo edits without an XML-RPC on the tap."""
     from . import live_cache
 
-    await asyncio.to_thread(live_cache.refresh_odoo_open_attendance)
+    if not live_cache.mirror_owns_attendance_reads():
+        await asyncio.to_thread(live_cache.refresh_odoo_open_attendance)
 
 
 async def _tick_attendance_mirror():

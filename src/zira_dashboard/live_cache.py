@@ -13,12 +13,60 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, UTC
 from typing import Any
+
+from . import attendance_location_policy, attendance_mirror, work_centers_store
 
 _log = logging.getLogger(__name__)
 
 STALE_THRESHOLD = timedelta(minutes=3)
+
+
+@dataclass(frozen=True)
+class AttendanceReadPolicy:
+    mirror_owned: bool
+    available: bool
+    refreshed_at: datetime | None
+    error: str | None = None
+    mode: str = "off"
+
+
+@dataclass(frozen=True)
+class AttendanceSourceSnapshot:
+    payload: dict | None
+    refreshed_at: datetime | None
+    mirror_owned: bool
+    available: bool
+    error: str | None = None
+
+
+def attendance_read_policy() -> AttendanceReadPolicy:
+    """Freeze the rollout and mirror-health decision for one source read."""
+    try:
+        config = attendance_location_policy.get_rollout_config()
+    except Exception as exc:  # Existing rollback path when settings cannot be read.
+        return AttendanceReadPolicy(False, True, None, str(exc), "off")
+    if config.mode == "off":
+        return AttendanceReadPolicy(False, True, None, mode="off")
+    try:
+        health = attendance_mirror.health_snapshot()
+    except Exception as exc:  # Saved shadow/live must never fall through to legacy.
+        return AttendanceReadPolicy(True, False, None, str(exc), config.mode)
+    if health.baseline_completed_at is None:
+        return AttendanceReadPolicy(False, True, None, mode=config.mode)
+    return AttendanceReadPolicy(
+        True,
+        True,
+        health.last_incremental_completed_at,
+        health.last_error,
+        config.mode,
+    )
+
+
+def mirror_owns_attendance_reads() -> bool:
+    return attendance_read_policy().mirror_owned
 
 
 def _write(table: str, day: date, payload: Any) -> None:
@@ -50,7 +98,32 @@ def write_attendance(day: date, payload: Any) -> None:
     _write("today_attendance_cache", day, payload)
 
 
+def read_attendance_source(
+    day: date,
+    *,
+    policy: AttendanceReadPolicy | None = None,
+) -> AttendanceSourceSnapshot:
+    policy = policy or attendance_read_policy()
+    if not policy.mirror_owned:
+        payload, refreshed_at = read_attendance(day)
+        return AttendanceSourceSnapshot(payload, refreshed_at, False, True, policy.error)
+    if not policy.available:
+        return AttendanceSourceSnapshot(
+            None, policy.refreshed_at, True, False, policy.error
+        )
+    try:
+        payload = attendance_mirror.day_presence(day)
+    except Exception as exc:
+        return AttendanceSourceSnapshot(
+            None, policy.refreshed_at, True, False, str(exc)
+        )
+    return AttendanceSourceSnapshot(
+        payload, policy.refreshed_at, True, True, policy.error
+    )
+
+
 def read_attendance(day: date) -> tuple[Any | None, datetime | None]:
+    """Legacy cache read retained for rollback and compatibility callers."""
     return _read("today_attendance_cache", day)
 
 
@@ -74,7 +147,7 @@ def write_open_attendance(snapshot: dict) -> None:
     )
 
 
-def read_open_attendance() -> tuple[dict | None, datetime | None]:
+def _read_open_attendance_legacy() -> tuple[dict | None, datetime | None]:
     """Return (snapshot, refreshed_at). (None, None) if the warmer has
     never run. An empty dict snapshot means 'Odoo shows nobody clocked in'
     — distinct from None, which means 'no data yet, fall back to local'."""
@@ -88,10 +161,63 @@ def read_open_attendance() -> tuple[dict | None, datetime | None]:
     return (rows[0]["snapshot"], rows[0]["refreshed_at"])
 
 
+def read_open_attendance_source(
+    *,
+    policy: AttendanceReadPolicy | None = None,
+) -> AttendanceSourceSnapshot:
+    policy = policy or attendance_read_policy()
+    if not policy.mirror_owned:
+        payload, refreshed_at = read_open_attendance()
+        return AttendanceSourceSnapshot(payload, refreshed_at, False, True, policy.error)
+    if not policy.available:
+        return AttendanceSourceSnapshot(
+            None, policy.refreshed_at, True, False, policy.error
+        )
+    try:
+        rows = attendance_mirror.current_open_attendance()
+        snapshot: dict[str, dict] = {}
+        for row in rows:
+            person_id = str(row["employee_odoo_id"])
+            attendance_id = int(row["odoo_attendance_id"])
+            check_in = row["check_in_utc"]
+            mapped_wc = work_centers_store.app_work_center_name_for_odoo_id(
+                row.get("odoo_work_center_id")
+            )
+            candidate = {
+                "att_id": attendance_id,
+                "check_in": check_in.isoformat(),
+                "wc_name": mapped_wc,
+                "raw_odoo_wc_name": row.get("odoo_work_center_name"),
+            }
+            existing = snapshot.get(person_id)
+            candidate_key = (check_in, attendance_id)
+            existing_key = (
+                (datetime.fromisoformat(existing["check_in"]), int(existing["att_id"]))
+                if existing
+                else None
+            )
+            if existing_key is None or candidate_key > existing_key:
+                snapshot[person_id] = candidate
+    except Exception as exc:
+        return AttendanceSourceSnapshot(
+            None, policy.refreshed_at, True, False, str(exc)
+        )
+    return AttendanceSourceSnapshot(
+        snapshot, policy.refreshed_at, True, True, policy.error
+    )
+
+
+def read_open_attendance() -> tuple[dict | None, datetime | None]:
+    """Legacy cache read retained for rollback and compatibility callers."""
+    return _read_open_attendance_legacy()
+
+
 def refresh_odoo_open_attendance() -> None:
     """Pull every open hr.attendance from Odoo and overwrite the keyed
     snapshot. Errors are logged and swallowed — the previous good snapshot
     stays in place, then falls back to local once it crosses is_stale."""
+    if mirror_owns_attendance_reads():
+        return
     try:
         from . import odoo_client
         rows = odoo_client.fetch_open_attendances()
@@ -135,6 +261,8 @@ def refresh_attendance(day: date) -> None:
 
     Errors are logged and swallowed — the warmer keeps running and the
     previous good payload (if any) remains in the cache table."""
+    if mirror_owns_attendance_reads():
+        return
     try:
         from . import attendance
         payload = attendance.punches_for_day(day)
