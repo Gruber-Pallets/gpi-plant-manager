@@ -35,7 +35,7 @@
 - Produces: `people.department_name TEXT NULL` through idempotent schema bootstrap.
 - Produces: Maintenance, Transportation, and Supervisor as the non-explicit default exemption set used by later tasks.
 
-- [ ] **Step 1: Write failing policy and schema tests**
+- [x] **Step 1: Write failing policy and schema tests**
 
 Add these assertions to the policy test beside the existing department requirement test:
 
@@ -63,7 +63,7 @@ assert "IN ('maintenance', 'transportation', 'supervisor')" in " ".join(ddl.spli
 
 Extend `test_department_sync_defaults_fresh_exempt_rows_without_overwriting_admin_choice` to pass `"Transportation"` and expect a non-explicit `False` row for it.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -77,7 +77,7 @@ Run:
 
 Expected: FAIL because `effective_department_name` and `people.department_name` do not exist and Transportation currently defaults to required.
 
-- [ ] **Step 3: Implement the pure resolver and idempotent defaults**
+- [x] **Step 3: Implement the pure resolver and idempotent defaults**
 
 In `attendance_location_policy.py`, separate display-name cleaning from lowercase default matching:
 
@@ -117,7 +117,7 @@ Change the non-explicit department migration predicate to:
 IN ('maintenance', 'transportation', 'supervisor');
 ```
 
-- [ ] **Step 4: Run Task 1 tests and verify GREEN**
+- [x] **Step 4: Run Task 1 tests and verify GREEN**
 
 Run:
 
@@ -130,7 +130,7 @@ Run:
 
 Expected: all selected tests PASS; PostgreSQL-gated tests may report skipped when `DATABASE_URL` is unset.
 
-- [ ] **Step 5: Commit and push Task 1**
+- [x] **Step 5: Commit and push Task 1**
 
 ```bash
 git add \
@@ -159,7 +159,7 @@ git push origin main
 - Produces: active employee snapshots containing Odoo `department_id`.
 - Produces: a clean nullable `people.department_name` updated on every successful roster sync.
 
-- [ ] **Step 1: Write failing Odoo fetch and sync tests**
+- [x] **Step 1: Write failing Odoo fetch and sync tests**
 
 In `test_fetch_employees_returns_active_only_with_required_fields`, capture the call keyword arguments and assert:
 
@@ -194,7 +194,7 @@ def test_sync_persists_clean_employee_home_department(monkeypatch):
     ) == [{"department_name": "Transportation"}]
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -206,7 +206,7 @@ Run:
 
 Expected: the client test FAILS because `department_id` is absent; the sync test either FAILS because `department_name` is not written or is skipped without PostgreSQL.
 
-- [ ] **Step 3: Fetch and persist the home department**
+- [x] **Step 3: Fetch and persist the home department**
 
 Add `"department_id"` to the `fetch_employees()` field list.
 
@@ -237,7 +237,7 @@ department_name = EXCLUDED.department_name,
 
 to the `ON CONFLICT (odoo_id) DO UPDATE` clause.
 
-- [ ] **Step 4: Run Task 2 tests and verify GREEN**
+- [x] **Step 4: Run Task 2 tests and verify GREEN**
 
 Run:
 
@@ -247,7 +247,7 @@ Run:
 
 Expected: all non-PostgreSQL tests PASS; PostgreSQL sync coverage passes in CI or reports skipped locally when `DATABASE_URL` is unset.
 
-- [ ] **Step 5: Commit and push Task 2**
+- [x] **Step 5: Commit and push Task 2**
 
 ```bash
 git add \
@@ -276,7 +276,7 @@ git push origin main
 - Produces: missing-WC cache rows containing nullable `department_name`.
 - Produces: legacy inbox rows only for departments whose policy requires a work center.
 
-- [ ] **Step 1: Write the failing attendance-fetch test**
+- [x] **Step 1: Write the failing attendance-fetch test**
 
 Update the configured-field test to monkeypatch both configured fields:
 
@@ -297,7 +297,7 @@ Return `"x_kiosk_department": [8, "00 Maintenance"]`, capture `kwargs["fields"]`
 
 Also assert `"x_kiosk_department" in captured["fields"]`.
 
-- [ ] **Step 2: Write failing legacy-shaper regression tests**
+- [x] **Step 2: Write failing legacy-shaper regression tests**
 
 Add:
 
@@ -347,7 +347,7 @@ def test_shape_suppresses_exempt_attendance_and_employee_departments():
 
 Import `attendance_location_policy` in `tests/test_missing_wc.py`. This one test covers attendance-first precedence, Supervisor and Maintenance exemptions, Gerald's employee fallback, and a required production control.
 
-- [ ] **Step 3: Run both focused tests and verify RED**
+- [x] **Step 3: Run both focused tests and verify RED**
 
 Run:
 
@@ -359,7 +359,7 @@ Run:
 
 Expected: FAIL because the fetch does not carry a department and `shape_rows` does not accept or apply `requires_work_center`.
 
-- [ ] **Step 4: Include attendance department in the cache**
+- [x] **Step 4: Include attendance department in the cache**
 
 Change `_odoo_attendance.fetch_attendances_missing_wc` to accept `department_field: str | None`. Build the search fields as:
 
@@ -382,7 +382,7 @@ department = row.get(department_field) if department_field else None
 
 Update the public wrapper to pass `_kiosk_department_field()`.
 
-- [ ] **Step 5: Filter the legacy rows through the shared policy**
+- [x] **Step 5: Filter the legacy rows through the shared policy**
 
 Import `Callable`. Add this keyword argument to `shape_rows` so existing pure tests retain their current conservative behavior:
 
@@ -407,7 +407,7 @@ In `current_rows`, select `department_name` from `people` and pass:
 requires_work_center=attendance_location_policy.department_requires_work_center,
 ```
 
-- [ ] **Step 6: Run Task 3 tests and verify GREEN**
+- [x] **Step 6: Run Task 3 tests and verify GREEN**
 
 Run:
 
@@ -422,7 +422,7 @@ Run:
 
 Expected: all selected tests PASS; PostgreSQL-gated tests may report skipped.
 
-- [ ] **Step 7: Commit and push Task 3**
+- [x] **Step 7: Commit and push Task 3**
 
 ```bash
 git add \
@@ -448,7 +448,7 @@ git push origin main
 - Produces: `_rows_with_employee_department_fallback(rows: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]` for local-only timeline input enrichment.
 - Preserves: any nonblank `odoo_department_name` already stored on the attendance mirror row.
 
-- [ ] **Step 1: Write the failing Gerald timeline regression test**
+- [x] **Step 1: Write the failing Gerald timeline regression test**
 
 Add beside the numbered-department timeline test:
 
@@ -491,7 +491,7 @@ def test_timeline_uses_employee_department_when_attendance_department_is_blank(
 
 Extend the existing numbered Maintenance test with a `db.query` monkeypatch that raises `pytest.fail` if called. This proves a present attendance department wins without consulting the employee fallback.
 
-- [ ] **Step 2: Run the focused timeline tests and verify RED**
+- [x] **Step 2: Run the focused timeline tests and verify RED**
 
 Run:
 
@@ -503,7 +503,7 @@ Run:
 
 Expected: the Gerald test FAILS with `missing_required_location` because timeline rows do not yet use `people.department_name`.
 
-- [ ] **Step 3: Enrich only blank timeline departments locally**
+- [x] **Step 3: Enrich only blank timeline departments locally**
 
 Add `db` to the module imports. Add:
 
@@ -542,7 +542,7 @@ def _rows_with_employee_department_fallback(
 
 In `timeline_for_range`, call this helper after the mirror read and before `project_rows`.
 
-- [ ] **Step 4: Run Task 4 tests and verify GREEN**
+- [x] **Step 4: Run Task 4 tests and verify GREEN**
 
 Run:
 
@@ -555,7 +555,7 @@ Run:
 
 Expected: all selected tests PASS.
 
-- [ ] **Step 5: Commit and push Task 4**
+- [x] **Step 5: Commit and push Task 4**
 
 ```bash
 git add \
@@ -576,7 +576,7 @@ git push origin main
 - Consumes: all behavior from Tasks 1-4.
 - Produces: plain-language What's New coverage and final validation evidence.
 
-- [ ] **Step 1: Add the user-facing patch note**
+- [x] **Step 1: Add the user-facing patch note**
 
 Add this newest entry under `## 2026-08-31`:
 
@@ -586,7 +586,7 @@ Add this newest entry under `## 2026-08-31`:
 - **Maintenance, Transportation, and Supervisor workers no longer get a work center warning when they do not need one.** If a time record loses its department, Plant Manager now checks the worker's saved Odoo department before showing a warning.
 ```
 
-- [ ] **Step 2: Run focused regression coverage**
+- [x] **Step 2: Run focused regression coverage**
 
 Run:
 
@@ -608,7 +608,7 @@ Run:
 
 Expected: all selected tests PASS; PostgreSQL-gated tests may report skipped when no test database is configured.
 
-- [ ] **Step 3: Run the complete suite and lint**
+- [x] **Step 3: Run the complete suite and lint**
 
 Run:
 
@@ -620,7 +620,7 @@ git diff --check
 
 Expected: the complete suite PASSes, Ruff reports no errors, and `git diff --check` is silent.
 
-- [ ] **Step 4: Review the final diff for scope and secret safety**
+- [x] **Step 4: Review the final diff for scope and secret safety**
 
 Run:
 
@@ -648,7 +648,7 @@ git diff -- \
 
 Expected: only the scoped fix, tests, plan tracking, and patch note appear; `.env` and credential values are absent.
 
-- [ ] **Step 5: Commit and push the patch note and final plan state**
+- [x] **Step 5: Commit and push the patch note and final plan state**
 
 ```bash
 git add \
@@ -658,7 +658,7 @@ git commit -m "docs: explain work center alert exemptions"
 git push origin main
 ```
 
-- [ ] **Step 6: Verify the pushed branch**
+- [x] **Step 6: Verify the pushed branch**
 
 Run:
 
