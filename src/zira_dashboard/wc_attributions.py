@@ -172,40 +172,88 @@ def add_breakdown(
     """Open a new breakdown exclusion window for one operator. end_utc is
     left NULL (open) until the operator leaves the machine (see
     cap_breakdown)."""
+    return _add_breakdown_window(
+        day,
+        wc_name,
+        person_name,
+        start_utc,
+        None,
+        breakdown_id,
+        employee_odoo_id=employee_odoo_id,
+    )
+
+
+def add_completed_breakdown(
+    day: date,
+    wc_name: str,
+    person_name: str,
+    start_utc: datetime,
+    breakdown_id: int,
+    *,
+    end_utc: datetime,
+    employee_odoo_id: int | None = None,
+) -> int:
+    """Idempotently persist one completed worker visit for a breakdown."""
+    if end_utc <= start_utc:
+        return 0
+    return _add_breakdown_window(
+        day,
+        wc_name,
+        person_name,
+        start_utc,
+        end_utc,
+        breakdown_id,
+        employee_odoo_id=employee_odoo_id,
+    )
+
+
+def _add_breakdown_window(
+    day: date,
+    wc_name: str,
+    person_name: str,
+    start_utc: datetime,
+    end_utc: datetime | None,
+    breakdown_id: int,
+    *,
+    employee_odoo_id: int | None,
+) -> int:
+    """Insert only while the incident is still open.
+
+    Locking the incident row serializes this insert with dismissal's resolve
+    transaction.  The exact-visit indexes make delayed/retried completed
+    spans converge on one row, while the existing open indexes retain one
+    active visit per immutable worker.
+    """
     from . import db
 
-    conflict_identity = (
-        "employee_odoo_id" if employee_odoo_id is not None else "person_name"
-    )
-    identity_predicate = (
-        "employee_odoo_id IS NOT NULL"
-        if employee_odoo_id is not None
-        else "employee_odoo_id IS NULL"
-    )
     rows = db.query(
-        "INSERT INTO wc_time_attributions "
+        "WITH open_incident AS MATERIALIZED ("
+        "SELECT id FROM machine_breakdowns "
+        "WHERE id = %s AND resolved_at IS NULL FOR UPDATE"
+        ") INSERT INTO wc_time_attributions "
         "(day, wc_name, person_name, start_utc, end_utc, source, breakdown_id, "
-        "employee_odoo_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-        f"ON CONFLICT (breakdown_id, {conflict_identity}) "
-        f"WHERE source = 'breakdown' AND end_utc IS NULL AND {identity_predicate} "
-        "DO NOTHING RETURNING id",
+        "employee_odoo_id) "
+        "SELECT %s, %s, %s, %s, %s, %s, open_incident.id, %s "
+        "FROM open_incident ON CONFLICT DO NOTHING RETURNING id",
         (
+            breakdown_id,
             day,
             wc_name,
             person_name,
             start_utc,
-            None,
+            end_utc,
             BREAKDOWN_SOURCE,
-            breakdown_id,
             employee_odoo_id,
         ),
     )
     if rows:
         return rows[0]["id"]
-    existing = open_breakdown_row(
+    existing = breakdown_row_for_visit(
         day,
         wc_name,
         person_name,
+        start_utc,
+        breakdown_id,
         employee_odoo_id=employee_odoo_id,
     )
     return existing["id"] if existing is not None else 0
@@ -218,8 +266,10 @@ def cap_breakdown(attribution_id: int, end_utc: datetime) -> None:
     from . import db
 
     db.execute(
-        "UPDATE wc_time_attributions SET end_utc = %s WHERE id = %s AND source = %s",
-        (end_utc, attribution_id, BREAKDOWN_SOURCE),
+        "UPDATE wc_time_attributions "
+        "SET end_utc = LEAST(COALESCE(end_utc, %s), %s) "
+        "WHERE id = %s AND source = %s",
+        (end_utc, end_utc, attribution_id, BREAKDOWN_SOURCE),
     )
 
 
@@ -277,6 +327,86 @@ def open_breakdown_row(
                 )
                 rows = claimed
     return rows[0] if rows else None
+
+
+def breakdown_row_for_visit(
+    day: date,
+    wc_name: str,
+    person_name: str,
+    start_utc: datetime,
+    breakdown_id: int,
+    *,
+    employee_odoo_id: int | None = None,
+) -> dict | None:
+    """One exact breakdown visit, whether still open or already capped."""
+    from . import db
+
+    if employee_odoo_id is None:
+        rows = db.query(
+            "SELECT id, start_utc, end_utc FROM wc_time_attributions "
+            "WHERE day = %s AND wc_name = %s AND person_name = %s "
+            "AND employee_odoo_id IS NULL AND start_utc = %s "
+            "AND breakdown_id = %s AND source = %s",
+            (
+                day,
+                wc_name,
+                person_name,
+                start_utc,
+                breakdown_id,
+                BREAKDOWN_SOURCE,
+            ),
+        )
+    else:
+        rows = db.query(
+            "SELECT id, start_utc, end_utc FROM wc_time_attributions "
+            "WHERE day = %s AND wc_name = %s AND employee_odoo_id = %s "
+            "AND start_utc = %s AND breakdown_id = %s AND source = %s",
+            (
+                day,
+                wc_name,
+                employee_odoo_id,
+                start_utc,
+                breakdown_id,
+                BREAKDOWN_SOURCE,
+            ),
+        )
+    return rows[0] if rows else None
+
+
+def restore_breakdown_snapshot(rows: list[dict], breakdown_id: int) -> None:
+    """Restore a dismiss snapshot atomically and exactly.
+
+    A failure on any row rolls the whole transaction back.  Exact-visit
+    conflicts are harmless on retry, so an earlier successful restore whose
+    later incident/event step failed also converges without duplicates.
+    """
+    from . import db
+
+    with db.cursor() as cursor:
+        for row in rows:
+            row_breakdown_id = row.get("breakdown_id", breakdown_id)
+            if row_breakdown_id != breakdown_id:
+                raise ValueError("breakdown snapshot contains another incident")
+            source = row.get("source", BREAKDOWN_SOURCE)
+            if source != BREAKDOWN_SOURCE:
+                raise ValueError("breakdown snapshot contains another source")
+            cursor.execute(
+                "INSERT INTO wc_time_attributions "
+                "(day, wc_name, person_name, start_utc, end_utc, source, "
+                "breakdown_id, employee_odoo_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT DO NOTHING",
+                (
+                    row["day"],
+                    row["wc_name"],
+                    row["person_name"],
+                    row["start_utc"],
+                    row.get("end_utc"),
+                    source,
+                    breakdown_id,
+                    row.get("employee_odoo_id"),
+                ),
+            )
 
 
 def open_breakdown_rows_for_incident(breakdown_id: int) -> list[dict]:
@@ -400,7 +530,8 @@ def shadow_unassigned_runs_for_day(
     for wc_name, samples in inputs.samples_by_wc.items():
         exclusions = [*inputs.break_windows]
         exclusions.extend(inputs.testing_windows.get(wc_name, ()))
-        for (_person_name, breakdown_wc), windows in inputs.breakdown_windows.items():
+        for breakdown_key, windows in inputs.breakdown_windows.items():
+            breakdown_wc = breakdown_key[-1]
             if breakdown_wc != wc_name:
                 continue
             exclusions.extend(

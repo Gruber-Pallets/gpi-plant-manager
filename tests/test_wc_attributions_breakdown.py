@@ -22,6 +22,8 @@ def test_breakdown_identity_schema_is_additive_and_idempotent():
     assert "WHERE employee_odoo_id IS NOT NULL" in ddl
     assert "breakdown_snoozes_legacy_identity_uniq" in ddl
     assert "WHERE employee_odoo_id IS NULL" in ddl
+    assert "wc_time_attributions_breakdown_odoo_visit_uniq" in ddl
+    assert "wc_time_attributions_breakdown_legacy_visit_uniq" in ddl
 
 
 def test_breakdown_source_excluded_from_people_by_wc():
@@ -107,13 +109,13 @@ def test_add_breakdown_and_cap_and_reopen(monkeypatch):
     sql, params = calls["insert"]
     assert "source" in sql.lower()
     assert params == (
+        42,
         day,
         "Dismantler 2",
         "Juan",
         start,
         None,
         wc_attributions.BREAKDOWN_SOURCE,
-        42,
         None,
     )
 
@@ -123,10 +125,129 @@ def test_add_breakdown_and_cap_and_reopen(monkeypatch):
     monkeypatch.setattr(db, "execute", fake_execute)
     end = datetime(2026, 7, 8, 13, 30, tzinfo=timezone.utc)
     wc_attributions.cap_breakdown(5, end)
-    assert calls["cap"][1] == (end, 5, wc_attributions.BREAKDOWN_SOURCE)
+    assert calls["cap"][1] == (end, end, 5, wc_attributions.BREAKDOWN_SOURCE)
 
     wc_attributions.reopen_breakdown(5)
     assert calls["cap"][1] == (5, wc_attributions.BREAKDOWN_SOURCE)  # last _execute call was reopen
+
+
+def test_add_breakdown_serializes_with_open_incident_before_insert(monkeypatch):
+    from zira_dashboard import db
+
+    seen = []
+    monkeypatch.setattr(
+        db,
+        "query",
+        lambda sql, params: seen.append((sql, params)) or [],
+    )
+    monkeypatch.setattr(
+        wc_attributions,
+        "open_breakdown_row",
+        lambda *_args, **_kwargs: None,
+    )
+
+    row_id = wc_attributions.add_breakdown(
+        date(2026, 7, 8),
+        "Dismantler 2",
+        "Alex",
+        datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc),
+        42,
+        employee_odoo_id=101,
+    )
+
+    assert row_id == 0
+    insert_sql = seen[0][0]
+    assert "FROM machine_breakdowns" in insert_sql
+    assert "resolved_at IS NULL" in insert_sql
+    assert "FOR UPDATE" in insert_sql
+
+
+def test_cap_breakdown_keeps_the_earliest_concurrent_boundary(monkeypatch):
+    from zira_dashboard import db
+
+    seen = {}
+    monkeypatch.setattr(
+        db,
+        "execute",
+        lambda sql, params: seen.update(sql=sql, params=params),
+    )
+    earlier = datetime(2026, 7, 8, 13, 30, tzinfo=timezone.utc)
+
+    wc_attributions.cap_breakdown(5, earlier)
+
+    assert "LEAST(COALESCE(end_utc, %s), %s)" in " ".join(seen["sql"].split())
+    assert seen["params"] == (
+        earlier,
+        earlier,
+        5,
+        wc_attributions.BREAKDOWN_SOURCE,
+    )
+
+
+def test_restore_breakdown_snapshot_rolls_back_partial_failure_and_retries(monkeypatch):
+    from contextlib import contextmanager
+
+    from zira_dashboard import db
+
+    snapshot = [
+        {
+            "day": date(2026, 7, 8),
+            "wc_name": "Dismantler 2",
+            "person_name": "Alex",
+            "employee_odoo_id": 101,
+            "start_utc": datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc),
+            "end_utc": datetime(2026, 7, 8, 13, 30, tzinfo=timezone.utc),
+            "source": wc_attributions.BREAKDOWN_SOURCE,
+            "breakdown_id": 42,
+        },
+        {
+            "day": date(2026, 7, 8),
+            "wc_name": "Dismantler 2",
+            "person_name": "Alex",
+            "employee_odoo_id": 202,
+            "start_utc": datetime(2026, 7, 8, 13, 12, tzinfo=timezone.utc),
+            "end_utc": None,
+            "source": wc_attributions.BREAKDOWN_SOURCE,
+            "breakdown_id": 42,
+        },
+    ]
+    saved = []
+    fail_second = {"enabled": True}
+
+    class Cursor:
+        def __init__(self, pending):
+            self.pending = pending
+
+        def execute(self, _sql, params):
+            if fail_second["enabled"] and len(self.pending) == 1:
+                raise RuntimeError("second restore failed")
+            self.pending.append(params)
+
+    @contextmanager
+    def cursor():
+        pending = []
+        try:
+            yield Cursor(pending)
+        except Exception:
+            raise
+        else:
+            saved.extend(pending)
+
+    monkeypatch.setattr(db, "cursor", cursor)
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="second restore failed"):
+        wc_attributions.restore_breakdown_snapshot(snapshot, 42)
+    assert saved == []
+
+    fail_second["enabled"] = False
+    wc_attributions.restore_breakdown_snapshot(snapshot, 42)
+
+    assert len(saved) == 2
+    assert saved[0][:3] == (date(2026, 7, 8), "Dismantler 2", "Alex")
+    assert saved[0][-2:] == (42, 101)
+    assert saved[1][-2:] == (42, 202)
 
 
 def test_add_and_open_breakdown_use_odoo_identity_without_changing_display_name(

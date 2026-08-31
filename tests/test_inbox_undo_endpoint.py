@@ -136,8 +136,20 @@ def test_undo_breakdown_dismiss_reopens_incident_and_recreates_rows(monkeypatch)
     calls = {}
     monkeypatch.setattr(machine_breakdown, "reopen_incident",
                         lambda iid: calls.setdefault("reopen_incident", iid))
-    added = []
-    monkeypatch.setattr(wc_attributions, "add", lambda **kw: added.append(kw) or 1)
+    restored = []
+    monkeypatch.setattr(
+        wc_attributions,
+        "restore_breakdown_snapshot",
+        lambda rows, incident_id: restored.append((rows, incident_id)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        wc_attributions,
+        "add",
+        lambda **_kw: (_ for _ in ()).throw(
+            AssertionError("dismiss undo must use atomic exact snapshot restore")
+        ),
+    )
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: 99)
     monkeypatch.setattr(inbox_log, "mark_undone", lambda e, u: None)
     monkeypatch.setattr(exceptions_route, "_refresh_time_off_surfaces", lambda: None)
@@ -146,7 +158,4 @@ def test_undo_breakdown_dismiss_reopens_incident_and_recreates_rows(monkeypatch)
 
     assert resp.status_code == 200
     assert calls["reopen_incident"] == 1
-    assert len(added) == 1
-    assert added[0]["person_name"] == "Juan"
-    assert added[0]["employee_odoo_id"] == 101
-    assert added[0]["breakdown_id"] == 1
+    assert restored == [(snapshot_rows, 1)]

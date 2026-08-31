@@ -1,6 +1,8 @@
 """POST /api/exceptions/breakdown/{transfer,snooze,dismiss,report}."""
 from datetime import datetime, timezone
 
+import pytest
+
 from zira_dashboard.routes import exceptions as exceptions_route
 
 _STOP = datetime(2026, 7, 8, 18, 2, tzinfo=timezone.utc)
@@ -185,20 +187,26 @@ def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
     monkeypatch.setattr(
         wc_attributions, "for_day", lambda day: [*snapshot_rows, unrelated_row]
     )
-    deleted = []
+    dismissed = []
     monkeypatch.setattr(wc_attributions, "delete_breakdown_rows_for_incident",
-                        lambda iid: deleted.append(iid))
-    resolved = []
+                        lambda iid: pytest.fail("dismiss must delete inside its incident transaction"))
     monkeypatch.setattr(machine_breakdown, "resolve_incident",
-                        lambda iid, resolution, resume_utc=None: resolved.append((iid, resolution)))
+                        lambda iid, resolution, resume_utc=None: pytest.fail(
+                            "dismiss must resolve inside its incident transaction"
+                        ))
+    monkeypatch.setattr(
+        machine_breakdown,
+        "dismiss_incident",
+        lambda iid: dismissed.append(iid),
+        raising=False,
+    )
     logged = []
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: logged.append(kw) or 43)
 
     resp = exceptions_route._breakdown_dismiss_sync({"incident_id": 1}, "dale@gruberpallets.com", "Dale")
 
     assert resp.status_code == 200
-    assert deleted == [1]
-    assert resolved == [(1, "dismissed")]
+    assert dismissed == [1]
     assert logged[0]["action"] == "dismiss"
     assert logged[0]["reversible"] is True
     assert logged[0]["detail"]["rows"] == snapshot_rows

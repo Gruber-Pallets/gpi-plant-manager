@@ -157,8 +157,7 @@ def dismiss(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
         if r.get("breakdown_id") == incident_id
         and r.get("source") == wc_attributions.BREAKDOWN_SOURCE
     ]
-    wc_attributions.delete_breakdown_rows_for_incident(incident_id)
-    machine_breakdown.resolve_incident(incident_id, "dismissed")
+    machine_breakdown.dismiss_incident(incident_id)
 
     eid = inbox_log.log_event_safe(
         item_kind="breakdown",

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, UTC
 
 from fastapi import APIRouter, Query, Request
@@ -32,7 +33,6 @@ from ..recycling_data import (
     aggregate_buckets,
     build_bars,
     build_downtime_rows,
-    compute_per_wc_expected,
     group_goal,
     sort_bars,
 )
@@ -46,6 +46,20 @@ router = APIRouter()
 # this one lives for the process. Cap at 4 workers so we don't starve the DB
 # pool (maxconn=20) or hammer the Zira API on multi-month ranges.
 _RANGE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="dept-range")
+
+
+def _breakdown_windows_for_segment(breakdown_windows, segment):
+    """Return only this immutable worker visit's breakdown windows.
+
+    ID-backed segments never consume a name-only row: with duplicate display
+    names that would apply one legacy exclusion to multiple people.  Legacy
+    segments retain the historical ``(name, wc)`` lookup.
+    """
+    if segment.person_odoo_id is not None:
+        return breakdown_windows.get(
+            (segment.person_odoo_id, segment.person_name, segment.wc_name), ()
+        )
+    return breakdown_windows.get((segment.person_name, segment.wc_name), ())
 
 
 def _segment_view(score) -> dict:
@@ -485,28 +499,60 @@ def _department_day_data(
     # Dismantler 4) accrue only from its own start.
     breakdown_windows = wc_attributions.breakdown_windows_for_day(d)
 
-    def _productive_minutes_less_breakdown(name, wc_name, s_utc, e_utc):
-        raw = shift_config.productive_minutes_in_window(d, s_utc, e_utc)
+    def _productive_minutes_for_segment(segment):
+        raw = shift_config.productive_minutes_in_window(
+            d, segment.start_utc, segment.end_utc
+        )
         excluded = machine_breakdown.excluded_minutes_overlapping(
-            breakdown_windows.get((name, wc_name), []),
-            s_utc, e_utc, now, d,
+            _breakdown_windows_for_segment(breakdown_windows, segment),
+            segment.start_utc, segment.end_utc, now, d,
             shift_config.productive_minutes_in_window,
         )
         return max(0.0, raw - excluded)
 
-    per_wc_expected = compute_per_wc_expected(
-        segments=segments,
-        active_wc_names=active_wc_names,
-        target_per_hour=target_per_hour,
-        productive_minutes=_productive_minutes_less_breakdown,
-    )
+    per_wc_expected = {wc_name: 0.0 for wc_name in active_wc_names}
+    for segment in segments:
+        target = target_per_hour.get(segment.wc_name, 0.0)
+        if segment.wc_name not in active_wc_names or target <= 0:
+            continue
+        per_wc_expected[segment.wc_name] += (
+            target * _productive_minutes_for_segment(segment) / 60.0
+        )
+
+    # production_segments retains its legacy four-argument callback API. Feed
+    # it deterministic per-segment minutes in the exact stable order it uses,
+    # so identical same-name spans still keep their Odoo identities separate.
+    minute_queues = defaultdict(deque)
+    credit_segments = [
+        segment for segment in segments if segment.wc_name in active_wc_names
+    ]
+    for segment in sorted(
+        credit_segments,
+        key=lambda value: (
+            value.start_utc.timestamp(),
+            value.end_utc.timestamp(),
+            value.wc_name,
+            value.person_name,
+        ),
+    ):
+        minute_queues[
+            (
+                segment.person_name,
+                segment.wc_name,
+                segment.start_utc,
+                segment.end_utc,
+            )
+        ].append(_productive_minutes_for_segment(segment))
+
+    def _productive_minutes_less_breakdown(name, wc_name, s_utc, e_utc):
+        values = minute_queues[(name, wc_name, s_utc, e_utc)]
+        if values:
+            return values.popleft()
+        return shift_config.productive_minutes_in_window(d, s_utc, e_utc)
+
     try:
         credits = production_segments.credit_work_segments(
-            [
-                segment
-                for segment in segments
-                if segment.wc_name in active_wc_names
-            ],
+            credit_segments,
             wc_totals={r.station.name: r.units for r in active_results},
             samples_by_wc={
                 r.station.name: list(getattr(r, "samples", ()) or ())

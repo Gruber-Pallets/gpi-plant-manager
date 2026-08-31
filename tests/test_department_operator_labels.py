@@ -28,6 +28,7 @@ def test_who_by_wc_excludes_absent_people_from_schedule_and_attributions(monkeyp
 def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(monkeypatch):
     """A live transfer changes the label, without losing either station's data."""
     from zira_dashboard import (
+        assignment_windows,
         attendance,
         machine_breakdown,
         settings_store,
@@ -102,12 +103,28 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
             ]
         },
     )
+    original_resolve = assignment_windows.resolve_segments
+
+    def identified_segments(**kwargs):
+        return [
+            assignment_windows.WorkSegment(
+                segment.wc_name,
+                segment.person_name,
+                segment.start_utc,
+                segment.end_utc,
+                segment.source,
+                person_odoo_id=101,
+            )
+            for segment in original_resolve(**kwargs)
+        ]
+
+    monkeypatch.setattr(assignment_windows, "resolve_segments", identified_segments)
     monkeypatch.setattr(wc_attributions, "creditable_for_day", lambda _d: [])
     monkeypatch.setattr(
         wc_attributions,
         "breakdown_windows_for_day",
         lambda _d: {
-            ("Jesus G.", "Repair 2"): [
+            (101, "Jesus G.", "Repair 2"): [
                 (
                     datetime(2026, 6, 2, 12, tzinfo=timezone.utc),
                     datetime(2026, 6, 2, 12, 2, tzinfo=timezone.utc),
@@ -194,6 +211,39 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     assert fallback["per_wc_segments"] == {}
     assert fallback["per_wc_units"] == {"Repair 2": 34, "Dismantler 2": 384}
 
+
+def test_department_breakdown_lookup_keeps_same_name_odoo_ids_separate():
+    from zira_dashboard import assignment_windows
+    from zira_dashboard.routes import departments
+
+    start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
+    end = start.replace(hour=13)
+    alex_101 = assignment_windows.WorkSegment(
+        "Repair 2", "Alex", start, end, "odoo", person_odoo_id=101
+    )
+    alex_202 = assignment_windows.WorkSegment(
+        "Repair 2", "Alex", start, end, "odoo", person_odoo_id=202
+    )
+    legacy_alex = assignment_windows.WorkSegment(
+        "Repair 2", "Alex", start, end, "schedule"
+    )
+    windows_101 = [(start, start.replace(minute=30))]
+    windows_202 = [(start.replace(minute=30), end)]
+    breakdown_windows = {
+        (101, "Alex", "Repair 2"): windows_101,
+        (202, "Alex", "Repair 2"): windows_202,
+        ("Alex", "Repair 2"): [(start, end)],
+    }
+
+    assert departments._breakdown_windows_for_segment(  # noqa: SLF001
+        breakdown_windows, alex_101
+    ) == windows_101
+    assert departments._breakdown_windows_for_segment(  # noqa: SLF001
+        breakdown_windows, alex_202
+    ) == windows_202
+    assert departments._breakdown_windows_for_segment(  # noqa: SLF001
+        breakdown_windows, legacy_alex
+    ) == [(start, end)]
 
 def test_department_segment_display_keeps_scheduled_lunch_continuous():
     from zira_dashboard.production_segments import SegmentScore

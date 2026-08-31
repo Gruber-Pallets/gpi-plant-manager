@@ -2407,6 +2407,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_legacy_open_uni
   ON wc_time_attributions (breakdown_id, person_name)
   WHERE source = 'breakdown' AND end_utc IS NULL
     AND employee_odoo_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_odoo_visit_uniq
+  ON wc_time_attributions (breakdown_id, employee_odoo_id, start_utc)
+  WHERE source = 'breakdown' AND employee_odoo_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_legacy_visit_uniq
+  ON wc_time_attributions (breakdown_id, person_name, start_utc)
+  WHERE source = 'breakdown' AND employee_odoo_id IS NULL;
 
 -- 2026-07-08: per-record minutes excluded from a person's expected due to a
 -- machine breakdown (source='breakdown' wc_time_attributions windows). Written

@@ -224,6 +224,29 @@ def resolve_incident(incident_id: int, resolution: str, resume_utc: datetime | N
     )
 
 
+def dismiss_incident(incident_id: int) -> None:
+    """Resolve and delete linked exclusions in one local transaction.
+
+    The incident UPDATE takes the same row lock used by breakdown insertion.
+    Whichever operation wins, the final state cannot contain an attribution
+    linked to this dismissed incident.
+    """
+    from . import db
+    from .wc_attributions import BREAKDOWN_SOURCE
+
+    with db.cursor() as cursor:
+        cursor.execute(
+            "UPDATE machine_breakdowns SET resolved_at = now(), "
+            "resolution = 'dismissed', resume_utc = NULL WHERE id = %s",
+            (incident_id,),
+        )
+        cursor.execute(
+            "DELETE FROM wc_time_attributions "
+            "WHERE breakdown_id = %s AND source = %s",
+            (incident_id, BREAKDOWN_SOURCE),
+        )
+
+
 def reopen_incident(incident_id: int) -> None:
     """Undo a resolution -- clears resolved_at/resolution/resume_utc so the
     incident is open again (dismiss-undo)."""
@@ -287,10 +310,9 @@ def active_snooze_until(
     else:
         rows = db.query(
             "SELECT until_utc FROM breakdown_snoozes "
-            "WHERE breakdown_id = %s AND (employee_odoo_id = %s OR "
-            "(employee_odoo_id IS NULL AND person_name = %s)) "
-            "AND until_utc > now() ORDER BY employee_odoo_id NULLS LAST LIMIT 1",
-            (incident_id, employee_odoo_id, person_name),
+            "WHERE breakdown_id = %s AND employee_odoo_id = %s "
+            "AND until_utc > now()",
+            (incident_id, employee_odoo_id),
         )
     return rows[0]["until_utc"] if rows else None
 
@@ -525,7 +547,6 @@ def run_detect_tick(day: date | None = None, now: datetime | None = None) -> Non
             if _maybe_auto_resolve(incident, day, now, operator_source):
                 continue
             if operator_source.available:
-                _cap_departed_operators(incident, day, now, operator_source)
                 _ensure_operator_breakdowns(incident, day, now, operator_source)
         except Exception:
             import logging
@@ -605,9 +626,13 @@ def _ensure_operator_breakdowns(
     now: datetime,
     operator_source: OperatorSourceSnapshot,
 ) -> None:
-    """Idempotently adopt eligible current workers at their personal start."""
-    from . import wc_attributions
+    """Idempotently reconcile completed visits, then current workers.
 
+    Completed visits must go first: a delayed recovery snapshot can contain an
+    old departure and a later return for the same immutable worker.  Closing
+    the old visit before adopting the return prevents the old open row from
+    suppressing the new personal clock.
+    """
     identities_by_name: dict[str, set[int]] = {}
     for visit in (*operator_source.presences, *operator_source.departures):
         if visit.wc_name == incident["wc_name"] and visit.employee_odoo_id is not None:
@@ -615,17 +640,25 @@ def _ensure_operator_breakdowns(
                 visit.employee_odoo_id
             )
 
-    for operator in _eligible_operator_presences(
-        incident, day, now, operator_source
-    ):
+    _reconcile_completed_breakdown_visits(
+        incident, day, now, operator_source, identities_by_name
+    )
+
+    from . import wc_attributions
+
+    def allow_legacy(person_name: str, employee_odoo_id: int | None) -> bool:
+        return employee_odoo_id is not None and len(
+            identities_by_name.get(person_name, ())
+        ) == 1
+
+    for operator in _eligible_operator_presences(incident, day, now, operator_source):
         existing = wc_attributions.open_breakdown_row(
             day,
             incident["wc_name"],
             operator.person_name,
             employee_odoo_id=operator.employee_odoo_id,
-            allow_legacy_fallback=(
-                operator.employee_odoo_id is not None
-                and len(identities_by_name.get(operator.person_name, ())) == 1
+            allow_legacy_fallback=allow_legacy(
+                operator.person_name, operator.employee_odoo_id
             ),
         )
         if existing is not None:
@@ -644,6 +677,83 @@ def _ensure_operator_breakdowns(
         )
 
 
+def _reconcile_completed_breakdown_visits(
+    incident: dict,
+    day: date,
+    end_cap: datetime,
+    operator_source: OperatorSourceSnapshot,
+    identities_by_name: dict[str, set[int]] | None = None,
+) -> None:
+    """Create/cap every eligible completed visit through ``end_cap``."""
+    from . import wc_attributions
+
+    if identities_by_name is None:
+        identities_by_name = {}
+        for visit in (*operator_source.presences, *operator_source.departures):
+            if (
+                visit.wc_name == incident["wc_name"]
+                and visit.employee_odoo_id is not None
+            ):
+                identities_by_name.setdefault(visit.person_name, set()).add(
+                    visit.employee_odoo_id
+                )
+
+    for departure in sorted(
+        operator_source.departures,
+        key=lambda visit: (visit.arrival_utc, visit.departure_utc),
+    ):
+        if departure.wc_name != incident["wc_name"]:
+            continue
+        personal_start = personal_breakdown_start(
+            station_stop_utc=incident["detected_stop_utc"],
+            arrival_utc=departure.arrival_utc,
+        )
+        personal_end = min(departure.departure_utc, end_cap)
+        if personal_end <= personal_start:
+            continue
+        existing = wc_attributions.open_breakdown_row(
+            day,
+            incident["wc_name"],
+            departure.person_name,
+            employee_odoo_id=departure.employee_odoo_id,
+            allow_legacy_fallback=(
+                departure.employee_odoo_id is not None
+                and len(identities_by_name.get(departure.person_name, ())) == 1
+            ),
+        )
+        if existing is not None and existing.get("start_utc") in (
+            None,
+            personal_start,
+        ):
+            wc_attributions.cap_breakdown(existing["id"], personal_end)
+            continue
+        if not _worker_reached_breakdown_threshold(
+            day, incident["detected_stop_utc"], departure, personal_end
+        ):
+            continue
+        exact = wc_attributions.breakdown_row_for_visit(
+            day,
+            incident["wc_name"],
+            departure.person_name,
+            personal_start,
+            incident["id"],
+            employee_odoo_id=departure.employee_odoo_id,
+        )
+        if exact is not None:
+            if exact.get("end_utc") is None:
+                wc_attributions.cap_breakdown(exact["id"], personal_end)
+            continue
+        wc_attributions.add_completed_breakdown(
+            day,
+            incident["wc_name"],
+            departure.person_name,
+            personal_start,
+            incident["id"],
+            end_utc=personal_end,
+            employee_odoo_id=departure.employee_odoo_id,
+        )
+
+
 def _cap_departed_operators(
     incident: dict,
     day: date,
@@ -656,37 +766,12 @@ def _cap_departed_operators(
     broken machine (transfer or self-punch-out) -- detected via their punch
     windows, not via the Transfer button (which caps immediately itself;
     this is the passive/punch-out path)."""
-    from . import wc_attributions
-    wc_name = incident["wc_name"]
     source = operator_source or _operator_source_snapshot(day, now)
     if not source.available:
         return
-    identities_by_name: dict[str, set[int]] = {}
-    for visit in (*source.presences, *source.departures):
-        if visit.wc_name == wc_name and visit.employee_odoo_id is not None:
-            identities_by_name.setdefault(visit.person_name, set()).add(
-                visit.employee_odoo_id
-            )
-    for departure in source.departures:
-        if departure.wc_name != wc_name:
-            continue
-        row = wc_attributions.open_breakdown_row(
-            day,
-            wc_name,
-            departure.person_name,
-            employee_odoo_id=departure.employee_odoo_id,
-            allow_legacy_fallback=(
-                departure.employee_odoo_id is not None
-                and len(identities_by_name.get(departure.person_name, ())) == 1
-            ),
-        )
-        if row is None:
-            continue
-        departure_end = min(departure.departure_utc, cap_utc or departure.departure_utc)
-        row_start = row.get("start_utc")
-        if row_start is not None and departure_end <= row_start:
-            continue
-        wc_attributions.cap_breakdown(row["id"], departure_end)
+    _reconcile_completed_breakdown_visits(
+        incident, day, cap_utc or now, source
+    )
 
 
 def _maybe_auto_resolve(
@@ -712,13 +797,6 @@ def _maybe_auto_resolve(
     # time, not at wall-clock ``now``. This prevents creating a window whose
     # end would precede its start.
     _ensure_operator_breakdowns(incident, day, resume, source)
-    _cap_departed_operators(
-        incident,
-        day,
-        now,
-        source,
-        cap_utc=resume,
-    )
     open_rows = wc_attributions.open_breakdown_rows_for_incident(incident["id"])
     if any(row.get("start_utc") is not None and row["start_utc"] > resume for row in open_rows):
         return False

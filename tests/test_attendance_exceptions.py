@@ -624,7 +624,10 @@ def test_shadow_run_source_uses_strict_samples_segments_and_active_run_boundarie
         samples_by_wc={"Dismantler 1": [(t0, 1.0), (t1, 2.0), (t2, 3.0)]},
         break_windows=(),
         testing_windows={},
-        breakdown_windows={},
+        # Task 12 breakdown windows retain the immutable Odoo identity.  The
+        # shadow run projector only needs the WC/window portion, but it must
+        # accept this three-part key without collapsing it to a name key.
+        breakdown_windows={(101, "Alex", "Dismantler 1"): []},
         active_intervals_by_wc={
             "Dismantler 1": (
                 (t0, t1 + timedelta(seconds=1)),

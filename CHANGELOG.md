@@ -15,6 +15,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Breakdown time starts when each worker arrives
 
 - **A worker who reaches a stopped machine later will no longer inherit breakdown time from before they arrived.** Their warning and excluded time start from their own arrival.
+- **Breakdown time now stays correct after a late update or connection problem.** Workers with the same name stay separate, and dismissing or undoing a breakdown will not leave extra time behind.
 
 ### Timeclock starts and ends the day
 

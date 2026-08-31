@@ -1453,14 +1453,10 @@ def _reverse_event(ev: dict[str, Any]) -> None:
                 wc_attributions.reopen_breakdown(attribution_id)
         elif action == "dismiss":
             incident_id = detail.get("incident_id")
+            wc_attributions.restore_breakdown_snapshot(
+                detail.get("rows") or [], incident_id
+            )
             machine_breakdown.reopen_incident(incident_id)
-            for row in detail.get("rows") or []:
-                wc_attributions.add(
-                    day=row["day"], wc_name=row["wc_name"], person_name=row["person_name"],
-                    start_utc=row["start_utc"], end_utc=row.get("end_utc"),
-                    source=wc_attributions.BREAKDOWN_SOURCE, breakdown_id=incident_id,
-                    employee_odoo_id=row.get("employee_odoo_id"),
-                )
 
 
 def _undo_sync(
