@@ -272,9 +272,7 @@ def precompute_day(day: date, client) -> dict:
         return {"day": day.isoformat(), "rows_written": written}
     except Exception:
         try:
-            attendance_mirror.enqueue_recalc(
-                (day,), "production_source_unavailable", mark_strict=False
-            )
+            attendance_mirror.enqueue_recalc((day,), "production_source_unavailable")
         except Exception:
             _log.warning(
                 "could not enqueue failed production recomputation for %s",
