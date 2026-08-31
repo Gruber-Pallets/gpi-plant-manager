@@ -127,3 +127,13 @@ def test_personal_breakdown_start_is_arrival_when_worker_reaches_stopped_station
         station_stop_utc=station_stop,
         arrival_utc=arrival,
     ) == arrival
+
+
+def test_first_output_after_returns_the_first_resume_not_the_latest_sample():
+    stop = SHIFT_START + timedelta(hours=2)
+    first_resume = stop + timedelta(minutes=4)
+    latest = stop + timedelta(minutes=40)
+
+    assert machine_breakdown.first_output_after(
+        (stop - timedelta(minutes=1), latest, first_resume), stop
+    ) == first_resume

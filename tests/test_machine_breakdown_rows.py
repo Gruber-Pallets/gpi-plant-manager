@@ -136,6 +136,62 @@ def test_detect_tick_preserves_open_incident_when_attendance_is_unavailable(monk
     assert resolved == []
 
 
+def test_detect_tick_does_not_mutate_workers_when_operator_snapshot_is_incomplete(
+    monkeypatch,
+):
+    incident = {
+        "id": 1,
+        "wc_name": "Repair 1",
+        "day": date(2026, 7, 8),
+        "detected_stop_utc": _now() - timedelta(minutes=25),
+        "source": "auto",
+    }
+    source = _operator_snapshot(
+        _presence(wc_name="Repair 1"),
+        available=True,
+        complete=False,
+    )
+    monkeypatch.setattr(machine_breakdown, "all_open_incidents", lambda _day: [incident])
+    monkeypatch.setattr(
+        machine_breakdown,
+        "_operator_source_snapshot",
+        lambda _day, _now: source,
+    )
+    monkeypatch.setattr(
+        machine_breakdown,
+        "_maybe_auto_resolve",
+        lambda *_args, **_kwargs: False,
+    )
+    worker_mutations = []
+    monkeypatch.setattr(
+        machine_breakdown,
+        "_cap_departed_operators",
+        lambda *_args, **_kwargs: worker_mutations.append("cap"),
+    )
+    monkeypatch.setattr(
+        machine_breakdown,
+        "_ensure_operator_breakdowns",
+        lambda *_args, **_kwargs: worker_mutations.append("ensure"),
+    )
+    monkeypatch.setattr(
+        machine_breakdown,
+        "_station_signals",
+        lambda _day, _now, _source=None: [],
+    )
+    monkeypatch.setattr(
+        machine_breakdown,
+        "_shift_bounds",
+        lambda _day: (_now() - timedelta(hours=6), _now() + timedelta(hours=2)),
+    )
+    from zira_dashboard import shift_config
+
+    monkeypatch.setattr(shift_config, "in_shift_on", lambda _local_dt: True)
+
+    machine_breakdown.run_detect_tick(day=date(2026, 7, 8), now=_now())
+
+    assert worker_mutations == []
+
+
 def test_detect_tick_keeps_existing_incident_when_a_coworker_is_present(monkeypatch):
     incident = {
         "id": 1, "wc_name": "Repair 1", "day": date(2026, 7, 8),
@@ -258,9 +314,14 @@ def test_run_detect_tick_opens_new_incident(monkeypatch):
     monkeypatch.setattr(machine_breakdown, "open_incident", _open_incident)
     from zira_dashboard import wc_attributions
     added = []
-    monkeypatch.setattr(wc_attributions, "open_breakdown_row", lambda *_args: None)
-    monkeypatch.setattr(wc_attributions, "add_breakdown",
-                        lambda day, wc, person, start, breakdown_id: added.append((day, wc, person, start, breakdown_id)) or 99)
+    monkeypatch.setattr(
+        wc_attributions,
+        "adopt_breakdown",
+        lambda day, wc, person, start, breakdown_id, **_kwargs: added.append(
+            (day, wc, person, start, breakdown_id)
+        )
+        or {"id": 99},
+    )
     monkeypatch.setattr(machine_breakdown, "_cap_departed_operators", lambda incident, day, now: None)
     monkeypatch.setattr(machine_breakdown, "_maybe_auto_resolve", lambda incident, day, now: None)
 
@@ -379,7 +440,7 @@ def test_cap_departed_operators_caps_and_leaves_still_present_untouched(monkeypa
         ),
     )
     monkeypatch.setattr(wc_attributions, "open_breakdown_row",
-                        lambda day, wc, person: {"id": 10, "start_utc": incident["detected_stop_utc"]} if person == "Juan" else {"id": 11, "start_utc": incident["detected_stop_utc"]})
+                        lambda day, wc, person, **_kwargs: {"id": 10, "start_utc": incident["detected_stop_utc"]} if person == "Juan" else {"id": 11, "start_utc": incident["detected_stop_utc"]})
     capped = []
     monkeypatch.setattr(wc_attributions, "cap_breakdown", lambda row_id, end: capped.append((row_id, end)))
 
@@ -399,11 +460,12 @@ def test_maybe_auto_resolve_resolves_when_station_producing_again(monkeypatch):
         "_last_output_after",
         lambda wc, day, stop, operator_source=None: resume,
     )
-    source = _operator_snapshot(
-        _presence(arrival_utc=_now() - timedelta(hours=1))
-    )
     from zira_dashboard import wc_attributions
-    monkeypatch.setattr(wc_attributions, "open_breakdown_row", lambda day, wc, person: {"id": 10})
+    monkeypatch.setattr(
+        wc_attributions,
+        "open_breakdown_rows_for_incident",
+        lambda incident_id: [{"id": 10, "start_utc": incident["detected_stop_utc"]}],
+    )
     capped = []
     monkeypatch.setattr(wc_attributions, "cap_breakdown", lambda row_id, end: capped.append((row_id, end)))
     resolved = []
@@ -411,7 +473,7 @@ def test_maybe_auto_resolve_resolves_when_station_producing_again(monkeypatch):
                         lambda incident_id, resolution, resume_utc=None: resolved.append((incident_id, resolution, resume_utc)))
 
     machine_breakdown._maybe_auto_resolve(
-        incident, date(2026, 7, 8), _now(), source
+        incident, date(2026, 7, 8), _now(), _operator_snapshot(available=False)
     )
 
     assert resolved == [(1, "recovered", resume)]
@@ -458,7 +520,7 @@ def test_current_rows_shapes_header_and_operator_rows(monkeypatch):
         lambda _day, start, end: (end - start).total_seconds() / 60,
     )
     monkeypatch.setattr(machine_breakdown, "active_snooze_until",
-                        lambda incident_id, person: (_now() + timedelta(minutes=10)) if person == "Benjamin" else None)
+                        lambda incident_id, person, **_kwargs: (_now() + timedelta(minutes=10)) if person == "Benjamin" else None)
     from zira_dashboard import staffing
     monkeypatch.setattr(staffing, "LOCATIONS", [])
 
@@ -585,12 +647,19 @@ def _departure(
     )
 
 
-def _operator_snapshot(*presences, departures=(), available=True, mirror_owned=True):
+def _operator_snapshot(
+    *presences,
+    departures=(),
+    available=True,
+    mirror_owned=True,
+    complete=True,
+):
     return machine_breakdown.OperatorSourceSnapshot(
         presences=tuple(presences),
         departures=tuple(departures),
         available=available,
         mirror_owned=mirror_owned,
+        complete=complete,
     )
 
 
@@ -699,13 +768,14 @@ def test_current_rows_do_not_collapse_distinct_employee_ids_with_same_display_na
         "productive_minutes_in_window",
         lambda _day, start, end: (end - start).total_seconds() / 60,
     )
-    monkeypatch.setattr(machine_breakdown, "active_snooze_until", lambda *_args: None)
+    monkeypatch.setattr(machine_breakdown, "active_snooze_until", lambda *_args, **_kwargs: None)
 
     rows = machine_breakdown.current_rows(day=incident["day"], now=_now())
     worker_rows = [row for row in rows if row.get("action")]
 
     assert [row["action"]["employee_odoo_id"] for row in worker_rows] == [101, 202]
     assert len({row["row_key"] for row in worker_rows}) == 2
+    assert len({row["item_key"] for row in worker_rows}) == 2
 
 
 @pytest.mark.parametrize(
@@ -1004,20 +1074,14 @@ def test_worker_crossing_threshold_gets_one_exclusion_from_exact_arrival(monkeyp
         "productive_minutes_in_window",
         lambda _day, start, end: (end - start).total_seconds() / 60,
     )
-    open_rows = {}
     added = []
 
-    def open_breakdown_row(_day, _wc, person):
-        return open_rows.get(person)
+    def adopt_breakdown(_day, wc, person, start, breakdown_id, **_kwargs):
+        if not added:
+            added.append((_day, wc, person, start, breakdown_id))
+        return {"id": 50, "start_utc": start}
 
-    def add_breakdown(_day, wc, person, start, breakdown_id):
-        row = {"id": 50, "start_utc": start}
-        open_rows[person] = row
-        added.append((_day, wc, person, start, breakdown_id))
-        return row["id"]
-
-    monkeypatch.setattr(wc_attributions, "open_breakdown_row", open_breakdown_row)
-    monkeypatch.setattr(wc_attributions, "add_breakdown", add_breakdown)
+    monkeypatch.setattr(wc_attributions, "adopt_breakdown", adopt_breakdown)
 
     machine_breakdown._ensure_operator_breakdowns(incident, day, _now(), source)
     machine_breakdown._ensure_operator_breakdowns(incident, day, _now(), source)
@@ -1045,12 +1109,12 @@ def test_worker_present_before_station_stop_gets_exclusion_from_station_stop(mon
         "productive_minutes_in_window",
         lambda _day, start, end: (end - start).total_seconds() / 60,
     )
-    monkeypatch.setattr(wc_attributions, "open_breakdown_row", lambda *_args: None)
+    monkeypatch.setattr(wc_attributions, "open_breakdown_row", lambda *_args, **_kwargs: None)
     added = []
     monkeypatch.setattr(
         wc_attributions,
-        "add_breakdown",
-        lambda *args: added.append(args),
+        "adopt_breakdown",
+        lambda *args, **_kwargs: added.append(args),
     )
 
     machine_breakdown._ensure_operator_breakdowns(incident, day, _now(), source)
@@ -1078,7 +1142,7 @@ def test_canonical_transfer_caps_only_worker_at_span_end_without_plant_manager_t
     monkeypatch.setattr(
         wc_attributions,
         "open_breakdown_row",
-        lambda _day, _wc, person: {"id": 10, "start_utc": incident["detected_stop_utc"]}
+        lambda _day, _wc, person, **_kwargs: {"id": 10, "start_utc": incident["detected_stop_utc"]}
         if person == "Juan"
         else None,
     )
@@ -1136,21 +1200,21 @@ def test_worker_returning_to_same_station_gets_a_new_personal_clock(monkeypatch)
     capped = []
     added = []
 
-    def open_breakdown_row(_day, _wc, _person):
+    def open_breakdown_row(_day, _wc, _person, **_kwargs):
         return open_row.copy() if open_row else None
 
     def cap_breakdown(row_id, end):
         capped.append((row_id, end))
         open_row.clear()
 
-    def add_breakdown(_day, wc, person, start, breakdown_id):
+    def adopt_breakdown(_day, wc, person, start, breakdown_id, **_kwargs):
         added.append((_day, wc, person, start, breakdown_id))
         open_row.update(id=11, start_utc=start)
         return 11
 
     monkeypatch.setattr(wc_attributions, "open_breakdown_row", open_breakdown_row)
     monkeypatch.setattr(wc_attributions, "cap_breakdown", cap_breakdown)
-    monkeypatch.setattr(wc_attributions, "add_breakdown", add_breakdown)
+    monkeypatch.setattr(wc_attributions, "adopt_breakdown", adopt_breakdown)
     monkeypatch.setattr(
         shift_config,
         "productive_minutes_in_window",
@@ -1162,3 +1226,213 @@ def test_worker_returning_to_same_station_gets_a_new_personal_clock(monkeypatch)
 
     assert capped == [(10, first_departure)]
     assert added == [(day, "Dismantler 2", "Juan", second_arrival, 1)]
+
+
+def test_same_name_departure_caps_only_matching_employee_identity(monkeypatch):
+    from zira_dashboard import wc_attributions
+
+    day = date(2026, 7, 8)
+    departure = _now() - timedelta(minutes=5)
+    incident = {
+        "id": 1,
+        "wc_name": "Dismantler 2",
+        "day": day,
+        "detected_stop_utc": _now() - timedelta(hours=2),
+    }
+    source = _operator_snapshot(
+        _presence("Alex", employee_odoo_id=202),
+        departures=(
+            _departure(
+                "Alex", employee_odoo_id=101, departure_utc=departure
+            ),
+        ),
+    )
+    lookups = []
+
+    def open_row(_day, _wc, person, *, employee_odoo_id=None, breakdown_id=None):
+        lookups.append((person, employee_odoo_id, breakdown_id))
+        if employee_odoo_id == 101:
+            return {"id": 10, "start_utc": incident["detected_stop_utc"]}
+        return {"id": 11, "start_utc": incident["detected_stop_utc"]}
+
+    monkeypatch.setattr(wc_attributions, "open_breakdown_row", open_row)
+    capped = []
+    monkeypatch.setattr(
+        wc_attributions,
+        "cap_breakdown",
+        lambda row_id, end: capped.append((row_id, end)),
+    )
+
+    machine_breakdown._cap_departed_operators(incident, day, _now(), source)
+
+    assert lookups == [("Alex", 101, 1)]
+    assert capped == [(10, departure)]
+
+
+def test_completed_span_backfills_closed_exclusion_after_warmer_outage(monkeypatch):
+    from zira_dashboard import shift_config, wc_attributions
+
+    day = date(2026, 7, 8)
+    stop = _now() - timedelta(hours=3)
+    arrival = _now() - timedelta(hours=2)
+    departure = _now() - timedelta(minutes=30)
+    incident = {
+        "id": 1,
+        "wc_name": "Dismantler 2",
+        "day": day,
+        "detected_stop_utc": stop,
+    }
+    source = _operator_snapshot(
+        departures=(
+            _departure(
+                arrival_utc=arrival,
+                departure_utc=departure,
+                employee_odoo_id=101,
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda _day, start, end: (end - start).total_seconds() / 60,
+    )
+    adopted = []
+    monkeypatch.setattr(
+        wc_attributions,
+        "adopt_breakdown",
+        lambda *args, **kwargs: adopted.append((args, kwargs)) or {"id": 50},
+    )
+
+    machine_breakdown._ensure_operator_breakdowns(incident, day, _now(), source)
+
+    assert adopted == [
+        (
+            (day, "Dismantler 2", "Juan", arrival, 1),
+            {"employee_odoo_id": 101, "end_utc": departure},
+        )
+    ]
+
+
+def test_completed_span_below_threshold_is_not_backfilled(monkeypatch):
+    from zira_dashboard import shift_config, wc_attributions
+
+    day = date(2026, 7, 8)
+    arrival = _now() - timedelta(minutes=50)
+    departure = _now() - timedelta(minutes=5)
+    incident = {
+        "id": 1,
+        "wc_name": "Dismantler 2",
+        "day": day,
+        "detected_stop_utc": _now() - timedelta(hours=3),
+    }
+    source = _operator_snapshot(
+        departures=(
+            _departure(arrival_utc=arrival, departure_utc=departure),
+        )
+    )
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda _day, start, end: (end - start).total_seconds() / 60,
+    )
+    adopted = []
+    monkeypatch.setattr(
+        wc_attributions,
+        "adopt_breakdown",
+        lambda *args, **kwargs: adopted.append((args, kwargs)),
+    )
+
+    machine_breakdown._ensure_operator_breakdowns(incident, day, _now(), source)
+
+    assert adopted == []
+
+
+def test_recovery_caps_every_open_exclusion_at_first_resume_when_source_unavailable(
+    monkeypatch,
+):
+    from zira_dashboard import wc_attributions
+
+    day = date(2026, 7, 8)
+    first_resume = _now() - timedelta(minutes=40)
+    incident = {
+        "id": 1,
+        "wc_name": "Dismantler 2",
+        "day": day,
+        "detected_stop_utc": _now() - timedelta(hours=2),
+    }
+    source = _operator_snapshot(available=False)
+    monkeypatch.setattr(
+        machine_breakdown,
+        "_last_output_after",
+        lambda *_args, **_kwargs: first_resume,
+    )
+    monkeypatch.setattr(
+        wc_attributions,
+        "open_breakdown_rows_for_incident",
+        lambda incident_id: [
+            {"id": 10, "start_utc": incident["detected_stop_utc"]},
+            {"id": 11, "start_utc": incident["detected_stop_utc"]},
+        ],
+    )
+    capped = []
+    monkeypatch.setattr(
+        wc_attributions,
+        "cap_breakdown",
+        lambda row_id, end: capped.append((row_id, end)),
+    )
+    resolved = []
+    monkeypatch.setattr(
+        machine_breakdown,
+        "resolve_incident",
+        lambda incident_id, resolution, resume_utc=None: resolved.append(
+            (incident_id, resolution, resume_utc)
+        ),
+    )
+
+    recovered = machine_breakdown._maybe_auto_resolve(
+        incident, day, _now(), source
+    )
+
+    assert recovered is True
+    assert capped == [(10, first_resume), (11, first_resume)]
+    assert resolved == [(1, "recovered", first_resume)]
+
+
+def test_unavailable_operator_source_marks_breakdown_rows_incomplete(monkeypatch):
+    incident = {
+        "id": 1,
+        "wc_name": "Dismantler 2",
+        "day": date(2026, 7, 8),
+        "detected_stop_utc": _now() - timedelta(hours=2),
+        "source": "auto",
+    }
+    monkeypatch.setattr(machine_breakdown, "all_open_incidents", lambda _day: [incident])
+    monkeypatch.setattr(
+        machine_breakdown,
+        "_operator_source_snapshot",
+        lambda _day, _now: _operator_snapshot(available=False),
+    )
+
+    rows = machine_breakdown.current_rows(day=incident["day"], now=_now())
+
+    assert len(rows) == 1
+    assert rows.complete is False
+
+
+def test_current_invalid_location_marks_operator_snapshot_incomplete():
+    invalid = _location_span(
+        employee_id=101,
+        person_name="Juan",
+        status="conflicting_location",
+        wc_name="Dismantler 2",
+        start_utc=_now() - timedelta(hours=2),
+        end_utc=_now(),
+        attendance_id=91,
+    )
+
+    snapshot = machine_breakdown._operator_source_from_staffing_snapshot(
+        _frozen_staffing_snapshot((invalid,), current_attendance_ids=(91,))
+    )
+
+    assert snapshot.presences == ()
+    assert snapshot.complete is False

@@ -2381,8 +2381,23 @@ CREATE TABLE IF NOT EXISTS breakdown_snoozes (
 -- exactly this incident's exclusion rows without touching a different,
 -- already-resolved incident on the same machine/day.
 ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS breakdown_id BIGINT;
+-- Canonical Odoo identity keeps two workers with the same display name from
+-- sharing one exclusion. NULL preserves legacy/manual rows created before the
+-- attendance-location rollout.
+ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
 CREATE INDEX IF NOT EXISTS wc_time_attributions_breakdown_idx
   ON wc_time_attributions (breakdown_id) WHERE breakdown_id IS NOT NULL;
+
+ALTER TABLE breakdown_snoozes ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
+-- The original primary key used display names and collapsed same-name Odoo
+-- workers. Keep name identity for legacy rows and use the durable Odoo id when
+-- it is known.
+ALTER TABLE breakdown_snoozes DROP CONSTRAINT IF EXISTS breakdown_snoozes_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS breakdown_snoozes_operator_identity_idx
+  ON breakdown_snoozes (
+    breakdown_id,
+    (COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name))
+  );
 
 -- 2026-07-08: per-record minutes excluded from a person's expected due to a
 -- machine breakdown (source='breakdown' wc_time_attributions windows). Written

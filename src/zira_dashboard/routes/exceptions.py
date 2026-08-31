@@ -1459,6 +1459,7 @@ def _reverse_event(ev: dict[str, Any]) -> None:
                     day=row["day"], wc_name=row["wc_name"], person_name=row["person_name"],
                     start_utc=row["start_utc"], end_utc=row.get("end_utc"),
                     source=wc_attributions.BREAKDOWN_SOURCE, breakdown_id=incident_id,
+                    employee_odoo_id=row.get("employee_odoo_id"),
                 )
 
 

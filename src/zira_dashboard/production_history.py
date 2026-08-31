@@ -54,7 +54,10 @@ class _StrictDayInputs:
     excluded_minutes: dict[PersonAttributionKey, dict[str, float]]
     break_windows: tuple[tuple[datetime, datetime], ...]
     testing_windows: dict[str, list[tuple[datetime, datetime]]]
-    breakdown_windows: dict[tuple[str, str], list[tuple[datetime, datetime | None]]]
+    breakdown_windows: dict[
+        tuple[PersonAttributionKey, str],
+        list[tuple[datetime, datetime | None]],
+    ]
 
 
 def attribute_for_day(
@@ -325,7 +328,9 @@ def _effective_now(day: date, now: datetime) -> datetime:
     return min(now, shift_end_utc)
 
 
-def _excluded_minutes_by_person_wc(day: date, now: datetime) -> dict[str, dict[str, float]]:
+def _excluded_minutes_by_person_wc(
+    day: date, now: datetime
+) -> dict[PersonAttributionKey, dict[str, float]]:
     """{person: {wc_name: minutes}} of machine-breakdown-excluded minutes for
     `day`. Open breakdown windows are capped at `now` (already clamped to
     shift end by the caller) so a live in-progress breakdown is reflected
@@ -335,7 +340,7 @@ def _excluded_minutes_by_person_wc(day: date, now: datetime) -> dict[str, dict[s
     from .shift_config import productive_minutes_in_window
 
     windows_by_key = wc_attributions.breakdown_windows_for_day(day)
-    out: dict[str, dict[str, float]] = {}
+    out: dict[PersonAttributionKey, dict[str, float]] = {}
     for (person, wc), windows in windows_by_key.items():
         closed = [(s, e if e is not None else now) for (s, e) in windows]
         minutes = machine_breakdown.excluded_minutes_for_windows(
@@ -481,7 +486,7 @@ def _validate_strict_sample_totals(
 
 def _identity_safe_excluded_minutes(
     segments: Sequence,
-    excluded_by_name: Mapping[str, Mapping[str, float]],
+    excluded_by_name: Mapping[PersonAttributionKey, Mapping[str, float]],
 ) -> dict[PersonAttributionKey, dict[str, float]]:
     ids_by_name_wc: dict[tuple[str, str], set[int]] = {}
     for segment in segments:
@@ -490,7 +495,16 @@ def _identity_safe_excluded_minutes(
                 segment.person_odoo_id
             )
     safe: dict[PersonAttributionKey, dict[str, float]] = {}
+    segment_identities = {
+        (segment.person_odoo_id, segment.person_name)
+        for segment in segments
+        if segment.person_odoo_id is not None
+    }
     for name, wc_map in excluded_by_name.items():
+        if isinstance(name, tuple):
+            if name in segment_identities:
+                safe[name] = {wc: float(minutes) for wc, minutes in wc_map.items()}
+            continue
         for wc_name, minutes in wc_map.items():
             employee_ids = ids_by_name_wc.get((name, wc_name), set())
             if len(employee_ids) != 1:

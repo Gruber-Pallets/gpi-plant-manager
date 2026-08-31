@@ -494,11 +494,31 @@ def _department_day_data(
         )
         return max(0.0, raw - excluded)
 
+    def _productive_minutes_for_segment(segment):
+        raw = shift_config.productive_minutes_in_window(
+            d, segment.start_utc, segment.end_utc
+        )
+        identity = (
+            (segment.person_odoo_id, segment.person_name)
+            if segment.person_odoo_id is not None
+            else segment.person_name
+        )
+        excluded = machine_breakdown.excluded_minutes_overlapping(
+            breakdown_windows.get((identity, segment.wc_name), []),
+            segment.start_utc,
+            segment.end_utc,
+            now,
+            d,
+            shift_config.productive_minutes_in_window,
+        )
+        return max(0.0, raw - excluded)
+
     per_wc_expected = compute_per_wc_expected(
         segments=segments,
         active_wc_names=active_wc_names,
         target_per_hour=target_per_hour,
         productive_minutes=_productive_minutes_less_breakdown,
+        productive_minutes_for_segment=_productive_minutes_for_segment,
     )
     try:
         credits = production_segments.credit_work_segments(
@@ -513,6 +533,7 @@ def _department_day_data(
                 for r in active_results
             },
             productive_minutes=_productive_minutes_less_breakdown,
+            productive_minutes_for_segment=_productive_minutes_for_segment,
             live_cap_utc=window_end_utc if is_live_dashboard else None,
         )
         scored = production_segments.score_work_segments(

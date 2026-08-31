@@ -38,6 +38,7 @@ def add(
     end_utc: datetime | None = None,
     source: str = "manual",
     breakdown_id: int | None = None,
+    employee_odoo_id: int | None = None,
 ) -> int:
     """Insert one attribution row. `end_utc=None` means the assignment is
     OPEN -- it stays running until the person clocks out, transfers, or is
@@ -48,9 +49,19 @@ def add(
 
     rows = db.query(
         "INSERT INTO wc_time_attributions "
-        "(day, wc_name, person_name, start_utc, end_utc, source, breakdown_id) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-        (day, wc_name, person_name, start_utc, end_utc, source, breakdown_id),
+        "(day, wc_name, person_name, start_utc, end_utc, source, breakdown_id, "
+        "employee_odoo_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (
+            day,
+            wc_name,
+            person_name,
+            start_utc,
+            end_utc,
+            source,
+            breakdown_id,
+            employee_odoo_id,
+        ),
     )
     return rows[0]["id"] if rows else 0
 
@@ -61,7 +72,8 @@ def for_day(day: date) -> list[dict]:
     from . import db
 
     return db.query(
-        "SELECT id, wc_name, person_name, start_utc, end_utc, source "
+        "SELECT id, wc_name, person_name, employee_odoo_id, start_utc, "
+        "end_utc, source, breakdown_id "
         "FROM wc_time_attributions WHERE day = %s ORDER BY wc_name, start_utc",
         (day,),
     )
@@ -120,7 +132,12 @@ def breakdown_windows_for_day(
     for r in rows:
         if r.get("source") != BREAKDOWN_SOURCE:
             continue
-        key = (r["person_name"], r["wc_name"])
+        person_identity = (
+            (int(r["employee_odoo_id"]), r["person_name"])
+            if r.get("employee_odoo_id") is not None
+            else r["person_name"]
+        )
+        key = (person_identity, r["wc_name"])
         out.setdefault(key, []).append((r["start_utc"], r.get("end_utc")))
     return out
 
@@ -142,7 +159,14 @@ def delete(attribution_id: int) -> None:
 
 
 def add_breakdown(
-    day: date, wc_name: str, person_name: str, start_utc: datetime, breakdown_id: int
+    day: date,
+    wc_name: str,
+    person_name: str,
+    start_utc: datetime,
+    breakdown_id: int,
+    *,
+    employee_odoo_id: int | None = None,
+    end_utc: datetime | None = None,
 ) -> int:
     """Open a new breakdown exclusion window for one operator. end_utc is
     left NULL (open) until the operator leaves the machine (see
@@ -152,10 +176,113 @@ def add_breakdown(
         wc_name,
         person_name,
         start_utc,
-        end_utc=None,
+        end_utc=end_utc,
         source=BREAKDOWN_SOURCE,
         breakdown_id=breakdown_id,
+        employee_odoo_id=employee_odoo_id,
     )
+
+
+def _operator_identity_key(person_name: str, employee_odoo_id: int | None) -> str:
+    if employee_odoo_id is not None:
+        return f"odoo:{int(employee_odoo_id)}"
+    return f"name:{person_name}"
+
+
+def _identity_sql(
+    person_name: str, employee_odoo_id: int | None
+) -> tuple[str, tuple]:
+    if employee_odoo_id is None:
+        return "employee_odoo_id IS NULL AND person_name = %s", (person_name,)
+    return "employee_odoo_id = %s", (int(employee_odoo_id),)
+
+
+def adopt_breakdown(
+    day: date,
+    wc_name: str,
+    person_name: str,
+    start_utc: datetime,
+    breakdown_id: int,
+    *,
+    employee_odoo_id: int | None = None,
+    end_utc: datetime | None = None,
+) -> dict:
+    """Atomically adopt one canonical worker interval.
+
+    A transaction advisory lock serializes every warmer for the same incident
+    and worker. Exact completed intervals are replay-safe; an existing open
+    interval is adopted rather than duplicated. Legacy name-only intervals are
+    promoted when the canonical employee id first becomes available.
+    """
+    from . import db
+
+    if end_utc is not None and end_utc <= start_utc:
+        raise ValueError("breakdown end must be after start")
+    identity = _operator_identity_key(person_name, employee_odoo_id)
+    lock_key = f"breakdown:{breakdown_id}:{identity}"
+    legacy_lock_key = f"breakdown:{breakdown_id}:name:{person_name}"
+    with db.cursor() as cur:
+        if employee_odoo_id is not None:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (legacy_lock_key,))
+        cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,))
+        identity_sql, identity_params = _identity_sql(person_name, employee_odoo_id)
+        cur.execute(
+            "SELECT id, start_utc, end_utc, employee_odoo_id "
+            "FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s "
+            f"AND {identity_sql} AND start_utc = %s ORDER BY id LIMIT 1 FOR UPDATE",
+            (breakdown_id, BREAKDOWN_SOURCE, *identity_params, start_utc),
+        )
+        row = cur.fetchone()
+        if row is None and employee_odoo_id is not None:
+            cur.execute(
+                "SELECT id, start_utc, end_utc, employee_odoo_id "
+                "FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s "
+                "AND employee_odoo_id IS NULL AND person_name = %s "
+                "AND start_utc = %s ORDER BY id LIMIT 1 FOR UPDATE",
+                (breakdown_id, BREAKDOWN_SOURCE, person_name, start_utc),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                cur.execute(
+                    "UPDATE wc_time_attributions SET employee_odoo_id = %s "
+                    "WHERE id = %s",
+                    (int(employee_odoo_id), row["id"]),
+                )
+                row = {**row, "employee_odoo_id": int(employee_odoo_id)}
+        if row is None and end_utc is None:
+            cur.execute(
+                "SELECT id, start_utc, end_utc, employee_odoo_id "
+                "FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s "
+                f"AND {identity_sql} AND end_utc IS NULL ORDER BY id LIMIT 1 FOR UPDATE",
+                (breakdown_id, BREAKDOWN_SOURCE, *identity_params),
+            )
+            row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                "INSERT INTO wc_time_attributions "
+                "(day, wc_name, person_name, employee_odoo_id, start_utc, end_utc, "
+                "source, breakdown_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "RETURNING id, start_utc, end_utc, employee_odoo_id",
+                (
+                    day,
+                    wc_name,
+                    person_name,
+                    employee_odoo_id,
+                    start_utc,
+                    end_utc,
+                    BREAKDOWN_SOURCE,
+                    breakdown_id,
+                ),
+            )
+            return dict(cur.fetchone())
+        if end_utc is not None and (row.get("end_utc") is None or end_utc < row["end_utc"]):
+            cur.execute(
+                "UPDATE wc_time_attributions SET end_utc = %s WHERE id = %s "
+                "RETURNING id, start_utc, end_utc, employee_odoo_id",
+                (end_utc, row["id"]),
+            )
+            return dict(cur.fetchone())
+        return dict(row)
 
 
 def cap_breakdown(attribution_id: int, end_utc: datetime) -> None:
@@ -165,8 +292,10 @@ def cap_breakdown(attribution_id: int, end_utc: datetime) -> None:
     from . import db
 
     db.execute(
-        "UPDATE wc_time_attributions SET end_utc = %s WHERE id = %s AND source = %s",
-        (end_utc, attribution_id, BREAKDOWN_SOURCE),
+        "UPDATE wc_time_attributions SET end_utc = CASE "
+        "WHEN end_utc IS NULL OR %s < end_utc THEN %s ELSE end_utc END "
+        "WHERE id = %s AND source = %s",
+        (end_utc, end_utc, attribution_id, BREAKDOWN_SOURCE),
     )
 
 
@@ -181,19 +310,43 @@ def reopen_breakdown(attribution_id: int) -> None:
     )
 
 
-def open_breakdown_row(day: date, wc_name: str, person_name: str) -> dict | None:
+def open_breakdown_row(
+    day: date,
+    wc_name: str,
+    person_name: str,
+    *,
+    employee_odoo_id: int | None = None,
+    breakdown_id: int | None = None,
+) -> dict | None:
     """The operator's currently-OPEN breakdown row for (day, wc_name), if
     any. Returns {id, start_utc} or None. Used by the detection tick to find
     the row to cap when an operator leaves the machine."""
     from . import db
 
+    identity_sql, identity_params = _identity_sql(person_name, employee_odoo_id)
+    breakdown_sql = " AND breakdown_id = %s" if breakdown_id is not None else ""
+    params = (day, wc_name, *identity_params, BREAKDOWN_SOURCE)
+    if breakdown_id is not None:
+        params = (*params, breakdown_id)
     rows = db.query(
-        "SELECT id, start_utc FROM wc_time_attributions "
-        "WHERE day = %s AND wc_name = %s AND person_name = %s "
-        "AND source = %s AND end_utc IS NULL",
-        (day, wc_name, person_name, BREAKDOWN_SOURCE),
+        "SELECT id, start_utc, end_utc, employee_odoo_id FROM wc_time_attributions "
+        f"WHERE day = %s AND wc_name = %s AND {identity_sql} "
+        f"AND source = %s AND end_utc IS NULL{breakdown_sql} ORDER BY id",
+        params,
     )
     return rows[0] if rows else None
+
+
+def open_breakdown_rows_for_incident(breakdown_id: int) -> list[dict]:
+    """Every still-open worker exclusion, including defensive duplicates."""
+    from . import db
+
+    return db.query(
+        "SELECT id, start_utc, employee_odoo_id, person_name "
+        "FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s "
+        "AND end_utc IS NULL ORDER BY id",
+        (breakdown_id, BREAKDOWN_SOURCE),
+    )
 
 
 def delete_breakdown_rows_for_incident(breakdown_id: int) -> None:

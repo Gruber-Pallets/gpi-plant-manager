@@ -87,3 +87,19 @@ def test_active_snooze_until_none_after_expiry(monkeypatch):
         (incident_id, "Juan", now - timedelta(minutes=1)),
     )
     assert machine_breakdown.active_snooze_until(incident_id, "Juan") is None
+
+
+def test_same_name_workers_have_independent_snoozes():
+    now = datetime.now(timezone.utc)
+    incident_id = machine_breakdown.open_incident(WC, now.date(), now, source="auto")
+
+    machine_breakdown.snooze_operator(
+        incident_id, "Alex", employee_odoo_id=101
+    )
+
+    assert machine_breakdown.active_snooze_until(
+        incident_id, "Alex", employee_odoo_id=101
+    ) is not None
+    assert machine_breakdown.active_snooze_until(
+        incident_id, "Alex", employee_odoo_id=202
+    ) is None

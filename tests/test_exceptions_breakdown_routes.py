@@ -36,11 +36,11 @@ def test_transfer_sync_caps_exclusion_and_calls_decide_and_apply(monkeypatch):
         "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08", "detected_stop_utc": _STOP,
     })
     monkeypatch.setattr(wc_attributions, "open_breakdown_row",
-                        lambda day, wc, person: {"id": 10})
+                        lambda day, wc, person, **_kwargs: {"id": 10})
     capped = []
     monkeypatch.setattr(wc_attributions, "cap_breakdown", lambda rid, end: capped.append((rid, end)))
     applied = {}
-    def _decide_and_apply(person, wc, ts):
+    def _decide_and_apply(person, wc, ts, **_kwargs):
         applied.update(person=person, wc=wc, ts=ts)
         return {"transfer": "moved", "person": person,
                 "closed_id": 5, "new_id": 6, "to_dept": "Recycled"}
@@ -71,10 +71,10 @@ def test_transfer_sync_500_with_friendly_error_when_decide_and_apply_raises(monk
         "id": 1, "wc_name": "Dismantler 2", "day": "2026-07-08", "detected_stop_utc": _STOP,
     })
     monkeypatch.setattr(wc_attributions, "open_breakdown_row",
-                        lambda day, wc, person: {"id": 10})
+                        lambda day, wc, person, **_kwargs: {"id": 10})
     monkeypatch.setattr(wc_attributions, "cap_breakdown", lambda rid, end: None)
 
-    def _raise(person, wc, ts):
+    def _raise(person, wc, ts, **_kwargs):
         raise RuntimeError("xmlrpc boom")
 
     monkeypatch.setattr(staffing_transfer, "decide_and_apply", _raise)
@@ -102,10 +102,30 @@ def test_snooze_sync_calls_snooze_operator(monkeypatch):
     from zira_dashboard import machine_breakdown
     called = []
     monkeypatch.setattr(machine_breakdown, "snooze_operator",
-                        lambda iid, person: called.append((iid, person)))
+                        lambda iid, person, **_kwargs: called.append((iid, person)))
     resp = exceptions_route._breakdown_snooze_sync({"incident_id": 1, "person_name": "Juan"})
     assert resp.status_code == 200
     assert called == [(1, "Juan")]
+
+
+def test_snooze_sync_threads_employee_identity(monkeypatch):
+    from zira_dashboard import machine_breakdown
+
+    called = []
+    monkeypatch.setattr(
+        machine_breakdown,
+        "snooze_operator",
+        lambda incident_id, person_name, employee_odoo_id=None: called.append(
+            (incident_id, person_name, employee_odoo_id)
+        ),
+    )
+
+    response = exceptions_route._breakdown_snooze_sync(
+        {"incident_id": 1, "person_name": "Alex", "employee_odoo_id": 202}
+    )
+
+    assert response.status_code == 200
+    assert called == [(1, "Alex", 202)]
 
 
 def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
@@ -115,7 +135,7 @@ def test_dismiss_sync_deletes_rows_and_resolves(monkeypatch):
     })
     snapshot_rows = [{"id": 10, "day": "2026-07-08", "wc_name": "Dismantler 2",
                       "person_name": "Juan", "start_utc": "2026-07-08T18:02:00+00:00",
-                      "end_utc": None, "source": "breakdown"}]
+                      "end_utc": None, "source": "breakdown", "breakdown_id": 1}]
     monkeypatch.setattr(wc_attributions, "for_day", lambda day: snapshot_rows)
     deleted = []
     monkeypatch.setattr(wc_attributions, "delete_breakdown_rows_for_incident",

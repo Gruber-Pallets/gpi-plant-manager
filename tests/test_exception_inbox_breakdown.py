@@ -169,3 +169,30 @@ def test_pending_live_breakdown_transfer_route_keeps_legacy_delegation(monkeypat
         "dale@gruberpallets.com",
         "Dale",
     )
+
+
+def test_incomplete_operator_source_marks_breakdown_section_incomplete(monkeypatch):
+    from zira_dashboard import machine_breakdown
+
+    rows = machine_breakdown.BreakdownRows([], complete=False)
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: rows)
+
+    snapshot = exception_inbox.build_snapshot()
+    section = next(item for item in snapshot["sections"] if item["id"] == "breakdown")
+
+    assert section["complete"] is False
+
+
+def test_breakdown_source_error_marks_section_incomplete(monkeypatch):
+    from zira_dashboard import machine_breakdown
+
+    def unavailable():
+        raise RuntimeError("breakdown snapshot unavailable")
+
+    monkeypatch.setattr(machine_breakdown, "current_rows", unavailable)
+
+    snapshot = exception_inbox.build_snapshot()
+    section = next(item for item in snapshot["sections"] if item["id"] == "breakdown")
+
+    assert section["rows"] == []
+    assert section["complete"] is False

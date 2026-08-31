@@ -11,6 +11,17 @@ def _json_error(message: str, status_code: int) -> JSONResponse:
     return JSONResponse({"ok": False, "error": message}, status_code=status_code)
 
 
+def _employee_id(body: dict) -> int | None:
+    raw = body.get("employee_odoo_id")
+    if raw in (None, ""):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def live_transfer_is_disabled() -> bool:
     """Suppress this legacy action only after positive live activation."""
     from . import attendance_location_policy
@@ -43,6 +54,7 @@ def transfer(
 
     incident_id = body.get("incident_id")
     person_name = str(body.get("person_name") or "").strip()
+    employee_odoo_id = _employee_id(body)
     to_wc = str(body.get("to_wc") or "").strip()
     if not incident_id or not person_name or not to_wc:
         return _json_error("incident_id, person_name, and to_wc are required", 400)
@@ -52,7 +64,13 @@ def transfer(
         return _json_error("incident not found", 404)
 
     transfer_at = incident["detected_stop_utc"]
-    row = wc_attributions.open_breakdown_row(incident["day"], incident["wc_name"], person_name)
+    row = wc_attributions.open_breakdown_row(
+        incident["day"],
+        incident["wc_name"],
+        person_name,
+        employee_odoo_id=employee_odoo_id,
+        breakdown_id=incident["id"],
+    )
     if row is not None:
         wc_attributions.cap_breakdown(row["id"], transfer_at)
 
@@ -65,13 +83,23 @@ def transfer(
     # for Odoo-calling handlers (_approve_time_off_sync, _refuse_time_off_sync):
     # log and return a friendly error, no rollback.
     try:
-        result = staffing_transfer.decide_and_apply(person_name, to_wc, transfer_at)
+        result = staffing_transfer.decide_and_apply(
+            person_name,
+            to_wc,
+            transfer_at,
+            employee_odoo_id=employee_odoo_id,
+        )
     except Exception as e:
         return _json_error(friendly_error(e), 500)
 
     eid = inbox_log.log_event_safe(
         item_kind="breakdown",
-        item_key=inbox_keys.breakdown(incident["wc_name"], incident["detected_stop_utc"].isoformat(), person_name),
+        item_key=inbox_keys.breakdown(
+            incident["wc_name"],
+            incident["detected_stop_utc"].isoformat(),
+            person_name,
+            employee_odoo_id,
+        ),
         person_name=person_name,
         category_label="Machine Breakdown",
         action="transfer",
@@ -85,6 +113,7 @@ def transfer(
             "closed_id": result.get("closed_id"),
             "new_id": result.get("new_id"),
             "attribution_id": row["id"] if row is not None else None,
+            "employee_odoo_id": employee_odoo_id,
         },
     )
     return JSONResponse({"ok": True, "event_id": eid, "transfer": result.get("transfer")})
@@ -98,7 +127,11 @@ def snooze(body: dict) -> JSONResponse:
     person_name = str(body.get("person_name") or "").strip()
     if not incident_id or not person_name:
         return _json_error("incident_id and person_name are required", 400)
-    machine_breakdown.snooze_operator(incident_id, person_name)
+    machine_breakdown.snooze_operator(
+        incident_id,
+        person_name,
+        employee_odoo_id=_employee_id(body),
+    )
     return JSONResponse({"ok": True})
 
 
@@ -121,7 +154,8 @@ def dismiss(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     snapshot_rows = [
         {**r, "day": incident["day"]}
         for r in wc_attributions.for_day(incident["day"])
-        if r.get("wc_name") == incident["wc_name"] and r.get("source") == wc_attributions.BREAKDOWN_SOURCE
+        if r.get("breakdown_id") == incident_id
+        and r.get("source") == wc_attributions.BREAKDOWN_SOURCE
     ]
     wc_attributions.delete_breakdown_rows_for_incident(incident_id)
     machine_breakdown.resolve_incident(incident_id, "dismissed")

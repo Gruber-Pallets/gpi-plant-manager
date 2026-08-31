@@ -181,6 +181,8 @@ def expected_by_wc(
     segments: list[WorkSegment],
     target_per_hour: dict[str, float],
     productive_minutes: Callable[[str, str, datetime, datetime], float],
+    *,
+    productive_minutes_for_segment: Callable[[WorkSegment], float] | None = None,
 ) -> dict[str, float]:
     """Sum prorated expected pallets per WC.
 
@@ -197,7 +199,11 @@ def expected_by_wc(
         thr = target_per_hour.get(s.wc_name, 0.0)
         if thr <= 0:
             continue
-        mins = productive_minutes(s.person_name, s.wc_name, s.start_utc, s.end_utc)
+        mins = (
+            productive_minutes_for_segment(s)
+            if productive_minutes_for_segment is not None
+            else productive_minutes(s.person_name, s.wc_name, s.start_utc, s.end_utc)
+        )
         if mins <= 0:
             continue
         out[s.wc_name] = out.get(s.wc_name, 0.0) + thr * mins / 60.0

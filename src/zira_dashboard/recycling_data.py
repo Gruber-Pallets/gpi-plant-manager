@@ -239,7 +239,14 @@ def build_downtime_rows(
     return out
 
 
-def compute_per_wc_expected(*, segments, active_wc_names, target_per_hour, productive_minutes):
+def compute_per_wc_expected(
+    *,
+    segments,
+    active_wc_names,
+    target_per_hour,
+    productive_minutes,
+    productive_minutes_for_segment=None,
+):
     """Prorated expected pallets per ACTIVE work center.
 
     Mirrors the route wiring exactly: filter segments to the active WCs, sum via
@@ -250,7 +257,12 @@ def compute_per_wc_expected(*, segments, active_wc_names, target_per_hour, produ
     goal on partial-leave days (the June 2026 regression)."""
     from . import assignment_windows
     active = [s for s in segments if s.wc_name in active_wc_names]
-    out = assignment_windows.expected_by_wc(active, target_per_hour, productive_minutes)
+    out = assignment_windows.expected_by_wc(
+        active,
+        target_per_hour,
+        productive_minutes,
+        productive_minutes_for_segment=productive_minutes_for_segment,
+    )
     for name in active_wc_names:
         out.setdefault(name, 0.0)
     return out

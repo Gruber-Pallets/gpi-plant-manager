@@ -304,6 +304,7 @@ def credit_work_segments(
     wc_totals: Mapping[str, float],
     samples_by_wc: Mapping[str, Sequence[tuple[datetime, float]]],
     productive_minutes: Callable[[str, str, datetime, datetime], float],
+    productive_minutes_for_segment: Callable[[WorkSegment], float] | None = None,
     live_cap_utc: datetime | None = None,
     allow_total_fallback: bool = True,
 ) -> dict[str, tuple[SegmentCredit, ...]]:
@@ -315,11 +316,15 @@ def credit_work_segments(
         minutes = max(
             0.0,
             float(
-                productive_minutes(
-                    segment.person_name,
-                    segment.wc_name,
-                    segment.start_utc,
-                    segment.end_utc,
+                (
+                    productive_minutes_for_segment(segment)
+                    if productive_minutes_for_segment is not None
+                    else productive_minutes(
+                        segment.person_name,
+                        segment.wc_name,
+                        segment.start_utc,
+                        segment.end_utc,
+                    )
                 )
             ),
         )

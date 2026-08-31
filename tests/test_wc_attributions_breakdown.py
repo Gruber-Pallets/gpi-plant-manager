@@ -1,6 +1,10 @@
 """Pure-logic + DB tests for the breakdown exclusion extension to
 wc_attributions.py. Mirrors tests/test_wc_attributions_testing.py's style."""
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+
+import pytest
 
 from zira_dashboard import wc_attributions
 
@@ -41,6 +45,23 @@ def test_breakdown_windows_for_day_groups_by_person_and_wc():
     assert out == {("Juan", "Dismantler 2"): [(s1, e1)]}
 
 
+def test_breakdown_windows_keep_same_display_names_separate_by_employee_id():
+    start = datetime(2026, 7, 8, 13, 2, tzinfo=timezone.utc)
+    rows = [
+        {"id": 1, "wc_name": "Dismantler 2", "person_name": "Alex",
+         "employee_odoo_id": 101, "start_utc": start, "end_utc": None,
+         "source": wc_attributions.BREAKDOWN_SOURCE},
+        {"id": 2, "wc_name": "Dismantler 2", "person_name": "Alex",
+         "employee_odoo_id": 202, "start_utc": start, "end_utc": None,
+         "source": wc_attributions.BREAKDOWN_SOURCE},
+    ]
+
+    assert wc_attributions.breakdown_windows_for_day("2026-07-08", rows=rows) == {
+        ((101, "Alex"), "Dismantler 2"): [(start, None)],
+        ((202, "Alex"), "Dismantler 2"): [(start, None)],
+    }
+
+
 def test_add_breakdown_and_cap_and_reopen(monkeypatch):
     from zira_dashboard import db
     calls = {}
@@ -56,7 +77,16 @@ def test_add_breakdown_and_cap_and_reopen(monkeypatch):
     assert row_id == 5
     sql, params = calls["insert"]
     assert "source" in sql.lower()
-    assert params == (day, "Dismantler 2", "Juan", start, None, wc_attributions.BREAKDOWN_SOURCE, 42)
+    assert params == (
+        day,
+        "Dismantler 2",
+        "Juan",
+        start,
+        None,
+        wc_attributions.BREAKDOWN_SOURCE,
+        42,
+        None,
+    )
 
     def fake_execute(sql, params):
         calls["cap"] = (sql, params)
@@ -64,7 +94,12 @@ def test_add_breakdown_and_cap_and_reopen(monkeypatch):
     monkeypatch.setattr(db, "execute", fake_execute)
     end = datetime(2026, 7, 8, 13, 30, tzinfo=timezone.utc)
     wc_attributions.cap_breakdown(5, end)
-    assert calls["cap"][1] == (end, 5, wc_attributions.BREAKDOWN_SOURCE)
+    assert calls["cap"][1] == (
+        end,
+        end,
+        5,
+        wc_attributions.BREAKDOWN_SOURCE,
+    )
 
     wc_attributions.reopen_breakdown(5)
     assert calls["cap"][1] == (5, wc_attributions.BREAKDOWN_SOURCE)  # last _execute call was reopen
@@ -88,3 +123,96 @@ def test_delete_breakdown_rows_for_incident(monkeypatch):
     monkeypatch.setattr(db, "execute", lambda sql, params: calls.setdefault("args", params))
     wc_attributions.delete_breakdown_rows_for_incident(42)
     assert calls["args"] == (42, wc_attributions.BREAKDOWN_SOURCE)
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs Postgres")
+def test_adopt_breakdown_is_atomic_for_concurrent_warmers():
+    from zira_dashboard import db
+
+    db.bootstrap_schema()
+    day = date(2098, 8, 31)
+    wc_name = "Task 12 Race WC"
+    start = datetime(2098, 8, 31, 13, 2, tzinfo=timezone.utc)
+    db.execute("DELETE FROM wc_time_attributions WHERE wc_name = %s", (wc_name,))
+
+    def adopt(_index):
+        return wc_attributions.adopt_breakdown(
+            day, wc_name, "Alex", start, 9912, employee_odoo_id=101
+        )["id"]
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            ids = list(pool.map(adopt, range(24)))
+        rows = db.query(
+            "SELECT id, employee_odoo_id FROM wc_time_attributions "
+            "WHERE wc_name = %s AND source = %s",
+            (wc_name, wc_attributions.BREAKDOWN_SOURCE),
+        )
+        assert len(set(ids)) == 1
+        assert rows == [{"id": ids[0], "employee_odoo_id": 101}]
+    finally:
+        db.execute("DELETE FROM wc_time_attributions WHERE wc_name = %s", (wc_name,))
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs Postgres")
+def test_same_name_workers_cap_only_the_departed_employee():
+    from zira_dashboard import db
+
+    db.bootstrap_schema()
+    day = date(2098, 8, 31)
+    wc_name = "Task 12 Same Name WC"
+    start = datetime(2098, 8, 31, 13, 2, tzinfo=timezone.utc)
+    departure = datetime(2098, 8, 31, 13, 23, tzinfo=timezone.utc)
+    db.execute("DELETE FROM wc_time_attributions WHERE wc_name = %s", (wc_name,))
+
+    try:
+        first = wc_attributions.adopt_breakdown(
+            day, wc_name, "Alex", start, 9913, employee_odoo_id=101
+        )
+        second = wc_attributions.adopt_breakdown(
+            day, wc_name, "Alex", start, 9913, employee_odoo_id=202
+        )
+
+        wc_attributions.cap_breakdown(first["id"], departure)
+
+        rows = db.query(
+            "SELECT employee_odoo_id, end_utc FROM wc_time_attributions "
+            "WHERE wc_name = %s AND source = %s ORDER BY employee_odoo_id",
+            (wc_name, wc_attributions.BREAKDOWN_SOURCE),
+        )
+        assert rows == [
+            {"employee_odoo_id": 101, "end_utc": departure},
+            {"employee_odoo_id": 202, "end_utc": None},
+        ]
+        assert first["id"] != second["id"]
+    finally:
+        db.execute("DELETE FROM wc_time_attributions WHERE wc_name = %s", (wc_name,))
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs Postgres")
+def test_breakdown_cap_keeps_the_earliest_resolution_time():
+    from zira_dashboard import db
+
+    db.bootstrap_schema()
+    day = date(2098, 8, 31)
+    wc_name = "Task 12 Earliest Cap WC"
+    start = datetime(2098, 8, 31, 13, 2, tzinfo=timezone.utc)
+    recovery = datetime(2098, 8, 31, 13, 20, tzinfo=timezone.utc)
+    late_departure = datetime(2098, 8, 31, 13, 25, tzinfo=timezone.utc)
+    db.execute("DELETE FROM wc_time_attributions WHERE wc_name = %s", (wc_name,))
+
+    try:
+        row = wc_attributions.adopt_breakdown(
+            day, wc_name, "Alex", start, 9914, employee_odoo_id=101
+        )
+
+        wc_attributions.cap_breakdown(row["id"], recovery)
+        wc_attributions.cap_breakdown(row["id"], late_departure)
+
+        saved = db.query(
+            "SELECT end_utc FROM wc_time_attributions WHERE id = %s",
+            (row["id"],),
+        )
+        assert saved == [{"end_utc": recovery}]
+    finally:
+        db.execute("DELETE FROM wc_time_attributions WHERE wc_name = %s", (wc_name,))

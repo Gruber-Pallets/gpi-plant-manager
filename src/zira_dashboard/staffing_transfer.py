@@ -36,7 +36,11 @@ def _employee_id_for(person_name: str) -> int | None:
 
 
 def decide_and_apply(
-    person_name: str, wc_name: str, window_start_utc: datetime
+    person_name: str,
+    wc_name: str,
+    window_start_utc: datetime,
+    *,
+    employee_odoo_id: int | None = None,
 ) -> dict:
     """Transfer ``person_name`` to ``wc_name``'s department in Odoo if needed.
 
@@ -64,7 +68,7 @@ def decide_and_apply(
 
     from . import odoo_client
 
-    emp_id = _employee_id_for(person_name)
+    emp_id = employee_odoo_id or _employee_id_for(person_name)
     to_dept = _wc_department_label(wc_name)
     if emp_id is None:
         return {"transfer": "skipped_no_employee", "person": person_name}
