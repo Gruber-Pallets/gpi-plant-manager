@@ -1,6 +1,9 @@
 import asyncio
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime
+
+import pytest
 
 from zira_dashboard import (
     app,
@@ -44,11 +47,14 @@ def _issue(kind, key, *, priority="urgent", comparison=False, end_is_open=False)
     )
 
 
-def _with_end_semantics(item, *, end_utc, end_is_open):
-    return replace(item, end_utc=end_utc, end_is_open=end_is_open)
-
-
-def _attendance_snapshot(*, mode="off", production_mode="legacy", issues=(), complete=True):
+def _attendance_snapshot(
+    *,
+    mode="off",
+    production_mode="legacy",
+    issues=(),
+    complete=True,
+    source_errors=(),
+):
     return attendance_exceptions.AttendanceExceptionSnapshot(
         day=DAY,
         mode=mode,
@@ -57,8 +63,12 @@ def _attendance_snapshot(*, mode="off", production_mode="legacy", issues=(), com
         fresh=complete,
         complete=complete,
         issues=tuple(issues),
-        source_errors=(),
+        source_errors=tuple(source_errors),
     )
+
+
+def _with_end_semantics(item, *, end_utc, end_is_open):
+    return replace(item, end_utc=end_utc, end_is_open=end_is_open)
 
 
 def _empty_legacy(monkeypatch, *, missing=(), assignments=()):
@@ -216,6 +226,24 @@ def test_closed_attendance_end_correction_changes_row_revision():
     assert initial["row_key"] != corrected["row_key"]
 
 
+def test_closing_an_open_attendance_end_changes_row_revision():
+    item = _issue(
+        "attendance_missing_location",
+        "attendance_missing_location:42:901:2026-08-31T13:00:00+00:00",
+        priority="urgent",
+    )
+
+    open_row = exception_inbox._attendance_issue_row(
+        _with_end_semantics(item, end_utc=NOW.replace(minute=4), end_is_open=True)
+    )
+    closed_row = exception_inbox._attendance_issue_row(
+        _with_end_semantics(item, end_utc=NOW.replace(minute=4), end_is_open=False)
+    )
+
+    assert open_row["item_key"] == closed_row["item_key"]
+    assert open_row["row_key"] != closed_row["row_key"]
+
+
 def test_production_run_end_correction_changes_row_revision():
     item = _issue(
         "production_unassigned_run",
@@ -269,22 +297,122 @@ def test_production_row_revision_changes_with_units_and_sample_count():
     assert initial["row_key"] != changed["row_key"]
 
 
-def test_stale_strict_day_never_restores_legacy_assignment_actions(monkeypatch):
-    _empty_legacy(monkeypatch, assignments=(_legacy_assignment(),))
-    stale_strict = _attendance_snapshot(mode="shadow", production_mode="strict", complete=False)
+def test_shadow_builder_failure_renders_source_issue_without_claiming_legacy(monkeypatch):
+    _empty_legacy(
+        monkeypatch,
+        missing=({"attendance_id": 901, "name": "Adrian", "check_in_label": "8:00 AM"},),
+        assignments=(_legacy_assignment(),),
+    )
     monkeypatch.setattr(
         attendance_exceptions,
         "build_snapshot",
-        lambda *_a, **_k: stale_strict,
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("attendance projection failed")),
     )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "get_rollout_config",
+        lambda: attendance_location_policy.RolloutConfig("shadow", NOW, None),
+    )
+    monkeypatch.setattr(attendance_location_policy, "strict_days", lambda: set())
+    monkeypatch.setattr(exception_inbox, "_auto_lunch_alert", lambda *_a, **_k: None)
+
+    full = exception_inbox.build_snapshot()
+    summary = exception_inbox.build_summary()
+    sections = {section["id"]: section for section in full["sections"]}
+
+    unavailable = sections["production_source_unavailable"]
+    assert unavailable["count"] == 1
+    assert unavailable["rows"][0]["item_key"] == "production_source_unavailable:2026-08-31"
+    assert unavailable["rows"][0]["comparison_only"] is True
+    assert sections["assignments"]["count"] == 1
+    assert sections["missing_wc"]["count"] == 1
+    assert summary["sections"]["production_source_unavailable"] == 1
+    assert summary["sections"]["assignments"] == 1
+    assert summary["sections"]["missing_wc"] == 1
+    assert summary["total"] == full["total"] == 3
+    assert summary["urgent_total"] == full["urgent_total"] == 2
+
+
+def test_empty_prebaseline_shadow_snapshot_does_not_claim_or_render(monkeypatch):
+    _empty_legacy(
+        monkeypatch,
+        missing=({"attendance_id": 901, "name": "Adrian", "check_in_label": "8:00 AM"},),
+        assignments=(_legacy_assignment(),),
+    )
+    incomplete = replace(
+        _attendance_snapshot(mode="shadow", production_mode="shadow", complete=False),
+        baseline_complete=False,
+    )
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "build_snapshot",
+        lambda *_a, **_k: incomplete,
+    )
+
+    full = exception_inbox.build_snapshot()
+    sections = {section["id"]: section for section in full["sections"]}
+
+    assert sections["assignments"]["count"] == 1
+    assert sections["missing_wc"]["count"] == 1
+    assert not set(exception_inbox._ATTENDANCE_SECTION_META).intersection(sections)
+
+
+@pytest.mark.parametrize(
+    ("production_mode", "builder_failure"),
+    [("strict", False), ("pending", False), ("strict", True)],
+)
+def test_authoritative_day_never_calls_legacy_during_attendance_outage(
+    monkeypatch, production_mode, builder_failure
+):
+    _empty_legacy(monkeypatch, assignments=(_legacy_assignment(),))
+    monkeypatch.setattr(
+        staffing_routes,
+        "assignments_todo_payload",
+        lambda: pytest.fail("authoritative day called legacy production provider"),
+    )
+    monkeypatch.setattr(
+        missing_wc,
+        "current_rows",
+        lambda: pytest.fail("authoritative day called legacy location provider"),
+    )
+    if builder_failure:
+        monkeypatch.setattr(
+            attendance_exceptions,
+            "build_snapshot",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("attendance projection failed")),
+        )
+        monkeypatch.setattr(
+            attendance_location_policy,
+            "get_rollout_config",
+            lambda: attendance_location_policy.RolloutConfig("shadow", NOW, None),
+        )
+        monkeypatch.setattr(
+            attendance_location_policy,
+            "strict_days",
+            lambda: {DAY} if production_mode == "strict" else set(),
+        )
+    else:
+        monkeypatch.setattr(
+            attendance_exceptions,
+            "build_snapshot",
+            lambda *_a, **_k: _attendance_snapshot(
+                mode="shadow",
+                production_mode=production_mode,
+                complete=False,
+                source_errors=("Attendance Timeline",),
+            ),
+        )
 
     snapshot = exception_inbox.build_snapshot()
-    assignments = next(
-        section for section in snapshot["sections"] if section["id"] == "assignments"
-    )
+    sections = {section["id"]: section for section in snapshot["sections"]}
 
-    assert assignments["count"] == 0
-    assert assignments["rows"] == []
+    assert sections["assignments"]["count"] == 0
+    assert sections["assignments"]["rows"] == []
+    assert "missing_wc" not in sections
+    if builder_failure:
+        assert sections["production_source_unavailable"]["count"] == 1
+        sources = {error["source"] for error in snapshot["source_errors"]}
+        assert {"Attendance Timeline", "Strict Production"} <= sources
 
 
 def test_summary_and_snapshot_count_the_same_attendance_items(monkeypatch):
@@ -353,19 +481,32 @@ def test_incomplete_timeline_sections_cannot_auto_resolve(monkeypatch):
 
 
 def test_departure_waits_for_linked_correction_completion(monkeypatch):
-    rows = [{"status": "verifying"}]
-    monkeypatch.setattr(inbox_reconcile.db, "query", lambda *_a, **_k: rows)
+    statuses = [{"status": "verifying"}]
+
+    class CorrectionCursor:
+        def execute(self, _sql, _params=None):
+            pass
+
+        def fetchone(self):
+            return statuses[0]
+
+    @contextmanager
+    def cursor():
+        yield CorrectionCursor()
+
+    monkeypatch.setattr(inbox_reconcile.db, "cursor", cursor)
     assert inbox_reconcile._correction_allows_resolution("production_unassigned_run:wc:x") is False
-    rows[0]["status"] = "complete"
+    statuses[0]["status"] = "complete"
     assert inbox_reconcile._correction_allows_resolution("production_unassigned_run:wc:x") is True
 
 
 def test_correction_lookup_failure_keeps_item_open(monkeypatch):
-    monkeypatch.setattr(
-        inbox_reconcile.db,
-        "query",
-        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("database unavailable")),
-    )
+    @contextmanager
+    def failed_cursor():
+        raise RuntimeError("database unavailable")
+        yield
+
+    monkeypatch.setattr(inbox_reconcile.db, "cursor", failed_cursor)
 
     assert inbox_reconcile._correction_allows_resolution("production_unassigned_run:wc:x") is False
 

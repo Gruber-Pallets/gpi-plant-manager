@@ -439,11 +439,8 @@ def _production_issues(
             error,
         )
 
-    # A recorded strict day stays live-strict even while the global setting is
-    # shadow (for example, after a clean-boundary rollback). Only the explicit
-    # legacy-state branch above is a shadow comparison.
-    comparison = False
-    production_mode: ProductionMode = "strict"
+    # Once the day has a strict marker it remains authoritative even if the
+    # rollout setting is later moved back to shadow or off.
     try:
         runs = wc_attributions.shadow_unassigned_runs_for_day(
             day, production_client, now_utc=now_utc
@@ -451,12 +448,11 @@ def _production_issues(
     except Exception as exc:  # noqa: BLE001 - any strict read failure is actionable
         reason = str(exc) or "strict production source is unavailable"
         return (
-            production_mode,
+            "strict",
             [_production_unavailable_issue(day, now_utc, reason, comparison_only=False)],
             reason,
         )
-
-    return production_mode, _run_issues(runs, spans=spans, comparison=comparison), None
+    return "strict", _run_issues(runs, spans=spans, comparison=False), None
 
 
 def _run_issues(
@@ -627,10 +623,9 @@ def build_snapshot(
             tuple(dict.fromkeys(source_errors)),
         )
 
-    verified = health.last_incremental_completed_at
+    verified = health.last_incremental_completed_at or health.baseline_completed_at
     source_age_stale = bool(
-        verified is None
-        or now - _aware_utc(verified, "last_incremental_completed_at") > _SOURCE_STALE_AFTER
+        verified is None or now - _aware_utc(verified, "verified freshness") > _SOURCE_STALE_AFTER
     )
     fresh = not source_age_stale and health.last_error is None
     if source_age_stale:
@@ -671,7 +666,7 @@ def build_snapshot(
             issues.extend(production_issues)
             if production_error:
                 source_errors.append(_PRODUCTION_SOURCE)
-        except Exception as exc:  # noqa: BLE001 - unknown source errors stay visible
+        except Exception as exc:  # noqa: BLE001 - every projection failure stays visible
             if production_mode != "legacy":
                 issues.append(
                     _production_unavailable_issue(

@@ -325,6 +325,23 @@ def test_stale_source_is_one_stable_urgent_item_and_snapshot_is_incomplete(sourc
     assert first.fresh is False
 
 
+@pytest.mark.parametrize(
+    ("age_seconds", "expected_fresh"),
+    [(89, True), (91, False)],
+)
+def test_baseline_only_freshness_uses_baseline_timestamp(source, age_seconds, expected_fresh):
+    baseline = NOW - timedelta(seconds=age_seconds)
+    source["health"] = _health(verified=None, baseline=baseline)
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+    stale = snapshot.issues_for("attendance_source_stale")
+
+    assert snapshot.fresh is expected_fresh
+    assert bool(stale) is not expected_fresh
+    if stale:
+        assert stale[0].start_utc == baseline + timedelta(seconds=90)
+
+
 def test_stale_mirror_preserves_frozen_strict_day_ownership(source, monkeypatch):
     source["health"] = _health(verified=NOW - timedelta(seconds=91))
     calls = {"strict": 0}
@@ -334,13 +351,23 @@ def test_stale_mirror_preserves_frozen_strict_day_ownership(source, monkeypatch)
         return {DAY}
 
     monkeypatch.setattr(attendance_location_policy, "strict_days", strict_once)
+    monkeypatch.setattr(
+        wc_attributions,
+        "shadow_unassigned_runs_for_day",
+        lambda *_a, **_k: pytest.fail("stale projection queried strict runs"),
+    )
 
     snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
 
     assert calls["strict"] == 1
     assert snapshot.production_mode == "strict"
+    assert snapshot.fresh is False
+    assert snapshot.complete is False
     assert "Attendance Timeline" in snapshot.source_errors
-    assert _one(snapshot, "production_source_unavailable").comparison_only is False
+    assert snapshot.source_errors.count("Strict Production") == 1
+    unavailable = snapshot.issues_for("production_source_unavailable")
+    assert len(unavailable) == 1
+    assert unavailable[0].comparison_only is False
 
 
 def test_rollout_config_failure_is_pending_instead_of_legacy(source, monkeypatch):
@@ -418,13 +445,51 @@ def test_strict_production_source_failure_becomes_urgent_without_aggregate_guess
     )
 
     snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
-    issue = _one(snapshot, "production_source_unavailable")
+    unavailable = snapshot.issues_for("production_source_unavailable")
+    assert len(unavailable) == 1
+    issue = unavailable[0]
 
     assert issue.item_key == "production_source_unavailable:2026-08-31"
     assert issue.reason == "timestamped samples do not match"
     assert issue.priority == "urgent"
     assert snapshot.complete is False
-    assert "Strict Production" in snapshot.source_errors
+    assert snapshot.source_errors.count("Strict Production") == 1
+
+
+@pytest.mark.parametrize("failure_boundary", ["client", "projection"])
+def test_all_production_projection_failures_create_the_day_keyed_urgent_item(
+    source, monkeypatch, failure_boundary
+):
+    if failure_boundary == "client":
+        monkeypatch.setattr(
+            attendance_exceptions,
+            "_shared_production_client",
+            lambda: (_ for _ in ()).throw(RuntimeError("shared client unavailable")),
+        )
+    else:
+        malformed = SimpleNamespace(
+            wc_name="Dismantler 1",
+            start_utc=None,
+            end_utc=None,
+            units=4,
+            sample_count=1,
+        )
+        monkeypatch.setattr(
+            wc_attributions,
+            "shadow_unassigned_runs_for_day",
+            lambda *_a, **_k: (malformed,),
+        )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+    unavailable = snapshot.issues_for("production_source_unavailable")
+    assert len(unavailable) == 1
+    issue = unavailable[0]
+
+    assert issue.item_key == "production_source_unavailable:2026-08-31"
+    assert issue.priority == "urgent"
+    assert issue.reason
+    assert snapshot.complete is False
+    assert snapshot.source_errors.count("Strict Production") == 1
 
 
 def test_distinct_unassigned_runs_keep_exact_units_samples_and_boundaries(source, monkeypatch):
@@ -466,9 +531,13 @@ def test_shadow_mode_computes_run_comparisons_without_changing_legacy_actions(so
     assert issue.item_key == ("production_unassigned_run:Dismantler 1:2026-08-31T12:55:00+00:00")
 
 
-def test_already_strict_day_in_shadow_is_not_labeled_as_a_comparison(source, monkeypatch):
+@pytest.mark.parametrize("rollout_mode", ["shadow", "off"])
+def test_already_strict_day_ignores_rollout_rollback(source, monkeypatch, rollout_mode):
     run = UnassignedRun(
         "Dismantler 1", NOW - timedelta(minutes=5), NOW - timedelta(minutes=4), 2.0, 1
+    )
+    monkeypatch.setattr(
+        attendance_location_policy, "get_rollout_config", lambda: _config(rollout_mode)
     )
     monkeypatch.setattr(attendance_location_policy, "strict_days", lambda: {DAY})
     monkeypatch.setattr(production_history, "unassigned_runs_for_day", lambda *_a, **_k: (run,))
@@ -476,6 +545,7 @@ def test_already_strict_day_in_shadow_is_not_labeled_as_a_comparison(source, mon
     snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
     issue = _one(snapshot, "production_unassigned_run")
 
+    assert snapshot.mode == rollout_mode
     assert snapshot.production_mode == "strict"
     assert issue.comparison_only is False
 
@@ -519,10 +589,13 @@ def test_pending_cutover_does_not_acquire_a_production_client(source, monkeypatc
     )
 
     snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
-    issue = _one(snapshot, "production_source_unavailable")
+    unavailable = snapshot.issues_for("production_source_unavailable")
+    assert len(unavailable) == 1
+    issue = unavailable[0]
 
     assert snapshot.production_mode == "pending"
     assert issue.reason == "strict production cutover is pending for 2026-08-31"
+    assert snapshot.source_errors.count("Strict Production") == 1
 
 
 def test_strict_failure_during_shadow_rollback_is_not_a_comparison(source, monkeypatch):
@@ -609,7 +682,27 @@ def test_recent_sync_error_is_incomplete_but_not_called_stale_before_threshold(s
     assert not [i for i in snapshot.issues if i.kind == "attendance_source_stale"]
 
 
+def test_strict_state_survives_attendance_health_failure(source, monkeypatch):
+    monkeypatch.setattr(attendance_location_policy, "strict_days", lambda: {DAY})
+    monkeypatch.setattr(
+        attendance_mirror,
+        "health_snapshot",
+        lambda: (_ for _ in ()).throw(RuntimeError("mirror unavailable")),
+    )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+
+    assert snapshot.production_mode == "strict"
+    assert snapshot.complete is False
+    assert "Attendance Timeline" in snapshot.source_errors
+    assert snapshot.source_errors.count("Strict Production") == 1
+    unavailable = snapshot.issues_for("production_source_unavailable")
+    assert len(unavailable) == 1
+    assert unavailable[0].comparison_only is False
+
+
 def test_unexpected_strict_read_failure_still_creates_source_unavailable_item(source, monkeypatch):
+    monkeypatch.setattr(attendance_location_policy, "strict_days", lambda: {DAY})
     monkeypatch.setattr(
         production_history,
         "unassigned_runs_for_day",
@@ -620,6 +713,9 @@ def test_unexpected_strict_read_failure_still_creates_source_unavailable_item(so
 
     issue = _one(snapshot, "production_source_unavailable")
     assert issue.reason == "Zira cache unavailable"
+    assert snapshot.mode == "shadow"
+    assert snapshot.production_mode == "strict"
+    assert issue.comparison_only is False
     assert snapshot.complete is False
 
 
@@ -670,6 +766,46 @@ def test_off_or_incomplete_baseline_does_not_claim_timeline_signal(source, monke
     assert incomplete.baseline_complete is False
     assert incomplete.issues == ()
     assert incomplete.complete is False
+
+
+def test_strict_baseline_gap_keeps_authority_and_one_actionable_source_item(source, monkeypatch):
+    source["health"] = _health(baseline=None)
+    monkeypatch.setattr(attendance_location_policy, "strict_days", lambda: {DAY})
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+
+    assert snapshot.production_mode == "strict"
+    assert snapshot.baseline_complete is False
+    assert snapshot.source_errors == ("Strict Production",)
+    unavailable = snapshot.issues_for("production_source_unavailable")
+    assert len(unavailable) == 1
+    assert unavailable[0].comparison_only is False
+
+
+def test_database_less_policy_store_defaults_to_legacy_without_other_reads(source, monkeypatch):
+    database_less = RuntimeError(attendance_exceptions._DATABASE_URL_MISSING)
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "get_rollout_config",
+        lambda: (_ for _ in ()).throw(database_less),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "strict_days",
+        lambda: (_ for _ in ()).throw(database_less),
+    )
+    monkeypatch.setattr(
+        attendance_mirror,
+        "health_snapshot",
+        lambda: pytest.fail("off fallback queried mirror health"),
+    )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+
+    assert snapshot.mode == "off"
+    assert snapshot.production_mode == "legacy"
+    assert snapshot.issues == ()
+    assert snapshot.source_errors == ()
 
 
 def test_snapshot_rejects_naive_now(source):

@@ -16,6 +16,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Plant Manager now keeps time-fix plans locked after they are made.** It preserves outside time records and rejects a saved plan if any step no longer matches.
 
+### Keep finished work and Odoo together
+
+- **A plan is ready to mark the matching 2s improvement complete after the work is finished, checked, and saved.** If there is not one clear match, it will stop and ask for help. Nothing in the app has changed yet.
+
+### Keep Odoo source problems visible
+
+- **The Exception Inbox now keeps an Odoo source problem visible even when the live copy is not ready.** A new work-time correction also cannot be closed by an older background check.
+
 ### Plan safe fixes for work times
 
 - **Plant Manager can now plan an exact Odoo time fix without covering lunch or changing time outside the chosen window.** The plan can split a record into before, fixed, and after pieces.
@@ -96,6 +104,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Keep a safe copy of Odoo work times
 
 - **Plant Manager now keeps a fresh copy of Odoo work times and checks for changed or removed records.** A failed check cannot erase good records. The copy is still running in the background only.
+
 ### People performance dashboard plan
 
 - **A plan is ready for a manager dashboard built around people.** It will show where each person worked, when they moved, whether they met each goal, downtime, and forklift calls. Nothing in the app has changed yet.

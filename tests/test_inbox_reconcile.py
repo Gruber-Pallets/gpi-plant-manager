@@ -1,12 +1,22 @@
 """inbox_reconcile: pure diff + complete-kinds guard + run_once + degraded wiring."""
+
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from threading import Barrier, Lock
+import os
+from threading import Barrier, Event, Lock
+import time
+
+import psycopg2
 
 import pytest
 
 from zira_dashboard import inbox_reconcile
+
+
+_needs_postgres = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"), reason="needs local Postgres"
+)
 
 
 def test_plan_reconcile_reports_departed_only_for_complete_kinds():
@@ -16,7 +26,7 @@ def test_plan_reconcile_reports_departed_only_for_complete_kinds():
         "late:5:2026-06-26": {"item_kind": "late"},
     }
     open_now = {
-        "missing_wc:1": {"item_kind": "missing_wc"},              # still open
+        "missing_wc:1": {"item_kind": "missing_wc"},  # still open
         "missed_punch_out:7": {"item_kind": "missed_punch_out"},  # new
     }
     # time_off was NOT fully enumerated this tick (errored or truncated).
@@ -26,25 +36,25 @@ def test_plan_reconcile_reports_departed_only_for_complete_kinds():
 
     assert set(actions["arrivals"]) == {"missed_punch_out:7"}
     assert actions["still_open"] == ["missing_wc:1"]
-    assert "late:5:2026-06-26" in actions["departed"]   # left, kind complete
-    assert "time_off:9" not in actions["departed"]       # kind not complete -> kept
+    assert "late:5:2026-06-26" in actions["departed"]  # left, kind complete
+    assert "time_off:9" not in actions["departed"]  # kind not complete -> kept
 
 
 def test_complete_kinds_skips_errored_and_truncated():
     snapshot = {
-        "source_errors": [{"source": "Pending Time Off"}],          # time_off errored
+        "source_errors": [{"source": "Pending Time Off"}],  # time_off errored
         "sections": [
-            {"id": "missing_wc", "count": 1, "rows": [{"x": 1}]},   # complete
-            {"id": "time_off", "count": 0, "rows": []},             # errored -> skip
+            {"id": "missing_wc", "count": 1, "rows": [{"x": 1}]},  # complete
+            {"id": "time_off", "count": 0, "rows": []},  # errored -> skip
             {"id": "late", "count": 9, "rows": [{"x": 1}, {"x": 2}]},  # truncated -> skip
-            {"id": "missed_punch_out", "count": 0, "rows": []},     # complete (empty)
+            {"id": "missed_punch_out", "count": 0, "rows": []},  # complete (empty)
         ],
     }
     complete = inbox_reconcile._complete_kinds(snapshot)
     assert "missing_wc" in complete
     assert "missed_punch_out" in complete
-    assert "time_off" not in complete   # source errored
-    assert "late" not in complete       # rows(2) < count(9) -> truncated by a cap
+    assert "time_off" not in complete  # source errored
+    assert "late" not in complete  # rows(2) < count(9) -> truncated by a cap
 
 
 def test_complete_kinds_includes_late_despite_snoozed_padding():
@@ -61,7 +71,7 @@ def test_complete_kinds_includes_late_despite_snoozed_padding():
                 "count": 1,  # one actionable item (e.g. scheduled_late)
                 "rows": [
                     {"item_key": "late:5:2026-06-26", "priority": "urgent"},  # counted
-                    {"item_key": "late:8:2026-06-26", "priority": "muted"},   # snoozed, NOT counted
+                    {"item_key": "late:8:2026-06-26", "priority": "muted"},  # snoozed, NOT counted
                 ],
             },
         ],
@@ -81,7 +91,7 @@ def test_complete_kinds_includes_late_when_item_key_repeats_across_buckets():
                 "count": 1,
                 "rows": [
                     {"item_key": "late:5:2026-06-26", "priority": "urgent"},  # scheduled late
-                    {"item_key": "late:5:2026-06-26", "priority": "muted"},   # same emp, snoozed
+                    {"item_key": "late:5:2026-06-26", "priority": "muted"},  # same emp, snoozed
                 ],
             },
         ],
@@ -124,8 +134,10 @@ def test_complete_kinds_includes_healthy_auto_lunch_but_skips_source_error():
 
 def _mirror_row(**over):
     base = {
-        "item_key": "missing_wc:1", "item_kind": "missing_wc",
-        "person_name": "Maria", "category_label": "Missing WC",
+        "item_key": "missing_wc:1",
+        "item_kind": "missing_wc",
+        "person_name": "Maria",
+        "category_label": "Missing WC",
         "first_seen": datetime(2026, 6, 1, tzinfo=timezone.utc),
         "last_seen": datetime(2026, 6, 1, tzinfo=timezone.utc),  # long ago -> past grace
     }
@@ -135,8 +147,11 @@ def _mirror_row(**over):
 
 def _snap_complete_missing_wc():
     # Nothing open now; the missing_wc section is fully enumerated (0 == 0).
-    return {"queue": [], "source_errors": [],
-            "sections": [{"id": "missing_wc", "count": 0, "rows": []}]}
+    return {
+        "queue": [],
+        "source_errors": [],
+        "sections": [{"id": "missing_wc", "count": 0, "rows": []}],
+    }
 
 
 def _auto_event(row):
@@ -220,6 +235,7 @@ def test_run_once_logs_auto_resolved_for_silent_departure(monkeypatch):
     monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {"missing_wc:1": _mirror_row()})
     deleted, logged = [], []
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda k, i: None)
+
     def delete(key, last_seen, *, auto_event=None):
         deleted.append(key)
         if auto_event is not None:
@@ -269,8 +285,7 @@ def test_concurrent_departure_is_claimed_and_logged_exactly_once(monkeypatch):
     assert database.mirror == {}
     assert [event[1] for event in database.events] == ["missing_wc:1"]
     assert [
-        [operation[0].split()[0] for operation in cursor.operations]
-        for cursor in database.cursors
+        [operation[0].split()[0] for operation in cursor.operations] for cursor in database.cursors
     ] == [["DELETE", "INSERT"], ["DELETE"]]
 
 
@@ -320,14 +335,108 @@ def test_delete_and_auto_event_use_one_transaction_cursor(monkeypatch):
     assert len(database.cursors) == 1
     cursor = database.cursors[0]
     assert cursor.operations[0][0] == (
-        "DELETE FROM inbox_open_items WHERE item_key = %s AND last_seen = %s "
-        "RETURNING item_key"
+        "DELETE FROM inbox_open_items WHERE item_key = %s AND last_seen = %s RETURNING item_key"
     )
     assert cursor.operations[0][1] == ("missing_wc:1", token)
     assert cursor.operations[1][0].startswith("INSERT INTO inbox_events")
     assert cursor.operations[1][1][1] == "missing_wc:1"
     assert cursor.operations[1][1][4] == "auto_resolved"
     assert database.commits == 1
+
+
+@_needs_postgres
+def test_concurrent_unfinished_correction_insert_blocks_departure_deletion():
+    from zira_dashboard import db
+
+    item_key = "production_unassigned_run:Task 6 race:2098-08-31T13:00:00+00:00"
+    last_seen = datetime(2098, 8, 31, 13, tzinfo=timezone.utc)
+    insert_started = Event()
+    release_insert = Event()
+    db.init_pool()
+    db.bootstrap_schema()
+    db.execute("DELETE FROM attendance_correction_jobs WHERE item_key = %s", (item_key,))
+    db.execute("DELETE FROM inbox_open_items WHERE item_key = %s", (item_key,))
+    db.execute(
+        "INSERT INTO inbox_open_items "
+        "(item_key, item_kind, category_label, priority, first_seen, last_seen) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (
+            item_key,
+            "production_unassigned_run",
+            "Production Without a Worker",
+            "urgent",
+            last_seen,
+            last_seen,
+        ),
+    )
+
+    def insert_unfinished_correction():
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with connection.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO attendance_correction_jobs "
+                    "(item_key, status, target_work_center_name, "
+                    "target_odoo_work_center_id, start_utc, employee_odoo_ids, "
+                    "source_snapshot, operations) "
+                    "VALUES (%s, 'planned', %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb)",
+                    (
+                        item_key,
+                        "Dismantler 1",
+                        44,
+                        last_seen,
+                        "[42]",
+                        "{}",
+                        "[]",
+                    ),
+                )
+                insert_started.set()
+                assert release_insert.wait(timeout=5)
+            connection.commit()
+        finally:
+            connection.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            insertion = pool.submit(insert_unfinished_correction)
+            assert insert_started.wait(timeout=5)
+            deletion = pool.submit(
+                inbox_reconcile._delete,
+                item_key,
+                last_seen,
+                correction_linked=True,
+            )
+
+            waiting_on_insert = False
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not deletion.done():
+                waiting_on_insert = bool(
+                    db.query(
+                        "SELECT 1 FROM pg_locks l "
+                        "JOIN pg_class c ON c.oid = l.relation "
+                        "WHERE c.relname = 'attendance_correction_jobs' "
+                        "AND l.mode = 'ShareLock' "
+                        "AND NOT l.granted"
+                    )
+                )
+                if waiting_on_insert:
+                    break
+                time.sleep(0.01)
+
+            release_insert.set()
+            insertion.result(timeout=5)
+            claimed = deletion.result(timeout=5)
+
+        assert waiting_on_insert is True
+        assert claimed is None
+        assert db.query(
+            "SELECT item_key FROM inbox_open_items WHERE item_key = %s",
+            (item_key,),
+        ) == [{"item_key": item_key}]
+    finally:
+        release_insert.set()
+        db.execute("DELETE FROM attendance_correction_jobs WHERE item_key = %s", (item_key,))
+        db.execute("DELETE FROM inbox_open_items WHERE item_key = %s", (item_key,))
 
 
 def test_failed_auto_event_rolls_back_claim_and_next_tick_retries(monkeypatch):
@@ -377,6 +486,7 @@ def test_run_once_auto_resolves_live_auto_lunch_after_grace(monkeypatch):
     monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {item_key: mirror_row})
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda key, info: None)
     deleted, logged = [], []
+
     def delete(key, last_seen, *, auto_event=None):
         deleted.append(key)
         if auto_event is not None:
@@ -455,10 +565,14 @@ def test_run_once_respects_grace_period(monkeypatch):
 
     monkeypatch.setattr(exception_inbox, "build_snapshot", _snap_complete_missing_wc)
     # last_seen is "just now" -> within the grace window -> must be left for next tick.
-    monkeypatch.setattr(inbox_reconcile, "_read_mirror",
-                        lambda: {"missing_wc:1": _mirror_row(last_seen=plant_day.now())})
+    monkeypatch.setattr(
+        inbox_reconcile,
+        "_read_mirror",
+        lambda: {"missing_wc:1": _mirror_row(last_seen=plant_day.now())},
+    )
     deleted, logged = [], []
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda k, i: None)
+
     def delete(key, last_seen, *, auto_event=None):
         deleted.append(key)
         if auto_event is not None:
@@ -470,7 +584,7 @@ def test_run_once_respects_grace_period(monkeypatch):
 
     inbox_reconcile.run_once()
 
-    assert deleted == []   # too recent -> not auto-resolved this tick
+    assert deleted == []  # too recent -> not auto-resolved this tick
     assert logged == []
 
 
@@ -480,11 +594,16 @@ def test_build_snapshot_flags_degraded_source_into_source_errors(monkeypatch):
     from zira_dashboard import exception_inbox, missing_wc, missed_punch_out
     from zira_dashboard.routes import staffing as staffing_routes
 
-    monkeypatch.setattr(staffing_routes, "assignments_todo_payload",
-                        lambda: {"degraded": True, "count": 0, "items": [], "people": []})
-    monkeypatch.setattr(staffing_routes, "late_report_payload",
-                        lambda: {"count": 0, "scheduled_late": [], "unscheduled_late": [],
-                                 "snoozed": []})
+    monkeypatch.setattr(
+        staffing_routes,
+        "assignments_todo_payload",
+        lambda: {"degraded": True, "count": 0, "items": [], "people": []},
+    )
+    monkeypatch.setattr(
+        staffing_routes,
+        "late_report_payload",
+        lambda: {"count": 0, "scheduled_late": [], "unscheduled_late": [], "snoozed": []},
+    )
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
@@ -493,12 +612,13 @@ def test_build_snapshot_flags_degraded_source_into_source_errors(monkeypatch):
 
     snap = exception_inbox.build_snapshot()
     sources = {e["source"] for e in snap["source_errors"]}
-    assert "Assignments To Do" in sources   # degraded -> flagged as a source error
+    assert "Assignments To Do" in sources  # degraded -> flagged as a source error
     assert "Late / Absence" not in sources  # healthy -> not flagged
 
 
 def test_reconcile_tick_is_registered():
     from zira_dashboard import app
+
     names = [w[0] for w in app._WARMERS]
     assert "Inbox reconcile" in names
     entry = next(w for w in app._WARMERS if w[0] == "Inbox reconcile")
@@ -509,17 +629,27 @@ def test_run_once_auto_resolves_departed_breakdown_row(monkeypatch):
     from zira_dashboard import exception_inbox, inbox_log
 
     def _snap():
-        return {"queue": [], "source_errors": [],
-                "sections": [{"id": "breakdown", "count": 0, "rows": []}]}
+        return {
+            "queue": [],
+            "source_errors": [],
+            "sections": [{"id": "breakdown", "count": 0, "rows": []}],
+        }
 
     monkeypatch.setattr(exception_inbox, "build_snapshot", _snap)
-    monkeypatch.setattr(inbox_reconcile, "_read_mirror", lambda: {
-        "breakdown:Dismantler 2:x": _mirror_row(
-            item_key="breakdown:Dismantler 2:x", item_kind="breakdown",
-            category_label="Machine Breakdown"),
-    })
+    monkeypatch.setattr(
+        inbox_reconcile,
+        "_read_mirror",
+        lambda: {
+            "breakdown:Dismantler 2:x": _mirror_row(
+                item_key="breakdown:Dismantler 2:x",
+                item_kind="breakdown",
+                category_label="Machine Breakdown",
+            ),
+        },
+    )
     deleted, logged = [], []
     monkeypatch.setattr(inbox_reconcile, "_upsert", lambda k, i: None)
+
     def delete(key, last_seen, *, auto_event=None):
         deleted.append(key)
         if auto_event is not None:

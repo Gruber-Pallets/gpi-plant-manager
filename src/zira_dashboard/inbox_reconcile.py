@@ -142,18 +142,26 @@ def _read_mirror() -> dict:
     return {r["item_key"]: r for r in rows}
 
 
+def _correction_allows_resolution_cur(cur, item_key: str) -> bool:
+    """Lock correction inserts and recheck the newest job in this transaction."""
+    cur.execute("LOCK TABLE attendance_correction_jobs IN SHARE MODE")
+    cur.execute(
+        "SELECT status FROM attendance_correction_jobs WHERE item_key = %s "
+        "ORDER BY id DESC LIMIT 1",
+        (item_key,),
+    )
+    row = cur.fetchone()
+    return row is None or row.get("status") == "complete"
+
+
 def _correction_allows_resolution(item_key: str) -> bool:
     """A linked correction keeps its source item open until fully complete."""
     try:
-        rows = db.query(
-            "SELECT status FROM attendance_correction_jobs WHERE item_key = %s "
-            "ORDER BY id DESC LIMIT 1",
-            (item_key,),
-        )
+        with db.cursor() as cur:
+            return _correction_allows_resolution_cur(cur, item_key)
     except Exception:  # noqa: BLE001 - uncertainty must keep the item open
         _log.warning("could not verify correction completion for %s", item_key)
         return False
-    return not rows or rows[0].get("status") == "complete"
 
 
 def _upsert(key: str, info: dict) -> None:
@@ -179,9 +187,12 @@ def _delete(
     last_seen: Any,
     *,
     auto_event: dict[str, Any] | None = None,
+    correction_linked: bool = False,
 ) -> dict | None:
     """Claim a departure and atomically record its automatic audit event."""
     with db.cursor() as cur:
+        if correction_linked and not _correction_allows_resolution_cur(cur, key):
+            return None
         cur.execute(
             "DELETE FROM inbox_open_items "
             "WHERE item_key = %s AND last_seen = %s "
@@ -210,10 +221,6 @@ def run_once() -> None:
     now = plant_day.now()
     for key in actions["departed"]:
         row = prev[key]
-        if row.get("item_kind") in _CORRECTION_LINKED_KINDS and not _correction_allows_resolution(
-            key
-        ):
-            continue
         last_seen = row.get("last_seen")
         if (
             last_seen is not None
@@ -235,10 +242,9 @@ def run_once() -> None:
                     "actor_name": None,
                     "source": "auto",
                 }
-            _delete(
-                key,
-                last_seen,
-                auto_event=auto_event,
-            )
+            delete_kwargs: dict[str, Any] = {"auto_event": auto_event}
+            if row.get("item_kind") in _CORRECTION_LINKED_KINDS:
+                delete_kwargs["correction_linked"] = True
+            _delete(key, last_seen, **delete_kwargs)
         except Exception as e:  # noqa: BLE001 -- one bad item never aborts the sweep
             _log.warning("inbox reconcile failed for %s: %s", key, e)
