@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Plan safe fixes for work times
+
+- **Plant Manager can now plan an exact Odoo time fix without covering lunch or changing time outside the chosen window.** The plan can split a record into before, fixed, and after pieces.
+
 ### Keep strict exceptions safe when settings are unclear
 
 - **Plant Manager now keeps strict Odoo production fixes protected if a setting cannot load.** Closed time changes also refresh in the Exception Inbox.
