@@ -342,6 +342,24 @@ def test_department_requirement_uses_explicit_row_or_safe_defaults(monkeypatch):
     assert policy.department_requires_work_center(None) is True
 
 
+def test_effective_department_prefers_attendance_then_employee_fallback():
+    assert policy.effective_department_name(
+        " 00 Maintenance ", "Transportation"
+    ) == "Maintenance"
+    assert policy.effective_department_name(
+        None, " 06 Transportation "
+    ) == "Transportation"
+    assert policy.effective_department_name("", "Supervisor") == "Supervisor"
+    assert policy.effective_department_name(None, None) is None
+
+
+def test_transportation_is_exempt_by_default():
+    assert policy.default_department_requires_work_center("Transportation") is False
+    assert policy.default_department_requires_work_center(" 06 Transportation ") is False
+    assert policy.default_department_requires_work_center("Recycled") is True
+    assert policy.default_department_requires_work_center(None) is True
+
+
 def test_set_department_requirement_marks_the_choice_explicit(monkeypatch):
     executed = {}
     monkeypatch.setattr(

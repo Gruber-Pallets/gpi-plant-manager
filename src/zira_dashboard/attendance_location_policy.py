@@ -285,16 +285,32 @@ def match_state_for_day_cur(
     )
 
 
-def _normalized_department_name(department_name: str | None) -> str:
+def _clean_department_name(department_name: str | None) -> str | None:
     if not department_name:
-        return ""
-    return _NUMBERED_DEPARTMENT_PREFIX.sub("", department_name).strip().lower()
+        return None
+    cleaned = _NUMBERED_DEPARTMENT_PREFIX.sub("", department_name).strip()
+    return cleaned or None
+
+
+def _normalized_department_name(department_name: str | None) -> str:
+    return (_clean_department_name(department_name) or "").lower()
+
+
+def effective_department_name(
+    attendance_department_name: str | None,
+    employee_department_name: str | None,
+) -> str | None:
+    """Attendance department wins; employee department is fallback-only."""
+    return _clean_department_name(attendance_department_name) or _clean_department_name(
+        employee_department_name
+    )
 
 
 def default_department_requires_work_center(department_name: str | None) -> bool:
     """Default for a department that has not received an explicit choice."""
     return _normalized_department_name(department_name) not in {
         "maintenance",
+        "transportation",
         "supervisor",
     }
 

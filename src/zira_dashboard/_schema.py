@@ -83,6 +83,7 @@ ALTER TABLE people DROP CONSTRAINT IF EXISTS people_spanish_level_check;
 ALTER TABLE people ADD CONSTRAINT people_spanish_level_check
   CHECK (spanish_level BETWEEN 0 AND 3);
 ALTER TABLE people ADD COLUMN IF NOT EXISTS resource_calendar_id INTEGER;
+ALTER TABLE people ADD COLUMN IF NOT EXISTS department_name TEXT;
 -- Raw Odoo name, kept alongside the compact roster label in `name` so the
 -- leaderboards can display un-abbreviated names.
 ALTER TABLE people ADD COLUMN IF NOT EXISTS full_name TEXT;
@@ -193,7 +194,7 @@ UPDATE departments
    SET requires_work_center = FALSE
  WHERE requires_work_center_explicit = FALSE
    AND lower(regexp_replace(name, '^\\s*[0-9]+\\s*', ''))
-       IN ('maintenance', 'supervisor');
+       IN ('maintenance', 'transportation', 'supervisor');
 
 -- Durable Odoo attendance mirror + rollout state ----------------------
 
