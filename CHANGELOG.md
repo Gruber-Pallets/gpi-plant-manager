@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Fix unassigned production from the inbox
+
+- **A manager can now choose who did an unassigned production run, set the exact start and end time, and preview the Odoo change before saving.** “Still working” keeps the time open.
+
 ### Keep Odoo teams lined up with work areas
 
 - **When an Odoo work area and team disagree, Plant Manager can now keep the work area and safely fix the team.** It checks the record again before and after the change.

@@ -3,17 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, UTC
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from .. import breakdown_actions, exception_inbox, inbox_keys, inbox_log, plant_day, time_off_audit
+from .. import (
+    attendance_corrections,
+    auth,
+    breakdown_actions,
+    exception_inbox,
+    inbox_keys,
+    inbox_log,
+    plant_day,
+    time_off_audit,
+)
 from ..deps import templates
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
 
 
 @router.get("/exceptions", response_class=HTMLResponse)
@@ -21,6 +35,11 @@ def exceptions_page(request: Request):
     # The nav Inbox-count bootstrap is rendered by _topnav.html (via
     # nav_inbox_summary()), so this route no longer needs to pass it.
     snapshot = exception_inbox.build_snapshot()
+    try:
+        correction_people = _active_correction_people()
+    except Exception:  # noqa: BLE001 - keep the inbox readable during roster outages
+        _log.exception("attendance correction people could not load for inbox")
+        correction_people = []
     return templates.TemplateResponse(
         request,
         "exceptions.html",
@@ -30,6 +49,9 @@ def exceptions_page(request: Request):
             "queue": snapshot["queue"],
             "work_centers": snapshot.get("work_centers") or [],
             "people": snapshot.get("people") or [],
+            "correction_people": correction_people,
+            "can_manage_work_centers": auth.request_is_super_admin(request),
+            "plant_timezone": str(plant_day.SITE_TZ),
         },
     )
 
@@ -88,6 +110,676 @@ def _load_time_off_request(request_id: int) -> dict[str, Any] | None:
 
 def _json_error(message: str, status_code: int) -> JSONResponse:
     return JSONResponse({"ok": False, "error": message}, status_code=status_code)
+
+
+_CORRECTION_PREVIEW_SALT = "exception-inbox-attendance-correction-v1"
+_CORRECTION_PREVIEW_MAX_AGE = 10 * 60
+_CORRECTION_REQUEST_FIELDS = frozenset(
+    ("item_key", "employee_odoo_ids", "work_center_name", "start_utc", "end_utc")
+)
+_CORRECTION_APPLY_FIELDS = frozenset(("preview_token",))
+_CORRECTION_ITEM_KIND = "production_unassigned_run"
+_CORRECTION_TEXT_LIMIT = 500
+_CORRECTION_DISPLAY_INTERVAL_LIMIT = 200
+_CORRECTION_ERROR_LIMIT = 300
+
+
+def _correction_error(code: str, message: str, status_code: int) -> JSONResponse:
+    return JSONResponse(
+        {"ok": False, "code": code, "error": message},
+        status_code=status_code,
+    )
+
+
+def _correction_manager(request: Request) -> tuple[str, str] | JSONResponse:
+    upn, name = _actor_from(request)
+    if not isinstance(upn, str) or not upn.strip():
+        return _correction_error(
+            "manager_identity_required",
+            "Sign in again before correcting attendance.",
+            401,
+        )
+    if not isinstance(name, str) or not name.strip():
+        return _correction_error(
+            "manager_identity_required",
+            "Sign in again before correcting attendance.",
+            401,
+        )
+    return upn.strip()[:320], name.strip()[:320]
+
+
+async def _correction_json(request: Request) -> Mapping[str, object] | JSONResponse:
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 - malformed request body is a bounded 400
+        return _correction_error("invalid_request", "Send a valid JSON request.", 400)
+    if not isinstance(payload, Mapping):
+        return _correction_error("invalid_request", "Send a JSON object.", 400)
+    return payload
+
+
+def _correction_datetime(value: object, field_name: str) -> datetime:
+    if not isinstance(value, str) or len(value) > 50:
+        raise ValueError(f"{field_name} must be an ISO time with a timezone")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{field_name} must be an ISO time with a timezone") from error
+    if parsed.utcoffset() is None:
+        raise ValueError(f"{field_name} must be an ISO time with a timezone")
+    return parsed.astimezone(UTC)
+
+
+def _correction_request_values(
+    payload: Mapping[str, object],
+) -> dict[str, object] | JSONResponse:
+    if set(payload) != _CORRECTION_REQUEST_FIELDS:
+        return _correction_error(
+            "invalid_request",
+            "The correction request has missing or unexpected fields.",
+            400,
+        )
+    item_key = payload.get("item_key")
+    target = payload.get("work_center_name")
+    employee_values = payload.get("employee_odoo_ids")
+    if (
+        not isinstance(item_key, str)
+        or not item_key.strip()
+        or len(item_key.strip()) > _CORRECTION_TEXT_LIMIT
+    ):
+        return _correction_error("invalid_request", "Choose a current inbox item.", 400)
+    if (
+        not isinstance(target, str)
+        or not target.strip()
+        or len(target.strip()) > 200
+    ):
+        return _correction_error("invalid_work_center", "Choose a work center.", 422)
+    if (
+        isinstance(employee_values, (str, bytes))
+        or not isinstance(employee_values, Sequence)
+        or not employee_values
+        or len(employee_values) > 100
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in employee_values
+        )
+    ):
+        return _correction_error(
+            "invalid_employee",
+            "Choose at least one active worker.",
+            422,
+        )
+    employee_ids = sorted(set(employee_values))
+    try:
+        start = _correction_datetime(payload.get("start_utc"), "start_utc")
+        raw_end = payload.get("end_utc")
+        end = None if raw_end is None else _correction_datetime(raw_end, "end_utc")
+    except ValueError:
+        return _correction_error(
+            "invalid_time_range",
+            "Enter a valid start and optional end time.",
+            422,
+        )
+    if end is not None and end <= start:
+        return _correction_error(
+            "invalid_time_range",
+            "The end time must be later than the start time.",
+            422,
+        )
+    return {
+        "item_key": item_key.strip(),
+        "employee_odoo_ids": employee_ids,
+        "work_center_name": target.strip(),
+        "start_utc": start,
+        "end_utc": end,
+    }
+
+
+def _active_correction_people() -> list[dict[str, object]]:
+    from .. import db
+
+    rows = db.query(
+        "SELECT odoo_id, name FROM people "
+        "WHERE active = TRUE AND odoo_id IS NOT NULL AND odoo_id > 0 "
+        "ORDER BY lower(name), odoo_id"
+    )
+    people = []
+    seen: set[int] = set()
+    for row in rows:
+        value = row.get("odoo_id")
+        name = row.get("name")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+            or value in seen
+            or not isinstance(name, str)
+            or not name.strip()
+        ):
+            continue
+        seen.add(value)
+        people.append({"employee_odoo_id": value, "name": name.strip()[:200]})
+    return people[:1000]
+
+
+def _current_correction_context(
+    values: Mapping[str, object],
+) -> tuple[dict[str, object], dict[int, str]] | JSONResponse:
+    try:
+        snapshot = exception_inbox.build_snapshot()
+    except Exception:  # noqa: BLE001 - source details stay in server logs
+        _log.exception("attendance correction current inbox lookup failed")
+        return _correction_error(
+            "inbox_unavailable",
+            "The current inbox could not be checked. Nothing was changed. Try again.",
+            503,
+        )
+    item_key = values["item_key"]
+    matches = [
+        row
+        for row in snapshot.get("queue") or []
+        if isinstance(row, Mapping)
+        and row.get("item_key") == item_key
+        and row.get("kind") == _CORRECTION_ITEM_KIND
+    ]
+    if len(matches) != 1:
+        return _correction_error(
+            "stale_item",
+            "This inbox item changed or is no longer open. Refresh the inbox and try again.",
+            409,
+        )
+    work_centers = {
+        item.strip()
+        for item in snapshot.get("work_centers") or []
+        if isinstance(item, str) and item.strip()
+    }
+    if values["work_center_name"] not in work_centers:
+        return _correction_error(
+            "invalid_work_center",
+            "Choose a current Plant Manager work center.",
+            422,
+        )
+    try:
+        people = _active_correction_people()
+    except Exception:  # noqa: BLE001 - local roster availability is manager-readable
+        _log.exception("attendance correction local roster lookup failed")
+        return _correction_error(
+            "people_unavailable",
+            "Worker choices are not available right now. Try again.",
+            503,
+        )
+    names = {int(person["employee_odoo_id"]): str(person["name"]) for person in people}
+    if any(employee_id not in names for employee_id in values["employee_odoo_ids"]):
+        return _correction_error(
+            "invalid_employee",
+            "Choose only active workers from the current list.",
+            422,
+        )
+    return dict(matches[0]), names
+
+
+def _utc_iso(value: datetime | None) -> str | None:
+    return value.astimezone(UTC).isoformat() if value is not None else None
+
+
+def _local_time_label(value: datetime | None) -> str:
+    if value is None:
+        return "Still working"
+    return value.astimezone(plant_day.SITE_TZ).strftime("%-m/%-d/%Y %-I:%M %p")
+
+
+def _display_interval(
+    value: Mapping[str, object], preview: attendance_corrections.CorrectionPreview
+) -> dict[str, object]:
+    start = value.get("check_in_utc")
+    end = value.get("check_out_utc")
+    if not isinstance(start, datetime) or (end is not None and not isinstance(end, datetime)):
+        raise ValueError("preview interval has invalid times")
+    work_center_name = value.get("odoo_work_center_name")
+    if value.get("odoo_work_center_id") == preview.target_odoo_work_center_id:
+        work_center_name = preview.target_work_center_name
+    if not isinstance(work_center_name, str) or not work_center_name.strip():
+        work_center_name = "No Odoo work center"
+    attendance_id = value.get("odoo_attendance_id")
+    return {
+        "attendance_id": attendance_id if isinstance(attendance_id, int) else None,
+        "start_utc": _utc_iso(start),
+        "end_utc": _utc_iso(end),
+        "start_label": _local_time_label(start),
+        "end_label": _local_time_label(end),
+        "end_is_open": end is None,
+        "work_center_name": work_center_name.strip()[:200],
+    }
+
+
+def _operation_summary(plan: attendance_corrections.CorrectionPlan) -> dict[str, int]:
+    counts = {"create": 0, "update": 0, "delete": 0}
+    for operation in plan.operations:
+        counts[operation.kind] += 1
+    return {**counts, "total": sum(counts.values())}
+
+
+def _preview_binding(
+    preview: attendance_corrections.CorrectionPreview,
+) -> dict[str, object]:
+    plans = []
+    for employee_id, plan in zip(
+        preview.employee_odoo_ids, preview.plans, strict=True
+    ):
+        encoded = attendance_corrections.plan_to_json(plan)
+        assert isinstance(encoded, Mapping)
+        plans.append(
+            {
+                "employee_odoo_id": employee_id,
+                "plan_integrity": encoded["integrity"],
+                "source_versions": [
+                    {
+                        "attendance_id": version.attendance_id,
+                        "write_date": _utc_iso(version.write_date),
+                    }
+                    for version in plan.source_versions
+                ],
+            }
+        )
+    return {
+        "version": 1,
+        "request": {
+            "item_key": preview.item_key,
+            "employee_odoo_ids": list(preview.employee_odoo_ids),
+            "work_center_name": preview.target_work_center_name,
+            "start_utc": _utc_iso(preview.start_utc),
+            "end_utc": _utc_iso(preview.end_utc),
+        },
+        "plans": plans,
+    }
+
+
+def _preview_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(auth._session_secret(), salt=_CORRECTION_PREVIEW_SALT)
+
+
+def _preview_token(preview: attendance_corrections.CorrectionPreview) -> str:
+    return _preview_serializer().dumps(_preview_binding(preview))
+
+
+def _load_preview_token(value: object) -> Mapping[str, object] | JSONResponse:
+    if not isinstance(value, str) or not value or len(value) > 20_000:
+        return _correction_error(
+            "invalid_preview", "Preview this correction again before applying it.", 400
+        )
+    try:
+        payload = _preview_serializer().loads(
+            value, max_age=_CORRECTION_PREVIEW_MAX_AGE
+        )
+    except SignatureExpired:
+        return _correction_error(
+            "preview_expired", "This preview expired. Preview the correction again.", 409
+        )
+    except BadSignature:
+        return _correction_error(
+            "invalid_preview", "Preview this correction again before applying it.", 400
+        )
+    if not isinstance(payload, Mapping) or set(payload) != {"version", "request", "plans"}:
+        return _correction_error(
+            "invalid_preview", "Preview this correction again before applying it.", 400
+        )
+    if payload.get("version") != 1 or not isinstance(payload.get("plans"), list):
+        return _correction_error(
+            "invalid_preview", "Preview this correction again before applying it.", 400
+        )
+    return payload
+
+
+def _safe_preview(
+    preview: attendance_corrections.CorrectionPreview, names: Mapping[int, str]
+) -> dict[str, object]:
+    selected_people = [
+        {"employee_odoo_id": employee_id, "name": names[employee_id]}
+        for employee_id in preview.employee_odoo_ids
+    ]
+    employees = []
+    aggregate = {"create": 0, "update": 0, "delete": 0, "total": 0}
+    for employee_id, plan in zip(
+        preview.employee_odoo_ids, preview.plans, strict=True
+    ):
+        source_values = list(plan.source_intervals)[:_CORRECTION_DISPLAY_INTERVAL_LIMIT]
+        expected_values = list(plan.expected_intervals)[:_CORRECTION_DISPLAY_INTERVAL_LIMIT]
+        source = [_display_interval(item, preview) for item in source_values]
+        after = [_display_interval(item, preview) for item in expected_values]
+        summary = _operation_summary(plan)
+        for key in aggregate:
+            aggregate[key] += summary[key]
+        employees.append(
+            {
+                "employee_odoo_id": employee_id,
+                "name": names[employee_id],
+                "source_intervals": source,
+                "before_intervals": list(source),
+                "after_intervals": after,
+                "operation_summary": summary,
+                "intervals_truncated": (
+                    len(plan.source_intervals) > len(source_values)
+                    or len(plan.expected_intervals) > len(expected_values)
+                ),
+            }
+        )
+    return {
+        "item_key": preview.item_key,
+        "selected_people": selected_people,
+        "target_work_center_name": preview.target_work_center_name,
+        "start_utc": _utc_iso(preview.start_utc),
+        "end_utc": _utc_iso(preview.end_utc),
+        "start_label": _local_time_label(preview.start_utc),
+        "end_label": _local_time_label(preview.end_utc),
+        "end_is_open": preview.end_utc is None,
+        "employees": employees,
+        "operation_summary": aggregate,
+    }
+
+
+def _build_live_preview(
+    values: Mapping[str, object],
+) -> attendance_corrections.CorrectionPreview | JSONResponse:
+    try:
+        return attendance_corrections.correction_preview(
+            item_key=values["item_key"],
+            employee_odoo_ids=values["employee_odoo_ids"],
+            target_work_center_name=values["work_center_name"],
+            start_utc=values["start_utc"],
+            end_utc=values["end_utc"],
+        )
+    except ValueError as error:
+        text = str(error).lower()
+        if "mapping" in text or "work center" in text or "department" in text:
+            message = (
+                "This work center is not ready for Odoo corrections. "
+                "Check its Odoo mapping, then try again."
+            )
+        elif "employee" in text:
+            message = "A selected worker is no longer active in Odoo. Refresh and try again."
+        else:
+            message = "Odoo could not build this correction preview. Check the choices and try again."
+        return _correction_error("preview_unavailable", message, 422)
+    except Exception:  # noqa: BLE001 - never expose Odoo faults or traces
+        _log.exception("attendance correction preview failed")
+        return _correction_error(
+            "preview_unavailable",
+            "Odoo could not build the preview right now. Nothing was changed.",
+            503,
+        )
+
+
+def _active_correction_job(
+    values: Mapping[str, object],
+) -> tuple[int, bool] | None | JSONResponse:
+    from .. import db
+
+    try:
+        rows = db.query(
+            "SELECT id, target_work_center_name, start_utc, end_utc, employee_odoo_ids "
+            "FROM attendance_correction_jobs WHERE item_key = %s "
+            "AND status IN ('planned','applying','verifying','recalculating') "
+            "ORDER BY id DESC LIMIT 1",
+            (values["item_key"],),
+        )
+    except Exception:  # noqa: BLE001 - durable state details stay server-side
+        _log.exception("attendance correction active job lookup failed")
+        return _correction_error(
+            "apply_unavailable",
+            "The correction queue could not be checked. Nothing was changed. Try again.",
+            503,
+        )
+    if not rows:
+        return None
+    row = rows[0]
+    employee_values = row.get("employee_odoo_ids")
+    if isinstance(employee_values, str):
+        try:
+            employee_values = json.loads(employee_values)
+        except json.JSONDecodeError:
+            employee_values = None
+    try:
+        start = row.get("start_utc")
+        end = row.get("end_utc")
+        if isinstance(start, str):
+            start = _correction_datetime(start, "start_utc")
+        if isinstance(end, str):
+            end = _correction_datetime(end, "end_utc")
+        matches = (
+            isinstance(start, datetime)
+            and start.astimezone(UTC) == values["start_utc"]
+            and (
+                (end is None and values["end_utc"] is None)
+                or (
+                    isinstance(end, datetime)
+                    and end.astimezone(UTC) == values["end_utc"]
+                )
+            )
+            and row.get("target_work_center_name") == values["work_center_name"]
+            and isinstance(employee_values, list)
+            and sorted(employee_values) == values["employee_odoo_ids"]
+        )
+        job_id = int(row["id"])
+    except (TypeError, ValueError):
+        return _correction_error(
+            "apply_unavailable",
+            "The active correction could not be checked safely. Nothing was changed.",
+            503,
+        )
+    return job_id, bool(matches)
+
+
+def _queued_correction_response(job_id: int) -> JSONResponse:
+    return JSONResponse(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "status": "planned",
+            "message": "Correction queued. Plant Manager is checking Odoo.",
+        },
+        status_code=202,
+    )
+
+
+def _correction_in_progress_response() -> JSONResponse:
+    return _correction_error(
+        "correction_in_progress",
+        "Another correction for this inbox item is already in progress. "
+        "Check its status before changing the request.",
+        409,
+    )
+
+
+@router.post("/api/exceptions/attendance-correction/preview")
+async def attendance_correction_preview(request: Request):
+    manager = _correction_manager(request)
+    if isinstance(manager, JSONResponse):
+        return manager
+    payload = await _correction_json(request)
+    if isinstance(payload, JSONResponse):
+        return payload
+    values = _correction_request_values(payload)
+    if isinstance(values, JSONResponse):
+        return values
+    context = _current_correction_context(values)
+    if isinstance(context, JSONResponse):
+        return context
+    _row, names = context
+    preview = _build_live_preview(values)
+    if isinstance(preview, JSONResponse):
+        return preview
+    return JSONResponse(
+        {
+            "ok": True,
+            "preview": _safe_preview(preview, names),
+            "preview_token": _preview_token(preview),
+        }
+    )
+
+
+@router.post("/api/exceptions/attendance-correction/apply")
+async def attendance_correction_apply(request: Request):
+    manager = _correction_manager(request)
+    if isinstance(manager, JSONResponse):
+        return manager
+    payload = await _correction_json(request)
+    if isinstance(payload, JSONResponse):
+        return payload
+    if set(payload) != _CORRECTION_APPLY_FIELDS:
+        return _correction_error(
+            "invalid_request",
+            "Apply accepts only the preview confirmation.",
+            400,
+        )
+    signed = _load_preview_token(payload.get("preview_token"))
+    if isinstance(signed, JSONResponse):
+        return signed
+    raw_request = signed.get("request")
+    if not isinstance(raw_request, Mapping):
+        return _correction_error(
+            "invalid_preview", "Preview this correction again before applying it.", 400
+        )
+    values = _correction_request_values(raw_request)
+    if isinstance(values, JSONResponse):
+        return _correction_error(
+            "invalid_preview", "Preview this correction again before applying it.", 400
+        )
+    context = _current_correction_context(values)
+    if isinstance(context, JSONResponse):
+        return context
+    _row, names = context
+    preview = _build_live_preview(values)
+    if isinstance(preview, JSONResponse):
+        return preview
+    fresh_binding = _preview_binding(preview)
+    if signed.get("plans") != fresh_binding["plans"]:
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "source_changed",
+                "error": (
+                    "Odoo changed after this preview. Review the refreshed preview, "
+                    "then confirm again."
+                ),
+                "preview": _safe_preview(preview, names),
+                "preview_token": _preview_token(preview),
+            },
+            status_code=409,
+        )
+    active_job = _active_correction_job(values)
+    if isinstance(active_job, JSONResponse):
+        return active_job
+    if active_job is not None:
+        job_id, request_matches = active_job
+        if not request_matches:
+            return _correction_in_progress_response()
+        return _queued_correction_response(job_id)
+    upn, manager_name = manager
+    try:
+        job_id = attendance_corrections.create_job(
+            item_key=values["item_key"],
+            employee_odoo_ids=values["employee_odoo_ids"],
+            target_work_center_name=values["work_center_name"],
+            start_utc=values["start_utc"],
+            end_utc=values["end_utc"],
+            actor_email=upn,
+            actor_name=manager_name,
+        )
+    except Exception:  # noqa: BLE001 - durable/Odoo details stay server-side
+        _log.exception("attendance correction job creation failed")
+        return _correction_error(
+            "apply_unavailable",
+            "The correction could not be queued. Nothing was changed. Preview and try again.",
+            503,
+        )
+    winner = _active_correction_job(values)
+    if isinstance(winner, JSONResponse):
+        return winner
+    if winner is not None:
+        winner_id, request_matches = winner
+        if winner_id != job_id or not request_matches:
+            return _correction_in_progress_response()
+    return _queued_correction_response(job_id)
+
+
+def _completed_operation_count(value: object) -> int:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return 0
+    if not isinstance(value, list):
+        return 0
+    return sum(
+        1
+        for item in value[:1000]
+        if isinstance(item, Mapping)
+        and isinstance(item.get("operation_key"), str)
+        and item.get("kind") in {"create", "update", "delete"}
+    )
+
+
+@router.get("/api/exceptions/attendance-correction/{job_id}")
+def attendance_correction_status(job_id: int, request: Request):
+    manager = _correction_manager(request)
+    if isinstance(manager, JSONResponse):
+        return manager
+    if job_id <= 0:
+        return _correction_error("job_not_found", "Correction job not found.", 404)
+    from .. import db
+
+    try:
+        rows = db.query(
+            "SELECT id, status, attempt_count, completed_operations, last_error, "
+            "updated_at, completed_at FROM attendance_correction_jobs WHERE id = %s",
+            (job_id,),
+        )
+    except Exception:  # noqa: BLE001 - never return durable storage details
+        _log.exception("attendance correction status lookup failed")
+        return _correction_error(
+            "status_unavailable",
+            "Correction status is not available right now. Checking again is safe.",
+            503,
+        )
+    if not rows:
+        return _correction_error("job_not_found", "Correction job not found.", 404)
+    row = rows[0]
+    status = row.get("status")
+    if status not in {
+        "planned",
+        "applying",
+        "verifying",
+        "recalculating",
+        "complete",
+        "failed",
+    }:
+        return _correction_error(
+            "status_unavailable", "Correction status is not available right now.", 503
+        )
+    failed = status == "failed"
+    active = status in {"planned", "applying", "verifying", "recalculating"}
+    error = (
+        "Odoo could not finish this correction. It is safe to try again."
+        if failed and row.get("last_error")
+        else None
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "job_id": int(row["id"]),
+            "status": status,
+            "attempt_count": max(0, int(row.get("attempt_count") or 0)),
+            "completed_operation_count": _completed_operation_count(
+                row.get("completed_operations")
+            ),
+            "retryable": failed,
+            "done": status in {"complete", "failed"},
+            "poll_after_ms": 2000 if active else None,
+            "error": error[:_CORRECTION_ERROR_LIMIT] if error else None,
+            "updated_at": jsonable_encoder(row.get("updated_at")),
+            "completed_at": jsonable_encoder(row.get("completed_at")),
+        }
+    )
 
 
 # Odoo's hr.leave ValidationError when the employee's Working Schedule has

@@ -402,6 +402,23 @@ header.app {
 .exception-row.is-error .row-status {
   color: var(--bad);
 }
+.attendance-source-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+.attendance-source-facts span {
+  position: relative;
+}
+.attendance-source-facts span + span::before {
+  content: "·";
+  position: absolute;
+  left: -0.48rem;
+  color: #94a3b8;
+}
 .empty-row {
   padding: 0.8rem 0.9rem;
   color: var(--muted);
@@ -534,6 +551,217 @@ header.app {
 .archive-more { margin-top: 0.6rem; }
 .archive-more[hidden] { display: none; }
 
+/* Odoo attendance correction dialog -------------------------------------- */
+.attendance-correction-dialog {
+  width: min(760px, calc(100vw - 2rem));
+  max-height: min(88vh, 900px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--fg);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+  overflow: auto;
+}
+.attendance-correction-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.58);
+}
+.attendance-correction-dialog :focus-visible {
+  outline: 3px solid #93c5fd;
+  outline-offset: 2px;
+}
+.attendance-correction-form {
+  padding: 1.15rem;
+}
+.attendance-correction-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+.attendance-correction-head h2 {
+  margin: 0.1rem 0 0.3rem;
+  font-size: 1.25rem;
+}
+.attendance-correction-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+.attendance-correction-kicker {
+  color: var(--accent) !important;
+  font-size: 0.72rem !important;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.attendance-dialog-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.25rem;
+}
+.attendance-correction-fields {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem 0;
+}
+.attendance-people-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.attendance-people-fieldset legend,
+.attendance-correction-fields label > span:first-child {
+  display: block;
+  margin-bottom: 0.38rem;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+.attendance-people-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem;
+  max-height: 190px;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  overflow: auto;
+}
+.attendance-person-choice,
+.attendance-open-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 34px;
+  cursor: pointer;
+  font-size: 0.84rem;
+}
+.attendance-person-choice input,
+.attendance-open-choice input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+.attendance-empty-choice {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0.4rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.attendance-time-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+.attendance-time-grid input,
+.attendance-target-field select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--fg);
+  font: inherit;
+  padding: 0.45rem 0.55rem;
+}
+.attendance-correction-message,
+.attendance-progress {
+  min-height: 1.25rem;
+  color: var(--muted);
+  font-size: 0.83rem;
+  font-weight: 700;
+}
+.attendance-correction-message.is-error {
+  color: var(--bad);
+}
+.attendance-preview-output {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+.attendance-preview-output[hidden] { display: none; }
+.attendance-preview-heading {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.attendance-preview-person {
+  display: grid;
+  gap: 0.4rem;
+}
+.attendance-preview-person h3 {
+  margin: 0;
+  font-size: 0.88rem;
+}
+.attendance-preview-group {
+  display: grid;
+  gap: 0.25rem;
+}
+.attendance-preview-group-title {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.attendance-preview-interval {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.42rem 0.5rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 0.78rem;
+}
+.attendance-preview-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.attendance-refresh-confirm {
+  margin-top: 0.7rem;
+  padding: 0.65rem;
+  border: 1px solid #f4ca64;
+  border-radius: 8px;
+  background: var(--warn-dim);
+  color: #713f12;
+}
+.attendance-refresh-confirm[hidden] { display: none; }
+.attendance-refresh-confirm p {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+.attendance-correction-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
 @media (max-width: 800px) {
   header.app, .inbox-title { align-items: flex-start; flex-direction: column; }
   .inbox-section th, .inbox-section td {
@@ -556,6 +784,16 @@ header.app {
   }
   .inline-input.time { flex: 0 1 130px; }
   .row-status { text-align: left; }
+  .attendance-correction-dialog {
+    width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
+  }
+  .attendance-correction-form { padding: 0.85rem; }
+  .attendance-people-list,
+  .attendance-time-grid { grid-template-columns: 1fr; }
+  .attendance-preview-interval { flex-direction: column; gap: 0.15rem; }
+  .attendance-correction-actions { flex-wrap: wrap; }
+  .attendance-correction-actions .row-btn { flex: 1 1 auto; }
 }
 
 /* Time-off coverage chip + hover/tap tooltip (inbox time-off rows) */
