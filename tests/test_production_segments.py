@@ -412,6 +412,34 @@ def test_unassigned_runs_use_original_sample_adjacency_and_active_interval_ident
     ]
 
 
+def test_unassigned_runs_skip_samples_outside_active_intervals_and_split_groups():
+    runs = unassigned_runs_for_samples(
+        [(t(12, 5), 5), (t(12, 30), 7), (t(14, 5), 11)],
+        set(),
+        ((t(12), t(12, 10)), (t(14), t(14, 10))),
+        wc_name="Repair 4",
+    )
+
+    assert [(run.start_utc, run.end_utc, run.units, run.sample_count) for run in runs] == [
+        (t(12, 5), t(12, 5), 5.0, 1),
+        (t(14, 5), t(14, 5), 11.0, 1),
+    ]
+
+
+def test_touching_active_intervals_keep_exact_boundary_sample_in_second_run():
+    runs = unassigned_runs_for_samples(
+        [(t(12, 55), 5), (t(13), 7)],
+        set(),
+        ((t(12), t(13)), (t(13), t(14))),
+        wc_name="Repair 4",
+    )
+
+    assert [(run.start_utc, run.end_utc, run.units, run.sample_count) for run in runs] == [
+        (t(12, 55), t(12, 55), 5.0, 1),
+        (t(13), t(13), 7.0, 1),
+    ]
+
+
 @pytest.mark.parametrize(
     ("samples", "intervals", "message"),
     [

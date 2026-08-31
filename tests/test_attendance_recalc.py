@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 import importlib
+import os
 
 import pytest
 
@@ -10,6 +11,12 @@ import pytest
 DAY_1 = date(2026, 8, 18)
 DAY_2 = date(2026, 8, 19)
 NOW = datetime(2026, 8, 30, 15, tzinfo=UTC)
+FINISHED = NOW + timedelta(minutes=20)
+
+
+_needs_postgres = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"), reason="needs local Postgres"
+)
 
 
 def recalc():
@@ -296,7 +303,7 @@ def test_success_marks_completed_keeps_historical_strict_marker_and_invalidates_
         lambda day: events.append(("invalidate", day)),
     )
 
-    result = module.process_next(production_client="zira", now_utc=NOW)
+    result = module.process_next(production_client="zira", now_utc=NOW, clock=lambda: NOW)
 
     assert result.status == "completed"
     assert result.rows_written == 2
@@ -322,6 +329,7 @@ def test_expired_older_worker_cannot_overwrite_newer_completed_snapshot(monkeypa
                 module.process_next(
                     production_client="newer",
                     now_utc=NOW + module.CLAIM_LEASE,
+                    clock=lambda: NOW + module.CLAIM_LEASE,
                 )
             )
             return prepared_snapshot(day, 10, strict=True)
@@ -333,7 +341,7 @@ def test_expired_older_worker_cannot_overwrite_newer_completed_snapshot(monkeypa
     )
     monkeypatch.setattr(module, "_refresh_caches", lambda day: None)
 
-    older_result = module.process_next(production_client="older", now_utc=NOW)
+    older_result = module.process_next(production_client="older", now_utc=NOW, clock=lambda: NOW)
 
     assert nested_results[0].status == "completed"
     assert older_result.status == "superseded"
@@ -384,13 +392,53 @@ def test_failure_stays_retryable_and_never_invalidates_cache(monkeypatch):
         lambda day: pytest.fail("failed recomputation invalidated caches"),
     )
 
-    result = module.process_next(production_client="zira", now_utc=NOW)
+    result = module.process_next(production_client="zira", now_utc=NOW, clock=lambda: NOW)
 
     assert result.status == "failed"
     assert result.error == "zira unavailable"
     assert store.rows[DAY_1]["completed_at"] is None
     assert store.rows[DAY_1]["attempt_count"] == 1
     assert store.rows[DAY_1]["started_at"] == NOW + timedelta(seconds=15)
+
+
+def test_failure_backoff_starts_at_actual_finish_time(monkeypatch):
+    module = recalc()
+    store = QueueStore([queue_row(DAY_1, requested_at=NOW - timedelta(hours=1))])
+    install_queue(monkeypatch, store)
+    monkeypatch.setattr(
+        "zira_dashboard.precompute.prepare_day",
+        lambda day, client: (_ for _ in ()).throw(RuntimeError("late failure")),
+    )
+
+    result = module.process_next(
+        production_client="zira",
+        now_utc=NOW,
+        clock=lambda: FINISHED,
+    )
+
+    assert result.status == "failed"
+    assert result.retry_at == FINISHED + timedelta(seconds=15)
+    assert store.rows[DAY_1]["started_at"] == result.retry_at
+
+
+def test_completion_uses_actual_finish_time(monkeypatch):
+    module = recalc()
+    store = QueueStore([queue_row(DAY_1, requested_at=NOW - timedelta(hours=1))])
+    install_queue(monkeypatch, store)
+    monkeypatch.setattr(
+        "zira_dashboard.precompute.prepare_day",
+        lambda day, client: prepared_snapshot(day),
+    )
+    monkeypatch.setattr(module, "_refresh_caches", lambda day: None)
+
+    result = module.process_next(
+        production_client="zira",
+        now_utc=NOW,
+        clock=lambda: FINISHED,
+    )
+
+    assert result.status == "completed"
+    assert store.rows[DAY_1]["completed_at"] == FINISHED
 
 
 def test_failure_recording_failure_reports_original_and_releases_by_lease(monkeypatch):
@@ -405,7 +453,7 @@ def test_failure_recording_failure_reports_original_and_releases_by_lease(monkey
         lambda day, client: (_ for _ in ()).throw(RuntimeError("original failure")),
     )
 
-    result = module.process_next(production_client="zira", now_utc=NOW)
+    result = module.process_next(production_client="zira", now_utc=NOW, clock=lambda: NOW)
 
     assert result.status == "failed"
     assert result.error == "original failure"
@@ -435,8 +483,86 @@ def test_lazy_zira_client_is_loaded_only_after_a_job_is_claimed(monkeypatch):
     )
     monkeypatch.setattr(module, "_refresh_caches", lambda day: None)
 
-    assert module.process_next(now_utc=NOW).status == "completed"
+    assert module.process_next(now_utc=NOW, clock=lambda: NOW).status == "completed"
     assert seen == [(DAY_1, sentinel)]
+
+
+@pytest.mark.parametrize("failure_boundary", ["client", "module"])
+def test_lazy_dependency_resolution_failure_is_recorded_for_retry(monkeypatch, failure_boundary):
+    module = recalc()
+    store = QueueStore([queue_row(DAY_1, requested_at=NOW - timedelta(hours=1))])
+    install_queue(monkeypatch, store)
+    if failure_boundary == "client":
+        monkeypatch.setattr(
+            module,
+            "_default_production_client",
+            lambda: (_ for _ in ()).throw(RuntimeError("client resolution failed")),
+        )
+    else:
+        monkeypatch.setattr(
+            module,
+            "_precompute_module",
+            lambda: (_ for _ in ()).throw(RuntimeError("module resolution failed")),
+            raising=False,
+        )
+
+    result = module.process_next(now_utc=NOW, clock=lambda: FINISHED)
+
+    assert result.status == "failed"
+    assert result.error == f"{failure_boundary} resolution failed"
+    assert result.retry_at == FINISHED + timedelta(seconds=15)
+
+
+@_needs_postgres
+def test_stale_claim_cannot_complete_or_reopen_replacement_completion():
+    from zira_dashboard import attendance_recalc, db
+
+    test_day = date(2098, 8, 21)
+    lease_until = NOW + attendance_recalc.CLAIM_LEASE
+    replacement_completed_at = FINISHED + timedelta(minutes=5)
+    stale_claim = attendance_recalc.RecalcClaim(
+        day=test_day,
+        attempt_count=1,
+        lease_until=lease_until,
+    )
+    db.init_pool()
+    db.bootstrap_schema()
+    db.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (test_day,))
+    db.execute(
+        "INSERT INTO attendance_recalc_queue "
+        "(day, reason, requested_at, started_at, completed_at, attempt_count) "
+        "VALUES (%s, %s, %s, NULL, %s, 2)",
+        (test_day, "replacement", NOW, replacement_completed_at),
+    )
+    try:
+        assert (
+            attendance_recalc._complete_claim(
+                stale_claim,
+                prepared_snapshot(test_day, 99),
+                FINISHED,
+            )
+            is None
+        )
+        with pytest.raises(RuntimeError, match="superseded"):
+            attendance_recalc._record_failure(
+                stale_claim,
+                RuntimeError("stale failure"),
+                FINISHED,
+            )
+
+        stored = db.query(
+            "SELECT started_at, completed_at, attempt_count, last_error "
+            "FROM attendance_recalc_queue WHERE day = %s",
+            (test_day,),
+        )[0]
+        assert stored == {
+            "started_at": None,
+            "completed_at": replacement_completed_at,
+            "attempt_count": 2,
+            "last_error": None,
+        }
+    finally:
+        db.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (test_day,))
 
 
 def test_refreshes_staffing_and_http_caches_after_success(monkeypatch):

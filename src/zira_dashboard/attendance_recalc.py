@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 import logging
@@ -169,6 +170,17 @@ def _default_production_client():
     return client
 
 
+def _precompute_module():
+    """Resolve the precompute module only after durable work is claimed."""
+    from . import precompute
+
+    return precompute
+
+
+def _finished_at(clock: Callable[[], datetime] | None) -> datetime:
+    return _aware_utc(clock() if clock is not None else None)
+
+
 def _refresh_caches(day: date) -> None:
     """Refresh attribution-dependent views after the queue commit succeeds."""
     from . import _http_cache, staffing
@@ -195,25 +207,25 @@ def process_next(
     *,
     production_client=None,
     now_utc: datetime | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> RecalcResult | None:
     """Claim, recompute, and complete one queue day, or return ``None``."""
-    from . import precompute
-
     now = _aware_utc(now_utc)
     claim = _claim_next(now)
     if claim is None:
         return None
     try:
+        precompute = _precompute_module()
         client = production_client
         if client is None:
             client = _default_production_client()
         prepared = precompute.prepare_day(claim.day, client)
-        rows_written = _complete_claim(claim, prepared, now)
+        rows_written = _complete_claim(claim, prepared, _finished_at(clock))
     except Exception as error:  # noqa: BLE001 - every failure remains retryable
         retry_at = None
         record_error = None
         try:
-            retry_at = _record_failure(claim, error, now)
+            retry_at = _record_failure(claim, error, _finished_at(clock))
         except Exception as failure_recording_error:  # noqa: BLE001
             record_error = str(failure_recording_error) or type(failure_recording_error).__name__
             _log.warning(

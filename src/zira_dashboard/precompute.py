@@ -35,6 +35,31 @@ class PreparedProductionDay:
     day: date
     rows: tuple[dict, ...]
     strict_day: date | None
+    expected_match_state: str | None = None
+
+
+def _validate_prepared_match_state_cur(cur, prepared: PreparedProductionDay) -> None:
+    """Lock and revalidate the rollout decision used to compute a snapshot."""
+    expected = prepared.expected_match_state
+    if expected is None:
+        return
+    if expected not in {"legacy", "strict"}:
+        raise ValueError("prepared match state must be legacy or strict")
+    from . import attendance_location_policy, production_history
+
+    # These tables are the complete strict/rollout decision boundary. The
+    # write-conflicting locks also protect a currently missing row until the
+    # production snapshot transaction commits.
+    cur.execute("LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE")
+    actual = attendance_location_policy.match_state_for_day_cur(
+        prepared.day,
+        cur=cur,
+    )
+    if actual != expected:
+        raise production_history.ProductionSourceUnavailable(
+            "Production attribution state changed before snapshot commit for "
+            f"{prepared.day.isoformat()}; saved production was left unchanged"
+        )
 
 
 def flatten_attribution(
@@ -202,7 +227,12 @@ def prepare_day(day: date, client) -> PreparedProductionDay:
     name_to_emp_id = attendance.name_to_person_id()
     rows = flatten_attribution(day, attribution, name_to_emp_id)
     strict_day = day if getattr(attribution, "is_strict", False) else None
-    return PreparedProductionDay(day=day, rows=tuple(rows), strict_day=strict_day)
+    return PreparedProductionDay(
+        day=day,
+        rows=tuple(rows),
+        strict_day=strict_day,
+        expected_match_state="strict" if strict_day is not None else "legacy",
+    )
 
 
 def store_prepared_day(prepared: PreparedProductionDay, *, cur=None) -> int:
@@ -210,16 +240,17 @@ def store_prepared_day(prepared: PreparedProductionDay, *, cur=None) -> int:
     if not isinstance(prepared, PreparedProductionDay):
         raise TypeError("prepared must be a PreparedProductionDay")
     if cur is None:
-        if prepared.strict_day is None:
-            return upsert_production_daily(
+        from . import db
+
+        with db.cursor() as owned_cur:
+            _validate_prepared_match_state_cur(owned_cur, prepared)
+            return _upsert_production_daily_cur(
+                owned_cur,
                 prepared.rows,
                 replace_days=(prepared.day,),
+                strict_day=prepared.strict_day,
             )
-        return upsert_production_daily(
-            prepared.rows,
-            replace_days=(prepared.day,),
-            strict_day=prepared.strict_day,
-        )
+    _validate_prepared_match_state_cur(cur, prepared)
     return _upsert_production_daily_cur(
         cur,
         prepared.rows,

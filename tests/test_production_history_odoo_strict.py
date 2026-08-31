@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, time
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,11 @@ from zira_dashboard.production_history import ProductionSourceUnavailable
 DAY = date(2026, 8, 20)
 START = datetime(2026, 8, 20, 12, tzinfo=UTC)
 END = datetime(2026, 8, 20, 20, tzinfo=UTC)
+
+
+_needs_postgres = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"), reason="needs local Postgres"
+)
 
 
 def at(hour: int, minute: int = 0) -> datetime:
@@ -310,6 +316,26 @@ def test_strict_testing_offsets_and_identity_safe_breakdown_exclusions(monkeypat
     assert result[(202, "Alex")]["Repair 4"]["excluded_minutes"] == 0.0
 
 
+@pytest.mark.parametrize("excluded_by", ["testing", "breakdown"])
+def test_unassigned_runs_do_not_restore_excluded_samples(monkeypatch, excluded_by):
+    window = (at(12), at(12, 30))
+    install_strict_dependencies(
+        monkeypatch,
+        spans=(),
+        totals=(
+            station_total(
+                units=9,
+                samples=((at(12, 15), 9),),
+                active_intervals=((at(12), at(13)),),
+            ),
+        ),
+        testing={"Repair 4": [window]} if excluded_by == "testing" else {},
+        breakdown=({("Unassigned", "Repair 4"): [window]} if excluded_by == "breakdown" else {}),
+    )
+
+    assert production_history.unassigned_runs_for_day(DAY, object(), now_utc=END) == ()
+
+
 def test_unique_strict_identity_keeps_existing_breakdown_expected_minute_exclusion(
     monkeypatch,
 ):
@@ -483,10 +509,8 @@ def test_strict_store_failure_rolls_back_marker_and_delete(monkeypatch):
     assert fake.events[-1] == "rollback"
 
 
-def test_precompute_uses_computed_strict_state_even_if_rollout_changes_before_write(
-    monkeypatch,
-):
-    from zira_dashboard import attendance, attendance_location_policy, attendance_mirror
+def test_precompute_carries_computed_strict_state_to_final_store(monkeypatch):
+    from zira_dashboard import attendance, attendance_mirror
 
     computed = production_history.AttributionResult(
         {(101, "Ana"): {"Repair 4": {"units": 10, "hours": 1, "days_worked": 1}}},
@@ -494,18 +518,11 @@ def test_precompute_uses_computed_strict_state_even_if_rollout_changes_before_wr
     )
     monkeypatch.setattr(production_history, "attribution_for", lambda day, client: computed)
     monkeypatch.setattr(attendance, "name_to_person_id", lambda: {})
-    monkeypatch.setattr(
-        attendance_location_policy,
-        "match_state_for_day",
-        lambda *_args, **_kwargs: pytest.fail("precompute re-resolved rollout state"),
-    )
     stored = []
     monkeypatch.setattr(
         precompute,
-        "upsert_production_daily",
-        lambda rows, *, replace_days=(), strict_day=None: (
-            stored.append((list(rows), tuple(replace_days), strict_day)) or len(rows)
-        ),
+        "store_prepared_day",
+        lambda prepared: stored.append(prepared) or len(prepared.rows),
     )
     monkeypatch.setattr(
         attendance_mirror,
@@ -514,7 +531,72 @@ def test_precompute_uses_computed_strict_state_even_if_rollout_changes_before_wr
     )
 
     assert precompute.precompute_day(DAY, object())["rows_written"] == 1
-    assert stored[0][1:] == ((DAY,), DAY)
+    assert stored[0].strict_day == DAY
+    assert stored[0].expected_match_state == "strict"
+
+
+@_needs_postgres
+def test_cutover_flip_between_prepare_and_store_preserves_prior_snapshot(monkeypatch):
+    from zira_dashboard import attendance, db
+
+    test_day = date(2098, 8, 20)
+    prior = {
+        "day": test_day,
+        "emp_id": "old",
+        "name": "Prior",
+        "wc_name": "Repair 4",
+        "units": 7,
+        "downtime": 0,
+        "hours": 1,
+        "days_worked": 1,
+    }
+    db.init_pool()
+    db.bootstrap_schema()
+    db.execute("DELETE FROM attendance_strict_days WHERE day = %s", (test_day,))
+    db.execute("DELETE FROM production_daily WHERE day = %s", (test_day,))
+    precompute.upsert_production_daily([prior], replace_days=(test_day,))
+    monkeypatch.setattr(
+        production_history,
+        "attribution_for",
+        lambda _day, _client: production_history.AttributionResult(
+            {
+                "New": {
+                    "Repair 4": {
+                        "units": 99,
+                        "downtime": 0,
+                        "hours": 1,
+                        "days_worked": 1,
+                    }
+                }
+            },
+            is_strict=False,
+        ),
+    )
+    monkeypatch.setattr(attendance, "name_to_person_id", lambda: {"New": "new"})
+    try:
+        prepared = precompute.prepare_day(test_day, object())
+        db.execute(
+            "INSERT INTO attendance_strict_days "
+            "(day, reason, source_changed_at) VALUES (%s, %s, %s)",
+            (test_day, "concurrent cutover", at(12)),
+        )
+
+        with pytest.raises(
+            ProductionSourceUnavailable,
+            match="changed before snapshot commit",
+        ):
+            precompute.store_prepared_day(prepared)
+
+        assert db.query(
+            "SELECT emp_id, name, units FROM production_daily WHERE day = %s",
+            (test_day,),
+        ) == [{"emp_id": "old", "name": "Prior", "units": 7}]
+        assert db.query("SELECT day FROM attendance_strict_days WHERE day = %s", (test_day,)) == [
+            {"day": test_day}
+        ]
+    finally:
+        db.execute("DELETE FROM production_daily WHERE day = %s", (test_day,))
+        db.execute("DELETE FROM attendance_strict_days WHERE day = %s", (test_day,))
 
 
 def test_precompute_source_failure_preserves_snapshot_and_enqueues_retry(monkeypatch):
@@ -556,11 +638,11 @@ def test_precompute_store_failure_enqueues_without_retrying_or_falling_back(monk
     monkeypatch.setattr(attendance, "name_to_person_id", lambda: {})
     writes = []
 
-    def fail_store(rows, *, replace_days=(), strict_day=None):
-        writes.append((list(rows), tuple(replace_days), strict_day))
+    def fail_store(prepared):
+        writes.append(prepared)
         raise RuntimeError("store failed")
 
-    monkeypatch.setattr(precompute, "upsert_production_daily", fail_store)
+    monkeypatch.setattr(precompute, "store_prepared_day", fail_store)
     enqueued = []
     monkeypatch.setattr(
         attendance_mirror,
@@ -572,5 +654,7 @@ def test_precompute_store_failure_enqueues_without_retrying_or_falling_back(monk
         precompute.precompute_day(DAY, object())
 
     assert len(writes) == 1
-    assert writes[0][1:] == ((DAY,), DAY)
+    assert writes[0].day == DAY
+    assert writes[0].strict_day == DAY
+    assert writes[0].expected_match_state == "strict"
     assert enqueued == [((DAY,), "production_source_unavailable", False)]

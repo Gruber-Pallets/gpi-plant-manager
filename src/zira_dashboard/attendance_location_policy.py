@@ -221,6 +221,15 @@ def match_state_for_day(
     if day in strict_days():
         return "strict"
     config = get_rollout_config()
+    return _match_state_from_config(day, config=config, now_utc=now_utc)
+
+
+def _match_state_from_config(
+    day: date,
+    *,
+    config: RolloutConfig,
+    now_utc: datetime | None,
+) -> MatchState:
     if config.cutover_at is None:
         return "legacy"
     now = _aware_utc(now_utc)
@@ -247,6 +256,33 @@ def match_state_for_day(
     if _live_is_active(config, now):
         return "strict"
     return "pending"
+
+
+def match_state_for_day_cur(
+    day: date, *, cur, now_utc: datetime | None = None
+) -> MatchState:
+    """Resolve match state from rows locked by the caller's transaction."""
+    cur.execute(
+        "SELECT 1 FROM attendance_strict_days WHERE day = %s",
+        (day,),
+    )
+    if cur.fetchone() is not None:
+        return "strict"
+    cur.execute(
+        "SELECT value FROM app_settings WHERE key = %s",
+        (_SETTING_KEY,),
+    )
+    row = cur.fetchone()
+    try:
+        config = _parse_config(row["value"]) if row is not None else None
+    except (TypeError, ValueError):
+        config = None
+    return _match_state_from_config(
+        day,
+        config=config
+        or RolloutConfig(mode="off", cutover_at=None, live_gate=None),
+        now_utc=now_utc,
+    )
 
 
 def _normalized_department_name(department_name: str | None) -> str:
