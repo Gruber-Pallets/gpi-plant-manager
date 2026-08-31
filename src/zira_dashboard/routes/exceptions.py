@@ -40,13 +40,14 @@ def exceptions_page(request: Request):
     except Exception:  # noqa: BLE001 - keep the inbox readable during roster outages
         _log.exception("attendance correction people could not load for inbox")
         correction_people = []
+    queue = _display_exception_queue(snapshot.get("queue") or [])
     return templates.TemplateResponse(
         request,
         "exceptions.html",
         {
             "snapshot": snapshot,
             "sections": snapshot["sections"],
-            "queue": snapshot["queue"],
+            "queue": queue,
             "work_centers": snapshot.get("work_centers") or [],
             "people": snapshot.get("people") or [],
             "correction_people": correction_people,
@@ -288,6 +289,12 @@ def _current_correction_context(
             "This inbox item changed or is no longer open. Refresh the inbox and try again.",
             409,
         )
+    if matches[0].get("comparison_only"):
+        return _correction_error(
+            "stale_item",
+            "This inbox item changed or is no longer open. Refresh the inbox and try again.",
+            409,
+        )
     work_centers = {
         item.strip()
         for item in snapshot.get("work_centers") or []
@@ -325,7 +332,72 @@ def _utc_iso(value: datetime | None) -> str | None:
 def _local_time_label(value: datetime | None) -> str:
     if value is None:
         return "Still working"
-    return value.astimezone(plant_day.SITE_TZ).strftime("%-m/%-d/%Y %-I:%M %p")
+    return value.astimezone(plant_day.SITE_TZ).strftime("%-m/%-d/%Y %-I:%M %p %Z")
+
+
+def _display_exception_queue(rows: Sequence[object]) -> list[object]:
+    displayed: list[object] = []
+    attendance_kinds = {
+        "production_unassigned_run",
+        "attendance_unmapped_location",
+    }
+    for value in rows:
+        if not isinstance(value, Mapping) or value.get("kind") not in attendance_kinds:
+            displayed.append(value)
+            continue
+        row = dict(value)
+        for field, label_field in (
+            ("start_utc", "start_label"),
+            ("end_utc", "end_label"),
+        ):
+            raw_time = row.get(field)
+            if raw_time is None:
+                row[label_field] = "Still working"
+                continue
+            try:
+                row[label_field] = _local_time_label(
+                    _correction_datetime(raw_time, field)
+                )
+            except ValueError:
+                row[label_field] = "Time unavailable"
+        workers = []
+        raw_workers = row.get("affected_workers")
+        if isinstance(raw_workers, Sequence) and not isinstance(
+            raw_workers, (str, bytes)
+        ):
+            for worker in raw_workers[:12]:
+                if not isinstance(worker, Mapping):
+                    continue
+                employee_id = worker.get("employee_odoo_id")
+                name = worker.get("employee_name")
+                if (
+                    isinstance(employee_id, int)
+                    and not isinstance(employee_id, bool)
+                    and employee_id > 0
+                    and isinstance(name, str)
+                    and name.strip()
+                ):
+                    workers.append(
+                        {
+                            "employee_odoo_id": employee_id,
+                            "employee_name": name.strip()[:100],
+                        }
+                    )
+        row["affected_workers"] = workers
+        row["affected_workers_truncated"] = (
+            isinstance(raw_workers, Sequence)
+            and not isinstance(raw_workers, (str, bytes))
+            and len(raw_workers) > 12
+        )
+        reason = row.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            words = reason.strip()[:200].replace("_", " ").split()
+            readable = " ".join(
+                "Odoo" if word.lower() == "odoo" else word for word in words
+            )
+            row["reason_label"] = readable[:1].upper() + readable[1:]
+        displayed.append(row)
+    return displayed
 
 
 def _display_interval(
@@ -601,11 +673,11 @@ async def attendance_correction_preview(request: Request):
     values = _correction_request_values(payload)
     if isinstance(values, JSONResponse):
         return values
-    context = _current_correction_context(values)
+    context = await asyncio.to_thread(_current_correction_context, values)
     if isinstance(context, JSONResponse):
         return context
     _row, names = context
-    preview = _build_live_preview(values)
+    preview = await asyncio.to_thread(_build_live_preview, values)
     if isinstance(preview, JSONResponse):
         return preview
     return JSONResponse(
@@ -644,11 +716,19 @@ async def attendance_correction_apply(request: Request):
         return _correction_error(
             "invalid_preview", "Preview this correction again before applying it.", 400
         )
-    context = _current_correction_context(values)
+    context = await asyncio.to_thread(_current_correction_context, values)
     if isinstance(context, JSONResponse):
         return context
     _row, names = context
-    preview = _build_live_preview(values)
+    active_job = await asyncio.to_thread(_active_correction_job, values)
+    if isinstance(active_job, JSONResponse):
+        return active_job
+    if active_job is not None:
+        job_id, request_matches = active_job
+        if not request_matches:
+            return _correction_in_progress_response()
+        return _queued_correction_response(job_id)
+    preview = await asyncio.to_thread(_build_live_preview, values)
     if isinstance(preview, JSONResponse):
         return preview
     fresh_binding = _preview_binding(preview)
@@ -666,22 +746,11 @@ async def attendance_correction_apply(request: Request):
             },
             status_code=409,
         )
-    active_job = _active_correction_job(values)
-    if isinstance(active_job, JSONResponse):
-        return active_job
-    if active_job is not None:
-        job_id, request_matches = active_job
-        if not request_matches:
-            return _correction_in_progress_response()
-        return _queued_correction_response(job_id)
     upn, manager_name = manager
     try:
-        job_id = attendance_corrections.create_job(
-            item_key=values["item_key"],
-            employee_odoo_ids=values["employee_odoo_ids"],
-            target_work_center_name=values["work_center_name"],
-            start_utc=values["start_utc"],
-            end_utc=values["end_utc"],
+        job_id = await asyncio.to_thread(
+            attendance_corrections.create_job_from_preview,
+            preview=preview,
             actor_email=upn,
             actor_name=manager_name,
         )
@@ -692,7 +761,7 @@ async def attendance_correction_apply(request: Request):
             "The correction could not be queued. Nothing was changed. Preview and try again.",
             503,
         )
-    winner = _active_correction_job(values)
+    winner = await asyncio.to_thread(_active_correction_job, values)
     if isinstance(winner, JSONResponse):
         return winner
     if winner is not None:

@@ -1,3 +1,4 @@
+import json
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -296,6 +297,109 @@ def test_active_duplicate_returns_before_preview_or_write(monkeypatch):
     )
 
     assert job_id == 44
+
+
+def test_create_job_from_preview_persists_exact_plan_without_rereading_odoo(
+    monkeypatch,
+):
+    from zira_dashboard import db
+
+    plan = attendance_corrections.plan_correction(
+        rows=[],
+        employee_odoo_id=7,
+        start_utc=NOW,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+    )
+    preview = attendance_corrections.CorrectionPreview(
+        item_key="production_unassigned_run:repair-1:1",
+        employee_odoo_ids=(7,),
+        target_work_center_name="Repair 1",
+        target_odoo_work_center_id=81,
+        target_odoo_department_id=9,
+        start_utc=NOW,
+        end_utc=None,
+        plans=(plan,),
+    )
+    statements = []
+
+    class Cursor:
+        def __init__(self):
+            self.response = None
+
+        def execute(self, sql, params=None):
+            statements.append((" ".join(sql.split()), params))
+            self.response = {"id": 51} if sql.startswith(
+                "INSERT INTO attendance_correction_jobs"
+            ) else None
+
+        def fetchone(self):
+            response = self.response
+            self.response = None
+            return response
+
+    @contextmanager
+    def cursor():
+        yield Cursor()
+
+    monkeypatch.setattr(attendance_corrections, "_active_job_id", lambda _key: None)
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_build_preview",
+        lambda **kwargs: pytest.fail(f"persisted preview re-read Odoo: {kwargs}"),
+    )
+    monkeypatch.setattr(db, "cursor", cursor)
+
+    job_id = attendance_corrections.create_job_from_preview(
+        preview=preview,
+        actor_email="manager@example.com",
+        actor_name="Manager",
+    )
+
+    insert = next(item for item in statements if item[0].startswith(
+        "INSERT INTO attendance_correction_jobs"
+    ))
+    assert job_id == 51
+    assert insert[1][7] == json.dumps(
+        attendance_corrections._plans_payload(preview), separators=(",", ":")
+    )
+    assert insert[1][8:] == ("manager@example.com", "Manager")
+
+
+def test_create_job_from_preview_rejects_request_plan_mismatch_before_dedupe(
+    monkeypatch,
+):
+    plan = attendance_corrections.plan_correction(
+        rows=[],
+        employee_odoo_id=7,
+        start_utc=NOW,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+    )
+    mismatched = attendance_corrections.CorrectionPreview(
+        item_key="production_unassigned_run:repair-1:1",
+        employee_odoo_ids=(7,),
+        target_work_center_name="Repair 1",
+        target_odoo_work_center_id=82,
+        target_odoo_department_id=9,
+        start_utc=NOW,
+        end_utc=None,
+        plans=(plan,),
+    )
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_active_job_id",
+        lambda _key: pytest.fail("invalid preview reached durable dedupe"),
+    )
+
+    with pytest.raises(ValueError, match="validated request"):
+        attendance_corrections.create_job_from_preview(
+            preview=mismatched,
+            actor_email="manager@example.com",
+            actor_name="Manager",
+        )
 
 
 def test_oldest_claim_uses_skip_locked_attempt_fence_and_durable_event(monkeypatch):

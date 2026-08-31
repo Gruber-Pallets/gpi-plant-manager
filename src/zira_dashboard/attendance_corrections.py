@@ -2244,6 +2244,120 @@ def _active_job_id(item_key: str) -> int | None:
     return int(rows[0]["id"]) if rows else None
 
 
+def _validated_job_preview(preview: CorrectionPreview) -> CorrectionPreview:
+    if not isinstance(preview, CorrectionPreview):
+        raise TypeError("preview must be a CorrectionPreview")
+    key, employees, target, start, end = _validated_request(
+        item_key=preview.item_key,
+        employee_odoo_ids=preview.employee_odoo_ids,
+        target_work_center_name=preview.target_work_center_name,
+        start_utc=preview.start_utc,
+        end_utc=preview.end_utc,
+    )
+    if len(preview.plans) != len(employees):
+        raise ValueError("preview must contain one plan per employee")
+    for employee_id, plan in zip(employees, preview.plans, strict=True):
+        request = plan.request
+        if (
+            request["employee_odoo_id"] != employee_id
+            or request["start_utc"] != start
+            or request["end_utc"] != end
+            or request["odoo_work_center_id"] != preview.target_odoo_work_center_id
+            or request["odoo_department_id"] != preview.target_odoo_department_id
+        ):
+            raise ValueError("preview plan does not match its validated request")
+    if (
+        preview.item_key != key
+        or preview.employee_odoo_ids != employees
+        or preview.target_work_center_name != target
+        or preview.start_utc != start
+        or preview.end_utc != end
+    ):
+        raise ValueError("preview request is not canonical")
+    return preview
+
+
+def _persist_preview_job(
+    preview: CorrectionPreview,
+    *,
+    actor_email: str | None,
+    actor_name: str | None,
+) -> int:
+    source_snapshot = _snapshot_payload(preview)
+    plans = _plans_payload(preview)
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO attendance_correction_jobs "
+            "(item_key, status, target_work_center_name, "
+            "target_odoo_work_center_id, start_utc, end_utc, employee_odoo_ids, "
+            "source_snapshot, operations, completed_operations, actor_email, actor_name) "
+            "VALUES (%s, 'planned', %s, %s, %s, %s, %s::jsonb, %s::jsonb, "
+            "%s::jsonb, '[]'::jsonb, %s, %s) "
+            "ON CONFLICT (item_key) WHERE status IN "
+            "('planned','applying','verifying','recalculating') DO NOTHING "
+            "RETURNING id",
+            (
+                preview.item_key,
+                preview.target_work_center_name,
+                preview.target_odoo_work_center_id,
+                preview.start_utc,
+                preview.end_utc,
+                json.dumps(list(preview.employee_odoo_ids)),
+                json.dumps(source_snapshot, separators=(",", ":")),
+                json.dumps(plans, separators=(",", ":")),
+                actor_email,
+                actor_name,
+            ),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            job_id = int(row["id"])
+            _append_event_cur(
+                cur,
+                job_id,
+                "planning",
+                "created",
+                _event_detail(
+                    job_id=job_id,
+                    employee_ids=preview.employee_odoo_ids,
+                    work_center_id=preview.target_odoo_work_center_id,
+                ),
+            )
+            return job_id
+        cur.execute(
+            "SELECT id FROM attendance_correction_jobs WHERE item_key = %s "
+            "AND status IN ('planned','applying','verifying','recalculating') "
+            "ORDER BY id DESC LIMIT 1 FOR UPDATE",
+            (preview.item_key,),
+        )
+        duplicate = cur.fetchone()
+        if duplicate is None:
+            raise RuntimeError("active correction dedupe winner disappeared")
+        return int(duplicate["id"])
+
+
+def create_job_from_preview(
+    *,
+    preview: CorrectionPreview,
+    actor_email: str | None,
+    actor_name: str | None,
+) -> int:
+    """Persist this exact validated preview without another Odoo source read."""
+    exact_preview = _validated_job_preview(preview)
+    email = _optional_bounded_text(actor_email, "actor_email", _ACTOR_LIMIT)
+    name = _optional_bounded_text(actor_name, "actor_name", _ACTOR_LIMIT)
+    existing = _active_job_id(exact_preview.item_key)
+    if existing is not None:
+        return existing
+    return _persist_preview_job(
+        exact_preview,
+        actor_email=email,
+        actor_name=name,
+    )
+
+
 def create_job(
     *,
     item_key: str,
@@ -2274,59 +2388,7 @@ def create_job(
         start_utc=start,
         end_utc=end,
     )
-    source_snapshot = _snapshot_payload(preview)
-    plans = _plans_payload(preview)
-    from . import db
-
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO attendance_correction_jobs "
-            "(item_key, status, target_work_center_name, "
-            "target_odoo_work_center_id, start_utc, end_utc, employee_odoo_ids, "
-            "source_snapshot, operations, completed_operations, actor_email, actor_name) "
-            "VALUES (%s, 'planned', %s, %s, %s, %s, %s::jsonb, %s::jsonb, "
-            "%s::jsonb, '[]'::jsonb, %s, %s) "
-            "ON CONFLICT (item_key) WHERE status IN "
-            "('planned','applying','verifying','recalculating') DO NOTHING "
-            "RETURNING id",
-            (
-                key,
-                target,
-                preview.target_odoo_work_center_id,
-                start,
-                end,
-                json.dumps(list(employees)),
-                json.dumps(source_snapshot, separators=(",", ":")),
-                json.dumps(plans, separators=(",", ":")),
-                email,
-                name,
-            ),
-        )
-        row = cur.fetchone()
-        if row is not None:
-            job_id = int(row["id"])
-            _append_event_cur(
-                cur,
-                job_id,
-                "planning",
-                "created",
-                _event_detail(
-                    job_id=job_id,
-                    employee_ids=employees,
-                    work_center_id=preview.target_odoo_work_center_id,
-                ),
-            )
-            return job_id
-        cur.execute(
-            "SELECT id FROM attendance_correction_jobs WHERE item_key = %s "
-            "AND status IN ('planned','applying','verifying','recalculating') "
-            "ORDER BY id DESC LIMIT 1 FOR UPDATE",
-            (key,),
-        )
-        duplicate = cur.fetchone()
-        if duplicate is None:
-            raise RuntimeError("active correction dedupe winner disappeared")
-        return int(duplicate["id"])
+    return _persist_preview_job(preview, actor_email=email, actor_name=name)
 
 
 def _claim_job(*, job_id: int | None, now_utc: datetime) -> _JobClaim | None:
