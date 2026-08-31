@@ -12,6 +12,22 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-08-31
 
+### Finished work stays matched with Odoo
+
+- **The work helpers now check off the matching 2s improvement after a change is finished, checked, and saved.** They stop and ask for help if they cannot find or confirm one clear match.
+
+### Odoo completion rule build plan
+
+- **A step-by-step build plan is ready so the work helpers can check off the matching 2s improvement after finished work.** They will stop and ask for help when there is not one clear match. Nothing in the app has changed yet.
+
+### Keep correction plans locked and exact
+
+- **Plant Manager now keeps time-fix plans locked after they are made.** It preserves outside time records and rejects a saved plan if any step no longer matches.
+
+### Keep finished work and Odoo together
+
+- **A plan is ready to mark the matching 2s improvement complete after the work is finished, checked, and saved.** If there is not one clear match, it will stop and ask for help. Nothing in the app has changed yet.
+
 ### Keep Odoo source problems visible
 
 - **The Exception Inbox now keeps an Odoo source problem visible even when the live copy is not ready.** A new work-time correction also cannot be closed by an older background check.
@@ -96,6 +112,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Keep a safe copy of Odoo work times
 
 - **Plant Manager now keeps a fresh copy of Odoo work times and checks for changed or removed records.** A failed check cannot erase good records. The copy is still running in the background only.
+
 ### People performance dashboard plan
 
 - **A plan is ready for a manager dashboard built around people.** It will show where each person worked, when they moved, whether they met each goal, downtime, and forklift calls. Nothing in the app has changed yet.

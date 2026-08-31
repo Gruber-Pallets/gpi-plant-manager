@@ -244,6 +244,26 @@ def test_adjacent_fully_covered_rows_become_one_interval_with_one_reused_id():
     ]
 
 
+def test_two_partial_boundary_rows_keep_both_source_ids_outside_window():
+    plan = planned(
+        [row(101, at(8), at(10)), row(102, at(10), at(12))],
+        at(9),
+        at(11),
+    )
+
+    assert interval_tuples(plan) == [
+        (101, at(8), at(9), 11, 3),
+        (None, at(9), at(11), WORK_CENTER, DEPARTMENT),
+        (102, at(11), at(12), 11, 3),
+    ]
+    assert [(op.kind, op.attendance_id) for op in plan.operations] == [
+        ("update", 101),
+        ("create", None),
+        ("update", 102),
+    ]
+    assert not any(op.kind == "delete" for op in plan.operations)
+
+
 def test_open_source_and_open_correction_preserve_only_time_before_start():
     plan = planned(
         [row(101, at(8), None)],
@@ -254,6 +274,23 @@ def test_open_source_and_open_correction_preserve_only_time_before_start():
     assert interval_tuples(plan) == [
         (101, at(8), at(10), 11, 3),
         (None, at(10), None, WORK_CENTER, DEPARTMENT),
+    ]
+
+
+def test_open_correction_preserves_boundary_id_and_reuses_fully_covered_future_row():
+    plan = planned(
+        [row(101, at(8), at(12)), row(102, at(12), at(14))],
+        at(10),
+        None,
+    )
+
+    assert interval_tuples(plan) == [
+        (101, at(8), at(10), 11, 3),
+        (102, at(10), None, WORK_CENTER, DEPARTMENT),
+    ]
+    assert [(op.kind, op.attendance_id) for op in plan.operations] == [
+        ("update", 101),
+        ("update", 102),
     ]
 
 
@@ -754,6 +791,37 @@ def test_whole_plan_integrity_protects_no_operation_plans(mutation):
         sources = value["source_intervals"]
         assert isinstance(sources, list)
         encoded_mapping_replace(sources[0], "note", "changed")
+
+    with pytest.raises(ValueError, match="integrity"):
+        plan_from_json(value)
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["remove_operations", "operation_after", "source_version", "operation_key", "integrity"],
+)
+def test_whole_plan_integrity_rejects_canonical_looking_tampering(tamper):
+    value = deepcopy(valid_json_value())
+    operations = value["operations"]
+    versions = value["source_versions"]
+    assert isinstance(operations, list)
+    assert isinstance(versions, list)
+    assert isinstance(operations[0], dict)
+    assert isinstance(versions[0], dict)
+    if tamper == "remove_operations":
+        operations.clear()
+    elif tamper == "operation_after":
+        encoded_mapping_replace(operations[0]["after"], "odoo_work_center_id", WORK_CENTER + 1)
+    elif tamper == "source_version":
+        versions[0]["write_date"] = "2026-08-31T00:02:00Z"
+    elif tamper == "operation_key":
+        key = operations[0]["key"]
+        assert isinstance(key, str)
+        operations[0]["key"] = different_canonical_key(key)
+    else:
+        integrity = value["integrity"]
+        assert isinstance(integrity, str)
+        value["integrity"] = integrity[:-1] + ("0" if integrity[-1] != "0" else "1")
 
     with pytest.raises(ValueError, match="integrity"):
         plan_from_json(value)
