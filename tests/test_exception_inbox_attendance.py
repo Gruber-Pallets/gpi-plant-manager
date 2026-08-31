@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import pytest
@@ -184,15 +185,58 @@ def test_live_strict_replaces_legacy_aggregate_with_distinct_run(monkeypatch):
     assert keys.count(issue.item_key) == 1
 
 
-@pytest.mark.parametrize("builder_failure", [False, True])
-def test_strict_day_never_calls_legacy_production_during_attendance_outage(
-    monkeypatch, builder_failure
+def test_attendance_row_revision_changes_for_urgency_but_not_a_moving_end():
+    item = _issue(
+        "attendance_missing_location",
+        "attendance_missing_location:42:901:2026-08-31T13:00:00+00:00",
+        priority="warn",
+    )
+
+    pending = exception_inbox._attendance_issue_row(item)
+    same_visible_content = exception_inbox._attendance_issue_row(
+        replace(item, end_utc=NOW.replace(minute=4))
+    )
+    urgent = exception_inbox._attendance_issue_row(
+        replace(item, end_utc=NOW.replace(minute=5), priority="urgent")
+    )
+
+    assert pending["item_key"] == same_visible_content["item_key"] == urgent["item_key"]
+    assert pending["row_key"] == same_visible_content["row_key"]
+    assert pending["row_key"] != urgent["row_key"]
+
+
+def test_production_row_revision_changes_with_units_and_sample_count():
+    item = _issue(
+        "production_unassigned_run",
+        "production_unassigned_run:Dismantler 1:2026-08-31T13:00:00+00:00",
+    )
+
+    initial = exception_inbox._attendance_issue_row(item)
+    repeated = exception_inbox._attendance_issue_row(item)
+    changed = exception_inbox._attendance_issue_row(replace(item, units=12.5, sample_count=4))
+
+    assert initial["item_key"] == changed["item_key"]
+    assert initial["row_key"] == repeated["row_key"]
+    assert initial["row_key"] != changed["row_key"]
+
+
+@pytest.mark.parametrize(
+    ("production_mode", "builder_failure"),
+    [("strict", False), ("pending", False), ("strict", True)],
+)
+def test_authoritative_day_never_calls_legacy_during_attendance_outage(
+    monkeypatch, production_mode, builder_failure
 ):
     _empty_legacy(monkeypatch, assignments=(_legacy_assignment(),))
     monkeypatch.setattr(
         staffing_routes,
         "assignments_todo_payload",
-        lambda: pytest.fail("strict day called legacy production provider"),
+        lambda: pytest.fail("authoritative day called legacy production provider"),
+    )
+    monkeypatch.setattr(
+        missing_wc,
+        "current_rows",
+        lambda: pytest.fail("authoritative day called legacy location provider"),
     )
     if builder_failure:
         monkeypatch.setattr(
@@ -208,7 +252,7 @@ def test_strict_day_never_calls_legacy_production_during_attendance_outage(
         monkeypatch.setattr(
             attendance_location_policy,
             "match_state_for_day",
-            lambda *_a, **_k: "strict",
+            lambda *_a, **_k: production_mode,
         )
     else:
         monkeypatch.setattr(
@@ -216,7 +260,7 @@ def test_strict_day_never_calls_legacy_production_during_attendance_outage(
             "build_snapshot",
             lambda *_a, **_k: _attendance_snapshot(
                 mode="shadow",
-                production_mode="strict",
+                production_mode=production_mode,
                 complete=False,
                 source_errors=("Attendance Timeline",),
             ),
@@ -227,6 +271,11 @@ def test_strict_day_never_calls_legacy_production_during_attendance_outage(
 
     assert sections["assignments"]["count"] == 0
     assert sections["assignments"]["rows"] == []
+    assert "missing_wc" not in sections
+    if builder_failure:
+        assert sections["production_source_unavailable"]["count"] == 1
+        sources = {error["source"] for error in snapshot["source_errors"]}
+        assert {"Attendance Timeline", "Strict Production"} <= sources
 
 
 def test_summary_and_snapshot_count_the_same_attendance_items(monkeypatch):
