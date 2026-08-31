@@ -24,18 +24,11 @@ from __future__ import annotations
 
 import logging
 
-from . import attendance_location_policy, db, odoo_client
+from . import db, odoo_client
 
 _log = logging.getLogger(__name__)
 
 _BATCH_SIZE = 50
-
-
-def _live_location_active() -> bool:
-    try:
-        return attendance_location_policy.live_is_active()
-    except Exception:
-        return False
 
 
 def retry_unsynced_punches() -> int:

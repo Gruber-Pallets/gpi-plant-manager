@@ -133,7 +133,12 @@ def current_attendance_windows() -> tuple[
         ):
             live_cache.refresh_odoo_open_attendance()
             refreshed = live_cache.read_open_attendance_source()
+            source = refreshed
             snapshot, refreshed_at = refreshed.payload, refreshed.refreshed_at
+            if not source.available:
+                return {}, refreshed_at
+        if source.mirror_owned and refreshed_at is None:
+            return {}, None
         # The legacy snapshot is an open-ended cache, so an old row must not
         # become current truth. Mirror-owned rows instead stop exactly at the
         # response's last verified refresh; downstream interval consumers may

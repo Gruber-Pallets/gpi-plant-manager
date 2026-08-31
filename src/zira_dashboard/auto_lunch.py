@@ -196,6 +196,38 @@ def _latest_in_wc(person_odoo_id: int, day: date, *, source=None) -> str | None:
     return rows[0]["wc_name"] if rows and rows[0]["wc_name"] else None
 
 
+def _legacy_attendance_inputs_bulk(
+    person_ids, day: date
+) -> tuple[dict[int, datetime | None], dict[int, str | None]]:
+    """Fetch each candidate's flex anchor and latest work center in one query."""
+    ids = [int(person_id) for person_id in person_ids]
+    if not ids:
+        return {}, {}
+    start, end = _day_bounds(day)
+    rows = db.query(
+        "SELECT person_odoo_id, "
+        "MIN(COALESCE(rounded_at, occurred_at)) "
+        "  FILTER (WHERE action = 'clock_in') AS first_in, "
+        "(ARRAY_AGG(wc_name ORDER BY COALESCE(rounded_at, occurred_at) DESC, id DESC) "
+        "  FILTER (WHERE action IN ('clock_in', 'transfer_in') "
+        "          AND wc_name IS NOT NULL))[1] AS latest_wc "
+        "FROM timeclock_punches_log "
+        "WHERE person_odoo_id = ANY(%s) "
+        "  AND action IN ('clock_in', 'transfer_in') "
+        "  AND COALESCE(rounded_at, occurred_at) >= %s "
+        "  AND COALESCE(rounded_at, occurred_at) < %s "
+        "GROUP BY person_odoo_id",
+        (ids, start, end),
+    )
+    first_clock_ins = {
+        int(row["person_odoo_id"]): row.get("first_in") for row in rows
+    }
+    latest_in_wcs = {
+        int(row["person_odoo_id"]): row.get("latest_wc") for row in rows
+    }
+    return first_clock_ins, latest_in_wcs
+
+
 def _get_run(person_odoo_id: int, day: date) -> dict | None:
     rows = db.query(
         "SELECT person_odoo_id, day, kind, state, target_out_at, target_in_at, "
@@ -327,16 +359,30 @@ def _fixed_windows_for_candidates(today, person_ids, app_fixed_window):
 
 
 def _apply(
-    person_odoo_id, today, kind, run, t, state, window, settings, *, source=None
+    person_odoo_id,
+    today,
+    kind,
+    run,
+    t,
+    state,
+    window,
+    settings,
+    *,
+    source=None,
+    latest_in_wc=_UNSET,
 ) -> None:
     if t.action == "clock_out":
         # Capture the WC to restore at sign-in. Prefer the reconciled current
         # WC; fall back to the WC on the employee's own latest in-punch so the
         # afternoon record still carries the work center (and its Kiosk
         # Department) even when the open-attendance cache doesn't surface it.
-        wc_name = state["current_wc"] or _latest_in_wc(
-            person_odoo_id, today, source=source
-        )
+        wc_name = state["current_wc"]
+        if not wc_name:
+            wc_name = (
+                _latest_in_wc(person_odoo_id, today, source=source)
+                if latest_in_wc is _UNSET
+                else latest_in_wc
+            )
         _log.info("auto-lunch %s: person %s clock_out @ %s (wc=%s)",
                   "OBSERVE" if settings.observe_only else "LIVE",
                   person_odoo_id, t.at, wc_name)
@@ -375,7 +421,8 @@ def _apply(
 
 def _advance_person(person_odoo_id, today, now, fixed_window, flex_ids, settings, *,
                     run=_UNSET, snapshot=None, refreshed_at=None, latest=_UNSET,
-                    first_clock_in=_UNSET, source=None) -> None:
+                    first_clock_in=_UNSET, source=None,
+                    latest_in_wc=_UNSET) -> None:
     # run_tick passes the per-person inputs it already batch-read (run row,
     # open-attendance snapshot, latest punch); when omitted, each is fetched
     # here so the per-person behavior is unchanged for direct callers.
@@ -424,6 +471,7 @@ def _advance_person(person_odoo_id, today, now, fixed_window, flex_ids, settings
         window,
         settings,
         source=source,
+        latest_in_wc=latest_in_wc,
     )
 
 
@@ -470,6 +518,7 @@ def run_tick(now: datetime | None = None) -> None:
         pid for pid in candidates if _kind_for(pid, runs.get(pid), flex_ids) == "flex"
     }
     first_clock_ins: dict[int, datetime | None] = {}
+    latest_in_wcs: dict[int, str | None] = {}
     if source.mirror_owned and flex_candidates:
         day_source = live_cache.read_attendance_source(today, policy=policy)
         if not day_source.available or day_source.payload is None:
@@ -484,6 +533,17 @@ def run_tick(now: datetime | None = None) -> None:
                 )
             except (TypeError, ValueError):
                 first_clock_ins[pid] = None
+    if source.mirror_owned:
+        for pid in candidates:
+            entry = snapshot.get(str(pid)) or snapshot.get(pid) or {}
+            latest_in_wcs[pid] = entry.get("wc_name")
+    elif candidates:
+        legacy_first_clock_ins, latest_in_wcs = _legacy_attendance_inputs_bulk(
+            candidates, today
+        )
+        first_clock_ins = {
+            pid: legacy_first_clock_ins.get(pid) for pid in flex_candidates
+        }
     scheduled_candidates = {
         pid for pid in candidates
         if _kind_for(pid, runs.get(pid), flex_ids) == "scheduled"
@@ -497,9 +557,10 @@ def run_tick(now: datetime | None = None) -> None:
                             latest=latest_by_pid.get(pid),
                             first_clock_in=(
                                 first_clock_ins.get(pid)
-                                if source.mirror_owned and pid in flex_candidates
+                                if pid in flex_candidates
                                 else _UNSET
                             ),
+                            latest_in_wc=latest_in_wcs.get(pid),
                             source=source)
         except Exception as e:  # noqa: BLE001 — one person never kills the tick
             _log.warning("auto-lunch: failed for person %s: %s", pid, e)

@@ -198,11 +198,11 @@ def test_pre_activation_clock_out_keeps_legacy_single_current_row(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("accepted_live", "retry_live", "expected_close_all"),
+    ("accepted_live", "rollout_after_enqueue", "expected_close_all"),
     [(True, False, True), (False, True, False)],
 )
 def test_clock_out_retry_keeps_the_ownership_intent_from_punch_acceptance(
-    monkeypatch, accepted_live, retry_live, expected_close_all
+    monkeypatch, accepted_live, rollout_after_enqueue, expected_close_all
 ):
     """Activation or rollback after enqueue must not change punch semantics."""
     from zira_dashboard import rounding
@@ -243,8 +243,8 @@ def test_clock_out_retry_keeps_the_ownership_intent_from_punch_acceptance(
     punch_insert = inserted[0]
     persisted_intent = punch_insert[1][-1]
     assert persisted_intent is expected_close_all
+    assert rollout_after_enqueue is not accepted_live
 
-    monkeypatch.setattr(timeclock_sync, "_live_location_active", lambda: retry_live)
     close_all = MagicMock(return_value=(81, 82))
     single = MagicMock(return_value={"id": 81})
     monkeypatch.setattr(

@@ -374,6 +374,76 @@ def test_legacy_current_windows_preserve_open_end(monkeypatch):
     assert windows == {"Maria": [("Bay 8", FIRST_IN, None)]}
 
 
+def test_legacy_refresh_adopts_mirror_ownership_and_verified_cap(monkeypatch):
+    """Activation between legacy refresh reads must not open-end mirror rows."""
+    legacy_source = live_cache.AttendanceSourceSnapshot(
+        payload=None,
+        refreshed_at=None,
+        mirror_owned=False,
+        available=True,
+        stale=True,
+    )
+    mirror_source = live_cache.AttendanceSourceSnapshot(
+        payload={
+            "5": {
+                "att_id": 90,
+                "check_in": FIRST_IN.isoformat(),
+                "wc_name": "Bay 8",
+            }
+        },
+        refreshed_at=FRESH_AT,
+        mirror_owned=True,
+        available=True,
+        stale=False,
+    )
+    sources = iter((legacy_source, mirror_source))
+    source_calls = []
+    refresh_calls = []
+    monkeypatch.setattr(
+        live_cache,
+        "read_open_attendance_source",
+        lambda: source_calls.append(True) or next(sources),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "refresh_odoo_open_attendance",
+        lambda: refresh_calls.append(True),
+    )
+    monkeypatch.setattr(live_cache, "is_stale", lambda at: at is None)
+    monkeypatch.setattr(attendance, "person_id_to_name", lambda: {"5": "Maria"})
+
+    windows, refreshed_at = timeclock_windows.current_attendance_windows()
+
+    assert source_calls == [True, True]
+    assert refresh_calls == [True]
+    assert refreshed_at == FRESH_AT
+    assert windows == {"Maria": [("Bay 8", FIRST_IN, FRESH_AT)]}
+
+
+def test_mirror_owned_current_windows_never_open_end_without_verified_cap(
+    monkeypatch,
+):
+    source = live_cache.AttendanceSourceSnapshot(
+        payload={
+            "5": {
+                "att_id": 90,
+                "check_in": FIRST_IN.isoformat(),
+                "wc_name": "Bay 8",
+            }
+        },
+        refreshed_at=None,
+        mirror_owned=True,
+        available=True,
+    )
+    monkeypatch.setattr(live_cache, "read_open_attendance_source", lambda: source)
+    monkeypatch.setattr(attendance, "person_id_to_name", lambda: {"5": "Maria"})
+
+    windows, refreshed_at = timeclock_windows.current_attendance_windows()
+
+    assert windows == {}
+    assert refreshed_at is None
+
+
 def test_owned_unavailable_open_source_is_not_replaced_by_synced_local_log(monkeypatch):
     monkeypatch.setattr(
         live_cache,
@@ -774,6 +844,165 @@ def test_auto_lunch_freezes_one_policy_and_one_day_snapshot_for_all_flex_people(
         (6, datetime(2026, 8, 31, 10, 30, tzinfo=UTC)),
     ]
     assert all(source is open_source for _pid, _first, source in advanced)
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow"])
+def test_auto_lunch_batches_legacy_attendance_inputs_once_per_tick(monkeypatch, mode):
+    """Legacy/off and pre-baseline shadow ticks share one local-day payload."""
+    policy = live_cache.AttendanceReadPolicy(
+        mirror_owned=False,
+        available=True,
+        refreshed_at=FRESH_AT,
+        mode=mode,
+    )
+    open_source = live_cache.AttendanceSourceSnapshot(
+        payload={
+            "5": {"att_id": 51, "check_in": FIRST_IN.isoformat(), "wc_name": None},
+            "6": {"att_id": 61, "check_in": FIRST_IN.isoformat(), "wc_name": None},
+        },
+        refreshed_at=FRESH_AT,
+        mirror_owned=False,
+        available=True,
+        stale=False,
+    )
+    first_by_pid = {
+        5: datetime(2026, 8, 31, 10, 0, tzinfo=UTC),
+        6: datetime(2026, 8, 31, 10, 30, tzinfo=UTC),
+    }
+    latest_wc_by_pid = {5: "Bay 3", 6: "Repair 1"}
+    policy_calls = []
+    open_calls = []
+    legacy_payload_calls = []
+    monkeypatch.setattr(
+        auto_lunch_settings,
+        "current",
+        lambda: SimpleNamespace(
+            enabled=True,
+            observe_only=False,
+            flex_after_hours=5.0,
+            flex_minutes=30,
+        ),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "attendance_read_policy",
+        lambda **_kwargs: policy_calls.append(True) or policy,
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "read_open_attendance_source",
+        lambda **kwargs: open_calls.append(kwargs["policy"]) or open_source,
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "read_attendance_source",
+        lambda *_args, **_kwargs: pytest.fail("legacy tick must not choose a second source"),
+    )
+    monkeypatch.setattr(live_cache, "is_stale", lambda _at: False)
+    monkeypatch.setattr(auto_lunch.shift_config, "is_workday", lambda _day: False)
+    monkeypatch.setattr(auto_lunch, "_flex_person_ids", lambda: {5, 6})
+    monkeypatch.setattr(auto_lunch, "_get_runs_bulk", lambda *_args: {})
+    monkeypatch.setattr(auto_lunch.attendance_state, "latest_punches_bulk", lambda _ids: {})
+    monkeypatch.setattr(auto_lunch, "_fixed_windows_for_candidates", lambda *_args: {})
+
+    def query(sql, params=None):
+        if "state NOT IN" in sql or "wage_type" in sql:
+            return []
+        if "GROUP BY person_odoo_id" in sql and "ARRAY_AGG" in sql:
+            legacy_payload_calls.append(params)
+            return [
+                {
+                    "person_odoo_id": pid,
+                    "first_in": first_by_pid[pid],
+                    "latest_wc": latest_wc_by_pid[pid],
+                }
+                for pid in (5, 6)
+            ]
+        pytest.fail(f"unexpected query: {sql}")
+
+    monkeypatch.setattr(auto_lunch.db, "query", query)
+    advanced = []
+    monkeypatch.setattr(
+        auto_lunch,
+        "_advance_person",
+        lambda person_id, *_args, **kwargs: advanced.append(
+            (
+                person_id,
+                kwargs["first_clock_in"],
+                kwargs["latest_in_wc"],
+                kwargs["source"],
+            )
+        ),
+    )
+
+    auto_lunch.run_tick(datetime(2026, 8, 31, 7, 0, tzinfo=UTC))
+
+    assert policy_calls == [True]
+    assert open_calls == [policy]
+    assert len(legacy_payload_calls) == 1
+    assert set(legacy_payload_calls[0][0]) == {5, 6}
+    assert sorted(advanced, key=lambda item: item[0]) == [
+        (5, first_by_pid[5], "Bay 3", open_source),
+        (6, first_by_pid[6], "Repair 1", open_source),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("day", "expected_hours"),
+    ((date(2026, 3, 8), 23), (date(2026, 11, 1), 25)),
+)
+def test_auto_lunch_legacy_batch_uses_exact_dst_plant_day(
+    monkeypatch, day, expected_hours
+):
+    query_params = []
+    monkeypatch.setattr(
+        auto_lunch.db,
+        "query",
+        lambda _sql, params: query_params.append(params) or [],
+    )
+
+    first_clock_ins, latest_in_wcs = auto_lunch._legacy_attendance_inputs_bulk(
+        {5, 6}, day
+    )
+
+    assert first_clock_ins == {}
+    assert latest_in_wcs == {}
+    ids, start, end = query_params[0]
+    assert set(ids) == {5, 6}
+    assert start.date() == day
+    assert end.date() == day + timedelta(days=1)
+    assert (end.astimezone(UTC) - start.astimezone(UTC)) == timedelta(
+        hours=expected_hours
+    )
+
+
+def test_auto_lunch_clock_out_uses_prefetched_wc_without_per_action_read(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        auto_lunch,
+        "_latest_in_wc",
+        lambda *_args, **_kwargs: pytest.fail("per-action local punch query"),
+    )
+    monkeypatch.setattr(
+        auto_lunch,
+        "_upsert_run",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+    window = auto_lunch.Window(FIRST_IN, FIRST_IN + timedelta(minutes=30))
+
+    auto_lunch._apply(
+        5,
+        DAY,
+        "flex",
+        None,
+        auto_lunch.Transition("auto_out", "clock_out", FIRST_IN),
+        {"current_wc": None},
+        window,
+        SimpleNamespace(observe_only=True),
+        latest_in_wc="Bay 3",
+    )
+
+    assert captured[0][1]["wc_name"] == "Bay 3"
 
 
 def test_legacy_attendance_warmers_noop_only_after_mirror_owns(monkeypatch):
