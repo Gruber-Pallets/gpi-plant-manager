@@ -358,47 +358,75 @@ def _production_issues(
     day: date,
     *,
     now_utc: datetime,
-    config: attendance_location_policy.RolloutConfig,
+    production_mode: ProductionMode,
     production_client,
     spans: Sequence[attendance_timeline.LocationSpan],
 ) -> tuple[ProductionMode, list[AttendanceException], str | None]:
-    try:
-        state = attendance_location_policy.match_state_for_day(day, now_utc=now_utc)
-    except Exception as exc:  # noqa: BLE001 - source failure needs one visible item
-        reason = str(exc) or "strict production source is unavailable"
-        mode: ProductionMode = "shadow" if config.mode == "shadow" else "strict"
-        return mode, [_production_unavailable_issue(day, now_utc, reason, config)], reason
-    if state == "legacy":
-        if config.mode != "shadow":
-            return "legacy", [], None
-        try:
-            runs = wc_attributions.shadow_unassigned_runs_for_day(
-                day, production_client, now_utc=now_utc
-            )
-        except Exception as exc:  # noqa: BLE001 - failed comparison stays visible
-            reason = str(exc) or "strict shadow production source is unavailable"
-            return "shadow", [_production_unavailable_issue(day, now_utc, reason, config)], reason
-        return "shadow", _run_issues(runs, spans=spans, comparison=True), None
-    if state == "pending":
+    if production_mode == "legacy":
+        return production_mode, [], None
+    if production_mode == "pending":
         error = f"strict production cutover is pending for {day.isoformat()}"
-        return "pending", [_production_unavailable_issue(day, now_utc, error, config)], error
+        return (
+            production_mode,
+            [
+                _production_unavailable_issue(
+                    day,
+                    now_utc,
+                    error,
+                    comparison_only=False,
+                )
+            ],
+            error,
+        )
 
-    # A recorded strict day stays live-strict even while the global setting is
-    # shadow (for example, after a clean-boundary rollback). Only the explicit
-    # legacy-state branch above is a shadow comparison.
-    comparison = False
-    production_mode: ProductionMode = "strict"
+    comparison = production_mode == "shadow"
     try:
-        runs = production_history.unassigned_runs_for_day(day, production_client, now_utc=now_utc)
-    except Exception as exc:  # noqa: BLE001 - any strict read failure is actionable
+        client = _shared_production_client() if production_client is None else production_client
+        if comparison:
+            runs = wc_attributions.shadow_unassigned_runs_for_day(day, client, now_utc=now_utc)
+        else:
+            runs = production_history.unassigned_runs_for_day(day, client, now_utc=now_utc)
+        issues = _run_issues(runs, spans=spans, comparison=comparison)
+    except Exception as exc:  # noqa: BLE001 - every projection failure is visible
         reason = str(exc) or "strict production source is unavailable"
         return (
             production_mode,
-            [_production_unavailable_issue(day, now_utc, reason, config)],
+            [
+                _production_unavailable_issue(
+                    day,
+                    now_utc,
+                    reason,
+                    comparison_only=comparison,
+                )
+            ],
             reason,
         )
+    return production_mode, issues, None
 
-    return production_mode, _run_issues(runs, spans=spans, comparison=comparison), None
+
+def _production_mode_for_day(
+    day: date,
+    *,
+    now_utc: datetime,
+    config: attendance_location_policy.RolloutConfig,
+) -> tuple[ProductionMode, str | None]:
+    """Resolve strict authority without depending on projection freshness."""
+    if config.mode == "off":
+        return "legacy", None
+    try:
+        state = attendance_location_policy.match_state_for_day(
+            day,
+            now_utc=now_utc,
+        )
+    except Exception as exc:  # noqa: BLE001 - uncertainty is visible and incomplete
+        reason = str(exc) or "strict production state is unavailable"
+        mode: ProductionMode = "shadow" if config.mode == "shadow" else "strict"
+        return mode, reason
+    if state == "legacy":
+        return ("shadow" if config.mode == "shadow" else "legacy"), None
+    if state == "pending":
+        return "pending", None
+    return "strict", None
 
 
 def _run_issues(
@@ -451,7 +479,8 @@ def _production_unavailable_issue(
     day: date,
     now_utc: datetime,
     reason: str,
-    config: attendance_location_policy.RolloutConfig,
+    *,
+    comparison_only: bool,
 ) -> AttendanceException:
     return AttendanceException(
         kind="production_source_unavailable",
@@ -469,7 +498,7 @@ def _production_unavailable_issue(
         sample_count=None,
         reason=reason,
         priority="urgent",
-        comparison_only=config.mode == "shadow",
+        comparison_only=comparison_only,
         target_odoo_department_id=None,
     )
 
@@ -494,24 +523,56 @@ def build_snapshot(
     if config.mode == "off":
         return AttendanceExceptionSnapshot(day, "off", "legacy", False, False, False, (), ())
 
+    production_mode, production_state_error = _production_mode_for_day(
+        day,
+        now_utc=now,
+        config=config,
+    )
+    issues: list[AttendanceException] = []
+    source_errors: list[str] = []
+    if production_state_error:
+        issues.append(
+            _production_unavailable_issue(
+                day,
+                now,
+                production_state_error,
+                comparison_only=production_mode == "shadow",
+            )
+        )
+        source_errors.append(_PRODUCTION_SOURCE)
+
     try:
         health = attendance_mirror.health_snapshot()
     except Exception:  # noqa: BLE001 - degraded state must be explicit and non-resolving
+        source_errors.append(_TIMELINE_SOURCE)
         return AttendanceExceptionSnapshot(
-            day, config.mode, "legacy", False, False, False, (), (_TIMELINE_SOURCE,)
+            day,
+            config.mode,
+            production_mode,
+            False,
+            False,
+            False,
+            tuple(issues),
+            tuple(dict.fromkeys(source_errors)),
         )
     baseline_complete = health.baseline_completed_at is not None
     if not baseline_complete:
-        return AttendanceExceptionSnapshot(day, config.mode, "legacy", False, False, False, (), ())
+        return AttendanceExceptionSnapshot(
+            day,
+            config.mode,
+            production_mode,
+            False,
+            False,
+            False,
+            tuple(issues),
+            tuple(dict.fromkeys(source_errors)),
+        )
 
-    verified = health.last_incremental_completed_at
+    verified = health.last_incremental_completed_at or health.baseline_completed_at
     source_age_stale = bool(
-        verified is None
-        or now - _aware_utc(verified, "last_incremental_completed_at") > _SOURCE_STALE_AFTER
+        verified is None or now - _aware_utc(verified, "verified freshness") > _SOURCE_STALE_AFTER
     )
     fresh = not source_age_stale and health.last_error is None
-    issues: list[AttendanceException] = []
-    source_errors: list[str] = []
     if source_age_stale:
         issues.append(_stale_issue(health, day=day, now_utc=now))
     if not fresh:
@@ -531,22 +592,16 @@ def build_snapshot(
             if _TIMELINE_SOURCE not in source_errors:
                 source_errors.append(_TIMELINE_SOURCE)
 
-    production_mode: ProductionMode = "legacy"
-    if fresh and _TIMELINE_SOURCE not in source_errors:
-        try:
-            production_mode, production_issues, production_error = _production_issues(
-                day,
-                now_utc=now,
-                config=config,
-                production_client=(
-                    _shared_production_client() if production_client is None else production_client
-                ),
-                spans=spans,
-            )
-            issues.extend(production_issues)
-            if production_error:
-                source_errors.append(_PRODUCTION_SOURCE)
-        except Exception:  # noqa: BLE001 - an unknown strict-source error is degraded
+    if fresh and _TIMELINE_SOURCE not in source_errors and production_state_error is None:
+        production_mode, production_issues, production_error = _production_issues(
+            day,
+            now_utc=now,
+            production_mode=production_mode,
+            production_client=production_client,
+            spans=spans,
+        )
+        issues.extend(production_issues)
+        if production_error:
             source_errors.append(_PRODUCTION_SOURCE)
 
     issues.sort(key=lambda issue: (issue.start_utc, issue.kind, issue.item_key))

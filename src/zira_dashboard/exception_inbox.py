@@ -276,15 +276,21 @@ def _attendance_snapshot(today: date, source_errors: list[dict]):
         snapshot = attendance_exceptions.build_snapshot(today, now_utc=_now_utc())
     except Exception as exc:  # noqa: BLE001 - rollout lookup must not hide legacy inbox
         _log.warning("exception inbox attendance source failed: %s", exc, exc_info=True)
-        return attendance_exceptions.AttendanceExceptionSnapshot(
+        config = attendance_exceptions._safe_rollout_config()
+        production_mode, _state_error = attendance_exceptions._production_mode_for_day(
+            today,
+            now_utc=_now_utc(),
+            config=config,
+        )
+        snapshot = attendance_exceptions.AttendanceExceptionSnapshot(
             day=today,
-            mode="off",
-            production_mode="legacy",
+            mode=config.mode,
+            production_mode=production_mode,
             baseline_complete=False,
             fresh=False,
             complete=False,
             issues=(),
-            source_errors=(),
+            source_errors=("Attendance Timeline",),
         )
     for source in snapshot.source_errors:
         if not any(error.get("source") == source for error in source_errors):

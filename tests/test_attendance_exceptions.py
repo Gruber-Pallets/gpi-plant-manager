@@ -327,6 +327,23 @@ def test_stale_source_is_one_stable_urgent_item_and_snapshot_is_incomplete(sourc
     assert first.fresh is False
 
 
+@pytest.mark.parametrize(
+    ("age_seconds", "expected_fresh"),
+    [(89, True), (91, False)],
+)
+def test_baseline_only_freshness_uses_baseline_timestamp(source, age_seconds, expected_fresh):
+    baseline = NOW - timedelta(seconds=age_seconds)
+    source["health"] = _health(verified=None, baseline=baseline)
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+    stale = snapshot.issues_for("attendance_source_stale")
+
+    assert snapshot.fresh is expected_fresh
+    assert bool(stale) is not expected_fresh
+    if stale:
+        assert stale[0].start_utc == baseline + timedelta(seconds=90)
+
+
 def test_strict_production_source_failure_becomes_urgent_without_aggregate_guess(
     source, monkeypatch
 ):
@@ -344,6 +361,40 @@ def test_strict_production_source_failure_becomes_urgent_without_aggregate_guess
     assert issue.item_key == "production_source_unavailable:2026-08-31"
     assert issue.reason == "timestamped samples do not match"
     assert issue.priority == "urgent"
+    assert snapshot.complete is False
+    assert "Strict Production" in snapshot.source_errors
+
+
+@pytest.mark.parametrize("failure_boundary", ["client", "projection"])
+def test_all_production_projection_failures_create_the_day_keyed_urgent_item(
+    source, monkeypatch, failure_boundary
+):
+    if failure_boundary == "client":
+        monkeypatch.setattr(
+            attendance_exceptions,
+            "_shared_production_client",
+            lambda: (_ for _ in ()).throw(RuntimeError("shared client unavailable")),
+        )
+    else:
+        malformed = SimpleNamespace(
+            wc_name="Dismantler 1",
+            start_utc=None,
+            end_utc=None,
+            units=4,
+            sample_count=1,
+        )
+        monkeypatch.setattr(
+            wc_attributions,
+            "shadow_unassigned_runs_for_day",
+            lambda *_a, **_k: (malformed,),
+        )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+    issue = _one(snapshot, "production_source_unavailable")
+
+    assert issue.item_key == "production_source_unavailable:2026-08-31"
+    assert issue.priority == "urgent"
+    assert issue.reason
     assert snapshot.complete is False
     assert "Strict Production" in snapshot.source_errors
 
@@ -472,6 +523,46 @@ def test_recent_sync_error_is_incomplete_but_not_called_stale_before_threshold(s
     assert snapshot.complete is False
     assert "Attendance Timeline" in snapshot.source_errors
     assert not [i for i in snapshot.issues if i.kind == "attendance_source_stale"]
+
+
+def test_strict_state_survives_stale_attendance_projection(source, monkeypatch):
+    source["health"] = _health(verified=NOW - timedelta(seconds=91))
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "match_state_for_day",
+        lambda *_a, **_k: "strict",
+    )
+    monkeypatch.setattr(
+        production_history,
+        "unassigned_runs_for_day",
+        lambda *_a, **_k: pytest.fail("stale projection queried strict runs"),
+    )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+
+    assert snapshot.production_mode == "strict"
+    assert snapshot.fresh is False
+    assert snapshot.complete is False
+    assert snapshot.issues_for("attendance_source_stale")
+
+
+def test_strict_state_survives_attendance_health_failure(source, monkeypatch):
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "match_state_for_day",
+        lambda *_a, **_k: "strict",
+    )
+    monkeypatch.setattr(
+        attendance_mirror,
+        "health_snapshot",
+        lambda: (_ for _ in ()).throw(RuntimeError("mirror unavailable")),
+    )
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+
+    assert snapshot.production_mode == "strict"
+    assert snapshot.complete is False
+    assert "Attendance Timeline" in snapshot.source_errors
 
 
 def test_unexpected_strict_read_failure_still_creates_source_unavailable_item(source, monkeypatch):

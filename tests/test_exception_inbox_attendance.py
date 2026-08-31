@@ -1,5 +1,8 @@
 import asyncio
+from contextlib import contextmanager
 from datetime import UTC, date, datetime
+
+import pytest
 
 from zira_dashboard import (
     app,
@@ -42,7 +45,14 @@ def _issue(kind, key, *, priority="urgent", comparison=False):
     )
 
 
-def _attendance_snapshot(*, mode="off", production_mode="legacy", issues=(), complete=True):
+def _attendance_snapshot(
+    *,
+    mode="off",
+    production_mode="legacy",
+    issues=(),
+    complete=True,
+    source_errors=(),
+):
     return attendance_exceptions.AttendanceExceptionSnapshot(
         day=DAY,
         mode=mode,
@@ -51,7 +61,7 @@ def _attendance_snapshot(*, mode="off", production_mode="legacy", issues=(), com
         fresh=complete,
         complete=complete,
         issues=tuple(issues),
-        source_errors=(),
+        source_errors=tuple(source_errors),
     )
 
 
@@ -174,6 +184,51 @@ def test_live_strict_replaces_legacy_aggregate_with_distinct_run(monkeypatch):
     assert keys.count(issue.item_key) == 1
 
 
+@pytest.mark.parametrize("builder_failure", [False, True])
+def test_strict_day_never_calls_legacy_production_during_attendance_outage(
+    monkeypatch, builder_failure
+):
+    _empty_legacy(monkeypatch, assignments=(_legacy_assignment(),))
+    monkeypatch.setattr(
+        staffing_routes,
+        "assignments_todo_payload",
+        lambda: pytest.fail("strict day called legacy production provider"),
+    )
+    if builder_failure:
+        monkeypatch.setattr(
+            attendance_exceptions,
+            "build_snapshot",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("attendance projection failed")),
+        )
+        monkeypatch.setattr(
+            attendance_location_policy,
+            "get_rollout_config",
+            lambda: attendance_location_policy.RolloutConfig("shadow", NOW, None),
+        )
+        monkeypatch.setattr(
+            attendance_location_policy,
+            "match_state_for_day",
+            lambda *_a, **_k: "strict",
+        )
+    else:
+        monkeypatch.setattr(
+            attendance_exceptions,
+            "build_snapshot",
+            lambda *_a, **_k: _attendance_snapshot(
+                mode="shadow",
+                production_mode="strict",
+                complete=False,
+                source_errors=("Attendance Timeline",),
+            ),
+        )
+
+    snapshot = exception_inbox.build_snapshot()
+    sections = {section["id"]: section for section in snapshot["sections"]}
+
+    assert sections["assignments"]["count"] == 0
+    assert sections["assignments"]["rows"] == []
+
+
 def test_summary_and_snapshot_count_the_same_attendance_items(monkeypatch):
     _empty_legacy(monkeypatch)
     issues = (
@@ -240,19 +295,32 @@ def test_incomplete_timeline_sections_cannot_auto_resolve(monkeypatch):
 
 
 def test_departure_waits_for_linked_correction_completion(monkeypatch):
-    rows = [{"status": "verifying"}]
-    monkeypatch.setattr(inbox_reconcile.db, "query", lambda *_a, **_k: rows)
+    statuses = [{"status": "verifying"}]
+
+    class CorrectionCursor:
+        def execute(self, _sql, _params=None):
+            pass
+
+        def fetchone(self):
+            return statuses[0]
+
+    @contextmanager
+    def cursor():
+        yield CorrectionCursor()
+
+    monkeypatch.setattr(inbox_reconcile.db, "cursor", cursor)
     assert inbox_reconcile._correction_allows_resolution("production_unassigned_run:wc:x") is False
-    rows[0]["status"] = "complete"
+    statuses[0]["status"] = "complete"
     assert inbox_reconcile._correction_allows_resolution("production_unassigned_run:wc:x") is True
 
 
 def test_correction_lookup_failure_keeps_item_open(monkeypatch):
-    monkeypatch.setattr(
-        inbox_reconcile.db,
-        "query",
-        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("database unavailable")),
-    )
+    @contextmanager
+    def failed_cursor():
+        raise RuntimeError("database unavailable")
+        yield
+
+    monkeypatch.setattr(inbox_reconcile.db, "cursor", failed_cursor)
 
     assert inbox_reconcile._correction_allows_resolution("production_unassigned_run:wc:x") is False
 
