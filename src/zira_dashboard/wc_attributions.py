@@ -168,25 +168,17 @@ def add_breakdown(
     breakdown_id: int,
     *,
     employee_odoo_id: int | None = None,
-    end_utc: datetime | None = None,
 ) -> int:
-    """Adopt one replay-safe breakdown interval and return its row id."""
-    row = adopt_breakdown(
+    """Open one replay-safe breakdown interval and return its row id."""
+    return _add_breakdown_window(
         day,
         wc_name,
         person_name,
         start_utc,
-        end_utc=end_utc,
-        breakdown_id=breakdown_id,
+        None,
+        breakdown_id,
         employee_odoo_id=employee_odoo_id,
     )
-    return int(row["id"])
-
-
-def _operator_identity_key(person_name: str, employee_odoo_id: int | None) -> str:
-    if employee_odoo_id is not None:
-        return f"odoo:{int(employee_odoo_id)}"
-    return f"name:{person_name}"
 
 
 def _identity_sql(
@@ -197,132 +189,80 @@ def _identity_sql(
     return "employee_odoo_id = %s", (int(employee_odoo_id),)
 
 
-def adopt_breakdown(
+def _add_breakdown_window(
     day: date,
     wc_name: str,
     person_name: str,
     start_utc: datetime,
+    end_utc: datetime | None,
     breakdown_id: int,
     *,
-    employee_odoo_id: int | None = None,
-    end_utc: datetime | None = None,
-    allow_legacy_fallback: bool = True,
-) -> dict:
-    """Atomically adopt one canonical worker interval.
+    employee_odoo_id: int | None,
+) -> int:
+    """Insert one exact visit only while its incident remains open.
 
     Locking the incident serializes warmers with dismissal and undo. Exact
-    completed intervals are replay-safe; an existing open interval is adopted
-    rather than duplicated. Legacy name-only intervals are promoted when the
-    canonical employee id first becomes available.
+    visit indexes make delayed and concurrent retries converge on one row.
     """
     from . import db
 
     if end_utc is not None and end_utc <= start_utc:
-        raise ValueError("breakdown end must be after start")
-    with db.cursor() as cur:
-        cur.execute(
-            "SELECT id FROM machine_breakdowns "
-            "WHERE id = %s AND resolved_at IS NULL FOR UPDATE",
-            (breakdown_id,),
-        )
-        if cur.fetchone() is None:
-            raise ValueError("breakdown incident is not open")
-        return _adopt_breakdown_locked(
-            cur,
+        return 0
+    rows = db.query(
+        "WITH open_incident AS MATERIALIZED ("
+        "SELECT id FROM machine_breakdowns "
+        "WHERE id = %s AND resolved_at IS NULL FOR UPDATE"
+        ") INSERT INTO wc_time_attributions "
+        "(day, wc_name, person_name, start_utc, end_utc, source, breakdown_id, "
+        "employee_odoo_id) "
+        "SELECT %s, %s, %s, %s, %s, %s, open_incident.id, %s "
+        "FROM open_incident ON CONFLICT DO NOTHING RETURNING id",
+        (
+            breakdown_id,
             day,
             wc_name,
             person_name,
             start_utc,
-            breakdown_id,
-            employee_odoo_id=employee_odoo_id,
-            end_utc=end_utc,
-            allow_legacy_fallback=allow_legacy_fallback,
-        )
+            end_utc,
+            BREAKDOWN_SOURCE,
+            employee_odoo_id,
+        ),
+    )
+    if rows:
+        return int(rows[0]["id"])
+    existing = breakdown_row_for_visit(
+        day,
+        wc_name,
+        person_name,
+        start_utc,
+        breakdown_id,
+        employee_odoo_id=employee_odoo_id,
+    )
+    return int(existing["id"]) if existing is not None else 0
 
 
-def _adopt_breakdown_locked(
-    cur,
+def add_completed_breakdown(
     day: date,
     wc_name: str,
     person_name: str,
     start_utc: datetime,
     breakdown_id: int,
     *,
-    employee_odoo_id: int | None,
-    end_utc: datetime | None,
-    allow_legacy_fallback: bool,
-) -> dict:
-    """Adopt one visit while the caller holds the incident row lock."""
-    identity_sql, identity_params = _identity_sql(person_name, employee_odoo_id)
-    cur.execute(
-        "SELECT id, start_utc, end_utc, employee_odoo_id "
-        "FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s "
-        f"AND {identity_sql} AND start_utc = %s ORDER BY id LIMIT 1 FOR UPDATE",
-        (breakdown_id, BREAKDOWN_SOURCE, *identity_params, start_utc),
+    end_utc: datetime,
+    employee_odoo_id: int | None = None,
+) -> int:
+    """Idempotently adopt one completed worker visit."""
+    if end_utc <= start_utc:
+        return 0
+    return _add_breakdown_window(
+        day,
+        wc_name,
+        person_name,
+        start_utc,
+        end_utc,
+        breakdown_id,
+        employee_odoo_id=employee_odoo_id,
     )
-    row = cur.fetchone()
-    if row is None and employee_odoo_id is not None and allow_legacy_fallback:
-        cur.execute(
-            "SELECT id, start_utc, end_utc, employee_odoo_id "
-            "FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s "
-            "AND employee_odoo_id IS NULL AND person_name = %s "
-            "AND start_utc = %s ORDER BY id LIMIT 1 FOR UPDATE",
-            (breakdown_id, BREAKDOWN_SOURCE, person_name, start_utc),
-        )
-        row = cur.fetchone()
-        if row is not None:
-            cur.execute(
-                "UPDATE wc_time_attributions SET employee_odoo_id = %s "
-                "WHERE id = %s",
-                (int(employee_odoo_id), row["id"]),
-            )
-            row = {**row, "employee_odoo_id": int(employee_odoo_id)}
-    if row is None and end_utc is None:
-        cur.execute(
-            "SELECT id, start_utc, end_utc, employee_odoo_id "
-            "FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s "
-            f"AND {identity_sql} AND end_utc IS NULL ORDER BY id LIMIT 1 FOR UPDATE",
-            (breakdown_id, BREAKDOWN_SOURCE, *identity_params),
-        )
-        row = cur.fetchone()
-    if row is None:
-        cur.execute(
-            "INSERT INTO wc_time_attributions "
-            "(day, wc_name, person_name, employee_odoo_id, start_utc, end_utc, "
-            "source, breakdown_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-            "ON CONFLICT DO NOTHING "
-            "RETURNING id, start_utc, end_utc, employee_odoo_id",
-            (
-                day,
-                wc_name,
-                person_name,
-                employee_odoo_id,
-                start_utc,
-                end_utc,
-                BREAKDOWN_SOURCE,
-                breakdown_id,
-            ),
-        )
-        row = cur.fetchone()
-        if row is None:
-            cur.execute(
-                "SELECT id, start_utc, end_utc, employee_odoo_id "
-                "FROM wc_time_attributions WHERE breakdown_id = %s "
-                f"AND source = %s AND {identity_sql} AND start_utc = %s "
-                "ORDER BY id LIMIT 1 FOR UPDATE",
-                (breakdown_id, BREAKDOWN_SOURCE, *identity_params, start_utc),
-            )
-            row = cur.fetchone()
-    if row is None:
-        raise RuntimeError("breakdown visit could not be adopted")
-    if end_utc is not None and (row.get("end_utc") is None or end_utc < row["end_utc"]):
-        cur.execute(
-            "UPDATE wc_time_attributions SET end_utc = %s WHERE id = %s "
-            "RETURNING id, start_utc, end_utc, employee_odoo_id",
-            (end_utc, row["id"]),
-        )
-        row = cur.fetchone()
-    return dict(row)
 
 
 def cap_breakdown(attribution_id: int, end_utc: datetime) -> None:
@@ -332,11 +272,126 @@ def cap_breakdown(attribution_id: int, end_utc: datetime) -> None:
     from . import db
 
     db.execute(
-        "UPDATE wc_time_attributions SET end_utc = CASE "
-        "WHEN end_utc IS NULL OR %s < end_utc THEN %s ELSE end_utc END "
+        "UPDATE wc_time_attributions "
+        "SET end_utc = LEAST(COALESCE(end_utc, %s), %s) "
         "WHERE id = %s AND source = %s",
         (end_utc, end_utc, attribution_id, BREAKDOWN_SOURCE),
     )
+
+
+def normalize_breakdown_visit(
+    stale_row_id: int,
+    breakdown_id: int,
+    person_name: str,
+    start_utc: datetime,
+    *,
+    employee_odoo_id: int | None = None,
+    end_utc: datetime | None = None,
+) -> int | None:
+    """Normalize one pre-upgrade row without colliding with an exact visit.
+
+    The incident lock is the common serialization boundary for detector adds,
+    dismissal, and recovery.  If the canonical visit already exists, discard
+    only the stale row for the same immutable identity and converge on that
+    exact row.  ``end_utc=None`` means the visit is current and must be open;
+    completed visits retain the earliest verified departure.
+    """
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM machine_breakdowns "
+            "WHERE id = %s AND resolved_at IS NULL FOR UPDATE",
+            (breakdown_id,),
+        )
+        if cur.fetchone() is None:
+            return None
+
+        if employee_odoo_id is None:
+            identity_clause = "employee_odoo_id IS NULL AND person_name = %s"
+            identity_params = (person_name,)
+        else:
+            identity_clause = "employee_odoo_id = %s"
+            identity_params = (employee_odoo_id,)
+
+        cur.execute(
+            "SELECT id FROM wc_time_attributions "
+            "WHERE breakdown_id = %s AND source = %s AND start_utc = %s "
+            f"AND {identity_clause} AND id <> %s FOR UPDATE",
+            (
+                breakdown_id,
+                BREAKDOWN_SOURCE,
+                start_utc,
+                *identity_params,
+                stale_row_id,
+            ),
+        )
+        exact = cur.fetchone()
+        if exact is not None:
+            cur.execute(
+                "DELETE FROM wc_time_attributions "
+                "WHERE id = %s AND breakdown_id = %s AND source = %s "
+                f"AND {identity_clause}",
+                (
+                    stale_row_id,
+                    breakdown_id,
+                    BREAKDOWN_SOURCE,
+                    *identity_params,
+                ),
+            )
+            if end_utc is None:
+                cur.execute(
+                    "UPDATE wc_time_attributions "
+                    "SET person_name = %s, end_utc = NULL "
+                    "WHERE id = %s AND breakdown_id = %s AND source = %s",
+                    (
+                        person_name,
+                        exact["id"],
+                        breakdown_id,
+                        BREAKDOWN_SOURCE,
+                    ),
+                )
+            else:
+                cur.execute(
+                    "UPDATE wc_time_attributions "
+                    "SET person_name = %s, "
+                    "end_utc = LEAST(COALESCE(end_utc, %s), %s) "
+                    "WHERE id = %s AND breakdown_id = %s AND source = %s",
+                    (
+                        person_name,
+                        end_utc,
+                        end_utc,
+                        exact["id"],
+                        breakdown_id,
+                        BREAKDOWN_SOURCE,
+                    ),
+                )
+            return exact["id"]
+
+        if end_utc is None:
+            update = "SET person_name = %s, start_utc = %s, end_utc = NULL "
+            update_params = (person_name, start_utc)
+        else:
+            update = (
+                "SET person_name = %s, start_utc = %s, "
+                "end_utc = LEAST(COALESCE(end_utc, %s), %s) "
+            )
+            update_params = (person_name, start_utc, end_utc, end_utc)
+        cur.execute(
+            "UPDATE wc_time_attributions "
+            f"{update}"
+            "WHERE id = %s AND breakdown_id = %s AND source = %s "
+            f"AND {identity_clause} RETURNING id",
+            (
+                *update_params,
+                stale_row_id,
+                breakdown_id,
+                BREAKDOWN_SOURCE,
+                *identity_params,
+            ),
+        )
+        normalized = cur.fetchone()
+        return normalized["id"] if normalized is not None else None
 
 
 def reopen_breakdown(attribution_id: int) -> None:
@@ -397,6 +452,78 @@ def open_breakdown_row(
     return rows[0] if rows else None
 
 
+def breakdown_row_for_visit(
+    day: date,
+    wc_name: str,
+    person_name: str,
+    start_utc: datetime,
+    breakdown_id: int,
+    *,
+    employee_odoo_id: int | None = None,
+) -> dict | None:
+    """One exact breakdown visit, whether still open or already capped."""
+    from . import db
+
+    if employee_odoo_id is None:
+        rows = db.query(
+            "SELECT id, start_utc, end_utc FROM wc_time_attributions "
+            "WHERE day = %s AND wc_name = %s AND person_name = %s "
+            "AND employee_odoo_id IS NULL AND start_utc = %s "
+            "AND breakdown_id = %s AND source = %s",
+            (
+                day,
+                wc_name,
+                person_name,
+                start_utc,
+                breakdown_id,
+                BREAKDOWN_SOURCE,
+            ),
+        )
+    else:
+        rows = db.query(
+            "SELECT id, start_utc, end_utc FROM wc_time_attributions "
+            "WHERE day = %s AND wc_name = %s AND employee_odoo_id = %s "
+            "AND start_utc = %s AND breakdown_id = %s AND source = %s",
+            (
+                day,
+                wc_name,
+                employee_odoo_id,
+                start_utc,
+                breakdown_id,
+                BREAKDOWN_SOURCE,
+            ),
+        )
+    return rows[0] if rows else None
+
+
+def _restore_breakdown_snapshot(cursor, rows: list[dict], breakdown_id: int) -> None:
+    """Insert an exact dismiss snapshot through the caller's transaction."""
+    for row in rows:
+        row_breakdown_id = row.get("breakdown_id", breakdown_id)
+        if row_breakdown_id != breakdown_id:
+            raise ValueError("breakdown snapshot contains another incident")
+        source = row.get("source", BREAKDOWN_SOURCE)
+        if source != BREAKDOWN_SOURCE:
+            raise ValueError("breakdown snapshot contains another source")
+        cursor.execute(
+            "INSERT INTO wc_time_attributions "
+            "(day, wc_name, person_name, start_utc, end_utc, source, "
+            "breakdown_id, employee_odoo_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT DO NOTHING",
+            (
+                row["day"],
+                row["wc_name"],
+                row["person_name"],
+                row["start_utc"],
+                row.get("end_utc"),
+                source,
+                breakdown_id,
+                row.get("employee_odoo_id"),
+            ),
+        )
+
+
 def open_breakdown_rows_for_incident(breakdown_id: int) -> list[dict]:
     """Every still-open worker exclusion, including defensive duplicates."""
     from . import db
@@ -417,48 +544,6 @@ def breakdown_operator_rows_for_incident(breakdown_id: int) -> list[dict]:
         "SELECT person_name, employee_odoo_id, start_utc, end_utc "
         "FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s "
         "ORDER BY start_utc, id",
-        (breakdown_id, BREAKDOWN_SOURCE),
-    )
-
-
-def restore_breakdown_snapshot(rows: list[dict], breakdown_id: int) -> None:
-    """Atomically reopen an incident and adopt every dismissed visit."""
-    from . import db
-
-    with db.cursor() as cur:
-        cur.execute(
-            "UPDATE machine_breakdowns SET resolved_at = NULL, resolution = NULL, "
-            "resume_utc = NULL WHERE id = %s RETURNING id",
-            (breakdown_id,),
-        )
-        if cur.fetchone() is None:
-            raise ValueError("breakdown incident not found")
-        for row in rows:
-            if row.get("breakdown_id", breakdown_id) != breakdown_id:
-                raise ValueError("breakdown snapshot contains another incident")
-            if row.get("source", BREAKDOWN_SOURCE) != BREAKDOWN_SOURCE:
-                raise ValueError("breakdown snapshot contains another source")
-            _adopt_breakdown_locked(
-                cur,
-                row["day"],
-                row["wc_name"],
-                row["person_name"],
-                row["start_utc"],
-                breakdown_id,
-                employee_odoo_id=row.get("employee_odoo_id"),
-                end_utc=row.get("end_utc"),
-                allow_legacy_fallback=True,
-            )
-
-
-def delete_breakdown_rows_for_incident(breakdown_id: int) -> None:
-    """Delete every wc_time_attributions row tied to one breakdown incident
-    -- the "Not a breakdown" dismiss, which restores normal averages by
-    removing the exclusion entirely."""
-    from . import db
-
-    db.execute(
-        "DELETE FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s",
         (breakdown_id, BREAKDOWN_SOURCE),
     )
 

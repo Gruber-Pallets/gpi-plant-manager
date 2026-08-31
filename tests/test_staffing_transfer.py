@@ -66,6 +66,54 @@ def test_transfers_when_dept_differs(roster, monkeypatch):
     assert captured["current"] is current
 
 
+def test_authoritative_employee_id_selects_the_right_same_name_worker(monkeypatch):
+    monkeypatch.setattr(
+        staffing,
+        "load_roster",
+        lambda: [
+            staffing.Person(name="Alex", employee_id=101),
+            staffing.Person(name="Alex", employee_id=202),
+        ],
+    )
+    monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda _wc: 9)
+    seen = []
+    monkeypatch.setattr(
+        odoo_client,
+        "get_current_attendance",
+        lambda employee_id: seen.append(employee_id) or {
+            "id": 1,
+            "check_in": "2026-06-02 12:00:00",
+            "department_id": 9,
+            "department_name": "07 New",
+        },
+    )
+
+    result = staffing_transfer.decide_and_apply(
+        "Alex", "Junior #2", WIN_START, employee_odoo_id=202
+    )
+
+    assert result["transfer"] == "already_in_dept"
+    assert seen == [202]
+
+
+def test_authoritative_employee_id_requires_matching_display_name(monkeypatch):
+    monkeypatch.setattr(
+        staffing,
+        "load_roster",
+        lambda: [staffing.Person(name="Alex", employee_id=202)],
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "get_current_attendance",
+        lambda _employee_id: pytest.fail("name guard must run before Odoo"),
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        staffing_transfer.decide_and_apply(
+            "Another Alex", "Junior #2", WIN_START, employee_odoo_id=202
+        )
+
+
 def test_transfer_ts_clamps_to_checkin(roster, monkeypatch):
     monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda wc: 9)
     monkeypatch.setattr(odoo_client, "get_current_attendance", lambda eid: {

@@ -1423,9 +1423,20 @@ def _event_detail(ev: dict[str, Any]) -> dict:
     return {}
 
 
+class _UndoConflict(Exception):
+    """A local reversal lost a state race and made no changes."""
+
+
 def _reverse_event(ev: dict[str, Any]) -> None:
     """Reverse a resolved inbox action. Assumes (item_kind, action) is undoable."""
-    from .. import absence_sync, late_report, missing_wc, odoo_client, wc_attributions
+    from .. import (
+        absence_sync,
+        late_report,
+        machine_breakdown,
+        missing_wc,
+        odoo_client,
+        wc_attributions,
+    )
 
     kind, action, key = ev["item_kind"], ev["action"], ev["item_key"]
     if kind == "missing_wc":
@@ -1453,9 +1464,12 @@ def _reverse_event(ev: dict[str, Any]) -> None:
                 wc_attributions.reopen_breakdown(attribution_id)
         elif action == "dismiss":
             incident_id = detail.get("incident_id")
-            wc_attributions.restore_breakdown_snapshot(
-                detail.get("rows") or [], incident_id
-            )
+            if not machine_breakdown.undo_dismiss_incident(
+                incident_id, detail.get("rows") or []
+            ):
+                raise _UndoConflict(
+                    "breakdown changed after dismissal; undo was not applied"
+                )
 
 
 def _undo_sync(
@@ -1479,6 +1493,8 @@ def _undo_sync(
         return _json_error("undo window expired", 409)
     try:
         _reverse_event(ev)
+    except _UndoConflict as e:
+        return _json_error(str(e), 409)
     except Exception as e:  # noqa: BLE001 -- surface reversal failure to caller
         return _json_error(_friendly_odoo_error(e), 500)
     undo_id = inbox_log.log_event_safe(

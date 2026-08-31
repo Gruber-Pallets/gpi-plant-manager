@@ -608,13 +608,12 @@ def _department_day_data(
         productive_minutes=_productive_minutes_less_breakdown,
         productive_minutes_for_segment=_productive_minutes_for_segment,
     )
+    credit_segments = [
+        segment for segment in segments if segment.wc_name in active_wc_names
+    ]
     try:
         credits = production_segments.credit_work_segments(
-            [
-                segment
-                for segment in segments
-                if segment.wc_name in active_wc_names
-            ],
+            credit_segments,
             wc_totals={r.station.name: r.units for r in active_results},
             samples_by_wc={
                 r.station.name: list(getattr(r, "samples", ()) or ())

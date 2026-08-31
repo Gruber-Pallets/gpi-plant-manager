@@ -31,6 +31,7 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     """A live transfer changes the label, without losing either station's data."""
     from zira_dashboard import (
         attendance,
+        attendance_location_policy,
         attendance_timeline,
         live_cache,
         machine_breakdown,
@@ -146,6 +147,20 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
             verified_cap_utc=verified_cap,
         ),
     )
+    monkeypatch.setattr(
+        live_cache,
+        "attendance_read_policy",
+        lambda **_kwargs: live_cache.AttendanceReadPolicy(
+            True,
+            True,
+            datetime(2026, 6, 2, 20, tzinfo=timezone.utc),
+            mode="shadow",
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy, "day_is_strict", lambda _day: False
+    )
+
     monkeypatch.setattr(
         timeclock_windows,
         "attendance_windows_for_day",
@@ -369,7 +384,6 @@ def test_department_canonical_segment_selection_honors_strict_day_and_staleness(
     assert stale_projection.segments == ()
     assert stale_projection.cap_utc == end
     assert timeline_calls == []
-
 
 def test_department_segment_display_keeps_scheduled_lunch_continuous():
     from zira_dashboard.production_segments import SegmentScore

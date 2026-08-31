@@ -37,8 +37,6 @@ def transfer(
         inbox_keys,
         inbox_log,
         machine_breakdown,
-        staffing_transfer,
-        wc_attributions,
     )
 
     if live_transfer_is_disabled():
@@ -57,48 +55,31 @@ def transfer(
     if not incident_id or not person_name or not to_wc:
         return _json_error("incident_id, person_name, and to_wc are required", 400)
 
-    incident = machine_breakdown.get_incident(incident_id)
-    if incident is None:
-        return _json_error("incident not found", 404)
-
     try:
-        person_name, employee_odoo_id = (
-            machine_breakdown.resolve_incident_operator_identity(
-                incident, person_name, employee_odoo_id
-            )
+        outcome = machine_breakdown.transfer_open_incident(
+            incident_id,
+            person_name,
+            employee_odoo_id,
+            to_wc,
         )
     except ValueError as exc:
         return _json_error(str(exc), 409)
-
-    transfer_at = incident["detected_stop_utc"]
-    row = wc_attributions.open_breakdown_row(
-        incident["day"],
-        incident["wc_name"],
-        person_name,
-        employee_odoo_id=employee_odoo_id,
-        breakdown_id=incident["id"],
-    )
-    if row is not None:
-        exclusion_end = max(transfer_at, row.get("start_utc") or transfer_at)
-        wc_attributions.cap_breakdown(row["id"], exclusion_end)
-
-    # Note: the breakdown-row cap above is not rolled back if decide_and_apply
-    # fails below; a failed transfer leaves the operator's exclusion capped
-    # as-if-departed. Retrying the transfer re-caps harmlessly (cap_breakdown
-    # is idempotent on an already-closed row) but does not reopen the
-    # exclusion -- a manual wc_attributions.reopen_breakdown would be needed
-    # if this matters in practice. Matches this file's existing convention
-    # for Odoo-calling handlers (_approve_time_off_sync, _refuse_time_off_sync):
-    # log and return a friendly error, no rollback.
-    try:
-        result = staffing_transfer.decide_and_apply(
-            person_name,
-            to_wc,
-            transfer_at,
-            employee_odoo_id=employee_odoo_id,
-        )
     except Exception as e:
         return _json_error(friendly_error(e), 500)
+
+    if outcome["status"] == "not_found":
+        return _json_error("incident not found", 404)
+    if outcome["status"] == "resolved":
+        return _json_error("incident is already resolved", 409)
+    if outcome["status"] == "blocked_live":
+        return _json_error(LIVE_TRANSFER_MESSAGE, 410)
+    if outcome["status"] == "rejected":
+        return _json_error(outcome["error"], 409)
+
+    incident = outcome["incident"]
+    person_name = outcome["person_name"]
+    employee_odoo_id = outcome["employee_odoo_id"]
+    result = outcome["result"]
 
     eid = inbox_log.log_event_safe(
         item_kind="breakdown",
@@ -120,7 +101,7 @@ def transfer(
         detail={
             "closed_id": result.get("closed_id"),
             "new_id": result.get("new_id"),
-            "attribution_id": row["id"] if row is not None else None,
+            "attribution_id": outcome["attribution_id"],
             "employee_odoo_id": employee_odoo_id,
         },
     )
@@ -152,8 +133,8 @@ def snooze(body: dict) -> JSONResponse:
 
 def dismiss(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
     """Blocking half of /api/exceptions/breakdown/dismiss ("Not a
-    breakdown"): snapshots the incident's exclusion rows into the undo
-    detail BEFORE deleting them, then resolves the incident."""
+    breakdown"): atomically resolves the incident and receives the exact
+    exclusion rows deleted under that same incident lock for undo."""
     from . import inbox_keys, inbox_log, machine_breakdown
 
     incident_id = body.get("incident_id")

@@ -2416,10 +2416,29 @@ ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS breakdown_id BIGINT;
 ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
 CREATE INDEX IF NOT EXISTS wc_time_attributions_breakdown_idx
   ON wc_time_attributions (breakdown_id) WHERE breakdown_id IS NOT NULL;
--- Older warmers could insert the same worker visit more than once. Preserve
--- the oldest row and its earliest known cap before installing durable keys.
+-- 2026-08-31: breakdown attribution duplicate reconciliation. Older warmers
+-- could insert the same worker visit more than once. Preserve
+-- the oldest row, newest display label, and earliest known cap before
+-- installing durable keys. Refuse to merge corrupt copies that disagree on
+-- their day or work center.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM wc_time_attributions
+    WHERE source = 'breakdown' AND breakdown_id IS NOT NULL
+    GROUP BY breakdown_id,
+      COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name),
+      start_utc
+    HAVING COUNT(*) > 1
+      AND (COUNT(DISTINCT day) > 1 OR COUNT(DISTINCT wc_name) > 1)
+  ) THEN
+    RAISE EXCEPTION 'ambiguous breakdown attribution duplicates cross day or work center';
+  END IF;
+END $$;
 WITH breakdown_visit_groups AS (
-  SELECT MIN(id) AS keep_id, MIN(end_utc) AS earliest_end
+  SELECT MIN(id) AS keep_id, MIN(end_utc) AS earliest_end,
+    (ARRAY_AGG(person_name ORDER BY id DESC))[1] AS latest_name
   FROM wc_time_attributions
   WHERE source = 'breakdown' AND breakdown_id IS NOT NULL
   GROUP BY breakdown_id,
@@ -2428,7 +2447,8 @@ WITH breakdown_visit_groups AS (
   HAVING COUNT(*) > 1
 )
 UPDATE wc_time_attributions AS attribution
-SET end_utc = grouped.earliest_end
+SET end_utc = LEAST(attribution.end_utc, grouped.earliest_end),
+    person_name = grouped.latest_name
 FROM breakdown_visit_groups AS grouped
 WHERE attribution.id = grouped.keep_id;
 WITH ranked_breakdown_visits AS (
@@ -2467,13 +2487,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_legacy_open_uni
   ON wc_time_attributions (breakdown_id, person_name)
   WHERE source = 'breakdown' AND end_utc IS NULL
     AND employee_odoo_id IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_operator_visit_uniq
-  ON wc_time_attributions (
-    breakdown_id,
-    (COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name)),
-    start_utc
-  )
-  WHERE source = 'breakdown' AND breakdown_id IS NOT NULL;
+DROP INDEX IF EXISTS wc_time_attributions_breakdown_operator_visit_uniq;
+CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_odoo_visit_uniq
+  ON wc_time_attributions (breakdown_id, employee_odoo_id, start_utc)
+  WHERE source = 'breakdown' AND employee_odoo_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_legacy_visit_uniq
+  ON wc_time_attributions (breakdown_id, person_name, start_utc)
+  WHERE source = 'breakdown' AND employee_odoo_id IS NULL;
 
 -- 2026-07-08: per-record minutes excluded from a person's expected due to a
 -- machine breakdown (source='breakdown' wc_time_attributions windows). Written

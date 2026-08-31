@@ -26,10 +26,29 @@ def _wc_department_label(wc_name: str) -> str | None:
     return staffing.department_for_wc(wc_name)
 
 
-def _employee_id_for(person_name: str) -> int | None:
+def _employee_id_for(
+    person_name: str,
+    *,
+    employee_odoo_id: int | None = None,
+) -> int | None:
     """The Odoo employee id for a person on the live roster, or None (legacy person / unknown name)."""
     from . import staffing
-    for p in staffing.load_roster():
+
+    roster = staffing.load_roster()
+    if employee_odoo_id is not None:
+        person = next(
+            (p for p in roster if p.employee_id == employee_odoo_id), None
+        )
+        if person is None:
+            raise ValueError(
+                f"employee_odoo_id {employee_odoo_id} is not on the live roster"
+            )
+        if person.name != person_name:
+            raise ValueError(
+                f"employee_odoo_id {employee_odoo_id} does not match {person_name}"
+            )
+        return employee_odoo_id
+    for p in roster:
         if p.name == person_name:
             return p.employee_id
     return None
@@ -68,7 +87,9 @@ def decide_and_apply(
 
     from . import odoo_client
 
-    emp_id = employee_odoo_id or _employee_id_for(person_name)
+    emp_id = _employee_id_for(
+        person_name, employee_odoo_id=employee_odoo_id
+    )
     to_dept = _wc_department_label(wc_name)
     if emp_id is None:
         return {"transfer": "skipped_no_employee", "person": person_name}
