@@ -40,13 +40,14 @@ def exceptions_page(request: Request):
     except Exception:  # noqa: BLE001 - keep the inbox readable during roster outages
         _log.exception("attendance correction people could not load for inbox")
         correction_people = []
+    queue = _display_exception_queue(snapshot.get("queue") or [])
     return templates.TemplateResponse(
         request,
         "exceptions.html",
         {
             "snapshot": snapshot,
             "sections": snapshot["sections"],
-            "queue": snapshot["queue"],
+            "queue": queue,
             "work_centers": snapshot.get("work_centers") or [],
             "people": snapshot.get("people") or [],
             "correction_people": correction_people,
@@ -349,7 +350,66 @@ def _utc_iso(value: datetime | None) -> str | None:
 def _local_time_label(value: datetime | None) -> str:
     if value is None:
         return "Still working"
-    return value.astimezone(plant_day.SITE_TZ).strftime("%-m/%-d/%Y %-I:%M %p")
+    return value.astimezone(plant_day.SITE_TZ).strftime("%-m/%-d/%Y %-I:%M %p %Z")
+
+
+def _display_exception_queue(rows: Sequence[object]) -> list[object]:
+    displayed: list[object] = []
+    attendance_kinds = {
+        "production_unassigned_run",
+        "attendance_unmapped_location",
+    }
+    for value in rows:
+        if not isinstance(value, Mapping) or value.get("kind") not in attendance_kinds:
+            displayed.append(value)
+            continue
+        row = dict(value)
+        for field, label_field in (
+            ("start_utc", "start_label"),
+            ("end_utc", "end_label"),
+        ):
+            raw_time = row.get(field)
+            if raw_time is None:
+                row[label_field] = "Still working"
+                continue
+            try:
+                row[label_field] = _local_time_label(_correction_datetime(raw_time, field))
+            except ValueError:
+                row[label_field] = "Time unavailable"
+        workers = []
+        raw_workers = row.get("affected_workers")
+        if isinstance(raw_workers, Sequence) and not isinstance(raw_workers, (str, bytes)):
+            for worker in raw_workers[:12]:
+                if not isinstance(worker, Mapping):
+                    continue
+                employee_id = worker.get("employee_odoo_id")
+                name = worker.get("employee_name")
+                if (
+                    isinstance(employee_id, int)
+                    and not isinstance(employee_id, bool)
+                    and employee_id > 0
+                    and isinstance(name, str)
+                    and name.strip()
+                ):
+                    workers.append(
+                        {
+                            "employee_odoo_id": employee_id,
+                            "employee_name": name.strip()[:100],
+                        }
+                    )
+        row["affected_workers"] = workers
+        row["affected_workers_truncated"] = (
+            isinstance(raw_workers, Sequence)
+            and not isinstance(raw_workers, (str, bytes))
+            and len(raw_workers) > 12
+        )
+        reason = row.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            words = reason.strip()[:200].replace("_", " ").split()
+            readable = " ".join("Odoo" if word.lower() == "odoo" else word for word in words)
+            row["reason_label"] = readable[:1].upper() + readable[1:]
+        displayed.append(row)
+    return displayed
 
 
 def _display_interval(
@@ -567,6 +627,14 @@ def _correction_in_progress_response() -> JSONResponse:
     )
 
 
+def _source_changed_without_refresh_response() -> JSONResponse:
+    return _correction_error(
+        "source_changed",
+        "Odoo changed after this preview. Preview the correction again.",
+        409,
+    )
+
+
 @router.post("/api/exceptions/attendance-correction/preview")
 async def attendance_correction_preview(request: Request):
     manager = _correction_manager(request)
@@ -635,10 +703,14 @@ def _attendance_apply_sync(
 ) -> JSONResponse:
     context = _current_correction_context(values)
     if isinstance(context, JSONResponse):
+        if context.status_code == 422:
+            return _source_changed_without_refresh_response()
         return context
     _row, names = context
     preview = _bounded_live_preview(values)
     if isinstance(preview, JSONResponse):
+        if preview.status_code == 422:
+            return _source_changed_without_refresh_response()
         return preview
     fresh_binding = _preview_binding(preview)
     if signed != fresh_binding:
@@ -662,7 +734,9 @@ def _attendance_apply_sync(
             actor_email=upn,
             actor_name=manager_name,
         )
-    except attendance_corrections.CorrectionRequestConflict:
+    except attendance_corrections.CorrectionRequestConflict as error:
+        if error.source_changed:
+            return _source_changed_without_refresh_response()
         return _correction_in_progress_response()
     except Exception:  # noqa: BLE001 - durable/Odoo details stay server-side
         _log.exception("attendance correction job creation failed")

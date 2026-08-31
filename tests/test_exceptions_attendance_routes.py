@@ -176,7 +176,9 @@ def test_preview_rejects_stale_key_or_another_exception_kind(client, monkeypatch
 
 
 @pytest.mark.parametrize("comparison_only", [True, 0, None])
-def test_preview_rejects_shadow_comparison_items_before_odoo(client, monkeypatch, comparison_only):
+def test_preview_and_apply_reject_nonliteral_false_comparison_items(
+    client, monkeypatch, comparison_only
+):
     monkeypatch.setattr(
         exception_inbox,
         "build_snapshot",
@@ -188,14 +190,20 @@ def test_preview_rejects_shadow_comparison_items_before_odoo(client, monkeypatch
         lambda **kwargs: pytest.fail(f"shadow item reached Odoo: {kwargs}"),
     )
 
-    response = client.post(
+    preview_response = client.post(
         "/api/exceptions/attendance-correction/preview",
         json=_payload(),
         headers=MANAGER_HEADERS,
     )
+    apply_response = client.post(
+        "/api/exceptions/attendance-correction/apply",
+        json={"preview_token": exceptions._preview_token(_live_preview())},
+        headers=MANAGER_HEADERS,
+    )
 
-    assert response.status_code == 409
-    assert response.json()["code"] == "stale_item"
+    assert preview_response.status_code == apply_response.status_code == 409
+    assert preview_response.json()["code"] == "stale_item"
+    assert apply_response.json()["code"] == "stale_item"
 
 
 def test_preview_rejects_target_not_in_current_app_work_centers(client, monkeypatch):
@@ -354,7 +362,8 @@ def test_preview_returns_bounded_json_when_fresh_inbox_is_unavailable(client, mo
 
 
 @pytest.mark.parametrize(
-    ("end", "open_label"), [(END, "8/28/2026 12:10 PM"), (None, "Still working")]
+    ("end", "open_label"),
+    [(END, "8/28/2026 12:10 PM CDT"), (None, "Still working")],
 )
 def test_preview_returns_display_safe_live_odoo_plan_in_plant_time(
     client, monkeypatch, end, open_label
@@ -377,7 +386,7 @@ def test_preview_returns_display_safe_live_odoo_plan_in_plant_time(
     assert body["preview_token"]
     assert body["preview"]["selected_people"] == [{"employee_odoo_id": 44, "name": "Maria Worker"}]
     assert body["preview"]["start_utc"] == "2026-08-28T16:55:00+00:00"
-    assert body["preview"]["start_label"] == "8/28/2026 11:55 AM"
+    assert body["preview"]["start_label"] == "8/28/2026 11:55 AM CDT"
     assert body["preview"]["end_label"] == open_label
     assert body["preview"]["end_is_open"] is (end is None)
     person = body["preview"]["employees"][0]
@@ -427,6 +436,12 @@ def test_apply_rebuilds_changed_source_and_requires_second_confirmation(client, 
         "create_job",
         lambda **kwargs: pytest.fail(f"changed source created job: {kwargs}"),
     )
+    monkeypatch.setattr(
+        attendance_corrections,
+        "create_job_from_preview",
+        lambda **kwargs: pytest.fail(f"changed source persisted job: {kwargs}"),
+        raising=False,
+    )
     preview_response = client.post(
         "/api/exceptions/attendance-correction/preview",
         json=_payload(),
@@ -445,6 +460,69 @@ def test_apply_rebuilds_changed_source_and_requires_second_confirmation(client, 
     assert body["code"] == "source_changed"
     assert body["preview_token"] != preview_response.json()["preview_token"]
     assert body["preview"]["selected_people"][0]["name"] == "Maria Worker"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "target work center has no saved Odoo mapping",
+        "selected employee is no longer active in Odoo",
+    ],
+)
+def test_apply_treats_mapping_or_source_gap_as_source_changed(client, monkeypatch, failure):
+    preview = _live_preview()
+    reads = 0
+
+    def current_preview(**_kwargs):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            return preview
+        raise ValueError(failure)
+
+    monkeypatch.setattr(
+        attendance_corrections,
+        "correction_preview",
+        current_preview,
+    )
+    preview_response = client.post(
+        "/api/exceptions/attendance-correction/preview",
+        json=_payload(),
+        headers=MANAGER_HEADERS,
+    )
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/apply",
+        json={"preview_token": preview_response.json()["preview_token"]},
+        headers=MANAGER_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "ok": False,
+        "code": "source_changed",
+        "error": "Odoo changed after this preview. Preview the correction again.",
+    }
+
+
+@pytest.mark.parametrize("gap", ["worker", "work_center"])
+def test_apply_treats_current_roster_or_work_center_gap_as_source_changed(client, monkeypatch, gap):
+    if gap == "worker":
+        monkeypatch.setattr(db, "query", lambda _sql, _params=(): [])
+    else:
+        current = _snapshot()
+        current["work_centers"] = ["Repair 1"]
+        monkeypatch.setattr(exception_inbox, "build_snapshot", lambda: current)
+    token = exceptions._preview_token(_live_preview())
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/apply",
+        json={"preview_token": token},
+        headers=MANAGER_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "source_changed"
 
 
 def test_apply_rejects_item_that_became_shadow_comparison_before_odoo(client, monkeypatch):
@@ -610,6 +688,32 @@ def test_apply_checks_concurrent_dedupe_winner_matches_request(client, monkeypat
     assert response.json()["code"] == "correction_in_progress"
     assert len(calls) == 1
     assert calls[0]["preview"].target_odoo_work_center_id == 91
+
+
+def test_apply_reports_concurrent_mapping_or_source_gap_as_source_changed(client, monkeypatch):
+    preview = _live_preview()
+    monkeypatch.setattr(
+        attendance_corrections,
+        "correction_preview",
+        lambda **_kwargs: preview,
+    )
+    monkeypatch.setattr(
+        attendance_corrections,
+        "create_job_from_preview",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            attendance_corrections.CorrectionRequestConflict(80, source_changed=True)
+        ),
+    )
+    token = exceptions._preview_token(preview)
+
+    response = client.post(
+        "/api/exceptions/attendance-correction/apply",
+        json={"preview_token": token},
+        headers=MANAGER_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "source_changed"
 
 
 def test_job_status_is_read_only_bounded_and_requires_manager_identity(client, monkeypatch):

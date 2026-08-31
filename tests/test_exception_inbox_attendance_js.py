@@ -1,5 +1,6 @@
-from pathlib import Path
+import json
 import subprocess
+from pathlib import Path
 
 
 JS = Path("src/zira_dashboard/static/exceptions.js")
@@ -7,6 +8,36 @@ JS = Path("src/zira_dashboard/static/exceptions.js")
 
 def _js():
     return JS.read_text(encoding="utf-8")
+
+
+def _run_attendance_hook(expression):
+    source = json.dumps(_js())
+    script = f"""
+global.window = {{
+  setInterval: function () {{}},
+  setTimeout: function () {{}},
+  clearTimeout: function () {{}},
+  location: {{reload: function () {{}}}},
+}};
+global.document = {{
+  hidden: false,
+  querySelector: function () {{ return null; }},
+  querySelectorAll: function () {{ return []; }},
+  addEventListener: function () {{}},
+}};
+global.sessionStorage = {{getItem: function () {{ return null; }}, setItem: function () {{}}}};
+eval({source});
+Promise.resolve({expression}).then(function (result) {{
+  process.stdout.write(JSON.stringify(result));
+}});
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
 
 
 def test_correction_javascript_posts_canonical_choices_and_token_only_apply():
@@ -53,38 +84,44 @@ def test_datetime_inputs_convert_with_the_plant_timezone_not_browser_timezone():
     js = _js()
 
     assert "attendanceCorrectionDialog.dataset.plantTimezone" in js
-    assert "function plantAttendanceParts(value)" in js
+    assert "function plantAttendanceParts(value, timezone)" in js
     assert "Intl.DateTimeFormat('en-US'" in js
     assert "timeZone: attendancePlantTimezone()" in js
     assert "function plantAttendanceUtcValue(input)" in js
     assert "value.getHours()" not in js
 
 
-def test_datetime_conversion_rejects_nonexistent_and_ambiguous_plant_times():
-    js = _js()
-    start = js.index("  function attendancePlantTimezone()")
-    end = js.index("  function attendanceCorrectionPayload()")
-    functions = js[start:end]
-    harness = f"""
-var attendanceCorrectionDialog = {{dataset: {{plantTimezone: 'America/Chicago'}}}};
-{functions}
-function assertEqual(actual, expected, label) {{
-  if (actual !== expected) throw new Error(label + ': ' + actual + ' !== ' + expected);
-}}
-assertEqual(
-  plantAttendanceUtcValue({{value: '2026-08-28T11:55'}}),
-  '2026-08-28T16:55:00.000Z',
-  'ordinary time'
-);
-assertEqual(plantAttendanceUtcValue({{value: '2026-03-08T02:30'}}), null, 'spring gap');
-assertEqual(plantAttendanceUtcValue({{value: '2026-11-01T01:30'}}), null, 'fall overlap');
-"""
-
-    result = subprocess.run(
-        ["node", "--eval", harness], capture_output=True, text=True, check=False
+def test_clock_change_resolution_rejects_gap_and_requires_both_fall_choices():
+    result = _run_attendance_hook(
+        "({gap: window.gpiAttendanceCorrection.localTimeResolution('2026-03-08T02:30', 'America/Chicago', null), fall: window.gpiAttendanceCorrection.localTimeCandidates('2026-11-01T01:30', 'America/Chicago'), first: window.gpiAttendanceCorrection.localTimeResolution('2026-11-01T01:30', 'America/Chicago', '2026-11-01T06:30:00.000Z'), second: window.gpiAttendanceCorrection.localTimeResolution('2026-11-01T01:30', 'America/Chicago', '2026-11-01T07:30:00.000Z')})"
     )
 
-    assert result.returncode == 0, result.stderr
+    assert result["gap"]["status"] == "nonexistent"
+    assert result["fall"] == [
+        "2026-11-01T06:30:00.000Z",
+        "2026-11-01T07:30:00.000Z",
+    ]
+    assert result["first"] == {
+        "status": "resolved",
+        "value": "2026-11-01T06:30:00.000Z",
+    }
+    assert result["second"] == {
+        "status": "resolved",
+        "value": "2026-11-01T07:30:00.000Z",
+    }
+
+    js = _js()
+    assert "Choose the first or second start time." in js
+    assert "This start time does not exist because the clock changes." in js
+
+
+def test_each_dialog_open_clears_an_old_clock_occurrence_choice():
+    js = _js()
+
+    assert "function clearAttendanceOccurrenceChoices()" in js
+    assert js.index("clearAttendanceOccurrenceChoices();") < js.index(
+        "refreshAttendanceOccurrenceChoices();", js.index("function openAttendanceCorrection")
+    )
 
 
 def test_job_polling_is_retry_safe_and_never_advances_the_worker():
@@ -97,6 +134,66 @@ def test_job_polling_is_retry_safe_and_never_advances_the_worker():
     assert "process_job" not in js
     assert "resp.status === 'complete'" in js
     assert "resp.retryable" in js
+
+
+def test_job_polling_retries_only_network_and_503_responses():
+    decisions = _run_attendance_hook(
+        "[503, 401, 403, 404, 500].map(function (status) { return window.gpiAttendanceCorrection.pollDecision(status, false, true); }).concat([window.gpiAttendanceCorrection.pollDecision(503, false, false), window.gpiAttendanceCorrection.pollDecision(200, true, false)])"
+    )
+
+    assert [item["retry"] for item in decisions] == [
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+    ]
+    assert "sign in" in decisions[1]["message"].lower()
+    assert "sign in" in decisions[2]["message"].lower()
+    assert "refresh" in decisions[3]["message"].lower()
+    assert "valid status" in decisions[5]["message"].lower()
+    assert "valid status" in decisions[6]["message"].lower()
+
+    js = _js()
+    poll_body = js[
+        js.index("function pollAttendanceCorrectionJob") : js.index(
+            "function applyAttendanceCorrection"
+        )
+    ]
+    assert "var decision = attendancePollDecision" in js
+    assert "if (decision.retry)" in js
+    assert "Connection lost. Checking again safely" in js
+    assert ".catch(" not in poll_body
+    assert "attendancePollNetworkFailure" in poll_body
+
+
+def test_job_poll_timer_is_not_scheduled_for_terminal_or_invalid_responses():
+    timers = _run_attendance_hook("""
+(async function () {
+  async function scheduled(fetcher) {
+    var count = 0;
+    global.setTimeout = function () { count += 1; return count; };
+    global.clearTimeout = function () {};
+    window.gpiFetch = fetcher;
+    await window.gpiAttendanceCorrection.pollJob(9);
+    return count;
+  }
+  return [
+    await scheduled(function () { return Promise.reject(new Error('network')); }),
+    await scheduled(function () { return Promise.resolve({status: 503, ok: false, json: function () { return Promise.resolve({ok: false}); }}); }),
+    await scheduled(function () { return Promise.resolve({status: 503, ok: false, json: function () { return Promise.reject(new Error('invalid JSON')); }}); }),
+    await scheduled(function () { return Promise.resolve({status: 401, ok: false, json: function () { return Promise.resolve({ok: false}); }}); }),
+    await scheduled(function () { return Promise.resolve({status: 404, ok: false, json: function () { return Promise.resolve({ok: false}); }}); }),
+    await scheduled(function () { return Promise.resolve({status: 200, ok: true, json: function () { return Promise.reject(new Error('invalid JSON')); }}); }),
+    await scheduled(function () { return Promise.resolve({status: 200, ok: true, json: function () { return Promise.resolve({ok: true, status: 'mystery', retryable: false}); }}); }),
+    await scheduled(function () { return Promise.resolve({status: 200, ok: true, json: function () { return Promise.resolve({ok: true, status: 'applying', retryable: false, poll_after_ms: 2000}); }}); }),
+  ];
+})()
+""")
+
+    assert timers == [1, 1, 0, 0, 0, 0, 0, 1]
 
 
 def test_dialog_supports_escape_close_and_returns_focus_to_the_card_action():
@@ -143,6 +240,138 @@ if (attendanceResponseIsCurrent(request.epoch)) throw new Error('old response st
 var next = beginAttendanceCorrectionRequest();
 attendanceCorrectionDialog.open = false;
 if (attendanceResponseIsCurrent(next.epoch)) throw new Error('closed dialog accepted response');
+"""
+
+    result = subprocess.run(
+        ["node", "--eval", harness], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_stale_preview_apply_and_poll_callbacks_cannot_mutate_the_dialog():
+    js = _js()
+    state = js[
+        js.index("  var attendanceCorrectionEpoch = 0;") : js.index(
+            "  function padAttendanceTime(value)"
+        )
+    ]
+    preview = js[
+        js.index("  function previewAttendanceCorrection()") : js.index(
+            "  function attendanceProgress(text, isError)"
+        )
+    ]
+    poll = js[
+        js.index("  function attendanceProgress(text, isError)") : js.index(
+            "  function applyAttendanceCorrection()"
+        )
+    ]
+    apply = js[
+        js.index("  function applyAttendanceCorrection()") : js.index(
+            "  function openAttendanceCorrection(button)"
+        )
+    ]
+    harness = f"""
+function deferred() {{
+  var resolve;
+  var promise = new Promise(function (done) {{ resolve = done; }});
+  return {{promise: promise, resolve: resolve}};
+}}
+function element() {{
+  return {{
+    hidden: false, disabled: false, textContent: '',
+    classList: {{toggle: function () {{}}}},
+    replaceChildren: function () {{}},
+  }};
+}}
+var elements = {{
+  message: element(), progress: element(), preview: element(), apply: element(),
+  output: element(), refresh: element(),
+}};
+var attendanceCorrectionDialog = {{
+  open: true,
+  querySelector: function (selector) {{
+    if (selector.indexOf('message') !== -1) return elements.message;
+    if (selector.indexOf('progress') !== -1) return elements.progress;
+    if (selector.indexOf('preview-output') !== -1) return elements.output;
+    if (selector.indexOf('refresh-wrap') !== -1) return elements.refresh;
+    if (selector.indexOf('attendance-preview]') !== -1) return elements.preview;
+    if (selector.indexOf('attendance-apply') !== -1) return elements.apply;
+    return element();
+  }},
+}};
+var attendanceCorrectionForm = {{}};
+var attendanceCorrectionRow = {{item: 'current'}};
+var correctionPreviewToken = null;
+var attendancePollTimer = null;
+var effects = [];
+var scheduled = 0;
+function setTimeout() {{ scheduled += 1; return scheduled; }}
+function clearTimeout() {{}}
+var window = {{
+  location: {{reload: function () {{ effects.push('reload'); }}}},
+}};
+function attendanceCorrectionPayload() {{ return {{item_key: 'current'}}; }}
+function renderAttendancePreview() {{ effects.push('render'); }}
+function showAttendanceRefreshConfirmation() {{ effects.push('confirm'); }}
+function localAttendanceTimeCandidates() {{ return []; }}
+function localAttendanceTimeResolution() {{ return {{status: 'nonexistent'}}; }}
+var posts = [];
+function postJson() {{ return posts.shift().promise; }}
+var polls = [];
+function fetchCompat() {{ return polls.shift().promise; }}
+{state}
+{preview}
+{poll}
+{apply}
+(async function () {{
+  var oldPreview = deferred();
+  posts.push(oldPreview);
+  previewAttendanceCorrection();
+  cancelAttendanceCorrectionRequests();
+  oldPreview.resolve({{ok: true, preview_token: 'old', preview: {{}}}});
+  await Promise.resolve();
+  await Promise.resolve();
+  if (effects.length) throw new Error('stale preview rendered');
+  if (correctionPreviewToken !== null) throw new Error('stale preview restored token');
+  if (elements.message.textContent !== 'Reading the latest attendance from Odoo…') {{
+    throw new Error('stale preview changed message');
+  }}
+
+  correctionPreviewToken = 'signed';
+  var oldApply = deferred();
+  posts.push(oldApply);
+  applyAttendanceCorrection();
+  cancelAttendanceCorrectionRequests();
+  oldApply.resolve({{ok: true, job_id: 9}});
+  await Promise.resolve();
+  await Promise.resolve();
+  if (effects.length) throw new Error('stale apply mutated dialog');
+  if (correctionPreviewToken !== 'signed') throw new Error('stale apply changed token');
+  if (elements.message.textContent !== 'Queueing the verified Odoo correction…') {{
+    throw new Error('stale apply changed message');
+  }}
+
+  var oldPoll = deferred();
+  polls.push(oldPoll);
+  var epoch = attendanceCorrectionEpoch;
+  elements.progress.textContent = 'unchanged';
+  var pendingPoll = pollAttendanceCorrectionJob(9, epoch);
+  cancelAttendanceCorrectionRequests();
+  oldPoll.resolve({{
+    status: 503,
+    ok: false,
+    json: function () {{ return Promise.resolve({{ok: false}}); }},
+  }});
+  await pendingPoll;
+  if (elements.progress.textContent !== 'unchanged') {{
+    throw new Error('stale poll changed progress');
+  }}
+  if (scheduled !== 0) throw new Error('stale poll scheduled another request');
+}})().catch(function (error) {{
+  process.stderr.write(String(error.stack || error));
+  process.exitCode = 1;
+}});
 """
 
     result = subprocess.run(

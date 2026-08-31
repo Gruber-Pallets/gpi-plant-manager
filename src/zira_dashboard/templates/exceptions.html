@@ -102,7 +102,7 @@
               <span class="priority-pill {{ row.get('priority', 'normal') }}">{{ row.badge }}</span>
             {% endif %}
           </div>
-          <div class="exception-detail">{{ row.label }}{% if row.detail %} · {{ row.detail }}{% endif %}{% if row.coverage %} · {% include "_inbox_coverage.html" %}{% endif %}</div>
+          <div class="exception-detail">{{ row.label }}{% if row.detail and row.get('kind') not in ('production_unassigned_run', 'attendance_unmapped_location') %} · {{ row.detail }}{% endif %}{% if row.coverage %} · {% include "_inbox_coverage.html" %}{% endif %}</div>
           {% if row.get('kind') == 'production_unassigned_run' %}
             <div class="attendance-source-facts" aria-label="Odoo production source details">
               <span>Odoo status: Unassigned production</span>
@@ -111,14 +111,21 @@
               {% if row.get('sample_count') is not none %}<span>{{ row.get('sample_count') }} source reading{{ '' if row.get('sample_count') == 1 else 's' }}</span>{% endif %}
               <span>
                 Source time:
-                <time datetime="{{ row.get('start_utc') }}">{{ row.get('start_utc') }}</time>
+                <time datetime="{{ row.get('start_utc') }}">{{ row.get('start_label') }}</time>
                 to
                 {% if row.get('end_is_open') %}
                   Still working
                 {% else %}
-                  <time datetime="{{ row.get('end_utc') }}">{{ row.get('end_utc') }}</time>
+                  <time datetime="{{ row.get('end_utc') }}">{{ row.get('end_label') }}</time>
                 {% endif %}
               </span>
+              {% if row.get('affected_workers') %}
+                <span>
+                  Nearby attendance:
+                  {{ row.get('affected_workers') | map(attribute='employee_name') | join(', ') }}{% if row.get('affected_workers_truncated') %}, and more{% endif %}
+                </span>
+              {% endif %}
+              {% if row.get('reason_label') %}<span>Reason: {{ row.get('reason_label') }}</span>{% endif %}
             </div>
           {% elif row.get('kind') == 'attendance_unmapped_location' %}
             <div class="attendance-source-facts" aria-label="Odoo attendance source details">
@@ -128,8 +135,13 @@
               {% endif %}
               <span>
                 Source time:
-                <time datetime="{{ row.get('start_utc') }}">{{ row.get('start_utc') }}</time>
-                to {{ 'Still working' if row.get('end_is_open') else row.get('end_utc') }}
+                <time datetime="{{ row.get('start_utc') }}">{{ row.get('start_label') }}</time>
+                to
+                {% if row.get('end_is_open') %}
+                  Still working
+                {% else %}
+                  <time datetime="{{ row.get('end_utc') }}">{{ row.get('end_label') }}</time>
+                {% endif %}
               </span>
             </div>
           {% endif %}
@@ -266,14 +278,26 @@
         </fieldset>
 
         <div class="attendance-time-grid">
-          <label>
-            <span>Exact start</span>
-            <input type="datetime-local" required data-attendance-start>
-          </label>
-          <label>
-            <span>Exact end</span>
-            <input type="datetime-local" data-attendance-end>
-          </label>
+          <div class="attendance-time-field">
+            <label>
+              <span>Exact start</span>
+              <input type="datetime-local" required data-attendance-start>
+            </label>
+            <fieldset class="attendance-occurrence-choice" data-attendance-start-occurrence hidden>
+              <legend>Which start time?</legend>
+              <div data-attendance-occurrence-options></div>
+            </fieldset>
+          </div>
+          <div class="attendance-time-field">
+            <label>
+              <span>Exact end</span>
+              <input type="datetime-local" data-attendance-end>
+            </label>
+            <fieldset class="attendance-occurrence-choice" data-attendance-end-occurrence hidden>
+              <legend>Which end time?</legend>
+              <div data-attendance-occurrence-options></div>
+            </fieldset>
+          </div>
         </div>
         <label class="attendance-open-choice">
           <input type="checkbox" data-attendance-open-ended>

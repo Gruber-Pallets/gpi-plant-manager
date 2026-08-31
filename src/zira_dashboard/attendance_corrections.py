@@ -1647,8 +1647,11 @@ class _StaleClaim(RuntimeError):
 class CorrectionRequestConflict(RuntimeError):
     """A concurrent job for the inbox item does not match the verified preview."""
 
-    def __init__(self, job_id: int) -> None:
+    def __init__(self, job_id: int, *, source_changed: bool = False) -> None:
+        if not isinstance(source_changed, bool):
+            raise TypeError("source_changed must be a boolean")
         self.job_id = _positive_int(job_id, "job_id")
+        self.source_changed = source_changed
         super().__init__("another correction request already owns this inbox item")
 
 
@@ -2307,25 +2310,35 @@ def _job_row_matches_preview(
     source_snapshot: Mapping[str, object],
     plans: Mapping[str, object],
 ) -> bool:
+    if not _job_row_request_matches_preview(row, preview):
+        return False
     try:
-        row_employees = _employee_ids(
-            _decode_json_column(row.get("employee_odoo_ids"), "employee_odoo_ids")
-        )
-        row_start = _aware_utc(row.get("start_utc"), "start_utc")
-        row_end = _optional_aware_utc(row.get("end_utc"), "end_utc")
         row_work_center_id = _positive_int(
             row.get("target_odoo_work_center_id"), "target_odoo_work_center_id"
         )
     except (TypeError, ValueError):
         return False
     return (
+        row_work_center_id == preview.target_odoo_work_center_id
+        and _json_column_matches(row.get("source_snapshot"), source_snapshot)
+        and _json_column_matches(row.get("operations"), plans)
+    )
+
+
+def _job_row_request_matches_preview(row: Mapping[str, object], preview: CorrectionPreview) -> bool:
+    try:
+        row_employees = _employee_ids(
+            _decode_json_column(row.get("employee_odoo_ids"), "employee_odoo_ids")
+        )
+        row_start = _aware_utc(row.get("start_utc"), "start_utc")
+        row_end = _optional_aware_utc(row.get("end_utc"), "end_utc")
+    except (TypeError, ValueError):
+        return False
+    return (
         row.get("target_work_center_name") == preview.target_work_center_name
-        and row_work_center_id == preview.target_odoo_work_center_id
         and row_start == preview.start_utc
         and row_end == preview.end_utc
         and row_employees == preview.employee_odoo_ids
-        and _json_column_matches(row.get("source_snapshot"), source_snapshot)
-        and _json_column_matches(row.get("operations"), plans)
     )
 
 
@@ -2396,7 +2409,10 @@ def create_job_from_preview(
             raise RuntimeError("correction dedupe winner disappeared")
         job_id = int(duplicate["id"])
         if not _job_row_matches_preview(duplicate, preview, source_snapshot, plans):
-            raise CorrectionRequestConflict(job_id)
+            raise CorrectionRequestConflict(
+                job_id,
+                source_changed=_job_row_request_matches_preview(duplicate, preview),
+            )
         return job_id
 
 

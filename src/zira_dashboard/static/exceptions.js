@@ -17,7 +17,13 @@
           ok: xhr.status >= 200 && xhr.status < 300,
           status: xhr.status,
           json: function () {
-            return Promise.resolve(responseText ? JSON.parse(responseText) : {});
+            return new Promise(function (jsonResolve, jsonReject) {
+              try {
+                jsonResolve(responseText ? JSON.parse(responseText) : {});
+              } catch (error) {
+                jsonReject(error);
+              }
+            });
           },
         });
       };
@@ -134,9 +140,9 @@
     return (attendanceCorrectionDialog && attendanceCorrectionDialog.dataset.plantTimezone) || 'America/Chicago';
   }
 
-  function plantAttendanceParts(value) {
+  function plantAttendanceParts(value, timezone) {
     var parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: attendancePlantTimezone(),
+      timeZone: timezone || attendancePlantTimezone(),
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -151,6 +157,78 @@
     return result;
   }
 
+  function parsedAttendanceLocalTime(localValue) {
+    if (!localValue) return null;
+    var match = localValue.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    var parts = {
+      year: Number(match[1]),
+      month: Number(match[2]),
+      day: Number(match[3]),
+      hour: Number(match[4]),
+      minute: Number(match[5]),
+    };
+    var desired = Date.UTC(
+      parts.year, parts.month - 1, parts.day, parts.hour, parts.minute
+    );
+    var check = new Date(desired);
+    if (
+      check.getUTCFullYear() !== parts.year ||
+      check.getUTCMonth() !== parts.month - 1 ||
+      check.getUTCDate() !== parts.day ||
+      check.getUTCHours() !== parts.hour ||
+      check.getUTCMinutes() !== parts.minute
+    ) return null;
+    return {parts: parts, desired: desired};
+  }
+
+  function sameAttendanceLocalTime(parts, desired) {
+    return (
+      parts.year === desired.year &&
+      parts.month === desired.month &&
+      parts.day === desired.day &&
+      parts.hour === desired.hour &&
+      parts.minute === desired.minute
+    );
+  }
+
+  function localAttendanceTimeCandidates(localValue, timezone) {
+    var parsed = parsedAttendanceLocalTime(localValue);
+    if (!parsed) return [];
+    var zone = timezone || attendancePlantTimezone();
+    var offsets = {};
+    for (var hour = -36; hour <= 36; hour += 6) {
+      var instant = parsed.desired + (hour * 60 * 60 * 1000);
+      var observed = plantAttendanceParts(new Date(instant), zone);
+      var observedUtc = Date.UTC(
+        observed.year, observed.month - 1, observed.day,
+        observed.hour, observed.minute
+      );
+      offsets[String(observedUtc - instant)] = true;
+    }
+    var candidates = [];
+    Object.keys(offsets).forEach(function (offsetText) {
+      var instant = parsed.desired - Number(offsetText);
+      var observed = plantAttendanceParts(new Date(instant), zone);
+      if (sameAttendanceLocalTime(observed, parsed.parts)) {
+        candidates.push(new Date(instant).toISOString());
+      }
+    });
+    return Array.from(new Set(candidates)).sort();
+  }
+
+  function localAttendanceTimeResolution(localValue, timezone, occurrence) {
+    var candidates = localAttendanceTimeCandidates(localValue, timezone);
+    if (!candidates.length) return {status: 'nonexistent'};
+    if (candidates.length > 1 && candidates.indexOf(occurrence) === -1) {
+      return {status: 'ambiguous', candidates: candidates};
+    }
+    return {
+      status: 'resolved',
+      value: candidates.length === 1 ? candidates[0] : occurrence,
+    };
+  }
+
   function localAttendanceInputValue(iso) {
     if (!iso) return '';
     var value = new Date(iso);
@@ -163,43 +241,90 @@
     ].join('');
   }
 
-  function plantAttendanceUtcValue(input) {
-    if (!input || !input.value) return null;
-    var match = input.value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-    if (!match) return null;
-    var desired = Date.UTC(
-      Number(match[1]), Number(match[2]) - 1, Number(match[3]),
-      Number(match[4]), Number(match[5])
-    );
-    var desiredDate = new Date(desired);
-    if (
-      desiredDate.getUTCFullYear() !== Number(match[1]) ||
-      desiredDate.getUTCMonth() !== Number(match[2]) - 1 ||
-      desiredDate.getUTCDate() !== Number(match[3]) ||
-      desiredDate.getUTCHours() !== Number(match[4]) ||
-      desiredDate.getUTCMinutes() !== Number(match[5])
-    ) return null;
-    var candidates = {};
-    for (var hour = -36; hour <= 36; hour += 1) {
-      var probe = desired + (hour * 60 * 60 * 1000);
-      var parts = plantAttendanceParts(new Date(probe));
-      var observed = Date.UTC(
-        parts.year, parts.month - 1, parts.day, parts.hour, parts.minute
-      );
-      var candidate = desired - (observed - probe);
-      var candidateParts = plantAttendanceParts(new Date(candidate));
-      if (
-        candidateParts.year === Number(match[1]) &&
-        candidateParts.month === Number(match[2]) &&
-        candidateParts.day === Number(match[3]) &&
-        candidateParts.hour === Number(match[4]) &&
-        candidateParts.minute === Number(match[5])
-      ) candidates[candidate] = true;
+  function attendanceOccurrenceContainer(input) {
+    if (input === attendanceEl('[data-attendance-start]')) {
+      return attendanceEl('[data-attendance-start-occurrence]');
     }
-    var matches = Object.keys(candidates);
-    if (matches.length !== 1) return null;
-    var value = new Date(Number(matches[0]));
-    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+    return attendanceEl('[data-attendance-end-occurrence]');
+  }
+
+  function selectedAttendanceOccurrence(container) {
+    var selected = container && container.querySelector('input:checked');
+    return selected ? selected.value : null;
+  }
+
+  function attendanceTimeResolution(input) {
+    if (!input || !input.value) return {status: 'invalid'};
+    var container = attendanceOccurrenceContainer(input);
+    return localAttendanceTimeResolution(
+      input.value,
+      attendancePlantTimezone(),
+      selectedAttendanceOccurrence(container)
+    );
+  }
+
+  function plantAttendanceUtcValue(input) {
+    var resolution = attendanceTimeResolution(input);
+    return resolution.status === 'resolved' ? resolution.value : null;
+  }
+
+  function attendanceOccurrenceLabel(value, index) {
+    var label = new Intl.DateTimeFormat('en-US', {
+      timeZone: attendancePlantTimezone(),
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    }).format(new Date(value));
+    return (index === 0 ? 'First occurrence — ' : 'Second occurrence — ') + label;
+  }
+
+  function renderAttendanceOccurrenceChoices(input, container, name) {
+    if (!input || !container) return;
+    var previous = selectedAttendanceOccurrence(container);
+    var options = container.querySelector('[data-attendance-occurrence-options]');
+    if (!options) return;
+    options.replaceChildren();
+    var candidates = localAttendanceTimeCandidates(
+      input.value, attendancePlantTimezone()
+    );
+    container.hidden = candidates.length < 2;
+    if (candidates.length < 2) return;
+    candidates.forEach(function (candidate, index) {
+      var label = document.createElement('label');
+      var radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = name;
+      radio.value = candidate;
+      radio.checked = candidate === previous;
+      label.appendChild(radio);
+      label.appendChild(document.createTextNode(attendanceOccurrenceLabel(candidate, index)));
+      options.appendChild(label);
+    });
+  }
+
+  function refreshAttendanceOccurrenceChoices() {
+    renderAttendanceOccurrenceChoices(
+      attendanceEl('[data-attendance-start]'),
+      attendanceEl('[data-attendance-start-occurrence]'),
+      'attendance_start_occurrence'
+    );
+    renderAttendanceOccurrenceChoices(
+      attendanceEl('[data-attendance-end]'),
+      attendanceEl('[data-attendance-end-occurrence]'),
+      'attendance_end_occurrence'
+    );
+  }
+
+  function clearAttendanceOccurrenceChoices() {
+    [
+      attendanceEl('[data-attendance-start-occurrence]'),
+      attendanceEl('[data-attendance-end-occurrence]'),
+    ].forEach(function (container) {
+      if (!container) return;
+      var options = container.querySelector('[data-attendance-occurrence-options]');
+      if (options) options.replaceChildren();
+      container.hidden = true;
+    });
   }
 
   function attendanceCorrectionPayload() {
@@ -213,14 +338,34 @@
     var endInput = attendanceEl('[data-attendance-end]');
     var openInput = attendanceEl('[data-attendance-open-ended]');
     var target = attendanceEl('[data-attendance-work-center]');
+    var startResolution = attendanceTimeResolution(startInput);
+    var endResolution = openInput && openInput.checked
+      ? {status: 'open', value: null}
+      : attendanceTimeResolution(endInput);
     var startUtc = plantAttendanceUtcValue(startInput);
     var endUtc = openInput && openInput.checked ? null : plantAttendanceUtcValue(endInput);
     if (!employeeIds.length) {
       attendanceMessage('Choose at least one worker.', true);
       return null;
     }
+    if (startResolution.status === 'nonexistent') {
+      attendanceMessage('This start time does not exist because the clock changes.', true);
+      return null;
+    }
+    if (startResolution.status === 'ambiguous') {
+      attendanceMessage('Choose the first or second start time.', true);
+      return null;
+    }
     if (!startUtc) {
       attendanceMessage('Enter an exact start time.', true);
+      return null;
+    }
+    if (endResolution.status === 'nonexistent') {
+      attendanceMessage('This end time does not exist because the clock changes.', true);
+      return null;
+    }
+    if (endResolution.status === 'ambiguous') {
+      attendanceMessage('Choose the first or second end time.', true);
       return null;
     }
     if (!openInput.checked && !endUtc) {
@@ -351,60 +496,157 @@
   }
 
   function scheduleAttendancePoll(jobId, requestedDelay, epoch) {
-    if (!attendanceResponseIsCurrent(epoch)) return;
+    if (!attendancePollIsCurrent(epoch)) return;
     if (attendancePollTimer) clearTimeout(attendancePollTimer);
     var delay = Math.max(1000, Math.min(Number(requestedDelay) || 2000, 10000));
     attendancePollTimer = setTimeout(function () {
-      if (attendanceResponseIsCurrent(epoch)) pollAttendanceCorrectionJob(jobId, epoch);
+      if (attendancePollIsCurrent(epoch)) pollAttendanceCorrectionJob(jobId, epoch);
     }, delay);
   }
 
+  function attendancePollIsCurrent(epoch) {
+    return epoch === null || attendanceResponseIsCurrent(epoch);
+  }
+
+  function attendancePollDecision(status, ok, validJson) {
+    if (status === 401 || status === 403) {
+      return {retry: false, message: 'Sign in again, then refresh the inbox to check this correction.'};
+    }
+    if (status === 404) {
+      return {retry: false, message: 'This correction status was not found. Refresh the inbox before trying again.'};
+    }
+    if (!validJson) {
+      return {retry: false, message: 'Plant Manager did not return a valid status. Refresh the inbox to check the correction.'};
+    }
+    if (status === 503) {
+      return {retry: true, message: 'Odoo status is briefly unavailable. Checking again safely…'};
+    }
+    if (!ok) {
+      return {retry: false, message: 'Plant Manager could not check this correction. Refresh the inbox before trying again.'};
+    }
+    return {retry: false, message: ''};
+  }
+
+  window.gpiAttendanceCorrection = Object.freeze({
+    localTimeCandidates: localAttendanceTimeCandidates,
+    localTimeResolution: localAttendanceTimeResolution,
+    pollDecision: attendancePollDecision,
+    pollJob: function (jobId) { return pollAttendanceCorrectionJob(jobId, null); },
+  });
+
+  function attendancePollNetworkFailure(jobId, epoch) {
+    if (!attendancePollIsCurrent(epoch)) return;
+    if (epoch !== null) attendancePollController = null;
+    attendanceProgress('Connection lost. Checking again safely…', true);
+    scheduleAttendancePoll(jobId, 3000, epoch);
+  }
+
+  function handleAttendancePollResult(jobId, response, resp, validJson, epoch) {
+    if (!attendancePollIsCurrent(epoch)) return;
+    if (epoch !== null) attendancePollController = null;
+    var decision = attendancePollDecision(
+      response && response.status, response && response.ok, validJson
+    );
+    if (decision.retry) {
+      attendanceProgress(decision.message, true);
+      scheduleAttendancePoll(jobId, 3000, epoch);
+      return;
+    }
+    if (decision.message) {
+      attendanceProgress(decision.message, true);
+      return;
+    }
+    if (!resp || !resp.ok) {
+      attendanceProgress(
+        (resp && resp.error) || 'Correction status stopped. Refresh the inbox to check it.',
+        true
+      );
+      return;
+    }
+    var knownStatuses = [
+      'planned', 'applying', 'verifying', 'recalculating', 'complete', 'failed',
+    ];
+    if (knownStatuses.indexOf(resp.status) === -1) {
+      attendanceProgress(
+        'Plant Manager did not return a valid status. Refresh the inbox to check the correction.',
+        true
+      );
+      return;
+    }
+    if (resp.status === 'complete') {
+      attendanceProgress('Correction complete. Refreshing the inbox…', false);
+      setTimeout(function () {
+        if (attendancePollIsCurrent(epoch)) window.location.reload();
+      }, 900);
+      return;
+    }
+    if (resp.retryable) {
+      attendanceProgress(resp.error || 'Odoo could not finish. Preview and try again.', true);
+      setAttendancePreviewBusy(false);
+      invalidateAttendancePreview();
+      return;
+    }
+    if (resp.status === 'failed') {
+      attendanceProgress(
+        resp.error || 'Odoo could not finish. Refresh the inbox before trying again.',
+        true
+      );
+      return;
+    }
+    attendanceProgress(
+      'Correction in progress · ' + Number(resp.completed_operation_count || 0) + ' Odoo changes saved',
+      false
+    );
+    scheduleAttendancePoll(jobId, resp.poll_after_ms, epoch);
+  }
+
   function pollAttendanceCorrectionJob(jobId, epoch) {
-    if (!attendanceResponseIsCurrent(epoch)) return;
-    if (attendancePollController) attendancePollController.abort();
-    attendancePollController = typeof AbortController === 'function'
-      ? new AbortController() : null;
-    fetchCompat(
-      '/api/exceptions/attendance-correction/' + encodeURIComponent(jobId),
-      {
-        headers: {'Accept': 'application/json'},
-        signal: attendancePollController ? attendancePollController.signal : undefined,
+    if (!attendancePollIsCurrent(epoch)) return;
+    if (epoch !== null) {
+      if (attendancePollController) attendancePollController.abort();
+      attendancePollController = typeof AbortController === 'function'
+        ? new AbortController() : null;
+    }
+    var request;
+    try {
+      request = fetchCompat(
+        '/api/exceptions/attendance-correction/' + encodeURIComponent(jobId),
+        {
+          headers: {'Accept': 'application/json'},
+          signal: epoch !== null && attendancePollController
+            ? attendancePollController.signal : undefined,
+        }
+      );
+    } catch (error) {
+      attendancePollNetworkFailure(jobId, epoch);
+      return;
+    }
+    return request.then(function (response) {
+      if (!attendancePollIsCurrent(epoch)) return;
+      if (!response || typeof response.json !== 'function') {
+        handleAttendancePollResult(jobId, response, null, false, epoch);
+        return;
       }
-    )
-      .then(function (response) { return response.json(); })
-      .then(function (resp) {
-        if (!attendanceResponseIsCurrent(epoch)) return;
-        attendancePollController = null;
-        if (!resp || !resp.ok) {
-          attendanceProgress((resp && resp.error) || 'Waiting for correction status…', true);
-          scheduleAttendancePoll(jobId, 3000, epoch);
-          return;
+      var body;
+      try {
+        body = response.json();
+      } catch (error) {
+        handleAttendancePollResult(jobId, response, null, false, epoch);
+        return;
+      }
+      return body.then(
+        function (resp) {
+          if (!attendancePollIsCurrent(epoch)) return;
+          var validJson = !!resp && typeof resp === 'object' && !Array.isArray(resp);
+          handleAttendancePollResult(jobId, response, resp, validJson, epoch);
+        },
+        function () {
+          handleAttendancePollResult(jobId, response, null, false, epoch);
         }
-        if (resp.status === 'complete') {
-          attendanceProgress('Correction complete. Refreshing the inbox…', false);
-          setTimeout(function () {
-            if (attendanceResponseIsCurrent(epoch)) window.location.reload();
-          }, 900);
-          return;
-        }
-        if (resp.retryable) {
-          attendanceProgress(resp.error || 'Odoo could not finish. Preview and try again.', true);
-          setAttendancePreviewBusy(false);
-          invalidateAttendancePreview();
-          return;
-        }
-        attendanceProgress(
-          'Correction in progress · ' + Number(resp.completed_operation_count || 0) + ' Odoo changes saved',
-          false
-        );
-        scheduleAttendancePoll(jobId, resp.poll_after_ms, epoch);
-      })
-      .catch(function () {
-        if (!attendanceResponseIsCurrent(epoch)) return;
-        attendancePollController = null;
-        attendanceProgress('Connection lost. Checking again safely…', true);
-        scheduleAttendancePoll(jobId, 3000, epoch);
-      });
+      );
+    }, function () {
+      attendancePollNetworkFailure(jobId, epoch);
+    });
   }
 
   function applyAttendanceCorrection() {
@@ -424,9 +666,14 @@
         attendanceCorrectionController = null;
         setAttendancePreviewBusy(false);
         if (resp && resp.code === 'source_changed') {
-          correctionPreviewToken = resp.preview_token;
-          renderAttendancePreview(resp.preview);
-          showAttendanceRefreshConfirmation();
+          if (resp.preview_token && resp.preview) {
+            correctionPreviewToken = resp.preview_token;
+            renderAttendancePreview(resp.preview);
+            showAttendanceRefreshConfirmation();
+          } else {
+            invalidateAttendancePreview();
+            attendanceMessage(resp.error || 'Odoo changed. Preview again.', true);
+          }
           return;
         }
         if (!resp || !resp.ok) {
@@ -460,11 +707,13 @@
     var end = attendanceEl('[data-attendance-end]');
     var openEnded = attendanceEl('[data-attendance-open-ended]');
     var target = attendanceEl('[data-attendance-work-center]');
+    clearAttendanceOccurrenceChoices();
     start.value = localAttendanceInputValue(attendanceCorrectionRow.dataset.correctionStartUtc);
     end.value = localAttendanceInputValue(attendanceCorrectionRow.dataset.correctionEndUtc);
     openEnded.checked = attendanceCorrectionRow.dataset.correctionEndOpen === 'true';
     end.disabled = openEnded.checked;
     target.value = attendanceCorrectionRow.dataset.correctionWorkCenter || '';
+    refreshAttendanceOccurrenceChoices();
     var progress = attendanceEl('[data-attendance-progress]');
     if (progress) {
       progress.hidden = true;
@@ -503,10 +752,14 @@
         var end = attendanceEl('[data-attendance-end]');
         end.disabled = event.target.checked;
         if (event.target.checked) end.value = '';
+        refreshAttendanceOccurrenceChoices();
       }
       invalidateAttendancePreview();
     });
-    attendanceCorrectionForm.addEventListener('input', function () {
+    attendanceCorrectionForm.addEventListener('input', function (event) {
+      if (event.target.matches('[data-attendance-start], [data-attendance-end]')) {
+        refreshAttendanceOccurrenceChoices();
+      }
       invalidateAttendancePreview();
     });
     attendanceCorrectionDialog.addEventListener('cancel', function (event) {

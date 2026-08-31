@@ -15,6 +15,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Fix unassigned production from the inbox
 
 - **A manager can now choose who did an unassigned production run, set the exact start and end time, and preview the Odoo change before saving.** “Still working” keeps the time open.
+- **Plant Manager now handles clock-change times and last-second Odoo changes safely.** Managers choose the right repeated time, and Plant Manager saves only the change they just checked.
 
 ### Keep Odoo teams lined up with work areas
 
