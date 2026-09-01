@@ -57,6 +57,9 @@ def test_preview_contains_busy_people_fixture():
     assert result.stdout.strip() == str(OUT)
     html = (OUT / "index.html").read_text(encoding="utf-8")
     assert html.count('class="pp-row') >= 10
+    assert ">Production<" in html
+    assert ">126/168<" in html
+    assert ">Centers<" not in html
     assert html.index("Metered production") < html.index("Tablet forklift")
     assert html.index("Tablet forklift") < html.index("Other non-metered people")
     assert html.index("Amy Behind") < html.index("Mia Mixed")

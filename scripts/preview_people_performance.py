@@ -98,12 +98,12 @@ def _ordered_rows(rows):
     return tuple(sorted(rows, key=key))
 
 
-def _production_summary(goal, uptime, downtime, centers="1"):
+def _production_summary(goal, uptime, downtime, production):
     return (
         ("Goal", goal),
         ("Uptime", uptime),
         ("Downtime", downtime),
-        ("Centers", centers),
+        ("Production", production),
     )
 
 
@@ -190,7 +190,7 @@ def _context() -> dict:
                     line_runs=uptime_runs,
                 ),
             ),
-            _production_summary("75%", "92%", "35 min"),
+            _production_summary("75%", "92%", "35 min", "126/168"),
             ("behind goal",),
         ),
         _row(
@@ -227,7 +227,7 @@ def _context() -> dict:
                     ),
                 ),
             ),
-            _production_summary("112%", "99%", "4 min"),
+            _production_summary("112%", "99%", "4 min", "190/170"),
         ),
         _row(
             103,
@@ -292,7 +292,7 @@ def _context() -> dict:
                     time_label="11:12 AM · Working now",
                 ),
             ),
-            _production_summary("103%", "96%", "9 min", "3"),
+            _production_summary("103%", "96%", "9 min", "206/200"),
         ),
         _row(
             104,
@@ -312,7 +312,7 @@ def _context() -> dict:
                     time_label="6:00 AM to 12:00 PM",
                 ),
             ),
-            _production_summary("108%", "97%", "8 min"),
+            _production_summary("108%", "97%", "8 min", "108/100"),
             active=False,
         ),
     )

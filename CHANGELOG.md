@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### See production totals at a glance
+
+- **The People page now shows each measured worker's current production next to their current goal.** The total follows them when they move to another measured work area.
+
 ### Plan a simpler People page header
 
 - **A step-by-step plan is ready to put the People page totals, warnings, date, and filter in one thin bar.** It will also show only the workday start, break starts, and end above each group. Nothing in the app has changed yet.

@@ -116,6 +116,27 @@ def test_final_work_center_goal_owns_subgroup_after_transfer():
     assert model.rows[1].intervals[-1].production.goal_units == 0
 
 
+def test_production_summary_shows_current_units_against_goal_across_transfers():
+    model = _assemble(
+        spans=(
+            span(86, "Current Worker", 0, 60, "Repair 1"),
+            span(86, "Current Worker", 60, 120, "Repair 2"),
+        ),
+        scores=(
+            score(86, "Current Worker", "Repair 1", 0, 60, 41.4, 50.4),
+            score(86, "Current Worker", "Repair 2", 60, 120, 100.4, 110.4),
+        ),
+        downtime_by_wc={"Repair 1": (), "Repair 2": ()},
+    )
+
+    assert model.rows[0].summary == (
+        ("Goal", "88%"),
+        ("Uptime", "100%"),
+        ("Downtime", "0 min"),
+        ("Production", "142/161"),
+    )
+
+
 def test_same_location_across_lunch_does_not_create_transfer():
     lunch = BreakSpan(
         START + timedelta(minutes=60),
@@ -217,7 +238,12 @@ def test_stale_mapped_span_keeps_identity_but_cannot_earn_metrics():
     assert row.intervals[0].location_name == "Repair 1"
     assert row.intervals[0].metric_available is False
     assert row.intervals[0].production is None
-    assert row.summary[:3] == (("Goal", "N/A"), ("Uptime", "N/A"), ("Downtime", "N/A"))
+    assert row.summary == (
+        ("Goal", "N/A"),
+        ("Uptime", "N/A"),
+        ("Downtime", "N/A"),
+        ("Production", "N/A"),
+    )
     assert row.attention_reasons == ("source stale",)
 
 
@@ -250,7 +276,12 @@ def test_unavailable_sources_keep_rows_and_warning_order_without_false_zeroes():
         forklift_available=False,
     )
     prod, fork = model.rows
-    assert prod.summary[:3] == (("Goal", "N/A"), ("Uptime", "N/A"), ("Downtime", "N/A"))
+    assert prod.summary == (
+        ("Goal", "N/A"),
+        ("Uptime", "N/A"),
+        ("Downtime", "N/A"),
+        ("Production", "N/A"),
+    )
     assert fork.summary == (
         ("Calls", "N/A"),
         ("On time", "N/A"),

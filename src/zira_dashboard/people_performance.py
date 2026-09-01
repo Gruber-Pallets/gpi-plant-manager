@@ -444,10 +444,9 @@ def cumulative_production_hover_points(
     return result
 
 
-def weighted_production_summary(
+def _scoreable_production_totals(
     metrics: Sequence[ProductionMetric],
-) -> tuple[float | None, float | None, float]:
-    """Return weighted goal, uptime, and downtime for scoreable intervals."""
+) -> tuple[float, float, float, float] | None:
     scoreable = [
         metric
         for metric in metrics
@@ -465,12 +464,25 @@ def weighted_production_summary(
         and metric.productive_minutes > 0
         and metric.downtime_minutes >= 0
     ]
-    actual = sum((metric.actual_units for metric in scoreable), 0.0)
-    goal = sum((metric.goal_units for metric in scoreable), 0.0)
-    available = sum((metric.productive_minutes for metric in scoreable), 0.0)
-    downtime = sum((metric.downtime_minutes for metric in scoreable), 0.0)
-    if not all(_is_finite_number(value) for value in (actual, goal, available, downtime)):
+    if not scoreable:
+        return None
+    totals = (
+        sum((metric.actual_units for metric in scoreable), 0.0),
+        sum((metric.goal_units for metric in scoreable), 0.0),
+        sum((metric.productive_minutes for metric in scoreable), 0.0),
+        sum((metric.downtime_minutes for metric in scoreable), 0.0),
+    )
+    return totals if all(_is_finite_number(value) for value in totals) else None
+
+
+def weighted_production_summary(
+    metrics: Sequence[ProductionMetric],
+) -> tuple[float | None, float | None, float]:
+    """Return weighted goal, uptime, and downtime for scoreable intervals."""
+    totals = _scoreable_production_totals(metrics)
+    if totals is None:
         return None, None, 0.0
+    actual, goal, available, downtime = totals
     goal_pct = 100.0 * actual / goal if goal > 0 else None
     uptime_pct = 100.0 * max(0.0, available - downtime) / available if available > 0 else None
     if goal_pct is not None and not _is_finite_number(goal_pct):
@@ -776,7 +788,6 @@ def _production_summary(
     intervals: Sequence[TimelineInterval],
 ) -> tuple[tuple[str, str], ...]:
     production_intervals = [item for item in intervals if item.role == "production"]
-    distinct_centers = {item.location_name for item in production_intervals}
     metrics = [
         item.production
         for item in production_intervals
@@ -785,18 +796,21 @@ def _production_summary(
     complete = bool(production_intervals) and all(
         item.metric_available and item.production is not None for item in production_intervals
     )
-    if complete:
+    totals = _scoreable_production_totals(metrics)
+    if complete and totals is not None:
         goal_pct, uptime_pct, downtime_minutes = weighted_production_summary(metrics)
         goal = _pct_or_na(goal_pct)
         uptime = _pct_or_na(uptime_pct)
         downtime = f"{downtime_minutes:.0f} min"
+        actual_units, goal_units, _available_minutes, _downtime_minutes = totals
+        production = f"{actual_units:.0f}/{goal_units:.0f}"
     else:
-        goal = uptime = downtime = "N/A"
+        goal = uptime = downtime = production = "N/A"
     return (
         ("Goal", goal),
         ("Uptime", uptime),
         ("Downtime", downtime),
-        ("Centers", str(len(distinct_centers))),
+        ("Production", production),
     )
 
 
