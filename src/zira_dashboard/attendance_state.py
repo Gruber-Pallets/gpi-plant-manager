@@ -18,6 +18,17 @@ from . import db, live_cache
 _UNSET = object()  # "not supplied" sentinel — None is a meaningful latest_punch value
 
 
+def _department_state(entry: dict | None) -> dict:
+    return {
+        "current_odoo_department_id": (
+            entry.get("odoo_department_id") if entry else None
+        ),
+        "current_odoo_department_name": (
+            entry.get("odoo_department_name") if entry else None
+        ),
+    }
+
+
 def latest_punch(person_odoo_id: int) -> dict | None:
     """Most-recent local punch row for this person, or None. Carries the
     sync bookkeeping (synced_to_odoo, synced_at) the reconciliation rule
@@ -56,9 +67,11 @@ def state_from_log(latest: dict | None) -> dict:
     recent local punch. Used as the safe fallback (cold/stale cache) and
     whenever the local log wins."""
     if latest is None or latest["action"] in ("clock_out", "transfer_out"):
-        return {"is_clocked_in": False, "current_wc": None,
+        return {**_department_state(None),
+                "is_clocked_in": False, "current_wc": None,
                 "check_in_ts": None, "open_odoo_attendance_id": None}
-    return {"is_clocked_in": True, "current_wc": latest["wc_name"],
+    return {**_department_state(None),
+            "is_clocked_in": True, "current_wc": latest["wc_name"],
             "check_in_ts": latest["occurred_at"],
             "open_odoo_attendance_id": latest["odoo_attendance_id"]}
 
@@ -136,6 +149,7 @@ def current_state(
             }
         if not source_available or snapshot is None:
             return {
+                **_department_state(None),
                 "is_clocked_in": None,
                 "current_wc": None,
                 "check_in_ts": None,
@@ -148,6 +162,7 @@ def current_state(
         if not entry:
             state = (
                 {
+                    **_department_state(None),
                     "is_clocked_in": None,
                     "current_wc": None,
                     "check_in_ts": None,
@@ -155,6 +170,7 @@ def current_state(
                 }
                 if source_stale
                 else {
+                    **_department_state(None),
                     "is_clocked_in": False,
                     "current_wc": None,
                     "check_in_ts": None,
@@ -164,6 +180,7 @@ def current_state(
         else:
             check_in = entry.get("check_in")
             state = {
+                **_department_state(entry),
                 "is_clocked_in": True,
                 "current_wc": entry.get("wc_name"),
                 "check_in_ts": datetime.fromisoformat(check_in) if check_in else None,
@@ -181,9 +198,11 @@ def current_state(
         return state_from_log(latest)
     entry = snapshot.get(str(person_odoo_id))
     if not entry:
-        return {"is_clocked_in": False, "current_wc": None,
+        return {**_department_state(None),
+                "is_clocked_in": False, "current_wc": None,
                 "check_in_ts": None, "open_odoo_attendance_id": None}
     check_in = entry.get("check_in")
-    return {"is_clocked_in": True, "current_wc": entry.get("wc_name"),
+    return {**_department_state(entry),
+            "is_clocked_in": True, "current_wc": entry.get("wc_name"),
             "check_in_ts": datetime.fromisoformat(check_in) if check_in else None,
             "open_odoo_attendance_id": entry.get("att_id")}

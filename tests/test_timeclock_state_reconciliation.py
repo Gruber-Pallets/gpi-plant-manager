@@ -63,13 +63,16 @@ def test_forgot_to_punch_in_added_in_odoo_shows_clock_out(monkeypatch):
     """No local punch, fresh cache shows them open → clocked in (clock-out)."""
     _set_cache(monkeypatch, {"5": {
         "att_id": 88, "check_in": "2026-06-01T11:00:00+00:00",
-        "wc_name": None}}, _now())
+        "wc_name": None, "odoo_department_id": 4,
+        "odoo_department_name": "Supervisor"}}, _now())
     _set_latest_punch(monkeypatch, None)
 
     st = timeclock._current_state(5)
     assert st["is_clocked_in"] is True
     assert st["open_odoo_attendance_id"] == 88
     assert st["current_wc"] is None  # manual Odoo punch has no WC
+    assert st["current_odoo_department_id"] == 4
+    assert st["current_odoo_department_name"] == "Supervisor"
     assert st["check_in_ts"] == datetime(2026, 6, 1, 11, 0, tzinfo=timezone.utc)
 
 
@@ -131,6 +134,8 @@ def test_just_clocked_in_unsynced_stays_clocked_in(monkeypatch):
     st = timeclock._current_state(5)
     assert st["is_clocked_in"] is True
     assert st["current_wc"] == "Bay 3"
+    assert st["current_odoo_department_id"] is None
+    assert st["current_odoo_department_name"] is None
 
 
 def test_closed_in_odoo_shows_clock_in(monkeypatch):

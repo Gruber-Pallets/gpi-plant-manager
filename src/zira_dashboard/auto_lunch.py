@@ -182,7 +182,9 @@ def _latest_in_wc(person_odoo_id: int, day: date, *, source=None) -> str | None:
     source = source or live_cache.read_open_attendance_source()
     if source.mirror_owned:
         entry = (source.payload or {}).get(str(person_odoo_id))
-        return entry.get("wc_name") if entry else None
+        wc_name = entry.get("wc_name") if entry else None
+        if wc_name:
+            return wc_name
     start, end = _day_bounds(day)
     rows = db.query(
         "SELECT wc_name FROM timeclock_punches_log "
@@ -231,7 +233,8 @@ def _legacy_attendance_inputs_bulk(
 def _get_run(person_odoo_id: int, day: date) -> dict | None:
     rows = db.query(
         "SELECT person_odoo_id, day, kind, state, target_out_at, target_in_at, "
-        "wc_name, out_punch_id, in_punch_id FROM auto_lunch_runs "
+        "wc_name, odoo_department_id, odoo_department_name, "
+        "out_punch_id, in_punch_id FROM auto_lunch_runs "
         "WHERE person_odoo_id = %s AND day = %s",
         (person_odoo_id, day),
     )
@@ -247,7 +250,8 @@ def _get_runs_bulk(day: date, person_ids) -> dict[int, dict]:
         return {}
     rows = db.query(
         "SELECT person_odoo_id, day, kind, state, target_out_at, target_in_at, "
-        "wc_name, out_punch_id, in_punch_id FROM auto_lunch_runs "
+        "wc_name, odoo_department_id, odoo_department_name, "
+        "out_punch_id, in_punch_id FROM auto_lunch_runs "
         "WHERE day = %s AND person_odoo_id = ANY(%s)",
         (day, ids),
     )
@@ -255,33 +259,48 @@ def _get_runs_bulk(day: date, person_ids) -> dict[int, dict]:
 
 
 def _upsert_run(person_odoo_id, day, kind, state, *, target_out_at=None,
-                target_in_at=None, wc_name=None, out_punch_id=None,
+                target_in_at=None, wc_name=None, odoo_department_id=None,
+                odoo_department_name=None, out_punch_id=None,
                 in_punch_id=None, cur=None) -> None:
     """Upsert the per-person/day run row. Pass an open `cur` to run inside an
     existing transaction (so the run-state change commits atomically with the
     punch insert); omit it for a standalone write."""
     sql = (
         "INSERT INTO auto_lunch_runs (person_odoo_id, day, kind, state, "
-        "target_out_at, target_in_at, wc_name, out_punch_id, in_punch_id, updated_at) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s, now()) "
+        "target_out_at, target_in_at, wc_name, odoo_department_id, "
+        "odoo_department_name, out_punch_id, in_punch_id, updated_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now()) "
         "ON CONFLICT (person_odoo_id, day) DO UPDATE SET "
         "kind = EXCLUDED.kind, state = EXCLUDED.state, "
         "target_out_at = COALESCE(EXCLUDED.target_out_at, auto_lunch_runs.target_out_at), "
         "target_in_at  = COALESCE(EXCLUDED.target_in_at,  auto_lunch_runs.target_in_at), "
         "wc_name       = COALESCE(EXCLUDED.wc_name,       auto_lunch_runs.wc_name), "
+        "odoo_department_id = COALESCE(EXCLUDED.odoo_department_id, "
+        "                              auto_lunch_runs.odoo_department_id), "
+        "odoo_department_name = COALESCE(EXCLUDED.odoo_department_name, "
+        "                                auto_lunch_runs.odoo_department_name), "
         "out_punch_id  = COALESCE(EXCLUDED.out_punch_id,  auto_lunch_runs.out_punch_id), "
         "in_punch_id   = COALESCE(EXCLUDED.in_punch_id,   auto_lunch_runs.in_punch_id), "
         "updated_at = now()"
     )
     params = (person_odoo_id, day, kind, state, target_out_at, target_in_at,
-              wc_name, out_punch_id, in_punch_id)
+              wc_name, odoo_department_id, odoo_department_name,
+              out_punch_id, in_punch_id)
     if cur is not None:
         cur.execute(sql, params)
     else:
         db.execute(sql, params)
 
 
-def _write_auto_punch(person_odoo_id, action, wc_name, occurred_at, *, cur) -> int:
+def _write_auto_punch(
+    person_odoo_id,
+    action,
+    wc_name,
+    occurred_at,
+    *,
+    odoo_department_id=None,
+    cur,
+) -> int:
     """Insert an auto-lunch punch stamped at the scheduled boundary time, using
     the caller's open cursor `cur` so it commits atomically with the run-state
     update (see _apply). source='auto_lunch'; rounded_at = occurred_at (it IS
@@ -290,9 +309,11 @@ def _write_auto_punch(person_odoo_id, action, wc_name, occurred_at, *, cur) -> i
     auto_lunch_runs row and supplied on the clock_in. Returns the new log id."""
     cur.execute(
         "INSERT INTO timeclock_punches_log "
-        "(person_odoo_id, action, wc_name, occurred_at, rounded_at, source) "
-        "VALUES (%s, %s, %s, %s, %s, 'auto_lunch') RETURNING id",
-        (person_odoo_id, action, wc_name, occurred_at, occurred_at),
+        "(person_odoo_id, action, wc_name, odoo_department_id, "
+        "occurred_at, rounded_at, source) "
+        "VALUES (%s, %s, %s, %s, %s, %s, 'auto_lunch') RETURNING id",
+        (person_odoo_id, action, wc_name, odoo_department_id,
+         occurred_at, occurred_at),
     )
     return cur.fetchone()["id"]
 
@@ -383,13 +404,17 @@ def _apply(
                 if latest_in_wc is _UNSET
                 else latest_in_wc
             )
+        odoo_department_id = state.get("current_odoo_department_id")
+        odoo_department_name = state.get("current_odoo_department_name")
         _log.info("auto-lunch %s: person %s clock_out @ %s (wc=%s)",
                   "OBSERVE" if settings.observe_only else "LIVE",
                   person_odoo_id, t.at, wc_name)
         if settings.observe_only:
             _upsert_run(person_odoo_id, today, kind, "auto_out",
                         target_out_at=window.out_at, target_in_at=window.in_at,
-                        wc_name=wc_name)
+                        wc_name=wc_name,
+                        odoo_department_id=odoo_department_id,
+                        odoo_department_name=odoo_department_name)
             return
         # Punch insert + run->auto_out commit in ONE transaction, so a crash
         # between them can't strand the employee (signed out with no owed auto
@@ -399,10 +424,14 @@ def _apply(
             out_id = _write_auto_punch(person_odoo_id, "clock_out", None, t.at, cur=cur)
             _upsert_run(person_odoo_id, today, kind, "auto_out",
                         target_out_at=window.out_at, target_in_at=window.in_at,
-                        wc_name=wc_name, out_punch_id=out_id, cur=cur)
+                        wc_name=wc_name,
+                        odoo_department_id=odoo_department_id,
+                        odoo_department_name=odoo_department_name,
+                        out_punch_id=out_id, cur=cur)
         timeclock_sync.sync_one_by_id(out_id)
     elif t.action == "clock_in":
         wc_name = run["wc_name"] if run else None
+        odoo_department_id = run.get("odoo_department_id") if run else None
         _log.info("auto-lunch %s: person %s clock_in @ %s (wc=%s)",
                   "OBSERVE" if settings.observe_only else "LIVE",
                   person_odoo_id, t.at, wc_name)
@@ -410,7 +439,14 @@ def _apply(
             _upsert_run(person_odoo_id, today, kind, "done")
             return
         with db.cursor() as cur:
-            in_id = _write_auto_punch(person_odoo_id, "clock_in", wc_name, t.at, cur=cur)
+            in_id = _write_auto_punch(
+                person_odoo_id,
+                "clock_in",
+                wc_name,
+                t.at,
+                odoo_department_id=odoo_department_id,
+                cur=cur,
+            )
             _upsert_run(person_odoo_id, today, kind, "done",
                         in_punch_id=in_id, cur=cur)
         timeclock_sync.sync_one_by_id(in_id)
@@ -534,9 +570,18 @@ def run_tick(now: datetime | None = None) -> None:
             except (TypeError, ValueError):
                 first_clock_ins[pid] = None
     if source.mirror_owned:
+        missing_wc_ids = set()
         for pid in candidates:
             entry = snapshot.get(str(pid)) or snapshot.get(pid) or {}
             latest_in_wcs[pid] = entry.get("wc_name")
+            if not latest_in_wcs[pid]:
+                missing_wc_ids.add(pid)
+        if missing_wc_ids:
+            _unused_first_ins, fallback_wcs = _legacy_attendance_inputs_bulk(
+                missing_wc_ids, today
+            )
+            for pid in missing_wc_ids:
+                latest_in_wcs[pid] = fallback_wcs.get(pid)
     elif candidates:
         legacy_first_clock_ins, latest_in_wcs = _legacy_attendance_inputs_bulk(
             candidates, today

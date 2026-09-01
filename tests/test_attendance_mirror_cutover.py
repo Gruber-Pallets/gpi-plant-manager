@@ -779,8 +779,10 @@ def test_auto_lunch_freezes_one_policy_and_one_day_snapshot_for_all_flex_people(
     }
     open_source = live_cache.AttendanceSourceSnapshot(
         payload={
-            "5": {"att_id": 51, "check_in": first_by_id["5"]["first_check_in"]},
-            "6": {"att_id": 61, "check_in": first_by_id["6"]["first_check_in"]},
+            "5": {"att_id": 51, "check_in": first_by_id["5"]["first_check_in"],
+                  "wc_name": "Bay 3"},
+            "6": {"att_id": 61, "check_in": first_by_id["6"]["first_check_in"],
+                  "wc_name": "Repair 1"},
         },
         refreshed_at=FRESH_AT,
         mirror_owned=True,
@@ -951,6 +953,75 @@ def test_auto_lunch_batches_legacy_attendance_inputs_once_per_tick(monkeypatch, 
     ]
 
 
+def test_auto_lunch_mirror_blank_wc_batches_local_fallback(monkeypatch):
+    policy = live_cache.AttendanceReadPolicy(
+        mirror_owned=True,
+        available=True,
+        refreshed_at=FRESH_AT,
+        mode="live",
+    )
+    open_source = live_cache.AttendanceSourceSnapshot(
+        payload={
+            "26": {
+                "att_id": 5257,
+                "check_in": FIRST_IN.isoformat(),
+                "wc_name": None,
+                "odoo_department_id": 4,
+                "odoo_department_name": "Supervisor",
+            }
+        },
+        refreshed_at=FRESH_AT,
+        mirror_owned=True,
+        available=True,
+        stale=False,
+    )
+    fallback_calls = []
+    advanced = []
+    monkeypatch.setattr(
+        auto_lunch_settings,
+        "current",
+        lambda: SimpleNamespace(
+            enabled=True,
+            observe_only=False,
+            flex_after_hours=5.0,
+            flex_minutes=30,
+        ),
+    )
+    monkeypatch.setattr(live_cache, "attendance_read_policy", lambda **_kwargs: policy)
+    monkeypatch.setattr(
+        live_cache, "read_open_attendance_source", lambda **_kwargs: open_source
+    )
+    monkeypatch.setattr(auto_lunch.shift_config, "is_workday", lambda _day: False)
+    monkeypatch.setattr(auto_lunch, "_flex_person_ids", lambda: set())
+    monkeypatch.setattr(auto_lunch, "_get_runs_bulk", lambda *_args: {})
+    monkeypatch.setattr(auto_lunch.attendance_state, "latest_punches_bulk", lambda _ids: {})
+    monkeypatch.setattr(auto_lunch, "_fixed_windows_for_candidates", lambda *_args: {})
+    monkeypatch.setattr(
+        auto_lunch,
+        "_legacy_attendance_inputs_bulk",
+        lambda ids, day: fallback_calls.append((set(ids), day)) or ({}, {26: "Tablets"}),
+    )
+    monkeypatch.setattr(
+        auto_lunch.db,
+        "query",
+        lambda sql, _params=None: []
+        if "state NOT IN" in sql or "wage_type" in sql
+        else pytest.fail(f"unexpected query: {sql}"),
+    )
+    monkeypatch.setattr(
+        auto_lunch,
+        "_advance_person",
+        lambda person_id, *_args, **kwargs: advanced.append(
+            (person_id, kwargs["latest_in_wc"])
+        ),
+    )
+
+    auto_lunch.run_tick(datetime(2026, 8, 31, 7, 0, tzinfo=UTC))
+
+    assert fallback_calls == [({26}, DAY)]
+    assert advanced == [(26, "Tablets")]
+
+
 @pytest.mark.parametrize(
     ("day", "expected_hours"),
     ((date(2026, 3, 8), 23), (date(2026, 11, 1), 25)),
@@ -1000,13 +1071,48 @@ def test_auto_lunch_clock_out_uses_prefetched_wc_without_per_action_read(monkeyp
         "flex",
         None,
         auto_lunch.Transition("auto_out", "clock_out", FIRST_IN),
-        {"current_wc": None},
+        {
+            "current_wc": None,
+            "current_odoo_department_id": 4,
+            "current_odoo_department_name": "Supervisor",
+        },
         window,
         SimpleNamespace(observe_only=True),
         latest_in_wc="Bay 3",
     )
 
     assert captured[0][1]["wc_name"] == "Bay 3"
+    assert captured[0][1]["odoo_department_id"] == 4
+    assert captured[0][1]["odoo_department_name"] == "Supervisor"
+
+
+def test_auto_lunch_punch_insert_carries_explicit_department():
+    class Cursor:
+        def __init__(self):
+            self.sql = None
+            self.params = None
+
+        def execute(self, sql, params):
+            self.sql = sql
+            self.params = params
+
+        def fetchone(self):
+            return {"id": 7190}
+
+    cursor = Cursor()
+
+    punch_id = auto_lunch._write_auto_punch(
+        26,
+        "clock_in",
+        "Tablets",
+        FIRST_IN,
+        odoo_department_id=4,
+        cur=cursor,
+    )
+
+    assert punch_id == 7190
+    assert "odoo_department_id" in cursor.sql
+    assert cursor.params == (26, "clock_in", "Tablets", 4, FIRST_IN, FIRST_IN)
 
 
 def test_legacy_attendance_warmers_noop_only_after_mirror_owns(monkeypatch):

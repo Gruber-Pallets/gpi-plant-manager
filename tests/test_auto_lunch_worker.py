@@ -52,7 +52,9 @@ def test_scheduled_auto_out_then_auto_in(monkeypatch):
     # Cache says clocked in, fresh.
     monkeypatch.setattr(live_cache, "read_open_attendance",
                         lambda: ({str(PID): {"att_id": 1, "check_in": None,
-                                             "wc_name": "Bay 3"}}, now_ref))
+                                             "wc_name": "Bay 3",
+                                             "odoo_department_id": 4,
+                                             "odoo_department_name": "Supervisor"}}, now_ref))
     monkeypatch.setattr(live_cache, "is_stale", lambda _r: False)
 
     # Tick at lunch start -> auto clock_out written, run = auto_out.
@@ -61,15 +63,19 @@ def test_scheduled_auto_out_then_auto_in(monkeypatch):
                     "COALESCE(rounded_at, occurred_at) AS at "
                     "FROM timeclock_punches_log WHERE person_odoo_id=%s", (PID,))
     assert [(r["action"], r["source"]) for r in outs] == [("clock_out", "auto_lunch")]
-    run = db.query("SELECT state, wc_name FROM auto_lunch_runs WHERE person_odoo_id=%s",
+    run = db.query("SELECT state, wc_name, odoo_department_id, "
+                   "odoo_department_name FROM auto_lunch_runs WHERE person_odoo_id=%s",
                    (PID,))[0]
-    assert run["state"] == "auto_out" and run["wc_name"] == "Bay 3"
+    assert run["state"] == "auto_out"
+    assert run["wc_name"] == "Bay 3"
+    assert run["odoo_department_id"] == 4
+    assert run["odoo_department_name"] == "Supervisor"
 
     # Now they're clocked OUT (cache empty) and it's lunch end -> auto clock_in.
     monkeypatch.setattr(live_cache, "read_open_attendance", lambda: ({}, now_ref))
     al.run_tick(now=lunch_in)
     rows = db.query(
-        "SELECT action, wc_name FROM timeclock_punches_log "
+        "SELECT action, wc_name, odoo_department_id FROM timeclock_punches_log "
         "WHERE person_odoo_id = %s "
         "ORDER BY COALESCE(rounded_at, occurred_at), id",
         (PID,),
@@ -77,6 +83,10 @@ def test_scheduled_auto_out_then_auto_in(monkeypatch):
     assert [(row["action"], row["wc_name"]) for row in rows] == [
         ("clock_out", None),
         ("clock_in", "Bay 3"),
+    ]
+    assert [(row["action"], row["odoo_department_id"]) for row in rows] == [
+        ("clock_out", None),
+        ("clock_in", 4),
     ]
     assert db.query("SELECT state FROM auto_lunch_runs WHERE person_odoo_id=%s",
                     (PID,))[0]["state"] == "done"
