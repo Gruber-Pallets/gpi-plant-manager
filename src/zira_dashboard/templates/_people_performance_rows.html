@@ -89,7 +89,11 @@
                       </svg>
                     {% endif %}
                   {% else %}
+                  {% if item.state == 'unavailable' %}
+                  <span class="pp-result-text">Location unavailable</span>
+                  {% else %}
                   <span class="pp-neutral-label">No metered goal</span>
+                  {% endif %}
                   {% endif %}
                 </span>
               </button>

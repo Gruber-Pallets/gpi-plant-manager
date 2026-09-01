@@ -53,6 +53,7 @@ def test_all_metric_states_are_named_and_keyboard_reachable(rendered_html):
         assert text.lower() in rendered_html.lower()
     assert 'type="button" class="pp-interval-trigger' in rendered_html
     assert 'aria-label="Transferred to' in rendered_html
+    assert "Location unavailable" in rendered_html
 
 
 def test_interval_buttons_carry_complete_text_and_decorative_charts_are_hidden(

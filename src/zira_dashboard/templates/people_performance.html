@@ -1,5 +1,6 @@
 {% extends "_staffing_base.html" %}
 {% block title %}People performance{% endblock %}
+{% block body_attrs %} data-live-polling-disabled="{{ 1 if poll_disabled else 0 }}"{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="/static/people-performance.css?v={{ static_v("people-performance.css") }}">
 {% endblock %}
@@ -8,6 +9,7 @@
          data-day="{{ day }}"
          data-today="{{ 1 if is_today else 0 }}"
          data-is-today="{{ 1 if is_today else 0 }}"
+         data-poll-disabled="{{ 1 if poll_disabled else 0 }}"
          data-rows-url="{{ rows_url }}">
   <header class="pp-toolbar">
     <div>

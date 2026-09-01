@@ -64,7 +64,8 @@ def _production_detail(item: TimelineInterval) -> str:
         f"{metric.result.title()} goal. "
         f"{metric.actual_units:.1f} credited units against a "
         f"{metric.goal_units:.1f} goal. Uptime {uptime}. "
-        f"Downtime {metric.downtime_minutes:.0f} minutes."
+        f"Downtime {metric.downtime_minutes:.0f} minutes. "
+        f"Productive time {metric.productive_minutes:.0f} minutes."
     )
 
 
@@ -93,7 +94,12 @@ def _interval_detail(item: TimelineInterval) -> str:
         header = f"{item.location_name}, {_time(item.start_utc)}. Working now."
     else:
         header = f"{item.location_name}, {_time(item.start_utc)} to {_time(item.end_utc)}."
-    if item.role == "production":
+    if item.role == "other" and not item.metric_available:
+        metric_detail = (
+            "Location unavailable because the attendance source reports "
+            f"{item.location_status}. Goal and uptime unavailable."
+        )
+    elif item.role == "production":
         metric_detail = _production_detail(item)
     elif item.role == "forklift":
         metric_detail = _forklift_detail(item)

@@ -140,6 +140,7 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             ? options.header : 'rows';
           return {
             ok: options.ok !== false,
+            status: options.status || (options.ok === false ? 500 : 200),
             redirected: Boolean(options.redirected),
             url: options.url || '/people-performance/rows',
             headers: {
@@ -503,9 +504,34 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           }
           historyController.destroy();
 
-          // Redirect, missing/wrong header, wrong root, and a plant-day rollover all
+          // Ordinary application errors preserve the last good rows and show
+          // a paused status even when an error response has no partial marker.
+          for (const statusCode of [404, 500]) {
+            const env = makeEnvironment('1');
+            const controller = makeController(env.document, env.windowObject);
+            controller.init();
+            const originalRows = env.document.rows;
+            const promise = controller.refreshRows();
+            env.requests[0].pending.resolve(response({
+              ok: false, status: statusCode, header: null
+            }));
+            if (await promise !== false) throw new Error('error refresh reported success');
+            if (
+              env.document.rows !== originalRows
+              || env.replacements.length
+              || env.navigations.length
+            ) {
+              throw new Error(statusCode + ' response replaced rows or navigated');
+            }
+            if (env.status.textContent !== 'Update paused — showing the last good view') {
+              throw new Error(statusCode + ' response did not show paused status');
+            }
+            controller.destroy();
+          }
+
+          // Redirect, auth, missing/wrong header, wrong root, and a plant-day rollover all
           // choose safe full navigation instead of swapping unknown HTML.
-          for (const scenario of ['redirect', 'missing-header', 'header', 'root', 'rollover']) {
+          for (const scenario of ['redirect', 'auth', 'missing-header', 'header', 'root', 'rollover']) {
             const env = makeEnvironment('1');
             const controller = makeController(env.document, env.windowObject);
             controller.init();
@@ -513,6 +539,10 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             const promise = controller.refreshRows();
             if (scenario === 'redirect') {
               env.requests[0].pending.resolve(response({redirected: true, url: '/auth/login'}));
+            } else if (scenario === 'auth') {
+              env.requests[0].pending.resolve(response({
+                ok: false, status: 401, header: null, url: '/auth/login'
+              }));
             } else if (scenario === 'missing-header') {
               env.parsed.missingHeader = env.makeRows('2026-08-28', '1', []);
               env.requests[0].pending.resolve(response({
@@ -565,3 +595,17 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_people_performance_preview_mode_explicitly_disables_live_polling():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    template = (ROOT / "src/zira_dashboard/templates/people_performance.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'data-poll-disabled="{{ 1 if poll_disabled else 0 }}"' in template
+    assert 'page.dataset.pollDisabled === "1"' in script
+    assert 'data-live-polling-disabled="{{ 1 if poll_disabled else 0 }}"' in template
+
+    footer = (ROOT / "src/zira_dashboard/static/footer.js").read_text(encoding="utf-8")
+    assert footer.count('document.body.dataset.livePollingDisabled === "1"') >= 2

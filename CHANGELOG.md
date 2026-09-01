@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### See each person's workday in one place
+
+- **Managers can now open People under Performance to see who worked, where they moved, whether each production goal was met, machine stops, and forklift calls.** People without a measured goal stay in a separate group below the measured workers.
+
 ### Keep the People page easy to scan
 
 - **The People page now fits manager computers and tablets, explains each part when selected, and refreshes without losing your place.** Breaks, moves, late calls, and good or low results all have words as well as colors.

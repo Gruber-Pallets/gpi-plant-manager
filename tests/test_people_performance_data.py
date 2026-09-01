@@ -335,6 +335,77 @@ def test_calls_after_shift_are_reconciled_but_not_displayed_or_scored(monkeypatc
     )
 
 
+def test_bounded_raw_events_compute_the_existing_score_above_the_call_gate(
+    monkeypatch,
+):
+    in_shift = tuple(
+        event(
+            "Trent",
+            index * 15,
+            on_time=True,
+            event_id=f"in-shift-{index}",
+        )
+        for index in range(8)
+    )
+    after_cap = event("Trent", 330, late=True, event_id="after-cap")
+    stored_row = _driver_row("driver-Trent", "Trent", 9, on_time=8, late=1)
+    stored_row.update(avg_ms=1, utilization_pct=100)
+    install_sources(
+        monkeypatch,
+        spans=(TRENT_SPAN,),
+        events=(*in_shift, after_cap),
+        driver_rows=(stored_row,),
+        coverage=_coverage(9),
+        calls_row={"day": DAY, "total_calls": 9},
+        resolved={"driver-Trent": 60},
+    )
+
+    model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
+
+    expected = forklift_score.daily_score(
+        {
+            "calls": 8,
+            "on_time": 8,
+            "late": 0,
+            "avg_ms": 60000,
+            "utilization_pct": 100 * (8 * 120000) / ((NOW - START).total_seconds() * 1000),
+        },
+        forklift_score.DEFAULT_SCORE_CONFIG,
+    )
+    assert expected is not None
+    assert model.rows[0].summary == (
+        ("Calls", "8"),
+        ("On time", "100%"),
+        ("Handling", "16 min"),
+        ("Score", f"{expected.score:.0f}"),
+    )
+
+
+def test_bounded_raw_event_score_stays_unavailable_below_the_call_gate(monkeypatch):
+    in_shift = tuple(
+        event(
+            "Trent",
+            index * 15,
+            on_time=True,
+            event_id=f"below-gate-{index}",
+        )
+        for index in range(7)
+    )
+    install_sources(
+        monkeypatch,
+        spans=(TRENT_SPAN,),
+        events=in_shift,
+        driver_rows=(_driver_row("driver-Trent", "Trent", 7, on_time=7),),
+        coverage=_coverage(7),
+        calls_row={"day": DAY, "total_calls": 7},
+        resolved={"driver-Trent": 60},
+    )
+
+    model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
+
+    assert model.rows[0].summary[-1] == ("Score", "N/A")
+
+
 def test_today_accepts_coverage_within_the_ten_minute_warmer_cadence(monkeypatch):
     install_sources(
         monkeypatch,

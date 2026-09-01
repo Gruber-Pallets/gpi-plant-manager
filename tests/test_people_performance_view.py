@@ -1,6 +1,9 @@
 from dataclasses import replace
 
-from tests.people_performance_fixtures import busy_dashboard_model
+import pytest
+
+from tests.people_performance_fixtures import DAY, END, START, busy_dashboard_model, span
+from zira_dashboard.people_performance import assemble_dashboard
 from zira_dashboard.people_performance_view import dashboard_context
 
 
@@ -53,6 +56,67 @@ def test_production_accessible_name_includes_status_uptime_and_downtime():
     assert "Behind goal" in interval["aria_label"]
     assert "Uptime 97%" in interval["aria_label"]
     assert "Downtime 15 minutes" in interval["aria_label"]
+    assert "Productive time 480 minutes" in interval["aria_label"]
+
+
+@pytest.mark.parametrize(
+    ("source_status", "status_label"),
+    (
+        ("missing_required_location", "location missing"),
+        ("conflicting_location", "location conflicting"),
+        ("unmapped_location", "location unmapped"),
+    ),
+)
+def test_uncertain_location_is_explicitly_unavailable_instead_of_neutral(
+    source_status, status_label
+):
+    model = assemble_dashboard(
+        day=DAY,
+        as_of_utc=END,
+        window_start_utc=START,
+        window_end_utc=END,
+        spans=(span(99, "Uncertain Worker", 0, 480, None, source_status),),
+        production_scores=(),
+        downtime_by_wc={},
+        breakdown_exclusions_by_person_wc={},
+        forklift_events_by_employee_id={},
+        forklift_day_metrics_by_employee_id={},
+        breaks=(),
+        metered_wc_names={"Repair 1"},
+        source_warnings=(),
+        is_today=True,
+    )
+
+    interval = _row_named(dashboard_context(model), "Uncertain Worker")["intervals"][0]
+
+    assert interval["state"] == "unavailable"
+    assert "Location unavailable" in interval["detail"]
+    assert status_label in interval["detail"]
+    assert "No metered goal applies" not in interval["detail"]
+
+
+def test_exempt_location_remains_a_neutral_non_metered_interval():
+    model = assemble_dashboard(
+        day=DAY,
+        as_of_utc=END,
+        window_start_utc=START,
+        window_end_utc=END,
+        spans=(span(100, "Exempt Worker", 0, 480, None, "exempt_no_location"),),
+        production_scores=(),
+        downtime_by_wc={},
+        breakdown_exclusions_by_person_wc={},
+        forklift_events_by_employee_id={},
+        forklift_day_metrics_by_employee_id={},
+        breaks=(),
+        metered_wc_names={"Repair 1"},
+        source_warnings=(),
+        is_today=True,
+    )
+
+    interval = _row_named(dashboard_context(model), "Exempt Worker")["intervals"][0]
+
+    assert interval["state"] == "neutral"
+    assert "No metered goal applies" in interval["detail"]
 
 
 def test_forklift_accessible_name_includes_calls_ontime_and_late_count():

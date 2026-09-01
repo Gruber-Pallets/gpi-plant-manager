@@ -12,6 +12,7 @@ import math
 from . import (
     attendance_timeline,
     forklift_event_store,
+    forklift_score,
     forklift_settings,
     forklift_store,
     production_history,
@@ -340,12 +341,28 @@ def _forklift_values(
         on_time = sum(event.on_time is True and event.late is not True for event in shift_events)
         late = sum(event.late is True for event in shift_events)
         handling_minutes = sum(max(0, event.handling_ms or 0) for event in shift_events) / 60000.0
+        responses = tuple(
+            max(0, event.response_ms) for event in shift_events if event.response_ms is not None
+        )
+        elapsed_ms = max(0.0, (cap - start).total_seconds() * 1000.0)
+        score_breakdown = forklift_score.daily_score(
+            {
+                "calls": len(shift_events),
+                "on_time": on_time,
+                "late": late,
+                "avg_ms": round(sum(responses) / len(responses)) if responses else 0,
+                "utilization_pct": (
+                    100.0 * handling_minutes * 60000.0 / elapsed_ms if elapsed_ms else 0.0
+                ),
+            },
+            config,
+        )
         metrics_by_employee[employee_id] = ForkliftDayMetric(
             calls=len(shift_events),
             on_time=on_time,
             late=late,
             handling_minutes=handling_minutes,
-            score=None,
+            score=(score_breakdown.score if complete and score_breakdown else None),
             ontime_floor_pct=float(config.ontime_floor),
             timeline_available=complete,
         )

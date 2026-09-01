@@ -185,7 +185,9 @@
   }
 
   function livePage() {
-    return document.querySelector('.pp-page[data-today="1"]');
+    var page = document.querySelector('.pp-page[data-today="1"]');
+    if (page && page.dataset.pollDisabled === "1") return null;
+    return page;
   }
 
   function setBusy(rows, busy) {
@@ -247,9 +249,10 @@
     })).then(function (response) {
       if (epoch !== requestEpoch || destroyed) return null;
       if (response.redirected) safeFullNavigation(response);
+      if (response.status === 401 || response.status === 403) safeFullNavigation(response);
+      if (!response.ok) throw new Error("People Performance refresh failed");
       var marker = responseHeader(response);
       if (marker !== "rows") safeFullNavigation(response);
-      if (!response.ok) throw new Error("People Performance refresh failed");
       return response.text();
     }).then(function (html) {
       if (html === null || epoch !== requestEpoch || destroyed) return false;

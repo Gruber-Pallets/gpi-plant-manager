@@ -51,6 +51,7 @@ def _context(
         "active": "people",
         "today": today.isoformat(),
         "rows_url": "/people-performance/rows",
+        "poll_disabled": False,
     }
 
 

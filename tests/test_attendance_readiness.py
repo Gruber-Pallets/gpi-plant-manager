@@ -596,6 +596,7 @@ def test_cutover_must_be_future_and_exact_local_boundary_including_dst(monkeypat
 def test_ready_cutover_scheduling_uses_fresh_same_request_report(monkeypatch):
     cutover = datetime(2026, 9, 2, 6, 0, tzinfo=attendance_readiness.shift_config.SITE_TZ)
     monkeypatch.setattr(attendance_readiness, "validate_cutover", lambda value, now_utc: value)
+    monkeypatch.setattr(attendance_readiness, "_utc_now", lambda: NOW)
     report = attendance_readiness.ReadinessReport(
         **{
             key: value
