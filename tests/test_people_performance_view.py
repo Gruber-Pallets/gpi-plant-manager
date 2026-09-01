@@ -7,7 +7,7 @@ import pytest
 
 from tests.people_performance_fixtures import DAY, END, START, busy_dashboard_model, span
 from zira_dashboard import people_performance_view
-from zira_dashboard.people_performance import ProductionHoverPoint, assemble_dashboard
+from zira_dashboard.people_performance import BreakSpan, ProductionHoverPoint, assemble_dashboard
 from zira_dashboard.people_performance_view import dashboard_context
 
 
@@ -20,28 +20,83 @@ def _row_named(context: dict, name: str) -> dict:
     )
 
 
-def test_presenter_uses_one_axis_and_preserves_short_intervals():
+def test_dashboard_model_carries_assembled_breaks():
+    model = busy_dashboard_model()
+
+    assert [(item.start_utc, item.end_utc, item.label) for item in model.breaks] == [
+        (
+            START + timedelta(minutes=270),
+            START + timedelta(minutes=300),
+            "Planned break",
+        )
+    ]
+
+
+def test_presenter_uses_only_shift_and_break_start_markers():
+    model = replace(
+        busy_dashboard_model(),
+        breaks=(
+            BreakSpan(
+                START + timedelta(hours=2),
+                START + timedelta(hours=2, minutes=15),
+                "Morning break",
+            ),
+            BreakSpan(
+                START + timedelta(hours=4),
+                START + timedelta(hours=4, minutes=30),
+                "Lunch",
+            ),
+            BreakSpan(END - timedelta(minutes=15), END, "Cleanup"),
+        ),
+    )
+
+    context = dashboard_context(model)
+
+    assert [(item["kind"], item["left_pct"]) for item in context["schedule_markers"]] == [
+        ("start", 0.0),
+        ("break", 25.0),
+        ("break", 50.0),
+        ("break", 96.875),
+        ("end", 100.0),
+    ]
+    assert [item["label"] for item in context["schedule_time_groups"]] == [
+        "6:00 AM",
+        "8:00",
+        "10:00",
+        "1:45 · 2:00 PM",
+    ]
+    assert "Cleanup starts at 1:45 PM" in context["schedule_markers"][-2]["aria_label"]
+
+
+def test_schedule_markers_deduplicate_equal_break_and_shift_end_times():
+    model = replace(
+        busy_dashboard_model(),
+        breaks=(BreakSpan(END, END, "End marker"),),
+    )
+
+    context = dashboard_context(model)
+
+    assert [item["left_pct"] for item in context["schedule_markers"]].count(100.0) == 1
+    assert context["schedule_time_groups"][-1]["edge"] == "end"
+
+
+def test_schedule_without_breaks_has_only_shift_boundaries():
+    context = dashboard_context(replace(busy_dashboard_model(), breaks=()))
+
+    assert [item["kind"] for item in context["schedule_markers"]] == ["start", "end"]
+    assert [item["label"] for item in context["schedule_time_groups"]] == [
+        "6:00 AM",
+        "2:00 PM",
+    ]
+
+
+def test_presenter_preserves_short_intervals():
     context = dashboard_context(busy_dashboard_model())
     row = _row_named(context, "Mia Mixed")
 
-    assert context["axis_labels"][0]["left_pct"] == 0.0
-    assert context["axis_labels"][-1]["left_pct"] == 100.0
     short = next(item for item in row["intervals"] if item["location_name"] == "Repair 2")
     assert short["width_pct"] > 0
     assert short["aria_label"].startswith("Transferred to Repair 2")
-
-
-def test_axis_omits_partial_final_tick_and_bars_end_at_effective_window():
-    effective_end = END - timedelta(minutes=15)
-    model = replace(busy_dashboard_model(), window_end_utc=effective_end)
-
-    context = dashboard_context(model)
-    row = _row_named(context, "Amy Behind")
-
-    assert context["axis_labels"][-1]["label"] == "1:00 PM"
-    assert context["axis_labels"][-1]["left_pct"] < 100.0
-    assert row["intervals"][0]["left_pct"] == 0.0
-    assert row["intervals"][0]["width_pct"] == 100.0
 
 
 def test_attention_filter_keeps_every_reason_state_inside_fixed_sections():

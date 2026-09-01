@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 import math
 
 from . import shift_config
@@ -34,6 +34,64 @@ def _pct(value: datetime, start: datetime, end: datetime) -> float:
 
 def _time(value: datetime) -> str:
     return value.astimezone(shift_config.SITE_TZ).strftime("%-I:%M %p")
+
+
+_MIN_TIME_LABEL_GAP_PCT = 8.0
+
+
+def _break_time(value: datetime) -> str:
+    return value.astimezone(shift_config.SITE_TZ).strftime("%-I:%M")
+
+
+def _schedule_markers(model: DashboardModel) -> tuple[dict, ...]:
+    candidates = [
+        (model.window_start_utc, "start", "Shift starts"),
+        *((item.start_utc, "break", f"{item.label} starts") for item in model.breaks),
+        (model.window_end_utc, "end", "Shift ends"),
+    ]
+    markers = []
+    seen = set()
+    for value, kind, description in sorted(
+        candidates,
+        key=lambda item: (item[0], item[1] == "break"),
+    ):
+        clamped = min(max(value, model.window_start_utc), model.window_end_utc)
+        if clamped in seen:
+            continue
+        seen.add(clamped)
+        full_time = _time(clamped)
+        markers.append(
+            {
+                "left_pct": _pct(clamped, model.window_start_utc, model.window_end_utc),
+                "kind": kind,
+                "visible_label": full_time if kind != "break" else _break_time(clamped),
+                "aria_label": f"{description} at {full_time}",
+            }
+        )
+    return tuple(markers)
+
+
+def _schedule_time_groups(markers: tuple[dict, ...]) -> tuple[dict, ...]:
+    groups: list[list[dict]] = []
+    for marker in markers:
+        if groups and marker["left_pct"] - groups[-1][-1]["left_pct"] < _MIN_TIME_LABEL_GAP_PCT:
+            groups[-1].append(marker)
+        else:
+            groups.append([marker])
+    return tuple(
+        {
+            "left_pct": sum(item["left_pct"] for item in group) / len(group),
+            "label": " · ".join(item["visible_label"] for item in group),
+            "edge": (
+                "start"
+                if group[0]["left_pct"] == 0.0
+                else "end"
+                if group[-1]["left_pct"] == 100.0
+                else "middle"
+            ),
+        }
+        for group in groups
+    )
 
 
 def _epoch_ms(value: datetime) -> int:
@@ -295,18 +353,7 @@ def dashboard_context(model: DashboardModel, *, attention_only: bool = False) ->
         for key in _SECTION_KEYS
     )
 
-    total_minutes = int((model.window_end_utc - model.window_start_utc).total_seconds() / 60)
-    axis_step = 60 if total_minutes > 360 else 30
-    axis_labels = []
-    value = model.window_start_utc
-    while value <= model.window_end_utc:
-        axis_labels.append(
-            {
-                "label": _time(value),
-                "left_pct": _pct(value, model.window_start_utc, model.window_end_utc),
-            }
-        )
-        value += timedelta(minutes=axis_step)
+    schedule_markers = _schedule_markers(model)
 
     return {
         "day": model.day.isoformat(),
@@ -314,7 +361,8 @@ def dashboard_context(model: DashboardModel, *, attention_only: bool = False) ->
         "as_of": _time(model.as_of_utc),
         "as_of_iso": model.as_of_utc.isoformat(),
         "sections": sections,
-        "axis_labels": tuple(axis_labels),
+        "schedule_markers": schedule_markers,
+        "schedule_time_groups": _schedule_time_groups(schedule_markers),
         "source_warnings": model.source_warnings,
         "working_now": sum(row.is_active for row in model.rows),
         "worked_earlier": sum(not row.is_active for row in model.rows),

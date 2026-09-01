@@ -115,6 +115,7 @@ class DashboardModel:
     window_start_utc: datetime
     window_end_utc: datetime
     rows: tuple[PersonRow, ...]
+    breaks: tuple[BreakSpan, ...] = ()
     source_warnings: tuple[str, ...] = ()
 
 
@@ -505,10 +506,14 @@ _SECTION_RANK: dict[SectionKey, int] = {
 
 def _production_subgroup_rank(
     role: RoleKey,
+    location_name: str,
+    known_no_goal_wc_names: set[str],
     score: SegmentScore | None,
 ) -> int:
     if role != "production":
         return 0
+    if location_name in known_no_goal_wc_names:
+        return 1
     if score is None:
         return 0
     if not _is_finite_number(score.goal_units):
@@ -908,6 +913,7 @@ def _assemble_person_row(
     forklift_day_metric: ForkliftDayMetric | None,
     breaks: Sequence[BreakSpan],
     metered_wc_names: set[str],
+    known_no_goal_wc_names: set[str],
     as_of_utc: datetime,
     window_end_utc: datetime,
     is_today: bool,
@@ -1070,7 +1076,12 @@ def _assemble_person_row(
     )
     sort_key = (
         _SECTION_RANK[final_role],
-        _production_subgroup_rank(final_role, final_score),
+        _production_subgroup_rank(
+            final_role,
+            final_interval.location_name,
+            known_no_goal_wc_names,
+            final_score,
+        ),
         attention_rank,
         -deficit,
         rolling_tiebreak,
@@ -1111,11 +1122,13 @@ def assemble_dashboard(
     metered_wc_names: set[str],
     source_warnings: Sequence[str],
     is_today: bool,
+    known_no_goal_wc_names: set[str] | None = None,
     production_available: bool = True,
     forklift_available: bool = True,
 ) -> DashboardModel:
     """Assemble one safely attributed dashboard row per Odoo employee ID."""
     cap = min(as_of_utc, window_end_utc)
+    known_no_goal_names = known_no_goal_wc_names or set()
     by_employee: dict[int, list[LocationSpan]] = {}
     for span in spans:
         left = max(window_start_utc, span.start_utc)
@@ -1172,6 +1185,7 @@ def assemble_dashboard(
                 forklift_day_metric=driver_day,
                 breaks=breaks,
                 metered_wc_names=metered_wc_names,
+                known_no_goal_wc_names=known_no_goal_names,
                 as_of_utc=as_of_utc,
                 window_end_utc=window_end_utc,
                 is_today=is_today,
@@ -1191,6 +1205,7 @@ def assemble_dashboard(
                 forklift_day_metric=None,
                 breaks=breaks,
                 metered_wc_names=metered_wc_names,
+                known_no_goal_wc_names=known_no_goal_names,
                 as_of_utc=as_of_utc,
                 window_end_utc=window_end_utc,
                 is_today=is_today,
@@ -1208,5 +1223,6 @@ def assemble_dashboard(
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
         rows=tuple(sorted(rows, key=lambda row: row.sort_key)),
+        breaks=tuple(breaks),
         source_warnings=tuple(dict.fromkeys(source_warnings)),
     )
