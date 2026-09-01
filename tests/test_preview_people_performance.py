@@ -11,7 +11,7 @@ from playwright.sync_api import Page, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "scripts/_preview_out/people_performance"
-VIEWPORTS = ((1440, 900), (1024, 768), (768, 1024))
+VIEWPORTS = ((1440, 900), (1024, 768), (768, 1024), (390, 844))
 
 
 def _render_preview() -> subprocess.CompletedProcess[str]:
@@ -57,6 +57,12 @@ def test_preview_contains_busy_people_fixture():
     assert result.stdout.strip() == str(OUT)
     html = (OUT / "index.html").read_text(encoding="utf-8")
     assert html.count('class="pp-row') >= 10
+    assert 'class="pp-manager-strip"' in html
+    assert 'class="pp-axis"' not in html
+    assert html.count('class="pp-section-header"') == 3
+    assert "6:00 AM" in html
+    assert "11:30" in html
+    assert "2:00 PM" in html
     assert ">Production<" in html
     assert ">126/168<" in html
     assert ">Centers<" not in html
@@ -112,7 +118,7 @@ def test_preview_metric_marks_do_not_cross_the_planned_break():
                         assert marker_position <= 68.75 or marker_position >= 75.0
 
 
-def test_preview_fits_all_manager_viewports_and_keeps_sticky_time_context():
+def test_preview_fits_all_manager_viewports_with_compact_sticky_controls():
     _render_preview()
     fixture_url = (OUT / "index.html").as_uri()
 
@@ -123,9 +129,9 @@ def test_preview_fits_all_manager_viewports_and_keeps_sticky_time_context():
                 page = browser.new_page(viewport={"width": width, "height": height})
                 errors = _install_console_capture(page)
                 page.goto(fixture_url, wait_until="load")
-                before = page.locator(".pp-axis").bounding_box()
+                before = page.locator(".pp-manager-strip").bounding_box()
                 page.evaluate("window.scrollTo(0, 900)")
-                after = page.locator(".pp-axis").bounding_box()
+                after = page.locator(".pp-manager-strip").bounding_box()
                 geometry = page.evaluate(
                     """
                     () => ({
@@ -133,9 +139,11 @@ def test_preview_fits_all_manager_viewports_and_keeps_sticky_time_context():
                       bodyWidth: document.body.scrollWidth,
                       rowRights: [...document.querySelectorAll('.pp-row')]
                         .map(row => row.getBoundingClientRect().right),
-                      axisLabelsDoNotOverlap: [...document.querySelectorAll('.pp-axis-track span')]
-                        .map(label => label.getBoundingClientRect())
-                        .every((box, index, boxes) => index === 0 || box.left >= boxes[index - 1].right),
+                      scheduleLabelsDoNotOverlap: [...document.querySelectorAll('.pp-section-header')]
+                        .every(header => [...header.querySelectorAll('.pp-schedule-time-group')]
+                          .map(label => label.getBoundingClientRect())
+                          .every((box, index, boxes) => index === 0 || box.left >= boxes[index - 1].right)),
+                      managerRows: getComputedStyle(document.querySelector('.pp-manager-strip')).gridTemplateRows,
                       identityNamesFit: [...document.querySelectorAll('.pp-identity h3')]
                         .every(name => name.scrollWidth <= name.clientWidth),
                       localOverflowContained: [...document.querySelectorAll('.pp-timeline-viewport')]
@@ -150,13 +158,21 @@ def test_preview_fits_all_manager_viewports_and_keeps_sticky_time_context():
                 )
                 assert before and after
                 assert 0 <= after["y"] < height
+                assert after["x"] >= 0
+                assert after["x"] + after["width"] <= width
                 assert geometry["documentWidth"] <= width
                 assert geometry["bodyWidth"] <= width
                 assert max(geometry["rowRights"]) <= width
-                assert geometry["axisLabelsDoNotOverlap"] is True
+                assert geometry["scheduleLabelsDoNotOverlap"] is True
                 assert geometry["identityNamesFit"] is True
                 assert page.locator(".pp-timeline").first.bounding_box()["width"] >= 480
                 assert geometry["localOverflowContained"] is True
+                if width == 768:
+                    assert after["height"] <= 88
+                elif width > 768:
+                    assert after["height"] <= 44
+                else:
+                    assert len(geometry["managerRows"].split()) <= 2
                 assert 30000 not in geometry["intervals"]
                 assert errors == []
                 page.evaluate("window.scrollTo(0, 0)")

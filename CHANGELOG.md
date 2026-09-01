@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Make the People page easier to scan
+
+- **The People page now keeps its totals, warnings, date, and filter in one thin bar.** Each green group shows only the workday start, break starts, and end, so managers can find the important times faster.
+
 ### Let Hand Build 1 keep a cleared goal
 
 - **You can now remove the Hand Build 1 goal in Settings and it stays removed after the app restarts.** Its production meter still works.

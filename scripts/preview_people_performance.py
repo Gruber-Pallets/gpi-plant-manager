@@ -491,23 +491,19 @@ def _context() -> dict:
                 "rows": other_rows,
             },
         ),
-        "axis_labels": tuple(
+        "schedule_markers": (
+            {"left_pct": 0.0, "kind": "start", "aria_label": "Shift starts at 6:00 AM"},
             {
-                "label": label,
-                "left_pct": index * 12.5,
-            }
-            for index, label in enumerate(
-                (
-                    "6:00 AM",
-                    "7:00 AM",
-                    "8:00 AM",
-                    "9:00 AM",
-                    "10:00 AM",
-                    "11:00 AM",
-                    "12:00 PM",
-                    "1:00 PM",
-                )
-            )
+                "left_pct": 68.75,
+                "kind": "break",
+                "aria_label": "Planned break starts at 11:30 AM",
+            },
+            {"left_pct": 100.0, "kind": "end", "aria_label": "Shift ends at 2:00 PM"},
+        ),
+        "schedule_time_groups": (
+            {"left_pct": 0.0, "label": "6:00 AM", "edge": "start"},
+            {"left_pct": 68.75, "label": "11:30", "edge": "middle"},
+            {"left_pct": 100.0, "label": "2:00 PM", "edge": "end"},
         ),
         "source_warnings": (),
         "working_now": 8,
