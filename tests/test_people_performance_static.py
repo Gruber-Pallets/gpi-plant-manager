@@ -96,6 +96,8 @@ def test_refresh_source_contract_places_capture_immediately_before_replacement()
         "preventScroll",
         "visibilitychange",
         "removeEventListener",
+        "data-pp-auto-submit",
+        "requestSubmit",
         "30000",
         '.pp-page[data-today="1"]',
     ):
@@ -159,6 +161,7 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           const navigations = [];
           const focusOptions = [];
           const replacements = [];
+          const filterSubmissions = [];
           const parsed = {};
           let boundsReads = 0;
           let popover = null;
@@ -172,6 +175,16 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           });
           const status = {textContent: ''};
           const page = {dataset: {today: String(today)}};
+          const filterForm = {
+            requestSubmit() { filterSubmissions.push('requestSubmit'); },
+            submit() { filterSubmissions.push('submit'); },
+          };
+          const filterControl = {
+            form: filterForm,
+            closest(selector) {
+              return selector === '[data-pp-auto-submit]' ? this : null;
+            },
+          };
 
           function makeViewport(name) {
             return {
@@ -340,6 +353,8 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             navigations,
             focusOptions,
             replacements,
+            filterSubmissions,
+            filterControl,
             parsed,
             makeTrigger,
             makeRows,
@@ -365,6 +380,10 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           const detailEnv = makeEnvironment('1');
           const detailController = makeController(detailEnv.document, detailEnv.windowObject);
           detailController.init();
+          detailEnv.document.emit('change', {target: detailEnv.filterControl});
+          if (JSON.stringify(detailEnv.filterSubmissions) !== JSON.stringify(['requestSubmit'])) {
+            throw new Error('filter change did not submit exactly once');
+          }
           if (detailEnv.timers.length !== 1 || detailEnv.timers[0].milliseconds !== 30000) {
             throw new Error('Today refresh timer was not scheduled');
           }
@@ -411,6 +430,10 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           detailEnv.document.emit('scroll', {target: detailEnv.document.axisViewport});
           if (detailEnv.getBoundsReads() <= reads) throw new Error('popover did not reposition');
           detailController.destroy();
+          detailEnv.document.emit('change', {target: detailEnv.filterControl});
+          if (JSON.stringify(detailEnv.filterSubmissions) !== JSON.stringify(['requestSubmit'])) {
+            throw new Error('destroy left filter change listener behind');
+          }
           if (!tip.removed || !detailEnv.timers[0].cleared) throw new Error('destroy did not clean up');
           for (const values of Object.values(detailEnv.document._listeners)) {
             if (values.length) throw new Error('destroy left document listeners behind');

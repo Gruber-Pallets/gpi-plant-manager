@@ -490,6 +490,16 @@
     return refreshRows();
   }
 
+  function onFilterChange(event) {
+    var target = event && event.target;
+    var control = target && target.closest
+      ? target.closest("[data-pp-auto-submit]")
+      : null;
+    if (!control || !control.form) return;
+    if (typeof control.form.requestSubmit === "function") control.form.requestSubmit();
+    else if (typeof control.form.submit === "function") control.form.submit();
+  }
+
   function onDocumentScroll(event) {
     var target = event.target;
     if (target && target.matches && target.matches(".pp-horizontal-scroll")) {
@@ -515,6 +525,7 @@
     listen(document, "pointerdown", onPointerDown, true);
     listen(document, "keydown", onKeyDown);
     listen(document, "visibilitychange", onVisibilityChange);
+    listen(document, "change", onFilterChange);
     listen(document, "scroll", onDocumentScroll, true);
     listen(windowObject, "scroll", onViewportChange, true);
     listen(windowObject, "resize", onViewportChange);
