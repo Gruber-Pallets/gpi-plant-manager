@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Past PTO Inbox build plan
+
+- **A step-by-step build plan is ready to put past-absence PTO requests in the Exception Inbox.** It covers manager buttons, clear error messages, safe counts, and checks that the request really appears. Nothing in the app has changed yet.
+
 ### Past PTO requests in the Inbox plan
 
 - **A plan is ready to put past-absence PTO requests in the Exception Inbox.** Managers will be able to approve, deny, or finish a payroll review from the same place as their other daily work. Nothing in the app has changed yet.
