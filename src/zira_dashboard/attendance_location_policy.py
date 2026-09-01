@@ -38,6 +38,30 @@ class RolloutConfig:
     live_gate: LiveGate | None
 
 
+def _validate_config_shape(config: RolloutConfig) -> None:
+    """Reject persisted combinations that cannot own production safely."""
+    cutover = config.cutover_at
+    gate = config.live_gate
+    if config.mode == "off":
+        if cutover is not None or gate is not None:
+            raise ValueError("invalid rollout shape")
+        return
+    if config.mode == "shadow":
+        if cutover is None and gate is None:
+            return
+        if cutover is None or gate is None or gate.activated_at is None:
+            raise ValueError("invalid rollout shape")
+        if gate.activated_at >= cutover:
+            raise ValueError("invalid rollout shape")
+        return
+    if config.mode != "live" or cutover is None or gate is None:
+        raise ValueError("invalid rollout shape")
+    if gate.activated_at is None:
+        return
+    if gate.activated_at < cutover:
+        raise ValueError("invalid rollout shape")
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -80,17 +104,26 @@ def _parse_config(raw: object) -> RolloutConfig:
             report_digest=digest,
             activated_at=activated_at,
         )
-    if mode == "live" and (cutover_at is None or live_gate is None):
-        raise ValueError("incomplete live rollout")
-    return RolloutConfig(mode=mode, cutover_at=cutover_at, live_gate=live_gate)
+    config = RolloutConfig(mode=mode, cutover_at=cutover_at, live_gate=live_gate)
+    _validate_config_shape(config)
+    return config
+
+
+def _rollout_config_snapshot() -> tuple[RolloutConfig, bool]:
+    """Return the parsed config and whether a persisted value was valid."""
+    raw = app_settings.get_setting(_SETTING_KEY)
+    if raw is None:
+        return RolloutConfig(mode="off", cutover_at=None, live_gate=None), True
+    try:
+        return _parse_config(raw), True
+    except (TypeError, ValueError):
+        return RolloutConfig(mode="off", cutover_at=None, live_gate=None), False
 
 
 def get_rollout_config() -> RolloutConfig:
     """Return the stored rollout config, safely falling back to ``off``."""
-    try:
-        return _parse_config(app_settings.get_setting(_SETTING_KEY))
-    except (TypeError, ValueError):
-        return RolloutConfig(mode="off", cutover_at=None, live_gate=None)
+    config, _valid = _rollout_config_snapshot()
+    return config
 
 
 def _validate_cutover(cutover_at: datetime | None) -> None:
@@ -99,6 +132,16 @@ def _validate_cutover(cutover_at: datetime | None) -> None:
     local = cutover_at.astimezone(shift_config.SITE_TZ)
     if local.time().replace(tzinfo=None) != shift_config.shift_start_for(local.date()):
         raise ValueError("cutover_boundary_required")
+
+
+def _validate_configured_workday(cutover_at: datetime) -> None:
+    local_day = cutover_at.astimezone(shift_config.SITE_TZ).date()
+    try:
+        is_workday = shift_config.is_workday(local_day)
+    except Exception as exc:  # noqa: BLE001 - schedule uncertainty must fail closed
+        raise ValueError("cutover_workday_unavailable") from exc
+    if not is_workday:
+        raise ValueError("cutover_workday_required")
 
 
 def _validate_live_gate(gate: LiveGate | None) -> None:
@@ -128,7 +171,15 @@ def set_rollout_config(config: RolloutConfig, *, cur=None) -> None:
         _validate_cutover(config.cutover_at)
     if config.mode == "live":
         _validate_cutover(config.cutover_at)
+        assert config.cutover_at is not None
+        _validate_configured_workday(config.cutover_at)
         _validate_live_gate(config.live_gate)
+        assert config.live_gate is not None
+        if (
+            config.live_gate.activated_at is None
+            and config.cutover_at.astimezone(UTC) <= _utc_now()
+        ):
+            raise ValueError("cutover_future_boundary_required")
     if (
         config.mode == "shadow"
         and config.live_gate is not None
@@ -138,8 +189,10 @@ def set_rollout_config(config: RolloutConfig, *, cur=None) -> None:
             raise ValueError("live_readiness_required")
         _validate_cutover(config.cutover_at)
         assert config.cutover_at is not None
+        _validate_configured_workday(config.cutover_at)
         if config.cutover_at.astimezone(UTC) <= _utc_now():
             raise ValueError("rollback_future_boundary_required")
+    _validate_config_shape(config)
     value = {
         "mode": config.mode,
         "cutover_at": (config.cutover_at.isoformat() if config.cutover_at is not None else None),
@@ -158,6 +211,35 @@ def set_rollout_config(config: RolloutConfig, *, cur=None) -> None:
     app_settings.set_setting(_SETTING_KEY, value, cur=cur)
 
 
+def restore_active_after_rejected_rollback(config: RolloutConfig, *, cur) -> None:
+    """Restore an already-activated typed live gate after rollback revalidation.
+
+    The historical live boundary may no longer match today's edited schedule,
+    so this validates identity/freshness without reinterpreting that boundary.
+    """
+    if config.mode != "live" or config.cutover_at is None or not _is_aware(config.cutover_at):
+        raise ValueError("live_readiness_required")
+    gate = config.live_gate
+    _validate_live_gate(gate)
+    if gate is None or gate.activated_at is None or not _is_aware(gate.activated_at):
+        raise ValueError("live_readiness_required")
+    if config.cutover_at.astimezone(UTC) > gate.activated_at.astimezone(UTC):
+        raise ValueError("live_readiness_required")
+    app_settings.set_setting(
+        _SETTING_KEY,
+        {
+            "mode": "live",
+            "cutover_at": config.cutover_at.isoformat(),
+            "live_gate": {
+                "checked_at": gate.checked_at.isoformat(),
+                "report_digest": gate.report_digest,
+                "activated_at": gate.activated_at.isoformat(),
+            },
+        },
+        cur=cur,
+    )
+
+
 def _aware_utc(value: datetime | None) -> datetime:
     resolved = value or _utc_now()
     if not _is_aware(resolved):
@@ -172,9 +254,7 @@ def _live_is_active(config: RolloutConfig, now_utc: datetime) -> bool:
     if config.mode == "live":
         return True
     return bool(
-        config.mode == "shadow"
-        and config.cutover_at is not None
-        and now_utc < config.cutover_at.astimezone(UTC)
+        config.mode == "shadow" and config.cutover_at is not None and gate.activated_at is not None
     )
 
 
@@ -208,7 +288,9 @@ def match_state_for_day(day: date, *, now_utc: datetime | None = None) -> MatchS
     """Resolve whether recomputation should use, wait for, or avoid strict matching."""
     if day in strict_days():
         return "strict"
-    config = get_rollout_config()
+    config, valid = _rollout_config_snapshot()
+    if not valid:
+        return "pending"
     return _match_state_from_config(day, config=config, now_utc=now_utc)
 
 
@@ -236,6 +318,15 @@ def _match_state_from_config(
             and activated_day <= day < cutover_day
         ):
             return "strict"
+        if (
+            gate is not None
+            and gate.activated_at is not None
+            and now >= cutover
+            and day >= cutover_day
+        ):
+            # A due rollback remains fail-closed until the serialized warmer
+            # validates and finalizes its clean boundary.
+            return "pending"
         return "legacy"
     if config.mode != "live":
         return "legacy"
@@ -259,13 +350,16 @@ def match_state_for_day_cur(day: date, *, cur, now_utc: datetime | None = None) 
         (_SETTING_KEY,),
     )
     row = cur.fetchone()
-    try:
-        config = _parse_config(row["value"]) if row is not None else None
-    except (TypeError, ValueError):
-        config = None
+    if row is None:
+        config = RolloutConfig(mode="off", cutover_at=None, live_gate=None)
+    else:
+        try:
+            config = _parse_config(row["value"])
+        except (TypeError, ValueError):
+            return "pending"
     return _match_state_from_config(
         day,
-        config=config or RolloutConfig(mode="off", cutover_at=None, live_gate=None),
+        config=config,
         now_utc=now_utc,
     )
 

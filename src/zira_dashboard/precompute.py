@@ -38,6 +38,10 @@ class PreparedProductionDay:
     expected_match_state: str | None = None
 
 
+class CutoverRecalculationPending(RuntimeError):
+    """An ordinary write lost the cutover-ready fence before its commit."""
+
+
 def _validate_prepared_match_state_cur(cur, prepared: PreparedProductionDay) -> None:
     """Lock and revalidate the rollout decision used to compute a snapshot."""
     expected = prepared.expected_match_state
@@ -240,9 +244,27 @@ def store_prepared_day(prepared: PreparedProductionDay, *, cur=None) -> int:
     if not isinstance(prepared, PreparedProductionDay):
         raise TypeError("prepared must be a PreparedProductionDay")
     if cur is None:
-        from . import db
+        from . import attendance_readiness, db
 
         with db.cursor() as owned_cur:
+            # Match activation/Settings lock order, then hold the exact queue
+            # row before taking app/strict matcher locks. The dedicated recalc
+            # worker already owns the queue row and uses the caller-cur branch.
+            attendance_readiness._lock_readiness_configuration_cur(  # noqa: SLF001
+                owned_cur
+            )
+            owned_cur.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (attendance_readiness._READINESS_LOCK_ID,),  # noqa: SLF001
+            )
+            if not attendance_readiness._ordinary_refresh_ready_cur(  # noqa: SLF001
+                prepared.day,
+                owned_cur,
+                lock_queue=True,
+            ):
+                raise CutoverRecalculationPending(
+                    "cutover recalculation became pending before production commit"
+                )
             _validate_prepared_match_state_cur(owned_cur, prepared)
             return _upsert_production_daily_cur(
                 owned_cur,
@@ -264,12 +286,25 @@ def precompute_day(day: date, client) -> dict:
 
     Returns {"day": iso, "rows_written": int}. Idempotent; safe to re-run.
     """
-    from . import attendance_mirror
+    from . import attendance_mirror, attendance_readiness
+
+    if not attendance_readiness.ordinary_refresh_ready(day):
+        return {
+            "day": day.isoformat(),
+            "rows_written": 0,
+            "skipped": "cutover_recalculation_pending",
+        }
 
     try:
         prepared = prepare_day(day, client)
         written = store_prepared_day(prepared)
         return {"day": day.isoformat(), "rows_written": written}
+    except CutoverRecalculationPending:
+        return {
+            "day": day.isoformat(),
+            "rows_written": 0,
+            "skipped": "cutover_recalculation_pending",
+        }
     except Exception:
         try:
             attendance_mirror.enqueue_recalc((day,), "production_source_unavailable")

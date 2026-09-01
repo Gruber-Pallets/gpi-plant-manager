@@ -224,7 +224,13 @@ def attribute_for_range(
     return out
 
 
-def _metered_leaderboard(client, day: date, *, now_utc: datetime | None = None):
+def _metered_leaderboard(
+    client,
+    day: date,
+    *,
+    now_utc: datetime | None = None,
+    locations=None,
+):
     """cached_leaderboard results for all metered WCs, or [] if none.
     Shared by _fetch_wc_totals and _fetch_wc_samples so the station-building
     block can't drift between them."""
@@ -234,7 +240,9 @@ def _metered_leaderboard(client, day: date, *, now_utc: datetime | None = None):
     )  # local — leaderboard pulls shift_config/tzdata
     from .stations import Station
 
-    metered = [loc for loc in staffing.LOCATIONS if loc.meter_id]
+    metered = [
+        loc for loc in (staffing.LOCATIONS if locations is None else locations) if loc.meter_id
+    ]
     if not metered:
         return []
     stations = [
@@ -335,7 +343,11 @@ def _breakdown_window_identity(key: tuple) -> tuple[int | None, str, str]:
 
 
 def _excluded_minutes_by_person_wc(
-    day: date, now: datetime
+    day: date,
+    now: datetime,
+    *,
+    breakdown_windows=None,
+    productive_minutes_in_window=None,
 ) -> dict[PersonAttributionKey, dict[str, float]]:
     """{person: {wc_name: minutes}} of machine-breakdown-excluded minutes for
     `day`. Open breakdown windows are capped at `now` (already clamped to
@@ -343,9 +355,14 @@ def _excluded_minutes_by_person_wc(
     immediately, matching the design's "today's live averages are correct
     during the outage" requirement."""
     from . import wc_attributions, machine_breakdown
-    from .shift_config import productive_minutes_in_window
+    if productive_minutes_in_window is None:
+        from .shift_config import productive_minutes_in_window
 
-    windows_by_key = wc_attributions.breakdown_windows_for_day(day)
+    windows_by_key = (
+        wc_attributions.breakdown_windows_for_day(day)
+        if breakdown_windows is None
+        else breakdown_windows
+    )
     out: dict[PersonAttributionKey, dict[str, float]] = {}
     for raw_key, windows in windows_by_key.items():
         employee_odoo_id, person, wc = _breakdown_window_identity(raw_key)
@@ -562,6 +579,14 @@ def _strict_inputs_for_day(
     client,
     *,
     now_utc: datetime,
+    location_spans=None,
+    mirror_health=None,
+    shift_bounds: tuple[datetime, datetime] | None = None,
+    break_windows: tuple[tuple[datetime, datetime], ...] | None = None,
+    metered_locations=None,
+    attribution_rows=None,
+    productive_minutes_in_window=None,
+    effective_now_utc: datetime | None = None,
 ) -> _StrictDayInputs:
     from . import (
         assignment_windows,
@@ -570,7 +595,7 @@ def _strict_inputs_for_day(
         wc_attributions,
     )
 
-    health = attendance_mirror.health_snapshot()
+    health = mirror_health or attendance_mirror.health_snapshot()
     if health.baseline_completed_at is None:
         raise ProductionSourceUnavailable(
             f"Odoo attendance mirror baseline is unavailable for {day.isoformat()}"
@@ -580,40 +605,68 @@ def _strict_inputs_for_day(
             f"Odoo attendance has no verified snapshot for {day.isoformat()}"
         )
 
-    shift_start, shift_end = _strict_shift_bounds(day)
-    spans = attendance_timeline.timeline_for_range(shift_start, shift_end, as_of_utc=now_utc)
+    shift_start, shift_end = shift_bounds or _strict_shift_bounds(day)
+    spans = (
+        attendance_timeline.timeline_for_range(shift_start, shift_end, as_of_utc=now_utc)
+        if location_spans is None
+        else tuple(location_spans)
+    )
     segments = assignment_windows.work_segments_from_timeline(
         spans,
         window_start_utc=shift_start,
         window_end_utc=shift_end,
     )
-    leaderboard_rows = _metered_leaderboard(client, day, now_utc=now_utc)
+    leaderboard_rows = _metered_leaderboard(
+        client,
+        day,
+        now_utc=now_utc,
+        locations=metered_locations,
+    )
     wc_totals, samples_by_wc, active_by_wc = _normalize_strict_leaderboard(
         leaderboard_rows,
         shift_start_utc=shift_start,
         shift_end_utc=shift_end,
     )
-    testing = wc_attributions.testing_windows_for_day(day)
+    testing = (
+        wc_attributions.testing_windows_for_day(day)
+        if attribution_rows is None
+        else wc_attributions.testing_windows_for_day(day, rows=attribution_rows)
+    )
     if testing:
         wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)
         samples_by_wc = _without_testing_samples(samples_by_wc, testing)
     _validate_strict_sample_totals(wc_totals, samples_by_wc)
 
-    try:
+    effective_now = (
+        _effective_now(day, now_utc) if effective_now_utc is None else effective_now_utc
+    )
+    breakdown = (
+        wc_attributions.breakdown_windows_for_day(day)
+        if attribution_rows is None
+        else wc_attributions.breakdown_windows_for_day(day, rows=attribution_rows)
+    )
+    if attribution_rows is None:
+        try:
+            excluded_by_identity = _excluded_minutes_by_person_wc(day, effective_now)
+        except Exception:
+            excluded_by_identity = {}
+    else:
         excluded_by_identity = _excluded_minutes_by_person_wc(
-            day, _effective_now(day, now_utc)
+            day,
+            effective_now,
+            breakdown_windows=breakdown,
+            productive_minutes_in_window=productive_minutes_in_window,
         )
-    except Exception:
-        excluded_by_identity = {}
     excluded = _identity_safe_excluded_minutes(segments, excluded_by_identity)
-    breakdown = wc_attributions.breakdown_windows_for_day(day)
     return _StrictDayInputs(
         segments=tuple(segments),
         wc_totals=wc_totals,
         samples_by_wc=samples_by_wc,
         active_intervals_by_wc=active_by_wc,
         excluded_minutes=excluded,
-        break_windows=_strict_break_windows(day),
+        break_windows=(
+            _strict_break_windows(day) if break_windows is None else tuple(break_windows)
+        ),
         testing_windows=testing,
         breakdown_windows=breakdown,
     )

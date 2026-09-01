@@ -561,6 +561,46 @@ def _strict_source_problem(
     )
 
 
+def _blocked_cutover_issue(
+    now_utc: datetime,
+    *,
+    source_errors: list[str] | None = None,
+) -> AttendanceException | None:
+    """Expose one stable local urgent item for a rejected live boundary."""
+    from . import attendance_readiness
+
+    try:
+        blocked = attendance_readiness.blocked_cutover_snapshot()
+    except Exception as exc:  # noqa: BLE001 - uncertainty must not resolve an open item
+        if source_errors is not None and not _is_database_less(exc):
+            source_errors.append(_TIMELINE_SOURCE)
+        blocked = None
+    if blocked is None:
+        return None
+    scheduled_at = blocked["scheduled_at"]
+    blockers = tuple(blocked["blockers"])
+    return AttendanceException(
+        kind="attendance_cutover_blocked",
+        item_key=f"attendance_cutover_blocked:{scheduled_at.isoformat()}",
+        employee_odoo_id=None,
+        employee_name=None,
+        attendance_ids=(),
+        start_utc=scheduled_at,
+        end_utc=now_utc,
+        raw_work_center_labels=(),
+        odoo_work_center_ids=(),
+        affected_workers=(),
+        app_work_center_name=None,
+        units=None,
+        sample_count=None,
+        reason=",".join(blockers),
+        priority="urgent",
+        comparison_only=False,
+        target_odoo_department_id=None,
+        end_is_open=True,
+    )
+
+
 def build_snapshot(
     day: date,
     *,
@@ -573,11 +613,21 @@ def build_snapshot(
     now = _aware_utc(now_utc, "now_utc")
     config, match_state, policy_error = _policy_snapshot_for_day(day, now_utc=now)
     production_mode = _production_mode_for(config, match_state)
-    if config.mode == "off" and match_state == "legacy":
-        return AttendanceExceptionSnapshot(day, "off", "legacy", False, False, False, (), ())
-
-    issues: list[AttendanceException] = []
     source_errors: list[str] = []
+    blocked_cutover = _blocked_cutover_issue(now, source_errors=source_errors)
+    if config.mode == "off" and match_state == "legacy":
+        return AttendanceExceptionSnapshot(
+            day,
+            "off",
+            "legacy",
+            False,
+            blocked_cutover is not None,
+            blocked_cutover is not None,
+            (blocked_cutover,) if blocked_cutover is not None else (),
+            tuple(dict.fromkeys(source_errors)),
+        )
+
+    issues: list[AttendanceException] = [blocked_cutover] if blocked_cutover is not None else []
     if policy_error is not None:
         issues.append(_strict_source_problem(day, now, policy_error))
         source_errors.append(_PRODUCTION_SOURCE)

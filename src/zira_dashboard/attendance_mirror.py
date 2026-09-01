@@ -47,6 +47,7 @@ class MirrorHealth:
     baseline_completed_at: datetime | None
     oldest_recalc_requested_at: datetime | None
     last_error: str | None
+    full_sweep_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -77,11 +78,16 @@ class _FullSweepStoreResult:
 def _logical_run_lock():
     """Serialize a complete attendance source snapshot through its commit."""
     with db.cursor() as cur:
-        cur.execute(
-            "SELECT pg_advisory_xact_lock(%s)",
-            (_SYNC_ADVISORY_LOCK_KEY,),
-        )
+        lock_sync_generation_cur(cur)
         yield cur
+
+
+def lock_sync_generation_cur(cur) -> None:
+    """Join the mirror's transaction lock before reading a bound generation."""
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(%s)",
+        (_SYNC_ADVISORY_LOCK_KEY,),
+    )
 
 
 def _decode_error_state(raw: object) -> dict[str, str]:
@@ -952,6 +958,7 @@ def _health_from_row(row: Mapping[str, Any] | None) -> MirrorHealth:
             row["oldest_recalc_requested_at"], "oldest_recalc_requested_at"
         ),
         last_error=_format_error_state(row["last_error"]),
+        full_sweep_generation=int(row.get("full_sweep_generation") or 0),
     )
 
 
@@ -959,6 +966,7 @@ def _health_snapshot_cur(cur) -> MirrorHealth:
     cur.execute(
         "SELECT s.last_incremental_completed_at, "
         "s.last_full_sweep_completed_at, s.baseline_completed_at, "
+        "s.full_sweep_generation, "
         "(SELECT MIN(requested_at) FROM attendance_recalc_queue "
         " WHERE completed_at IS NULL) AS oldest_recalc_requested_at, "
         "s.last_error FROM odoo_attendance_sync_state s "
@@ -971,6 +979,7 @@ def health_snapshot() -> MirrorHealth:
     rows = db.query(
         "SELECT s.last_incremental_completed_at, "
         "s.last_full_sweep_completed_at, s.baseline_completed_at, "
+        "s.full_sweep_generation, "
         "(SELECT MIN(requested_at) FROM attendance_recalc_queue "
         " WHERE completed_at IS NULL) AS oldest_recalc_requested_at, "
         "s.last_error FROM odoo_attendance_sync_state s "

@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-09-01
+
+### Odoo live locations are ready for a safe start
+
+- **Plant Manager can now check that Odoo locations are fresh and complete before they control production.** The app can compare the new answer first, start on a clean workday, and show clear reasons when it is not safe to start.
+
 ## 2026-08-31
 
 ### Breakdown time starts when each worker arrives

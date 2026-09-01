@@ -513,22 +513,68 @@
       </p>
 
       <dl style="display:grid;grid-template-columns:max-content 1fr;gap:.35rem .8rem;font-size:.9rem">
+        <dt>Readiness</dt>
+        <dd>
+          <strong style="color:var(--{{ 'good' if attendance_location.readiness.ready else 'bad' }})">
+            {{ 'Ready' if attendance_location.readiness.ready else 'Blocked' }}
+          </strong>
+          <small>checked {{ attendance_location.readiness_checked_at.strftime('%Y-%m-%d %-I:%M %p') }} plant time</small>
+        </dd>
         <dt>Rollout mode</dt>
         <dd><strong>{{ attendance_location.mode }}</strong></dd>
         <dt>Cutover</dt>
         <dd>{{ attendance_location.cutover_at or 'not scheduled' }}</dd>
+        <dt>Cutover status</dt>
+        <dd>{{ attendance_location.cutover_status.status if attendance_location.cutover_status else 'not scheduled' }}</dd>
         <dt>Mirror freshness</dt>
-        <dd>{{ attendance_location.mirror_freshness or 'not synced yet' }}</dd>
+        <dd>{{ attendance_location.mirror_freshness.strftime('%Y-%m-%d %-I:%M:%S %p') ~ ' plant time' if attendance_location.mirror_freshness else 'not synced yet' }}</dd>
         <dt>Last full sweep</dt>
-        <dd>{{ attendance_location.last_full_sweep or 'not completed yet' }}</dd>
+        <dd>{{ attendance_location.last_full_sweep.strftime('%Y-%m-%d %-I:%M:%S %p') ~ ' plant time' if attendance_location.last_full_sweep else 'not completed yet' }}</dd>
+        <dt>Open rows not refreshed</dt>
+        <dd>{{ attendance_location.readiness.open_rows_not_refreshed }}</dd>
+        <dt>Last sweep deletions</dt>
+        <dd>{{ attendance_location.readiness.last_sweep_deletion_count }}</dd>
+        <dt>Projection lag</dt>
+        <dd>{{ attendance_location.readiness.projection_lag_seconds if attendance_location.readiness.projection_lag_seconds is not none else 'unavailable' }} seconds</dd>
+        <dt>Recalculation queue</dt>
+        <dd>{{ attendance_location.readiness.recalc_queue_depth }} waiting · {{ attendance_location.readiness.recalc_queue_age_seconds if attendance_location.readiness.recalc_queue_age_seconds is not none else 'unavailable' }} seconds old</dd>
+        <dt>Location problems</dt>
+        <dd>{{ attendance_location.readiness.open_conflicts }} conflicts · {{ attendance_location.readiness.open_unmapped }} unknown · {{ attendance_location.readiness.open_missing_required }} missing</dd>
+        <dt>Conflict time</dt>
+        <dd>{{ attendance_location.readiness.conflict_minutes_today }} minutes today</dd>
+        <dt>Unknown location time</dt>
+        <dd>{{ attendance_location.readiness.unmapped_minutes_today }} minutes today</dd>
+        <dt>Missing location time</dt>
+        <dd>{{ attendance_location.readiness.missing_minutes_today }} minutes today</dd>
+        <dt>Unassigned production</dt>
+        <dd>{{ attendance_location.readiness.unassigned_units_today }} units</dd>
+        <dt>Oldest unassigned age</dt>
+        <dd>{{ attendance_location.readiness.oldest_unassigned_age_seconds if attendance_location.readiness.oldest_unassigned_age_seconds is not none else 'none' }} seconds</dd>
+        <dt>Shadow worker-unit changes</dt>
+        <dd>{{ attendance_location.readiness.shadow_changed_worker_units }} units</dd>
+        <dt>Correction failures</dt>
+        <dd>{{ attendance_location.readiness.failed_corrections }} failed · {{ attendance_location.readiness.correction_verification_failures_today }} check failures</dd>
+        <dt>Correction retries</dt>
+        <dd>{{ attendance_location.readiness.correction_retries_today }}</dd>
+        <dt>Department repair failures</dt>
+        <dd>{{ attendance_location.readiness.failed_department_repairs }}</dd>
       </dl>
+
+      {% if attendance_location.readiness.blockers %}
+        <h4>Why live is blocked</h4>
+        <ul>
+          {% for blocker in attendance_location.readiness.blockers %}
+            <li>{{ blocker | replace('_', ' ') | capitalize }} <code>{{ blocker }}</code></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
 
       <form method="post" action="/settings/attendance-location" style="margin-top:1rem">
         <label>Rollout mode
           <select name="rollout_mode" {% if not can_manage_attendance_location %}disabled{% endif %}>
             <option value="off" {% if attendance_location.mode == 'off' %}selected{% endif %} {% if attendance_location.live_active %}disabled{% endif %}>Off</option>
             <option value="shadow" {% if attendance_location.mode == 'shadow' %}selected{% endif %}>Shadow</option>
-            <option value="live" {% if attendance_location.mode == 'live' %}selected{% endif %} disabled>Live — readiness check required</option>
+            <option value="live" {% if attendance_location.mode == 'live' %}selected{% endif %}>Live — readiness check required</option>
           </select>
         </label>
         {% if attendance_location.live_active %}

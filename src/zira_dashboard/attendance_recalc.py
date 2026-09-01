@@ -149,12 +149,20 @@ def _claim_pending_cache(now_utc: datetime) -> CacheRefreshClaim | None:
 
 def _complete_claim(claim: RecalcClaim, prepared, completed_at: datetime) -> int | None:
     """Atomically fence, write, and complete the current recalculation claim."""
-    from . import precompute
+    from . import attendance_readiness, precompute
 
     completed = _aware_utc(completed_at)
     if prepared.day != claim.day:
         raise ValueError("prepared production day does not match recalculation claim")
     with db.cursor() as cur:
+        # Activation, ordinary precompute, and dedicated completion can each
+        # touch the cutover queue and strict-attribution matcher. Serialize
+        # them before either lock family so their internal order cannot form
+        # a database deadlock cycle.
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(%s)",
+            (attendance_readiness._READINESS_LOCK_ID,),  # noqa: SLF001
+        )
         cur.execute(
             """
             SELECT day, attempt_count, started_at, completed_at

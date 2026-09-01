@@ -34,6 +34,12 @@ class QueueCursor:
     def execute(self, sql, params=()):
         normalized = " ".join(sql.split())
         self.store.sql.append((normalized, params))
+        if normalized.startswith("SELECT pg_advisory_xact_lock"):
+            self.result = None
+            return
+        if normalized.startswith("LOCK TABLE app_settings, attendance_strict_days"):
+            self.result = None
+            return
         if normalized.startswith("SELECT day, attempt_count, started_at, completed_at"):
             self.result = self.store.rows.get(params[0])
             if self.result is not None:
@@ -615,6 +621,52 @@ def test_completion_failure_rolls_back_marker_snapshot_and_queue_together(monkey
     assert store.rows[DAY_1]["completed_at"] is None
     assert store.rows[DAY_1]["started_at"] == claim.lease_until
     assert store.events[-1] == "rollback"
+
+
+def test_completion_serializes_before_queue_and_matcher_locks(monkeypatch):
+    module = recalc()
+    from zira_dashboard import attendance_readiness
+
+    lease_until = NOW + module.CLAIM_LEASE
+    store = QueueStore(
+        [
+            queue_row(
+                DAY_1,
+                requested_at=NOW - timedelta(hours=1),
+                started_at=lease_until,
+                attempt_count=1,
+            )
+        ]
+    )
+    install_queue(monkeypatch, store)
+    monkeypatch.setattr(
+        "zira_dashboard.precompute.store_prepared_day",
+        lambda _prepared, *, cur: (
+            cur.execute(
+                "LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE"
+            )
+            or 0
+        ),
+    )
+    claim = module.RecalcClaim(DAY_1, 1, lease_until)
+
+    assert module._complete_claim(claim, prepared_snapshot(DAY_1), NOW) == 0
+
+    sql = [statement for statement, _params in store.sql]
+    advisory_lock = next(
+        index
+        for index, operation in enumerate(store.sql)
+        if operation[1] == (attendance_readiness._READINESS_LOCK_ID,)
+    )
+    queue_lock = next(
+        index
+        for index, statement in enumerate(sql)
+        if "FROM attendance_recalc_queue" in statement and statement.endswith("FOR UPDATE")
+    )
+    matcher_lock = sql.index(
+        "LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE"
+    )
+    assert advisory_lock < queue_lock < matcher_lock
 
 
 def test_failure_stays_retryable_and_never_invalidates_cache(monkeypatch):

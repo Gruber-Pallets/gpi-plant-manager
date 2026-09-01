@@ -174,6 +174,80 @@ def test_work_segments_from_timeline_keeps_only_clipped_positive_valid_spans():
     ]
 
 
+def test_strict_inputs_accept_detached_projection_and_explicit_meter_locations(monkeypatch):
+    from zira_dashboard import attendance_mirror, attendance_timeline, wc_attributions
+
+    projected = (span(101, "Ana", START, END),)
+    health = attendance_mirror.MirrorHealth(
+        last_incremental_completed_at=END,
+        last_full_sweep_completed_at=START,
+        baseline_completed_at=START,
+        oldest_recalc_requested_at=None,
+        last_error=None,
+        full_sweep_generation=3,
+    )
+    locations = (
+        SimpleNamespace(
+            name="Repair 4",
+            meter_id="fresh-meter",
+            skill="Production",
+            bay="A",
+        ),
+    )
+    seen = []
+    monkeypatch.setattr(
+        attendance_mirror,
+        "health_snapshot",
+        lambda: pytest.fail("detached strict inputs re-read mirror health"),
+    )
+    monkeypatch.setattr(
+        attendance_timeline,
+        "timeline_for_range",
+        lambda *_a, **_k: pytest.fail("detached strict inputs used cached projection"),
+    )
+    monkeypatch.setattr(
+        production_history,
+        "_metered_leaderboard",
+        lambda _client, _day, **kwargs: seen.append(kwargs["locations"]) or [],
+    )
+    monkeypatch.setattr(
+        wc_attributions, "testing_windows_for_day", lambda _day, rows=None: {}
+    )
+    monkeypatch.setattr(
+        wc_attributions, "breakdown_windows_for_day", lambda _day, rows=None: {}
+    )
+    monkeypatch.setattr(
+        production_history,
+        "_excluded_minutes_by_person_wc",
+        lambda *_a, **_k: {},
+    )
+    monkeypatch.setattr(
+        production_history,
+        "_effective_now",
+        lambda *_a, **_k: pytest.fail("snapshot-backed strict inputs used cached shift end"),
+    )
+
+    inputs = production_history._strict_inputs_for_day(
+        DAY,
+        object(),
+        now_utc=END,
+        location_spans=projected,
+        mirror_health=health,
+        shift_bounds=(START, END),
+        break_windows=(),
+        metered_locations=locations,
+        attribution_rows=(),
+        productive_minutes_in_window=lambda _day, start, end: (
+            end - start
+        ).total_seconds()
+        / 60,
+        effective_now_utc=END,
+    )
+
+    assert [segment.person_odoo_id for segment in inputs.segments] == [101]
+    assert seen == [locations]
+
+
 def test_strict_branch_is_chosen_once_and_splits_duplicate_names_by_odoo_id(monkeypatch):
     state_calls = install_strict_dependencies(
         monkeypatch,
