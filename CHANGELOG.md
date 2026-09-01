@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Plan a clean end to People work bars
+
+- **A plan is ready to end People work bars before the last cleanup break and keep the final time labels apart.** Nothing in the app has changed yet.
+
 ### Plan current production at a glance
 
 - **A step-by-step plan is ready to show each measured worker's current production next to their current goal.** Nothing in the app has changed yet.
