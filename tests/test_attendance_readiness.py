@@ -228,7 +228,9 @@ def test_ready_report_uses_one_collected_snapshot(monkeypatch):
     monkeypatch.setattr(
         attendance_readiness,
         "_collect_inputs",
-        lambda now_utc, production_client=None: calls.append((now_utc, production_client))
+        lambda now_utc, production_client=None, **_kwargs: calls.append(
+            (now_utc, production_client)
+        )
         or _inputs(),
     )
 
@@ -521,8 +523,10 @@ def test_local_source_fingerprint_covers_shadow_proof_and_department_fallback():
     assert "odoo_attendance_shadow_health" in sql
     assert "odoo_attendance_shadow_epoch" in sql
     assert "department_name" in strict_sql and "FROM people" in strict_sql
+    assert "wage_type" in strict_sql
     assert "odoo_department_name" in strict_sql
     assert "odoo_department_name" in attendance_readiness._SHADOW_SOURCE_FINGERPRINT_SQL
+    assert "wage_type" in attendance_readiness._SHADOW_SOURCE_FINGERPRINT_SQL
 
 
 def test_readiness_source_digest_is_day_scoped_and_semantic():
@@ -3101,6 +3105,8 @@ def test_source_fingerprint_covers_names_and_correction_events():
     assert "employee_name" in shadow_sql
     assert "person_name" in strict_sql
     assert "person_name" in shadow_sql
+    assert "wage_type" in strict_sql
+    assert "wage_type" in shadow_sql
     assert "attendance_correction_job_events" in source_sql
 
 

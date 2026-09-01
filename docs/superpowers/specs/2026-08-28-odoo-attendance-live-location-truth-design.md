@@ -422,6 +422,17 @@ repair, and recalculation identifiers.
 Remove legacy routine transfer ownership only after Luke's first-location and
 transfer feed has proven reliable in production.
 
+### Operator runbook
+
+1. Deploy with mode `off`; verify the schema and mirror worker.
+2. Wait for a completed baseline and full sweep.
+3. Set `shadow`; observe at least one complete production day.
+4. Resolve mappings and conflicts, then exercise one correction in a non-production test interval.
+5. Run `uv run python scripts/check_attendance_location_readiness.py` until it exits 0.
+6. Schedule `live` for the next local workday boundary before production begins.
+7. Monitor mirror age, unassigned units, queue age, conflicts, corrections, and department repairs.
+8. At the end of the trial, schedule rollback to `shadow` at the next clean workday boundary. Keep the mirror, already-strict days, source records, and audit history intact.
+
 ## Test Plan
 
 ### Unit tests

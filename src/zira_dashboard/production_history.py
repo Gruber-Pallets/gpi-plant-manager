@@ -73,7 +73,8 @@ SELECT md5(concat_ws('|',
      ) ORDER BY id)::text, '[]') FROM work_centers),
   (SELECT COALESCE(jsonb_agg(jsonb_build_array(name, requires_work_center)
      ORDER BY name)::text, '[]') FROM departments),
-  (SELECT COALESCE(jsonb_agg(jsonb_build_array(id, odoo_id, department_name, active)
+  (SELECT COALESCE(jsonb_agg(jsonb_build_array(
+       id, odoo_id, department_name, wage_type, active)
      ORDER BY id)::text, '[]') FROM people
     WHERE odoo_id IN (
       SELECT employee_odoo_id FROM odoo_attendance_mirror

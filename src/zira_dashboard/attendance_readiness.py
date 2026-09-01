@@ -256,7 +256,7 @@ WITH mirror AS (
   FROM departments
 ), people_home AS (
   SELECT md5(COALESCE(jsonb_agg(jsonb_build_array(
-      odoo_id, department_name, active
+      odoo_id, department_name, wage_type, active
     ) ORDER BY odoo_id)::text, '[]')) AS fp
   FROM people WHERE odoo_id IS NOT NULL
 ), auxiliary AS (

@@ -732,6 +732,11 @@ def test_postgres_strict_source_fingerprint_is_day_scoped_and_semantic_only():
             "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
             (attendance_id,),
         )
+        cur.execute("DELETE FROM people WHERE odoo_id = 9082401")
+        cur.execute(
+            "INSERT INTO people (odoo_id, name, active, wage_type) "
+            "VALUES (9082401, 'Fingerprint Worker', TRUE, 'hourly')"
+        )
         cur.execute(
             "INSERT INTO odoo_attendance_mirror "
             "(odoo_attendance_id, employee_odoo_id, employee_name, check_in_utc, "
@@ -774,6 +779,10 @@ def test_postgres_strict_source_fingerprint_is_day_scoped_and_semantic_only():
         )
         metadata_only = production_history.strict_local_source_fingerprint(day)
         db.execute(
+            "UPDATE people SET wage_type = 'monthly' WHERE odoo_id = 9082401"
+        )
+        salaried_change = production_history.strict_local_source_fingerprint(day)
+        db.execute(
             "UPDATE odoo_attendance_mirror SET employee_name = %s "
             "WHERE odoo_attendance_id = %s",
             ("Changed Fingerprint Worker", attendance_id),
@@ -782,6 +791,7 @@ def test_postgres_strict_source_fingerprint_is_day_scoped_and_semantic_only():
 
         assert len(original) == 64
         assert metadata_only == original
+        assert salaried_change != original
         assert semantic_change != original
         prepared = precompute.PreparedProductionDay(
             day,
@@ -818,6 +828,7 @@ def test_postgres_strict_source_fingerprint_is_day_scoped_and_semantic_only():
                 "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
                 (attendance_id,),
             )
+            cur.execute("DELETE FROM people WHERE odoo_id = 9082401")
             cur.execute(
                 "UPDATE odoo_attendance_sync_state SET baseline_completed_at = %s, "
                 "last_incremental_completed_at = %s, "

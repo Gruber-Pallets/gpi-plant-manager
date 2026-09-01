@@ -54,6 +54,7 @@ class _SourceRow:
     work_center_name: str | None
     department_id: int | None
     department_name: str | None
+    wage_type: str | None
     write_date: datetime
 
     def effective_end(self, as_of_utc: datetime) -> datetime:
@@ -151,6 +152,7 @@ def _source_row(raw: object) -> _SourceRow:
         work_center_name=_optional_text(raw["odoo_work_center_name"], "odoo_work_center_name"),
         department_id=_optional_positive_int(raw["odoo_department_id"], "odoo_department_id"),
         department_name=_optional_text(raw["odoo_department_name"], "odoo_department_name"),
+        wage_type=_optional_text(raw.get("employee_wage_type"), "employee_wage_type"),
         write_date=_aware_utc(raw["odoo_write_date"], "odoo_write_date"),
     )
 
@@ -208,6 +210,16 @@ def _validated_requirement(value: object) -> bool:
     if not isinstance(value, bool):
         raise TypeError("requires_work_center must return bool")
     return value
+
+
+def _requires_work_center(
+    source: _SourceRow,
+    department_requirement: Callable[[str | None], bool],
+) -> bool:
+    """Salaried Odoo employees need no location unless one is recorded."""
+    if source.wage_type == "monthly":
+        return False
+    return _validated_requirement(department_requirement(source.department_name))
 
 
 def _validated_expected_department(value: object) -> int | None:
@@ -456,7 +468,7 @@ def _project_employee(
         if not distinct_work_centers:
             day_state = day_states[left.astimezone(shift_config.SITE_TZ).date()]
             required = any(
-                _validated_requirement(requires_work_center(source.department_name))
+                _requires_work_center(source, requires_work_center)
                 for source in active
             )
             if not required:
@@ -614,32 +626,49 @@ def _department_requirements_for_rows(rows: Sequence[Mapping[str, object]]):
 
 def _rows_with_employee_department_fallback(
     rows: Sequence[Mapping[str, object]],
+    *,
+    include_wage_type: bool = False,
 ) -> tuple[Mapping[str, object], ...]:
-    missing_ids = sorted(
+    profile_ids = sorted(
         {
             int(row["employee_odoo_id"])
             for row in rows
             if not str(row.get("odoo_department_name") or "").strip()
+            or (include_wage_type and "employee_wage_type" not in row)
         }
     )
-    if not missing_ids:
+    if not profile_ids:
         return tuple(rows)
     home_rows = db.query(
-        "SELECT odoo_id, department_name FROM people WHERE odoo_id = ANY(%s)",
-        (missing_ids,),
+        "SELECT odoo_id, department_name, wage_type FROM people WHERE odoo_id = ANY(%s)",
+        (profile_ids,),
     )
-    home_by_id = {int(row["odoo_id"]): row.get("department_name") for row in home_rows}
+    home_by_id = {int(row["odoo_id"]): row for row in home_rows}
     enriched = []
     for row in rows:
-        if str(row.get("odoo_department_name") or "").strip():
-            enriched.append(row)
-            continue
-        employee_department = home_by_id.get(int(row["employee_odoo_id"]))
+        profile = home_by_id.get(int(row["employee_odoo_id"]), {})
         effective = attendance_location_policy.effective_department_name(
-            None,
-            employee_department,
+            row.get("odoo_department_name"),
+            profile.get("department_name"),
         )
-        enriched.append({**row, "odoo_department_name": effective})
+        enriched.append(
+            {
+                **row,
+                "odoo_department_name": effective,
+                **(
+                    {
+                        "employee_wage_type": (
+                            profile.get("wage_type")
+                            if profile
+                            else row.get("employee_wage_type")
+                        )
+                        or None,
+                    }
+                    if include_wage_type
+                    else {}
+                ),
+            }
+        )
     return tuple(enriched)
 
 
@@ -667,9 +696,9 @@ def timeline_for_range(
     rows = attendance_mirror.rows_overlapping(context_start, end)
     if not rows:
         return ()
-    rows = _rows_with_employee_department_fallback(rows)
     if verified_through is None:
         raise RuntimeError("attendance mirror has no verified freshness")
+    rows = _rows_with_employee_department_fallback(rows, include_wage_type=True)
 
     projected = project_rows(
         rows,

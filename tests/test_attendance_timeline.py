@@ -40,6 +40,7 @@ def row(
         "odoo_work_center_name": work_center_name,
         "odoo_department_id": department_id,
         "odoo_department_name": department_name,
+        "employee_wage_type": "hourly",
         "odoo_write_date": write_date,
     }
 
@@ -751,6 +752,51 @@ def test_zero_grace_is_valid_and_produces_only_missing_required_location():
     assert spans == (expected_span(at(), at(minutes=1), "missing_required_location"),)
 
 
+def test_monthly_employee_without_location_is_exempt_in_required_department():
+    source = row(
+        check_out=at(minutes=1),
+        work_center_id=None,
+        work_center_name=None,
+    )
+    source["employee_wage_type"] = "monthly"
+
+    spans = project([source], grace=timedelta(0))
+
+    assert spans == (expected_span(at(), at(minutes=1), "exempt_no_location"),)
+
+
+@pytest.mark.parametrize("wage_type", ["hourly", None, "unexpected"])
+def test_nonmonthly_employee_without_location_remains_required(wage_type):
+    source = row(
+        check_out=at(minutes=1),
+        work_center_id=None,
+        work_center_name=None,
+    )
+    source["employee_wage_type"] = wage_type
+
+    spans = project([source], grace=timedelta(0))
+
+    assert spans == (expected_span(at(), at(minutes=1), "missing_required_location"),)
+
+
+def test_monthly_employee_with_mapped_location_remains_valid():
+    source = row(check_out=at(minutes=1))
+    source["employee_wage_type"] = "monthly"
+
+    spans = project([source])
+
+    assert spans == (
+        expected_span(
+            at(),
+            at(minutes=1),
+            "valid",
+            app_work_center_name="Repair 1",
+            odoo_work_center_id=71,
+            odoo_work_center_name="Odoo Repair One",
+        ),
+    )
+
+
 def test_dependency_results_are_runtime_validated():
     kwargs = {
         "as_of_utc": at(1),
@@ -955,6 +1001,88 @@ def test_timeline_for_range_normalizes_numbered_odoo_department_for_saved_policy
     assert seen_departments
     assert set(seen_departments) == {"Maintenance"}
     assert spans == (expected_span(at(), at(minutes=10), "exempt_no_location"),)
+
+
+def test_timeline_for_range_uses_local_monthly_wage_type_for_missing_location(
+    monkeypatch,
+):
+    source = row(
+        check_out=at(minutes=10),
+        work_center_id=None,
+        work_center_name=None,
+        department_name="Production",
+    )
+    source.pop("employee_wage_type")
+    monkeypatch.setattr(
+        attendance_timeline.attendance_mirror,
+        "health_snapshot",
+        lambda: attendance_mirror.MirrorHealth(at(minutes=10), at(), at(), None, None),
+    )
+    monkeypatch.setattr(
+        attendance_timeline.attendance_mirror,
+        "rows_overlapping",
+        lambda _start, _end: (source,),
+    )
+    monkeypatch.setattr(
+        attendance_timeline,
+        "db",
+        type(
+            "MonthlyEmployeeDb",
+            (),
+            {
+                "query": staticmethod(
+                    lambda sql, _params: (
+                        [
+                            {
+                                "odoo_id": 41,
+                                "department_name": "Production",
+                                "wage_type": "monthly",
+                            }
+                        ]
+                        if "FROM people" in sql
+                        else [
+                            {
+                                "name": "Production",
+                                "requires_work_center": True,
+                            }
+                        ]
+                    )
+                )
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        attendance_timeline.attendance_location_policy,
+        "department_requires_work_center",
+        lambda _name: True,
+    )
+
+    spans = attendance_timeline.timeline_for_range(at(), at(minutes=10), as_of_utc=at(minutes=10))
+
+    assert spans == (expected_span(at(), at(minutes=10), "exempt_no_location"),)
+
+
+def test_department_fallback_can_skip_wage_lookup_when_not_needed(monkeypatch):
+    source = row(check_out=at(minutes=10))
+    source.pop("employee_wage_type")
+    monkeypatch.setattr(
+        attendance_timeline,
+        "db",
+        type(
+            "NoProfileLookupDb",
+            (),
+            {"query": staticmethod(lambda *_args: pytest.fail("profile lookup"))},
+        ),
+        raising=False,
+    )
+
+    rows = attendance_timeline._rows_with_employee_department_fallback(
+        (source,),
+        include_wage_type=False,
+    )
+
+    assert rows == (source,)
 
 
 def test_timeline_uses_employee_department_when_attendance_department_is_blank(
