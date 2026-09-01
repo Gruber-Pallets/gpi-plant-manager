@@ -575,6 +575,36 @@ def test_nonpositive_goal_and_truncated_total_are_unavailable_per_meter(monkeypa
     assert "Production metric unavailable: Repair 2" in model.source_warnings
 
 
+def test_known_no_goal_stations_sort_below_goal_based_metered_work(monkeypatch):
+    hand_build = span(73, "Hand Build Worker", 0, 300, "Hand Build 1")
+    repair = span(74, "Repair Worker", 0, 300, "Repair 1")
+    trim_saw = span(75, "Trim Saw Worker", 0, 300, "Trim Saw 1")
+    hand_build_total = _total("Hand Build 1")
+    repair_total = _total("Repair 1")
+    trim_saw_total = _total("Trim Saw 1")
+    repair_score = score(74, "Repair Worker", "Repair 1", 0, 300, 20, 10)
+    install_sources(
+        monkeypatch,
+        spans=(hand_build, repair, trim_saw),
+        totals=(hand_build_total, repair_total, trim_saw_total),
+        catalog=(hand_build_total.station, repair_total.station, trim_saw_total.station),
+        scores=(repair_score,),
+    )
+    monkeypatch.setattr(
+        data.settings_store,
+        "station_target",
+        lambda station: 10.0 if station.name == "Repair 1" else 0.0,
+    )
+
+    model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
+
+    assert [row.person_name for row in model.rows] == [
+        "Repair Worker",
+        "Hand Build Worker",
+        "Trim Saw Worker",
+    ]
+
+
 def test_duplicate_totals_make_only_that_meter_unavailable(monkeypatch):
     repair = span(77, "Repair Worker", 0, 300, "Repair 1")
     first = _total("Repair 1")

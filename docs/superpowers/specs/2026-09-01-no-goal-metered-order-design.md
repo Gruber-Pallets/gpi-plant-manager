@@ -18,13 +18,13 @@ Keep every worker at a metered work center in the Metered production section, bu
 
 ## Implementation boundary
 
-Replace the current Trim-Saw-specific production subgroup helper in `people_performance.py` with a goal-based helper. The helper will consume the final role and final interval's production score, then contribute one subgroup rank to the existing `PersonRow.sort_key`.
+The production loader identifies configured metered work centers with a known non-positive or unusable goal and passes those names into dashboard assembly. The subgroup helper consumes the final role, final canonical work-center name, known no-goal names, and final production score, then contributes one subgroup rank to the existing `PersonRow.sort_key`.
 
 Do not change source loading, production scoring, goal calculation, attention reasons, section assignment, summaries, or templates.
 
 ## Failure behavior
 
-The subgroup uses the goal value already present in the final production score. A known zero, negative, or unusable goal sorts in the lower metered subgroup. A missing score means the goal status is unknown, so the row retains the normal metered subgroup and its existing unavailable-data attention order. Existing unavailable-location and non-production behavior remains unchanged.
+The loader's known no-goal set is authoritative even when no production score is built for that center. A known zero, negative, or unusable goal sorts in the lower metered subgroup. If configuration cannot establish goal status and the score is also missing, the row retains the normal metered subgroup and its existing unavailable-data attention order. Existing unavailable-location and non-production behavior remains unchanged.
 
 ## Verification
 
@@ -33,5 +33,6 @@ The subgroup uses the goal value already present in the final production score. 
 - A Trim Saw row with a positive goal stays with the normal goal-based metered rows.
 - A transfer uses the current or final interval's goal status.
 - A stale-location row with a known positive goal retains its existing attention placement.
+- Trim Saw and Hand Build rows without goals sort below a goal-based metered row even though no score is built for them.
 - Rows within each subgroup retain the existing attention ordering.
 - Forklift and Other ordering remains unchanged.

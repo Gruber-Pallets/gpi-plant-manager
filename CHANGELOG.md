@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Keep no-goal measured work at the bottom
+
+- **Trim Saw, Hand Build, and any other measured work without a goal now stay below measured work that has a goal on the People page.** Missing meter data no longer gets confused with a missing goal.
+
 ### See production totals at a glance
 
 - **The People page now shows each measured worker's current production next to their current goal.** The total follows them when they move to another measured work area.

@@ -168,12 +168,32 @@ def _production_values(
     dict[str, tuple[tuple[datetime, datetime], ...]],
     dict,
     set[str],
+    set[str],
     tuple[str, ...],
     bool,
 ]:
     metered_names = {station.name for station in source.catalog}
+    goal_based_names: set[str] = set()
+    known_no_goal_names: set[str] = set()
+    for station in source.catalog:
+        try:
+            target = float(settings_store.station_target(station))
+        except Exception:  # noqa: BLE001 - one bad goal only affects its WC
+            continue
+        if math.isfinite(target) and target > 0:
+            goal_based_names.add(station.name)
+        else:
+            known_no_goal_names.add(station.name)
     if source.error is not None:
-        return (), {}, {}, metered_names, ("Production data unavailable",), False
+        return (
+            (),
+            {},
+            {},
+            metered_names,
+            known_no_goal_names,
+            ("Production data unavailable",),
+            False,
+        )
     totals_by_name = {}
     duplicate_total_names: set[str] = set()
     for total in source.totals:
@@ -193,13 +213,8 @@ def _production_values(
             station.name not in duplicate_total_names
             and total is not None
             and not bool(getattr(total, "truncated", True))
+            and station.name in goal_based_names
         )
-        if available:
-            try:
-                target = float(settings_store.station_target(station))
-                available = math.isfinite(target) and target > 0
-            except Exception:  # noqa: BLE001 - one bad goal only affects its WC
-                available = False
         if available and (
             total.station.meter_id != station.meter_id or total.station.name != station.name
         ):
@@ -232,6 +247,7 @@ def _production_values(
         downtime_by_wc,
         breakdowns,
         metered_names,
+        known_no_goal_names,
         tuple(warnings),
         True,
     )
@@ -465,6 +481,7 @@ def load_dashboard(
             downtime_by_wc,
             breakdowns,
             metered_wc_names,
+            known_no_goal_wc_names,
             production_warnings,
             production_available,
         ) = _production_values(
@@ -484,6 +501,7 @@ def load_dashboard(
         downtime_by_wc = {}
         breakdowns = {}
         metered_wc_names = set()
+        known_no_goal_wc_names = set()
         production_available = False
         source_warnings.append("Production data unavailable")
 
@@ -524,6 +542,7 @@ def load_dashboard(
         metered_wc_names=metered_wc_names,
         source_warnings=source_warnings,
         is_today=is_today,
+        known_no_goal_wc_names=known_no_goal_wc_names,
         production_available=production_available,
         forklift_available=forklift_available,
     )
