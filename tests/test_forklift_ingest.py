@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, UTC
 from zoneinfo import ZoneInfo
 
 from zira_dashboard import forklift_ingest
@@ -26,6 +26,44 @@ COMPLETIONS = [
     {"id": "skip-no-driver", "workstationName": "X", "createdAt": 1782484200000},
 ]
 ID2NAME = {"fk-1": "Trent", "fk-2": "Louie"}
+
+
+def test_completion_events_keep_timestamp_status_and_unknown_values():
+    events = forklift_ingest.completion_events(
+        [
+            {"id": "c1", "completedBy": "fk-1", "createdAt": 1782484200000,
+             "workstationName": "Prosaw #4", "onTime": True, "late": False,
+             "responseMs": 120000, "handlingMs": 300000},
+            {"id": "c2", "completedBy": "fk-1", "createdAt": 1782485100000},
+            {"id": "missing-id", "createdAt": 1782485100000},
+        ],
+        {"fk-1": "Trent"},
+    )
+    assert [event.event_id for event in events] == ["c1", "c2"]
+    assert events[0].created_at_utc == datetime.fromtimestamp(
+        1782484200, tz=UTC
+    )
+    assert events[0].on_time is True
+    assert events[0].late is False
+    assert events[1].on_time is None
+    assert events[1].late is None
+
+
+def test_completion_events_keep_last_duplicate_external_id_once():
+    events = forklift_ingest.completion_events(
+        [
+            {"id": "c1", "completedBy": "fk-1", "createdAt": 1782484200000,
+             "workstationName": "Old station", "late": False},
+            {"id": "c1", "completedBy": "fk-1", "createdAt": 1782485100000,
+             "workstationName": "New station", "late": True},
+        ],
+        ID2NAME,
+    )
+
+    assert len(events) == 1
+    assert events[0].event_id == "c1"
+    assert events[0].workstation_name == "New station"
+    assert events[0].late is True
 
 
 def test_aggregate_completions_buckets_by_local_day_and_hour():

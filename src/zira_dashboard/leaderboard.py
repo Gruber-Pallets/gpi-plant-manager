@@ -38,6 +38,7 @@ class StationTotal:
     last_status: str | None
     samples: tuple[tuple[datetime, int], ...]  # (event_dt_utc, units) for shift rows with units > 0
     active_intervals: tuple[tuple[datetime, datetime], ...]  # (start_utc, end_utc) per the transfer rule
+    downtime_intervals: tuple[tuple[datetime, datetime], ...] = ()
 
 
 def day_window_utc(day: date) -> tuple[str, str]:
@@ -108,14 +109,13 @@ def _minutes_in_breaks(
     """Sum minutes between [start_utc, end_utc] that fall inside a break
     window on the local date(s) covered. Returns 0 when start >= end.
 
-    Used by `_adjusted_downtime` so the lunch/break portion of a downtime
-    event that bleeds into a break (or sits inside an active interval that
-    spans a break) is subtracted off — the report should only credit
-    productive minutes against downtime.
+    Retained as the aggregate counterpart to `_subtract_breaks`: the
+    lunch/break portion of a downtime event must not count as stopped
+    productive time.
 
     `breaks_by_day` is an optional {local_date: breaks} memo shared across
-    calls (see `_adjusted_downtime`) so the day's schedule isn't re-resolved
-    for every overlap window in a nested loop.
+    calls so the day's schedule isn't re-resolved for every overlap window in
+    a nested loop.
     """
     if end_utc <= start_utc:
         return 0.0
@@ -145,6 +145,68 @@ def _minutes_in_breaks(
     return total
 
 
+def _subtract_breaks(
+    start_utc: datetime,
+    end_utc: datetime,
+    breaks_by_day: dict[date, Any],
+) -> tuple[tuple[datetime, datetime], ...]:
+    pieces = [(start_utc, end_utc)]
+    local_start = start_utc.astimezone(SITE_TZ).date()
+    local_end = end_utc.astimezone(SITE_TZ).date()
+    day = local_start
+    while day <= local_end:
+        if day not in breaks_by_day:
+            try:
+                breaks_by_day[day] = breaks_for(day) or []
+            except Exception:
+                breaks_by_day[day] = []
+        for shift_break in breaks_by_day[day]:
+            break_start = datetime.combine(
+                day, shift_break.start, tzinfo=SITE_TZ
+            ).astimezone(UTC)
+            break_end = datetime.combine(
+                day, shift_break.end, tzinfo=SITE_TZ
+            ).astimezone(UTC)
+            next_pieces: list[tuple[datetime, datetime]] = []
+            for left, right in pieces:
+                if break_end <= left or break_start >= right:
+                    next_pieces.append((left, right))
+                    continue
+                if left < break_start:
+                    next_pieces.append((left, min(right, break_start)))
+                if break_end < right:
+                    next_pieces.append((max(left, break_end), right))
+            pieces = next_pieces
+        day += timedelta(days=1)
+    return tuple((left, right) for left, right in pieces if right > left)
+
+
+def _adjusted_downtime_intervals(
+    downtime_rows: list[tuple[datetime, int]],
+    samples: list[tuple[datetime, int]],
+    end_of_day: datetime,
+    *,
+    breaks_by_day: dict[date, Any] | None = None,
+) -> tuple[tuple[datetime, datetime], ...]:
+    active = _active_intervals(samples, end_of_day)
+    if not active:
+        return ()
+    resolved_breaks = dict(breaks_by_day or {})
+    sample_times = sorted(ts for ts, _units in samples)
+    adjusted: list[tuple[datetime, datetime]] = []
+    for event_end, duration_min in downtime_rows:
+        event_start = event_end - timedelta(minutes=duration_min)
+        sample_idx = bisect_left(sample_times, event_end) - 1
+        if sample_idx >= 0:
+            event_start = max(event_start, sample_times[sample_idx])
+        for active_start, active_end in active:
+            left = max(event_start, active_start)
+            right = min(event_end, active_end)
+            if right > left:
+                adjusted.extend(_subtract_breaks(left, right, resolved_breaks))
+    return tuple(sorted(adjusted))
+
+
 def _adjusted_downtime(
     downtime_rows: list[tuple[datetime, int]],
     samples: list[tuple[datetime, int]],
@@ -162,39 +224,17 @@ def _adjusted_downtime(
     events whose START is in a break — it doesn't help when the DURATION
     bleeds into one.
     """
-    intervals = _active_intervals(samples, end_of_day)
-    if not intervals:
-        return 0
-    breaks_by_day = dict(breaks_by_day or {})
-    sample_times = sorted(ts for ts, _units in samples)
-    total_minutes = 0.0
-    for event_end, duration_min in downtime_rows:
-        # The meter stamps each reading at the END of the interval it covers,
-        # and `duration` is that interval's length in minutes -- so the event
-        # spans [event_end - duration, event_end], looking BACKWARD. Projecting
-        # it forward instead laid the overnight idle hour (the hourly Stop
-        # stamped 07:00 with duration=60, which describes 06:00->07:00) on top
-        # of the morning's production, inflating every producing station's
-        # downtime by ~an hour at shift start.
-        event_start = event_end - timedelta(minutes=duration_min)
-        # A stopped duration cannot truthfully span across a production
-        # reading. Zira can emit zero-unit Stopped rows whose duration reaches
-        # back over productive rows, so clip the claimed stop to the latest
-        # production sample inside the window before intersecting it with
-        # active intervals.
-        sample_idx = bisect_left(sample_times, event_end) - 1
-        if sample_idx >= 0:
-            latest_sample = sample_times[sample_idx]
-            if latest_sample > event_start:
-                event_start = latest_sample
-        for ai_start, ai_end in intervals:
-            overlap_start = max(event_start, ai_start)
-            overlap_end = min(event_end, ai_end)
-            if overlap_end > overlap_start:
-                window_min = (overlap_end - overlap_start).total_seconds() / 60.0
-                break_min = _minutes_in_breaks(overlap_start, overlap_end, breaks_by_day)
-                total_minutes += max(0.0, window_min - break_min)
-    return int(total_minutes)
+    return int(
+        sum(
+            (right - left).total_seconds() / 60.0
+            for left, right in _adjusted_downtime_intervals(
+                downtime_rows,
+                samples,
+                end_of_day,
+                breaks_by_day=breaks_by_day,
+            )
+        )
+    )
 
 
 def fetch_station_day(
@@ -310,11 +350,17 @@ def fetch_station_day(
         eval_end = min(eval_end, now_utc)
     intervals = _active_intervals(samples, eval_end)
     active_minutes = int(sum((b - a).total_seconds() / 60.0 for a, b in intervals))
-    downtime = _adjusted_downtime(
+    adjusted_intervals = _adjusted_downtime_intervals(
         downtime_rows,
         samples,
         eval_end,
         breaks_by_day={day: info[3] for day, info in resolved_shift_by_day.items()},
+    )
+    downtime = int(
+        sum(
+            (right - left).total_seconds() / 60.0
+            for left, right in adjusted_intervals
+        )
     )
     return StationTotal(
         station=station,
@@ -327,6 +373,7 @@ def fetch_station_day(
         last_status=last_status,
         samples=tuple(samples),
         active_intervals=tuple(intervals),
+        downtime_intervals=adjusted_intervals,
     )
 
 

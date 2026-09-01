@@ -197,6 +197,44 @@ def test_fetch_station_day_ignores_stopped_status_on_productive_rows(monkeypatch
     assert total.downtime_minutes == 0
 
 
+def test_fetch_station_day_exposes_adjusted_downtime_intervals(monkeypatch):
+    day = date(2026, 7, 3)
+    monkeypatch.setattr(leaderboard, "is_workday", lambda d: True)
+    monkeypatch.setattr(leaderboard, "shift_start_for", lambda d: time(6, 0))
+    monkeypatch.setattr(leaderboard, "shift_end_for", lambda d: time(14, 30))
+    monkeypatch.setattr(leaderboard, "breaks_for", lambda d: ())
+
+    class _Client:
+        def get_readings(self, **kwargs):
+            return {
+                "data": [
+                    {
+                        "event_date": _iso_z(6, 5, day),
+                        "units": 1,
+                        "status": "Working",
+                        "duration": 0,
+                    },
+                    {
+                        "event_date": _iso_z(6, 30, day),
+                        "units": 0,
+                        "status": "Stopped",
+                        "duration": 10,
+                    },
+                ],
+                "lastValue": None,
+            }
+
+    station = Station("d3", "Dismantler 3", "Dismantler", "Recycling")
+    start_iso, end_iso = leaderboard.day_window_utc(day)
+
+    total = leaderboard.fetch_station_day(
+        _Client(), station, start_iso, end_iso, now_utc=_utc(7, 0, day)
+    )
+
+    assert total.downtime_minutes == 10
+    assert total.downtime_intervals == ((_utc(6, 20, day), _utc(6, 30, day)),)
+
+
 def test_adjusted_downtime_trims_stop_duration_that_crosses_production(_lunch_1130_to_1200):
     """A stopped-duration row cannot reach backward across a production sample.
 
@@ -217,3 +255,31 @@ def test_adjusted_downtime_trims_stop_duration_that_crosses_production(_lunch_11
 
     result = leaderboard._adjusted_downtime(downtime_rows, samples, end_of_day)
     assert result == 5
+
+
+def test_adjusted_downtime_intervals_split_around_lunch(_lunch_1130_to_1200):
+    samples = [
+        (_utc(11, 20), 1),
+        (_utc(12, 10), 1),
+    ]
+    rows = [(_utc(12, 5), 40)]
+
+    intervals = leaderboard._adjusted_downtime_intervals(
+        rows, samples, _utc(14, 30)
+    )
+
+    assert intervals == (
+        (_utc(11, 25), _utc(11, 30)),
+        (_utc(12, 0), _utc(12, 5)),
+    )
+    assert leaderboard._adjusted_downtime(rows, samples, _utc(14, 30)) == 10
+
+
+def test_station_total_keeps_interval_contract_backward_compatible():
+    station = Station("1", "Repair 1", "Repair", "Recycling")
+
+    total = leaderboard.StationTotal(
+        station, 1, 1, False, 0, 0, None, None, (), ()
+    )
+
+    assert total.downtime_intervals == ()

@@ -15,7 +15,7 @@ DRIVERS = [
 
 
 def test_backfill_history_aggregates_and_upserts(monkeypatch):
-    captured = {"calls": [], "drivers": None, "settings": {}}
+    captured = {"calls": [], "drivers": None, "events": None, "settings": {}}
     monkeypatch.setattr(forklift_backfill.forklift_client, "fetch_completions",
                         lambda since=0: COMPLETIONS)
     monkeypatch.setattr(forklift_backfill.forklift_client, "fetch_drivers",
@@ -24,6 +24,11 @@ def test_backfill_history_aggregates_and_upserts(monkeypatch):
                         lambda row: captured["calls"].append(row))
     monkeypatch.setattr(forklift_backfill.forklift_store, "upsert_driver_daily",
                         lambda rows: captured.update(drivers=rows) or len(rows))
+    monkeypatch.setattr(
+        forklift_backfill.forklift_event_store,
+        "upsert_completion_events",
+        lambda events: captured.update(events=events) or len(events),
+    )
     monkeypatch.setattr(forklift_backfill.app_settings, "set_setting",
                         lambda k, v: captured["settings"].update({k: v}))
 
@@ -37,6 +42,7 @@ def test_backfill_history_aggregates_and_upserts(monkeypatch):
     # driver name resolved from id->name
     names = {r["driver_id"]: r["name"] for r in captured["drivers"]}
     assert names == {"fk-1": "Trent", "fk-2": "Louie"}
+    assert [event.event_id for event in captured["events"]] == ["c1", "c2"]
 
 
 def test_backfill_history_passes_since(monkeypatch):
@@ -50,6 +56,8 @@ def test_backfill_history_passes_since(monkeypatch):
     monkeypatch.setattr(forklift_backfill.forklift_client, "fetch_drivers", lambda: [])
     monkeypatch.setattr(forklift_backfill.forklift_store, "upsert_calls_daily", lambda row: None)
     monkeypatch.setattr(forklift_backfill.forklift_store, "upsert_driver_daily", lambda rows: 0)
+    monkeypatch.setattr(forklift_backfill.forklift_event_store,
+                        "upsert_completion_events", lambda events: len(events))
     monkeypatch.setattr(forklift_backfill.app_settings, "set_setting", lambda k, v: None)
 
     forklift_backfill.backfill_history(since=12345)

@@ -6,7 +6,69 @@ JSONB hour keys are stored as strings (slot number) for stable round-tripping.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, UTC
+
+
+@dataclass(frozen=True)
+class ForkliftCompletionEvent:
+    event_id: str
+    driver_id: str
+    driver_name: str
+    created_at_utc: datetime
+    workstation_name: str | None
+    on_time: bool | None
+    late: bool | None
+    response_ms: int | None
+    handling_ms: int | None
+
+
+def _optional_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def completion_events(
+    items: list[dict], id_to_name: dict[str, str]
+) -> tuple[ForkliftCompletionEvent, ...]:
+    events_by_id: dict[str, ForkliftCompletionEvent] = {}
+    for item in items or []:
+        event_id = item.get("id")
+        driver_id = item.get("completedBy")
+        created_at = _optional_int(item.get("createdAt"))
+        if not event_id or not driver_id or created_at is None:
+            continue
+        driver_key = str(driver_id)
+        event = ForkliftCompletionEvent(
+            event_id=str(event_id),
+            driver_id=driver_key,
+            driver_name=str(id_to_name.get(driver_key) or driver_key),
+            created_at_utc=datetime.fromtimestamp(created_at / 1000.0, tz=UTC),
+            workstation_name=(
+                str(item["workstationName"])
+                if item.get("workstationName")
+                else None
+            ),
+            on_time=_optional_bool(item.get("onTime")),
+            late=_optional_bool(item.get("late")),
+            response_ms=_optional_int(item.get("responseMs")),
+            handling_ms=_optional_int(item.get("handlingMs")),
+        )
+        events_by_id[event.event_id] = event
+    return tuple(
+        sorted(
+            events_by_id.values(),
+            key=lambda event: (event.created_at_utc, event.event_id),
+        )
+    )
 
 
 def build_calls_daily(day: date, dashboard: dict, history: list[dict]) -> dict:

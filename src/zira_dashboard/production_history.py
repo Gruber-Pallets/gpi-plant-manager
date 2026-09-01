@@ -444,6 +444,27 @@ def attribute_for_range(
     return out
 
 
+def metered_station_totals(
+    client,
+    day: date,
+    now_utc: datetime | None = None,
+):
+    from . import staffing
+    from .leaderboard import cached_leaderboard
+    from .stations import Station
+
+    stations = [
+        Station(loc.meter_id, loc.name, loc.skill, loc.bay)
+        for loc in staffing.LOCATIONS
+        if loc.meter_id
+    ]
+    if not stations:
+        return []
+    if now_utc is None:
+        return cached_leaderboard(client, stations, day)
+    return cached_leaderboard(client, stations, day, now_utc)
+
+
 def _metered_leaderboard(
     client,
     day: date,
@@ -458,16 +479,16 @@ def _metered_leaderboard(
     Shared by _fetch_wc_totals and _fetch_wc_samples so the station-building
     block can't drift between them."""
     from . import staffing  # local import — staffing imports leaderboard.Station
-    from .leaderboard import (
-        cached_leaderboard as leaderboard,
-    )  # local — leaderboard pulls shift_config/tzdata
     from .leaderboard import leaderboard as uncached_leaderboard
+
     frozen_inputs = bool(
         stations is not None
         or shift_by_day is not None
         or cache_variant is not None
         or not persist
     )
+    if not frozen_inputs:
+        return metered_station_totals(client, day, now_utc)
     if stations is None:
         from .stations import Station
 
@@ -478,10 +499,6 @@ def _metered_leaderboard(
             Station(meter_id=loc.meter_id, name=loc.name, category=loc.skill, cell=loc.bay)
             for loc in metered
         ]
-    if not frozen_inputs:
-        if now_utc is None:
-            return leaderboard(client, stations, day)
-        return leaderboard(client, stations, day, now_utc)
     return uncached_leaderboard(
         client,
         list(stations),

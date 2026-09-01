@@ -16,6 +16,48 @@ def test_attribute_for_day_empty_schedule_returns_empty():
     assert out == {}
 
 
+def test_metered_station_totals_forwards_cap_and_all_metered_locations(monkeypatch):
+    from datetime import datetime, timezone
+
+    from zira_dashboard import leaderboard, staffing
+
+    day = date(2026, 8, 31)
+    cap = datetime(2026, 8, 31, 18, 30, tzinfo=timezone.utc)
+    calls = []
+    monkeypatch.setattr(
+        staffing,
+        "LOCATIONS",
+        [
+            staffing.Location(
+                "Repair 1", "Repair", "Bay 1", "Recycled", "meter-1"
+            ),
+            staffing.Location("Office", "Support", "Office", "Office", None),
+            staffing.Location(
+                "Dismantler 2",
+                "Dismantler",
+                "Bay 2",
+                "Recycled",
+                "meter-2",
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        leaderboard,
+        "cached_leaderboard",
+        lambda client, stations, selected_day, now_utc=None: calls.append(
+            (client, stations, selected_day, now_utc)
+        )
+        or [],
+    )
+    client = object()
+
+    assert production_history.metered_station_totals(client, day, cap) == []
+    assert calls[0][0] is client
+    assert calls[0][2:] == (day, cap)
+    assert [station.meter_id for station in calls[0][1]] == ["meter-1", "meter-2"]
+    assert [station.name for station in calls[0][1]] == ["Repair 1", "Dismantler 2"]
+
+
 def test_solo_operator_gets_full_credit():
     out = attribute_for_day(
         assignments={"Repair 1": ["Christian"]},

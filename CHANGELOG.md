@@ -16,6 +16,22 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **Past-absence PTO requests now appear with the other daily work in the Exception Inbox.** Managers can approve or deny a waiting request there. Requests that need payroll help stay visible until a manager adds a note and marks them handled.
 
+### Put every worker in the right dashboard group
+
+- **Plant Manager can now place production workers, tablet drivers, and other workers in the right order.** A person who moves still stays on one line, and late calls or low results can move them to the top of their group.
+
+### Keep each person's production goal separate
+
+- **Plant Manager can now work out one person's goal and uptime for each place they worked.** A move to a new work area starts a fresh result.
+
+### Remember exactly when a machine stopped
+
+- **Plant Manager can now keep the exact parts of a stop that count as downtime.** Break and lunch time stay out, so the new people view can draw an honest uptime line.
+
+### Keep each forklift call's time
+
+- **Plant Manager now keeps the time and result for each forklift call.** This will let managers see when calls happened without changing the current forklift totals.
+
 ### Past PTO Inbox build plan
 
 - **A step-by-step build plan is ready to put past-absence PTO requests in the Exception Inbox.** It covers manager buttons, clear error messages, safe counts, and checks that the request really appears. Nothing in the app has changed yet.

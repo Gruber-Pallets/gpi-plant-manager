@@ -8,7 +8,7 @@ DAY = date(2026, 6, 26)
 
 
 def test_snapshot_today_fetches_aggregates_and_stores(monkeypatch):
-    captured = {}
+    captured = {"events": None}
     monkeypatch.setattr(forklift_snapshot.forklift_client, "fetch_completions",
                         lambda since=0: [
                             {"id": "c1", "workstationName": "Prosaw #4",
@@ -26,6 +26,11 @@ def test_snapshot_today_fetches_aggregates_and_stores(monkeypatch):
                         lambda row: captured.setdefault("calls", row))
     monkeypatch.setattr(forklift_snapshot.forklift_store, "upsert_driver_daily",
                         lambda rows: captured.setdefault("drivers", rows) or len(rows))
+    monkeypatch.setattr(
+        forklift_snapshot.forklift_event_store,
+        "upsert_completion_events",
+        lambda events: captured.update(events=events) or len(events),
+    )
     saved = {}
     monkeypatch.setattr(forklift_snapshot.app_settings, "set_setting",
                         lambda k, v: saved.update({k: v}))
@@ -38,6 +43,7 @@ def test_snapshot_today_fetches_aggregates_and_stores(monkeypatch):
     assert captured["calls"]["by_hour"]["9"]["calls"] == 1
     assert [d["driver_id"] for d in captured["drivers"]] == ["fk-1"]
     assert captured["drivers"][0]["name"] == "Trent"
+    assert [event.event_id for event in captured["events"]] == ["c1", "c2"]
     assert saved["forklift_overload_responders"] == ["Louie"]
     assert out["day"] == "2026-06-26"
     assert out["calls"] == 1
@@ -54,6 +60,8 @@ def test_snapshot_today_preserves_overload_responders_without_flag(monkeypatch):
                         lambda row: None)
     monkeypatch.setattr(forklift_snapshot.forklift_store, "upsert_driver_daily",
                         lambda rows: 0)
+    monkeypatch.setattr(forklift_snapshot.forklift_event_store,
+                        "upsert_completion_events", lambda events: len(events))
     monkeypatch.setattr(forklift_snapshot.app_settings, "set_setting",
                         lambda k, v: saved.update({k: v}))
 
@@ -71,6 +79,8 @@ def test_snapshot_today_empty_day_writes_zero_row(monkeypatch):
                         lambda row: captured.setdefault("calls", row))
     monkeypatch.setattr(forklift_snapshot.forklift_store, "upsert_driver_daily",
                         lambda rows: len(rows))
+    monkeypatch.setattr(forklift_snapshot.forklift_event_store,
+                        "upsert_completion_events", lambda events: len(events))
     monkeypatch.setattr(forklift_snapshot.app_settings, "set_setting", lambda k, v: None)
 
     out = forklift_snapshot.snapshot_today(client=None, day=DAY)
@@ -90,6 +100,8 @@ def test_snapshot_today_requests_since_day_start(monkeypatch):
     monkeypatch.setattr(forklift_snapshot.forklift_client, "fetch_drivers", lambda: [])
     monkeypatch.setattr(forklift_snapshot.forklift_store, "upsert_calls_daily", lambda row: None)
     monkeypatch.setattr(forklift_snapshot.forklift_store, "upsert_driver_daily", lambda rows: 0)
+    monkeypatch.setattr(forklift_snapshot.forklift_event_store,
+                        "upsert_completion_events", lambda events: len(events))
     monkeypatch.setattr(forklift_snapshot.app_settings, "set_setting", lambda k, v: None)
 
     forklift_snapshot.snapshot_today(client=None, day=DAY)

@@ -5,6 +5,7 @@ import pytest
 from zira_dashboard.assignment_windows import WorkSegment
 from zira_dashboard import production_segments as production_segments_module
 from zira_dashboard.production_segments import (
+    SegmentCredit,
     SegmentScore,
     coalesce_display_scores,
     credit_work_segments,
@@ -216,6 +217,90 @@ def test_transfer_segments_keep_independent_actual_goal_and_runway():
         32.0,
         True,
     )
+
+
+def test_segment_score_keeps_odoo_employee_identity():
+    credit = SegmentCredit(
+        segment_id=1,
+        wc_name="Repair 1",
+        person_name="Alex Worker",
+        start_utc=t(12),
+        end_utc=t(13),
+        source="odoo",
+        productive_minutes=30,
+        actual_units=20,
+        is_active=False,
+        person_odoo_id=44,
+    )
+
+    scored = score_work_segments({"Repair 1": (credit,)}, target_per_hour={"Repair 1": 30.0})[
+        "Repair 1"
+    ][0]
+
+    assert scored.person_odoo_id == 44
+
+
+def test_display_scores_do_not_join_same_name_with_different_odoo_identity():
+    common = {
+        "wc_name": "Repair 1",
+        "person_name": "Alex Worker",
+        "source": "odoo",
+        "productive_minutes": 30,
+        "actual_units": 10,
+        "goal_units": 10,
+        "runway_units": 10,
+        "is_active": False,
+        "result": "ahead",
+    }
+    morning = SegmentScore(
+        segment_id=1,
+        start_utc=t(12),
+        end_utc=t(12, 30),
+        person_odoo_id=44,
+        **common,
+    )
+    afternoon = SegmentScore(
+        segment_id=2,
+        start_utc=t(13),
+        end_utc=t(13, 30),
+        person_odoo_id=45,
+        **common,
+    )
+
+    rows = coalesce_display_scores((morning, afternoon), ignored_gaps=((t(12, 30), t(13)),))
+
+    assert [row.person_odoo_id for row in rows] == [44, 45]
+
+
+def test_display_score_join_keeps_matching_odoo_identity():
+    common = {
+        "wc_name": "Repair 1",
+        "person_name": "Alex Worker",
+        "source": "odoo",
+        "productive_minutes": 30,
+        "actual_units": 10,
+        "goal_units": 10,
+        "runway_units": 10,
+        "is_active": False,
+        "result": "ahead",
+        "person_odoo_id": 44,
+    }
+    morning = SegmentScore(
+        segment_id=1,
+        start_utc=t(12),
+        end_utc=t(12, 30),
+        **common,
+    )
+    afternoon = SegmentScore(
+        segment_id=2,
+        start_utc=t(13),
+        end_utc=t(13, 30),
+        **common,
+    )
+
+    (joined,) = coalesce_display_scores((morning, afternoon), ignored_gaps=((t(12, 30), t(13)),))
+
+    assert joined.person_odoo_id == 44
 
 
 def test_transfer_boundary_and_overlap_credit_each_sample_once():

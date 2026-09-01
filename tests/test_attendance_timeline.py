@@ -83,6 +83,7 @@ def expected_span(
     odoo_work_center_name: str | None = None,
     attendance_ids: tuple[int, ...] = (101,),
     department_repair: tuple[int, int, datetime] | None = None,
+    is_open: bool = False,
 ) -> LocationSpan:
     return LocationSpan(
         employee_odoo_id=employee_id,
@@ -95,6 +96,7 @@ def expected_span(
         odoo_work_center_name=odoo_work_center_name,
         attendance_ids=attendance_ids,
         department_repair=department_repair,
+        is_open=is_open,
     )
 
 
@@ -410,11 +412,12 @@ def test_fresh_open_row_ends_exactly_at_as_of_and_threshold_equality_is_fresh():
             app_work_center_name="Repair 1",
             odoo_work_center_id=71,
             odoo_work_center_name="Odoo Repair One",
+            is_open=True,
         ),
     )
 
 
-def test_stale_open_row_splits_at_verified_boundary_and_withholds_app_wc():
+def test_stale_open_row_keeps_safe_mapped_identity_after_verified_boundary():
     spans = project(
         [row()],
         as_of=at(2),
@@ -435,8 +438,10 @@ def test_stale_open_row_splits_at_verified_boundary_and_withholds_app_wc():
             at(1, 58),
             at(2),
             "stale_open_location",
+            app_work_center_name="Repair 1",
             odoo_work_center_id=71,
             odoo_work_center_name="Odoo Repair One",
+            is_open=True,
         ),
     )
 
@@ -455,6 +460,38 @@ def test_stale_verified_boundary_before_row_start_clamps_to_whole_stale_row():
             "stale_open_location",
             odoo_work_center_id=71,
             odoo_work_center_name="Odoo Repair One",
+            is_open=True,
+        ),
+    )
+
+
+def test_stale_location_does_not_carry_mapping_across_attendance_identity_change():
+    spans = project(
+        [
+            row(check_out=at(1)),
+            row(102, check_in=at(1)),
+        ],
+        as_of=at(2),
+        verified=at(1),
+    )
+
+    assert spans == (
+        expected_span(
+            at(),
+            at(1),
+            "valid",
+            app_work_center_name="Repair 1",
+            odoo_work_center_id=71,
+            odoo_work_center_name="Odoo Repair One",
+        ),
+        expected_span(
+            at(1),
+            at(2),
+            "stale_open_location",
+            odoo_work_center_id=71,
+            odoo_work_center_name="Odoo Repair One",
+            attendance_ids=(102,),
+            is_open=True,
         ),
     )
 
@@ -470,6 +507,7 @@ def test_verified_boundary_after_as_of_is_clamped_without_future_output():
             app_work_center_name="Repair 1",
             odoo_work_center_id=71,
             odoo_work_center_name="Odoo Repair One",
+            is_open=True,
         ),
     )
 
