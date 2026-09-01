@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 import json
 from typing import Any
 
-from . import db
+from . import attendance_location_policy, db, shift_config
 from .shift_config import SITE_TZ
 
 
@@ -47,6 +47,7 @@ class MirrorHealth:
     baseline_completed_at: datetime | None
     oldest_recalc_requested_at: datetime | None
     last_error: str | None
+    last_incremental_observed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -273,16 +274,50 @@ def _enqueue_recalc_cur(
     reason: str,
     *,
     requested_at: datetime,
+    mark_strict: bool = False,
 ) -> None:
     unique_days = sorted(set(days))
+    live_active = bool(
+        mark_strict
+        and unique_days
+        and attendance_location_policy.live_is_active_cur(
+            cur=cur,
+            now_utc=requested_at,
+        )
+    )
     for day in unique_days:
         if not isinstance(day, date) or isinstance(day, datetime):
             raise TypeError("recalculation days must be date values")
+        is_completed_history = False
+        if live_active:
+            shift = shift_config.snapshot_for(day, cur=cur)
+            shift_start = datetime.combine(
+                day,
+                shift.shift_start,
+                tzinfo=SITE_TZ,
+            )
+            shift_end = datetime.combine(
+                day,
+                shift.shift_end,
+                tzinfo=SITE_TZ,
+            )
+            if shift_end <= shift_start:
+                shift_end += timedelta(days=1)
+            is_completed_history = (
+                requested_at.astimezone(UTC) >= shift_end.astimezone(UTC)
+            )
+        if live_active and is_completed_history:
+            cur.execute(
+                "INSERT INTO attendance_strict_days (day, reason, source_changed_at) "
+                "VALUES (%s, %s, %s) ON CONFLICT (day) DO NOTHING",
+                (day, reason, requested_at),
+            )
         cur.execute(
             "INSERT INTO attendance_recalc_queue "
             "(day, reason, requested_at, started_at, completed_at, "
-            "cache_started_at, cache_ready_at, attempt_count, last_error) "
-            "VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, 0, NULL) "
+            "cache_started_at, cache_ready_at, source_fingerprint, "
+            "attempt_count, last_error) "
+            "VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, NULL, 0, NULL) "
             "ON CONFLICT (day) DO UPDATE SET "
             "reason = EXCLUDED.reason, "
             "requested_at = CASE "
@@ -291,6 +326,7 @@ def _enqueue_recalc_cur(
             "ELSE EXCLUDED.requested_at END, "
             "started_at = NULL, completed_at = NULL, "
             "cache_started_at = NULL, cache_ready_at = NULL, "
+            "source_fingerprint = NULL, "
             "attempt_count = CASE "
             "WHEN attendance_recalc_queue.completed_at IS NULL "
             "THEN attendance_recalc_queue.attempt_count ELSE 0 END, "
@@ -299,15 +335,76 @@ def _enqueue_recalc_cur(
         )
 
 
-def enqueue_recalc(days: Iterable[date], reason: str) -> None:
+def enqueue_recalc(
+    days: Iterable[date], reason: str, *, mark_strict: bool = False
+) -> None:
     requested_at = datetime.now(UTC)
     with db.cursor() as cur:
+        if mark_strict:
+            from . import attendance_location_policy
+
+            attendance_location_policy.lock_rollout_decision_cur(cur)
         _enqueue_recalc_cur(
             cur,
             days,
             reason,
             requested_at=requested_at,
+            mark_strict=mark_strict,
         )
+
+
+def ensure_recalc_queued(
+    days: Iterable[date], reason: str, *, source_fingerprint: str
+) -> bool:
+    """Queue exact strict sources without disturbing an active/newer lease.
+
+    Returns ``True`` only when every requested day already completed both the
+    recalculation and cache-ready fence for the same exact source fingerprint.
+    """
+    if not isinstance(source_fingerprint, str) or not source_fingerprint:
+        raise ValueError("strict source fingerprint is required")
+    requested_at = datetime.now(UTC)
+    unique_days = sorted(set(days))
+    all_ready = True
+    with db.cursor() as cur:
+        attendance_location_policy.lock_rollout_decision_cur(cur)
+        for day in unique_days:
+            if not isinstance(day, date) or isinstance(day, datetime):
+                raise TypeError("recalculation days must be date values")
+            cur.execute(
+                "SELECT source_fingerprint, completed_at, cache_ready_at "
+                "FROM attendance_recalc_queue WHERE day = %s FOR UPDATE",
+                (day,),
+            )
+            row = cur.fetchone()
+            if (
+                row is not None
+                and row.get("source_fingerprint") == source_fingerprint
+                and row.get("completed_at") is not None
+                and row.get("cache_ready_at") is not None
+            ):
+                continue
+            all_ready = False
+            # Never reset either an active production lease or its cache-ready
+            # continuation.  A later tick will compare the completed exact
+            # fingerprint and queue a newer request when needed.
+            if row is not None and row.get("cache_ready_at") is None:
+                continue
+            cur.execute(
+                "INSERT INTO attendance_recalc_queue "
+                "(day, reason, requested_at, started_at, completed_at, "
+                "cache_started_at, cache_ready_at, source_fingerprint, "
+                "attempt_count, last_error) "
+                "VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, %s, 0, NULL) "
+                "ON CONFLICT (day) DO UPDATE SET "
+                "reason = EXCLUDED.reason, requested_at = EXCLUDED.requested_at, "
+                "started_at = NULL, completed_at = NULL, "
+                "cache_started_at = NULL, cache_ready_at = NULL, "
+                "source_fingerprint = EXCLUDED.source_fingerprint, "
+                "attempt_count = 0, last_error = NULL",
+                (day, reason, requested_at, source_fingerprint),
+            )
+    return all_ready
 
 
 def _locked_sync_state(cur) -> Mapping[str, Any]:
@@ -344,6 +441,20 @@ def _sync_state_from_row(row: Mapping[str, Any]) -> SyncState:
 
 def _sync_state_cur(cur) -> SyncState:
     return _sync_state_from_row(_locked_sync_state(cur))
+
+
+def _sync_state_read_cur(cur) -> SyncState:
+    """Read sync state under the sync advisory lock without taking a row lock."""
+    cur.execute(
+        "SELECT cursor_write_date, cursor_id, last_incremental_completed_at, "
+        "last_full_sweep_completed_at, full_sweep_generation, "
+        "baseline_completed_at, last_error FROM odoo_attendance_sync_state "
+        "WHERE singleton = TRUE"
+    )
+    state = cur.fetchone()
+    if state is None:
+        raise RuntimeError("Odoo attendance sync state is missing")
+    return _sync_state_from_row(state)
 
 
 def _upsert_rows_cur(
@@ -421,6 +532,7 @@ def _upsert_rows_cur(
             affected_days,
             "odoo_attendance_changed",
             requested_at=sync_completed_at,
+            mark_strict=True,
         )
     return affected_days
 
@@ -461,6 +573,7 @@ def _store_incremental_cycle_cur(
     cursor_id: int | None,
     completed_at: datetime,
     observed_at: datetime | None = None,
+    started_at: datetime | None = None,
 ) -> set[date]:
     completed = _aware_utc(completed_at, "completed_at")
     observed = completed if observed_at is None else _aware_utc(observed_at, "observed_at")
@@ -471,7 +584,12 @@ def _store_incremental_cycle_cur(
     elif cursor_id is not None:
         raise ValueError("cursor_id requires cursor_write_date")
 
+    from . import attendance_location_policy
+
+    attendance_location_policy.lock_rollout_decision_cur(cur)
     state = _locked_sync_state(cur)
+    if started_at is not None:
+        _record_incremental_started_cur(cur, started_at)
     affected = _upsert_rows_cur(
         cur,
         normalized,
@@ -488,12 +606,14 @@ def _store_incremental_cycle_cur(
     cur.execute(
         "UPDATE odoo_attendance_sync_state SET "
         "cursor_write_date = %s, cursor_id = %s, "
-        "last_incremental_completed_at = %s, last_error = %s "
+        "last_incremental_completed_at = %s, "
+        "last_incremental_observed_at = %s, last_error = %s "
         "WHERE singleton = TRUE",
         (
             next_date,
             next_id,
             completed,
+            observed,
             _error_after_success(state["last_error"], "incremental"),
         ),
     )
@@ -768,6 +888,9 @@ def _store_full_sweep_cur(
     sweep_generation = _positive_int(generation, "generation")
     completed = _aware_utc(completed_at, "completed_at")
     observed = completed if observed_at is None else _aware_utc(observed_at, "observed_at")
+    from . import attendance_location_policy
+
+    attendance_location_policy.lock_rollout_decision_cur(cur)
     state = _locked_sync_state(cur)
     if sweep_generation != int(state["full_sweep_generation"]) + 1:
         raise ValueError("full sweep generation is stale")
@@ -824,6 +947,7 @@ def _store_full_sweep_cur(
                 deleted_days,
                 "odoo_attendance_deleted",
                 requested_at=completed,
+                mark_strict=True,
             )
     cur.execute(
         "UPDATE odoo_attendance_sync_state SET "
@@ -935,7 +1059,7 @@ def _complete_baseline_if_ready(completed_at: datetime) -> bool:
 
 def _health_from_row(row: Mapping[str, Any] | None) -> MirrorHealth:
     if row is None:
-        return MirrorHealth(None, None, None, None, "sync state is missing")
+        return MirrorHealth(None, None, None, None, "sync state is missing", None)
     return MirrorHealth(
         last_incremental_completed_at=_optional_aware_utc(
             row["last_incremental_completed_at"],
@@ -952,12 +1076,16 @@ def _health_from_row(row: Mapping[str, Any] | None) -> MirrorHealth:
             row["oldest_recalc_requested_at"], "oldest_recalc_requested_at"
         ),
         last_error=_format_error_state(row["last_error"]),
+        last_incremental_observed_at=_optional_aware_utc(
+            row.get("last_incremental_observed_at"),
+            "last_incremental_observed_at",
+        ),
     )
 
 
 def _health_snapshot_cur(cur) -> MirrorHealth:
     cur.execute(
-        "SELECT s.last_incremental_completed_at, "
+        "SELECT s.last_incremental_completed_at, s.last_incremental_observed_at, "
         "s.last_full_sweep_completed_at, s.baseline_completed_at, "
         "(SELECT MIN(requested_at) FROM attendance_recalc_queue "
         " WHERE completed_at IS NULL) AS oldest_recalc_requested_at, "
@@ -969,7 +1097,7 @@ def _health_snapshot_cur(cur) -> MirrorHealth:
 
 def health_snapshot() -> MirrorHealth:
     rows = db.query(
-        "SELECT s.last_incremental_completed_at, "
+        "SELECT s.last_incremental_completed_at, s.last_incremental_observed_at, "
         "s.last_full_sweep_completed_at, s.baseline_completed_at, "
         "(SELECT MIN(requested_at) FROM attendance_recalc_queue "
         " WHERE completed_at IS NULL) AS oldest_recalc_requested_at, "
@@ -986,6 +1114,7 @@ __all__ = [
     "day_presence",
     "day_presence_from_rows",
     "enqueue_recalc",
+    "ensure_recalc_queued",
     "health_snapshot",
     "local_days_touched",
     "mark_deleted_after_successful_sweep",

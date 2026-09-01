@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 import os
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -92,6 +93,7 @@ def install_strict_dependencies(
         attendance_location_policy,
         attendance_mirror,
         attendance_timeline,
+        db,
         shift_config,
         staffing,
         timeclock_windows,
@@ -116,7 +118,30 @@ def install_strict_dependencies(
     monkeypatch.setattr(
         attendance_timeline,
         "timeline_for_range",
-        lambda start, end, *, as_of_utc=None: spans,
+        lambda start, end, **_kwargs: spans,
+    )
+    @contextmanager
+    def source_snapshot():
+        yield object()
+
+    monkeypatch.setattr(db, "read_snapshot", source_snapshot)
+    monkeypatch.setattr(
+        production_history,
+        "strict_source_snapshot",
+        lambda _day, **_kwargs: SimpleNamespace(
+            shift_start_utc=START,
+            shift_end_utc=END,
+            break_windows=(),
+            stations=(),
+            shift_by_day={},
+            work_center_by_odoo_id={44: "Repair 4"},
+            source_fingerprint="strict-test-source",
+        ),
+    )
+    monkeypatch.setattr(
+        production_history,
+        "strict_local_source_fingerprint",
+        lambda _day, **_kwargs: "strict-local-test",
     )
     monkeypatch.setattr(
         production_history, "_metered_leaderboard", lambda client, day, **kwargs: list(totals)
@@ -188,6 +213,27 @@ def test_strict_branch_is_chosen_once_and_splits_duplicate_names_by_odoo_id(monk
     assert result[(202, "Alex")]["Repair 4"]["units"] == 20.0
     assert sum(wcs["Repair 4"]["units"] for wcs in result.values()) == 40.0
     assert result.is_strict is True
+    assert result.source_fingerprint == "strict-local-test"
+    assert isinstance(result.request_fingerprint, str)
+    assert result.request_fingerprint != result.source_fingerprint
+
+
+def test_strict_request_fingerprint_changes_when_only_historical_meter_data_changes(
+    monkeypatch,
+):
+    totals = [station_total(units=10, samples=((at(13), 10),))]
+    install_strict_dependencies(
+        monkeypatch,
+        spans=(span(101, "Alex", START, END),),
+        totals=totals,
+    )
+
+    first = production_history.attribution_for(DAY, object(), now_utc=END)
+    totals[:] = [station_total(units=20, samples=((at(13), 20),))]
+    second = production_history.attribution_for(DAY, object(), now_utc=END)
+
+    assert first.source_fingerprint == second.source_fingerprint == "strict-local-test"
+    assert first.request_fingerprint != second.request_fingerprint
 
 
 def test_pending_cutover_fails_before_loading_any_attribution_source(monkeypatch):
@@ -509,12 +555,14 @@ def test_strict_store_failure_rolls_back_marker_and_delete(monkeypatch):
     assert fake.events[-1] == "rollback"
 
 
-def test_precompute_carries_computed_strict_state_to_final_store(monkeypatch):
+def test_precompute_carries_computed_strict_state_to_durable_queue(monkeypatch):
     from zira_dashboard import attendance, attendance_mirror
 
     computed = production_history.AttributionResult(
         {(101, "Ana"): {"Repair 4": {"units": 10, "hours": 1, "days_worked": 1}}},
         is_strict=True,
+        source_fingerprint="strict-source",
+        request_fingerprint="strict-request-source",
     )
     monkeypatch.setattr(production_history, "attribution_for", lambda day, client: computed)
     monkeypatch.setattr(attendance, "name_to_person_id", lambda: {})
@@ -526,13 +574,18 @@ def test_precompute_carries_computed_strict_state_to_final_store(monkeypatch):
     )
     monkeypatch.setattr(
         attendance_mirror,
-        "enqueue_recalc",
-        lambda *_args, **_kwargs: pytest.fail("successful strict write enqueued"),
+        "ensure_recalc_queued",
+        lambda days, reason, **kwargs: stored.append(
+            (tuple(days), reason, kwargs["source_fingerprint"])
+        ),
     )
 
-    assert precompute.precompute_day(DAY, object())["rows_written"] == 1
-    assert stored[0].strict_day == DAY
-    assert stored[0].expected_match_state == "strict"
+    assert precompute.precompute_day(DAY, object()) == {
+        "day": DAY.isoformat(),
+        "rows_written": 0,
+        "queued": True,
+    }
+    assert stored == [((DAY,), "strict_direct_refresh", "strict-request-source")]
 
 
 @_needs_postgres
@@ -632,7 +685,7 @@ def test_precompute_store_failure_enqueues_without_retrying_or_falling_back(monk
 
     computed = production_history.AttributionResult(
         {(101, "Ana"): {"Repair 4": {"units": 10, "hours": 1, "days_worked": 1}}},
-        is_strict=True,
+        is_strict=False,
     )
     monkeypatch.setattr(production_history, "attribution_for", lambda day, client: computed)
     monkeypatch.setattr(attendance, "name_to_person_id", lambda: {})
@@ -655,6 +708,244 @@ def test_precompute_store_failure_enqueues_without_retrying_or_falling_back(monk
 
     assert len(writes) == 1
     assert writes[0].day == DAY
-    assert writes[0].strict_day == DAY
-    assert writes[0].expected_match_state == "strict"
+    assert writes[0].strict_day is None
+    assert writes[0].expected_match_state == "legacy"
     assert enqueued == [((DAY,), "production_source_unavailable")]
+
+
+@_needs_postgres
+def test_postgres_strict_source_fingerprint_is_day_scoped_and_semantic_only():
+    from zira_dashboard import db
+
+    day = date(2098, 8, 24)
+    attendance_id = 9_082_401
+    check_in = datetime(2098, 8, 24, 12, tzinfo=UTC)
+    db.init_pool()
+    db.bootstrap_schema()
+    original_sync = db.query(
+        "SELECT baseline_completed_at, last_incremental_completed_at, "
+        "last_incremental_observed_at FROM odoo_attendance_sync_state "
+        "WHERE singleton = TRUE"
+    )[0]
+    with db.cursor() as cur:
+        cur.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        cur.execute(
+            "INSERT INTO odoo_attendance_mirror "
+            "(odoo_attendance_id, employee_odoo_id, employee_name, check_in_utc, "
+            "check_out_utc, odoo_work_center_id, odoo_work_center_name, "
+            "odoo_write_date, first_seen_at, last_seen_at) "
+            "VALUES (%s, 9082401, 'Fingerprint Worker', %s, %s, NULL, NULL, "
+            "%s, %s, %s)",
+            (
+                attendance_id,
+                check_in,
+                check_in + timedelta(hours=1),
+                check_in,
+                check_in,
+                check_in,
+            ),
+        )
+        cur.execute(
+            "UPDATE odoo_attendance_sync_state SET baseline_completed_at = %s, "
+            "last_incremental_completed_at = %s, last_incremental_observed_at = %s "
+            "WHERE singleton = TRUE",
+            (check_in, check_in, check_in),
+        )
+    try:
+        source_snapshot = production_history.strict_source_snapshot(day)
+        verified_after_shift = source_snapshot.shift_end_utc + timedelta(minutes=1)
+        db.execute(
+            "UPDATE odoo_attendance_sync_state "
+            "SET last_incremental_completed_at = %s WHERE singleton = TRUE",
+            (verified_after_shift,),
+        )
+        original = production_history.strict_local_source_fingerprint(day)
+        db.execute(
+            "UPDATE odoo_attendance_sync_state "
+            "SET last_incremental_completed_at = %s, last_incremental_observed_at = %s "
+            "WHERE singleton = TRUE",
+            (
+                verified_after_shift + timedelta(hours=1),
+                check_in + timedelta(minutes=1),
+            ),
+        )
+        metadata_only = production_history.strict_local_source_fingerprint(day)
+        db.execute(
+            "UPDATE odoo_attendance_mirror SET employee_name = %s "
+            "WHERE odoo_attendance_id = %s",
+            ("Changed Fingerprint Worker", attendance_id),
+        )
+        semantic_change = production_history.strict_local_source_fingerprint(day)
+
+        assert len(original) == 64
+        assert metadata_only == original
+        assert semantic_change != original
+        prepared = precompute.PreparedProductionDay(
+            day,
+            (
+                {
+                    "day": day,
+                    "emp_id": "9082401",
+                    "name": "Fingerprint Worker",
+                    "wc_name": "Repair 4",
+                    "units": 3.0,
+                    "downtime": 0.0,
+                    "hours": 1.0,
+                    "days_worked": 1.0,
+                    "excluded_minutes": 0.0,
+                },
+            ),
+            day,
+            "strict",
+            original,
+        )
+        db.execute(
+            "INSERT INTO attendance_strict_days (day, reason, source_changed_at) "
+            "VALUES (%s, 'source_fence_test', now()) ON CONFLICT (day) DO NOTHING",
+            (day,),
+        )
+        with pytest.raises(ProductionSourceUnavailable, match="source changed"):
+            precompute.store_prepared_day(prepared)
+        assert db.query("SELECT emp_id FROM production_daily WHERE day = %s", (day,)) == []
+    finally:
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
+            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
+            cur.execute(
+                "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+                (attendance_id,),
+            )
+            cur.execute(
+                "UPDATE odoo_attendance_sync_state SET baseline_completed_at = %s, "
+                "last_incremental_completed_at = %s, "
+                "last_incremental_observed_at = %s WHERE singleton = TRUE",
+                (
+                    original_sync["baseline_completed_at"],
+                    original_sync["last_incremental_completed_at"],
+                    original_sync["last_incremental_observed_at"],
+                ),
+            )
+
+
+@_needs_postgres
+def test_postgres_source_write_serializes_before_stale_strict_store():
+    from zira_dashboard import db
+
+    day = date(2098, 8, 25)
+    attendance_id = 9_082_502
+    check_in = datetime(2098, 8, 25, 12, tzinfo=UTC)
+    db.init_pool()
+    db.bootstrap_schema()
+    with db.cursor() as cur:
+        cur.execute(
+            "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+            (attendance_id,),
+        )
+        cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
+        cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
+        cur.execute(
+            "INSERT INTO odoo_attendance_mirror "
+            "(odoo_attendance_id, employee_odoo_id, employee_name, check_in_utc, "
+            "check_out_utc, odoo_write_date, first_seen_at, last_seen_at) "
+            "VALUES (%s, 9082502, 'Race Worker Before', %s, %s, %s, %s, %s)",
+            (
+                attendance_id,
+                check_in,
+                check_in + timedelta(hours=1),
+                check_in,
+                check_in,
+                check_in,
+            ),
+        )
+        cur.execute(
+            "INSERT INTO attendance_strict_days (day, reason, source_changed_at) "
+            "VALUES (%s, 'source_race_test', now())",
+            (day,),
+        )
+        cur.execute(
+            "INSERT INTO production_daily "
+            "(day, emp_id, name, wc_name, units, downtime, hours, days_worked) "
+            "VALUES (%s, '9082502', 'Prior Saved Worker', 'Repair 4', 7, 0, 1, 1)",
+            (day,),
+        )
+    original = production_history.strict_local_source_fingerprint(day)
+    prepared = precompute.PreparedProductionDay(
+        day,
+        (
+            {
+                "day": day,
+                "emp_id": "9082502",
+                "name": "Stale Prepared Worker",
+                "wc_name": "Repair 4",
+                "units": 99.0,
+                "downtime": 0.0,
+                "hours": 1.0,
+                "days_worked": 1.0,
+                "excluded_minutes": 0.0,
+            },
+        ),
+        day,
+        "strict",
+        original,
+    )
+    writer_holds_change = Event()
+    release_writer = Event()
+    store_done = Event()
+    errors = []
+
+    def mutate_source():
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "UPDATE odoo_attendance_mirror SET employee_name = %s "
+                    "WHERE odoo_attendance_id = %s",
+                    ("Race Worker After", attendance_id),
+                )
+                writer_holds_change.set()
+                assert release_writer.wait(timeout=5)
+        except Exception as exc:  # pragma: no cover - asserted in parent thread
+            errors.append(exc)
+
+    def store_stale_result():
+        try:
+            precompute.store_prepared_day(prepared)
+        except Exception as exc:  # expected stale-source rejection
+            errors.append(exc)
+        finally:
+            store_done.set()
+
+    writer = Thread(target=mutate_source)
+    store = Thread(target=store_stale_result)
+    writer.start()
+    assert writer_holds_change.wait(timeout=5)
+    store.start()
+    try:
+        assert not store_done.wait(timeout=0.25)
+        release_writer.set()
+        writer.join(timeout=5)
+        store.join(timeout=5)
+
+        assert not writer.is_alive()
+        assert not store.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], ProductionSourceUnavailable)
+        assert "source changed" in str(errors[0])
+        assert db.query(
+            "SELECT name, units FROM production_daily "
+            "WHERE day = %s AND emp_id = '9082502' AND wc_name = 'Repair 4'",
+            (day,),
+        ) == [{"name": "Prior Saved Worker", "units": 7}]
+    finally:
+        release_writer.set()
+        writer.join(timeout=5)
+        store.join(timeout=5)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
+            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
+            cur.execute(
+                "DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s",
+                (attendance_id,),
+            )

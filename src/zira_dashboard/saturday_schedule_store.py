@@ -68,23 +68,27 @@ def current() -> SaturdaySchedule:
     return _store.current()
 
 
-def save(sched: SaturdaySchedule) -> None:
+def save(sched: SaturdaySchedule, *, cur=None) -> None:
     from . import db
-    db.execute(
+    sql = (
         "INSERT INTO saturday_schedule (id, shift_start, shift_end, breaks, updated_at) "
         "VALUES (1, %s, %s, %s::jsonb, now()) "
         "ON CONFLICT (id) DO UPDATE SET shift_start = EXCLUDED.shift_start, "
-        "shift_end = EXCLUDED.shift_end, breaks = EXCLUDED.breaks, updated_at = now()",
-        (
-            sched.shift_start,
-            sched.shift_end,
-            json.dumps([
-                {"start": _format_time(b.start), "end": _format_time(b.end), "name": b.name}
-                for b in sched.breaks
-            ]),
-        ),
+        "shift_end = EXCLUDED.shift_end, breaks = EXCLUDED.breaks, updated_at = now()"
     )
-    _store.set(sched)
+    params = (
+        sched.shift_start,
+        sched.shift_end,
+        json.dumps([
+            {"start": _format_time(b.start), "end": _format_time(b.end), "name": b.name}
+            for b in sched.breaks
+        ]),
+    )
+    if cur is None:
+        db.execute(sql, params)
+        _store.set(sched)
+    else:
+        cur.execute(sql, params)
 
 
 def reload() -> SaturdaySchedule:

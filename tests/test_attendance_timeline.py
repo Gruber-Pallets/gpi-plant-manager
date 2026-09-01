@@ -901,9 +901,9 @@ def test_timeline_for_partial_day_reads_prior_day_context_before_clipping(
         lambda _wc_id: "Repair 1",
     )
     monkeypatch.setattr(
-        attendance_timeline.attendance_location_policy,
-        "department_requires_work_center",
-        lambda _name: True,
+        attendance_timeline,
+        "_department_requirements_for_rows",
+        lambda _rows: lambda _name: True,
     )
 
     spans = attendance_timeline.timeline_for_range(at(), at(minutes=10), as_of_utc=at(minutes=10))
@@ -941,18 +941,13 @@ def test_timeline_for_range_normalizes_numbered_odoo_department_for_saved_policy
     )
     monkeypatch.setattr(
         attendance_timeline,
-        "db",
-        type(
-            "NoFallbackDb",
-            (),
-            {"query": staticmethod(lambda *_args: pytest.fail("fallback queried"))},
+        "_department_requirements_for_rows",
+        lambda _rows: (
+            lambda name: seen_departments.append(
+                attendance_timeline._NUMBERED_DEPARTMENT_PREFIX.sub("", name).strip()
+            )
+            or name != "00 Maintenance"
         ),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        attendance_timeline.attendance_location_policy,
-        "department_requires_work_center",
-        lambda name: seen_departments.append(name) or name != "Maintenance",
     )
 
     spans = attendance_timeline.timeline_for_range(at(), at(minutes=10), as_of_utc=at(minutes=10))
@@ -1002,9 +997,11 @@ def test_timeline_uses_employee_department_when_attendance_department_is_blank(
         raising=False,
     )
     monkeypatch.setattr(
-        attendance_timeline.attendance_location_policy,
-        "department_requires_work_center",
-        attendance_timeline.attendance_location_policy.default_department_requires_work_center,
+        attendance_timeline,
+        "_department_requirements_for_rows",
+        lambda _rows: (
+            attendance_timeline.attendance_location_policy.default_department_requires_work_center
+        ),
     )
 
     spans = attendance_timeline.timeline_for_range(at(), at(minutes=10), as_of_utc=at(minutes=10))

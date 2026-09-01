@@ -1,6 +1,7 @@
 """Behavior tests for the attendance-location rollout policy boundary."""
 
 from datetime import UTC, date, datetime, time, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,15 @@ from zira_dashboard import shift_config
 def _fixed_workday_boundary(monkeypatch):
     """Keep policy tests independent of Postgres-backed schedule overrides."""
     monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(7, 0))
+    monkeypatch.setattr(shift_config, "is_workday", lambda _day: True)
+    monkeypatch.setattr(
+        shift_config,
+        "snapshot_for",
+        lambda day, **_kwargs: SimpleNamespace(
+            shift_start=shift_config.shift_start_for(day),
+            is_workday=shift_config.is_workday(day),
+        ),
+    )
 
 
 def _cutover_utc(day: date) -> datetime:
@@ -129,6 +139,21 @@ def test_live_cutover_must_be_timezone_aware_and_on_workday_boundary():
         )
 
 
+def test_live_cutover_rejects_non_workday(monkeypatch):
+    monkeypatch.setattr(shift_config, "is_workday", lambda _day: False)
+    gate = policy.LiveGate(
+        checked_at=datetime.now(UTC),
+        report_digest="b617a1c0" * 8,
+        activated_at=None,
+    )
+    day = datetime.now(shift_config.SITE_TZ).date() + timedelta(days=1)
+
+    with pytest.raises(ValueError, match="^cutover_workday_required$"):
+        policy.set_rollout_config(
+            policy.RolloutConfig(mode="live", cutover_at=_cutover_utc(day), live_gate=gate)
+        )
+
+
 def test_live_is_active_only_after_gate_activation(monkeypatch):
     day = date(2026, 8, 31)
     cutover = _cutover_utc(day)
@@ -142,7 +167,7 @@ def test_live_is_active_only_after_gate_activation(monkeypatch):
     assert policy.live_is_active(now_utc=cutover) is True
 
 
-def test_scheduled_shadow_rollback_stays_live_until_clean_boundary(monkeypatch):
+def test_scheduled_shadow_rollback_stays_live_until_atomic_settlement(monkeypatch):
     activated_at = _cutover_utc(date(2026, 8, 31))
     rollback_at = _cutover_utc(date(2026, 9, 2))
     monkeypatch.setattr(
@@ -152,7 +177,7 @@ def test_scheduled_shadow_rollback_stays_live_until_clean_boundary(monkeypatch):
     )
 
     assert policy.live_is_active(now_utc=rollback_at - timedelta(seconds=1)) is True
-    assert policy.live_is_active(now_utc=rollback_at) is False
+    assert policy.live_is_active(now_utc=rollback_at) is True
 
 
 def test_scheduled_shadow_rollback_keeps_prior_days_strict(monkeypatch):
@@ -187,7 +212,7 @@ def test_scheduled_shadow_rollback_keeps_prior_days_strict(monkeypatch):
 
     persisted.add(date(2026, 9, 1))
     assert policy.match_state_for_day(date(2026, 9, 1), now_utc=rollback_at) == "strict"
-    assert policy.match_state_for_day(rollback_day, now_utc=rollback_at) == "legacy"
+    assert policy.match_state_for_day(rollback_day, now_utc=rollback_at) == "strict"
 
 
 def test_active_live_rollback_rejects_a_past_clean_boundary(monkeypatch):
@@ -374,3 +399,23 @@ def test_set_department_requirement_uses_supplied_transaction_cursor(monkeypatch
 
     assert "requires_work_center_explicit = TRUE" in executed["sql"]
     assert executed["params"] == (False, "Maintenance")
+
+
+def test_match_state_for_day_cur_fails_closed_for_malformed_rollout_config():
+    class Cursor:
+        def __init__(self):
+            self.rows = iter(
+                (
+                    None,
+                    {"value": {"mode": "broken", "cutover_at": "not-a-date"}},
+                )
+            )
+
+        def execute(self, _sql, _params):
+            pass
+
+        def fetchone(self):
+            return next(self.rows)
+
+    with pytest.raises(ValueError, match="^rollout_config_invalid$"):
+        policy.match_state_for_day_cur(date(2026, 9, 1), cur=Cursor())

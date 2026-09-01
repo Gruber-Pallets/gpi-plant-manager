@@ -264,6 +264,7 @@ def _pending_time_off(today: date, limit: int = 8) -> tuple[int, list[dict]]:
 _TIER_RANK = {"urgent": 0, "warn": 1, "info": 2, "normal": 2, "muted": 3}
 
 _ATTENDANCE_SECTION_META = {
+    "attendance_cutover_blocked": ("Attendance Cutover Blocked", "bad"),
     "attendance_missing_location": ("Odoo Location Missing", "bad"),
     "attendance_unmapped_location": ("Unknown Odoo Work Center", "bad"),
     "attendance_conflicting_location": ("Mixed-Up Odoo Locations", "bad"),
@@ -381,6 +382,7 @@ def _attendance_issue_row(issue) -> dict:
         for employee_id, name in issue.affected_workers
     ]
     label_by_kind = {
+        "attendance_cutover_blocked": "Live rollout stayed in shadow",
         "attendance_missing_location": "No Odoo work center",
         "attendance_unmapped_location": raw_labels[0] if raw_labels else "Unknown Odoo work center",
         "attendance_conflicting_location": "Overlapping Odoo work centers",
@@ -581,6 +583,7 @@ def build_summary() -> dict:
     )
     summary = {
         "today": today.isoformat(),
+        "attendance_location_mode": attendance_snapshot.mode,
         "generated_at": plant_day.now().strftime("%-I:%M %p"),
         "total": total,
         "urgent_total": urgent_total,
@@ -943,6 +946,7 @@ def build_snapshot() -> dict:
     )
     return {
         "today": today.isoformat(),
+        "attendance_location_mode": attendance_snapshot.mode,
         "generated_at": plant_day.now().strftime("%-I:%M %p"),
         "total": total,
         "urgent_total": urgent_total,

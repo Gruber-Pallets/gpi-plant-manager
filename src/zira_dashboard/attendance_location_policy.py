@@ -38,6 +38,11 @@ class RolloutConfig:
     live_gate: LiveGate | None
 
 
+def lock_rollout_decision_cur(cur) -> None:
+    """Take the shared rollout write fence in the one canonical order."""
+    cur.execute("LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE")
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -93,12 +98,38 @@ def get_rollout_config() -> RolloutConfig:
         return RolloutConfig(mode="off", cutover_at=None, live_gate=None)
 
 
-def _validate_cutover(cutover_at: datetime | None) -> None:
+def get_rollout_config_strict() -> RolloutConfig:
+    """Read rollout state for a mutation; malformed or missing state is fatal."""
+    raw = app_settings.get_setting(_SETTING_KEY)
+    if raw is None:
+        return RolloutConfig(mode="off", cutover_at=None, live_gate=None)
+    return _parse_config(raw)
+
+
+def get_rollout_config_cur(cur) -> RolloutConfig:
+    """Read rollout state from the caller's fenced transaction, fail closed."""
+    cur.execute(
+        "SELECT value FROM app_settings WHERE key = %s",
+        (_SETTING_KEY,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return RolloutConfig(mode="off", cutover_at=None, live_gate=None)
+    try:
+        return _parse_config(row["value"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("rollout_config_invalid") from exc
+
+
+def _validate_cutover(cutover_at: datetime | None, *, cur=None) -> None:
     if cutover_at is None or not _is_aware(cutover_at):
         raise ValueError("cutover_timezone_required")
     local = cutover_at.astimezone(shift_config.SITE_TZ)
-    if local.time().replace(tzinfo=None) != shift_config.shift_start_for(local.date()):
+    shift = shift_config.snapshot_for(local.date(), cur=cur)
+    if local.time().replace(tzinfo=None) != shift.shift_start:
         raise ValueError("cutover_boundary_required")
+    if not shift.is_workday:
+        raise ValueError("cutover_workday_required")
 
 
 def _validate_live_gate(gate: LiveGate | None) -> None:
@@ -125,9 +156,9 @@ def set_rollout_config(config: RolloutConfig, *, cur=None) -> None:
     if config.mode == "off" and live_is_active():
         raise ValueError("rollback_boundary_required")
     if config.cutover_at is not None:
-        _validate_cutover(config.cutover_at)
+        _validate_cutover(config.cutover_at, cur=cur)
     if config.mode == "live":
-        _validate_cutover(config.cutover_at)
+        _validate_cutover(config.cutover_at, cur=cur)
         _validate_live_gate(config.live_gate)
     if (
         config.mode == "shadow"
@@ -136,7 +167,7 @@ def set_rollout_config(config: RolloutConfig, *, cur=None) -> None:
     ):
         if not _is_aware(config.live_gate.activated_at):
             raise ValueError("live_readiness_required")
-        _validate_cutover(config.cutover_at)
+        _validate_cutover(config.cutover_at, cur=cur)
         assert config.cutover_at is not None
         if config.cutover_at.astimezone(UTC) <= _utc_now():
             raise ValueError("rollback_future_boundary_required")
@@ -171,16 +202,38 @@ def _live_is_active(config: RolloutConfig, now_utc: datetime) -> bool:
         return False
     if config.mode == "live":
         return True
-    return bool(
-        config.mode == "shadow"
-        and config.cutover_at is not None
-        and now_utc < config.cutover_at.astimezone(UTC)
-    )
+    # A scheduled Shadow rollback changes ownership only when its fenced
+    # settlement transaction succeeds. This prevents a later schedule edit
+    # from turning an obsolete timestamp into a silent mid-shift handoff.
+    return config.mode == "shadow" and config.cutover_at is not None
 
 
 def live_is_active(*, now_utc: datetime | None = None) -> bool:
     """True only after a live rollout's boundary activation is recorded."""
     return _live_is_active(get_rollout_config(), _aware_utc(now_utc))
+
+
+def live_is_active_cur(*, cur, now_utc: datetime | None = None) -> bool:
+    """Resolve active ownership from the caller's rollout-fenced transaction."""
+    return _live_is_active(
+        get_rollout_config_cur(cur),
+        _aware_utc(now_utc),
+    )
+
+
+def require_no_pending_boundary_cur(cur) -> None:
+    """Reject schedule mutations that would silently move a saved boundary."""
+    config = get_rollout_config_cur(cur)
+    gate = config.live_gate
+    if (
+        config.cutover_at is not None
+        and gate is not None
+        and (
+            (config.mode == "live" and gate.activated_at is None)
+            or (config.mode == "shadow" and gate.activated_at is not None)
+        )
+    ):
+        raise ValueError("attendance_rollout_boundary_pending")
 
 
 def strict_days() -> set[date]:
@@ -193,14 +246,17 @@ def day_is_strict(day: date) -> bool:
     if day in strict_days():
         return True
     config = get_rollout_config()
-    if config.cutover_at is None or not _live_is_active(config, _utc_now()):
+    now = _utc_now()
+    if config.cutover_at is None or not _live_is_active(config, now):
         return False
     cutover_day = config.cutover_at.astimezone(shift_config.SITE_TZ).date()
     if config.mode == "shadow":
         assert config.live_gate is not None
         assert config.live_gate.activated_at is not None
         activated_day = config.live_gate.activated_at.astimezone(shift_config.SITE_TZ).date()
-        return activated_day <= day < cutover_day
+        return activated_day <= day and (
+            day < cutover_day or now >= config.cutover_at.astimezone(UTC)
+        )
     return day >= cutover_day
 
 
@@ -230,10 +286,10 @@ def _match_state_from_config(
             if gate is not None and gate.activated_at is not None
             else None
         )
-        if (
-            _live_is_active(config, now)
-            and activated_day is not None
-            and activated_day <= day < cutover_day
+        rollback_due_but_unsettled = now >= cutover
+        if _live_is_active(config, now) and activated_day is not None and (
+            activated_day <= day < cutover_day
+            or (rollback_due_but_unsettled and day >= activated_day)
         ):
             return "strict"
         return "legacy"
@@ -254,18 +310,9 @@ def match_state_for_day_cur(day: date, *, cur, now_utc: datetime | None = None) 
     )
     if cur.fetchone() is not None:
         return "strict"
-    cur.execute(
-        "SELECT value FROM app_settings WHERE key = %s",
-        (_SETTING_KEY,),
-    )
-    row = cur.fetchone()
-    try:
-        config = _parse_config(row["value"]) if row is not None else None
-    except (TypeError, ValueError):
-        config = None
     return _match_state_from_config(
         day,
-        config=config or RolloutConfig(mode="off", cutover_at=None, live_gate=None),
+        config=get_rollout_config_cur(cur),
         now_utc=now_utc,
     )
 

@@ -149,12 +149,25 @@ def _claim_pending_cache(now_utc: datetime) -> CacheRefreshClaim | None:
 
 def _complete_claim(claim: RecalcClaim, prepared, completed_at: datetime) -> int | None:
     """Atomically fence, write, and complete the current recalculation claim."""
-    from . import precompute
+    from . import attendance_location_policy, precompute, production_history
 
     completed = _aware_utc(completed_at)
     if prepared.day != claim.day:
         raise ValueError("prepared production day does not match recalculation claim")
+    if (
+        getattr(prepared, "expected_match_state", None) == "strict"
+        and not getattr(prepared, "request_fingerprint", None)
+    ):
+        raise production_history.ProductionSourceUnavailable(
+            "strict production request fingerprint is unavailable"
+        )
     with db.cursor() as cur:
+        # Activation and every production commit use rollout -> queue order.
+        # Taking the rollout fence first prevents a queue->rollout / rollout->queue
+        # deadlock at the live boundary.
+        attendance_location_policy.lock_rollout_decision_cur(cur)
+        if getattr(prepared, "expected_match_state", None) == "strict":
+            production_history.lock_strict_sources_cur(cur)
         cur.execute(
             """
             SELECT day, attempt_count, started_at, completed_at
@@ -172,13 +185,17 @@ def _complete_claim(claim: RecalcClaim, prepared, completed_at: datetime) -> int
             or row["started_at"] != claim.lease_until
         ):
             return None
-        rows_written = precompute.store_prepared_day(prepared, cur=cur)
+        rows_written = precompute.store_prepared_day(
+            prepared,
+            cur=cur,
+            allow_cutover_recalc=True,
+        )
         cur.execute(
             """
             UPDATE attendance_recalc_queue
             SET completed_at = %s, started_at = NULL,
                 cache_started_at = %s, cache_ready_at = NULL,
-                last_error = NULL
+                source_fingerprint = %s, last_error = NULL
             WHERE day = %s
               AND completed_at IS NULL
               AND attempt_count = %s
@@ -188,6 +205,7 @@ def _complete_claim(claim: RecalcClaim, prepared, completed_at: datetime) -> int
             (
                 completed,
                 completed + CLAIM_LEASE,
+                getattr(prepared, "request_fingerprint", None),
                 claim.day,
                 claim.attempt_count,
                 claim.lease_until,

@@ -236,6 +236,39 @@ def test_create_timeout_adopts_one_exact_row_and_never_duplicates():
     assert facade.creates == 1
 
 
+def test_retry_preflight_accepts_exact_created_outsider_beside_source_row():
+    source = _source(end=datetime(2026, 8, 31, 18, tzinfo=UTC))
+    after = {
+        "employee_odoo_id": 7,
+        "check_in_utc": datetime(2026, 8, 31, 16, tzinfo=UTC),
+        "check_out_utc": datetime(2026, 8, 31, 17, tzinfo=UTC),
+        "odoo_work_center_id": 81,
+        "odoo_department_id": 9,
+    }
+    created = {
+        "odoo_attendance_id": 99,
+        **after,
+        "odoo_write_date": datetime(2026, 8, 31, 16, 1, tzinfo=UTC),
+    }
+    operation = attendance_corrections.CorrectionOperation(
+        key="attendance-correction-v2:7:" + "2" * 64,
+        kind="create",
+        attendance_id=None,
+        employee_odoo_id=7,
+        before=None,
+        after=after,
+    )
+
+    class Facade:
+        def fetch_attendance_rows_by_ids(self, ids):
+            return [dict(source)] if ids == [11] else []
+
+        def fetch_employee_attendance_rows(self, *_args):
+            return [dict(source), dict(created)]
+
+    attendance_corrections._preflight_operations(Facade(), (operation,), (source,))
+
+
 def test_operation_reservation_is_persisted_with_a_fresh_job_lease(monkeypatch):
     from zira_dashboard import db
 
@@ -1258,10 +1291,14 @@ def test_recalc_enqueue_keeps_101_durable_days_but_bounds_event_ids(monkeypatch)
     class Cursor:
         def __init__(self):
             self.result = None
+            self.statements = []
 
         def execute(self, sql, params=()):
             normalized = " ".join(sql.split())
-            if normalized.startswith("SELECT status, attempt_count"):
+            self.statements.append(normalized)
+            if normalized.startswith("LOCK TABLE"):
+                self.result = None
+            elif normalized.startswith("SELECT status, attempt_count"):
                 self.result = {"status": "recalculating", "attempt_count": 1}
             elif normalized.startswith("UPDATE attendance_correction_jobs"):
                 persisted.extend(json.loads(params[0]))
@@ -1272,9 +1309,11 @@ def test_recalc_enqueue_keeps_101_durable_days_but_bounds_event_ids(monkeypatch)
         def fetchone(self):
             return self.result
 
+    active_cursor = Cursor()
+
     @contextmanager
     def cursor():
-        yield Cursor()
+        yield active_cursor
 
     monkeypatch.setattr(db, "cursor", cursor)
     monkeypatch.setattr(attendance_mirror, "_enqueue_recalc_cur", lambda *_a, **_k: None)
@@ -1292,6 +1331,10 @@ def test_recalc_enqueue_keeps_101_durable_days_but_bounds_event_ids(monkeypatch)
     )
     assert len(persisted[-1]["recalc_ids"]) == 101
     assert len(events[-1]["recalc_ids"]) == attendance_corrections._MAX_EVENT_IDS
+    assert active_cursor.statements[0].startswith(
+        "LOCK TABLE app_settings, attendance_strict_days"
+    )
+    assert active_cursor.statements[1].startswith("SELECT status, attempt_count")
 
 
 def _open_claim_spanning_local_days(day_count):

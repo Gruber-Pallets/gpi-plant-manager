@@ -21,6 +21,10 @@ from . import (
 logger = logging.getLogger(__name__)
 
 
+class GoatFinalizationDeferred(RuntimeError):
+    """The exact strict production request is not cache-ready yet."""
+
+
 def winner_for_day(category, day: date, records: list[dict]) -> dict | None:
     wc_names = goat_categories.work_center_names(category)
     rows = awards.person_days_in_wc_names(wc_names, day, day, records=records)
@@ -47,7 +51,11 @@ def _records_through(day: date) -> list[dict]:
 
 def finalize_day(day: date, client) -> list[dict]:
     """Persist notifications for category records set on one completed workday."""
-    precompute.precompute_day(day, client)
+    result = precompute.precompute_day(day, client)
+    if (result or {}).get("queued"):
+        raise GoatFinalizationDeferred(
+            f"strict production recalculation is pending for {day.isoformat()}"
+        )
     records = _records_through(day)
     alerts: list[dict] = []
 
@@ -183,6 +191,9 @@ def run_due(now_utc: datetime, client) -> None:
         else _prior_configured_workday(today)
     )
     for day in store.unfinalized_workdays(latest_completed_day):
-        finalize_day(day, client)
+        try:
+            finalize_day(day, client)
+        except GoatFinalizationDeferred:
+            continue
         store.record_finalized_day(day)
     drain_deliveries(today)

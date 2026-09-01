@@ -144,6 +144,17 @@ async def _tick_attendance_recalc():
     await asyncio.to_thread(attendance_recalc.process_next)
 
 
+async def _tick_attendance_readiness():
+    """Refresh aggregate shadow health and settle due rollout boundaries."""
+    from . import attendance_readiness
+
+    await asyncio.to_thread(
+        attendance_readiness.run_warmer_tick,
+        datetime.now(UTC),
+        _zira_client(),
+    )
+
+
 async def _tick_attendance_corrections():
     """Advance at most one durable, verified Odoo correction job."""
     from . import attendance_corrections
@@ -468,6 +479,7 @@ _WARMERS = [
     ("kiosk sync", _tick_timeclock_sync, 60),
     ("Odoo open-attendance", _tick_odoo_attendance, 30),
     ("attendance mirror", _tick_attendance_mirror, 30),
+    ("attendance readiness", _tick_attendance_readiness, 30),
     ("attendance recalculation", _tick_attendance_recalc, 15),
     ("attendance corrections", _tick_attendance_corrections, 15),
     ("attendance department repair", _tick_attendance_department_repair, 15),

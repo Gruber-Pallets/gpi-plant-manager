@@ -114,26 +114,30 @@ def current() -> Schedule:
     return _store.current()
 
 
-def save(sched: Schedule) -> None:
+def save(sched: Schedule, *, cur=None) -> None:
     """Persist + invalidate the cache so the next current() call re-reads."""
     from . import db
-    db.execute(
+    sql = (
         "INSERT INTO global_schedule (id, shift_start, shift_end, work_weekdays, breaks, updated_at) "
         "VALUES (1, %s, %s, %s, %s::jsonb, now()) "
         "ON CONFLICT (id) DO UPDATE SET shift_start = EXCLUDED.shift_start, "
         "shift_end = EXCLUDED.shift_end, work_weekdays = EXCLUDED.work_weekdays, "
-        "breaks = EXCLUDED.breaks, updated_at = now()",
-        (
-            sched.shift_start,
-            sched.shift_end,
-            sorted(sched.work_weekdays),
-            json.dumps([
-                {"start": _format_time(b.start), "end": _format_time(b.end), "name": b.name}
-                for b in sched.breaks
-            ]),
-        ),
+        "breaks = EXCLUDED.breaks, updated_at = now()"
     )
-    _store.set(sched)
+    params = (
+        sched.shift_start,
+        sched.shift_end,
+        sorted(sched.work_weekdays),
+        json.dumps([
+            {"start": _format_time(b.start), "end": _format_time(b.end), "name": b.name}
+            for b in sched.breaks
+        ]),
+    )
+    if cur is None:
+        db.execute(sql, params)
+        _store.set(sched)
+    else:
+        cur.execute(sql, params)
 
 
 def reload() -> Schedule:

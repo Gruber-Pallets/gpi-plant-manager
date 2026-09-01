@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 from collections.abc import Iterable, Sequence
 
@@ -33,6 +34,7 @@ from ._schema import SCHEMA_DDL
 
 
 _pool: ThreadedConnectionPool | None = None
+_snapshot_cursor: ContextVar[Any | None] = ContextVar("db_snapshot_cursor", default=None)
 
 
 def init_pool(minconn: int = 10, maxconn: int = 30) -> None:
@@ -118,6 +120,10 @@ def cursor():
     - Waits briefly for a free connection under transient pool exhaustion
       (see ``_getconn_blocking``) instead of failing instantly.
     """
+    pinned = _snapshot_cursor.get()
+    if pinned is not None:
+        yield pinned
+        return
     pool = _get_pool()
     conn = _getconn_blocking(pool)
     try:
@@ -128,6 +134,34 @@ def cursor():
         except Exception:
             conn.rollback()
             raise
+        finally:
+            cur.close()
+    finally:
+        pool.putconn(conn)
+
+
+@contextmanager
+def read_snapshot():
+    """Pin all nested DB helpers to one repeatable, read-only transaction."""
+    pinned = _snapshot_cursor.get()
+    if pinned is not None:
+        yield pinned
+        return
+    pool = _get_pool()
+    conn = _getconn_blocking(pool)
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            token = _snapshot_cursor.set(cur)
+            try:
+                yield cur
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                _snapshot_cursor.reset(token)
         finally:
             cur.close()
     finally:
@@ -176,6 +210,7 @@ __all__ = [
     "init_pool",
     "shutdown_pool",
     "cursor",
+    "read_snapshot",
     "query",
     "execute",
     "execute_many",

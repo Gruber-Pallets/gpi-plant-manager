@@ -521,6 +521,20 @@
         <dd>{{ attendance_location.mirror_freshness or 'not synced yet' }}</dd>
         <dt>Last full sweep</dt>
         <dd>{{ attendance_location.last_full_sweep or 'not completed yet' }}</dd>
+        <dt>Attendance baseline</dt>
+        <dd>{{ attendance_location.baseline_completed_at or 'not completed yet' }}</dd>
+        <dt>Mirror sync status</dt>
+        <dd>
+          {% if not attendance_location.sync_health_available %}
+            unavailable
+          {% elif attendance_location.last_error %}
+            error: {{ attendance_location.last_error }}
+          {% else %}
+            no sync error
+          {% endif %}
+        </dd>
+        <dt>Open rows not refreshed</dt>
+        <dd>{{ attendance_location.open_rows_not_refreshed if attendance_location.open_rows_not_refreshed is not none else 'unknown' }}</dd>
       </dl>
 
       <form method="post" action="/settings/attendance-location" style="margin-top:1rem">
@@ -528,11 +542,27 @@
           <select name="rollout_mode" {% if not can_manage_attendance_location %}disabled{% endif %}>
             <option value="off" {% if attendance_location.mode == 'off' %}selected{% endif %} {% if attendance_location.live_active %}disabled{% endif %}>Off</option>
             <option value="shadow" {% if attendance_location.mode == 'shadow' %}selected{% endif %}>Shadow</option>
-            <option value="live" {% if attendance_location.mode == 'live' %}selected{% endif %} disabled>Live — readiness check required</option>
+            <option value="live" {% if attendance_location.mode == 'live' %}selected{% endif %} {% if attendance_location.live_active %}disabled{% endif %}>Live — check and schedule</option>
           </select>
         </label>
         {% if attendance_location.live_active %}
           <p class="help">Live rules are active. To turn them back safely, choose Shadow and set a future workday boundary. Off stays unavailable until then.</p>
+        {% endif %}
+        {% if attendance_location.readiness %}
+          <dl style="display:grid;grid-template-columns:max-content 1fr;gap:.35rem .8rem;font-size:.9rem">
+            <dt>Last readiness check</dt>
+            <dd>{{ attendance_location.readiness.checked_at or 'unknown' }} — {% if attendance_location.readiness.ready %}ready{% else %}blocked{% endif %}</dd>
+            <dt>Projection lag</dt><dd>{{ attendance_location.readiness.projection_lag_seconds if attendance_location.readiness.projection_lag_seconds is not none else 'unknown' }} seconds</dd>
+            <dt>Open rows not refreshed</dt><dd>{{ attendance_location.readiness.open_rows_not_refreshed or 0 }}</dd>
+            <dt>Last sweep deletions</dt><dd>{{ attendance_location.readiness.last_sweep_deletion_count or 0 }}</dd>
+            <dt>Recalculation queue</dt><dd>{{ attendance_location.readiness.recalc_queue_depth or 0 }} waiting; oldest {{ attendance_location.readiness.recalc_queue_age_seconds if attendance_location.readiness.recalc_queue_age_seconds is not none else 'none' }} seconds</dd>
+            <dt>Attendance issues</dt><dd>{{ attendance_location.readiness.open_conflicts or 0 }} conflicts, {{ attendance_location.readiness.open_unmapped or 0 }} unknown, {{ attendance_location.readiness.open_missing_required or 0 }} missing</dd>
+            <dt>Issue time</dt><dd>{{ attendance_location.readiness.conflict_minutes_today or 0 }} conflict, {{ attendance_location.readiness.unmapped_minutes_today or 0 }} unknown, {{ attendance_location.readiness.missing_minutes_today or 0 }} missing minutes</dd>
+            <dt>Unassigned production</dt><dd>{{ attendance_location.readiness.unassigned_units_today or 0 }} units; oldest {{ attendance_location.readiness.oldest_unassigned_age_seconds if attendance_location.readiness.oldest_unassigned_age_seconds is not none else 'none' }} seconds</dd>
+            <dt>Shadow difference</dt><dd>{{ attendance_location.readiness.shadow_changed_worker_units or 0 }} worker-units changed</dd>
+            <dt>Failed follow-up</dt><dd>{{ attendance_location.readiness.failed_corrections or 0 }} corrections, {{ attendance_location.readiness.failed_department_repairs or 0 }} department repairs; {{ attendance_location.readiness.correction_retries_today or 0 }} retries and {{ attendance_location.readiness.correction_verification_failures_today or 0 }} verification failures today</dd>
+            <dt>Blockers</dt><dd>{{ attendance_location.readiness.blockers|join(', ') if attendance_location.readiness.blockers else 'none' }}</dd>
+          </dl>
         {% endif %}
         <label>Cutover at the local workday boundary
           <input type="datetime-local" name="cutover_at"

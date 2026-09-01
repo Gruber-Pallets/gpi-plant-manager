@@ -95,9 +95,10 @@ class _MirrorRunBackend:
 
     def __init__(self, cur):
         self._cur = cur
+        self._incremental_started_at = None
 
     def sync_state(self) -> SyncState:
-        state = attendance_mirror._sync_state_cur(self._cur)
+        state = attendance_mirror._sync_state_read_cur(self._cur)
         return SyncState(
             cursor_write_date=state.cursor_write_date,
             cursor_id=state.cursor_id,
@@ -108,7 +109,7 @@ class _MirrorRunBackend:
         )
 
     def record_incremental_started(self, started_at: datetime) -> None:
-        attendance_mirror._record_incremental_started_cur(self._cur, started_at)
+        self._incremental_started_at = started_at
 
     def store_incremental_cycle(
         self,
@@ -126,6 +127,7 @@ class _MirrorRunBackend:
             cursor_id=cursor_id,
             completed_at=completed_at,
             observed_at=observed_at,
+            started_at=self._incremental_started_at,
         )
 
     def active_attendance_ids(self) -> set[int]:

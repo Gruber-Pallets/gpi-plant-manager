@@ -578,6 +578,40 @@ def _department_requires_work_center_for_mirror(
     )
 
 
+def _department_requirements_for_rows(rows: Sequence[Mapping[str, object]]):
+    """Load every projected department rule once, independent of row count."""
+    names = sorted(
+        {
+            (_NUMBERED_DEPARTMENT_PREFIX.sub("", raw).strip() or raw)
+            for row in rows
+            if row.get("odoo_work_center_id") is None
+            if (raw := str(row.get("odoo_department_name") or "").strip())
+        }
+    )
+    saved = {}
+    if names:
+        policy_rows = db.query(
+            "SELECT name, requires_work_center FROM departments WHERE name = ANY(%s)",
+            (names,),
+        )
+        saved = {
+            str(row["name"]): bool(row["requires_work_center"])
+            for row in policy_rows
+        }
+
+    def requires(department_name: str | None) -> bool:
+        if department_name is None:
+            return True
+        raw = department_name.strip()
+        normalized = _NUMBERED_DEPARTMENT_PREFIX.sub("", raw).strip() or raw
+        return saved.get(
+            normalized,
+            attendance_location_policy.default_department_requires_work_center(normalized),
+        )
+
+    return requires
+
+
 def _rows_with_employee_department_fallback(
     rows: Sequence[Mapping[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
@@ -614,6 +648,8 @@ def timeline_for_range(
     end_utc: datetime,
     *,
     as_of_utc: datetime | None = None,
+    health_snapshot=None,
+    map_work_center: Callable[[int], str | None] | None = None,
 ) -> tuple[LocationSpan, ...]:
     """Read active mirror rows and return spans clipped to ``[start, end)``."""
     start = _aware_utc(start_utc, "start_utc")
@@ -626,7 +662,8 @@ def timeline_for_range(
     )
 
     context_start, _context_end = _plant_day_bounds(start.astimezone(shift_config.SITE_TZ).date())
-    verified_through = attendance_mirror.health_snapshot().last_incremental_completed_at
+    health = health_snapshot or attendance_mirror.health_snapshot()
+    verified_through = health.last_incremental_completed_at
     rows = attendance_mirror.rows_overlapping(context_start, end)
     if not rows:
         return ()
@@ -638,8 +675,12 @@ def timeline_for_range(
         rows,
         as_of_utc=as_of,
         verified_through_utc=verified_through,
-        map_work_center=work_centers_store.app_work_center_name_for_odoo_id,
-        requires_work_center=_department_requires_work_center_for_mirror,
+        map_work_center=(
+            map_work_center
+            if map_work_center is not None
+            else work_centers_store.app_work_center_name_for_odoo_id
+        ),
+        requires_work_center=_department_requirements_for_rows(rows),
         expected_department_id=(_expected_department_id_for_app_work_center),
     )
     clipped = [

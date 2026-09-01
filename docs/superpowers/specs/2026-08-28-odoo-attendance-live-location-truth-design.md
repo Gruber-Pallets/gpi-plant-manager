@@ -389,15 +389,38 @@ Logs should carry employee, Odoo record, work-center, exception, correction, and
 
 ## Rollout
 
-1. Add the mirror, sync state, department rule, correction state, and cutover configuration behind feature flags.
-2. Import attendance history and run live synchronization without changing attribution.
-3. Run the new timeline projector in shadow mode and compare it with current Odoo window logic.
-4. Run the strict matcher in shadow mode and measure changes in credited and unassigned production.
-5. Meet readiness gates for mapping coverage, sync freshness, overlap rate, and unexplained unassigned production.
-6. Release the plan-plus-live staffing display and new exceptions while legacy attribution remains active.
-7. Set the cutover timestamp and enable strict attribution for new production.
-8. Monitor closely and keep a controlled rollback switch that changes the matcher for new data without deleting the mirror or audit records.
-9. Remove legacy routine transfer ownership only after Luke's first-location and transfer feed has proven reliable in production.
+The exact operator procedure is maintained in
+[`docs/operations/odoo-attendance-location-rollout.md`](../../operations/odoo-attendance-location-rollout.md).
+Its required sequence is:
+
+1. Deploy with mode `off`; verify the schema and mirror worker.
+2. Wait for a completed baseline and full sweep.
+3. Set `shadow`; observe at least one complete production day.
+4. Resolve mappings and conflicts, then exercise one correction in a
+   non-production test interval.
+5. Run `uv run python scripts/check_attendance_location_readiness.py` until it
+   exits `0`.
+6. Schedule `live` for the next local workday boundary before production begins.
+7. Monitor mirror age, unassigned units, queue age, conflicts, corrections, and
+   department repairs.
+8. Schedule rollback to `shadow` at the next clean workday boundary. Keep the
+   mirror, already-strict days, source records, and audit history intact.
+
+Entering Shadow starts a new saved observation epoch and clears older Shadow
+proof. A day counts only when that same epoch began before the saved shift start
+and the comparison finished after the saved shift end. Scheduling and boundary
+activation bind the public report to the exact local rows and the one frozen
+production response used to build it; a changed binding is superseded rather
+than activated.
+
+Each rollout transition appends a bounded, personal-data-free audit row in the
+same transaction as the setting change. The 30-second warmer keeps the persisted
+readiness report current in both Shadow and active Live mode. Diagnostic logs
+carry only bounded attendance, employee, work-center, exception, correction,
+repair, and recalculation identifiers.
+
+Remove legacy routine transfer ownership only after Luke's first-location and
+transfer feed has proven reliable in production.
 
 ## Test Plan
 

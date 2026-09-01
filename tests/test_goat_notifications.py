@@ -483,3 +483,80 @@ def test_run_due_does_not_record_a_day_when_finalization_raises(monkeypatch):
 
     assert recorded == []
     assert drained == []
+
+
+def test_run_due_defers_strict_goat_until_exact_recalc_cache_is_ready(monkeypatch):
+    now_utc = datetime(2026, 7, 29, 21, 0, tzinfo=UTC)
+    completed_day = date(2026, 7, 29)
+    category = goat_categories.GoatCategory(
+        "repairs", "Repairs", "Repair GOAT", group_name="Repairs"
+    )
+    precompute_results = iter(
+        [
+            {"day": completed_day.isoformat(), "rows_written": 0, "queued": True},
+            {"day": completed_day.isoformat(), "rows_written": 0, "queued": False},
+        ]
+    )
+    records = [
+        {
+            "person": "Old Holder",
+            "day": date(2026, 6, 10),
+            "wc": "Repair 3",
+            "units": 891,
+            "hours": 7,
+        },
+        {
+            "person": "Jose O.",
+            "day": completed_day,
+            "wc": "Repair 3",
+            "units": 898,
+            "hours": 7,
+        },
+    ]
+    finalized = []
+    record_reads = []
+    inserted = []
+    monkeypatch.setattr(
+        goat_notifications.shift_config, "shift_end_for", lambda _: time(15, 30)
+    )
+    monkeypatch.setattr(goat_notifications.store, "ensure_enabled_on", lambda _: None)
+    monkeypatch.setattr(
+        goat_notifications.store,
+        "unfinalized_workdays",
+        lambda _: [] if finalized else [completed_day],
+    )
+    monkeypatch.setattr(
+        goat_notifications.precompute,
+        "precompute_day",
+        lambda *_: next(precompute_results),
+    )
+    monkeypatch.setattr(goat_notifications, "_eligible_categories", lambda: (category,))
+    monkeypatch.setattr(
+        goat_categories, "work_center_names", lambda _: {"Repair 3"}
+    )
+    monkeypatch.setattr(
+        goat_notifications,
+        "_records_through",
+        lambda _: record_reads.append(completed_day) or records,
+    )
+    monkeypatch.setattr(
+        goat_notifications.store,
+        "insert_alert_and_delivery",
+        lambda alert: inserted.append(alert) or 42,
+    )
+    monkeypatch.setattr(
+        goat_notifications.store, "record_finalized_day", finalized.append
+    )
+    monkeypatch.setattr(goat_notifications, "drain_deliveries", lambda _: 0)
+
+    goat_notifications.run_due(now_utc, client="client")
+
+    assert record_reads == []
+    assert inserted == []
+    assert finalized == []
+
+    goat_notifications.run_due(now_utc, client="client")
+
+    assert record_reads == [completed_day]
+    assert [alert["units"] for alert in inserted] == [898]
+    assert finalized == [completed_day]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, time, UTC
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,132 @@ TARGET_PER_DAY = {
     "Repair": 220,
     "Other": 0,
 }
+
+
+@dataclass(frozen=True)
+class DayShiftSnapshot:
+    """One uncached, transaction-bound operational shift decision."""
+
+    day: date
+    is_workday: bool
+    shift_start: time
+    shift_end: time
+    breaks: tuple
+
+
+_DAY_SHIFT_SNAPSHOT_SQL = """
+SELECT g.id AS global_id, g.shift_start AS global_start, g.shift_end AS global_end,
+       g.work_weekdays AS global_weekdays, g.breaks AS global_breaks,
+       sat.id AS saturday_id, sat.shift_start AS saturday_start,
+       sat.shift_end AS saturday_end,
+       sat.breaks AS saturday_breaks,
+       sched.published AS day_published, sched.custom_hours,
+       holiday.odoo_id AS holiday_odoo_id,
+       recruitment.day_kind AS recruitment_day_kind,
+       recruitment.holiday_odoo_id AS recruitment_holiday_odoo_id,
+       recruitment.status AS recruitment_status
+  FROM (SELECT 1) seed
+  LEFT JOIN global_schedule g ON g.id = 1
+  LEFT JOIN saturday_schedule sat ON sat.id = 1
+  LEFT JOIN schedules sched ON sched.day = %s
+  LEFT JOIN LATERAL (
+       SELECT odoo_id FROM company_holidays
+        WHERE date_from <= %s AND date_to >= %s
+        ORDER BY odoo_id LIMIT 1
+  ) holiday ON TRUE
+  LEFT JOIN saturday_recruitments recruitment ON recruitment.day = %s
+"""
+
+
+def snapshot_for(day: date, *, cur=None) -> DayShiftSnapshot:
+    """Resolve a day directly from PostgreSQL, bypassing process caches."""
+    from . import db, saturday_schedule_store
+
+    params = (day, day, day, day)
+    if cur is None:
+        rows = db.query(_DAY_SHIFT_SNAPSHOT_SQL, params)
+        row = rows[0] if rows else {}
+    else:
+        cur.execute(_DAY_SHIFT_SNAPSHOT_SQL, params)
+        row = cur.fetchone() or {}
+
+    global_schedule = (
+        schedule_store.DEFAULT_SCHEDULE
+        if row.get("global_id") is None
+        else schedule_store._row_to_schedule(  # noqa: SLF001
+            {
+                "shift_start": row.get("global_start"),
+                "shift_end": row.get("global_end"),
+                "work_weekdays": row.get("global_weekdays"),
+                "breaks": row.get("global_breaks"),
+            }
+        )
+    )
+    saturday_schedule = (
+        saturday_schedule_store.DEFAULT
+        if row.get("saturday_id") is None
+        else saturday_schedule_store._row_to_schedule(  # noqa: SLF001
+            {
+                "shift_start": row.get("saturday_start"),
+                "shift_end": row.get("saturday_end"),
+                "breaks": row.get("saturday_breaks"),
+            }
+        )
+    )
+    published = bool(row.get("day_published"))
+    custom = row.get("custom_hours") if published else None
+    custom = custom if isinstance(custom, dict) else None
+    holiday_odoo_id = row.get("holiday_odoo_id")
+    if holiday_odoo_id is not None:
+        operational = bool(
+            published
+            and row.get("recruitment_day_kind") == "holiday"
+            and row.get("recruitment_status") == "published"
+            and row.get("recruitment_holiday_odoo_id") == holiday_odoo_id
+        )
+        optional_day = True
+    else:
+        operational = day.weekday() in global_schedule.work_weekdays or published
+        optional_day = day.weekday() == SATURDAY
+
+    base = saturday_schedule if optional_day and operational else global_schedule
+    start = base.shift_start
+    end = base.shift_end
+    day_breaks = base.breaks
+    if custom is not None:
+        raw_start = custom.get("start")
+        raw_end = custom.get("end")
+        if isinstance(raw_start, str):
+            try:
+                start = time.fromisoformat(raw_start)
+            except ValueError:
+                pass
+        if isinstance(raw_end, str):
+            try:
+                end = time.fromisoformat(raw_end)
+            except ValueError:
+                pass
+        if isinstance(custom.get("breaks"), list):
+            parsed = []
+            for raw_break in custom["breaks"]:
+                if not isinstance(raw_break, dict):
+                    continue
+                try:
+                    break_start = time.fromisoformat(str(raw_break["start"]))
+                    break_end = time.fromisoformat(str(raw_break["end"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if break_end <= break_start:
+                    continue
+                parsed.append(
+                    schedule_store.Break(
+                        break_start,
+                        break_end,
+                        str(raw_break.get("name") or "Break")[:40],
+                    )
+                )
+            day_breaks = tuple(sorted(parsed, key=lambda item: item.start))
+    return DayShiftSnapshot(day, operational, start, end, tuple(day_breaks))
 
 
 def _sched():

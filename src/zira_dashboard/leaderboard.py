@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, UTC
 from time import monotonic as _monotonic
+from collections.abc import Mapping
 from typing import Any
 
 from zira_probe.client import ZiraClient
@@ -148,6 +149,8 @@ def _adjusted_downtime(
     downtime_rows: list[tuple[datetime, int]],
     samples: list[tuple[datetime, int]],
     end_of_day: datetime,
+    *,
+    breaks_by_day: dict[date, Any] | None = None,
 ) -> int:
     """Sum downtime that overlaps with active intervals; the rest is dropped.
 
@@ -162,7 +165,7 @@ def _adjusted_downtime(
     intervals = _active_intervals(samples, end_of_day)
     if not intervals:
         return 0
-    breaks_by_day: dict[date, Any] = {}  # shared memo — one breaks_for() per local date
+    breaks_by_day = dict(breaks_by_day or {})
     sample_times = sorted(ts for ts, _units in samples)
     total_minutes = 0.0
     for event_end, duration_min in downtime_rows:
@@ -200,6 +203,7 @@ def fetch_station_day(
     start_iso: str,
     end_iso: str,
     now_utc: datetime | None = None,
+    shift_by_day: Mapping[date, tuple[bool, time, time, tuple]] | None = None,
 ) -> StationTotal:
     total = 0
     count = 0
@@ -215,14 +219,18 @@ def fetch_station_day(
     # reading row (up to PAGE_SIZE * MAX_PAGES rows, refetched every 30s).
     # Mirrors shift_config.in_shift_on exactly, including the published-
     # Saturday / per-day custom_hours handling inside is_workday & friends.
-    shift_by_day: dict[date, tuple[bool, time, time, tuple]] = {}
+    resolved_shift_by_day: dict[date, tuple[bool, time, time, tuple]] = dict(
+        shift_by_day or {}
+    )
 
     def _in_shift_local(local_dt: datetime) -> bool:
         d = local_dt.date()
-        info = shift_by_day.get(d)
+        info = resolved_shift_by_day.get(d)
         if info is None:
+            if shift_by_day is not None:
+                raise ValueError("frozen shift input is missing a local day")
             info = (is_workday(d), shift_start_for(d), shift_end_for(d), breaks_for(d))
-            shift_by_day[d] = info
+            resolved_shift_by_day[d] = info
         workday, s_start, s_end, s_breaks = info
         if not workday:
             return False
@@ -286,13 +294,28 @@ def fetch_station_day(
     # future minutes as productive.
     end_of_day = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
     day_local = end_of_day.astimezone(SITE_TZ).date()
-    shift_end_local = datetime.combine(day_local, shift_end_for(day_local), tzinfo=SITE_TZ)
+    shift_info = resolved_shift_by_day.get(day_local)
+    if shift_info is None:
+        if shift_by_day is not None:
+            raise ValueError("frozen shift input is missing the meter day")
+        shift_info = (
+            is_workday(day_local),
+            shift_start_for(day_local),
+            shift_end_for(day_local),
+            breaks_for(day_local),
+        )
+    shift_end_local = datetime.combine(day_local, shift_info[2], tzinfo=SITE_TZ)
     eval_end = min(shift_end_local.astimezone(UTC), end_of_day)
     if now_utc is not None:
         eval_end = min(eval_end, now_utc)
     intervals = _active_intervals(samples, eval_end)
     active_minutes = int(sum((b - a).total_seconds() / 60.0 for a, b in intervals))
-    downtime = _adjusted_downtime(downtime_rows, samples, eval_end)
+    downtime = _adjusted_downtime(
+        downtime_rows,
+        samples,
+        eval_end,
+        breaks_by_day={day: info[3] for day, info in resolved_shift_by_day.items()},
+    )
     return StationTotal(
         station=station,
         units=total,
@@ -319,11 +342,24 @@ def leaderboard(
     stations: list[Station],
     day: date,
     now_utc: datetime | None = None,
+    shift_by_day: Mapping[date, tuple[bool, time, time, tuple]] | None = None,
 ) -> list[StationTotal]:
     start_iso, end_iso = day_window_utc(day)
+    def fetch(station):
+        if shift_by_day is None:
+            return fetch_station_day(client, station, start_iso, end_iso, now_utc)
+        return fetch_station_day(
+            client,
+            station,
+            start_iso,
+            end_iso,
+            now_utc,
+            shift_by_day,
+        )
+
     results = list(
         _FETCH_POOL.map(
-            lambda s: fetch_station_day(client, s, start_iso, end_iso, now_utc),
+            fetch,
             stations,
         )
     )
@@ -384,6 +420,10 @@ def cached_leaderboard(
     stations: list[Station],
     day: date,
     now_utc: datetime | None = None,
+    *,
+    shift_by_day: Mapping[date, tuple[bool, time, time, tuple]] | None = None,
+    cache_variant: str | None = None,
+    persist: bool = True,
 ) -> list[StationTotal]:
     """Same contract as `leaderboard()`, but caches per-station results so
     repeated requests within the TTL skip the Zira API round-trip
@@ -402,7 +442,12 @@ def cached_leaderboard(
     for s in stations:
         if s.meter_id in by_meter or s.meter_id in missing_meters:
             continue
-        hit = cache.peek((s.meter_id, day_key))
+        cache_key = (
+            (s.meter_id, day_key)
+            if cache_variant is None
+            else (s.meter_id, day_key, cache_variant)
+        )
+        hit = cache.peek(cache_key)
         if hit is not None:
             by_meter[s.meter_id] = hit
         else:
@@ -412,7 +457,7 @@ def cached_leaderboard(
     if missing:
         fetched: list[StationTotal] | None = None
         # For past days, check Postgres first.
-        if not is_today:
+        if not is_today and cache_variant is None and persist:
             try:
                 from . import _zira_persist
                 fetched = _zira_persist.load_day(missing, day)
@@ -422,11 +467,22 @@ def cached_leaderboard(
                 fetched = None
         if fetched is None:
             # Cache miss — call Zira for ONLY the missing meters.
-            fetched = leaderboard(client, missing, day, now_utc)
-            if fetched:
+            fetched = leaderboard(
+                client,
+                missing,
+                day,
+                now_utc,
+                shift_by_day=shift_by_day,
+            )
+            if fetched and persist:
                 _persist_day(fetched, day, is_today)
         for r in fetched:
-            cache.set((r.station.meter_id, day_key), r)
+            cache_key = (
+                (r.station.meter_id, day_key)
+                if cache_variant is None
+                else (r.station.meter_id, day_key, cache_variant)
+            )
+            cache.set(cache_key, r)
             by_meter[r.station.meter_id] = r
 
     out: list[StationTotal] = []

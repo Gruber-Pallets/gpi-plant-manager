@@ -219,6 +219,9 @@ CREATE TABLE IF NOT EXISTS odoo_attendance_mirror (
 CREATE INDEX IF NOT EXISTS odoo_attendance_mirror_employee_time_idx
   ON odoo_attendance_mirror (employee_odoo_id, check_in_utc, check_out_utc)
   WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS odoo_attendance_mirror_open_refresh_idx
+  ON odoo_attendance_mirror (last_seen_at)
+  WHERE deleted_at IS NULL AND check_out_utc IS NULL;
 
 CREATE TABLE IF NOT EXISTS odoo_attendance_sync_state (
   singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
@@ -226,6 +229,7 @@ CREATE TABLE IF NOT EXISTS odoo_attendance_sync_state (
   cursor_id BIGINT,
   last_incremental_started_at TIMESTAMPTZ,
   last_incremental_completed_at TIMESTAMPTZ,
+  last_incremental_observed_at TIMESTAMPTZ,
   last_full_sweep_completed_at TIMESTAMPTZ,
   last_full_sweep_deletion_count INTEGER NOT NULL DEFAULT 0,
   full_sweep_generation BIGINT NOT NULL DEFAULT 0,
@@ -234,6 +238,8 @@ CREATE TABLE IF NOT EXISTS odoo_attendance_sync_state (
 );
 INSERT INTO odoo_attendance_sync_state DEFAULT VALUES
   ON CONFLICT (singleton) DO NOTHING;
+ALTER TABLE odoo_attendance_sync_state
+  ADD COLUMN IF NOT EXISTS last_incremental_observed_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS attendance_recalc_queue (
   day DATE PRIMARY KEY,
@@ -243,6 +249,7 @@ CREATE TABLE IF NOT EXISTS attendance_recalc_queue (
   completed_at TIMESTAMPTZ,
   cache_started_at TIMESTAMPTZ,
   cache_ready_at TIMESTAMPTZ,
+  source_fingerprint TEXT,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   last_error TEXT
 );
@@ -273,12 +280,44 @@ BEGIN
   END IF;
 END
 $attendance_recalc_cache_columns$;
+ALTER TABLE attendance_recalc_queue
+  ADD COLUMN IF NOT EXISTS source_fingerprint TEXT;
+CREATE INDEX IF NOT EXISTS attendance_recalc_queue_pending_idx
+  ON attendance_recalc_queue (requested_at)
+  WHERE completed_at IS NULL OR cache_ready_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS attendance_strict_days (
   day DATE PRIMARY KEY,
   reason TEXT NOT NULL,
   source_changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS attendance_rollout_audit (
+  id BIGSERIAL PRIMARY KEY,
+  event_kind TEXT NOT NULL CHECK (event_kind IN
+    ('shadow_started', 'off', 'live_scheduled', 'live_cancelled', 'live_activated',
+     'live_blocked', 'rollback_scheduled', 'rolled_back')),
+  rollout_mode TEXT NOT NULL CHECK (rollout_mode IN ('off', 'shadow', 'live')),
+  cutover_at TIMESTAMPTZ,
+  checked_at TIMESTAMPTZ NOT NULL,
+  report_digest TEXT,
+  blocker_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (jsonb_typeof(blocker_codes) = 'array')
+);
+DO $attendance_rollout_audit_event_kind$
+BEGIN
+  ALTER TABLE attendance_rollout_audit
+    DROP CONSTRAINT IF EXISTS attendance_rollout_audit_event_kind_check;
+  ALTER TABLE attendance_rollout_audit
+    ADD CONSTRAINT attendance_rollout_audit_event_kind_check
+    CHECK (event_kind IN
+      ('shadow_started', 'off', 'live_scheduled', 'live_cancelled',
+       'live_activated', 'live_blocked', 'rollback_scheduled', 'rolled_back'));
+END
+$attendance_rollout_audit_event_kind$;
+CREATE INDEX IF NOT EXISTS attendance_rollout_audit_created_idx
+  ON attendance_rollout_audit (created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS attendance_correction_jobs (
   id BIGSERIAL PRIMARY KEY,
@@ -306,6 +345,9 @@ CREATE TABLE IF NOT EXISTS attendance_correction_jobs (
 CREATE UNIQUE INDEX IF NOT EXISTS attendance_correction_jobs_active_item_idx
   ON attendance_correction_jobs (item_key)
   WHERE status IN ('planned', 'applying', 'verifying', 'recalculating');
+CREATE INDEX IF NOT EXISTS attendance_correction_jobs_failed_idx
+  ON attendance_correction_jobs (item_key, created_at DESC, id DESC)
+  WHERE status = 'failed';
 
 CREATE TABLE IF NOT EXISTS attendance_correction_job_events (
   id BIGSERIAL PRIMARY KEY,
@@ -333,6 +375,9 @@ CREATE TABLE IF NOT EXISTS attendance_department_repairs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_error TEXT
 );
+CREATE INDEX IF NOT EXISTS attendance_department_repairs_failed_idx
+  ON attendance_department_repairs (updated_at)
+  WHERE status = 'failed';
 ALTER TABLE attendance_department_repairs
   ADD COLUMN IF NOT EXISTS expected_odoo_work_center_id BIGINT;
 ALTER TABLE attendance_department_repairs

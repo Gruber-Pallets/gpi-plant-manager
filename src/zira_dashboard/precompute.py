@@ -28,6 +28,10 @@ import logging
 _log = logging.getLogger(__name__)
 
 
+class CutoverRecalcPending(RuntimeError):
+    """Ordinary production refresh must wait for the cutover rebuild."""
+
+
 @dataclass(frozen=True)
 class PreparedProductionDay:
     """A computed daily snapshot that has not been written yet."""
@@ -36,9 +40,16 @@ class PreparedProductionDay:
     rows: tuple[dict, ...]
     strict_day: date | None
     expected_match_state: str | None = None
+    source_fingerprint: str | None = None
+    request_fingerprint: str | None = None
 
 
-def _validate_prepared_match_state_cur(cur, prepared: PreparedProductionDay) -> None:
+def _validate_prepared_match_state_cur(
+    cur,
+    prepared: PreparedProductionDay,
+    *,
+    allow_cutover_recalc: bool = False,
+) -> None:
     """Lock and revalidate the rollout decision used to compute a snapshot."""
     expected = prepared.expected_match_state
     if expected is None:
@@ -50,7 +61,7 @@ def _validate_prepared_match_state_cur(cur, prepared: PreparedProductionDay) -> 
     # These tables are the complete strict/rollout decision boundary. The
     # write-conflicting locks also protect a currently missing row until the
     # production snapshot transaction commits.
-    cur.execute("LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE")
+    attendance_location_policy.lock_rollout_decision_cur(cur)
     actual = attendance_location_policy.match_state_for_day_cur(
         prepared.day,
         cur=cur,
@@ -60,6 +71,37 @@ def _validate_prepared_match_state_cur(cur, prepared: PreparedProductionDay) -> 
             "Production attribution state changed before snapshot commit for "
             f"{prepared.day.isoformat()}; saved production was left unchanged"
         )
+    if expected == "strict":
+        if not prepared.source_fingerprint:
+            raise production_history.ProductionSourceUnavailable(
+                "strict production source fingerprint is unavailable; "
+                "saved production was left unchanged"
+            )
+        production_history.lock_strict_sources_cur(cur)
+        current_source = production_history.strict_local_source_fingerprint(
+            prepared.day,
+            cur=cur,
+        )
+        if current_source != prepared.source_fingerprint:
+            raise production_history.ProductionSourceUnavailable(
+                "strict production source changed before snapshot commit; "
+                "saved production was left unchanged"
+            )
+    cur.execute(
+        "SELECT s.reason, q.completed_at "
+        "FROM attendance_strict_days s "
+        "LEFT JOIN attendance_recalc_queue q ON q.day = s.day "
+        "WHERE s.day = %s",
+        (prepared.day,),
+    )
+    fence = cur.fetchone()
+    if (
+        fence is not None
+        and fence["reason"] == "live_cutover"
+        and fence["completed_at"] is None
+        and not allow_cutover_recalc
+    ):
+        raise CutoverRecalcPending(prepared.day.isoformat())
 
 
 def flatten_attribution(
@@ -232,10 +274,17 @@ def prepare_day(day: date, client) -> PreparedProductionDay:
         rows=tuple(rows),
         strict_day=strict_day,
         expected_match_state="strict" if strict_day is not None else "legacy",
+        source_fingerprint=getattr(attribution, "source_fingerprint", None),
+        request_fingerprint=getattr(attribution, "request_fingerprint", None),
     )
 
 
-def store_prepared_day(prepared: PreparedProductionDay, *, cur=None) -> int:
+def store_prepared_day(
+    prepared: PreparedProductionDay,
+    *,
+    cur=None,
+    allow_cutover_recalc: bool = False,
+) -> int:
     """Store a prepared snapshot, optionally inside a caller-owned transaction."""
     if not isinstance(prepared, PreparedProductionDay):
         raise TypeError("prepared must be a PreparedProductionDay")
@@ -243,14 +292,22 @@ def store_prepared_day(prepared: PreparedProductionDay, *, cur=None) -> int:
         from . import db
 
         with db.cursor() as owned_cur:
-            _validate_prepared_match_state_cur(owned_cur, prepared)
+            _validate_prepared_match_state_cur(
+                owned_cur,
+                prepared,
+                allow_cutover_recalc=allow_cutover_recalc,
+            )
             return _upsert_production_daily_cur(
                 owned_cur,
                 prepared.rows,
                 replace_days=(prepared.day,),
                 strict_day=prepared.strict_day,
             )
-    _validate_prepared_match_state_cur(cur, prepared)
+    _validate_prepared_match_state_cur(
+        cur,
+        prepared,
+        allow_cutover_recalc=allow_cutover_recalc,
+    )
     return _upsert_production_daily_cur(
         cur,
         prepared.rows,
@@ -264,12 +321,36 @@ def precompute_day(day: date, client) -> dict:
 
     Returns {"day": iso, "rows_written": int}. Idempotent; safe to re-run.
     """
-    from . import attendance_mirror
+    from . import attendance_mirror, production_history
 
     try:
         prepared = prepare_day(day, client)
+    except Exception:
+        try:
+            attendance_mirror.enqueue_recalc((day,), "production_source_unavailable")
+        except Exception:
+            _log.warning(
+                "could not enqueue failed production recomputation for %s",
+                day,
+                exc_info=True,
+            )
+        raise
+    if prepared.expected_match_state == "strict":
+        if not prepared.request_fingerprint:
+            raise production_history.ProductionSourceUnavailable(
+                "strict production request fingerprint is unavailable"
+            )
+        ready = attendance_mirror.ensure_recalc_queued(
+            (day,),
+            "strict_direct_refresh",
+            source_fingerprint=prepared.request_fingerprint,
+        )
+        return {"day": day.isoformat(), "rows_written": 0, "queued": not ready}
+    try:
         written = store_prepared_day(prepared)
         return {"day": day.isoformat(), "rows_written": written}
+    except CutoverRecalcPending:
+        raise
     except Exception:
         try:
             attendance_mirror.enqueue_recalc((day,), "production_source_unavailable")

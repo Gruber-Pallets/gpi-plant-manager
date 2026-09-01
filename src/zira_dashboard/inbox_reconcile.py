@@ -40,6 +40,7 @@ _SECTION_KIND = {
     "attendance_duplicate_location": "attendance_duplicate_location",
     "attendance_department_repair_failed": "attendance_department_repair_failed",
     "attendance_source_stale": "attendance_source_stale",
+    "attendance_cutover_blocked": "attendance_cutover_blocked",
     "production_source_unavailable": "production_source_unavailable",
     "production_unassigned_run": "production_unassigned_run",
 }
@@ -62,6 +63,7 @@ _KIND_SOURCE = {
     "attendance_duplicate_location": "Attendance Timeline",
     "attendance_department_repair_failed": "Attendance Timeline",
     "attendance_source_stale": "Attendance Timeline",
+    "attendance_cutover_blocked": "Attendance Timeline",
     "production_source_unavailable": "Strict Production",
     "production_unassigned_run": "Strict Production",
 }
@@ -105,6 +107,8 @@ def _complete_kinds(snapshot: dict) -> set:
     a legitimate late self-clear would wait for a snooze-free tick to auto-resolve."""
     errored = {e.get("source") for e in (snapshot.get("source_errors") or [])}
     complete: set[str] = set()
+    if snapshot.get("attendance_location_mode") == "off":
+        complete.add("attendance_cutover_blocked")
     for section in snapshot.get("sections") or []:
         kind = _SECTION_KIND.get(section.get("id"))
         if kind is None:

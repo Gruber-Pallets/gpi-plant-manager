@@ -10,7 +10,7 @@ against archived events by it.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 def time_off(request_id) -> str:
@@ -99,3 +99,10 @@ def production_source_unavailable(day) -> str:
 def attendance_source_stale_key() -> str:
     """Singleton identity for freshness of the shared attendance mirror."""
     return "attendance_source_stale:odoo_attendance_mirror"
+
+
+def attendance_cutover_blocked(cutover_at: datetime) -> str:
+    """Stable urgent rollout failure identity from the scheduled UTC boundary."""
+    if not isinstance(cutover_at, datetime) or cutover_at.utcoffset() is None:
+        raise ValueError("cutover_at must be timezone-aware")
+    return f"attendance_cutover_blocked:{cutover_at.astimezone(UTC).isoformat()}"

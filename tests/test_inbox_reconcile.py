@@ -132,6 +132,66 @@ def test_complete_kinds_includes_healthy_auto_lunch_but_skips_source_error():
     assert "auto_lunch" not in inbox_reconcile._complete_kinds(live_snapshot)
 
 
+def test_cutover_blocker_is_complete_when_attendance_source_is_healthy():
+    snapshot = {
+        "sections": [
+            {
+                "id": "attendance_cutover_blocked",
+                "count": 0,
+                "rows": [],
+                "complete": True,
+            }
+        ],
+        "source_errors": [],
+    }
+
+    assert "attendance_cutover_blocked" in inbox_reconcile._complete_kinds(snapshot)
+
+    snapshot["source_errors"] = [{"source": "Attendance Timeline"}]
+    assert "attendance_cutover_blocked" not in inbox_reconcile._complete_kinds(snapshot)
+
+
+def test_cutover_blocker_departs_after_explicit_off_snapshot():
+    key = "attendance_cutover_blocked:2026-09-01T12:00:00+00:00"
+    failed_snapshot = {
+        "attendance_location_mode": "shadow",
+        "queue": [
+            {
+                "item_key": key,
+                "section_id": "attendance_cutover_blocked",
+                "priority": "urgent",
+            }
+        ],
+        "sections": [
+            {
+                "id": "attendance_cutover_blocked",
+                "count": 1,
+                "rows": [{"item_key": key}],
+                "complete": True,
+            }
+        ],
+        "source_errors": [],
+    }
+    open_after_failure = inbox_reconcile._open_now_from_snapshot(failed_snapshot)
+    assert inbox_reconcile.plan_reconcile(
+        open_after_failure,
+        {},
+        inbox_reconcile._complete_kinds(failed_snapshot),
+    )["arrivals"] == [key]
+
+    off_snapshot = {
+        "attendance_location_mode": "off",
+        "queue": [],
+        "sections": [],
+        "source_errors": [],
+    }
+    assert inbox_reconcile.plan_reconcile(
+        {},
+        open_after_failure,
+        inbox_reconcile._complete_kinds(off_snapshot),
+    )["departed"] == [key]
+
+
 def _mirror_row(**over):
     base = {
         "item_key": "missing_wc:1",

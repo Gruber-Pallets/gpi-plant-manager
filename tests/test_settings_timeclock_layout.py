@@ -14,6 +14,8 @@ import os
 from datetime import datetime, time, timedelta, timezone
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -197,7 +199,7 @@ class _FormRequest:
 
 @contextmanager
 def _settings_cursor():
-    yield object()
+    yield MagicMock()
 
 
 def test_attendance_location_settings_section_has_health_and_policy_contract():
@@ -209,6 +211,77 @@ def test_attendance_location_settings_section_has_health_and_policy_contract():
     assert 'name="department_requires_work_center"' in html
     assert "Mirror freshness" in html
     assert "Last full sweep" in html
+    assert "Attendance baseline" in html
+    assert "Mirror sync status" in html
+    assert "attendance_location.baseline_completed_at" in html
+    assert "attendance_location.last_error" in html
+    assert "attendance_location.open_rows_not_refreshed" in html
+    for field in (
+        "open_rows_not_refreshed",
+        "last_sweep_deletion_count",
+        "conflict_minutes_today",
+        "unmapped_minutes_today",
+        "missing_minutes_today",
+        "oldest_unassigned_age_seconds",
+        "shadow_changed_worker_units",
+        "correction_retries_today",
+        "correction_verification_failures_today",
+    ):
+        assert f"attendance_location.readiness.{field}" in html
+
+
+def test_off_context_exposes_source_health_without_live_build_writes_or_pii(monkeypatch):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    baseline_completed_at = datetime(2026, 9, 1, 10, tzinfo=timezone.utc)
+    sync_error = "Odoo request timed out"
+    queries: list[str] = []
+
+    monkeypatch.setattr(
+        policy,
+        "get_rollout_config",
+        lambda: policy.RolloutConfig(mode="off", cutover_at=None, live_gate=None),
+    )
+    monkeypatch.setattr(policy, "live_is_active", lambda: False)
+    monkeypatch.setattr(settings.app_settings, "get_setting", lambda _key: None)
+
+    def query(sql, *_args, **_kwargs):
+        queries.append(sql)
+        if "FROM departments" in sql:
+            return []
+        return [
+            {
+                "baseline_completed_at": baseline_completed_at,
+                "mirror_freshness": baseline_completed_at,
+                "last_full_sweep_completed_at": baseline_completed_at,
+                "last_error": sync_error,
+                "open_rows_not_refreshed": 3,
+            }
+        ]
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Off-mode Settings attempted an expensive build or write")
+
+    monkeypatch.setattr(settings.db, "query", query)
+    monkeypatch.setattr(settings.db, "execute", forbidden)
+    monkeypatch.setattr(settings.app_settings, "set_setting", forbidden)
+    monkeypatch.setattr(settings.attendance_readiness, "build_report", forbidden)
+    monkeypatch.setattr(settings.odoo_client, "execute", forbidden)
+
+    context = settings._attendance_location_context()
+
+    assert len(queries) == 2
+    health_sql = queries[1].lower()
+    assert "select count(*)" in health_sql
+    assert "odoo_attendance_mirror" in health_sql
+    assert "employee_id" not in health_sql
+    assert "employee_name" not in health_sql
+    assert context["mode"] == "off"
+    assert context["baseline_completed_at"] == baseline_completed_at
+    assert context["last_error"] == sync_error
+    assert context["open_rows_not_refreshed"] == 3
+    assert context["readiness"] is None
 
 
 def test_active_live_settings_ui_disables_off_and_explains_shadow_rollback(
@@ -231,6 +304,10 @@ def test_active_live_settings_ui_disables_off_and_explains_shadow_rollback(
     assert context["live_active"] is True
     assert (
         'value="off" {% if attendance_location.mode == \'off\' %}selected{% endif %} '
+        "{% if attendance_location.live_active %}disabled{% endif %}"
+    ) in html
+    assert (
+        'value="live" {% if attendance_location.mode == \'live\' %}selected{% endif %} '
         "{% if attendance_location.live_active %}disabled{% endif %}"
     ) in html
     assert "choose Shadow and set a future workday boundary" in html
@@ -261,25 +338,32 @@ def test_attendance_location_save_is_super_admin_only(monkeypatch):
     assert response.body == b'{"ok":false,"error":"super_admin_required"}'
 
 
-def test_attendance_location_save_rejects_live_until_readiness_exists(monkeypatch):
+def test_attendance_location_save_runs_fresh_live_readiness_off_event_loop(monkeypatch):
     from zira_dashboard.routes import settings
 
     monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
-    monkeypatch.setattr(settings.db, "cursor", _settings_cursor)
+    cutover = datetime(2026, 9, 2, 12, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        settings.attendance_location_policy,
-        "set_rollout_config",
-        lambda *_args, **_kwargs: pytest.fail("ungated live config was persisted"),
+        settings.attendance_readiness,
+        "parse_local_cutover",
+        lambda raw: cutover,
+    )
+    calls = []
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "schedule_live_cutover",
+        lambda value, *, now_utc: calls.append((value, now_utc)),
     )
 
     response = asyncio.run(
         settings.settings_save_attendance_location(
-            _FormRequest({"rollout_mode": "live"})
+            _FormRequest({"rollout_mode": "live", "cutover_at": "2026-09-02T07:00"})
         )
     )
 
-    assert response.status_code == 422
-    assert response.body == b'{"ok":false,"error":"live_readiness_required"}'
+    assert response.status_code == 200
+    assert calls and calls[0][0] == cutover
+    assert calls[0][1].tzinfo is timezone.utc
 
 
 def test_attendance_location_route_schedules_active_live_rollback(monkeypatch):
@@ -302,6 +386,15 @@ def test_attendance_location_route_schedules_active_live_rollback(monkeypatch):
     monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
     monkeypatch.setattr(settings.db, "cursor", _settings_cursor)
     monkeypatch.setattr(policy.shift_config, "shift_start_for", lambda _day: time(7, 0))
+    monkeypatch.setattr(policy.shift_config, "is_workday", lambda _day: True)
+    monkeypatch.setattr(
+        policy.shift_config,
+        "snapshot_for",
+        lambda _day, **_kwargs: SimpleNamespace(
+            shift_start=time(7, 0),
+            is_workday=True,
+        ),
+    )
     monkeypatch.setattr(policy.app_settings, "get_setting", lambda _key: stored["value"])
     monkeypatch.setattr(
         policy.app_settings,
@@ -323,7 +416,57 @@ def test_attendance_location_route_schedules_active_live_rollback(monkeypatch):
 
     assert response.status_code == 200
     assert policy.live_is_active(now_utc=rollback_at - timedelta(seconds=1)) is True
-    assert policy.live_is_active(now_utc=rollback_at) is False
+    assert policy.live_is_active(now_utc=rollback_at) is True
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "store_name"),
+    [
+        ("settings_save_schedule", "schedule_store"),
+        ("settings_save_saturday_schedule", "saturday_schedule_store"),
+    ],
+)
+def test_schedule_mutation_rejects_pending_attendance_boundary(
+    monkeypatch,
+    handler_name,
+    store_name,
+):
+    from zira_dashboard.routes import settings
+
+    store = getattr(settings, store_name, None)
+    if store is None:
+        from zira_dashboard import saturday_schedule_store
+
+        store = saturday_schedule_store
+    monkeypatch.setattr(settings.db, "cursor", _settings_cursor)
+    default_schedule = getattr(store, "DEFAULT_SCHEDULE", None) or store.DEFAULT
+    monkeypatch.setattr(store, "current", lambda: default_schedule)
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "require_no_pending_boundary_cur",
+        lambda _cur: (_ for _ in ()).throw(
+            ValueError("attendance_rollout_boundary_pending")
+        ),
+    )
+    monkeypatch.setattr(
+        store,
+        "save",
+        lambda *_args, **_kwargs: pytest.fail("pending boundary allowed schedule write"),
+    )
+
+    response = asyncio.run(
+        getattr(settings, handler_name)(
+            _FormRequest(
+                {
+                    "shift_start": "07:00",
+                    "shift_end": "15:30",
+                    "weekday_0": "on",
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 409
 
 
 def test_attendance_location_route_rejects_midday_rollback(monkeypatch):
@@ -389,7 +532,7 @@ def test_attendance_location_route_rejects_active_live_off_without_any_write(
     @contextmanager
     def cursor():
         cursor_entries.append(True)
-        yield object()
+        yield MagicMock()
 
     monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
     monkeypatch.setattr(settings.db, "cursor", cursor)
@@ -428,7 +571,7 @@ def test_attendance_location_route_rejects_active_live_off_without_any_write(
     assert response.status_code == 422
     assert response.body == b'{"ok":false,"error":"rollback_boundary_required"}'
     assert stored["value"] is original
-    assert cursor_entries == []
+    assert cursor_entries == [True]
     assert department_writes == []
 
 
@@ -456,7 +599,7 @@ def test_attendance_location_save_updates_shadow_and_department_choices(monkeypa
     )
     monkeypatch.setattr(
         settings.attendance_location_policy,
-        "get_rollout_config",
+        "get_rollout_config_strict",
         lambda: settings.attendance_location_policy.RolloutConfig(
             mode="off", cutover_at=None, live_gate=None
         ),
@@ -535,12 +678,27 @@ def test_attendance_location_save_rolls_back_every_write_on_department_failure(
     )
     monkeypatch.setattr(
         policy,
-        "get_rollout_config",
+        "get_rollout_config_strict",
         lambda: policy.RolloutConfig(mode="off", cutover_at=None, live_gate=None),
     )
-    monkeypatch.setattr(policy, "live_is_active", lambda: False)
+    monkeypatch.setattr(policy, "lock_rollout_decision_cur", lambda _cur: None)
     monkeypatch.setattr(policy, "set_rollout_config", save_rollout)
     monkeypatch.setattr(policy, "set_department_requirement", save_department)
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "clear_shadow_evidence_cur",
+        lambda cur: persist(("clear_shadow_evidence",), cur),
+    )
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "clear_cutover_blocked_cur",
+        lambda cur: persist(("clear_cutover_blocked",), cur),
+    )
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "_record_rollout_audit_cur",
+        lambda cur, **_kwargs: persist(("rollout_audit",), cur),
+    )
 
     response = asyncio.run(
         settings.settings_save_attendance_location(
@@ -558,3 +716,179 @@ def test_attendance_location_save_rolls_back_every_write_on_department_failure(
     assert response.body == b'{"ok":false,"error":"injected_department_failure"}'
     assert transactional_db.cursor_entries == 1
     assert transactional_db.durable == []
+
+
+def test_non_live_save_rejects_a_rollout_that_changed_before_the_fence(monkeypatch):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    checked_at = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
+    expected = policy.RolloutConfig(
+        "live",
+        checked_at,
+        policy.LiveGate(checked_at - timedelta(minutes=1), "scheduled", None),
+    )
+    activated = policy.RolloutConfig(
+        "live",
+        checked_at,
+        policy.LiveGate(checked_at, "boundary", checked_at),
+    )
+    lock_calls = []
+    monkeypatch.setattr(settings.db, "cursor", _settings_cursor)
+    monkeypatch.setattr(
+        policy,
+        "lock_rollout_decision_cur",
+        lambda cur: lock_calls.append(cur),
+    )
+    monkeypatch.setattr(policy, "get_rollout_config_strict", lambda: activated)
+    monkeypatch.setattr(
+        policy,
+        "set_rollout_config",
+        lambda *_args, **_kwargs: pytest.fail("stale request overwrote activation"),
+    )
+
+    with pytest.raises(ValueError, match="rollout_save_superseded"):
+        settings._save_non_live_attendance_location(
+            mode="off",
+            cutover_at=None,
+            selected_departments=set(),
+            departments=(),
+            expected_config=expected,
+        )
+
+    assert len(lock_calls) == 1
+
+
+def test_cancel_pending_live_schedule_appends_atomic_audit(monkeypatch):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    checked_at = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
+    pending = policy.RolloutConfig(
+        "live",
+        checked_at + timedelta(days=1),
+        policy.LiveGate(checked_at, "scheduled", None),
+    )
+    cursor = MagicMock()
+    audits = []
+
+    @contextmanager
+    def cursor_context():
+        yield cursor
+
+    monkeypatch.setattr(settings.db, "cursor", cursor_context)
+    monkeypatch.setattr(policy, "lock_rollout_decision_cur", lambda _cur: None)
+    monkeypatch.setattr(policy, "get_rollout_config_strict", lambda: pending)
+    monkeypatch.setattr(policy, "_utc_now", lambda: checked_at)
+    monkeypatch.setattr(policy, "set_rollout_config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "_record_rollout_audit_cur",
+        lambda cur, **kwargs: audits.append((cur, kwargs)),
+    )
+
+    settings._save_non_live_attendance_location(
+        mode="shadow",
+        cutover_at=None,
+        selected_departments=set(),
+        departments=(),
+        expected_config=pending,
+    )
+
+    assert audits == [
+        (
+            cursor,
+            {
+                "event_kind": "live_cancelled",
+                "rollout_mode": "shadow",
+                "cutover_at": pending.cutover_at,
+                "checked_at": checked_at,
+                "report_fingerprint": "scheduled",
+            },
+        )
+    ]
+
+
+def test_entering_shadow_starts_a_new_observation_epoch_and_clears_old_proof(
+    monkeypatch,
+):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    previous = policy.RolloutConfig("off", None, None)
+    setting_writes = []
+    cursor = MagicMock()
+
+    @contextmanager
+    def cursor_context():
+        yield cursor
+
+    monkeypatch.setattr(settings.db, "cursor", cursor_context)
+    monkeypatch.setattr(policy, "lock_rollout_decision_cur", lambda _cur: None)
+    monkeypatch.setattr(policy, "get_rollout_config_strict", lambda: previous)
+    monkeypatch.setattr(policy, "_utc_now", lambda: datetime(2026, 9, 1, tzinfo=timezone.utc))
+    monkeypatch.setattr(policy, "set_rollout_config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "start_shadow_epoch_cur",
+        lambda cur, *, entered_at: setting_writes.append((cur, entered_at)),
+    )
+
+    settings._save_non_live_attendance_location(
+        mode="shadow",
+        cutover_at=None,
+        selected_departments=set(),
+        departments=(),
+        expected_config=previous,
+    )
+
+    assert setting_writes == [(cursor, datetime(2026, 9, 1, tzinfo=timezone.utc))]
+
+
+def test_explicit_off_clears_shadow_proof_and_cutover_blocker(monkeypatch):
+    from zira_dashboard import attendance_location_policy as policy
+    from zira_dashboard.routes import settings
+
+    previous = policy.RolloutConfig("shadow", None, None)
+    cursor = MagicMock()
+    cleared = []
+
+    @contextmanager
+    def cursor_context():
+        yield cursor
+
+    monkeypatch.setattr(settings.db, "cursor", cursor_context)
+    monkeypatch.setattr(policy, "lock_rollout_decision_cur", lambda _cur: None)
+    monkeypatch.setattr(policy, "get_rollout_config_strict", lambda: previous)
+    monkeypatch.setattr(
+        policy,
+        "_utc_now",
+        lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(policy, "set_rollout_config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "clear_shadow_evidence_cur",
+        lambda cur: cleared.append(("shadow", cur)),
+    )
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "clear_cutover_blocked_cur",
+        lambda cur: cleared.append(("cutover", cur)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "_record_rollout_audit_cur",
+        lambda *_args, **_kwargs: None,
+    )
+
+    settings._save_non_live_attendance_location(
+        mode="off",
+        cutover_at=None,
+        selected_departments=set(),
+        departments=(),
+        expected_config=previous,
+    )
+
+    assert cleared == [("shadow", cursor), ("cutover", cursor)]

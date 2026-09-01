@@ -3130,7 +3130,7 @@ def _preflight_operations(
         exact_outsiders = [row for row in outsiders if _exact_mutable(row, operation.after)]
         if len(exact_outsiders) > 1 or any(row not in exact_outsiders for row in outsiders):
             raise _SourceChanged("create interval has new conflicting Odoo state")
-        if exact_outsiders and len(candidates) != 1:
+        if exact_outsiders and len(outsiders) != 1:
             raise _SourceChanged("create interval has ambiguous Odoo state")
 
 
@@ -3183,15 +3183,19 @@ def _perform_operation(
     if operation.kind == "create":
         assert operation.after is not None
         candidates = _create_candidates(facade, operation, before_remote_call=before_remote_call)
-        exact = [row for row in candidates if _exact_mutable(row, operation.after)]
-        if len(exact) == 1 and len(candidates) == 1:
+        source_ids = {int(row["odoo_attendance_id"]) for row in source_rows}
+        outsiders = [
+            row for row in candidates if int(row["odoo_attendance_id"]) not in source_ids
+        ]
+        exact = [row for row in outsiders if _exact_mutable(row, operation.after)]
+        if len(exact) == 1 and len(outsiders) == 1:
             attendance_id = _positive_int(exact[0]["odoo_attendance_id"], "odoo_attendance_id")
             return {
                 "operation_key": operation.key,
                 "kind": operation.kind,
                 "attendance_id": attendance_id,
             }, "adopted"
-        if exact or candidates:
+        if exact or outsiders:
             raise _SourceChanged("create interval overlaps changed Odoo state")
         try:
             _before_remote(before_remote_call)
@@ -3208,8 +3212,13 @@ def _perform_operation(
             candidates = _create_candidates(
                 facade, operation, before_remote_call=before_remote_call
             )
-            exact = [row for row in candidates if _exact_mutable(row, operation.after)]
-            if len(exact) == 1 and len(candidates) == 1:
+            outsiders = [
+                row
+                for row in candidates
+                if int(row["odoo_attendance_id"]) not in source_ids
+            ]
+            exact = [row for row in outsiders if _exact_mutable(row, operation.after)]
+            if len(exact) == 1 and len(outsiders) == 1:
                 return {
                     "operation_key": operation.key,
                     "kind": operation.kind,
@@ -3217,7 +3226,7 @@ def _perform_operation(
                         exact[0]["odoo_attendance_id"], "odoo_attendance_id"
                     ),
                 }, "adopted_timeout"
-            if exact or candidates:
+            if exact or outsiders:
                 raise _SourceChanged("create outcome is ambiguous") from error
             raise _RecoverableWrite(str(error) or type(error).__name__) from error
         confirmed = _read_one(
@@ -3432,7 +3441,7 @@ def _mirror_verified_rows(
     *,
     completed_at: datetime,
 ) -> bool:
-    from . import attendance_mirror, db
+    from . import attendance_location_policy, attendance_mirror, db
 
     # The facade normally includes display names. The mirror contract accepts
     # nullable display values, so identifiers and exact interval fields remain
@@ -3455,6 +3464,7 @@ def _mirror_verified_rows(
     deleted_ids = sorted(source_ids - verified_ids)
     normalized = attendance_mirror._normalized_rows(mirror_rows)
     with db.cursor() as cur:
+        attendance_location_policy.lock_rollout_decision_cur(cur)
         cur.execute(
             "SELECT status, attempt_count FROM attendance_correction_jobs WHERE id = %s FOR UPDATE",
             (claim.job_id,),
@@ -3519,9 +3529,10 @@ def _enqueue_recalculation(
     requested_at: datetime,
 ) -> bool:
     """Fence, enqueue verified days, and record the stage in one transaction."""
-    from . import attendance_mirror, db
+    from . import attendance_location_policy, attendance_mirror, db
 
     with db.cursor() as cur:
+        attendance_location_policy.lock_rollout_decision_cur(cur)
         cur.execute(
             "SELECT status, attempt_count FROM attendance_correction_jobs WHERE id = %s FOR UPDATE",
             (claim.job_id,),
@@ -3538,6 +3549,7 @@ def _enqueue_recalculation(
             days,
             "attendance_correction_verified",
             requested_at=requested_at,
+            mark_strict=True,
         )
         marker = {
             "stage": "recalc_enqueued",

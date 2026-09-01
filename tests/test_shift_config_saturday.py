@@ -205,3 +205,53 @@ def test_legacy_published_saturday_remains_active(monkeypatch):
     monkeypatch.setattr(staffing, "load_schedule", _load(True))
 
     assert shift_config.is_workday(SAT) is True
+
+
+class _SnapshotCursor:
+    def __init__(self, row):
+        self.row = row
+
+    def execute(self, _sql, _params):
+        return None
+
+    def fetchone(self):
+        return self.row
+
+
+def test_canonical_snapshot_uses_full_global_default_when_singleton_missing():
+    snapshot = shift_config.snapshot_for(
+        TUE,
+        cur=_SnapshotCursor(
+            {
+                "global_id": None,
+                "saturday_id": None,
+                "day_published": False,
+                "holiday_odoo_id": None,
+            }
+        ),
+    )
+
+    assert snapshot.shift_start == schedule_store.DEFAULT_SCHEDULE.shift_start
+    assert snapshot.shift_end == schedule_store.DEFAULT_SCHEDULE.shift_end
+    assert snapshot.breaks == schedule_store.DEFAULT_SCHEDULE.breaks
+    assert snapshot.is_workday is True
+
+
+def test_canonical_snapshot_uses_full_saturday_default_when_singleton_missing():
+    snapshot = shift_config.snapshot_for(
+        SAT,
+        cur=_SnapshotCursor(
+            {
+                "global_id": None,
+                "saturday_id": None,
+                "day_published": True,
+                "custom_hours": None,
+                "holiday_odoo_id": None,
+            }
+        ),
+    )
+
+    assert snapshot.shift_start == saturday_schedule_store.DEFAULT.shift_start
+    assert snapshot.shift_end == saturday_schedule_store.DEFAULT.shift_end
+    assert snapshot.breaks == saturday_schedule_store.DEFAULT.breaks
+    assert snapshot.is_workday is True

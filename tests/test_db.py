@@ -1,4 +1,5 @@
 import os
+from threading import Thread
 import pytest
 
 from zira_dashboard import db
@@ -39,6 +40,39 @@ def test_cursor_rolls_back_on_exception():
             raise RuntimeError("boom")
     rows = db.query("SELECT id FROM _t")
     assert rows == []
+
+
+def test_read_snapshot_pins_nested_queries_to_one_repeatable_view():
+    db.init_pool()
+    db.bootstrap_schema()
+    key = "test_read_snapshot_repeatable_view"
+    db.execute("DELETE FROM app_settings WHERE key = %s", (key,))
+    db.execute(
+        "INSERT INTO app_settings (key, value) VALUES (%s, %s::jsonb)",
+        (key, '"before"'),
+    )
+    try:
+        with db.read_snapshot():
+            assert db.query("SELECT value FROM app_settings WHERE key = %s", (key,)) == [
+                {"value": "before"}
+            ]
+            writer = Thread(
+                target=lambda: db.execute(
+                    "UPDATE app_settings SET value = %s::jsonb WHERE key = %s",
+                    ('"after"', key),
+                )
+            )
+            writer.start()
+            writer.join(timeout=5)
+            assert not writer.is_alive()
+            assert db.query("SELECT value FROM app_settings WHERE key = %s", (key,)) == [
+                {"value": "before"}
+            ]
+        assert db.query("SELECT value FROM app_settings WHERE key = %s", (key,)) == [
+            {"value": "after"}
+        ]
+    finally:
+        db.execute("DELETE FROM app_settings WHERE key = %s", (key,))
 
 
 def test_bootstrap_schema_idempotent():

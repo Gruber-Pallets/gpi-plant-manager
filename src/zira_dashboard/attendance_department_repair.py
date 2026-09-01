@@ -768,6 +768,7 @@ class _PostgresBackend:
         if normalized["odoo_attendance_id"] != claim.attendance_id:
             raise ValueError("verified row does not match the repair claim")
         with db.cursor() as cur:
+            attendance_location_policy.lock_rollout_decision_cur(cur)
             owned = self._lock_owned(cur, claim)
             if owned is None:
                 return False
@@ -880,6 +881,7 @@ class _PostgresBackend:
         if normalized["odoo_attendance_id"] != claim.attendance_id:
             raise ValueError("verified row does not match the repair claim")
         with db.cursor() as cur:
+            attendance_location_policy.lock_rollout_decision_cur(cur)
             owned = self._lock_owned(cur, claim)
             if owned is None:
                 return False
@@ -931,6 +933,7 @@ class _PostgresBackend:
         )
         failed = claim.attempt_count >= MAX_ATTEMPTS
         with db.cursor() as cur:
+            attendance_location_policy.lock_rollout_decision_cur(cur)
             owned = self._lock_owned(cur, claim)
             if owned is None:
                 return None

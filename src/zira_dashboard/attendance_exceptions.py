@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Literal
 
 from . import (
+    app_settings,
     attendance_location_policy,
     attendance_mirror,
     attendance_timeline,
@@ -16,6 +17,8 @@ from . import (
     shift_config,
     wc_attributions,
 )
+
+_CUTOVER_BLOCKED_SETTING_KEY = "odoo_attendance_cutover_blocked"
 
 
 ExceptionPriority = Literal["urgent", "warn", "muted"]
@@ -561,6 +564,44 @@ def _strict_source_problem(
     )
 
 
+def _cutover_blocked_issue(day: date) -> AttendanceException | None:
+    payload = app_settings.get_setting(_CUTOVER_BLOCKED_SETTING_KEY)
+    if not isinstance(payload, dict):
+        return None
+    try:
+        cutover = _aware_utc(datetime.fromisoformat(str(payload["cutover_at"])), "cutover")
+        checked = _aware_utc(datetime.fromisoformat(str(payload["checked_at"])), "checked")
+        blocker_values = payload.get("blockers")
+        if not isinstance(blocker_values, list) or not blocker_values:
+            return None
+        blockers = tuple(
+            value for value in blocker_values if isinstance(value, str) and 0 < len(value) <= 80
+        )
+        if not blockers:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return AttendanceException(
+        kind="attendance_cutover_blocked",
+        item_key=inbox_keys.attendance_cutover_blocked(cutover),
+        employee_odoo_id=None,
+        employee_name=None,
+        attendance_ids=(),
+        start_utc=checked,
+        end_utc=checked,
+        raw_work_center_labels=(),
+        odoo_work_center_ids=(),
+        affected_workers=(),
+        app_work_center_name=None,
+        units=None,
+        sample_count=None,
+        reason="Readiness blockers: " + ", ".join(blockers),
+        priority="urgent",
+        comparison_only=False,
+        target_odoo_department_id=None,
+    )
+
+
 def build_snapshot(
     day: date,
     *,
@@ -577,6 +618,12 @@ def build_snapshot(
         return AttendanceExceptionSnapshot(day, "off", "legacy", False, False, False, (), ())
 
     issues: list[AttendanceException] = []
+    try:
+        blocked_issue = _cutover_blocked_issue(day)
+    except Exception:  # noqa: BLE001 - corrupt optional alert never hides core issues
+        blocked_issue = None
+    if blocked_issue is not None:
+        issues.append(blocked_issue)
     source_errors: list[str] = []
     if policy_error is not None:
         issues.append(_strict_source_problem(day, now, policy_error))
