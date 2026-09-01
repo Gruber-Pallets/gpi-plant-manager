@@ -49,6 +49,7 @@ from .routes import (
     object_api,
     past_schedules,
     people,
+    people_performance,
     rotations,
     settings,
     share,
@@ -736,6 +737,7 @@ app.include_router(missed_punch_out.router)
 app.include_router(share.router)
 app.include_router(skills.router)
 app.include_router(people.router)
+app.include_router(people_performance.router)
 app.include_router(leaderboards.router)
 app.include_router(forklift_leaderboards.router)
 app.include_router(past_schedules.router)

@@ -1,0 +1,32 @@
+{% extends "_staffing_base.html" %}
+{% block title %}People performance{% endblock %}
+{% block content %}
+<section class="pp-page"
+         data-day="{{ day }}"
+         data-today="{{ 1 if is_today else 0 }}"
+         data-is-today="{{ 1 if is_today else 0 }}"
+         data-rows-url="{{ rows_url }}">
+  <header class="pp-toolbar">
+    <div>
+      <p class="pp-eyebrow">People performance</p>
+      <h1>{{ 'Today' if is_today else day }}</h1>
+      <p class="pp-updated" id="pp-live-status" aria-live="polite">
+        Updated through {{ as_of }}
+      </p>
+    </div>
+    <form class="pp-controls" action="/people-performance" method="get">
+      <label>
+        Date
+        <input type="date" name="day" value="{{ day }}" max="{{ today }}">
+      </label>
+      <label class="pp-check">
+        <input type="checkbox" name="attention" value="1"{% if attention_only %} checked{% endif %}>
+        Needs attention
+      </label>
+      <button type="submit">Apply</button>
+      <a href="/people-performance">Today</a>
+    </form>
+  </header>
+  {% include "_people_performance_rows.html" %}
+</section>
+{% endblock %}

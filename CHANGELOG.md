@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Add a people-first performance page
+
+- **Managers now have a People tab ready to show one workday person by person.** It keeps production workers, tablet drivers, and other workers in separate easy-to-scan groups.
+
 ### Bring each worker's day together safely
 
 - **Plant Manager can now bring work times, production, stops, and forklift calls into one safe day view.** If one source is down, the other facts stay visible and the missing part says it is not available.
