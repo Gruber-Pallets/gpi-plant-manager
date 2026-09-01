@@ -56,18 +56,42 @@ def test_color_shape_readability_and_tablet_contracts_are_present():
     assert "#111827" in focus_ring.group(1)
 
 
-def test_sticky_axis_is_outside_horizontal_overflow_and_scroll_is_local():
+def test_manager_strip_is_sticky_and_overflow_stays_local():
     css = CSS_PATH.read_text(encoding="utf-8")
-    axis = re.search(r"\.pp-axis\s*\{([^}]*)\}", css)
+    strip = re.search(r"\.pp-manager-strip\s*\{([^}]*)\}", css)
+    warnings = re.search(r"\.pp-source-warnings\s*\{([^}]*)\}", css)
     horizontal = re.search(r"\.pp-horizontal-scroll\s*\{([^}]*)\}", css)
 
-    assert axis
-    assert "position: sticky" in axis.group(1)
-    assert "overflow" not in axis.group(1)
-    assert horizontal
-    assert "overflow-x: auto" in horizontal.group(1)
-    assert "overscroll-behavior-x: contain" in horizontal.group(1)
+    assert strip
+    assert "position: sticky" in strip.group(1)
+    assert "min-height: 2.75rem" in strip.group(1)
+    assert "overflow" not in strip.group(1)
+    assert warnings and "overflow-x: auto" in warnings.group(1)
+    assert horizontal and "overflow-x: auto" in horizontal.group(1)
     assert ".pp-page { overflow-x" not in css
+
+
+def test_section_headers_share_row_columns_and_time_tracks():
+    css = CSS_PATH.read_text(encoding="utf-8")
+    assert ".pp-section-header," in css
+    assert ".pp-row" in css
+    assert ".pp-schedule-track," in css
+    assert ".pp-timeline" in css
+    assert ".pp-schedule-time-group.is-start" in css
+    assert ".pp-schedule-time-group.is-end" in css
+
+
+def test_compact_mobile_strip_uses_two_rows_without_an_empty_warning_cell():
+    css = CSS_PATH.read_text(encoding="utf-8")
+    check = re.search(r"\.pp-controls \.pp-check\s*\{([^}]*)\}", css)
+    no_warnings = re.search(
+        r"\.pp-counts \+ \.pp-updated \+ \.pp-controls\s*\{([^}]*)\}", css
+    )
+
+    assert check and "min-height: 2rem" in check.group(1)
+    assert no_warnings
+    assert "grid-column: 1 / -1" in no_warnings.group(1)
+    assert "justify-self: end" in no_warnings.group(1)
 
 
 def test_short_intervals_have_a_separate_nonoverlapping_touch_target():
@@ -81,7 +105,7 @@ def test_short_intervals_have_a_separate_nonoverlapping_touch_target():
     assert 'class="pp-interval-shortcut"' in template
     assert "row.short_intervals" in template
     assert 'class="pp-timeline-viewport pp-horizontal-scroll"' in template
-    assert 'class="pp-axis-viewport pp-horizontal-scroll"' in template
+    assert 'class="pp-schedule-viewport pp-horizontal-scroll"' in template
 
 
 def test_refresh_source_contract_places_capture_immediately_before_replacement():
