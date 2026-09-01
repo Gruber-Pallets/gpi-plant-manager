@@ -487,10 +487,17 @@ _SECTION_RANK: dict[SectionKey, int] = {
 }
 
 
-def _production_subgroup_rank(role: RoleKey, location_name: str) -> int:
-    if role == "production" and location_name.casefold().startswith("trim saw"):
+def _production_subgroup_rank(
+    role: RoleKey,
+    score: SegmentScore | None,
+) -> int:
+    if role != "production":
+        return 0
+    if score is None:
+        return 0
+    if not _is_finite_number(score.goal_units):
         return 1
-    return 0
+    return 0 if score.goal_units > 0 else 1
 
 
 _LOCATION_STATUS = {
@@ -1035,9 +1042,14 @@ def _assemble_person_row(
         reasons = ("metric unavailable",)
         deficit = 0.0
         rolling_tiebreak = 0.0
+    final_score = _production_score_for_span(
+        production_scores,
+        employee_odoo_id=employee_odoo_id,
+        span=final_span,
+    )
     sort_key = (
         _SECTION_RANK[final_role],
-        _production_subgroup_rank(final_role, final_interval.location_name),
+        _production_subgroup_rank(final_role, final_score),
         attention_rank,
         -deficit,
         rolling_tiebreak,

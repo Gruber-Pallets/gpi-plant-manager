@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Put all measured work without goals at the bottom
+
+- **The People page now places any measured work without a goal below measured work that has a goal.** Trim Saw follows the same rule as every other measured work area.
+
 ### Plan the People work bar ending fix
 
 - **A step-by-step plan is ready to stop People work bars before the last cleanup break and keep the final times easy to read.** Nothing in the app has changed yet.

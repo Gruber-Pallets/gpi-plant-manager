@@ -4,7 +4,7 @@
 
 **Goal:** Place every metered People row whose current or final work center has no goal below all metered rows whose current or final work center has a goal.
 
-**Architecture:** Replace the work-center-name-specific production subgroup rank with a goal-based rank derived from the final timeline interval's `ProductionMetric`. Preserve the existing section rank and every attention/result tie-breaker after the subgroup rank.
+**Architecture:** Replace the work-center-name-specific production subgroup rank with a goal-based rank derived from the final timeline interval's `SegmentScore`. Preserve the existing section rank and every attention/result tie-breaker after the subgroup rank.
 
 **Tech Stack:** Python 3.12, frozen dataclasses, pytest, Ruff.
 
@@ -12,7 +12,8 @@
 
 - The current interval, or final interval for a completed day, owns the subgroup.
 - A finite, positive `goal_units` value means the final metered interval has a goal.
-- A missing, zero, negative, or non-finite final goal means the row belongs at the bottom of Metered production.
+- A known zero, negative, or non-finite final goal means the row belongs at the bottom of Metered production.
+- A missing score leaves goal status unknown and retains the row's normal metered attention order.
 - Work-center names do not affect placement; Trim Saw follows the same rule as every other metered work center.
 - Preserve attention, deficit, rolling-performance, person-name, and employee-ID ordering within each subgroup.
 - Preserve the fixed Metered production, Tablet forklift, and Other non-metered people section order.
@@ -29,8 +30,8 @@
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**
-- Consumes: `RoleKey`, `ProductionMetric | None`, `_is_finite_number(value: object) -> bool`, and the final `TimelineInterval.production` value.
-- Produces: `_production_subgroup_rank(role: RoleKey, metric: ProductionMetric | None) -> int`, returning `0` for goal-based production and all non-production roles, or `1` for production without a finite positive goal.
+- Consumes: `RoleKey`, `SegmentScore | None`, `_is_finite_number(value: object) -> bool`, and the final span's indexed production score.
+- Produces: `_production_subgroup_rank(role: RoleKey, score: SegmentScore | None) -> int`, returning `0` for goal-based production, unknown production, and all non-production roles, or `1` for production with a known non-positive or non-finite goal.
 
 - [ ] **Step 1: Replace the Trim-Saw-specific tests with failing goal-based ordering tests**
 
@@ -108,16 +109,28 @@ Replace `_production_subgroup_rank` in `src/zira_dashboard/people_performance.py
 ```python
 def _production_subgroup_rank(
     role: RoleKey,
-    metric: ProductionMetric | None,
+    score: SegmentScore | None,
 ) -> int:
     if role != "production":
         return 0
-    if metric is None or not _is_finite_number(metric.goal_units):
+    if score is None:
+        return 0
+    if not _is_finite_number(score.goal_units):
         return 1
-    return 0 if metric.goal_units > 0 else 1
+    return 0 if score.goal_units > 0 else 1
 ```
 
-Then change the second field in `_assemble_person_row()`'s `sort_key` from:
+Before constructing `_assemble_person_row()`'s `sort_key`, resolve the final score:
+
+```python
+    final_score = _production_score_for_span(
+        production_scores,
+        employee_odoo_id=employee_odoo_id,
+        span=final_span,
+    )
+```
+
+Then change the second sort-key field from:
 
 ```python
         _production_subgroup_rank(final_role, final_interval.location_name),
@@ -126,10 +139,10 @@ Then change the second field in `_assemble_person_row()`'s `sort_key` from:
 to:
 
 ```python
-        _production_subgroup_rank(final_role, final_interval.production),
+        _production_subgroup_rank(final_role, final_score),
 ```
 
-This keeps the subgroup decision local to the final interval and avoids adding work-center configuration to the assembly interface.
+This keeps the subgroup decision local to the final interval, preserves unknown-data attention ordering, and avoids adding work-center configuration to the assembly interface.
 
 - [ ] **Step 4: Run the row tests and verify GREEN**
 
