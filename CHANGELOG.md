@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Keep a worker's team after lunch plan
+
+- **A plan is ready to keep a worker in the same Odoo team after Auto-Lunch.** It covers safe retries and uses the team from just before lunch. Nothing in the app has changed yet.
+
 ### Past PTO requests now show in the Inbox
 
 - **Past-absence PTO requests now appear with the other daily work in the Exception Inbox.** Managers can approve or deny a waiting request there. Requests that need payroll help stay visible until a manager adds a note and marks them handled.
