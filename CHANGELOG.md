@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Keep Trim Saw at the bottom of measured work
+
+- **Trim Saw workers now stay below the other measured work areas on the People page.** They still show their results, but the work areas we understand better stay first.
+
 ### Auto-Lunch team carryover build plan
 
 - **A step-by-step build plan is ready to keep a worker in the same Odoo team after lunch.** It covers safe retries, checks the saved result, and includes a careful fix for Lauro's affected time record. Nothing in the app has changed yet.
