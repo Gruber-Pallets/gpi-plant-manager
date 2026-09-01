@@ -128,7 +128,7 @@ def test_undo_breakdown_transfer_reverses_and_reopens_exclusion(monkeypatch):
 
 
 def test_undo_breakdown_dismiss_reopens_incident_and_recreates_rows(monkeypatch):
-    from zira_dashboard import machine_breakdown, wc_attributions
+    from zira_dashboard import machine_breakdown
     snapshot_rows = [
         {
             "day": "2026-07-08",
@@ -161,20 +161,6 @@ def test_undo_breakdown_dismiss_reopens_incident_and_recreates_rows(monkeypatch)
         lambda incident_id, rows: atomic_undos.append((incident_id, rows)) or True,
         raising=False,
     )
-    monkeypatch.setattr(
-        wc_attributions,
-        "restore_breakdown_snapshot",
-        lambda *_args, **_kwargs: pytest.fail(
-            "snapshot restore must share the reopen transaction"
-        ),
-    )
-    monkeypatch.setattr(
-        machine_breakdown,
-        "reopen_incident",
-        lambda *_args, **_kwargs: pytest.fail(
-            "incident reopen must share the snapshot transaction"
-        ),
-    )
     monkeypatch.setattr(inbox_log, "log_event_safe", lambda **kw: 99)
     monkeypatch.setattr(inbox_log, "mark_undone", lambda e, u: None)
     monkeypatch.setattr(exceptions_route, "_refresh_time_off_surfaces", lambda: None)
@@ -188,7 +174,7 @@ def test_undo_breakdown_dismiss_reopens_incident_and_recreates_rows(monkeypatch)
 def test_undo_breakdown_dismiss_conflict_returns_409_without_partial_restore(
     monkeypatch,
 ):
-    from zira_dashboard import machine_breakdown, wc_attributions
+    from zira_dashboard import machine_breakdown
 
     snapshot_rows = [
         {
@@ -218,20 +204,6 @@ def test_undo_breakdown_dismiss_conflict_returns_409_without_partial_restore(
         "undo_dismiss_incident",
         lambda _incident_id, _rows: False,
         raising=False,
-    )
-    monkeypatch.setattr(
-        wc_attributions,
-        "restore_breakdown_snapshot",
-        lambda *_args, **_kwargs: pytest.fail(
-            "snapshot restore must share the reopen transaction"
-        ),
-    )
-    monkeypatch.setattr(
-        machine_breakdown,
-        "reopen_incident",
-        lambda *_args, **_kwargs: pytest.fail(
-            "incident reopen must share the snapshot transaction"
-        ),
     )
     monkeypatch.setattr(
         inbox_log,

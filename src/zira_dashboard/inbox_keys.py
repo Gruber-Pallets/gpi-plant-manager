@@ -49,10 +49,17 @@ def unexpected_worker(day, person_odoo_id) -> str:
     return f"unexpected_worker:{day}:{person_odoo_id}"
 
 
-def breakdown(wc_name, stop_iso, person_name=None) -> str:
+def breakdown(
+    wc_name,
+    stop_iso,
+    person_name=None,
+    employee_odoo_id: int | None = None,
+) -> str:
     """The incident's own key when person_name is None (the card header /
     dismiss target); a distinct per-operator key otherwise (the Transfer /
     snooze / auto-resolve target for one operator's row)."""
+    if employee_odoo_id is not None:
+        return f"breakdown:{wc_name}:{stop_iso}:odoo:{int(employee_odoo_id)}"
     if person_name:
         return f"breakdown:{wc_name}:{stop_iso}:{person_name}"
     return f"breakdown:{wc_name}:{stop_iso}"

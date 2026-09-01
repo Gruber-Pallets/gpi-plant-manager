@@ -69,6 +69,34 @@ def test_effective_now_clamps_to_shift_end(monkeypatch):
     assert effective < late_now
 
 
+def test_excluded_minutes_keep_same_display_names_separate(monkeypatch):
+    from zira_dashboard import shift_config, wc_attributions
+
+    day = date(2026, 7, 8)
+    start = datetime(2026, 7, 8, 13, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 8, 13, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        wc_attributions,
+        "breakdown_windows_for_day",
+        lambda _day: {
+            (101, "Alex", "Dismantler 2"): [(start, end)],
+            (202, "Alex", "Dismantler 2"): [(start, end)],
+        },
+    )
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda _day, lo, hi: (hi - lo).total_seconds() / 60,
+    )
+
+    result = production_history._excluded_minutes_by_person_wc(day, end)
+
+    assert result == {
+        (101, "Alex"): {"Dismantler 2": 30.0},
+        (202, "Alex"): {"Dismantler 2": 30.0},
+    }
+
+
 def test_identity_safe_exclusions_keep_same_name_odoo_workers_separate():
     from types import SimpleNamespace
 

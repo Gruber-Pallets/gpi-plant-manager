@@ -2378,151 +2378,107 @@ CREATE TABLE IF NOT EXISTS breakdown_snoozes (
 
 -- 2026-08-31: canonical location spans identify people by immutable Odoo id.
 -- Keep the display name for old rows and audit/UI labels, while allowing two
--- people with the same name to own independent snoozes. The two partial
--- indexes preserve the old name-keyed behavior for rows without an Odoo id.
+-- people with the same name to own independent snoozes. One effective-identity
+-- expression covers both ID-backed and legacy name-backed rows.
 ALTER TABLE breakdown_snoozes
   ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
-CREATE UNIQUE INDEX IF NOT EXISTS breakdown_snoozes_odoo_identity_uniq
-  ON breakdown_snoozes (breakdown_id, employee_odoo_id)
-  WHERE employee_odoo_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS breakdown_snoozes_legacy_identity_uniq
-  ON breakdown_snoozes (breakdown_id, person_name)
-  WHERE employee_odoo_id IS NULL;
 ALTER TABLE breakdown_snoozes
   DROP CONSTRAINT IF EXISTS breakdown_snoozes_pkey;
+-- A partially deployed legacy database may already contain duplicate rows.
+-- Preserve the longest active snooze before installing the canonical key.
+WITH ranked_breakdown_snoozes AS (
+  SELECT ctid, ROW_NUMBER() OVER (
+    PARTITION BY breakdown_id,
+      COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name)
+    ORDER BY until_utc DESC, created_at DESC, ctid DESC
+  ) AS snooze_rank
+  FROM breakdown_snoozes
+)
+DELETE FROM breakdown_snoozes AS snooze
+USING ranked_breakdown_snoozes AS ranked
+WHERE snooze.ctid = ranked.ctid AND ranked.snooze_rank > 1;
+DROP INDEX IF EXISTS breakdown_snoozes_odoo_identity_uniq;
+DROP INDEX IF EXISTS breakdown_snoozes_legacy_identity_uniq;
+CREATE UNIQUE INDEX IF NOT EXISTS breakdown_snoozes_operator_identity_idx
+  ON breakdown_snoozes (
+    breakdown_id,
+    (COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name))
+  );
 
 -- 2026-07-08: link wc_time_attributions rows back to the machine_breakdowns
 -- incident that created them, so a dismiss ("Not a breakdown") can delete
 -- exactly this incident's exclusion rows without touching a different,
 -- already-resolved incident on the same machine/day.
 ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS breakdown_id BIGINT;
+-- Canonical Odoo identity keeps two workers with the same display name from
+-- sharing one exclusion. NULL preserves legacy/manual rows created before the
+-- attendance-location rollout.
 ALTER TABLE wc_time_attributions ADD COLUMN IF NOT EXISTS employee_odoo_id INTEGER;
 CREATE INDEX IF NOT EXISTS wc_time_attributions_breakdown_idx
   ON wc_time_attributions (breakdown_id) WHERE breakdown_id IS NOT NULL;
-
--- 2026-08-31: breakdown attribution duplicate reconciliation. An older
--- dismiss/undo retry could create the same exact visit more than once before
--- the unique indexes below existed. Keep the oldest row id, the newest
--- display label, and the earliest proven end. Distinct Odoo identities are
--- never combined. Multiple open starts for one identity are genuinely
--- ambiguous, so fail visibly rather than guessing which visit is current.
+-- 2026-08-31: breakdown attribution duplicate reconciliation. Older warmers
+-- could insert the same worker visit more than once. Preserve
+-- the oldest row, newest display label, and earliest known cap before
+-- installing durable keys. Refuse to merge corrupt copies that disagree on
+-- their day or work center.
 DO $$
 BEGIN
   IF EXISTS (
     SELECT 1
-      FROM wc_time_attributions
-     WHERE source = 'breakdown'
-       AND breakdown_id IS NOT NULL
-       AND employee_odoo_id IS NOT NULL
-     GROUP BY breakdown_id, employee_odoo_id, start_utc
+    FROM wc_time_attributions
+    WHERE source = 'breakdown' AND breakdown_id IS NOT NULL
+    GROUP BY breakdown_id,
+      COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name),
+      start_utc
     HAVING COUNT(*) > 1
-       AND (COUNT(DISTINCT day) > 1 OR COUNT(DISTINCT wc_name) > 1)
-  ) OR EXISTS (
-    SELECT 1
-      FROM wc_time_attributions
-     WHERE source = 'breakdown'
-       AND breakdown_id IS NOT NULL
-       AND employee_odoo_id IS NULL
-     GROUP BY breakdown_id, person_name, start_utc
-    HAVING COUNT(*) > 1
-       AND (COUNT(DISTINCT day) > 1 OR COUNT(DISTINCT wc_name) > 1)
+      AND (COUNT(DISTINCT day) > 1 OR COUNT(DISTINCT wc_name) > 1)
   ) THEN
     RAISE EXCEPTION 'ambiguous breakdown attribution duplicates cross day or work center';
   END IF;
-
-  WITH merged AS (
-    SELECT breakdown_id,
-           employee_odoo_id,
-           start_utc,
-           MIN(id) AS keeper_id,
-           (ARRAY_AGG(person_name ORDER BY id DESC))[1] AS latest_name,
-           MIN(end_utc) AS earliest_end
-      FROM wc_time_attributions
-     WHERE source = 'breakdown'
-       AND breakdown_id IS NOT NULL
-       AND employee_odoo_id IS NOT NULL
-     GROUP BY breakdown_id, employee_odoo_id, start_utc
-    HAVING COUNT(*) > 1
-  )
-  UPDATE wc_time_attributions kept
-     SET person_name = merged.latest_name,
-         end_utc = LEAST(kept.end_utc, merged.earliest_end)
-    FROM merged
-   WHERE kept.id = merged.keeper_id;
-
-  WITH ranked AS (
-    SELECT id,
-           ROW_NUMBER() OVER (
-             PARTITION BY breakdown_id, employee_odoo_id, start_utc
-             ORDER BY id
-           ) AS duplicate_rank
-      FROM wc_time_attributions
-     WHERE source = 'breakdown'
-       AND breakdown_id IS NOT NULL
-       AND employee_odoo_id IS NOT NULL
-  )
-  DELETE FROM wc_time_attributions duplicate
-   USING ranked
-   WHERE duplicate.id = ranked.id
-     AND ranked.duplicate_rank > 1;
-
-  WITH merged AS (
-    SELECT breakdown_id,
-           person_name,
-           start_utc,
-           MIN(id) AS keeper_id,
-           MIN(end_utc) AS earliest_end
-      FROM wc_time_attributions
-     WHERE source = 'breakdown'
-       AND breakdown_id IS NOT NULL
-       AND employee_odoo_id IS NULL
-     GROUP BY breakdown_id, person_name, start_utc
-    HAVING COUNT(*) > 1
-  )
-  UPDATE wc_time_attributions kept
-     SET end_utc = LEAST(kept.end_utc, merged.earliest_end)
-    FROM merged
-   WHERE kept.id = merged.keeper_id;
-
-  WITH ranked AS (
-    SELECT id,
-           ROW_NUMBER() OVER (
-             PARTITION BY breakdown_id, person_name, start_utc
-             ORDER BY id
-           ) AS duplicate_rank
-      FROM wc_time_attributions
-     WHERE source = 'breakdown'
-       AND breakdown_id IS NOT NULL
-       AND employee_odoo_id IS NULL
-  )
-  DELETE FROM wc_time_attributions duplicate
-   USING ranked
-   WHERE duplicate.id = ranked.id
-     AND ranked.duplicate_rank > 1;
-
-  IF EXISTS (
-    SELECT 1
-      FROM wc_time_attributions
-     WHERE source = 'breakdown'
-       AND breakdown_id IS NOT NULL
-       AND employee_odoo_id IS NOT NULL
-       AND end_utc IS NULL
-     GROUP BY breakdown_id, employee_odoo_id
-    HAVING COUNT(*) > 1
-  ) OR EXISTS (
-    SELECT 1
-      FROM wc_time_attributions
-     WHERE source = 'breakdown'
-       AND breakdown_id IS NOT NULL
-       AND employee_odoo_id IS NULL
-       AND end_utc IS NULL
-     GROUP BY breakdown_id, person_name
-    HAVING COUNT(*) > 1
-  ) THEN
-    RAISE EXCEPTION 'ambiguous breakdown attribution duplicates have multiple open starts';
-  END IF;
 END $$;
-
+WITH breakdown_visit_groups AS (
+  SELECT MIN(id) AS keep_id, MIN(end_utc) AS earliest_end,
+    (ARRAY_AGG(person_name ORDER BY id DESC))[1] AS latest_name
+  FROM wc_time_attributions
+  WHERE source = 'breakdown' AND breakdown_id IS NOT NULL
+  GROUP BY breakdown_id,
+    COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name),
+    start_utc
+  HAVING COUNT(*) > 1
+)
+UPDATE wc_time_attributions AS attribution
+SET end_utc = LEAST(attribution.end_utc, grouped.earliest_end),
+    person_name = grouped.latest_name
+FROM breakdown_visit_groups AS grouped
+WHERE attribution.id = grouped.keep_id;
+WITH ranked_breakdown_visits AS (
+  SELECT id, ROW_NUMBER() OVER (
+    PARTITION BY breakdown_id,
+      COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name),
+      start_utc
+    ORDER BY id
+  ) AS visit_rank
+  FROM wc_time_attributions
+  WHERE source = 'breakdown' AND breakdown_id IS NOT NULL
+)
+DELETE FROM wc_time_attributions AS attribution
+USING ranked_breakdown_visits AS ranked
+WHERE attribution.id = ranked.id AND ranked.visit_rank > 1;
+-- If old data contains more than one open return visit, close each older
+-- visit at the next personal start and leave only the newest one open.
+WITH ordered_open_breakdown_visits AS (
+  SELECT id, LEAD(start_utc) OVER (
+    PARTITION BY breakdown_id,
+      COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name)
+    ORDER BY start_utc, id
+  ) AS next_start_utc
+  FROM wc_time_attributions
+  WHERE source = 'breakdown' AND breakdown_id IS NOT NULL AND end_utc IS NULL
+)
+UPDATE wc_time_attributions AS attribution
+SET end_utc = ordered.next_start_utc
+FROM ordered_open_breakdown_visits AS ordered
+WHERE attribution.id = ordered.id AND ordered.next_start_utc IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_odoo_open_uniq
   ON wc_time_attributions (breakdown_id, employee_odoo_id)
   WHERE source = 'breakdown' AND end_utc IS NULL
@@ -2531,6 +2487,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_legacy_open_uni
   ON wc_time_attributions (breakdown_id, person_name)
   WHERE source = 'breakdown' AND end_utc IS NULL
     AND employee_odoo_id IS NULL;
+DROP INDEX IF EXISTS wc_time_attributions_breakdown_operator_visit_uniq;
 CREATE UNIQUE INDEX IF NOT EXISTS wc_time_attributions_breakdown_odoo_visit_uniq
   ON wc_time_attributions (breakdown_id, employee_odoo_id, start_utc)
   WHERE source = 'breakdown' AND employee_odoo_id IS NOT NULL;

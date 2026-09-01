@@ -512,7 +512,10 @@ def build_summary() -> dict:
     )
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
     breakdown_rows = _capture(
-        source_errors, "Machine Breakdown", machine_breakdown.current_rows, []
+        source_errors,
+        "Machine Breakdown",
+        machine_breakdown.current_rows,
+        machine_breakdown.BreakdownRows([], complete=False),
     )
     unexpected_rows = _capture(
         source_errors, "Unexpected Workers", lambda: unexpected_worker.open_events(today), []
@@ -635,8 +638,12 @@ def build_snapshot() -> dict:
     )
     missed_rows = _capture(source_errors, "Missed Punch Out", missed_punch_out.current_rows, [])
     breakdown_rows = _capture(
-        source_errors, "Machine Breakdown", machine_breakdown.current_rows, []
+        source_errors,
+        "Machine Breakdown",
+        machine_breakdown.current_rows,
+        machine_breakdown.BreakdownRows([], complete=False),
     )
+    breakdown_complete = bool(getattr(breakdown_rows, "complete", True))
     unexpected_rows = _capture(
         source_errors,
         "Unexpected Workers",
@@ -903,6 +910,7 @@ def build_snapshot() -> dict:
             "empty": "All clear",
             "context": {"work_centers": work_centers},
             "rows": breakdown_rows,
+            "complete": breakdown_complete,
         },
         {
             "id": "time_off",

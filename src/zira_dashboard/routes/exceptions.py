@@ -1429,7 +1429,14 @@ class _UndoConflict(Exception):
 
 def _reverse_event(ev: dict[str, Any]) -> None:
     """Reverse a resolved inbox action. Assumes (item_kind, action) is undoable."""
-    from .. import absence_sync, late_report, machine_breakdown, missing_wc, odoo_client, wc_attributions
+    from .. import (
+        absence_sync,
+        late_report,
+        machine_breakdown,
+        missing_wc,
+        odoo_client,
+        wc_attributions,
+    )
 
     kind, action, key = ev["item_kind"], ev["action"], ev["item_key"]
     if kind == "missing_wc":

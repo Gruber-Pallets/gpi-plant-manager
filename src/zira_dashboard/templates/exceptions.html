@@ -87,7 +87,7 @@
              data-attendance-id="{{ action.attendance_id or '' }}"
            {% elif action and action.type == 'time_off' %}
              data-request-id="{{ action.request_id or '' }}"
-           {% elif action and action.type == 'breakdown' %}
+          {% elif action and action.type == 'breakdown' %}
              data-incident-id="{{ action.incident_id or '' }}"
              data-wc-name="{{ action.wc_name or '' }}"
              data-employee-odoo-id="{{ action.employee_odoo_id or '' }}"

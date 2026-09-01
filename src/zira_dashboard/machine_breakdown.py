@@ -25,6 +25,7 @@ class StationSignal:
     wc_name: str
     last_output_utc: datetime | None  # None = no output yet today
     has_operator: bool  # at least one operator currently clocked in on this WC
+    sample_times_utc: tuple[datetime, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,15 @@ class OperatorSourceSnapshot:
     departures: tuple[OperatorDeparture, ...]
     available: bool
     mirror_owned: bool
+    complete: bool = True
+
+
+class BreakdownRows(list):
+    """Breakdown rows plus whether worker identity was fully enumerated."""
+
+    def __init__(self, values=(), *, complete: bool):
+        super().__init__(values)
+        self.complete = bool(complete)
 
 
 def personal_breakdown_start(
@@ -63,6 +73,14 @@ def personal_breakdown_start(
 ) -> datetime:
     """The worker clock cannot begin before the worker reached the station."""
     return max(station_stop_utc, arrival_utc)
+
+
+def first_output_after(
+    sample_times_utc: tuple[datetime, ...] | list[datetime],
+    stop_utc: datetime,
+) -> datetime | None:
+    """The first real production sample after a station stopped."""
+    return min((sample for sample in sample_times_utc if sample > stop_utc), default=None)
 
 
 def detect(
@@ -214,16 +232,6 @@ def all_open_incidents(day) -> list[dict]:
     )
 
 
-def resolve_incident(incident_id: int, resolution: str, resume_utc: datetime | None = None) -> None:
-    """Mark an incident resolved (resolution in 'recovered'|'handled'|'dismissed')."""
-    from . import db
-    db.execute(
-        "UPDATE machine_breakdowns SET resolved_at = now(), resolution = %s, resume_utc = %s "
-        "WHERE id = %s",
-        (resolution, resume_utc, incident_id),
-    )
-
-
 def dismiss_incident(incident_id: int) -> list[dict] | None:
     """Resolve, delete, and return linked exclusions in one transaction.
 
@@ -353,15 +361,180 @@ def finalize_recovered_incident(
         return True
 
 
-def reopen_incident(incident_id: int) -> None:
-    """Undo a resolution -- clears resolved_at/resolution/resume_utc so the
-    incident is open again (dismiss-undo)."""
-    from . import db
-    db.execute(
-        "UPDATE machine_breakdowns SET resolved_at = NULL, resolution = NULL, resume_utc = NULL "
-        "WHERE id = %s",
-        (incident_id,),
+def resolve_incident_operator_identity(
+    incident: dict,
+    person_name: str,
+    employee_odoo_id: int | None,
+) -> tuple[str, int | None]:
+    """Resolve a transfer target from durable server-owned worker identity."""
+    from . import wc_attributions
+
+    durable = wc_attributions.breakdown_operator_rows_for_incident(incident["id"])
+    return _resolve_incident_operator_identity(
+        incident, person_name, employee_odoo_id, durable
     )
+
+
+def _resolve_incident_operator_identity(
+    incident: dict,
+    person_name: str,
+    employee_odoo_id: int | None,
+    durable: list[dict],
+) -> tuple[str, int | None]:
+    """Pure durable-identity match with canonical staffing fallback."""
+
+    def choose(rows) -> tuple[str, int | None] | None:
+        matches = []
+        for row in rows:
+            row_name = str(row.get("person_name") or "").strip()
+            row_id = row.get("employee_odoo_id")
+            if employee_odoo_id is not None:
+                if row_id == employee_odoo_id and row_name == person_name:
+                    matches.append((row_name, int(row_id)))
+            elif row_name == person_name:
+                matches.append(
+                    (row_name, int(row_id) if row_id is not None else None)
+                )
+        unique = list(dict.fromkeys(matches))
+        return unique[0] if len(unique) == 1 else None
+
+    resolved = choose(durable)
+    if resolved is not None:
+        return resolved
+    durable_same_id = [
+        row
+        for row in durable
+        if employee_odoo_id is not None
+        and row.get("employee_odoo_id") == employee_odoo_id
+    ]
+    durable_same_name_ids = {
+        row.get("employee_odoo_id")
+        for row in durable
+        if str(row.get("person_name") or "").strip() == person_name
+        and row.get("employee_odoo_id") is not None
+    }
+    if durable_same_id or (
+        durable_same_name_ids
+        and employee_odoo_id not in durable_same_name_ids
+    ):
+        raise ValueError("worker identity does not match this breakdown")
+
+    now = datetime.now(UTC)
+    source = _operator_source_snapshot(incident["day"], now)
+    if not source.available or not source.complete:
+        raise ValueError("worker identity is not available")
+    canonical = [
+        {
+            "person_name": presence.person_name,
+            "employee_odoo_id": presence.employee_odoo_id,
+        }
+        for presence in source.presences
+        if presence.wc_name == incident["wc_name"]
+    ]
+    resolved = choose(canonical)
+    if resolved is None:
+        raise ValueError("worker identity does not match this breakdown")
+    return resolved
+
+
+def transfer_open_incident(
+    incident_id: int,
+    person_name: str,
+    employee_odoo_id: int | None,
+    to_wc: str,
+) -> dict:
+    """Validate and apply one pre-live transfer under the incident row lock.
+
+    The incident is the terminal ownership fence shared with dismissal and
+    recovery. Roster/live checks and the Odoo move happen while that fence is
+    held. The worker exclusion is capped only after a real transfer decision
+    succeeds, so every rejection leaves local state untouched.
+    """
+    from . import db, staffing_transfer, wc_attributions
+
+    with db.cursor() as cursor:
+        cursor.execute(
+            "SELECT id, wc_name, day, detected_stop_utc, source, created_at, "
+            "resolved_at, resolution, resume_utc FROM machine_breakdowns "
+            "WHERE id = %s FOR UPDATE",
+            (incident_id,),
+        )
+        incident = cursor.fetchone()
+        if incident is None:
+            return {"status": "not_found"}
+        if incident.get("resolved_at") is not None:
+            return {"status": "resolved"}
+
+        cursor.execute(
+            "SELECT person_name, employee_odoo_id, start_utc, end_utc "
+            "FROM wc_time_attributions WHERE breakdown_id = %s AND source = %s "
+            "ORDER BY start_utc, id",
+            (incident_id, wc_attributions.BREAKDOWN_SOURCE),
+        )
+        durable = list(cursor.fetchall())
+        person_name, employee_odoo_id = _resolve_incident_operator_identity(
+            incident, person_name, employee_odoo_id, durable
+        )
+
+        if employee_odoo_id is None:
+            result = staffing_transfer.decide_and_apply(
+                person_name, to_wc, incident["detected_stop_utc"]
+            )
+        else:
+            result = staffing_transfer.decide_and_apply(
+                person_name,
+                to_wc,
+                incident["detected_stop_utc"],
+                employee_odoo_id=employee_odoo_id,
+            )
+
+        transfer_kind = result.get("transfer")
+        if transfer_kind == "blocked_live":
+            return {"status": "blocked_live"}
+        if transfer_kind not in {"moved", "opened", "already_in_dept"}:
+            return {
+                "status": "rejected",
+                "error": "worker transfer was not applied",
+            }
+
+        if employee_odoo_id is None:
+            identity_sql = "employee_odoo_id IS NULL AND person_name = %s"
+            identity_params = (person_name,)
+        else:
+            identity_sql = "employee_odoo_id = %s"
+            identity_params = (employee_odoo_id,)
+        cursor.execute(
+            "SELECT id, start_utc FROM wc_time_attributions "
+            "WHERE breakdown_id = %s AND source = %s "
+            f"AND {identity_sql} AND end_utc IS NULL ORDER BY id LIMIT 1 FOR UPDATE",
+            (incident_id, wc_attributions.BREAKDOWN_SOURCE, *identity_params),
+        )
+        row = cursor.fetchone()
+        if row is not None:
+            exclusion_end = max(
+                incident["detected_stop_utc"],
+                row.get("start_utc") or incident["detected_stop_utc"],
+            )
+            cursor.execute(
+                "UPDATE wc_time_attributions "
+                "SET end_utc = LEAST(COALESCE(end_utc, %s), %s) "
+                "WHERE id = %s AND source = %s",
+                (
+                    exclusion_end,
+                    exclusion_end,
+                    row["id"],
+                    wc_attributions.BREAKDOWN_SOURCE,
+                ),
+            )
+
+        return {
+            "status": "success",
+            "incident": dict(incident),
+            "person_name": person_name,
+            "employee_odoo_id": employee_odoo_id,
+            "attribution_id": row["id"] if row is not None else None,
+            "result": result,
+        }
 
 
 def snooze_operator(
@@ -374,24 +547,14 @@ def snooze_operator(
     """Silence one operator's row on this incident's card for `minutes`."""
     from . import db
     until = datetime.now(UTC) + timedelta(minutes=minutes)
-    if employee_odoo_id is None:
-        db.execute(
-            "INSERT INTO breakdown_snoozes "
-            "(breakdown_id, person_name, employee_odoo_id, until_utc) "
-            "VALUES (%s, %s, NULL, %s) "
-            "ON CONFLICT (breakdown_id, person_name) "
-            "WHERE employee_odoo_id IS NULL DO UPDATE SET "
-            "until_utc = EXCLUDED.until_utc, created_at = now()",
-            (incident_id, person_name, until),
-        )
-        return
     db.execute(
         "INSERT INTO breakdown_snoozes "
         "(breakdown_id, person_name, employee_odoo_id, until_utc) "
-        "VALUES (%s, %s, %s, %s) "
-        "ON CONFLICT (breakdown_id, employee_odoo_id) "
-        "WHERE employee_odoo_id IS NOT NULL DO UPDATE SET "
-        "person_name = EXCLUDED.person_name, until_utc = EXCLUDED.until_utc, "
+        "VALUES (%s, %s, %s, %s) ON CONFLICT ("
+        "breakdown_id, "
+        "(COALESCE('odoo:' || employee_odoo_id::text, 'name:' || person_name))"
+        ") DO UPDATE SET "
+        "until_utc = EXCLUDED.until_utc, person_name = EXCLUDED.person_name, "
         "created_at = now()",
         (incident_id, person_name, employee_odoo_id, until),
     )
@@ -407,19 +570,16 @@ def active_snooze_until(
     hasn't expired yet, else None."""
     from . import db
     if employee_odoo_id is None:
-        rows = db.query(
-            "SELECT until_utc FROM breakdown_snoozes "
-            "WHERE breakdown_id = %s AND person_name = %s "
-            "AND employee_odoo_id IS NULL AND until_utc > now()",
-            (incident_id, person_name),
-        )
+        identity_sql = "employee_odoo_id IS NULL AND person_name = %s"
+        identity_params = (person_name,)
     else:
-        rows = db.query(
-            "SELECT until_utc FROM breakdown_snoozes "
-            "WHERE breakdown_id = %s AND employee_odoo_id = %s "
-            "AND until_utc > now()",
-            (incident_id, employee_odoo_id),
-        )
+        identity_sql = "employee_odoo_id = %s"
+        identity_params = (int(employee_odoo_id),)
+    rows = db.query(
+        "SELECT until_utc FROM breakdown_snoozes WHERE breakdown_id = %s "
+        f"AND {identity_sql} AND until_utc > now()",
+        (incident_id, *identity_params),
+    )
     return rows[0]["until_utc"] if rows else None
 
 
@@ -451,7 +611,7 @@ def _operator_source_from_legacy_windows(
 ) -> OperatorSourceSnapshot:
     """Project the rollback attendance-window shape without changing it."""
     if not available:
-        return OperatorSourceSnapshot((), (), False, False)
+        return OperatorSourceSnapshot((), (), False, False, False)
     presences: list[OperatorPresence] = []
     departures: list[OperatorDeparture] = []
     for person_name in sorted(punch_windows):
@@ -468,26 +628,23 @@ def _operator_source_from_legacy_windows(
                         person_name, wc_name, start_utc, end_utc, None
                     )
                 )
-    return OperatorSourceSnapshot(
-        tuple(presences), tuple(departures), True, False
-    )
+    return OperatorSourceSnapshot(tuple(presences), tuple(departures), True, False, True)
 
 
 def _operator_source_from_staffing_snapshot(snapshot) -> OperatorSourceSnapshot:
     """Use Task 11's atomic policy/timeline generation for breakdown reads."""
     policy = snapshot.policy
     if not policy.mirror_owned:
-        return OperatorSourceSnapshot((), (), True, False)
+        return OperatorSourceSnapshot((), (), True, False, True)
     if not policy.available or policy.stale:
-        return OperatorSourceSnapshot((), (), False, True)
+        return OperatorSourceSnapshot((), (), False, True, False)
 
     verified_cap = snapshot.verified_cap_utc
     current_attendance_ids = snapshot.current_attendance_ids
     presences: list[OperatorPresence] = []
     departures: list[OperatorDeparture] = []
+    complete = True
     for span in snapshot.spans:
-        if span.status != "valid" or not span.app_work_center_name:
-            continue
         is_current = bool(
             span.start_utc <= verified_cap < span.end_utc
             or (
@@ -495,6 +652,15 @@ def _operator_source_from_staffing_snapshot(snapshot) -> OperatorSourceSnapshot:
                 and current_attendance_ids.intersection(span.attendance_ids)
             )
         )
+        if span.status == "exempt_no_location":
+            # This worker's department intentionally has no station location,
+            # so they are outside breakdown operator scope rather than an
+            # incomplete source row.
+            continue
+        if span.status != "valid" or not span.app_work_center_name:
+            if is_current:
+                complete = False
+            continue
         if is_current:
             presences.append(
                 OperatorPresence(
@@ -527,6 +693,7 @@ def _operator_source_from_staffing_snapshot(snapshot) -> OperatorSourceSnapshot:
         tuple(sorted(departures, key=identity_order)),
         True,
         True,
+        complete,
     )
 
 
@@ -595,7 +762,14 @@ def _station_signals(
         has_operator = bool(
             _present_operators_on_wc(wc_name, day, now, operator_source)
         )
-        out.append(StationSignal(wc_name=wc_name, last_output_utc=last_output, has_operator=has_operator))
+        out.append(
+            StationSignal(
+                wc_name=wc_name,
+                last_output_utc=last_output,
+                has_operator=has_operator,
+                sample_times_utc=tuple(sample[0] for sample in total.samples),
+            )
+        )
     return out
 
 
@@ -605,10 +779,14 @@ def _last_output_after(
     stop_utc: datetime,
     operator_source: OperatorSourceSnapshot | None = None,
 ) -> datetime | None:
-    """The most recent output time for wc_name strictly after `stop_utc`, or
-    None if it's still silent -- used to detect recovery."""
+    """The first output time for wc_name strictly after ``stop_utc``."""
     for sig in _station_signals(day, datetime.now(UTC), operator_source):
-        if sig.wc_name == wc_name and sig.last_output_utc and sig.last_output_utc > stop_utc:
+        if sig.wc_name != wc_name:
+            continue
+        resume = first_output_after(sig.sample_times_utc, stop_utc)
+        if resume is not None:
+            return resume
+        if not sig.sample_times_utc and sig.last_output_utc and sig.last_output_utc > stop_utc:
             return sig.last_output_utc
     return None
 
@@ -639,6 +817,7 @@ def run_detect_tick(day: date | None = None, now: datetime | None = None) -> Non
     now = now or datetime.now(UTC)
     shift_start, shift_end = _shift_bounds(day)
     operator_source = _operator_source_snapshot(day, now)
+    operator_source_complete = operator_source.available and operator_source.complete
 
     try:
         open_incidents = all_open_incidents(day)
@@ -652,7 +831,8 @@ def run_detect_tick(day: date | None = None, now: datetime | None = None) -> Non
         try:
             if _maybe_auto_resolve(incident, day, now, operator_source):
                 continue
-            if operator_source.available:
+            if operator_source_complete:
+                _cap_departed_operators(incident, day, now, operator_source)
                 _ensure_operator_breakdowns(incident, day, now, operator_source)
         except Exception:
             import logging
@@ -675,17 +855,18 @@ def run_detect_tick(day: date | None = None, now: datetime | None = None) -> Non
             continue
         try:
             incident_id = open_incident(candidate.wc_name, day, candidate.stop_utc, source="auto")
-            _ensure_operator_breakdowns(
-                {
-                    "id": incident_id,
-                    "wc_name": candidate.wc_name,
-                    "day": day,
-                    "detected_stop_utc": candidate.stop_utc,
-                },
-                day,
-                now,
-                operator_source,
-            )
+            if operator_source_complete:
+                _ensure_operator_breakdowns(
+                    {
+                        "id": incident_id,
+                        "wc_name": candidate.wc_name,
+                        "day": day,
+                        "detected_stop_utc": candidate.stop_utc,
+                    },
+                    day,
+                    now,
+                    operator_source,
+                )
         except Exception:
             import logging
             logging.getLogger(__name__).warning(
@@ -731,6 +912,8 @@ def _ensure_operator_breakdowns(
     day: date,
     now: datetime,
     operator_source: OperatorSourceSnapshot,
+    *,
+    end_cap: datetime | None = None,
 ) -> None:
     """Idempotently reconcile completed visits, then current workers.
 
@@ -756,12 +939,13 @@ def _ensure_operator_breakdowns(
             incident["wc_name"],
             person_name,
             employee_odoo_id=None,
+            breakdown_id=incident["id"],
         )
         if legacy is not None:
             wc_attributions.delete(legacy["id"])
 
     _reconcile_completed_breakdown_visits(
-        incident, day, now, operator_source, identities_by_name
+        incident, day, end_cap or now, operator_source, identities_by_name
     )
 
     def allow_legacy(person_name: str, employee_odoo_id: int | None) -> bool:
@@ -796,6 +980,7 @@ def _ensure_operator_breakdowns(
             incident["wc_name"],
             operator.person_name,
             employee_odoo_id=operator.employee_odoo_id,
+            breakdown_id=incident["id"],
             allow_legacy_fallback=allow_fallback,
         )
         if (
@@ -811,6 +996,7 @@ def _ensure_operator_breakdowns(
                 incident["wc_name"],
                 operator.person_name,
                 employee_odoo_id=None,
+                breakdown_id=incident["id"],
             )
             if legacy is not None:
                 wc_attributions.delete(legacy["id"])
@@ -895,6 +1081,7 @@ def _reconcile_completed_breakdown_visits(
             incident["wc_name"],
             departure.person_name,
             employee_odoo_id=departure.employee_odoo_id,
+            breakdown_id=incident["id"],
             allow_legacy_fallback=(
                 departure.employee_odoo_id is not None
                 and len(identities_by_name.get(departure.person_name, ())) == 1
@@ -976,18 +1163,19 @@ def _maybe_auto_resolve(
     """Resolve an incident as 'recovered' once its station has produced
     output again, capping any operator still open at the resume time."""
     source = operator_source or _operator_source_snapshot(day, now)
-    if not source.available:
-        return False
     resume = _last_output_after(
         incident["wc_name"], day, incident["detected_stop_utc"], source
     )
     if resume is None:
         return False
-
-    # A delayed tick must evaluate the worker threshold at the actual recovery
-    # time, not at wall-clock ``now``. This prevents creating a window whose
-    # end would precede its start.
-    _ensure_operator_breakdowns(incident, day, resume, source)
+    if source.available and source.complete:
+        _ensure_operator_breakdowns(
+            incident,
+            day,
+            resume,
+            source,
+            end_cap=resume,
+        )
     return finalize_recovered_incident(incident["id"], resume)
 
 
@@ -1003,7 +1191,7 @@ def current_rows(day: date | None = None, now: datetime | None = None) -> list[d
     now = now or datetime.now(UTC)
     incidents = all_open_incidents(day)
     if not incidents:
-        return []
+        return BreakdownRows([], complete=True)
     operator_source = _operator_source_snapshot(day, now)
 
     rows: list[dict] = []
@@ -1039,12 +1227,9 @@ def current_rows(day: date | None = None, now: datetime | None = None) -> list[d
                 person,
                 employee_odoo_id=operator.employee_odoo_id,
             )
-            item_identity = (
-                f"odoo:{operator.employee_odoo_id}"
-                if operator.employee_odoo_id is not None
-                else person
+            item_key = inbox_keys.breakdown(
+                wc_name, stop_iso, person, operator.employee_odoo_id
             )
-            item_key = inbox_keys.breakdown(wc_name, stop_iso, item_identity)
             if snoozed_until is not None:
                 mins_left = max(1, int((snoozed_until - now).total_seconds() // 60))
                 rows.append({
@@ -1074,7 +1259,9 @@ def current_rows(day: date | None = None, now: datetime | None = None) -> list[d
                     "employee_odoo_id": operator.employee_odoo_id,
                 },
             })
-    return rows
+    return BreakdownRows(
+        rows, complete=operator_source.available and operator_source.complete
+    )
 
 
 def _local_time_label(dt: datetime) -> str:
@@ -1099,15 +1286,16 @@ def report_manual(wc_name: str, day: date | None = None, now: datetime | None = 
     operator_source = _operator_source_snapshot(day, now)
     stop = _last_output_before(wc_name, day, now, operator_source) or now
     incident_id = open_incident(wc_name, day, stop, source="manual")
-    _ensure_operator_breakdowns(
-        {
-            "id": incident_id,
-            "wc_name": wc_name,
-            "day": day,
-            "detected_stop_utc": stop,
-        },
-        day,
-        now,
-        operator_source,
-    )
+    if operator_source.available and operator_source.complete:
+        _ensure_operator_breakdowns(
+            {
+                "id": incident_id,
+                "wc_name": wc_name,
+                "day": day,
+                "detected_stop_utc": stop,
+            },
+            day,
+            now,
+            operator_source,
+        )
     return {"ok": True, "incident_id": incident_id}

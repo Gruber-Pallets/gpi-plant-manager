@@ -16,7 +16,7 @@ def _snapshot():
         "name": "Juan", "label": "Idle — Dismantler 2 is down", "detail": "",
         "priority": "urgent", "badge": "Needs decision",
         "row_key": "breakdown_op:Dismantler 2:x:Juan", "item_key": "breakdown:Dismantler 2:x:Juan",
-        "action": {"type": "breakdown", "incident_id": 1, "person_name": "Juan", "wc_name": "Dismantler 2"},
+        "action": {"type": "breakdown", "incident_id": 1, "person_name": "Juan", "wc_name": "Dismantler 2", "employee_odoo_id": 101},
     }
     return {
         "today": "2026-07-08", "generated_at": "1:22 PM", "total": 2, "urgent_total": 2,
@@ -61,6 +61,7 @@ def test_breakdown_operator_row_renders_transfer_and_snooze(monkeypatch):
     assert resp.status_code == 200
     assert 'data-action-type="breakdown"' in resp.text
     assert 'data-person-name="Juan"' in resp.text
+    assert 'data-employee-odoo-id="101"' in resp.text
     assert "js-breakdown-transfer" in resp.text
     assert "js-breakdown-snooze" in resp.text
     assert '<option value="Repair 3">Repair 3</option>' in resp.text

@@ -41,10 +41,11 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         timeclock_windows,
         wc_attributions,
     )
-    from zira_dashboard.routes import departments
+    from zira_dashboard.routes import departments, staffing as staffing_routes
     from zira_dashboard.stations import Station
 
     day = date(2026, 6, 2)
+    verified_cap = datetime(2026, 6, 2, 18, 59, tzinfo=timezone.utc)
     repair = Station("repair-2", "Repair 2", "Repair", "Recycling")
     dismantler = Station("dismantler-2", "Dismantler 2", "Dismantler", "Recycling")
     rows = [
@@ -58,11 +59,14 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         ),
         SimpleNamespace(
             station=dismantler,
-            units=384,
+            units=391,
             downtime_minutes=0,
             active_intervals=(),
             last_reading_at=None,
-            samples=((datetime(2026, 6, 2, 12, 10, tzinfo=timezone.utc), 384),),
+            samples=(
+                (datetime(2026, 6, 2, 12, 10, tzinfo=timezone.utc), 384),
+                (datetime(2026, 6, 2, 18, 59, 30, tzinfo=timezone.utc), 7),
+            ),
         ),
     ]
 
@@ -95,19 +99,6 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
                 )
             ]
         },
-    )
-    monkeypatch.setattr(
-        live_cache,
-        "attendance_read_policy",
-        lambda **_kwargs: live_cache.AttendanceReadPolicy(
-            True,
-            True,
-            datetime(2026, 6, 2, 20, tzinfo=timezone.utc),
-            mode="shadow",
-        ),
-    )
-    monkeypatch.setattr(
-        attendance_location_policy, "day_is_strict", lambda _day: False
     )
 
     def canonical_spans(_start, end, **_kwargs):
@@ -142,6 +133,34 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         )
 
     monkeypatch.setattr(attendance_timeline, "timeline_for_range", canonical_spans)
+    monkeypatch.setattr(
+        staffing_routes,
+        "_read_staffing_response_snapshot",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            policy=live_cache.AttendanceReadPolicy(
+                True,
+                True,
+                verified_cap,
+                mode="shadow",
+            ),
+            spans=canonical_spans(None, verified_cap),
+            verified_cap_utc=verified_cap,
+        ),
+    )
+    monkeypatch.setattr(
+        live_cache,
+        "attendance_read_policy",
+        lambda **_kwargs: live_cache.AttendanceReadPolicy(
+            True,
+            True,
+            datetime(2026, 6, 2, 20, tzinfo=timezone.utc),
+            mode="shadow",
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy, "day_is_strict", lambda _day: False
+    )
+
     monkeypatch.setattr(
         timeclock_windows,
         "attendance_windows_for_day",
@@ -182,7 +201,7 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     }
     assert live["active_wc_names"] == {"Repair 2", "Dismantler 2"}
     assert live["total_recycling_people"] == 1
-    assert live["total_man_hours"] == 6.5
+    assert live["total_man_hours"] == pytest.approx(389 / 60)
 
     repair_score = live["per_wc_segments"]["Repair 2"][0]
     assert repair_score["person_name"] == "Jesus G."
@@ -192,15 +211,16 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
     assert repair_score["time_label"] == "7-7:05a"
 
     dismantler_score = live["per_wc_segments"]["Dismantler 2"][0]
+    assert len(live["per_wc_segments"]["Dismantler 2"]) == 1
     assert dismantler_score["person_name"] == "Jesus G."
     assert dismantler_score["actual_units"] == 384.0
-    assert dismantler_score["goal_units"] == 415.0
+    assert dismantler_score["goal_units"] == 414.0
     assert dismantler_score["is_active"] is True
     assert dismantler_score["time_label"] == "since 7:05a"
     assert live["is_live_dashboard"] is True
     assert live["per_wc_expected"] == {
         "Repair 2": 3.0,
-        "Dismantler 2": 415.0,
+        "Dismantler 2": 414.0,
     }
     assert live["per_wc_segment_display"] == {
         "Repair 2": True,
@@ -239,7 +259,7 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         group_categories=("Repair", "Dismantler"),
     )
     assert fallback["per_wc_segments"] == {}
-    assert fallback["per_wc_units"] == {"Repair 2": 34, "Dismantler 2": 384}
+    assert fallback["per_wc_units"] == {"Repair 2": 34, "Dismantler 2": 391}
 
 
 def test_department_breakdown_lookup_keeps_same_name_odoo_ids_separate():
@@ -300,7 +320,7 @@ def test_department_canonical_segment_selection_honors_strict_day_and_staleness(
         attendance_timeline,
         live_cache,
     )
-    from zira_dashboard.routes import departments
+    from zira_dashboard.routes import departments, staffing as staffing_routes
 
     day = date(2026, 6, 2)
     start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
@@ -319,7 +339,11 @@ def test_department_canonical_segment_selection_honors_strict_day_and_staleness(
     )
     policy = {"value": live_cache.AttendanceReadPolicy(False, True, None)}
     monkeypatch.setattr(
-        live_cache, "attendance_read_policy", lambda **_kwargs: policy["value"]
+        staffing_routes,
+        "_read_staffing_response_snapshot",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            policy=policy["value"], spans=(span,), verified_cap_utc=end
+        ),
     )
     monkeypatch.setattr(
         attendance_location_policy, "day_is_strict", lambda _day: True
@@ -331,13 +355,15 @@ def test_department_canonical_segment_selection_honors_strict_day_and_staleness(
         lambda *_args, **_kwargs: timeline_calls.append(True) or (span,),
     )
 
-    strict_segments = departments._canonical_department_segments(  # noqa: SLF001
+    strict_projection = departments._canonical_department_segments(  # noqa: SLF001
         day, start, end, now_utc=end
     )
 
-    assert [(segment.person_odoo_id, segment.person_name) for segment in strict_segments] == [
-        (202, "Alex")
-    ]
+    assert [
+        (segment.person_odoo_id, segment.person_name)
+        for segment in strict_projection.segments
+    ] == [(202, "Alex")]
+    assert strict_projection.cap_utc == end
     assert timeline_calls == [True]
 
     policy["value"] = live_cache.AttendanceReadPolicy(
@@ -352,9 +378,11 @@ def test_department_canonical_segment_selection_honors_strict_day_and_staleness(
     )
     timeline_calls.clear()
 
-    assert departments._canonical_department_segments(  # noqa: SLF001
+    stale_projection = departments._canonical_department_segments(  # noqa: SLF001
         day, start, end, now_utc=end
-    ) == ()
+    )
+    assert stale_projection.segments == ()
+    assert stale_projection.cap_utc == end
     assert timeline_calls == []
 
 def test_department_segment_display_keeps_scheduled_lunch_continuous():

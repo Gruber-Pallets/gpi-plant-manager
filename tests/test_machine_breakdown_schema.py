@@ -100,6 +100,21 @@ def test_production_daily_has_excluded_minutes_column():
 
 def test_wc_time_attributions_has_breakdown_id_column():
     db.execute("DELETE FROM wc_time_attributions WHERE wc_name = 'Test WC'")
+
+
+def test_breakdown_identity_columns_support_same_display_name():
+    db.bootstrap_schema()
+    columns = db.query(
+        "SELECT table_name, column_name FROM information_schema.columns "
+        "WHERE table_schema = 'public' "
+        "AND table_name IN ('wc_time_attributions', 'breakdown_snoozes') "
+        "AND column_name = 'employee_odoo_id' ORDER BY table_name"
+    )
+
+    assert columns == [
+        {"table_name": "breakdown_snoozes", "column_name": "employee_odoo_id"},
+        {"table_name": "wc_time_attributions", "column_name": "employee_odoo_id"},
+    ]
     db.execute(
         "INSERT INTO wc_time_attributions (day, wc_name, person_name, start_utc, "
         "source, breakdown_id) VALUES (%s, %s, %s, %s, %s, %s)",
@@ -112,6 +127,126 @@ def test_wc_time_attributions_has_breakdown_id_column():
     )
     assert fetched[0]["breakdown_id"] == 999
     db.execute("DELETE FROM wc_time_attributions WHERE wc_name = 'Test WC'")
+
+
+def test_legacy_breakdown_identity_schema_migrates_in_place():
+    from zira_dashboard._schema import SCHEMA_DDL
+
+    class RollBackMigrationFixture(Exception):
+        pass
+
+    with pytest.raises(RollBackMigrationFixture):
+        with db.cursor() as cur:
+            cur.execute("CREATE SCHEMA task12_legacy_migration")
+            cur.execute("SET LOCAL search_path TO task12_legacy_migration")
+            cur.execute(
+                "CREATE TABLE wc_time_attributions ("
+                "id BIGSERIAL PRIMARY KEY, day DATE NOT NULL, wc_name TEXT NOT NULL, "
+                "person_name TEXT NOT NULL, start_utc TIMESTAMPTZ NOT NULL, "
+                "end_utc TIMESTAMPTZ, source TEXT NOT NULL DEFAULT 'manual', "
+                "breakdown_id BIGINT, employee_odoo_id INTEGER, "
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT now()); "
+                "CREATE TABLE breakdown_snoozes ("
+                "breakdown_id BIGINT NOT NULL, person_name TEXT NOT NULL, "
+                "until_utc TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+                "PRIMARY KEY (breakdown_id, person_name))"
+            )
+            cur.execute(
+                "INSERT INTO wc_time_attributions "
+                "(day, wc_name, person_name, employee_odoo_id, start_utc, "
+                "end_utc, source, breakdown_id) VALUES "
+                "('2098-08-31', 'Dismantler 2', 'Alex', 101, "
+                "'2098-08-31 13:02+00', '2098-08-31 13:40+00', 'breakdown', 7), "
+                "('2098-08-31', 'Dismantler 2', 'Alex', 101, "
+                "'2098-08-31 13:02+00', '2098-08-31 13:30+00', 'breakdown', 7)"
+            )
+
+            cur.execute(SCHEMA_DDL)
+
+            cur.execute(
+                "SELECT table_name FROM information_schema.columns "
+                "WHERE table_schema = 'task12_legacy_migration' "
+                "AND table_name IN ('wc_time_attributions', 'breakdown_snoozes') "
+                "AND column_name = 'employee_odoo_id' ORDER BY table_name"
+            )
+            assert cur.fetchall() == [
+                {"table_name": "breakdown_snoozes"},
+                {"table_name": "wc_time_attributions"},
+            ]
+            cur.execute(
+                "SELECT employee_odoo_id, end_utc FROM wc_time_attributions "
+                "WHERE breakdown_id = 7"
+            )
+            assert cur.fetchall() == [{
+                "employee_odoo_id": 101,
+                "end_utc": datetime(2098, 8, 31, 13, 30, tzinfo=timezone.utc),
+            }]
+            cur.execute(
+                "INSERT INTO breakdown_snoozes "
+                "(breakdown_id, person_name, employee_odoo_id, until_utc) VALUES "
+                "(1, 'Alex', 101, now()), (1, 'Alex', 202, now())"
+            )
+            raise RollBackMigrationFixture
+
+
+def test_partially_deployed_snooze_schema_dedupes_and_bootstraps_twice():
+    from zira_dashboard._schema import SCHEMA_DDL
+
+    class RollBackMigrationFixture(Exception):
+        pass
+
+    with pytest.raises(RollBackMigrationFixture):
+        with db.cursor() as cur:
+            cur.execute("CREATE SCHEMA task12_partial_snooze_migration")
+            cur.execute("SET LOCAL search_path TO task12_partial_snooze_migration")
+            cur.execute(
+                "CREATE TABLE breakdown_snoozes ("
+                "breakdown_id BIGINT NOT NULL, person_name TEXT NOT NULL, "
+                "employee_odoo_id INTEGER, until_utc TIMESTAMPTZ NOT NULL, "
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+            )
+            cur.execute(
+                "INSERT INTO breakdown_snoozes "
+                "(breakdown_id, person_name, employee_odoo_id, until_utc, created_at) "
+                "VALUES "
+                "(41, 'Alex Old', 101, '2098-08-31 13:20+00', '2098-08-31 13:00+00'), "
+                "(41, 'Alex New', 101, '2098-08-31 13:50+00', '2098-08-31 13:05+00'), "
+                "(41, 'Legacy Alex', NULL, '2098-08-31 13:15+00', '2098-08-31 13:00+00'), "
+                "(41, 'Legacy Alex', NULL, '2098-08-31 13:45+00', '2098-08-31 13:05+00')"
+            )
+
+            # Startup may rerun the whole idempotent bootstrap after a partial
+            # deploy. Both passes must preserve one longest snooze per durable
+            # effective identity and leave the canonical key installed.
+            cur.execute(SCHEMA_DDL)
+            cur.execute(SCHEMA_DDL)
+
+            cur.execute(
+                "SELECT person_name, employee_odoo_id, until_utc "
+                "FROM breakdown_snoozes WHERE breakdown_id = 41 "
+                "ORDER BY employee_odoo_id NULLS LAST"
+            )
+            assert cur.fetchall() == [
+                {
+                    "person_name": "Alex New",
+                    "employee_odoo_id": 101,
+                    "until_utc": datetime(2098, 8, 31, 13, 50, tzinfo=timezone.utc),
+                },
+                {
+                    "person_name": "Legacy Alex",
+                    "employee_odoo_id": None,
+                    "until_utc": datetime(2098, 8, 31, 13, 45, tzinfo=timezone.utc),
+                },
+            ]
+            cur.execute(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE schemaname = 'task12_partial_snooze_migration' "
+                "AND indexname = 'breakdown_snoozes_operator_identity_idx'"
+            )
+            assert cur.fetchall() == [
+                {"indexname": "breakdown_snoozes_operator_identity_idx"}
+            ]
+            raise RollBackMigrationFixture
 
 
 def test_wc_time_attributions_round_trips_breakdown_employee_identity():
