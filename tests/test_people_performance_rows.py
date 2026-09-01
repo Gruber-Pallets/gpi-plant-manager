@@ -286,7 +286,7 @@ def test_stable_interval_keys_include_odoo_identity_and_exact_boundaries():
     )
     interval = model.rows[0].intervals[0]
     assert interval.key == (
-        f"77:production:Repair 1:{START.isoformat()}:{(START + timedelta(minutes=60)).isoformat()}"
+        f"77:production:Repair 1:{START.isoformat()}"
     )
 
 
@@ -323,7 +323,47 @@ def test_open_interval_key_stays_stable_while_the_shared_cap_moves():
     assert first_interval.is_open is second_interval.is_open is True
     assert first_interval.end_utc != second_interval.end_utc
     assert first_interval.key == second_interval.key
-    assert first_interval.key.endswith(":open")
+
+
+def test_interval_key_stays_stable_when_open_interval_closes_on_transfer():
+    open_source = span(88, "Lifecycle Worker", 0, 480, "Repair 1", is_open=True)
+    closed_source = span(88, "Lifecycle Worker", 0, 120, "Repair 1", is_open=False)
+    common = {
+        "day": DAY,
+        "window_start_utc": START,
+        "window_end_utc": END,
+        "downtime_by_wc": {"Repair 1": ()},
+        "breakdown_exclusions_by_person_wc": {},
+        "forklift_events_by_employee_id": {},
+        "forklift_day_metrics_by_employee_id": {},
+        "breaks": (),
+        "metered_wc_names": {"Repair 1"},
+        "source_warnings": (),
+        "is_today": True,
+    }
+    open_model = assemble_dashboard(
+        **common,
+        as_of_utc=START + timedelta(minutes=60),
+        spans=(open_source,),
+        production_scores=(
+            score(88, "Lifecycle Worker", "Repair 1", 0, 60, 10, 10),
+        ),
+    )
+    closed_model = assemble_dashboard(
+        **common,
+        as_of_utc=START + timedelta(minutes=120),
+        spans=(closed_source,),
+        production_scores=(
+            score(88, "Lifecycle Worker", "Repair 1", 0, 120, 20, 20),
+        ),
+    )
+    open_interval = open_model.rows[0].intervals[0]
+    closed_interval = closed_model.rows[0].intervals[0]
+
+    assert open_interval.is_open is True
+    assert closed_interval.is_open is False
+    assert open_interval.end_utc != closed_interval.end_utc
+    assert open_interval.key == closed_interval.key
 
 
 def test_historical_row_is_completed_even_when_source_marks_attendance_open():

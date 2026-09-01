@@ -457,6 +457,64 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           if (preciseTip.textContent.includes('30.0 / 40.0')) {
             throw new Error('a pinned precise minute changed during pointer movement');
           }
+
+          const secondBoundsEnv = makeEnvironment('0');
+          secondBoundsEnv.windowObject.Intl = Intl;
+          const secondStartMs = startMs + 31000;
+          const secondEndMs = startMs + 60 * 60000 + 29000;
+          const roundedInteriorMs = startMs + 31 * 60000;
+          const secondBounds = secondBoundsEnv.makeTrigger(
+            'second-bounds',
+            'second-bearing bounds',
+            'interval',
+            80,
+            {
+              productionHover: JSON.stringify([
+                [secondStartMs, 1, 2, 90],
+                [roundedInteriorMs, 3, 4, 91],
+                [secondEndMs, 5, 6, 92],
+              ]),
+              hoverStartMs: String(secondStartMs),
+              hoverEndMs: String(secondEndMs),
+            }
+          );
+          secondBoundsEnv.document.rows.triggers = [secondBounds];
+          const secondBoundsController = makeController(
+            secondBoundsEnv.document, secondBoundsEnv.windowObject
+          );
+          secondBoundsController.init();
+          secondBoundsEnv.document.emit(
+            'pointermove', {...event(secondBounds), clientX: 270}
+          );
+          if (
+            secondBounds.marker.style.left !== '0%'
+            || !secondBoundsEnv.getPopover().textContent.includes('Production: 1.0 / 2.0')
+          ) {
+            throw new Error('second-bearing left edge did not select the exact interval start');
+          }
+          secondBoundsEnv.document.emit(
+            'pointermove', {...event(secondBounds), clientX: 310}
+          );
+          if (
+            secondBounds.marker.style.left !== '100%'
+            || !secondBoundsEnv.getPopover().textContent.includes('Production: 5.0 / 6.0')
+          ) {
+            throw new Error('second-bearing right edge did not select the exact interval end');
+          }
+          secondBoundsEnv.document.emit(
+            'pointermove', {...event(secondBounds), clientX: 290}
+          );
+          const interiorMarker = parseFloat(secondBounds.marker.style.left);
+          const expectedInterior = 100 * (roundedInteriorMs - secondStartMs)
+            / (secondEndMs - secondStartMs);
+          if (
+            Math.abs(interiorMarker - expectedInterior) > 0.000001
+            || !secondBoundsEnv.getPopover().textContent.includes('Production: 3.0 / 4.0')
+          ) {
+            throw new Error('second-bearing interior selection was not rounded then clamped');
+          }
+          secondBoundsController.destroy();
+
           const precisePromise = preciseController.refreshRows();
           const shorterPreciseDataset = {
             productionHover: JSON.stringify([
@@ -484,6 +542,70 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           if (refreshedPrecise.marker.classList.contains('is-visible')) {
             throw new Error('destroy did not hide the precise hover marker');
           }
+
+          const lifecycleEnv = makeEnvironment('1');
+          lifecycleEnv.windowObject.Intl = Intl;
+          const lifecycleKey = '88:production:Repair 1:2026-08-28T12:00:00+00:00';
+          const openLifecycle = lifecycleEnv.makeTrigger(
+            lifecycleKey,
+            'open lifecycle interval',
+            'interval',
+            80,
+            preciseDataset
+          );
+          lifecycleEnv.document.rows.triggers = [openLifecycle];
+          const lifecycleController = makeController(
+            lifecycleEnv.document, lifecycleEnv.windowObject
+          );
+          lifecycleController.init();
+          lifecycleEnv.document.emit(
+            'pointermove', {...event(openLifecycle), clientX: 290}
+          );
+          lifecycleEnv.document.emit('click', event(openLifecycle));
+          const lifecyclePromise = lifecycleController.refreshRows();
+          const closedLifecycle = lifecycleEnv.makeTrigger(
+            lifecycleKey,
+            'closed lifecycle interval',
+            'interval',
+            80,
+            {
+              productionHover: JSON.stringify([
+                [startMs, 0, 0, null],
+                [startMs + 30 * 60000, 12, 20, 75.4],
+                [startMs + 45 * 60000, 18, 30, 88],
+              ]),
+              hoverStartMs: String(startMs),
+              hoverEndMs: String(startMs + 45 * 60000),
+            }
+          );
+          const transferredLifecycle = lifecycleEnv.makeTrigger(
+            '88:production:Repair 2:2026-08-28T12:45:00+00:00',
+            'transferred lifecycle interval',
+            'interval',
+            80,
+            {
+              productionHover: JSON.stringify([
+                [startMs + 45 * 60000, 18, 30, null],
+                [startMs + 60 * 60000, 22, 38, 90],
+              ]),
+              hoverStartMs: String(startMs + 45 * 60000),
+              hoverEndMs: String(startMs + 60 * 60000),
+            }
+          );
+          lifecycleEnv.parsed.lifecycle = lifecycleEnv.makeRows(
+            '2026-08-28', '1', [closedLifecycle, transferredLifecycle]
+          );
+          lifecycleEnv.requests[0].pending.resolve(response({token: 'lifecycle'}));
+          await lifecyclePromise;
+          if (
+            lifecycleEnv.getPopover().textContent
+              !== '7:30 AM\nProduction: 12.0 / 20.0\nUptime 75%'
+            || closedLifecycle.getAttribute('aria-expanded') !== 'true'
+            || transferredLifecycle.getAttribute('aria-expanded') === 'true'
+          ) {
+            throw new Error('open-to-closed transfer refresh did not restore the pinned minute by exact key');
+          }
+          lifecycleController.destroy();
 
           const focusProductionEnv = makeEnvironment('0');
           focusProductionEnv.windowObject.Intl = Intl;

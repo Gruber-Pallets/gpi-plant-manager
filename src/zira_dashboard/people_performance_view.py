@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import math
 
 from . import shift_config
 from .people_performance import (
@@ -46,6 +47,26 @@ def _hover_point_view(point: ProductionHoverPoint) -> tuple[int, float, float, f
         round(point.goal_units, 6),
         None if point.uptime_pct is None else round(point.uptime_pct, 6),
     )
+
+
+def _hover_points_view(
+    points: tuple[ProductionHoverPoint, ...],
+) -> tuple[tuple[int, float, float, float | None], ...]:
+    try:
+        if any(
+            not math.isfinite(point.at_utc.timestamp())
+            or not math.isfinite(point.actual_units)
+            or not math.isfinite(point.goal_units)
+            or (
+                point.uptime_pct is not None
+                and not math.isfinite(point.uptime_pct)
+            )
+            for point in points
+        ):
+            return ()
+        return tuple(_hover_point_view(point) for point in points)
+    except (AttributeError, OverflowError, OSError, TypeError, ValueError):
+        return ()
 
 
 def _line_runs(points: list[dict]) -> tuple[tuple[dict, ...], ...]:
@@ -200,7 +221,7 @@ def _interval_view(
         "time_label": time_label,
         "line_runs": _line_runs(line_points),
         "buckets": tuple(buckets),
-        "hover_points": tuple(_hover_point_view(point) for point in production_hover),
+        "hover_points": _hover_points_view(production_hover),
         "hover_start_ms": _epoch_ms(item.start_utc) if item.role == "production" else None,
         "hover_end_ms": _epoch_ms(item.end_utc) if item.role == "production" else None,
         "detail": detail,

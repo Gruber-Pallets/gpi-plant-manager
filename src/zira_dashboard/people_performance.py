@@ -418,15 +418,27 @@ def cumulative_production_hover_points(
             trusted = False
             result[interval.key] = ()
             continue
-        result[interval.key] = tuple(
-            ProductionHoverPoint(
-                point.at_utc,
-                actual_base + point.actual_units,
-                goal_base + point.goal_units,
-                point.uptime_pct,
+        cumulative_points = []
+        for point in metric.hover_points:
+            actual_candidate = actual_base + point.actual_units
+            goal_candidate = goal_base + point.goal_units
+            if not (
+                math.isfinite(actual_candidate) and math.isfinite(goal_candidate)
+            ):
+                trusted = False
+                cumulative_points = []
+                break
+            cumulative_points.append(
+                ProductionHoverPoint(
+                    point.at_utc,
+                    actual_candidate,
+                    goal_candidate,
+                    point.uptime_pct,
+                )
             )
-            for point in metric.hover_points
-        )
+        result[interval.key] = tuple(cumulative_points)
+        if not trusted:
+            continue
         actual_base += metric.actual_units
         goal_base += metric.goal_units
     return result
@@ -832,11 +844,7 @@ def _unavailable_interval(
         else None
     )
     return TimelineInterval(
-        key=(
-            f"{employee_odoo_id}:{role}:{location_name}:"
-            f"{span.start_utc.isoformat()}:"
-            f"{'open' if span.is_open else span.end_utc.isoformat()}"
-        ),
+        key=_interval_key(employee_odoo_id, role, location_name, span.start_utc),
         start_utc=span.start_utc,
         end_utc=span.end_utc,
         location_name=location_name,
@@ -847,6 +855,15 @@ def _unavailable_interval(
         metric_available=False,
         production=production,
     )
+
+
+def _interval_key(
+    employee_odoo_id: int,
+    role: RoleKey,
+    location_name: str,
+    start_utc: datetime,
+) -> str:
+    return f"{employee_odoo_id}:{role}:{location_name}:{start_utc.isoformat()}"
 
 
 def _assemble_person_row(
@@ -969,11 +986,7 @@ def _assemble_person_row(
                     end_utc=span.end_utc,
                 )
             interval = TimelineInterval(
-                key=(
-                    f"{employee_odoo_id}:{role}:{location}:"
-                    f"{span.start_utc.isoformat()}:"
-                    f"{'open' if span.is_open else span.end_utc.isoformat()}"
-                ),
+                key=_interval_key(employee_odoo_id, role, location, span.start_utc),
                 start_utc=span.start_utc,
                 end_utc=span.end_utc,
                 location_name=location,

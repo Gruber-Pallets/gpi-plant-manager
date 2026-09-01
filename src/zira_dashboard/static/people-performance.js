@@ -119,9 +119,9 @@
     var validBounds = start !== null && end !== null && end >= start;
     var atMs = null;
     if (validBounds) {
-      atMs = Number.isFinite(requestedAtMs)
-        ? clamp(Math.round(requestedAtMs / 60000) * 60000, start, end)
-        : end;
+      if (!Number.isFinite(requestedAtMs) || requestedAtMs >= end) atMs = end;
+      else if (requestedAtMs <= start) atMs = start;
+      else atMs = clamp(Math.round(requestedAtMs / 60000) * 60000, start, end);
     } else if (Number.isFinite(requestedAtMs)) {
       atMs = Math.round(requestedAtMs / 60000) * 60000;
     } else if (end !== null) {

@@ -398,6 +398,61 @@ def test_cumulative_hover_points_continue_across_transfer_targets():
     assert cumulative["second"][-1].goal_units == pytest.approx(50.0)
 
 
+def test_cumulative_hover_points_poison_current_and_later_intervals_on_overflow():
+    first_metric = production_metric(
+        replace(
+            _score(1e308, 1e308, START, START + timedelta(minutes=30)),
+            unit_points=(
+                CreditedUnitPoint(START + timedelta(minutes=29), 1e308),
+            ),
+        ),
+        downtime_windows=(),
+        breaks=(),
+    )
+    second_metric = production_metric(
+        replace(
+            _score(
+                1e308,
+                1e308,
+                START + timedelta(minutes=30),
+                START + timedelta(minutes=60),
+            ),
+            unit_points=(
+                CreditedUnitPoint(START + timedelta(minutes=59), 1e308),
+            ),
+        ),
+        downtime_windows=(),
+        breaks=(),
+    )
+    intervals = (
+        TimelineInterval(
+            "first",
+            START,
+            START + timedelta(minutes=30),
+            "Repair 1",
+            "valid",
+            "production",
+            False,
+            production=first_metric,
+        ),
+        TimelineInterval(
+            "second",
+            START + timedelta(minutes=30),
+            START + timedelta(minutes=60),
+            "Repair 2",
+            "valid",
+            "production",
+            True,
+            production=second_metric,
+        ),
+    )
+
+    cumulative = cumulative_production_hover_points(intervals)
+
+    assert cumulative["first"]
+    assert cumulative["second"] == ()
+
+
 def test_untrusted_earlier_production_poison_later_cumulative_hover():
     missing_points = production_metric(_score(10, 30), downtime_windows=(), breaks=())
     valid = production_metric(

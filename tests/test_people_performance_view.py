@@ -1,10 +1,12 @@
+import json
 import math
 from dataclasses import replace
 
 import pytest
 
 from tests.people_performance_fixtures import DAY, END, START, busy_dashboard_model, span
-from zira_dashboard.people_performance import assemble_dashboard
+from zira_dashboard import people_performance_view
+from zira_dashboard.people_performance import ProductionHoverPoint, assemble_dashboard
 from zira_dashboard.people_performance_view import dashboard_context
 
 
@@ -134,7 +136,7 @@ def test_presenter_preserves_stable_open_interval_key():
     interval = _row_named(context, "Amy Behind")["intervals"][0]
 
     assert interval["is_open"] is True
-    assert interval["key"].endswith(":open")
+    assert interval["key"] == f"44:production:Repair 1:{START.isoformat()}"
     assert "6:00 AM. Working now." in interval["aria_label"]
     assert "to 2:00 PM" not in interval["aria_label"]
 
@@ -214,3 +216,26 @@ def test_nonproduction_intervals_do_not_receive_production_hover_values():
     assert forklift["hover_points"] == ()
     assert forklift["hover_start_ms"] is None
     assert forklift["hover_end_ms"] is None
+
+
+def test_presenter_fails_closed_when_hover_values_are_non_finite(monkeypatch):
+    poisoned = ProductionHoverPoint(START, float("inf"), 10.0, 95.0)
+    monkeypatch.setattr(
+        people_performance_view,
+        "cumulative_production_hover_points",
+        lambda intervals: {
+            item.key: (poisoned,) for item in intervals if item.role == "production"
+        },
+    )
+
+    context = dashboard_context(busy_dashboard_model())
+    serialized = json.dumps(context)
+
+    assert "Infinity" not in serialized
+    assert all(
+        item["hover_points"] == ()
+        for section in context["sections"]
+        for row in section["rows"]
+        for item in row["intervals"]
+        if item["role"] == "production"
+    )
