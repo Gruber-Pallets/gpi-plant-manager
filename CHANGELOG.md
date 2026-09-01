@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Keep each person's production goal separate
+
+- **Plant Manager can now work out one person's goal and uptime for each place they worked.** A move to a new work area starts a fresh result.
+
 ### Remember exactly when a machine stopped
 
 - **Plant Manager can now keep the exact parts of a stop that count as downtime.** Break and lunch time stay out, so the new people view can draw an honest uptime line.

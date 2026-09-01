@@ -164,6 +164,7 @@ class SegmentScore:
     runway_units: float
     is_active: bool
     result: SegmentResult
+    person_odoo_id: int | None = None
 
 
 def _segment_result(
@@ -200,6 +201,7 @@ def _can_join_display_scores(
     return bool(
         left.person_name is not None
         and left.person_name == right.person_name
+        and left.person_odoo_id == right.person_odoo_id
         and left.wc_name == right.wc_name
         and left.end_utc is not None
         and right.start_utc is not None
@@ -223,6 +225,7 @@ def _join_display_scores(left: SegmentScore, right: SegmentScore) -> SegmentScor
         runway_units=max(actual, goal),
         is_active=left.is_active or right.is_active,
         result=_segment_result(left.person_name, actual, goal),
+        person_odoo_id=left.person_odoo_id,
     )
 
 
@@ -474,6 +477,7 @@ def score_work_segments(
                     runway_units=max(credit.actual_units, goal),
                     is_active=credit.is_active,
                     result=result,
+                    person_odoo_id=credit.person_odoo_id,
                 )
             )
         out[wc_name] = tuple(scored)
