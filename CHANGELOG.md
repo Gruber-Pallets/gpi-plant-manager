@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Keep the People page easy to scan
+
+- **The People page now fits manager computers and tablets, explains each part when selected, and refreshes without losing your place.** Breaks, moves, late calls, and good or low results all have words as well as colors.
+
 ### Add a people-first performance page
 
 - **Managers now have a People tab ready to show one workday person by person.** It keeps production workers, tablet drivers, and other workers in separate easy-to-scan groups.

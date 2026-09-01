@@ -75,6 +75,12 @@ def test_mixed_role_person_has_one_labelled_row(rendered_html):
     assert 'id="pp-person-48"' in rendered_html
 
 
+def test_short_interval_has_a_separate_tablet_detail_target(rendered_html):
+    assert 'class="pp-interval-shortcut"' in rendered_html
+    assert 'data-interval-key="48:production:Repair 2:' in rendered_html
+    assert "Repair 2 · 7:30 AM to 7:35 AM" in rendered_html
+
+
 def test_people_tab_is_in_both_performance_navigation_branches():
     staffing_base = (ROOT / "src/zira_dashboard/templates/_staffing_base.html").read_text(
         encoding="utf-8"

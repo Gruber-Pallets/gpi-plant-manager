@@ -82,6 +82,16 @@ def test_presenter_names_the_end_time_for_a_closed_interval():
     assert "6:00 AM to 7:30 AM" in interval["aria_label"]
 
 
+def test_presenter_exposes_five_minute_interval_in_nonoverlapping_short_list():
+    context = dashboard_context(busy_dashboard_model())
+    row = _row_named(context, "Mia Mixed")
+
+    short = next(item for item in row["short_intervals"] if item["location_name"] == "Repair 2")
+    assert short["needs_touch_target"] is True
+    assert "7:30 AM to 7:35 AM" in short["time_label"]
+    assert all(item["location_name"] != "Repair 1" for item in row["short_intervals"])
+
+
 def test_location_color_is_stable_when_another_location_appears():
     model = busy_dashboard_model()
     original = _row_named(dashboard_context(model), "Amy Behind")["intervals"][0]

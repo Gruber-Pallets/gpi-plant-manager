@@ -1,5 +1,8 @@
 {% extends "_staffing_base.html" %}
 {% block title %}People performance{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="/static/people-performance.css?v={{ static_v("people-performance.css") }}">
+{% endblock %}
 {% block content %}
 <section class="pp-page"
          data-day="{{ day }}"
@@ -29,4 +32,7 @@
   </header>
   {% include "_people_performance_rows.html" %}
 </section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/people-performance.js?v={{ static_v("people-performance.js") }}"></script>
 {% endblock %}

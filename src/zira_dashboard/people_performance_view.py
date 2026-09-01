@@ -150,6 +150,12 @@ def _interval_view(item: TimelineInterval, model: DashboardModel, location_class
         )
 
     detail = _interval_detail(item)
+    duration_seconds = (item.end_utc - item.start_utc).total_seconds()
+    time_label = (
+        f"{_time(item.start_utc)} · Working now"
+        if item.is_open
+        else f"{_time(item.start_utc)} to {_time(item.end_utc)}"
+    )
     return {
         "key": item.key,
         "left_pct": left,
@@ -160,6 +166,8 @@ def _interval_view(item: TimelineInterval, model: DashboardModel, location_class
         "state": _interval_state(item),
         "is_transfer": item.is_transfer,
         "is_open": item.is_open,
+        "needs_touch_target": duration_seconds <= 30 * 60,
+        "time_label": time_label,
         "line_runs": _line_runs(line_points),
         "buckets": tuple(buckets),
         "detail": detail,
@@ -172,6 +180,9 @@ def _row_view(
     model: DashboardModel,
     location_classes: dict[str, str],
 ) -> dict:
+    intervals = tuple(
+        _interval_view(item, model, location_classes[item.location_name]) for item in row.intervals
+    )
     return {
         "employee_odoo_id": row.employee_odoo_id,
         "person_name": row.person_name,
@@ -179,10 +190,8 @@ def _row_view(
         "status": row.status,
         "primary_role": row.primary_role,
         "attention_reasons": row.attention_reasons,
-        "intervals": tuple(
-            _interval_view(item, model, location_classes[item.location_name])
-            for item in row.intervals
-        ),
+        "intervals": intervals,
+        "short_intervals": tuple(item for item in intervals if item["needs_touch_target"]),
         "breaks": tuple(
             {
                 "left_pct": _pct(item.start_utc, model.window_start_utc, model.window_end_utc),
