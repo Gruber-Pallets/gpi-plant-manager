@@ -15,6 +15,7 @@
   var triggerSelector = ".pp-interval-trigger, .pp-interval-shortcut";
   var active = null;
   var pinned = null;
+  var selectedAtMs = null;
   var popover = null;
   var timer = null;
   var requestController = null;
@@ -56,6 +57,56 @@
     return Math.max(minimum, Math.min(value, maximum));
   }
 
+  function productionPoints(trigger) {
+    if (!trigger || trigger.dataset.productionHover == null) return null;
+    try {
+      var parsed = JSON.parse(trigger.dataset.productionHover);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function pointAt(points, atMs) {
+    var selected = null;
+    points.forEach(function (point) {
+      if (Array.isArray(point) && point.length === 4 && Number(point[0]) <= atMs) {
+        selected = point;
+      }
+    });
+    return selected;
+  }
+
+  function localTime(atMs) {
+    var IntlObject = windowObject.Intl || Intl;
+    return new IntlObject.DateTimeFormat("en-US", {
+      timeZone: "America/Chicago",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(atMs));
+  }
+
+  function productionDetail(trigger, requestedAtMs) {
+    var points = productionPoints(trigger);
+    if (points === null) return null;
+    var start = Number(trigger.dataset.hoverStartMs);
+    var end = Number(trigger.dataset.hoverEndMs);
+    var fallback = points.length ? Number(points[points.length - 1][0]) : end;
+    var atMs = clamp(Number.isFinite(requestedAtMs) ? requestedAtMs : fallback, start, end);
+    atMs = Math.round(atMs / 60000) * 60000;
+    var point = pointAt(points, atMs);
+    var time = localTime(atMs);
+    if (!point || !Number.isFinite(point[1]) || !Number.isFinite(point[2])) {
+      return {atMs: atMs, text: time + "\nProduction: N/A\nUptime N/A"};
+    }
+    var uptime = Number.isFinite(point[3]) ? Math.round(point[3]) + "%" : "N/A";
+    return {
+      atMs: atMs,
+      text: time + "\nProduction: " + Number(point[1]).toFixed(1)
+        + " / " + Number(point[2]).toFixed(1) + "\nUptime " + uptime,
+    };
+  }
+
   function position(trigger) {
     if (!trigger || !popover) return;
     var box = trigger.getBoundingClientRect();
@@ -75,16 +126,45 @@
     popover.style.top = top + "px";
   }
 
-  function open(trigger, shouldPin) {
+  function hideMarker(trigger) {
+    var marker = trigger && trigger.querySelector
+      ? trigger.querySelector(".pp-hover-marker")
+      : null;
+    if (marker) marker.classList.remove("is-visible");
+  }
+
+  function updateMarker(trigger, atMs) {
+    var marker = trigger && trigger.querySelector
+      ? trigger.querySelector(".pp-hover-marker")
+      : null;
+    if (!marker) return;
+    var start = Number(trigger.dataset.hoverStartMs);
+    var end = Number(trigger.dataset.hoverEndMs);
+    var percent = end > start ? 100 * (atMs - start) / (end - start) : 100;
+    marker.style.left = clamp(percent, 0, 100) + "%";
+    marker.classList.add("is-visible");
+  }
+
+  function open(trigger, shouldPin, requestedAtMs) {
     if (!trigger) return;
     var tip = ensurePopover();
     if (active && active !== trigger) {
+      hideMarker(active);
       active.setAttribute("aria-expanded", "false");
       active.removeAttribute("aria-describedby");
     }
     active = trigger;
     pinned = shouldPin ? trigger : null;
-    tip.textContent = trigger.dataset.detail || trigger.getAttribute("aria-label") || "";
+    var precise = productionDetail(trigger, requestedAtMs);
+    if (precise) {
+      selectedAtMs = precise.atMs;
+      tip.textContent = precise.text;
+      updateMarker(trigger, precise.atMs);
+    } else {
+      selectedAtMs = null;
+      hideMarker(trigger);
+      tip.textContent = trigger.dataset.detail || trigger.getAttribute("aria-label") || "";
+    }
     tip.hidden = false;
     trigger.setAttribute("aria-expanded", "true");
     trigger.setAttribute("aria-describedby", tip.id);
@@ -108,11 +188,13 @@
   function close(restoreFocus) {
     var previous = pinned || active;
     if (active) {
+      hideMarker(active);
       active.setAttribute("aria-expanded", "false");
       active.removeAttribute("aria-describedby");
     }
     active = null;
     pinned = null;
+    selectedAtMs = null;
     if (popover) popover.hidden = true;
     if (restoreFocus) focusWithoutScrolling(previous, true);
   }
@@ -169,6 +251,7 @@
       focusKind: triggerKind(focused),
       pinnedKey: pinned ? pinned.dataset.intervalKey : null,
       pinnedKind: triggerKind(pinned),
+      pinnedAtMs: pinned ? selectedAtMs : null,
     };
   }
 
@@ -177,7 +260,7 @@
     var pinTarget = restoredTrigger(state.pinnedKind, state.pinnedKey);
 
     if (focusTarget) focusWithoutScrolling(focusTarget);
-    if (pinTarget) open(pinTarget, true);
+    if (pinTarget) open(pinTarget, true, state.pinnedAtMs);
     else if (focusTarget) open(focusTarget, false);
     else close(false);
     syncHorizontalScroll(state.horizontalScroll, null);
@@ -306,6 +389,18 @@
     if (trigger && !pinned) open(trigger, false);
   }
 
+  function onPointerMove(event) {
+    var trigger = triggerFor(event.target);
+    if (!trigger || pinned || productionPoints(trigger) === null) return;
+    var box = trigger.getBoundingClientRect();
+    var fraction = box.width > 0
+      ? clamp((event.clientX - box.left) / box.width, 0, 1)
+      : 1;
+    var start = Number(trigger.dataset.hoverStartMs);
+    var end = Number(trigger.dataset.hoverEndMs);
+    open(trigger, false, start + fraction * (end - start));
+  }
+
   function onPointerOut(event) {
     var trigger = triggerFor(event.target);
     if (trigger && trigger === active && !pinned && leftTrigger(trigger, event.relatedTarget)) {
@@ -330,7 +425,7 @@
     if (!trigger) return;
     event.preventDefault();
     if (trigger === active && pinned === trigger) close(false);
-    else open(trigger, true);
+    else open(trigger, true, trigger === active ? selectedAtMs : null);
   }
 
   function onPointerDown(event) {
@@ -365,6 +460,7 @@
     initialized = true;
     ensurePopover();
     listen(document, "pointerover", onPointerOver);
+    listen(document, "pointermove", onPointerMove);
     listen(document, "pointerout", onPointerOut);
     listen(document, "focusin", onFocusIn);
     listen(document, "focusout", onFocusOut);

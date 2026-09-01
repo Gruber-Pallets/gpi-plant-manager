@@ -181,10 +181,20 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             };
           }
 
-          function makeTrigger(key, detail, kind, top) {
+          function makeTrigger(key, detail, kind, top, datasetValues) {
             const attributes = {};
+            const markerClasses = new Set();
+            const marker = {
+              style: {},
+              classList: {
+                add(value) { markerClasses.add(value); },
+                remove(value) { markerClasses.delete(value); },
+                contains(value) { return markerClasses.has(value); },
+              },
+            };
             const trigger = {
-              dataset: {intervalKey: key, detail},
+              dataset: Object.assign({intervalKey: key, detail}, datasetValues || {}),
+              marker,
               kind: kind || 'interval',
               focusCount: 0,
               closest(selector) {
@@ -197,6 +207,9 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
                   || (this.kind === 'interval' && selector === '.pp-interval-trigger');
               },
               contains(node) { return node === this; },
+              querySelector(selector) {
+                return selector === '.pp-hover-marker' ? marker : null;
+              },
               getBoundingClientRect() {
                 boundsReads += 1;
                 const y = top == null ? 160 : top;
@@ -405,6 +418,118 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           for (const values of Object.values(detailEnv.windowObject._listeners)) {
             if (values.length) throw new Error('destroy left window listeners behind');
           }
+
+          // Production intervals select, pin, and restore the exact minute while
+          // keyboard/tap access falls back to the latest checkpoint.
+          const preciseEnv = makeEnvironment('1');
+          preciseEnv.windowObject.Intl = Intl;
+          const startMs = Date.UTC(2026, 7, 28, 12, 0);
+          const preciseDataset = {
+            productionHover: JSON.stringify([
+              [startMs, 0, 0, null],
+              [startMs + 30 * 60000, 12, 20, 75.4],
+              [startMs + 60 * 60000, 30, 40, 92.6],
+            ]),
+            hoverStartMs: String(startMs),
+            hoverEndMs: String(startMs + 60 * 60000),
+          };
+          const precise = preciseEnv.makeTrigger(
+            'precise',
+            'old interval detail',
+            'interval',
+            80,
+            preciseDataset
+          );
+          preciseEnv.document.rows.triggers = [precise];
+          const preciseController = makeController(preciseEnv.document, preciseEnv.windowObject);
+          preciseController.init();
+          preciseEnv.document.emit('pointerover', event(precise));
+          preciseEnv.document.emit('pointermove', {...event(precise), clientX: 290});
+          const preciseTip = preciseEnv.getPopover();
+          if (preciseTip.textContent !== '7:30 AM\nProduction: 12.0 / 20.0\nUptime 75%') {
+            throw new Error('precise production tooltip format or value is wrong: ' + preciseTip.textContent);
+          }
+          if (!precise.marker.classList.contains('is-visible') || precise.marker.style.left !== '50%') {
+            throw new Error('precise hover marker did not follow the selected minute');
+          }
+          preciseEnv.document.emit('click', event(precise));
+          preciseEnv.document.emit('pointermove', {...event(precise), clientX: 309});
+          if (preciseTip.textContent.includes('30.0 / 40.0')) {
+            throw new Error('a pinned precise minute changed during pointer movement');
+          }
+          const precisePromise = preciseController.refreshRows();
+          const refreshedPrecise = preciseEnv.makeTrigger(
+            'precise', 'new interval detail', 'interval', 80, preciseDataset
+          );
+          preciseEnv.parsed.precise = preciseEnv.makeRows(
+            '2026-08-28', '1', [refreshedPrecise]
+          );
+          preciseEnv.requests[0].pending.resolve(response({token: 'precise'}));
+          await precisePromise;
+          if (
+            preciseTip.textContent !== '7:30 AM\nProduction: 12.0 / 20.0\nUptime 75%'
+            || refreshedPrecise.marker.style.left !== '50%'
+          ) {
+            throw new Error('refresh did not restore the pinned precise minute');
+          }
+          preciseController.destroy();
+
+          const focusProductionEnv = makeEnvironment('0');
+          focusProductionEnv.windowObject.Intl = Intl;
+          const focusedProduction = focusProductionEnv.makeTrigger(
+            'focused-production', 'old production detail', 'interval', 80, preciseDataset
+          );
+          focusProductionEnv.document.rows.triggers = [focusedProduction];
+          const focusProductionController = makeController(
+            focusProductionEnv.document, focusProductionEnv.windowObject
+          );
+          focusProductionController.init();
+          focusProductionEnv.document.emit('focusin', event(focusedProduction));
+          if (!focusProductionEnv.getPopover().textContent.includes('30.0 / 40.0')) {
+            throw new Error('keyboard focus did not choose the last production point');
+          }
+          focusProductionEnv.document.emit('click', event(focusedProduction));
+          if (!focusProductionEnv.getPopover().textContent.includes('30.0 / 40.0')) {
+            throw new Error('tap did not choose the last production point');
+          }
+          focusProductionController.destroy();
+
+          const emptyProductionEnv = makeEnvironment('0');
+          emptyProductionEnv.windowObject.Intl = Intl;
+          const emptyProduction = emptyProductionEnv.makeTrigger(
+            'empty-production',
+            'old empty detail',
+            'interval',
+            80,
+            {
+              productionHover: '[]',
+              hoverStartMs: String(startMs),
+              hoverEndMs: String(startMs + 60 * 60000),
+            }
+          );
+          emptyProductionEnv.document.rows.triggers = [emptyProduction];
+          const emptyProductionController = makeController(
+            emptyProductionEnv.document, emptyProductionEnv.windowObject
+          );
+          emptyProductionController.init();
+          emptyProductionEnv.document.emit('focusin', event(emptyProduction));
+          if (!emptyProductionEnv.getPopover().textContent.endsWith('Production: N/A\nUptime N/A')) {
+            throw new Error('empty production values did not use the N/A detail card');
+          }
+          emptyProductionController.destroy();
+
+          const forkliftEnv = makeEnvironment('0');
+          const forklift = forkliftEnv.makeTrigger(
+            'forklift', 'Forklift call details stay unchanged', 'interval', 80
+          );
+          forkliftEnv.document.rows.triggers = [forklift];
+          const forkliftController = makeController(forkliftEnv.document, forkliftEnv.windowObject);
+          forkliftController.init();
+          forkliftEnv.document.emit('pointerover', event(forklift));
+          if (forkliftEnv.getPopover().textContent !== 'Forklift call details stay unchanged') {
+            throw new Error('non-production detail text changed');
+          }
+          forkliftController.destroy();
 
           // A poll followed by a visibility refresh must abort/epoch-guard the
           // poll. State changed after both requests start is captured only at swap.

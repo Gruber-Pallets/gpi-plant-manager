@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### See production at the exact minute
+
+- **Point at a measured work bar to see that worker's production, goal, and uptime at that exact minute.** The numbers keep adding up when the worker moves to another measured work area.
+
 ### Plan exact production details on hover
 
 - **A step-by-step plan is ready to show production, goal, and uptime for the exact minute a manager points to on the People page.** Nothing in the app has changed yet.

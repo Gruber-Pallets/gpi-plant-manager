@@ -305,6 +305,21 @@
   pointer-events: none;
 }
 
+.pp-hover-marker {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 24;
+  display: none;
+  width: 2px;
+  background: #fff;
+  box-shadow: 0 0 0 1px #0f172a;
+  pointer-events: none;
+}
+
+.pp-hover-marker.is-visible {
+  display: block;
+}
+
 .pp-location-ribbon {
   position: absolute;
   inset: 0 0 auto;
@@ -491,6 +506,7 @@
   color: #fff;
   font-size: .8rem;
   line-height: 1.45;
+  white-space: pre-line;
 }
 
 .pp-detail-popover[hidden] {
