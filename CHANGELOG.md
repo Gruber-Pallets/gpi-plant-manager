@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Past PTO requests in the Inbox plan
+
+- **A plan is ready to put past-absence PTO requests in the Exception Inbox.** Managers will be able to approve, deny, or finish a payroll review from the same place as their other daily work. Nothing in the app has changed yet.
+
 ### Salaried managers do not need a work center
 
 - **Salaried people from Odoo can clock in without a work center when they are not doing plant work.** When Luke records a work center, that work still counts normally.
