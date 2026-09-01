@@ -10,6 +10,7 @@ from zira_dashboard import (
     auto_lunch_guard,
     db,
     exception_inbox,
+    inbox_keys,
     machine_breakdown,
     missing_wc,
     missed_punch_out,
@@ -134,6 +135,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
             "action": {"type": "time_off", "request_id": 20, "state": "confirm"},
         }],
     ))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto", lambda: (0, []))
 
     snap = exception_inbox.build_snapshot()
 
@@ -318,13 +320,14 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
     monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off_counts", lambda today: (4, 2))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto_count", lambda: 1)
     monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _today: (0, []))
 
     summary = exception_inbox.build_summary()
 
     assert summary["today"] == "2026-06-19"
     assert summary["generated_at"] == "8:10 AM"
-    assert summary["total"] == 11
+    assert summary["total"] == 12
     assert summary["urgent_total"] == 6
     assert summary["follow_up_total"] == 1
     assert summary["source_errors"] == []
@@ -339,7 +342,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
         "missed_punch_out": 1,
         "unexpected_workers": 0,
         "breakdown": 0,
-        "time_off": 4,
+        "time_off": 5,
     }
 
 
@@ -453,6 +456,71 @@ def test_pending_time_off_attaches_coverage(monkeypatch):
     assert rows[0]["coverage"] == {"severity": "warn", "peak_count": 3}
 
 
+def test_absence_pto_inbox_key_matches_existing_audit_identity():
+    assert inbox_keys.absence_pto(41) == "absence_pto:41"
+
+
+def test_pending_absence_pto_count_reads_only_open_states(monkeypatch):
+    captured = {}
+
+    def fake_query(sql, params=()):
+        captured["sql"] = sql
+        captured["params"] = params
+        return [{"n": 2}]
+
+    monkeypatch.setattr(db, "query", fake_query)
+
+    assert exception_inbox._pending_absence_pto_count() == 2
+    assert "absence_pto_requests" in captured["sql"]
+    assert "state IN ('pending', 'needs_review')" in captured["sql"]
+    assert captured["params"] == ()
+
+
+def test_pending_absence_pto_shapes_pending_and_review_rows(monkeypatch):
+    monkeypatch.setattr(db, "query", lambda sql, params: [
+        {
+            "id": 41,
+            "person_odoo_id": 7,
+            "name": "Maria",
+            "absence_day": date(2026, 8, 31),
+            "state": "pending",
+            "leave_type": "Paid Time Off",
+            "sync_error": None,
+            "total_count": 2,
+        },
+        {
+            "id": 42,
+            "person_odoo_id": 8,
+            "name": "Eli",
+            "absence_day": date(2026, 8, 30),
+            "state": "needs_review",
+            "leave_type": "Paid Time Off",
+            "sync_error": "Payroll review is required.",
+            "total_count": 2,
+        },
+    ])
+    monkeypatch.setattr(
+        exception_inbox.time_off_context,
+        "coverage_breakdowns_for",
+        lambda rows: {},
+    )
+
+    count, rows = exception_inbox._pending_absence_pto(limit=8)
+
+    assert count == 2
+    assert rows[0]["detail"] == "Past absence PTO · 1 PTO day · Waiting for approval"
+    assert rows[0]["row_key"] == "absence_pto:41:pending"
+    assert rows[0]["item_key"] == "absence_pto:41"
+    assert rows[0]["action"] == {
+        "type": "absence_pto",
+        "request_id": 41,
+        "state": "pending",
+    }
+    assert rows[1]["priority"] == "warn"
+    assert rows[1]["badge"] == "Payroll review"
+    assert rows[1]["action"]["state"] == "needs_review"
+
+
 def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     monkeypatch.setattr(exception_inbox.plant_day, "today", lambda: date(2026, 6, 19))
     monkeypatch.setattr(
@@ -471,6 +539,7 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
     monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto", lambda: (0, []))
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
     monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _today: (0, []))
 
@@ -500,6 +569,7 @@ def test_pending_time_off_section_links_to_approvals_page(monkeypatch):
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto", lambda: (0, []))
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
 
     snap = exception_inbox.build_snapshot()
@@ -515,8 +585,109 @@ def _empty_inbox_sources(monkeypatch):
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
     monkeypatch.setattr(exception_inbox, "_pending_time_off_counts", lambda today: (0, 0))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto", lambda: (0, []))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto_count", lambda: 0)
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
     monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _today: (0, []))
+
+
+def test_snapshot_merges_past_absence_pto_into_pending_time_off(monkeypatch):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    ordinary = {
+        "id": 20,
+        "name": "Ana",
+        "date_from": date(2026, 9, 2),
+        "label": "2026-09-02",
+        "priority": "info",
+        "row_key": "time_off:20:confirm",
+        "item_key": "time_off:20",
+        "action": {"type": "time_off", "request_id": 20},
+    }
+    linked = {
+        "id": 41,
+        "name": "Maria",
+        "date_from": date(2026, 8, 31),
+        "label": "2026-08-31",
+        "priority": "info",
+        "row_key": "absence_pto:41:pending",
+        "item_key": "absence_pto:41",
+        "action": {"type": "absence_pto", "request_id": 41, "state": "pending"},
+    }
+    monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (1, [ordinary]))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto", lambda: (1, [linked]))
+
+    snapshot = exception_inbox.build_snapshot()
+    section = next(item for item in snapshot["sections"] if item["id"] == "time_off")
+
+    assert section["count"] == 2
+    assert [row["item_key"] for row in section["rows"]] == [
+        "absence_pto:41",
+        "time_off:20",
+    ]
+    assert snapshot["total"] == 2
+
+
+def test_pending_time_off_source_failure_still_shows_past_absence_pto(monkeypatch):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    linked = {
+        "id": 41,
+        "name": "Maria",
+        "date_from": date(2026, 8, 31),
+        "label": "2026-08-31",
+        "priority": "info",
+        "row_key": "absence_pto:41:pending",
+        "item_key": "absence_pto:41",
+        "action": {"type": "absence_pto", "request_id": 41, "state": "pending"},
+    }
+    monkeypatch.setattr(
+        exception_inbox,
+        "_pending_time_off",
+        lambda today: (_ for _ in ()).throw(RuntimeError("ordinary time off failed")),
+    )
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto", lambda: (1, [linked]))
+
+    snapshot = exception_inbox.build_snapshot()
+    section = next(item for item in snapshot["sections"] if item["id"] == "time_off")
+
+    assert section["rows"] == [linked]
+    assert section["count"] == 1
+    assert {"source": "Pending Time Off"} in snapshot["source_errors"]
+
+
+def test_past_absence_pto_source_failure_still_shows_ordinary_time_off(monkeypatch):
+    _empty_inbox_sources(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
+    monkeypatch.setattr(machine_breakdown, "current_rows", lambda: [])
+    monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
+    ordinary = {
+        "id": 20,
+        "name": "Ana",
+        "date_from": date(2026, 9, 2),
+        "label": "2026-09-02",
+        "priority": "info",
+        "row_key": "time_off:20:confirm",
+        "item_key": "time_off:20",
+        "action": {"type": "time_off", "request_id": 20},
+    }
+    monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (1, [ordinary]))
+    monkeypatch.setattr(
+        exception_inbox,
+        "_pending_absence_pto",
+        lambda: (_ for _ in ()).throw(RuntimeError("past absence PTO failed")),
+    )
+
+    snapshot = exception_inbox.build_snapshot()
+    section = next(item for item in snapshot["sections"] if item["id"] == "time_off")
+
+    assert section["rows"] == [ordinary]
+    assert section["count"] == 1
+    assert {"source": "Past Absence PTO"} in snapshot["source_errors"]
 
 
 def test_auto_lunch_off_is_one_urgent_inbox_item(monkeypatch):
@@ -1354,6 +1525,74 @@ def test_exceptions_page_renders_inline_action_controls(monkeypatch):
     assert "js-time-off-approve" in resp.text
 
 
+def test_exceptions_page_renders_past_absence_pto_controls(monkeypatch):
+    pending = {
+        "id": 41,
+        "name": "Maria",
+        "label": "2026-08-31",
+        "detail": "Past absence PTO · 1 PTO day · Waiting for approval",
+        "priority": "info",
+        "badge": "Approval",
+        "row_key": "absence_pto:41:pending",
+        "item_key": "absence_pto:41",
+        "action": {"type": "absence_pto", "request_id": 41, "state": "pending"},
+    }
+    review = {
+        "id": 42,
+        "name": "Eli",
+        "label": "2026-08-30",
+        "detail": "Past absence PTO · 1 PTO day · Needs payroll review",
+        "priority": "warn",
+        "badge": "Payroll review",
+        "row_key": "absence_pto:42:needs_review",
+        "item_key": "absence_pto:42",
+        "action": {
+            "type": "absence_pto",
+            "request_id": 42,
+            "state": "needs_review",
+        },
+    }
+    snapshot = {
+        "today": "2026-09-01",
+        "generated_at": "8:00 AM",
+        "total": 2,
+        "urgent_total": 0,
+        "follow_up_total": 0,
+        "source_errors": [],
+        "work_centers": [],
+        "people": [],
+        "sections": [],
+        "queue": [
+            {
+                **pending,
+                "section_id": "time_off",
+                "category_label": "Pending Time Off",
+                "tone": "info",
+            },
+            {
+                **review,
+                "section_id": "time_off",
+                "category_label": "Pending Time Off",
+                "tone": "info",
+            },
+        ],
+    }
+    monkeypatch.setattr(exceptions_route.exception_inbox, "build_snapshot", lambda: snapshot)
+    client = TestClient(app)
+
+    response = client.get("/exceptions")
+
+    assert response.status_code == 200
+    assert 'data-action-type="absence_pto"' in response.text
+    assert 'data-request-id="41"' in response.text
+    assert 'data-request-id="42"' in response.text
+    assert 'class="row-btn primary js-time-off-approve"' in response.text
+    assert 'class="row-btn danger js-time-off-refuse"' in response.text
+    assert 'aria-label="Reason to deny past PTO"' in response.text
+    assert 'aria-label="How this past PTO request was handled"' in response.text
+    assert 'class="row-btn primary js-absence-pto-handled"' in response.text
+
+
 def test_exceptions_page_renders_forgot_punch_in_controls(monkeypatch):
     late_row = {
         "name": "Lauro Benitez",
@@ -1471,7 +1710,8 @@ def test_inbox_template_has_inline_time_off_deny_reason():
     assert 'aria-label="Person to assign"' in html
     assert 'aria-label="Late or absence reason"' not in html
     assert 'aria-label="Work center to assign"' in html
-    assert 'aria-label="Reason to deny time off"' in html
+    assert "Reason to deny time off" in html
+    assert "Reason to deny past PTO" in html
     assert 'aria-label="Forgotten punch-in time"' in html
     assert 'aria-label="Forgotten punch-in work center"' in html
     assert "js-forgot-punch-open" in html
@@ -1487,6 +1727,16 @@ def test_inbox_template_has_inline_time_off_deny_reason():
 def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
     js = (STATIC_DIR / "exceptions.js").read_text(encoding="utf-8")
 
+    assert "row.dataset.actionType === 'absence_pto'" in js
+    assert "'/api/exceptions/absence-pto/'" in js
+    assert "resp.status === 'needs_review'" in js
+    assert "resp.status === 'pending'" in js
+    assert "js-absence-pto-note" in js
+    assert "js-absence-pto-handled" in js
+    assert "base + '/approve'" in js
+    assert "base + '/deny'" in js
+    assert "base + '/handled'" in js
+    assert "note: handledNote" in js
     assert "js-time-off-reason" in js
     assert "source: 'inbox'" in js
     assert "Enter a reason, then Deny again." in js
@@ -1511,6 +1761,10 @@ def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
     assert ".js-forgot-punch-save" in js
     assert "Missed punch: enter time and work center." in js
     assert "btn.click()" in js
+    assert "var input = event.target.closest('.js-time-off-reason');" in js
+    assert "submitRowInput(input, '.js-time-off-refuse')" in js
+    assert "input = event.target.closest('.js-absence-pto-note');" in js
+    assert "submitRowInput(input, '.js-absence-pto-handled')" in js
 
 
 def test_late_report_footer_uses_direct_reason_free_actions():

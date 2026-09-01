@@ -17,6 +17,10 @@ def time_off(request_id) -> str:
     return f"time_off:{request_id}"
 
 
+def absence_pto(request_id) -> str:
+    return f"absence_pto:{request_id}"
+
+
 def missing_wc(attendance_id) -> str:
     return f"missing_wc:{attendance_id}"
 

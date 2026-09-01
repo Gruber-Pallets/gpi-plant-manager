@@ -261,6 +261,67 @@ def _pending_time_off(today: date, limit: int = 8) -> tuple[int, list[dict]]:
     return int(rows[0].get("total_count") or 0) if rows else 0, shaped
 
 
+_PENDING_ABSENCE_PTO_WHERE = "r.state IN ('pending', 'needs_review')"
+
+
+def _pending_absence_pto_count() -> int:
+    from . import db
+
+    rows = db.query(
+        "SELECT COUNT(*) AS n FROM absence_pto_requests r "
+        f"WHERE {_PENDING_ABSENCE_PTO_WHERE}"
+    )
+    return int(rows[0]["n"] or 0) if rows else 0
+
+
+def _pending_absence_pto(limit: int = 8) -> tuple[int, list[dict]]:
+    from . import db
+
+    rows = db.query(
+        "SELECT r.id, r.person_odoo_id, r.person_name AS name, "
+        "r.absence_day, r.state, r.leave_type_name AS leave_type, "
+        "r.sync_error, COUNT(*) OVER () AS total_count "
+        "FROM absence_pto_requests r "
+        f"WHERE {_PENDING_ABSENCE_PTO_WHERE} "
+        "ORDER BY r.requested_at, r.id LIMIT %s",
+        (limit,),
+    )
+    shaped = []
+    for source in rows:
+        day = source["absence_day"]
+        needs_review = source["state"] == "needs_review"
+        shaped.append({
+            "id": source["id"],
+            "person_odoo_id": source["person_odoo_id"],
+            "date_from": day,
+            "date_to": day,
+            "name": source["name"],
+            "label": day.isoformat(),
+            "detail": (
+                "Past absence PTO · 1 PTO day · Needs payroll review"
+                if needs_review
+                else "Past absence PTO · 1 PTO day · Waiting for approval"
+            ),
+            "state": source["state"],
+            "sync_error": source.get("sync_error"),
+            "past_due": False,
+            "priority": "warn" if needs_review else "info",
+            "badge": "Payroll review" if needs_review else "Approval",
+            "row_key": _row_key("absence_pto", source["id"], source["state"]),
+            "item_key": inbox_keys.absence_pto(source["id"]),
+            "action": {
+                "type": "absence_pto",
+                "request_id": source["id"],
+                "state": source["state"],
+            },
+        })
+    coverage = time_off_context.coverage_breakdowns_for(shaped)
+    for row in shaped:
+        row["coverage"] = coverage.get(row["id"])
+    count = int(rows[0].get("total_count") or 0) if rows else 0
+    return count, shaped
+
+
 _TIER_RANK = {"urgent": 0, "warn": 1, "info": 2, "normal": 2, "muted": 3}
 
 _ATTENDANCE_SECTION_META = {
@@ -536,6 +597,13 @@ def build_summary() -> dict:
     pending_count, pending_urgent_count = _capture(
         source_errors, "Pending Time Off", lambda: _pending_time_off_counts(today), (0, 0)
     )
+    absence_pto_count = _capture(
+        source_errors,
+        "Past Absence PTO",
+        _pending_absence_pto_count,
+        0,
+    )
+    pending_count += absence_pto_count
 
     assignment_count = int(assignments.get("count") or 0)
     late_count = int(late.get("count") or 0)
@@ -667,6 +735,22 @@ def build_snapshot() -> dict:
     )
     pending_count, pending_rows = _capture(
         source_errors, "Pending Time Off", lambda: _pending_time_off(today), (0, [])
+    )
+    absence_pto_count, absence_pto_rows = _capture(
+        source_errors,
+        "Past Absence PTO",
+        _pending_absence_pto,
+        (0, []),
+    )
+    pending_count += absence_pto_count
+    pending_rows = sorted(
+        [*pending_rows, *absence_pto_rows],
+        key=lambda row: (
+            row.get("date_from") or date.max,
+            str(row.get("name") or "").lower(),
+            str((row.get("action") or {}).get("type") or ""),
+            int(row.get("id") or 0),
+        ),
     )
     work_centers = _capture(source_errors, "Work Center List", _work_center_names, [])
     # assignments_todo_payload / late_report_payload swallow their own internal

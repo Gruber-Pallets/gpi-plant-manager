@@ -1305,6 +1305,10 @@
     var incidentId = row.dataset.incidentId;
     var breakdownWc = row.dataset.wcName;
     var employeeOdooId = asInt(row.dataset.employeeOdooId);
+    var isAbsencePto = row.dataset.actionType === 'absence_pto';
+    var base = isAbsencePto
+      ? '/api/exceptions/absence-pto/' + encodeURIComponent(row.dataset.requestId)
+      : '/api/exceptions/time-off/' + encodeURIComponent(row.dataset.requestId);
 
     if (rowBtn.classList.contains('js-assign')) {
       var person = row.querySelector('.js-person').value;
@@ -1511,19 +1515,26 @@
     if (rowBtn.classList.contains('js-time-off-approve')) {
       setBusy(row, true);
       rowStatus(row, 'Approving...', false);
-      postJson('/api/exceptions/time-off/' + encodeURIComponent(row.dataset.requestId) + '/approve', {
+      postJson(base + '/approve', {
         source: 'inbox',
       })
         .then(function (resp) {
-          if (resp && resp.ok && resp.approved === false) {
+          if (isAbsencePto && resp && resp.status === 'needs_review') {
+            rowStatus(row, resp.warning || 'This needs payroll review.', false);
+            setTimeout(function () { window.location.reload(); }, 600);
+          } else if (isAbsencePto && resp && resp.status === 'pending') {
+            failRow(row, resp.warning || resp.error || 'Approval is still pending.');
+          } else if (resp && resp.ok && resp.approved === false) {
             rowStatus(row, 'Moved forward; refreshing...', false);
             setTimeout(function () { window.location.reload(); }, 600);
           } else if (resp && resp.ok) {
-            resolveRow(row, resp.recorded_locally
-              ? 'Approved — recorded here (Odoo schedule conflict)'
-              : 'Approved');
+            resolveRow(row, isAbsencePto
+              ? (resp.message || 'Approved')
+              : (resp.recorded_locally
+                ? 'Approved — recorded here (Odoo schedule conflict)'
+                : 'Approved'));
           } else {
-            failRow(row, (resp && resp.error) || 'Approval failed.');
+            failRow(row, (resp && (resp.warning || resp.error)) || 'Approval failed.');
           }
         }).catch(function () { failRow(row, 'Network error.'); });
       return;
@@ -1545,14 +1556,41 @@
       }
       setBusy(row, true);
       rowStatus(row, 'Denying...', false);
-      postJson('/api/exceptions/time-off/' + encodeURIComponent(row.dataset.requestId) + '/refuse', {
+      var denyUrl = isAbsencePto ? base + '/deny' : base + '/refuse';
+      postJson(denyUrl, {
         reason: denyReason,
         source: 'inbox',
       })
         .then(function (resp) {
-          if (resp && resp.ok) resolveRow(row, 'Denied');
-          else failRow(row, (resp && resp.error) || 'Deny failed.');
+          if (resp && resp.ok) resolveRow(row, resp.message || 'Denied');
+          else failRow(row, (resp && (resp.warning || resp.error)) || 'Deny failed.');
         }).catch(function () { failRow(row, 'Network error.'); });
+      return;
+    }
+
+    if (rowBtn.classList.contains('js-absence-pto-handled')) {
+      var noteInput = row.querySelector('.js-absence-pto-note');
+      if (noteInput && noteInput.hidden) {
+        noteInput.hidden = false;
+        noteInput.focus();
+        rowStatus(row, 'Add a note, then Mark handled again.', false);
+        return;
+      }
+      var handledNote = noteInput ? noteInput.value.trim() : '';
+      if (!handledNote) {
+        if (noteInput) noteInput.focus();
+        failRow(row, 'A note is required to mark this handled.');
+        return;
+      }
+      setBusy(row, true);
+      rowStatus(row, 'Saving...', false);
+      postJson(base + '/handled', {note: handledNote, source: 'inbox'})
+        .then(function (resp) {
+          if (resp && resp.ok) resolveRow(row, resp.message || 'Marked handled');
+          else failRow(row, (resp && (resp.warning || resp.error)) || 'Could not mark handled.');
+        })
+        .catch(function () { failRow(row, 'Network error.'); });
+      return;
     }
   });
 
@@ -1561,6 +1599,11 @@
     if (!event.target || !event.target.closest) return;
     var input = event.target.closest('.js-time-off-reason');
     if (submitRowInput(input, '.js-time-off-refuse')) {
+      event.preventDefault();
+      return;
+    }
+    input = event.target.closest('.js-absence-pto-note');
+    if (submitRowInput(input, '.js-absence-pto-handled')) {
       event.preventDefault();
       return;
     }

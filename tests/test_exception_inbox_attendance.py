@@ -91,6 +91,8 @@ def _empty_legacy(monkeypatch, *, missing=(), assignments=()):
     monkeypatch.setattr(unexpected_worker, "open_events", lambda _day: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda _day: (0, []))
     monkeypatch.setattr(exception_inbox, "_pending_time_off_counts", lambda _day: (0, 0))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto", lambda: (0, []))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto_count", lambda: 0)
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
     monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
     monkeypatch.setattr(exception_inbox, "_saturday_staffing_actions", lambda _day: (0, []))
