@@ -146,16 +146,12 @@ UPDATE work_centers
    AND COALESCE(meter_id, '') = '';
 
 -- Hand Build #1 received its Zira source after the work-center row existed.
--- Preserve later nonblank meter and nonzero goal choices.
+-- Preserve later meter choices. Its goal is user-managed in Settings and
+-- must not be reapplied here after someone deliberately clears it.
 UPDATE work_centers
    SET meter_id = '44484'
  WHERE name = 'Hand Build #1'
    AND COALESCE(meter_id, '') = '';
-
-UPDATE work_centers
-   SET goal_per_day_override = 400
- WHERE name = 'Hand Build #1'
-   AND COALESCE(goal_per_day_override, 0) = 0;
 
 CREATE TABLE IF NOT EXISTS work_center_required_skills (
   wc_id           INTEGER NOT NULL REFERENCES work_centers(id) ON DELETE CASCADE,

@@ -27,12 +27,15 @@ def test_hand_build_1_uses_its_zira_meter_in_both_registries():
     assert station not in recycling_stations()
 
 
-def test_hand_build_1_meter_and_goal_backfill_only_blank_defaults():
+def test_hand_build_1_meter_backfill_only_fills_a_blank_mapping():
     assert "SET meter_id = '44484'" in SCHEMA_DDL
     assert "WHERE name = 'Hand Build #1'" in SCHEMA_DDL
     assert "COALESCE(meter_id, '') = ''" in SCHEMA_DDL
-    assert "SET goal_per_day_override = 400" in SCHEMA_DDL
-    assert "COALESCE(goal_per_day_override, 0) = 0" in SCHEMA_DDL
+
+
+def test_hand_build_1_goal_is_not_reapplied_during_schema_bootstrap():
+    assert "SET goal_per_day_override = 400" not in SCHEMA_DDL
+    assert "COALESCE(goal_per_day_override, 0) = 0" not in SCHEMA_DDL
 
 
 def test_hand_build_1_auto_activates_existing_new_paths(monkeypatch):

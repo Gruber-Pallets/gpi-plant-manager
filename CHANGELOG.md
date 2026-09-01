@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Let Hand Build 1 keep a cleared goal
+
+- **You can now remove the Hand Build 1 goal in Settings and it stays removed after the app restarts.** Its production meter still works.
+
 ### Keep no-goal measured work at the bottom
 
 - **Trim Saw, Hand Build, and any other measured work without a goal now stay below measured work that has a goal on the People page.** Missing meter data no longer gets confused with a missing goal.
