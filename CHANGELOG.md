@@ -16,6 +16,22 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **A plan is ready to keep a worker in the same Odoo team after Auto-Lunch.** It covers safe retries and uses the team from just before lunch. Nothing in the app has changed yet.
 
+### See each person's workday in one place
+
+- **Managers can now open People under Performance to see who worked, where they moved, whether each production goal was met, machine stops, and forklift calls.** People without a measured goal stay in a separate group below the measured workers.
+
+### Keep the People page easy to scan
+
+- **The People page now fits manager computers and tablets, explains each part when selected, and refreshes without losing your place.** Breaks, moves, late calls, and good or low results all have words as well as colors.
+
+### Add a people-first performance page
+
+- **Managers now have a People tab ready to show one workday person by person.** It keeps production workers, tablet drivers, and other workers in separate easy-to-scan groups.
+
+### Bring each worker's day together safely
+
+- **Plant Manager can now bring work times, production, stops, and forklift calls into one safe day view.** If one source is down, the other facts stay visible and the missing part says it is not available.
+
 ### Past PTO requests now show in the Inbox
 
 - **Past-absence PTO requests now appear with the other daily work in the Exception Inbox.** Managers can approve or deny a waiting request there. Requests that need payroll help stay visible until a manager adds a note and marks them handled.

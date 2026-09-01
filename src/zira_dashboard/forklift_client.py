@@ -14,6 +14,7 @@ Config (read per-call, so importing this module has no side effects):
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from typing import Any
 
 import requests
@@ -108,8 +109,10 @@ def fetch_completions(since: int = 0, limit: int = 500, max_pages: int = 400) ->
         if cursor:
             params["cursor"] = cursor
         data = _external_get("/api/external/v1/completions", params)
-        out.extend(data.get("items") or [])
+        if not isinstance(data, Mapping) or not isinstance(data.get("items"), list):
+            raise ForkliftError("completion response must contain an items list")
+        out.extend(data["items"])
         cursor = data.get("nextCursor")
         if not cursor:
-            break
-    return out
+            return out
+    raise ForkliftError("completion pagination limit reached before the final page")

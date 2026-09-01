@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -56,6 +56,248 @@ def test_metered_station_totals_forwards_cap_and_all_metered_locations(monkeypat
     assert calls[0][2:] == (day, cap)
     assert [station.meter_id for station in calls[0][1]] == ["meter-1", "meter-2"]
     assert [station.name for station in calls[0][1]] == ["Repair 1", "Dismantler 2"]
+
+
+def test_timeline_scoring_rejects_positive_total_without_timestamped_samples():
+    from zira_dashboard.leaderboard import StationTotal
+    from zira_dashboard.stations import Station
+    from tests.people_performance_fixtures import DAY, END, START, span
+
+    total = StationTotal(
+        station=Station("m1", "Repair 1", "Repair", "Bay 1"),
+        units=10,
+        reading_count=0,
+        truncated=False,
+        downtime_minutes=0,
+        active_minutes=0,
+        last_reading_at=None,
+        last_status=None,
+        samples=(),
+        active_intervals=(),
+    )
+
+    with pytest.raises(
+        production_history.ProductionSourceUnavailable,
+        match="Timestamped samples for Repair 1",
+    ):
+        production_history.production_scores_for_timeline(
+            object(),
+            DAY,
+            (span(81, "Worker", 0, 60, "Repair 1"),),
+            now_utc=END,
+            is_today=False,
+            window_start_utc=START,
+            window_end_utc=END,
+            station_totals=(total,),
+            attribution_rows=(),
+        )
+
+
+def test_timeline_scoring_removes_testing_samples_and_identity_breakdown_minutes(
+    monkeypatch,
+):
+    from zira_dashboard import production_segments, settings_store, shift_config
+    from zira_dashboard.leaderboard import StationTotal
+    from zira_dashboard.stations import Station
+    from tests.people_performance_fixtures import DAY, END, START, span
+
+    total = StationTotal(
+        station=Station("m1", "Repair 1", "Repair", "Bay 1"),
+        units=10,
+        reading_count=2,
+        truncated=False,
+        downtime_minutes=0,
+        active_minutes=60,
+        last_reading_at=START + timedelta(minutes=20),
+        last_status="Working",
+        samples=(
+            (START + timedelta(minutes=10), 4),
+            (START + timedelta(minutes=20), 6),
+        ),
+        active_intervals=((START, START + timedelta(minutes=60)),),
+    )
+    rows = (
+        {
+            "id": 1,
+            "wc_name": "Repair 1",
+            "person_name": "Testing",
+            "employee_odoo_id": None,
+            "start_utc": START + timedelta(minutes=5),
+            "end_utc": START + timedelta(minutes=15),
+            "source": "testing",
+            "breakdown_id": None,
+        },
+        {
+            "id": 2,
+            "wc_name": "Repair 1",
+            "person_name": "Worker",
+            "employee_odoo_id": 81,
+            "start_utc": START + timedelta(minutes=30),
+            "end_utc": START + timedelta(minutes=40),
+            "source": "breakdown",
+            "breakdown_id": 9,
+        },
+    )
+    captured = {}
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda day, start, end: (end - start).total_seconds() / 60,
+    )
+    monkeypatch.setattr(settings_store, "station_target", lambda station: 10.0)
+
+    def capture(segments, **kwargs):
+        captured.update(kwargs)
+        captured["minutes"] = {
+            item.person_odoo_id: kwargs["productive_minutes_for_segment"](item)
+            for item in segments
+        }
+        return {}
+
+    monkeypatch.setattr(production_segments, "credit_work_segments", capture)
+    monkeypatch.setattr(production_segments, "score_work_segments", lambda *a, **k: {})
+
+    assert production_history.production_scores_for_timeline(
+        object(),
+        DAY,
+        (span(81, "Worker", 0, 60, "Repair 1", is_open=False),),
+        now_utc=END,
+        is_today=False,
+        window_start_utc=START,
+        window_end_utc=END,
+        station_totals=(total,),
+        attribution_rows=rows,
+    ) == ()
+
+    assert captured["wc_totals"] == {"Repair 1": 6.0}
+    assert captured["samples_by_wc"] == {
+        "Repair 1": [(START + timedelta(minutes=20), 6)]
+    }
+    assert captured["minutes"] == {81: 50.0}
+    assert captured["allow_total_fallback"] is False
+
+
+def test_timeline_breakdown_identity_does_not_cross_same_display_name(monkeypatch):
+    from zira_dashboard import production_segments, settings_store, shift_config
+    from zira_dashboard.leaderboard import StationTotal
+    from zira_dashboard.stations import Station
+    from tests.people_performance_fixtures import DAY, END, START, span
+
+    total = StationTotal(
+        station=Station("m1", "Repair 1", "Repair", "Bay 1"),
+        units=10,
+        reading_count=1,
+        truncated=False,
+        downtime_minutes=0,
+        active_minutes=60,
+        last_reading_at=START + timedelta(minutes=20),
+        last_status="Working",
+        samples=((START + timedelta(minutes=20), 10),),
+        active_intervals=((START, START + timedelta(minutes=60)),),
+    )
+    breakdown = {
+        "id": 2,
+        "wc_name": "Repair 1",
+        "person_name": "Same Name",
+        "employee_odoo_id": 81,
+        "start_utc": START + timedelta(minutes=30),
+        "end_utc": START + timedelta(minutes=40),
+        "source": "breakdown",
+        "breakdown_id": 9,
+    }
+    captured = {}
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda day, start, end: (end - start).total_seconds() / 60,
+    )
+    monkeypatch.setattr(settings_store, "station_target", lambda station: 10.0)
+
+    def capture(segments, **kwargs):
+        captured.update(
+            {
+                item.person_odoo_id: kwargs["productive_minutes_for_segment"](item)
+                for item in segments
+            }
+        )
+        return {}
+
+    monkeypatch.setattr(production_segments, "credit_work_segments", capture)
+    monkeypatch.setattr(production_segments, "score_work_segments", lambda *a, **k: {})
+
+    production_history.production_scores_for_timeline(
+        object(),
+        DAY,
+        (
+            span(81, "Same Name", 0, 60, "Repair 1", is_open=False),
+            span(82, "Same Name", 0, 60, "Repair 1", is_open=False),
+        ),
+        now_utc=END,
+        is_today=False,
+        window_start_utc=START,
+        window_end_utc=END,
+        station_totals=(total,),
+        attribution_rows=(breakdown,),
+    )
+
+    assert captured == {81: 50.0, 82: 60.0}
+
+
+def test_timeline_scoring_uses_explicit_is_today_for_live_cap(monkeypatch):
+    from zira_dashboard import production_segments, settings_store
+    from zira_dashboard.leaderboard import StationTotal
+    from zira_dashboard.stations import Station
+    from tests.people_performance_fixtures import DAY, END, START, span
+
+    total = StationTotal(
+        station=Station("m1", "Repair 1", "Repair", "Bay 1"),
+        units=10,
+        reading_count=1,
+        truncated=False,
+        downtime_minutes=0,
+        active_minutes=60,
+        last_reading_at=START + timedelta(minutes=20),
+        last_status="Working",
+        samples=((START + timedelta(minutes=20), 10),),
+        active_intervals=((START, START + timedelta(minutes=60)),),
+    )
+    captured = {}
+    monkeypatch.setattr(settings_store, "station_target", lambda station: 10.0)
+    monkeypatch.setattr(
+        production_segments,
+        "credit_work_segments",
+        lambda *args, **kwargs: captured.update(kwargs) or {},
+    )
+    monkeypatch.setattr(production_segments, "score_work_segments", lambda *a, **k: {})
+
+    production_history.production_scores_for_timeline(
+        object(),
+        DAY,
+        (span(81, "Worker", 0, 60, "Repair 1", is_open=False),),
+        now_utc=END,
+        is_today=False,
+        window_start_utc=START,
+        window_end_utc=END,
+        station_totals=(total,),
+        attribution_rows=(),
+    )
+
+    assert captured["live_cap_utc"] is None
+
+
+def test_timeline_scoring_rejects_naive_cap_before_reading_sources():
+    from tests.people_performance_fixtures import DAY, END
+
+    with pytest.raises(TypeError, match="now_utc"):
+        production_history.production_scores_for_timeline(
+            object(),
+            DAY,
+            (),
+            now_utc=END.replace(tzinfo=None),
+            is_today=True,
+            station_totals=(),
+            attribution_rows=(),
+        )
 
 
 def test_solo_operator_gets_full_credit():

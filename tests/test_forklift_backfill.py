@@ -15,11 +15,20 @@ DRIVERS = [
 
 
 def test_backfill_history_aggregates_and_upserts(monkeypatch):
-    captured = {"calls": [], "drivers": None, "events": None, "settings": {}}
+    from datetime import UTC, datetime
+
+    captured = {
+        "calls": [], "drivers": None, "events": None, "settings": {}, "coverage": []
+    }
     monkeypatch.setattr(forklift_backfill.forklift_client, "fetch_completions",
                         lambda since=0: COMPLETIONS)
     monkeypatch.setattr(forklift_backfill.forklift_client, "fetch_drivers",
                         lambda: DRIVERS)
+    monkeypatch.setattr(
+        forklift_backfill,
+        "_utc_now",
+        lambda: datetime(2026, 6, 27, 18, 0, tzinfo=UTC),
+    )
     monkeypatch.setattr(forklift_backfill.forklift_store, "upsert_calls_daily",
                         lambda row: captured["calls"].append(row))
     monkeypatch.setattr(forklift_backfill.forklift_store, "upsert_driver_daily",
@@ -28,6 +37,13 @@ def test_backfill_history_aggregates_and_upserts(monkeypatch):
         forklift_backfill.forklift_event_store,
         "upsert_completion_events",
         lambda events: captured.update(events=events) or len(events),
+    )
+    monkeypatch.setattr(
+        forklift_backfill.forklift_event_store,
+        "record_completion_coverage",
+        lambda day, *, covered_through_utc, raw_event_count: captured["coverage"].append(
+            (day, covered_through_utc, raw_event_count)
+        ),
     )
     monkeypatch.setattr(forklift_backfill.app_settings, "set_setting",
                         lambda k, v: captured["settings"].update({k: v}))
@@ -43,6 +59,10 @@ def test_backfill_history_aggregates_and_upserts(monkeypatch):
     names = {r["driver_id"]: r["name"] for r in captured["drivers"]}
     assert names == {"fk-1": "Trent", "fk-2": "Louie"}
     assert [event.event_id for event in captured["events"]] == ["c1", "c2"]
+    assert [(day.isoformat(), count) for day, _through, count in captured["coverage"]] == [
+        ("2026-06-26", 1),
+        ("2026-06-27", 1),
+    ]
 
 
 def test_backfill_history_passes_since(monkeypatch):
@@ -58,6 +78,11 @@ def test_backfill_history_passes_since(monkeypatch):
     monkeypatch.setattr(forklift_backfill.forklift_store, "upsert_driver_daily", lambda rows: 0)
     monkeypatch.setattr(forklift_backfill.forklift_event_store,
                         "upsert_completion_events", lambda events: len(events))
+    monkeypatch.setattr(
+        forklift_backfill.forklift_event_store,
+        "record_completion_coverage",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(forklift_backfill.app_settings, "set_setting", lambda k, v: None)
 
     forklift_backfill.backfill_history(since=12345)
@@ -72,6 +97,140 @@ def test_backfill_history_swallows_errors(monkeypatch):
 
     out = forklift_backfill.backfill_history()
     assert out["days"] == 0 and out["calls"] == 0 and "error" in out
+
+
+def test_backfill_records_explicit_zero_coverage_between_event_days(monkeypatch):
+    from datetime import UTC, datetime
+
+    completions = [COMPLETIONS[0], {**COMPLETIONS[1], "createdAt": 1782651600000}]
+    calls = []
+    coverage = []
+    monkeypatch.setattr(
+        forklift_backfill.forklift_client,
+        "fetch_completions",
+        lambda since=0: completions,
+    )
+    monkeypatch.setattr(forklift_backfill.forklift_client, "fetch_drivers", lambda: DRIVERS)
+    monkeypatch.setattr(
+        forklift_backfill.forklift_store,
+        "upsert_calls_daily",
+        lambda row: calls.append(row),
+    )
+    monkeypatch.setattr(
+        forklift_backfill.forklift_store,
+        "upsert_driver_daily",
+        lambda rows: len(rows),
+    )
+    monkeypatch.setattr(
+        forklift_backfill.forklift_event_store,
+        "upsert_completion_events",
+        lambda events: len(events),
+    )
+    monkeypatch.setattr(
+        forklift_backfill.forklift_event_store,
+        "record_completion_coverage",
+        lambda day, *, covered_through_utc, raw_event_count: coverage.append(
+            (day, raw_event_count)
+        ),
+    )
+    monkeypatch.setattr(
+        forklift_backfill,
+        "_utc_now",
+        lambda: datetime(2026, 6, 28, 18, 0, tzinfo=UTC),
+    )
+    monkeypatch.setattr(forklift_backfill.app_settings, "set_setting", lambda *args: None)
+
+    forklift_backfill.backfill_history()
+
+    assert [(row["day"].isoformat(), row["total_calls"]) for row in calls] == [
+        ("2026-06-26", 1),
+        ("2026-06-27", 0),
+        ("2026-06-28", 1),
+    ]
+    assert [(day.isoformat(), count) for day, count in coverage] == [
+        ("2026-06-26", 1),
+        ("2026-06-27", 0),
+        ("2026-06-28", 1),
+    ]
+
+
+def test_partial_first_calendar_day_is_not_marked_complete(monkeypatch):
+    from datetime import UTC, datetime
+
+    coverage = []
+    monkeypatch.setattr(
+        forklift_backfill.forklift_client,
+        "fetch_completions",
+        lambda since=0: [COMPLETIONS[0]],
+    )
+    monkeypatch.setattr(forklift_backfill.forklift_client, "fetch_drivers", lambda: DRIVERS)
+    monkeypatch.setattr(forklift_backfill.forklift_store, "upsert_calls_daily", lambda row: None)
+    monkeypatch.setattr(
+        forklift_backfill.forklift_store, "upsert_driver_daily", lambda rows: len(rows)
+    )
+    monkeypatch.setattr(
+        forklift_backfill.forklift_event_store,
+        "upsert_completion_events",
+        lambda events: len(events),
+    )
+    monkeypatch.setattr(
+        forklift_backfill.forklift_event_store,
+        "record_completion_coverage",
+        lambda day, **kwargs: coverage.append(day),
+    )
+    monkeypatch.setattr(
+        forklift_backfill,
+        "_utc_now",
+        lambda: datetime(2026, 6, 26, 18, 0, tzinfo=UTC),
+    )
+    monkeypatch.setattr(forklift_backfill.app_settings, "set_setting", lambda *args: None)
+    partial_since = 1782468000000  # 2026-06-26 05:00 plant time
+
+    forklift_backfill.backfill_history(since=partial_since)
+
+    assert coverage == []
+
+
+def test_empty_full_history_establishes_only_current_day_zero(monkeypatch):
+    from datetime import UTC, datetime
+
+    calls = []
+    coverage = []
+    checked_at = datetime(2026, 6, 26, 18, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        forklift_backfill.forklift_client,
+        "fetch_completions",
+        lambda since=0: [],
+    )
+    monkeypatch.setattr(forklift_backfill.forklift_client, "fetch_drivers", lambda: [])
+    monkeypatch.setattr(
+        forklift_backfill.forklift_store,
+        "upsert_calls_daily",
+        lambda row: calls.append(row),
+    )
+    monkeypatch.setattr(forklift_backfill.forklift_store, "upsert_driver_daily", lambda rows: 0)
+    monkeypatch.setattr(
+        forklift_backfill.forklift_event_store,
+        "upsert_completion_events",
+        lambda events: 0,
+    )
+    monkeypatch.setattr(
+        forklift_backfill.forklift_event_store,
+        "record_completion_coverage",
+        lambda day, **kwargs: coverage.append((day, kwargs)),
+    )
+    monkeypatch.setattr(forklift_backfill, "_utc_now", lambda: checked_at)
+    monkeypatch.setattr(forklift_backfill.app_settings, "set_setting", lambda *args: None)
+
+    out = forklift_backfill.backfill_history(since=0)
+
+    assert out == {"days": 1, "drivers": 0, "calls": 0}
+    assert [(row["day"].isoformat(), row["total_calls"]) for row in calls] == [
+        ("2026-06-26", 0)
+    ]
+    assert [(day.isoformat(), values["raw_event_count"]) for day, values in coverage] == [
+        ("2026-06-26", 0)
+    ]
 
 
 def test_diff_cumulative_days_clamps_and_subtracts():

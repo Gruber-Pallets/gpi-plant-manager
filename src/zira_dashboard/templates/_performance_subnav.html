@@ -4,7 +4,7 @@
    Context required:
      active_dashboard_key — one of 'vs_recycling', 'vs_new',
                             'vs_recycling_leaderboard', 'vs_new_leaderboard',
-                            'trophies', 'leaderboards', 'forklift', or a
+                            'trophies', 'leaderboards', 'forklift', 'people', or a
                             string starting with 'wc:' (any WC = Operator
                             tab active).
 #}
@@ -20,6 +20,10 @@
   <a href="/operator"
      class="subnav-item {% if active_dashboard_key and active_dashboard_key.startswith('wc:') %}active{% endif %}">
     Operator
+  </a>
+  <a href="/people-performance"
+     class="subnav-item {% if active_dashboard_key == 'people' %}active{% endif %}">
+    People
   </a>
   <a href="/recycling-leaderboard"
      class="subnav-item {% if active_dashboard_key == 'vs_recycling_leaderboard' %}active{% endif %}">

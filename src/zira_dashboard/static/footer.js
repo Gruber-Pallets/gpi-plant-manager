@@ -64,6 +64,10 @@
     return !!(document.documentElement.dataset && document.documentElement.dataset.tvTheme);
   }
 
+  function livePollingDisabled() {
+    return document.body && document.body.dataset.livePollingDisabled === "1";
+  }
+
   function injectButton() {
     if (isTvMode()) return;
     var header = document.querySelector('header, .k-header');
@@ -206,17 +210,17 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
       injectButton();
-      refreshDot();
+      if (!livePollingDisabled()) refreshDot();
     });
   } else {
     injectButton();
-    refreshDot();
+    if (!livePollingDisabled()) refreshDot();
   }
 
   document.body.addEventListener('htmx:afterSwap', function (event) {
     if (!event.target || event.target.id !== 'timeclock-screen') return;
     injectButton();
-    refreshDot();
+    if (!livePollingDisabled()) refreshDot();
   });
 })();
 
@@ -314,6 +318,7 @@
 
   function startInboxSummary(link) {
     if (!link) return;
+    if (document.body && document.body.dataset.livePollingDisabled === "1") return;
     window.gpiRefreshInboxSummary = function () { refreshInboxSummary(link); };
     var initial = readInboxSummaryBootstrap();
     if (initial) {

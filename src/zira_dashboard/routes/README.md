@@ -20,6 +20,7 @@ Dashboards, leaderboards, and the trophy case — all under
 | `dashboard.py` | `/` → redirect, `/work-centers` → redirect, `/api/leaderboard`, `/tv/ping` |
 | `departments.py` | `/recycling`, `/new`, and their `/tv/*` variants |
 | `wc_dashboard.py` | `/wc/{slug}`, `/tv/wc/{slug}`, `/operator` (per-work-center dashboards) |
+| `people_performance.py` | `/people-performance`, `/people-performance/rows` (people-first day dashboard + live row partial) |
 | `recycling_leaderboard.py` | `/recycling-leaderboard` (+ `/tv/`) |
 | `new_leaderboard.py` | `/new-leaderboard` (+ `/tv/`) |
 | `leaderboards.py` | `/staffing/leaderboards` (plant leaderboards) |

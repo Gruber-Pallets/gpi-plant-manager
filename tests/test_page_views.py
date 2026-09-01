@@ -78,6 +78,7 @@ def test_should_track_excludes_noise_but_keeps_real_pages():
     assert page_views.should_track("/static") is False
     assert page_views.should_track("/auth/login") is False
     assert page_views.should_track("/auth/callback") is False
+    assert page_views.should_track("/people-performance/rows") is False
 
 
 def test_never_hit_returns_inventory_minus_observed_sorted():
@@ -107,6 +108,10 @@ def test_page_inventory_keeps_get_pages_drops_api_and_noise():
 
     @app.get("/healthz")
     def _h():  # noise
+        return "ok"
+
+    @app.get("/people-performance/rows")
+    def _people_rows():  # polling partial, not a navigable page
         return "ok"
 
     assert page_views.page_inventory(app) == ["/staffing", "/wc/{slug}"]

@@ -1,0 +1,134 @@
+<div id="people-performance-live"
+     data-response-kind="people-performance-rows"
+     data-day="{{ day }}"
+     data-is-today="{{ 1 if is_today else 0 }}"
+     data-attention="{{ 1 if attention_only else 0 }}"
+     data-as-of="{{ as_of }}"
+     data-as-of-iso="{{ as_of_iso }}">
+  <div class="pp-counts" aria-label="Day totals">
+    <span><strong>{{ working_now }}</strong> working now</span>
+    <span><strong>{{ worked_earlier }}</strong> worked earlier</span>
+    <span><strong>{{ needs_attention }}</strong> need attention</span>
+  </div>
+  {% if source_warnings %}
+  <aside class="pp-source-warnings" role="status">
+    {% for warning in source_warnings %}<span>{{ warning }}</span>{% endfor %}
+  </aside>
+  {% endif %}
+  <div class="pp-axis" aria-hidden="true">
+    <span class="pp-axis-spacer"></span>
+    <div class="pp-axis-viewport pp-horizontal-scroll">
+      <div class="pp-axis-track">
+        {% for tick in axis_labels %}
+        <span style="left:{{ tick.left_pct }}%">{{ tick.label }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    <span class="pp-axis-summary">Summary</span>
+  </div>
+  <div id="people-performance-rows">
+    {% for section in sections %}
+    <section class="pp-section" data-section="{{ section.key }}">
+      <h2>{{ section.label }} <span>{{ section.rows|length }}</span></h2>
+      {% if not section.rows %}<p class="pp-empty">No people in this group.</p>{% endif %}
+      {% for row in section.rows %}
+      <article class="pp-row{% if not row.is_active %} is-complete{% endif %}"
+               data-person-id="{{ row.employee_odoo_id }}"
+               aria-labelledby="pp-person-{{ row.employee_odoo_id }}">
+        <header class="pp-identity">
+          <h3 id="pp-person-{{ row.employee_odoo_id }}">{{ row.person_name }}</h3>
+          <span>{{ row.status }}</span>
+          {% for reason in row.attention_reasons %}<em>{{ reason }}</em>{% endfor %}
+          {% if row.unattached_forklift_calls %}
+          <em>
+            {{ row.unattached_forklift_calls }} forklift call{% if row.unattached_forklift_calls != 1 %}s{% endif %}
+            not placed because the Tablet location was not valid
+          </em>
+          {% endif %}
+        </header>
+        <div class="pp-timeline-cell">
+          <div class="pp-timeline-viewport pp-horizontal-scroll">
+            <div class="pp-timeline" role="group" aria-label="{{ row.person_name }} work timeline">
+              {% for item in row.intervals %}
+              <button type="button" class="pp-interval-trigger {{ item.location_class }} role-{{ item.role }} state-{{ item.state }}"
+                      style="left:{{ item.left_pct }}%;width:{{ item.width_pct }}%"
+                      data-interval-key="{{ item.key }}"
+                      data-detail="{{ item.detail|e }}"
+                      data-open="{{ 1 if item.is_open else 0 }}"
+                      aria-label="{{ item.aria_label|e }}"
+                      aria-expanded="false">
+                <span class="pp-location-ribbon">
+                  {{ item.location_name }}
+                  {% if item.is_transfer %}<b aria-hidden="true">→</b><span class="sr-only">Transfer</span>{% endif %}
+                </span>
+                <span class="pp-metric-track">
+                  {% if item.role == 'production' %}
+                  <span class="pp-result-text">{{ item.state|title }}</span>
+                  <svg aria-hidden="true" focusable="false" viewBox="0 0 100 100" preserveAspectRatio="none">
+                    {% for run in item.line_runs %}
+                    <polyline points="{% for point in run %}{{ point.x }},{{ point.y }} {% endfor %}"></polyline>
+                    {% endfor %}
+                  </svg>
+                  {% elif item.role == 'forklift' %}
+                    {% if item.state == 'unavailable' %}
+                    <span class="pp-result-text">Unavailable</span>
+                    {% else %}
+                      {% for bucket in item.buckets %}
+                      <i class="pp-call-bar" aria-hidden="true"
+                         style="left:{{ bucket.left_pct }}%;width:{{ bucket.width_pct }}%;height:{{ bucket.height_pct }}%"></i>
+                      {% endfor %}
+                      {% for bucket in item.buckets %}
+                        {% for marker in bucket.late_markers %}
+                        <i class="pp-late-marker" aria-hidden="true" style="left:{{ marker }}%"></i>
+                        {% endfor %}
+                      {% endfor %}
+                      <svg aria-hidden="true" focusable="false" viewBox="0 0 100 100" preserveAspectRatio="none">
+                        {% for run in item.line_runs %}
+                        <polyline points="{% for point in run %}{{ point.x }},{{ point.y }} {% endfor %}"></polyline>
+                        {% endfor %}
+                      </svg>
+                    {% endif %}
+                  {% else %}
+                  {% if item.state == 'unavailable' %}
+                  <span class="pp-result-text">Location unavailable</span>
+                  {% else %}
+                  <span class="pp-neutral-label">No metered goal</span>
+                  {% endif %}
+                  {% endif %}
+                </span>
+              </button>
+              {% endfor %}
+              {% for item in row.breaks %}
+              <span class="pp-break"
+                    style="left:{{ item.left_pct }}%;width:{{ item.width_pct }}%">
+                <span class="sr-only">{{ item.label }}</span>
+              </span>
+              {% endfor %}
+            </div>
+          </div>
+          {% if row.short_intervals %}
+          <div class="pp-short-intervals" aria-label="Short interval details">
+            <span class="pp-short-label">Short moves</span>
+            {% for item in row.short_intervals %}
+            <button type="button" class="pp-interval-shortcut"
+                    data-interval-key="{{ item.key }}"
+                    data-detail="{{ item.detail|e }}"
+                    aria-label="{{ item.aria_label|e }} Open details."
+                    aria-expanded="false">
+              {{ item.location_name }} · {{ item.time_label }}
+            </button>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+        <dl class="pp-summary">
+          {% for label, value in row.summary %}
+          <div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
+          {% endfor %}
+        </dl>
+      </article>
+      {% endfor %}
+    </section>
+    {% endfor %}
+  </div>
+</div>

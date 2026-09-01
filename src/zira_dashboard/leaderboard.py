@@ -300,7 +300,6 @@ def fetch_station_day(
         for r in rows:
             u = r.get("units")
             u_int = int(u) if isinstance(u, (int, float)) else 0
-            total += u_int
             status = r.get("status")
             duration = r.get("duration")
             event_dt = _parse_event_date(r.get("event_date"))
@@ -318,6 +317,7 @@ def fetch_station_day(
             ):
                 downtime_rows.append((event_dt, int(duration)))
             if u_int > 0 and event_dt is not None and in_shift_now:
+                total += u_int
                 samples.append((event_dt, u_int))
         count += len(rows)
         if not cursor or len(rows) < PAGE_SIZE:
@@ -478,7 +478,8 @@ def cached_leaderboard(
     so only the missing/expired meters of a request are fetched. For 'today'
     the TTL is 30s; for past days it's 1h. Past-day results are also
     persisted to Postgres so they survive Railway redeploys."""
-    today = datetime.now(UTC).date()
+    effective_now = datetime.now(UTC) if now_utc is None else now_utc.astimezone(UTC)
+    today = effective_now.astimezone(SITE_TZ).date()
     is_today = day == today
     cache = _TODAY_CACHE if is_today else _PAST_CACHE
     day_key = day.isoformat()

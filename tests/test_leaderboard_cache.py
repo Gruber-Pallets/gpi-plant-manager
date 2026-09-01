@@ -7,6 +7,7 @@ needed; these tests exercise the cache assembly logic only.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -151,6 +152,29 @@ def test_past_day_postgres_hit_skips_fetch(monkeypatch):
     assert calls == []  # no Zira fetch
     assert saved == []  # nothing re-persisted
     assert out[0].units == 42
+
+
+def test_today_semantics_use_plant_local_date_from_supplied_now(monkeypatch):
+    calls, _saved = _wire(monkeypatch)
+    from zira_dashboard import _zira_persist
+
+    loaded = []
+    monkeypatch.setattr(
+        _zira_persist,
+        "load_day",
+        lambda stations, day: loaded.append(day) or None,
+    )
+    local_now = datetime(2026, 8, 28, 23, 30, tzinfo=ZoneInfo("America/Chicago"))
+
+    lb.cached_leaderboard(
+        None,
+        [_station("1")],
+        local_now.date(),
+        now_utc=local_now.astimezone(timezone.utc),
+    )
+
+    assert calls == ["1"]
+    assert loaded == []
 
 
 def test_station_total_for_returns_single_total(monkeypatch):
