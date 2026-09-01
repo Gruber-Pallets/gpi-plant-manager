@@ -13,10 +13,11 @@
   top: 0;
   z-index: 30;
   display: flex;
-  min-height: 2.75rem;
+  box-sizing: border-box;
+  height: 2.75rem;
   align-items: center;
   gap: .45rem;
-  padding: .35rem .5rem;
+  padding: .3rem .5rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 96%, transparent);
@@ -100,7 +101,9 @@
 }
 
 .pp-source-warnings {
+  height: 2rem;
   overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-x: contain;
   scrollbar-width: thin;
 }
@@ -557,7 +560,33 @@
 
   .pp-manager-strip {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .pp-counts {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .pp-source-warnings {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .pp-controls {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .pp-controls > * {
+    flex: 0 0 auto;
   }
 
   .pp-counts,

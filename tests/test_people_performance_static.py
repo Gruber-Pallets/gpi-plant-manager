@@ -64,7 +64,8 @@ def test_manager_strip_is_sticky_and_overflow_stays_local():
 
     assert strip
     assert "position: sticky" in strip.group(1)
-    assert "min-height: 2.75rem" in strip.group(1)
+    assert re.search(r"(?m)^\s*height:\s*2\.75rem;", strip.group(1))
+    assert "box-sizing: border-box" in strip.group(1)
     assert "overflow" not in strip.group(1)
     assert warnings and "overflow-x: auto" in warnings.group(1)
     assert horizontal and "overflow-x: auto" in horizontal.group(1)
@@ -73,22 +74,82 @@ def test_manager_strip_is_sticky_and_overflow_stays_local():
 
 def test_section_headers_share_row_columns_and_time_tracks():
     css = CSS_PATH.read_text(encoding="utf-8")
-    assert ".pp-section-header," in css
-    assert ".pp-row" in css
-    assert ".pp-schedule-track," in css
-    assert ".pp-timeline" in css
+    shared_grid = re.search(
+        r"\.pp-section-header,\s*\.pp-row\s*\{([^}]*)\}", css
+    )
+    shared_tracks = re.search(
+        r"\.pp-schedule-track,\s*\.pp-timeline\s*\{([^}]*)\}", css
+    )
+
+    assert shared_grid
+    assert (
+        "grid-template-columns: minmax(10.5rem, .85fr) minmax(0, 4fr) "
+        "minmax(16rem, 1.35fr)"
+    ) in shared_grid.group(1)
+    assert shared_tracks
+    assert "width: 100%" in shared_tracks.group(1)
+    assert "min-width: 34rem" in shared_tracks.group(1)
     assert ".pp-schedule-time-group.is-start" in css
     assert ".pp-schedule-time-group.is-end" in css
 
 
+def test_compact_header_media_queries_preserve_shared_layout_contracts():
+    css = CSS_PATH.read_text(encoding="utf-8")
+    tablet = css.split("@media (max-width: 1100px)", 1)[1].split(
+        "@media (max-width: 760px)", 1
+    )[0]
+    mobile = css.split("@media (max-width: 760px)", 1)[1]
+
+    tablet_grid = re.search(
+        r"\.pp-section-header,\s*\.pp-row\s*\{([^}]*)\}", tablet
+    )
+    tablet_tracks = re.search(
+        r"\.pp-schedule-track,\s*\.pp-timeline\s*\{([^}]*)\}", tablet
+    )
+    tablet_summary = re.search(r"\.pp-section-summary\s*\{([^}]*)\}", tablet)
+    mobile_grid = re.search(
+        r"\.pp-section-header,\s*\.pp-row\s*\{([^}]*)\}", mobile
+    )
+    mobile_strip = re.search(r"\.pp-manager-strip\s*\{([^}]*)\}", mobile)
+
+    assert tablet_grid
+    assert "grid-template-columns: 12rem minmax(0, 1fr)" in tablet_grid.group(1)
+    assert tablet_tracks and "min-width: 38rem" in tablet_tracks.group(1)
+    assert tablet_summary and "display: none" in tablet_summary.group(1)
+    assert mobile_grid
+    assert "grid-template-columns: 10rem minmax(0, 1fr)" in mobile_grid.group(1)
+    assert mobile_strip
+    assert "height: auto" in mobile_strip.group(1)
+    assert (
+        "grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)"
+        in mobile_strip.group(1)
+    )
+
+
 def test_compact_mobile_strip_uses_two_rows_without_an_empty_warning_cell():
     css = CSS_PATH.read_text(encoding="utf-8")
+    mobile = css.split("@media (max-width: 760px)", 1)[1]
     check = re.search(r"\.pp-controls \.pp-check\s*\{([^}]*)\}", css)
+    counts = re.search(r"\.pp-counts\s*\{([^}]*)\}", mobile)
+    warnings = re.search(r"\.pp-source-warnings\s*\{([^}]*)\}", mobile)
+    controls = re.search(r"\.pp-controls\s*\{([^}]*)\}", mobile)
+    first_row = re.search(
+        r"\.pp-counts,\s*\.pp-updated\s*\{([^}]*)\}", mobile
+    )
+    second_row = re.search(
+        r"\.pp-source-warnings,\s*\.pp-controls\s*\{([^}]*)\}", mobile
+    )
     no_warnings = re.search(
-        r"\.pp-counts \+ \.pp-updated \+ \.pp-controls\s*\{([^}]*)\}", css
+        r"\.pp-counts \+ \.pp-updated \+ \.pp-controls\s*\{([^}]*)\}", mobile
     )
 
     assert check and "min-height: 2rem" in check.group(1)
+    assert counts and "overflow-x: auto" in counts.group(1)
+    assert warnings and "overflow-x: auto" in warnings.group(1)
+    assert controls and "overflow-x: auto" in controls.group(1)
+    assert "min-width: 0" in controls.group(1)
+    assert first_row and "grid-row: 1" in first_row.group(1)
+    assert second_row and "grid-row: 2" in second_row.group(1)
     assert no_warnings
     assert "grid-column: 1 / -1" in no_warnings.group(1)
     assert "justify-self: end" in no_warnings.group(1)
