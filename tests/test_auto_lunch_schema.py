@@ -47,9 +47,11 @@ def test_people_has_is_flexible_column():
 
 def test_auto_lunch_runs_and_settings_exist():
     db.bootstrap_schema()
+    assert _columns("timeclock_punches_log") >= {"odoo_department_id"}
     assert _columns("auto_lunch_runs") >= {
         "person_odoo_id", "day", "kind", "state", "target_out_at",
-        "target_in_at", "wc_name", "out_punch_id", "in_punch_id"}
+        "target_in_at", "wc_name", "odoo_department_id",
+        "odoo_department_name", "out_punch_id", "in_punch_id"}
     assert _columns("auto_lunch_settings") >= {
         "enabled", "observe_only", "flex_after_hours", "flex_minutes"}
 

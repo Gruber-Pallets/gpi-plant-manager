@@ -1578,6 +1578,17 @@ CREATE TABLE IF NOT EXISTS auto_lunch_runs (
   UNIQUE (person_odoo_id, day)
 );
 
+-- Preserve the exact Odoo department that was active before Auto-Lunch so
+-- its return punch can restore that department even when no work center maps
+-- to it. The punch copy keeps retries and delayed sync deterministic.
+ALTER TABLE timeclock_punches_log
+  ADD COLUMN IF NOT EXISTS odoo_department_id BIGINT;
+
+ALTER TABLE auto_lunch_runs
+  ADD COLUMN IF NOT EXISTS odoo_department_id BIGINT;
+ALTER TABLE auto_lunch_runs
+  ADD COLUMN IF NOT EXISTS odoo_department_name TEXT;
+
 -- Auto salaried punch scoreboard: one row per fixed-wage person per plant day.
 -- Each *_punch_id column is the timeclock_punches_log id of that slot's punch
 -- (0 = simulated punch written in dry-run mode; NULL = not yet punched).
