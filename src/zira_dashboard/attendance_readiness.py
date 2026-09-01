@@ -192,6 +192,7 @@ class _ShadowConfigSnapshot:
     work_center_names: Mapping[int, str]
     department_requirements: Mapping[str, bool]
     employee_departments: Mapping[int, str | None]
+    employee_wage_types: Mapping[int, str | None]
     attribution_rows: tuple[Mapping[str, object], ...]
     metered_locations: tuple[_ShadowMeteredLocation, ...]
     workday: bool
@@ -324,8 +325,8 @@ def _shadow_config_snapshot_cur(cur, day: date) -> _ShadowConfigSnapshot:
     )
     people = _config_rows_cur(
         cur,
-        "SELECT odoo_id, department_name FROM people "
-        "WHERE odoo_id IS NOT NULL AND department_name IS NOT NULL ORDER BY odoo_id",
+        "SELECT odoo_id, department_name, wage_type FROM people "
+        "WHERE odoo_id IS NOT NULL ORDER BY odoo_id",
     )
     global_rows = _config_rows_cur(
         cur,
@@ -366,6 +367,7 @@ def _shadow_config_snapshot_cur(cur, day: date) -> _ShadowConfigSnapshot:
             attendance_location_policy._normalized_department_name(  # noqa: SLF001
                 row.get("department_name")
             ),
+            str(row.get("wage_type") or "").strip().casefold() or None,
         )
         for row in people
     )
@@ -382,8 +384,8 @@ def _shadow_config_snapshot_cur(cur, day: date) -> _ShadowConfigSnapshot:
             departments,
             key=lambda row: str(row.get("name") or "").casefold(),
         ),
-        # Odoo ID + normalized department is the only person fallback truth.
-        "employee_departments": normalized_people,
+        # Odoo ID + normalized department and wage type are the only person fallback truth.
+        "employee_profiles": normalized_people,
         "global_schedule": global_rows,
         "saturday_schedule": saturday_rows,
     }
@@ -501,6 +503,10 @@ def _shadow_config_snapshot_cur(cur, day: date) -> _ShadowConfigSnapshot:
         )
         for row in people
     }
+    employee_wage_types = {
+        int(row["odoo_id"]): str(row.get("wage_type") or "").strip().casefold() or None
+        for row in people
+    }
     metered = tuple(
         _ShadowMeteredLocation(
             name=str(row["name"]),
@@ -518,6 +524,7 @@ def _shadow_config_snapshot_cur(cur, day: date) -> _ShadowConfigSnapshot:
         work_center_names=work_center_names,
         department_requirements=requirements,
         employee_departments=employee_departments,
+        employee_wage_types=employee_wage_types,
         attribution_rows=tuple(attribution_rows),
         metered_locations=metered,
         workday=workday,
@@ -558,6 +565,9 @@ def _project_shadow_snapshot(
                 None,
                 config.employee_departments.get(int(row["employee_odoo_id"])),
             )
+        row["employee_wage_type"] = config.employee_wage_types.get(
+            int(row["employee_odoo_id"])
+        )
         rows.append(row)
 
     def requires_work_center(department_name: str | None) -> bool:
@@ -674,26 +684,20 @@ def _timeline_metrics_cur(
             if row.get(field) is not None:
                 row[field] = _optional_utc(row[field])
 
-    missing_employee_ids = sorted(
-        {
-            int(row["employee_odoo_id"])
-            for row in rows
-            if not str(row.get("odoo_department_name") or "").strip()
-        }
-    )
-    home_by_id: dict[int, str | None] = {}
-    if missing_employee_ids:
+    employee_ids = sorted({int(row["employee_odoo_id"]) for row in rows})
+    home_by_id: dict[int, Mapping[str, object]] = {}
+    if employee_ids:
         cur.execute(
-            "SELECT odoo_id, department_name FROM people WHERE odoo_id = ANY(%s)",
-            (missing_employee_ids,),
+            "SELECT odoo_id, department_name, wage_type FROM people WHERE odoo_id = ANY(%s)",
+            (employee_ids,),
         )
-        home_by_id = {int(row["odoo_id"]): row.get("department_name") for row in cur.fetchall()}
+        home_by_id = {int(row["odoo_id"]): row for row in cur.fetchall()}
     for row in rows:
-        if str(row.get("odoo_department_name") or "").strip():
-            continue
+        profile = home_by_id.get(int(row["employee_odoo_id"]), {})
         row["odoo_department_name"] = attendance_location_policy.effective_department_name(
-            None, home_by_id.get(int(row["employee_odoo_id"]))
+            row.get("odoo_department_name"), profile.get("department_name")
         )
+        row["employee_wage_type"] = profile.get("wage_type") or None
 
     cur.execute(
         "SELECT odoo_work_center_id, name FROM work_centers "

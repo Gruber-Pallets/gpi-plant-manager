@@ -373,6 +373,17 @@ def test_shadow_config_digest_is_canonical_curated_and_privacy_safe():
     assert "published_snapshot" not in sql
 
 
+def test_shadow_config_digest_changes_when_employee_wage_type_changes():
+    before = _ShadowConfigCursor()
+    after = _ShadowConfigCursor()
+    after.sources["people"][1]["wage_type"] = "monthly"
+
+    assert (
+        attendance_readiness._shadow_config_digest_cur(before, DAY)
+        != attendance_readiness._shadow_config_digest_cur(after, DAY)
+    )
+
+
 def test_shadow_day_origin_binds_exact_testing_and_breakdown_rows():
     testing = {
         "id": 41,

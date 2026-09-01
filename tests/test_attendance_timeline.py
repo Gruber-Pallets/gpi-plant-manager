@@ -40,6 +40,7 @@ def row(
         "odoo_work_center_name": work_center_name,
         "odoo_department_id": department_id,
         "odoo_department_name": department_name,
+        "employee_wage_type": "hourly",
         "odoo_write_date": write_date,
     }
 
@@ -1004,6 +1005,57 @@ def test_timeline_for_range_normalizes_numbered_odoo_department_for_saved_policy
 
     assert seen_departments
     assert set(seen_departments) == {"Maintenance"}
+    assert spans == (expected_span(at(), at(minutes=10), "exempt_no_location"),)
+
+
+def test_timeline_for_range_uses_local_monthly_wage_type_for_missing_location(
+    monkeypatch,
+):
+    source = row(
+        check_out=at(minutes=10),
+        work_center_id=None,
+        work_center_name=None,
+        department_name="Production",
+    )
+    source.pop("employee_wage_type")
+    monkeypatch.setattr(
+        attendance_timeline.attendance_mirror,
+        "health_snapshot",
+        lambda: attendance_mirror.MirrorHealth(at(minutes=10), at(), at(), None, None),
+    )
+    monkeypatch.setattr(
+        attendance_timeline.attendance_mirror,
+        "rows_overlapping",
+        lambda _start, _end: (source,),
+    )
+    monkeypatch.setattr(
+        attendance_timeline,
+        "db",
+        type(
+            "MonthlyEmployeeDb",
+            (),
+            {
+                "query": staticmethod(
+                    lambda _sql, _params: [
+                        {
+                            "odoo_id": 41,
+                            "department_name": "Production",
+                            "wage_type": "monthly",
+                        }
+                    ]
+                )
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        attendance_timeline.attendance_location_policy,
+        "department_requires_work_center",
+        lambda _name: True,
+    )
+
+    spans = attendance_timeline.timeline_for_range(at(), at(minutes=10), as_of_utc=at(minutes=10))
+
     assert spans == (expected_span(at(), at(minutes=10), "exempt_no_location"),)
 
 
