@@ -46,6 +46,7 @@ def _deserialize_dt(s: str | None) -> datetime | None:
 def _serialize_total(total: StationTotal) -> dict:
     """StationTotal -> JSON-serializable dict."""
     return {
+        "payload_version": 2,
         "station": {
             "meter_id": total.station.meter_id,
             "name": total.station.name,
@@ -62,6 +63,10 @@ def _serialize_total(total: StationTotal) -> dict:
         "samples": [[_serialize_dt(s[0]), s[1]] for s in total.samples],
         "active_intervals": [
             [_serialize_dt(a), _serialize_dt(b)] for a, b in total.active_intervals
+        ],
+        "downtime_intervals": [
+            [_serialize_dt(start), _serialize_dt(end)]
+            for start, end in total.downtime_intervals
         ],
     }
 
@@ -90,6 +95,10 @@ def _deserialize_total(payload: dict) -> StationTotal:
         active_intervals=tuple(
             (_deserialize_dt(a), _deserialize_dt(b))
             for a, b in payload.get("active_intervals", [])
+        ),
+        downtime_intervals=tuple(
+            (_deserialize_dt(start), _deserialize_dt(end))
+            for start, end in payload.get("downtime_intervals", [])
         ),
     )
 
@@ -124,6 +133,12 @@ def load_day(stations: list[Station], day: date) -> list[StationTotal] | None:
         # returns a string (some configurations), parse it.
         if isinstance(payload, str):
             payload = json.loads(payload)
+        try:
+            payload_version = int(payload.get("payload_version", 1))
+        except (TypeError, ValueError):
+            return None
+        if payload_version < 2:
+            return None
         totals.append(_deserialize_total(payload))
     totals.sort(key=lambda r: (-r.units, r.station.name))
     return totals

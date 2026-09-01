@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from zira_dashboard import _zira_persist
 from zira_dashboard.leaderboard import StationTotal
@@ -39,6 +39,48 @@ def test_serialize_then_deserialize_round_trips():
     assert restored.last_status == original.last_status
     assert restored.samples == original.samples
     assert restored.active_intervals == original.active_intervals
+    assert restored.downtime_intervals == original.downtime_intervals
+
+
+def test_version_two_round_trip_preserves_exact_downtime_intervals():
+    start = datetime(2026, 4, 30, 14, 5, tzinfo=timezone.utc)
+    original = _make_total()
+    original = StationTotal(
+        station=original.station,
+        units=original.units,
+        reading_count=original.reading_count,
+        truncated=original.truncated,
+        downtime_minutes=original.downtime_minutes,
+        active_minutes=original.active_minutes,
+        last_reading_at=original.last_reading_at,
+        last_status=original.last_status,
+        samples=original.samples,
+        active_intervals=original.active_intervals,
+        downtime_intervals=((start, start + timedelta(minutes=15)),),
+    )
+
+    payload = _zira_persist._serialize_total(original)
+    restored = _zira_persist._deserialize_total(payload)
+
+    assert payload["payload_version"] == 2
+    assert restored.downtime_intervals == original.downtime_intervals
+
+
+def test_load_day_rejects_old_aggregate_only_payload(monkeypatch):
+    station = Station("m1", "Repair 1", "Repair", "Recycling")
+    payload = _zira_persist._serialize_total(_make_total())
+    payload.pop("payload_version")
+    payload.pop("downtime_intervals")
+
+    from zira_dashboard import db
+
+    monkeypatch.setattr(
+        db,
+        "query",
+        lambda *_args, **_kwargs: [{"meter_id": station.meter_id, "payload": payload}],
+    )
+
+    assert _zira_persist.load_day([station], date(2026, 4, 30)) is None
 
 
 def test_serialize_handles_none_dt_fields():
