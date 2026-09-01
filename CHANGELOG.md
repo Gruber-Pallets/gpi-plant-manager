@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Plan current production at a glance
+
+- **A step-by-step plan is ready to show each measured worker's current production next to their current goal.** Nothing in the app has changed yet.
+
 ### Keep exact hover details dependable
 
 - **Exact production details now stay safe when a work bar closes, starts between minutes, or contains an unusable number.** The People page keeps your selected moment when it can and avoids showing a made-up value.
