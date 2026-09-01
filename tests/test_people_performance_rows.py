@@ -66,6 +66,57 @@ def test_fixed_section_order_and_needs_attention_sort_are_stable():
     ]
 
 
+def test_trim_saw_rows_sort_after_every_other_metered_row():
+    model = _assemble(
+        spans=(
+            span(80, "Trim Behind", 0, 480, "Trim Saw 1"),
+            span(81, "Repair Ahead", 0, 480, "Repair 1"),
+            span(82, "Trim Ahead", 0, 480, "Trim Saw 2"),
+            span(83, "Repair Behind", 0, 480, "Repair 1"),
+        ),
+        scores=(
+            score(80, "Trim Behind", "Trim Saw 1", 0, 480, 50, 100),
+            score(81, "Repair Ahead", "Repair 1", 0, 480, 110, 100),
+            score(82, "Trim Ahead", "Trim Saw 2", 0, 480, 110, 100),
+            score(83, "Repair Behind", "Repair 1", 0, 480, 50, 100),
+        ),
+        downtime_by_wc={"Repair 1": (), "Trim Saw 1": (), "Trim Saw 2": ()},
+        metered_wc_names={"Repair 1", "Trim Saw 1", "Trim Saw 2"},
+    )
+
+    assert [row.person_name for row in model.rows] == [
+        "Repair Behind",
+        "Repair Ahead",
+        "Trim Behind",
+        "Trim Ahead",
+    ]
+    assert all(row.section == "production" for row in model.rows)
+
+
+def test_final_work_center_owns_trim_saw_subgroup_after_transfer():
+    model = _assemble(
+        spans=(
+            span(84, "Moved To Repair", 0, 60, "Trim Saw 1"),
+            span(84, "Moved To Repair", 60, 480, "Repair 1"),
+            span(85, "Still Trim", 0, 480, "Trim Saw 1"),
+        ),
+        scores=(
+            score(84, "Moved To Repair", "Trim Saw 1", 0, 60, 5, 10),
+            score(84, "Moved To Repair", "Repair 1", 60, 480, 50, 100),
+            score(85, "Still Trim", "Trim Saw 1", 0, 480, 50, 100),
+        ),
+        downtime_by_wc={"Repair 1": (), "Trim Saw 1": ()},
+        metered_wc_names={"Repair 1", "Trim Saw 1"},
+    )
+
+    assert [row.person_name for row in model.rows] == [
+        "Moved To Repair",
+        "Still Trim",
+    ]
+    assert model.rows[0].intervals[-1].location_name == "Repair 1"
+    assert model.rows[1].intervals[-1].location_name == "Trim Saw 1"
+
+
 def test_same_location_across_lunch_does_not_create_transfer():
     lunch = BreakSpan(
         START + timedelta(minutes=60),

@@ -353,6 +353,14 @@ _SECTION_RANK: dict[SectionKey, int] = {
     "forklift": 1,
     "other": 2,
 }
+
+
+def _production_subgroup_rank(role: RoleKey, location_name: str) -> int:
+    if role == "production" and location_name.casefold().startswith("trim saw"):
+        return 1
+    return 0
+
+
 _LOCATION_STATUS = {
     "pending_first_location": "location pending",
     "missing_required_location": "location missing",
@@ -896,6 +904,7 @@ def _assemble_person_row(
         rolling_tiebreak = 0.0
     sort_key = (
         _SECTION_RANK[final_role],
+        _production_subgroup_rank(final_role, final_interval.location_name),
         attention_rank,
         -deficit,
         rolling_tiebreak,
