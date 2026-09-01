@@ -4,7 +4,7 @@
 
 **Goal:** Exempt Odoo Fixed Wage (`monthly`) employees from no-work-center attendance alerts while preserving any real Odoo work-center span for production and staffing.
 
-**Architecture:** Keep wage type as local Odoo employee truth in `people`. Enrich mirrored attendance rows with that value before projection and add an optional employee-aware requirement callback to the timeline. Existing department-only callback users retain their current behavior; local attendance consumers opt into the salary rule. Bind wage type into the shadow comparison’s local configuration digest so a salary-status change invalidates prior clean evidence.
+**Architecture:** Keep wage type as local Odoo employee truth in `people`. Enrich mirrored attendance rows with that value before projection, then make the shared timeline exempt only a `monthly` employee in its missing-work-center branch. Existing department-only callback users therefore inherit the rule without bespoke caller logic. Bind wage type into the shadow comparison’s local configuration digest so a salary-status change invalidates prior clean evidence.
 
 **Tech Stack:** Python 3.12, PostgreSQL-local reads, pytest, Ruff.
 
@@ -26,8 +26,8 @@
 
 **Interfaces:**
 - Consumes: normalized attendance rows with optional `employee_wage_type` text supplied from local `people` records.
-- Produces: `project_rows(..., employee_requires_work_center=...)`, where the optional callback receives `(employee_odoo_id: int, department_name: str | None, wage_type: str | None)` and returns `bool`.
-- Preserves: `requires_work_center(department_name)` remains required and is the default when the new callback is omitted.
+- Produces: `project_rows(...)` applies the salary exemption from each optional `employee_wage_type` source field.
+- Preserves: `requires_work_center(department_name)` remains the department policy for hourly, absent, and unknown wage types.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -36,10 +36,7 @@ def test_monthly_employee_without_location_is_exempt_even_in_required_department
     source = row(work_center_id=None, work_center_name=None)
     source["employee_wage_type"] = "monthly"
 
-    spans = project(
-        [source],
-        employee_requires=lambda _id, _department, wage: wage != "monthly",
-    )
+    spans = project([source])
 
     assert [span.status for span in spans] == ["exempt_no_location"]
 
@@ -49,10 +46,7 @@ def test_non_monthly_employee_without_location_remains_required(wage_type):
     source = row(work_center_id=None, work_center_name=None)
     source["employee_wage_type"] = wage_type
 
-    spans = project(
-        [source],
-        employee_requires=lambda _id, _department, wage: wage != "monthly",
-    )
+    spans = project([source])
 
     assert [span.status for span in spans] == ["missing_required_location"]
 
@@ -61,10 +55,7 @@ def test_monthly_employee_mapped_location_remains_valid():
     source = row()
     source["employee_wage_type"] = "monthly"
 
-    spans = project(
-        [source],
-        employee_requires=lambda _id, _department, wage: wage != "monthly",
-    )
+    spans = project([source])
 
     assert [span.status for span in spans] == ["valid"]
 ```
@@ -73,7 +64,7 @@ def test_monthly_employee_mapped_location_remains_valid():
 
 Run: `.venv/bin/python -m pytest tests/test_attendance_timeline.py -q`
 
-Expected: FAIL because `project()` and `project_rows()` do not yet accept `employee_requires` / `employee_requires_work_center` and no wage value reaches the projection.
+Expected: FAIL because no wage value reaches the projection and a `monthly` row still produces the existing missing-location status.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -84,20 +75,16 @@ class _SourceRow:
     wage_type: str | None
 
 
-def _employee_requirement(
+def _requires_work_center(
     source: _SourceRow,
-    *,
     department_requirement: Callable[[str | None], bool],
-    employee_requirement: Callable[[int, str | None, str | None], bool] | None,
 ) -> bool:
-    if employee_requirement is None:
-        return _validated_requirement(department_requirement(source.department_name))
-    return _validated_requirement(
-        employee_requirement(source.employee_id, source.department_name, source.wage_type)
-    )
+    if source.wage_type == "monthly":
+        return False
+    return _validated_requirement(department_requirement(source.department_name))
 ```
 
-Use `_employee_requirement(...)` only in the no-work-center branch. Extend `_source_row()` to accept optional `employee_wage_type` text without adding it to `_ROW_FIELDS`, so existing callers remain compatible. Thread the optional callback through `project_rows()` and `_project_employee()`.
+Use `_requires_work_center(...)` only in the no-work-center branch. Extend `_source_row()` to accept optional `employee_wage_type` text without adding it to `_ROW_FIELDS`, so existing callers remain compatible. Keep `project_rows()` and its department-policy callback API unchanged, making every existing consumer share the rule once its local rows are enriched.
 
 - [ ] **Step 4: Run test to verify GREEN**
 
@@ -161,15 +148,9 @@ home_rows = db.query(
     (employee_ids,),
 )
 
-def _employee_requires_work_center(
-    _employee_id: int, department_name: str | None, wage_type: str | None
-) -> bool:
-    if wage_type == "monthly":
-        return False
-    return _department_requires_work_center_for_mirror(department_name)
 ```
 
-Rename the fallback helper if necessary so it enriches every row with both the existing effective department and `employee_wage_type`. Use it from `timeline_for_range()` and existing local consumers. In readiness, select the same wage type, enrich its detached rows, use the employee callback, and include `(odoo_id, normalized_department, normalized_wage_type)` in the canonical global shadow digest and snapshot mapping.
+Rename the fallback helper if necessary so it enriches every row with both the existing effective department and `employee_wage_type`. Use it from `timeline_for_range()` and existing local consumers. In readiness, select the same wage type, enrich its detached rows, and include `(odoo_id, normalized_department, normalized_wage_type)` in the canonical global shadow digest and snapshot mapping.
 
 - [ ] **Step 4: Run tests to verify GREEN**
 
@@ -250,5 +231,4 @@ Run the local readiness CLI and production health check after the deployment. Co
 
 - Spec coverage: Task 1 implements the employee-level missing-location rule and preserves mapped spans. Task 2 uses the local Odoo wage type in both normal and shadow/readiness projections and invalidates stale evidence. Task 3 proves shared consumers, documents the user-facing change, and verifies deployment without activating rollout.
 - Placeholder scan: no implementation placeholders remain; every code task gives the intended API, test behavior, command, and expected outcome.
-- Type consistency: `employee_requires_work_center(employee_odoo_id, department_name, wage_type) -> bool` is introduced only as an optional `project_rows` dependency, so existing department-only callers remain valid.
-
+- Type consistency: optional `employee_wage_type` is carried by normalized source rows; `project_rows` retains its existing department-policy callback signature, so all existing callers remain valid.
