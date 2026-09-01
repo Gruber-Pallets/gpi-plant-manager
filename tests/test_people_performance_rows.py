@@ -137,6 +137,40 @@ def test_production_summary_shows_current_units_against_goal_across_transfers():
     )
 
 
+def test_production_summary_hides_all_values_when_one_interval_is_non_finite(monkeypatch):
+    original = people_performance.production_metric
+
+    def metric_with_non_finite_interval(segment_score, **kwargs):
+        metric = original(segment_score, **kwargs)
+        if segment_score.wc_name == "Repair 2":
+            return replace(metric, actual_units=float("nan"))
+        return metric
+
+    monkeypatch.setattr(
+        people_performance,
+        "production_metric",
+        metric_with_non_finite_interval,
+    )
+    model = _assemble(
+        spans=(
+            span(87, "Invalid Total", 0, 60, "Repair 1"),
+            span(87, "Invalid Total", 60, 120, "Repair 2"),
+        ),
+        scores=(
+            score(87, "Invalid Total", "Repair 1", 0, 60, 10, 10),
+            score(87, "Invalid Total", "Repair 2", 60, 120, 20, 20),
+        ),
+        downtime_by_wc={"Repair 1": (), "Repair 2": ()},
+    )
+
+    assert model.rows[0].summary == (
+        ("Goal", "N/A"),
+        ("Uptime", "N/A"),
+        ("Downtime", "N/A"),
+        ("Production", "N/A"),
+    )
+
+
 def test_same_location_across_lunch_does_not_create_transfer():
     lunch = BreakSpan(
         START + timedelta(minutes=60),

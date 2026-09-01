@@ -795,7 +795,7 @@ def _production_summary(
     ]
     complete = bool(production_intervals) and all(
         item.metric_available and item.production is not None for item in production_intervals
-    )
+    ) and all(_scoreable_production_totals((metric,)) is not None for metric in metrics)
     totals = _scoreable_production_totals(metrics)
     if complete and totals is not None:
         goal_pct, uptime_pct, downtime_minutes = weighted_production_summary(metrics)
