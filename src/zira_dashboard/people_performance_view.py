@@ -49,22 +49,29 @@ def _schedule_markers(model: DashboardModel) -> tuple[dict, ...]:
         *((item.start_utc, "break", f"{item.label} starts") for item in model.breaks),
         (model.window_end_utc, "end", "Shift ends"),
     ]
+    clamped_candidates = [
+        (
+            min(max(value, model.window_start_utc), model.window_end_utc),
+            kind,
+            description,
+        )
+        for value, kind, description in candidates
+    ]
     markers = []
     seen = set()
     for value, kind, description in sorted(
-        candidates,
+        clamped_candidates,
         key=lambda item: (item[0], item[1] == "break"),
     ):
-        clamped = min(max(value, model.window_start_utc), model.window_end_utc)
-        if clamped in seen:
+        if value in seen:
             continue
-        seen.add(clamped)
-        full_time = _time(clamped)
+        seen.add(value)
+        full_time = _time(value)
         markers.append(
             {
-                "left_pct": _pct(clamped, model.window_start_utc, model.window_end_utc),
+                "left_pct": _pct(value, model.window_start_utc, model.window_end_utc),
                 "kind": kind,
-                "visible_label": full_time if kind != "break" else _break_time(clamped),
+                "visible_label": full_time if kind != "break" else _break_time(value),
                 "aria_label": f"{description} at {full_time}",
             }
         )

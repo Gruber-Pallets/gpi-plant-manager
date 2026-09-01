@@ -80,6 +80,32 @@ def test_schedule_markers_deduplicate_equal_break_and_shift_end_times():
     assert context["schedule_time_groups"][-1]["edge"] == "end"
 
 
+def test_schedule_markers_keep_shift_boundaries_for_out_of_window_breaks():
+    model = replace(
+        busy_dashboard_model(),
+        breaks=(
+            BreakSpan(
+                START - timedelta(minutes=15),
+                START - timedelta(minutes=5),
+                "Early break",
+            ),
+            BreakSpan(
+                END + timedelta(minutes=5),
+                END + timedelta(minutes=15),
+                "Late break",
+            ),
+        ),
+    )
+
+    context = dashboard_context(model)
+
+    assert [item["kind"] for item in context["schedule_markers"]] == ["start", "end"]
+    assert [item["aria_label"] for item in context["schedule_markers"]] == [
+        "Shift starts at 6:00 AM",
+        "Shift ends at 2:00 PM",
+    ]
+
+
 def test_schedule_without_breaks_has_only_shift_boundaries():
     context = dashboard_context(replace(busy_dashboard_model(), breaks=()))
 
