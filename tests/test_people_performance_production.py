@@ -332,7 +332,8 @@ def test_production_hover_points_use_real_samples_adjusted_goal_and_latest_uptim
 
     assert at_30.actual_units == pytest.approx(10.0)
     assert at_30.goal_units == pytest.approx(20.0)
-    assert at_30.uptime_pct == pytest.approx(75.0)
+    assert metric.rolling_uptime[6].value_pct == pytest.approx(50.0)
+    assert at_30.uptime_pct == pytest.approx(50.0)
     assert at_15.goal_units == pytest.approx(10.0)
     assert at_15.uptime_pct is None
     assert metric.hover_points[-1].actual_units == pytest.approx(metric.actual_units)

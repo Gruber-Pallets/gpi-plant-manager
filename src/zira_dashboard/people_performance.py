@@ -256,7 +256,6 @@ def _rolling_point(
     available: Sequence[TimeWindow],
     downtime: Sequence[TimeWindow],
     window: timedelta,
-    bridge_unavailable_gaps: bool = False,
 ) -> RollingPoint:
     current_window = next(
         (
@@ -266,13 +265,7 @@ def _rolling_point(
         ),
         None,
     )
-    window_start = (
-        max(available[0][0], at_utc - window)
-        if current_window and bridge_unavailable_gaps
-        else max(current_window[0], at_utc - window)
-        if current_window
-        else at_utc
-    )
+    window_start = max(current_window[0], at_utc - window) if current_window else at_utc
     denominator = _intersection_minutes(window_start, at_utc, available)
     if current_window is None or denominator <= 0:
         value = None
@@ -290,9 +283,8 @@ def rolling_uptime_points(
     downtime_windows: Sequence[TimeWindow],
     step: timedelta = timedelta(minutes=5),
     window: timedelta = timedelta(minutes=30),
-    bridge_unavailable_gaps: bool = False,
 ) -> tuple[RollingPoint, ...]:
-    """Calculate rolling uptime, resetting across unavailable gaps by default."""
+    """Calculate a rolling uptime series without bridging unavailable gaps."""
     if step <= timedelta(0):
         raise ValueError("step must be positive")
     if window <= timedelta(0):
@@ -311,7 +303,6 @@ def rolling_uptime_points(
                 available=available,
                 downtime=downtime,
                 window=window,
-                bridge_unavailable_gaps=bridge_unavailable_gaps,
             )
         )
         at += step
@@ -323,7 +314,6 @@ def rolling_uptime_points(
                 available=available,
                 downtime=downtime,
                 window=window,
-                bridge_unavailable_gaps=bridge_unavailable_gaps,
             )
         )
     return tuple(points)
@@ -385,7 +375,6 @@ def production_metric(
         end_utc=score.end_utc,
         available_windows=available,
         downtime_windows=eligible_stops,
-        bridge_unavailable_gaps=True,
     )
     hover_points = _production_hover_points(
         score,
