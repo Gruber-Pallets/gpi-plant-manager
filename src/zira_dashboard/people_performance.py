@@ -37,6 +37,14 @@ class RollingPoint:
 
 
 @dataclass(frozen=True)
+class ProductionHoverPoint:
+    at_utc: datetime
+    actual_units: float
+    goal_units: float
+    uptime_pct: float | None
+
+
+@dataclass(frozen=True)
 class ProductionMetric:
     actual_units: float
     goal_units: float
@@ -44,6 +52,7 @@ class ProductionMetric:
     downtime_minutes: float
     result: MetricState
     rolling_uptime: tuple[RollingPoint, ...]
+    hover_points: tuple[ProductionHoverPoint, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -145,6 +154,70 @@ def _intersection_minutes(
     )
 
 
+def _minute_points(start_utc: datetime, end_utc: datetime) -> tuple[datetime, ...]:
+    values = [start_utc]
+    cursor = start_utc.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    while cursor < end_utc:
+        values.append(cursor)
+        cursor += timedelta(minutes=1)
+    if values[-1] != end_utc:
+        values.append(end_utc)
+    return tuple(values)
+
+
+def _production_hover_points(
+    score: SegmentScore,
+    *,
+    available_windows: Sequence[TimeWindow],
+    rolling_uptime: Sequence[RollingPoint],
+) -> tuple[ProductionHoverPoint, ...]:
+    credited = tuple(sorted(score.unit_points, key=lambda point: point.at_utc))
+    if any(
+        not _is_finite_number(point.units)
+        or point.units < 0
+        or not isinstance(point.at_utc, datetime)
+        or point.at_utc.utcoffset() is None
+        or point.at_utc < score.start_utc
+        or point.at_utc >= score.end_utc
+        for point in credited
+    ):
+        return ()
+    if abs(sum(point.units for point in credited) - score.actual_units) > 1e-6:
+        return ()
+    available_minutes = _intersection_minutes(
+        score.start_utc, score.end_utc, available_windows
+    )
+    if available_minutes <= 0:
+        return ()
+    rate = score.goal_units / available_minutes
+    values = []
+    for at_utc in _minute_points(score.start_utc, score.end_utc):
+        actual = sum(point.units for point in credited if point.at_utc <= at_utc)
+        elapsed = _intersection_minutes(score.start_utc, at_utc, available_windows)
+        is_available = any(left < at_utc <= right for left, right in available_windows)
+        uptime = (
+            next(
+                (
+                    point.value_pct
+                    for point in reversed(rolling_uptime)
+                    if point.at_utc <= at_utc
+                ),
+                None,
+            )
+            if is_available
+            else None
+        )
+        values.append(
+            ProductionHoverPoint(
+                at_utc,
+                actual,
+                min(score.goal_units, rate * elapsed),
+                uptime,
+            )
+        )
+    return tuple(values)
+
+
 def _merge_windows(windows: Sequence[TimeWindow]) -> tuple[TimeWindow, ...]:
     merged: list[list[datetime]] = []
     for start, end in sorted((left, right) for left, right in windows if right > left):
@@ -183,6 +256,7 @@ def _rolling_point(
     available: Sequence[TimeWindow],
     downtime: Sequence[TimeWindow],
     window: timedelta,
+    bridge_unavailable_gaps: bool = False,
 ) -> RollingPoint:
     current_window = next(
         (
@@ -192,7 +266,13 @@ def _rolling_point(
         ),
         None,
     )
-    window_start = max(current_window[0], at_utc - window) if current_window else at_utc
+    window_start = (
+        max(available[0][0], at_utc - window)
+        if current_window and bridge_unavailable_gaps
+        else max(current_window[0], at_utc - window)
+        if current_window
+        else at_utc
+    )
     denominator = _intersection_minutes(window_start, at_utc, available)
     if current_window is None or denominator <= 0:
         value = None
@@ -210,8 +290,9 @@ def rolling_uptime_points(
     downtime_windows: Sequence[TimeWindow],
     step: timedelta = timedelta(minutes=5),
     window: timedelta = timedelta(minutes=30),
+    bridge_unavailable_gaps: bool = False,
 ) -> tuple[RollingPoint, ...]:
-    """Calculate a rolling uptime series without bridging unavailable gaps."""
+    """Calculate rolling uptime, resetting across unavailable gaps by default."""
     if step <= timedelta(0):
         raise ValueError("step must be positive")
     if window <= timedelta(0):
@@ -230,6 +311,7 @@ def rolling_uptime_points(
                 available=available,
                 downtime=downtime,
                 window=window,
+                bridge_unavailable_gaps=bridge_unavailable_gaps,
             )
         )
         at += step
@@ -241,6 +323,7 @@ def rolling_uptime_points(
                 available=available,
                 downtime=downtime,
                 window=window,
+                bridge_unavailable_gaps=bridge_unavailable_gaps,
             )
         )
     return tuple(points)
@@ -297,19 +380,67 @@ def production_metric(
     if not _is_finite_number(downtime):
         return _unavailable_metric(score)
     state: MetricState = "ahead" if score.actual_units >= score.goal_units else "behind"
+    rolling_uptime = rolling_uptime_points(
+        start_utc=score.start_utc,
+        end_utc=score.end_utc,
+        available_windows=available,
+        downtime_windows=eligible_stops,
+        bridge_unavailable_gaps=True,
+    )
+    hover_points = _production_hover_points(
+        score,
+        available_windows=available,
+        rolling_uptime=rolling_uptime,
+    )
     return ProductionMetric(
         actual_units=score.actual_units,
         goal_units=score.goal_units,
         productive_minutes=available_minutes,
         downtime_minutes=downtime,
         result=state,
-        rolling_uptime=rolling_uptime_points(
-            start_utc=score.start_utc,
-            end_utc=score.end_utc,
-            available_windows=available,
-            downtime_windows=eligible_stops,
-        ),
+        rolling_uptime=rolling_uptime,
+        hover_points=hover_points,
     )
+
+
+def cumulative_production_hover_points(
+    intervals: Sequence[TimelineInterval],
+) -> dict[str, tuple[ProductionHoverPoint, ...]]:
+    production_keys = [
+        interval.key for interval in intervals if interval.role == "production"
+    ]
+    if len(set(production_keys)) != len(production_keys):
+        raise ValueError("production interval keys must be unique")
+    actual_base = 0.0
+    goal_base = 0.0
+    trusted = True
+    result = {}
+    for interval in intervals:
+        if interval.role != "production":
+            continue
+        metric = interval.production
+        if (
+            not trusted
+            or not interval.metric_available
+            or metric is None
+            or metric.result == "unavailable"
+            or not metric.hover_points
+        ):
+            trusted = False
+            result[interval.key] = ()
+            continue
+        result[interval.key] = tuple(
+            ProductionHoverPoint(
+                point.at_utc,
+                actual_base + point.actual_units,
+                goal_base + point.goal_units,
+                point.uptime_pct,
+            )
+            for point in metric.hover_points
+        )
+        actual_base += metric.actual_units
+        goal_base += metric.goal_units
+    return result
 
 
 def weighted_production_summary(

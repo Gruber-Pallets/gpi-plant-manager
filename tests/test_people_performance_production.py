@@ -6,12 +6,14 @@ import pytest
 
 from zira_dashboard.people_performance import (
     BreakSpan,
+    TimelineInterval,
+    cumulative_production_hover_points,
     production_metric,
     productive_windows,
     rolling_uptime_points,
     weighted_production_summary,
 )
-from zira_dashboard.production_segments import SegmentScore
+from zira_dashboard.production_segments import CreditedUnitPoint, SegmentScore
 
 
 START = datetime(2026, 8, 28, 11, 0, tzinfo=UTC)
@@ -294,3 +296,143 @@ def test_weighted_summary_fails_closed_when_finite_values_overflow_aggregate():
     second = production_metric(_score(1e308, 5), downtime_windows=(), breaks=())
 
     assert weighted_production_summary((first, second)) == (None, None, 0.0)
+
+
+def test_production_hover_points_use_real_samples_adjusted_goal_and_latest_uptime():
+    score = replace(
+        _score(10, 50),
+        productive_minutes=50,
+        unit_points=(
+            CreditedUnitPoint(START + timedelta(minutes=5), 6),
+            CreditedUnitPoint(START + timedelta(minutes=25), 4),
+        ),
+    )
+
+    metric = production_metric(
+        score,
+        downtime_windows=((START + timedelta(minutes=25), START + timedelta(minutes=30)),),
+        breaks=(
+            BreakSpan(
+                START + timedelta(minutes=10),
+                START + timedelta(minutes=20),
+                "Break",
+            ),
+        ),
+    )
+    at_30 = next(
+        point
+        for point in metric.hover_points
+        if point.at_utc == START + timedelta(minutes=30)
+    )
+    at_15 = next(
+        point
+        for point in metric.hover_points
+        if point.at_utc == START + timedelta(minutes=15)
+    )
+
+    assert at_30.actual_units == pytest.approx(10.0)
+    assert at_30.goal_units == pytest.approx(20.0)
+    assert at_30.uptime_pct == pytest.approx(75.0)
+    assert at_15.goal_units == pytest.approx(10.0)
+    assert at_15.uptime_pct is None
+    assert metric.hover_points[-1].actual_units == pytest.approx(metric.actual_units)
+    assert metric.hover_points[-1].goal_units == pytest.approx(metric.goal_units)
+
+
+def test_cumulative_hover_points_continue_across_transfer_targets():
+    first_metric = production_metric(
+        replace(
+            _score(10, 30, START, START + timedelta(minutes=30)),
+            productive_minutes=30,
+            unit_points=(CreditedUnitPoint(START + timedelta(minutes=20), 10),),
+        ),
+        downtime_windows=(),
+        breaks=(),
+    )
+    second_score = SegmentScore(
+        segment_id=2,
+        wc_name="Dismantler 1",
+        person_name="Alex Worker",
+        start_utc=START + timedelta(minutes=30),
+        end_utc=START + timedelta(minutes=60),
+        source="odoo",
+        productive_minutes=30,
+        actual_units=5,
+        goal_units=20,
+        runway_units=20,
+        is_active=False,
+        result="behind",
+        person_odoo_id=44,
+        unit_points=(CreditedUnitPoint(START + timedelta(minutes=50), 5),),
+    )
+    second_metric = production_metric(second_score, downtime_windows=(), breaks=())
+    intervals = (
+        TimelineInterval(
+            "first",
+            START,
+            START + timedelta(minutes=30),
+            "Repair 1",
+            "valid",
+            "production",
+            False,
+            production=first_metric,
+        ),
+        TimelineInterval(
+            "second",
+            START + timedelta(minutes=30),
+            START + timedelta(minutes=60),
+            "Dismantler 1",
+            "valid",
+            "production",
+            True,
+            production=second_metric,
+        ),
+    )
+
+    cumulative = cumulative_production_hover_points(intervals)
+
+    assert cumulative["first"][-1].actual_units == pytest.approx(10.0)
+    assert cumulative["first"][-1].goal_units == pytest.approx(30.0)
+    assert cumulative["second"][-1].actual_units == pytest.approx(15.0)
+    assert cumulative["second"][-1].goal_units == pytest.approx(50.0)
+
+
+def test_untrusted_earlier_production_poison_later_cumulative_hover():
+    missing_points = production_metric(_score(10, 30), downtime_windows=(), breaks=())
+    valid = production_metric(
+        replace(
+            _score(5, 30, START + timedelta(hours=1), START + timedelta(hours=2)),
+            unit_points=(
+                CreditedUnitPoint(START + timedelta(hours=1, minutes=30), 5),
+            ),
+        ),
+        downtime_windows=(),
+        breaks=(),
+    )
+    intervals = (
+        TimelineInterval(
+            "missing",
+            START,
+            START + timedelta(hours=1),
+            "Repair 1",
+            "valid",
+            "production",
+            False,
+            production=missing_points,
+        ),
+        TimelineInterval(
+            "later",
+            START + timedelta(hours=1),
+            START + timedelta(hours=2),
+            "Repair 2",
+            "valid",
+            "production",
+            True,
+            production=valid,
+        ),
+    )
+
+    assert cumulative_production_hover_points(intervals) == {
+        "missing": (),
+        "later": (),
+    }

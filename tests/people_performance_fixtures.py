@@ -7,7 +7,7 @@ from zira_dashboard.people_performance import (
     ForkliftDayMetric,
     assemble_dashboard,
 )
-from zira_dashboard.production_segments import SegmentScore
+from zira_dashboard.production_segments import CreditedUnitPoint, SegmentScore
 
 
 DAY = date(2026, 8, 28)
@@ -40,14 +40,33 @@ def span(
     )
 
 
-def score(employee_id, name, wc, start_minute, end_minute, actual, goal):
+def score(
+    employee_id,
+    name,
+    wc,
+    start_minute,
+    end_minute,
+    actual,
+    goal,
+    *,
+    unit_points=None,
+):
+    start_utc = START + timedelta(minutes=start_minute)
+    end_utc = START + timedelta(minutes=end_minute)
+    points = (
+        (
+            CreditedUnitPoint(end_utc - timedelta(microseconds=1), actual),
+        )
+        if unit_points is None and actual > 0
+        else () if unit_points is None else tuple(unit_points)
+    )
     minutes = end_minute - start_minute
     return SegmentScore(
         segment_id=employee_id,
         wc_name=wc,
         person_name=name,
-        start_utc=START + timedelta(minutes=start_minute),
-        end_utc=START + timedelta(minutes=end_minute),
+        start_utc=start_utc,
+        end_utc=end_utc,
         source="odoo",
         productive_minutes=minutes,
         actual_units=actual,
@@ -56,6 +75,7 @@ def score(employee_id, name, wc, start_minute, end_minute, actual, goal):
         is_active=end_minute == 480,
         result="ahead" if actual >= goal else "behind",
         person_odoo_id=employee_id,
+        unit_points=points,
     )
 
 
