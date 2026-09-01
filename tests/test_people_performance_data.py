@@ -8,6 +8,7 @@ from zira_dashboard import people_performance_data as data
 from zira_dashboard.attendance_timeline import AttendanceTimelineSnapshot
 from zira_dashboard.forklift_event_store import ForkliftCompletionCoverage
 from zira_dashboard.leaderboard import StationTotal
+from zira_dashboard.people_performance import BreakSpan
 from zira_dashboard.production_segments import SegmentScore
 from zira_dashboard.stations import Station
 
@@ -19,6 +20,47 @@ CALENDAR_START = datetime.combine(
     DAY, datetime.min.time(), tzinfo=data.shift_config.SITE_TZ
 ).astimezone(UTC)
 CALENDAR_END = CALENDAR_START + timedelta(days=1)
+
+
+def test_dashboard_window_ends_at_renamed_trailing_break_start(monkeypatch):
+    midday = BreakSpan(
+        START + timedelta(hours=2),
+        START + timedelta(hours=2, minutes=15),
+        "Lunch",
+    )
+    wind_down = BreakSpan(
+        END - timedelta(minutes=15),
+        END,
+        "Put tools away",
+    )
+    monkeypatch.setattr(data, "_bounds", lambda day, now: (START, END, END, False))
+    monkeypatch.setattr(data, "_breaks", lambda day: (midday, wind_down))
+
+    start, end, cap, is_today, breaks = data._dashboard_window(DAY, END)
+
+    assert start == START
+    assert end == wind_down.start_utc
+    assert cap == wind_down.start_utc
+    assert is_today is False
+    assert breaks == (midday,)
+
+
+def test_dashboard_window_keeps_shift_end_without_valid_trailing_break(monkeypatch):
+    midday = BreakSpan(
+        START + timedelta(hours=2),
+        START + timedelta(hours=2, minutes=15),
+        "Lunch",
+    )
+    monkeypatch.setattr(data, "_bounds", lambda day, now: (START, END, END, False))
+    monkeypatch.setattr(data, "_breaks", lambda day: (midday,))
+
+    assert data._dashboard_window(DAY, END) == (
+        START,
+        END,
+        END,
+        False,
+        (midday,),
+    )
 
 
 def _attendance(spans, *, blockers=()):

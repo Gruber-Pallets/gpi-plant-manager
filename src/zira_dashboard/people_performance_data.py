@@ -93,6 +93,24 @@ def _breaks(day: date) -> tuple[BreakSpan, ...]:
     )
 
 
+def _dashboard_window(
+    day: date,
+    now_utc: datetime,
+) -> tuple[datetime, datetime, datetime, bool, tuple[BreakSpan, ...]]:
+    start, shift_end, cap, is_today = _bounds(day, now_utc)
+    breaks = _breaks(day)
+    trailing_starts = tuple(
+        item.start_utc
+        for item in breaks
+        if item.end_utc == shift_end and start < item.start_utc < shift_end
+    )
+    end = min(trailing_starts, default=shift_end)
+    visible_breaks = tuple(
+        item for item in breaks if item.start_utc < end and item.end_utc <= end
+    )
+    return start, end, min(cap, end), is_today, visible_breaks
+
+
 def _calendar_bounds(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=shift_config.SITE_TZ).astimezone(UTC)
     end = datetime.combine(
@@ -395,8 +413,7 @@ def load_dashboard(
 ) -> DashboardModel:
     """Load one day with independent attendance, production, and forklift health."""
     now = _aware_utc(_utc_now() if now_utc is None else now_utc, "now_utc")
-    start, end, cap, is_today = _bounds(day, now)
-    breaks = _breaks(day)
+    start, end, cap, is_today, breaks = _dashboard_window(day, now)
     attendance_future = _LOAD_POOL.submit(
         attendance_timeline.snapshot_for_range,
         start,
