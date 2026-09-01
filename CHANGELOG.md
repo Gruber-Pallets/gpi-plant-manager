@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Plan a simpler People page header
+
+- **A step-by-step plan is ready to put the People page totals, warnings, date, and filter in one thin bar.** It will also show only the workday start, break starts, and end above each group. Nothing in the app has changed yet.
+
 ### Keep the end of People work bars clear
 
 - **People work bars now stop when the last working time ends, before a cleanup break.** The final times also stay apart, so they are easy to read.
