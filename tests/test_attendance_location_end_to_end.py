@@ -217,8 +217,14 @@ class _JourneyOdoo:
         row = max(open_rows, key=lambda value: value["check_in_utc"])
         return {"id": row["odoo_attendance_id"]}
 
-    def clock_in(self, employee_id, _wc_name, at):
-        return self._new(employee_id, at, None, None)
+    def clock_in(self, employee_id, _wc_name, at, *, odoo_department_id=None):
+        return self._new(
+            employee_id,
+            at,
+            None,
+            None,
+            department_id=odoo_department_id or 8,
+        )
 
     def close_all_open_attendance_rows(self, employee_id, at):
         closed = []
