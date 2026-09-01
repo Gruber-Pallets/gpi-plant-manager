@@ -22,7 +22,7 @@ The first production number is the person's total credited units from the beginn
 
 The goal uses the target of each metered work center during the time the person worked there. Planned breaks and non-metered intervals add no goal. The calculation must use the same productive-time and goal rules as the existing interval score so the hover card cannot disagree with the bar or day summary at the same endpoint.
 
-`Uptime` is the existing rolling 30-minute uptime reading at the hovered moment, not cumulative day uptime. It uses the latest available five-minute rolling point at or before the selected minute.
+`Uptime` is the existing rolling 30-minute uptime reading at the hovered moment, not cumulative day uptime. It uses the latest five-minute rolling point at or before the selected minute. When the selected minute is inside a planned break or another interval with no uptime denominator, uptime is unavailable instead of carrying the earlier reading across that gap.
 
 Values display with one decimal place for production and goal and as a whole percentage for uptime.
 
