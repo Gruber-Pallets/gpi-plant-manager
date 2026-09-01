@@ -54,6 +54,7 @@ class _SourceRow:
     work_center_name: str | None
     department_id: int | None
     department_name: str | None
+    wage_type: str | None
     write_date: datetime
 
     def effective_end(self, as_of_utc: datetime) -> datetime:
@@ -151,6 +152,7 @@ def _source_row(raw: object) -> _SourceRow:
         work_center_name=_optional_text(raw["odoo_work_center_name"], "odoo_work_center_name"),
         department_id=_optional_positive_int(raw["odoo_department_id"], "odoo_department_id"),
         department_name=_optional_text(raw["odoo_department_name"], "odoo_department_name"),
+        wage_type=_optional_text(raw.get("employee_wage_type"), "employee_wage_type"),
         write_date=_aware_utc(raw["odoo_write_date"], "odoo_write_date"),
     )
 
@@ -208,6 +210,16 @@ def _validated_requirement(value: object) -> bool:
     if not isinstance(value, bool):
         raise TypeError("requires_work_center must return bool")
     return value
+
+
+def _requires_work_center(
+    source: _SourceRow,
+    department_requirement: Callable[[str | None], bool],
+) -> bool:
+    """Salaried Odoo employees need no location unless one is recorded."""
+    if source.wage_type == "monthly":
+        return False
+    return _validated_requirement(department_requirement(source.department_name))
 
 
 def _validated_expected_department(value: object) -> int | None:
@@ -456,7 +468,7 @@ def _project_employee(
         if not distinct_work_centers:
             day_state = day_states[left.astimezone(shift_config.SITE_TZ).date()]
             required = any(
-                _validated_requirement(requires_work_center(source.department_name))
+                _requires_work_center(source, requires_work_center)
                 for source in active
             )
             if not required:

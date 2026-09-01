@@ -751,6 +751,51 @@ def test_zero_grace_is_valid_and_produces_only_missing_required_location():
     assert spans == (expected_span(at(), at(minutes=1), "missing_required_location"),)
 
 
+def test_monthly_employee_without_location_is_exempt_in_required_department():
+    source = row(
+        check_out=at(minutes=1),
+        work_center_id=None,
+        work_center_name=None,
+    )
+    source["employee_wage_type"] = "monthly"
+
+    spans = project([source], grace=timedelta(0))
+
+    assert spans == (expected_span(at(), at(minutes=1), "exempt_no_location"),)
+
+
+@pytest.mark.parametrize("wage_type", ["hourly", None, "unexpected"])
+def test_nonmonthly_employee_without_location_remains_required(wage_type):
+    source = row(
+        check_out=at(minutes=1),
+        work_center_id=None,
+        work_center_name=None,
+    )
+    source["employee_wage_type"] = wage_type
+
+    spans = project([source], grace=timedelta(0))
+
+    assert spans == (expected_span(at(), at(minutes=1), "missing_required_location"),)
+
+
+def test_monthly_employee_with_mapped_location_remains_valid():
+    source = row(check_out=at(minutes=1))
+    source["employee_wage_type"] = "monthly"
+
+    spans = project([source])
+
+    assert spans == (
+        expected_span(
+            at(),
+            at(minutes=1),
+            "valid",
+            app_work_center_name="Repair 1",
+            odoo_work_center_id=71,
+            odoo_work_center_name="Odoo Repair One",
+        ),
+    )
+
+
 def test_dependency_results_are_runtime_validated():
     kwargs = {
         "as_of_utc": at(1),
