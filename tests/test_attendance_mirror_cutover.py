@@ -95,6 +95,8 @@ def test_complete_baseline_makes_shadow_and_live_read_only_the_mirror(monkeypatc
                 "check_in_utc": FIRST_IN,
                 "odoo_work_center_id": 8,
                 "odoo_work_center_name": "Luke Bay 8",
+                "odoo_department_id": 4,
+                "odoo_department_name": "Supervisor",
             },
         ),
     )
@@ -128,6 +130,8 @@ def test_complete_baseline_makes_shadow_and_live_read_only_the_mirror(monkeypatc
             "check_in": FIRST_IN.isoformat(),
             "wc_name": "Bay 8",
             "raw_odoo_wc_name": "Luke Bay 8",
+            "odoo_department_id": 4,
+            "odoo_department_name": "Supervisor",
         }
     }
 
@@ -1047,6 +1051,8 @@ def test_day_presence_and_current_open_queries_are_bounded(monkeypatch):
                 "check_in_utc": FIRST_IN,
                 "odoo_work_center_id": 8,
                 "odoo_work_center_name": "Luke Bay 8",
+                "odoo_department_id": 4,
+                "odoo_department_name": "Supervisor",
             }
         ]
 
@@ -1055,10 +1061,15 @@ def test_day_presence_and_current_open_queries_are_bounded(monkeypatch):
     assert attendance_mirror.day_presence(DAY) == {
         "5": {"first_check_in": FIRST_IN.isoformat(), "currently_open": True}
     }
-    assert attendance_mirror.current_open_attendance()[0]["odoo_attendance_id"] == 90
+    open_row = attendance_mirror.current_open_attendance()[0]
+    assert open_row["odoo_attendance_id"] == 90
+    assert open_row["odoo_department_id"] == 4
+    assert open_row["odoo_department_name"] == "Supervisor"
     assert "check_in_utc >= %s" in calls[0][0]
     assert "check_in_utc < %s" in calls[0][0]
     assert "check_out_utc IS NULL" in calls[1][0]
+    assert "odoo_department_id" in calls[1][0]
+    assert "odoo_department_name" in calls[1][0]
 
 
 def test_injected_policy_prevents_a_second_ownership_health_decision(monkeypatch):

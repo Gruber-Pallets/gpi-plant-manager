@@ -793,7 +793,8 @@ def current_open_attendance() -> tuple[dict[str, Any], ...]:
         _utc_database_row(row)
         for row in db.query(
             "SELECT odoo_attendance_id, employee_odoo_id, check_in_utc, "
-            "odoo_work_center_id, odoo_work_center_name "
+            "odoo_work_center_id, odoo_work_center_name, "
+            "odoo_department_id, odoo_department_name "
             "FROM odoo_attendance_mirror "
             "WHERE deleted_at IS NULL AND check_out_utc IS NULL "
             "ORDER BY employee_odoo_id, check_in_utc, odoo_attendance_id"

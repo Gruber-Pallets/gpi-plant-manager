@@ -234,6 +234,8 @@ def read_open_attendance_source(
                 "check_in": check_in.isoformat(),
                 "wc_name": mapped_wc,
                 "raw_odoo_wc_name": row.get("odoo_work_center_name"),
+                "odoo_department_id": row.get("odoo_department_id"),
+                "odoo_department_name": row.get("odoo_department_name"),
             }
             existing = snapshot.get(person_id)
             candidate_key = (check_in, attendance_id)
@@ -279,6 +281,8 @@ def refresh_odoo_open_attendance() -> None:
                 "att_id": row["att_id"],
                 "check_in": row["check_in"],
                 "wc_name": row["wc_name"],
+                "odoo_department_id": row.get("odoo_department_id"),
+                "odoo_department_name": row.get("odoo_department_name"),
             }
             existing = snapshot.get(person_id)
             candidate_key = (str(candidate["check_in"] or ""), int(candidate["att_id"] or 0))

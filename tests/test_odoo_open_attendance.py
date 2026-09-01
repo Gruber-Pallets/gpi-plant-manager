@@ -15,6 +15,7 @@ from zira_dashboard import odoo_client
 
 def test_fetch_open_attendances_maps_rows(monkeypatch):
     monkeypatch.setenv("ODOO_KIOSK_WC_FIELD", "x_studio_work_center")
+    monkeypatch.setenv("ODOO_KIOSK_DEPARTMENT_FIELD", "x_kiosk_department_id")
     monkeypatch.setattr(
         "zira_dashboard.work_centers_store._odoo_work_center_maps",
         lambda: ({}, {41: "Repair 1"}),
@@ -22,9 +23,11 @@ def test_fetch_open_attendances_maps_rows(monkeypatch):
     fake = MagicMock(return_value=[
         {"id": 88, "employee_id": [5, "Bob"],
          "check_in": "2026-06-01 11:02:00",
-         "x_studio_work_center": [41, "Repair #1"]},
+         "x_studio_work_center": [41, "Repair #1"],
+         "x_kiosk_department_id": [4, "Supervisor"]},
         {"id": 90, "employee_id": [7, "Al"],
-         "check_in": "2026-06-01 12:15:00", "x_studio_work_center": False},
+         "check_in": "2026-06-01 12:15:00", "x_studio_work_center": False,
+         "x_kiosk_department_id": False},
     ])
     monkeypatch.setattr(odoo_client, "execute", fake)
 
@@ -35,12 +38,15 @@ def test_fetch_open_attendances_maps_rows(monkeypatch):
     assert args[0] == "hr.attendance" and args[1] == "search_read"
     assert ("check_out", "=", False) in args[2]
     assert "x_studio_work_center" in kwargs["fields"]
+    assert "x_kiosk_department_id" in kwargs["fields"]
 
     assert out == [
         {"att_id": 88, "employee_odoo_id": 5,
-         "check_in": "2026-06-01T11:02:00+00:00", "wc_name": "Repair 1"},
+         "check_in": "2026-06-01T11:02:00+00:00", "wc_name": "Repair 1",
+         "odoo_department_id": 4, "odoo_department_name": "Supervisor"},
         {"att_id": 90, "employee_odoo_id": 7,
-         "check_in": "2026-06-01T12:15:00+00:00", "wc_name": None},
+         "check_in": "2026-06-01T12:15:00+00:00", "wc_name": None,
+         "odoo_department_id": None, "odoo_department_name": None},
     ]
 
 
@@ -80,6 +86,7 @@ def test_open_attendance_omits_malformed_odoo_work_center_values(monkeypatch, od
 
 def test_fetch_open_attendances_no_wc_field(monkeypatch):
     monkeypatch.delenv("ODOO_KIOSK_WC_FIELD", raising=False)
+    monkeypatch.delenv("ODOO_KIOSK_DEPARTMENT_FIELD", raising=False)
     fake = MagicMock(return_value=[
         {"id": 88, "employee_id": [5, "Bob"], "check_in": "2026-06-01 11:02:00"},
     ])
@@ -90,7 +97,8 @@ def test_fetch_open_attendances_no_wc_field(monkeypatch):
     _args, kwargs = fake.call_args
     assert kwargs["fields"] == ["id", "employee_id", "check_in"]
     assert out == [{"att_id": 88, "employee_odoo_id": 5,
-                    "check_in": "2026-06-01T11:02:00+00:00", "wc_name": None}]
+                    "check_in": "2026-06-01T11:02:00+00:00", "wc_name": None,
+                    "odoo_department_id": None, "odoo_department_name": None}]
 
 
 def test_odoo_dt_to_iso_parses_naive_utc():
@@ -362,9 +370,11 @@ def test_refresh_builds_keyed_snapshot(monkeypatch):
         "zira_dashboard.odoo_client.fetch_open_attendances",
         lambda: [
             {"att_id": 88, "employee_odoo_id": 5,
-             "check_in": "2026-06-01T11:02:00+00:00", "wc_name": "Bay 3"},
+             "check_in": "2026-06-01T11:02:00+00:00", "wc_name": "Bay 3",
+             "odoo_department_id": 4, "odoo_department_name": "Supervisor"},
             {"att_id": 90, "employee_odoo_id": 7,
-             "check_in": "2026-06-01T12:15:00+00:00", "wc_name": None},
+             "check_in": "2026-06-01T12:15:00+00:00", "wc_name": None,
+             "odoo_department_id": None, "odoo_department_name": None},
         ],
     )
     written = {}
@@ -375,9 +385,11 @@ def test_refresh_builds_keyed_snapshot(monkeypatch):
 
     assert written == {
         "5": {"att_id": 88, "check_in": "2026-06-01T11:02:00+00:00",
-              "wc_name": "Bay 3"},
+              "wc_name": "Bay 3", "odoo_department_id": 4,
+              "odoo_department_name": "Supervisor"},
         "7": {"att_id": 90, "check_in": "2026-06-01T12:15:00+00:00",
-              "wc_name": None},
+              "wc_name": None, "odoo_department_id": None,
+              "odoo_department_name": None},
     }
 
 
@@ -400,7 +412,9 @@ def test_refresh_keeps_the_latest_open_attendance_for_each_employee(monkeypatch)
     live_cache.refresh_odoo_open_attendance()
 
     assert written == {
-        "5": {"att_id": 90, "check_in": "2026-06-01T12:20:00+00:00", "wc_name": "Repair 2"}
+        "5": {"att_id": 90, "check_in": "2026-06-01T12:20:00+00:00",
+              "wc_name": "Repair 2", "odoo_department_id": None,
+              "odoo_department_name": None}
     }
 
 

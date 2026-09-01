@@ -586,10 +586,11 @@ def fetch_open_attendances(
     app_wc_name_for_odoo_id: Callable[[int | None], str | None],
 ) -> list[dict]:
     """Return normalized currently-open attendance rows."""
-    del department_field
     fields = ["id", "employee_id", "check_in"]
     if wc_field:
         fields.append(wc_field)
+    if department_field and department_field not in fields:
+        fields.append(department_field)
     rows = execute_fn(
         "hr.attendance",
         "search_read",
@@ -601,6 +602,8 @@ def fetch_open_attendances(
         employee_id = _unwrap_m2o(row.get("employee_id"))
         if not employee_id:
             continue
+        department = row.get(department_field) if department_field else None
+        department_id, department_name = _m2o_parts(department)
         out.append(
             {
                 "att_id": row["id"],
@@ -609,6 +612,8 @@ def fetch_open_attendances(
                 "wc_name": (
                     app_wc_name_for_odoo_id(_unwrap_m2o(row.get(wc_field))) if wc_field else None
                 ),
+                "odoo_department_id": department_id,
+                "odoo_department_name": department_name if department_id else None,
             }
         )
     return out
