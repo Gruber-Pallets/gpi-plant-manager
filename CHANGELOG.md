@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Plan fair ordering for measured work without goals
+
+- **A design is ready to place any measured work without a goal below measured work that has a goal on the People page.** Nothing in the app has changed yet.
+
 ### Plan a clean end to People work bars
 
 - **A plan is ready to end People work bars before the last cleanup break and keep the final time labels apart.** Nothing in the app has changed yet.
