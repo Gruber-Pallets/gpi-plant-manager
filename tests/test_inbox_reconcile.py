@@ -57,6 +57,57 @@ def test_complete_kinds_skips_errored_and_truncated():
     assert "late" not in complete  # rows(2) < count(9) -> truncated by a cap
 
 
+def test_open_now_keeps_absence_pto_kind_inside_time_off_section():
+    snapshot = {
+        "queue": [{
+            "section_id": "time_off",
+            "item_key": "absence_pto:41",
+            "name": "Maria",
+            "action": {"type": "absence_pto", "request_id": 41},
+        }],
+    }
+
+    assert inbox_reconcile._open_now_from_snapshot(snapshot)["absence_pto:41"][
+        "item_kind"
+    ] == "absence_pto"
+
+
+def test_complete_kinds_protects_only_failed_source_in_shared_time_off_section():
+    snapshot = {
+        "source_errors": [{"source": "Past Absence PTO"}],
+        "sections": [{"id": "time_off", "count": 1, "rows": [{}]}],
+    }
+
+    complete = inbox_reconcile._complete_kinds(snapshot)
+
+    assert "time_off" in complete
+    assert "absence_pto" not in complete
+
+
+def test_healthy_shared_time_off_section_completes_both_kinds():
+    snapshot = {
+        "source_errors": [],
+        "sections": [{"id": "time_off", "count": 2, "rows": [{}, {}]}],
+    }
+
+    complete = inbox_reconcile._complete_kinds(snapshot)
+
+    assert "time_off" in complete
+    assert "absence_pto" in complete
+
+
+def test_truncated_shared_time_off_section_completes_neither_kind():
+    snapshot = {
+        "source_errors": [],
+        "sections": [{"id": "time_off", "count": 2, "rows": [{}]}],
+    }
+
+    complete = inbox_reconcile._complete_kinds(snapshot)
+
+    assert "time_off" not in complete
+    assert "absence_pto" not in complete
+
+
 def test_complete_kinds_includes_late_despite_snoozed_padding():
     """build_snapshot appends `snoozed` rows to the late queue, but the late
     `count` sums only the three actionable buckets -> len(rows) > count. A
@@ -667,6 +718,7 @@ def test_build_snapshot_flags_degraded_source_into_source_errors(monkeypatch):
     monkeypatch.setattr(missing_wc, "current_rows", lambda: [])
     monkeypatch.setattr(missed_punch_out, "current_rows", lambda: [])
     monkeypatch.setattr(exception_inbox, "_pending_time_off", lambda today: (0, []))
+    monkeypatch.setattr(exception_inbox, "_pending_absence_pto", lambda: (0, []))
     monkeypatch.setattr(exception_inbox, "_plant_schedule_reminder", lambda: (0, []))
     monkeypatch.setattr(exception_inbox, "_work_center_names", lambda: [])
 

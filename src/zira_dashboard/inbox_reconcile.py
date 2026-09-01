@@ -45,6 +45,11 @@ _SECTION_KIND = {
     "production_unassigned_run": "production_unassigned_run",
 }
 
+_SECTION_KINDS = {
+    **{section: (kind,) for section, kind in _SECTION_KIND.items()},
+    "time_off": ("time_off", "absence_pto"),
+}
+
 # item_kind -> the build_snapshot source label (matches _capture(...) names),
 # used to tell whether a category's source errored this tick.
 _KIND_SOURCE = {
@@ -56,6 +61,7 @@ _KIND_SOURCE = {
     "missing_wc": "Missing Work Center",
     "missed_punch_out": "Missed Punch Out",
     "time_off": "Pending Time Off",
+    "absence_pto": "Past Absence PTO",
     "breakdown": "Machine Breakdown",
     "attendance_missing_location": "Attendance Timeline",
     "attendance_unmapped_location": "Attendance Timeline",
@@ -110,16 +116,16 @@ def _complete_kinds(snapshot: dict) -> set:
     if snapshot.get("attendance_location_mode") == "off":
         complete.add("attendance_cutover_blocked")
     for section in snapshot.get("sections") or []:
-        kind = _SECTION_KIND.get(section.get("id"))
-        if kind is None:
+        kinds = _SECTION_KINDS.get(section.get("id"))
+        if kinds is None:
             continue
         if section.get("complete") is False:
             continue
-        if _KIND_SOURCE.get(kind) in errored:
-            continue
         if len(section.get("rows") or []) < int(section.get("count") or 0):
             continue  # fewer rows than count -> truncated by a display cap
-        complete.add(kind)
+        for kind in kinds:
+            if _KIND_SOURCE.get(kind) not in errored:
+                complete.add(kind)
     return complete
 
 
@@ -129,8 +135,14 @@ def _open_now_from_snapshot(snapshot: dict) -> dict:
         key = row.get("item_key")
         if not key:
             continue
+        action_type = (row.get("action") or {}).get("type")
+        item_kind = (
+            "absence_pto"
+            if action_type == "absence_pto"
+            else _SECTION_KIND.get(row.get("section_id"), row.get("section_id"))
+        )
         out[key] = {
-            "item_kind": _SECTION_KIND.get(row.get("section_id"), row.get("section_id")),
+            "item_kind": item_kind,
             "person_name": row.get("name"),
             "category_label": row.get("category_label"),
             "priority": row.get("priority"),
