@@ -57,11 +57,18 @@
     return Math.max(minimum, Math.min(value, maximum));
   }
 
+  function validTimestamp(value) {
+    return Number.isFinite(value) && Math.abs(value) <= 8640000000000000;
+  }
+
   function productionPoints(trigger) {
     if (!trigger || trigger.dataset.productionHover == null) return null;
     try {
       var parsed = JSON.parse(trigger.dataset.productionHover);
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(function (point) {
+        return Array.isArray(point) && point.length === 4 && validTimestamp(point[0]);
+      });
     } catch (_error) {
       return [];
     }
@@ -70,7 +77,13 @@
   function pointAt(points, atMs) {
     var selected = null;
     points.forEach(function (point) {
-      if (Array.isArray(point) && point.length === 4 && Number(point[0]) <= atMs) {
+      if (
+        Array.isArray(point)
+        && point.length === 4
+        && validTimestamp(point[0])
+        && point[0] <= atMs
+        && (!selected || point[0] >= selected[0])
+      ) {
         selected = point;
       }
     });
@@ -78,32 +91,59 @@
   }
 
   function localTime(atMs) {
-    var IntlObject = windowObject.Intl || Intl;
-    return new IntlObject.DateTimeFormat("en-US", {
-      timeZone: "America/Chicago",
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(new Date(atMs));
+    if (!validTimestamp(atMs)) return "Time unavailable";
+    try {
+      var IntlObject = windowObject.Intl || (typeof Intl !== "undefined" ? Intl : null);
+      if (!IntlObject || !IntlObject.DateTimeFormat) return "Time unavailable";
+      return new IntlObject.DateTimeFormat("en-US", {
+        timeZone: "America/Chicago",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(atMs));
+    } catch (_error) {
+      return "Time unavailable";
+    }
+  }
+
+  function finiteDatasetNumber(value) {
+    if (value == null || value === "") return null;
+    var number = Number(value);
+    return validTimestamp(number) ? number : null;
   }
 
   function productionDetail(trigger, requestedAtMs) {
     var points = productionPoints(trigger);
     if (points === null) return null;
-    var start = Number(trigger.dataset.hoverStartMs);
-    var end = Number(trigger.dataset.hoverEndMs);
-    var fallback = points.length ? Number(points[points.length - 1][0]) : end;
-    var atMs = clamp(Number.isFinite(requestedAtMs) ? requestedAtMs : fallback, start, end);
-    atMs = Math.round(atMs / 60000) * 60000;
+    var start = finiteDatasetNumber(trigger.dataset.hoverStartMs);
+    var end = finiteDatasetNumber(trigger.dataset.hoverEndMs);
+    var validBounds = start !== null && end !== null && end >= start;
+    var atMs = null;
+    if (validBounds) {
+      atMs = Number.isFinite(requestedAtMs)
+        ? clamp(Math.round(requestedAtMs / 60000) * 60000, start, end)
+        : end;
+    } else if (Number.isFinite(requestedAtMs)) {
+      atMs = Math.round(requestedAtMs / 60000) * 60000;
+    } else if (end !== null) {
+      atMs = end;
+    } else if (points.length) {
+      points.forEach(function (point) {
+        if (atMs === null || point[0] > atMs) atMs = point[0];
+      });
+    } else if (start !== null) {
+      atMs = start;
+    }
     var point = pointAt(points, atMs);
     var time = localTime(atMs);
-    if (!point || !Number.isFinite(point[1]) || !Number.isFinite(point[2])) {
-      return {atMs: atMs, text: time + "\nProduction: N/A\nUptime N/A"};
-    }
-    var uptime = Number.isFinite(point[3]) ? Math.round(point[3]) + "%" : "N/A";
+    var production = point && Number.isFinite(point[1]) && Number.isFinite(point[2])
+      ? Number(point[1]).toFixed(1) + " / " + Number(point[2]).toFixed(1)
+      : "N/A";
+    var uptime = point && Number.isFinite(point[3])
+      ? Math.round(point[3]) + "%"
+      : "N/A";
     return {
       atMs: atMs,
-      text: time + "\nProduction: " + Number(point[1]).toFixed(1)
-        + " / " + Number(point[2]).toFixed(1) + "\nUptime " + uptime,
+      text: time + "\nProduction: " + production + "\nUptime " + uptime,
     };
   }
 
@@ -138,8 +178,12 @@
       ? trigger.querySelector(".pp-hover-marker")
       : null;
     if (!marker) return;
-    var start = Number(trigger.dataset.hoverStartMs);
-    var end = Number(trigger.dataset.hoverEndMs);
+    var start = finiteDatasetNumber(trigger.dataset.hoverStartMs);
+    var end = finiteDatasetNumber(trigger.dataset.hoverEndMs);
+    if (start === null || end === null || end < start || !Number.isFinite(atMs)) {
+      hideMarker(trigger);
+      return;
+    }
     var percent = end > start ? 100 * (atMs - start) / (end - start) : 100;
     marker.style.left = clamp(percent, 0, 100) + "%";
     marker.classList.add("is-visible");
@@ -396,9 +440,12 @@
     var fraction = box.width > 0
       ? clamp((event.clientX - box.left) / box.width, 0, 1)
       : 1;
-    var start = Number(trigger.dataset.hoverStartMs);
-    var end = Number(trigger.dataset.hoverEndMs);
-    open(trigger, false, start + fraction * (end - start));
+    var start = finiteDatasetNumber(trigger.dataset.hoverStartMs);
+    var end = finiteDatasetNumber(trigger.dataset.hoverEndMs);
+    var requestedAtMs = start !== null && end !== null && end >= start
+      ? start + fraction * (end - start)
+      : null;
+    open(trigger, false, requestedAtMs);
   }
 
   function onPointerOut(event) {

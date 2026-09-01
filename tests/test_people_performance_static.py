@@ -458,8 +458,16 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             throw new Error('a pinned precise minute changed during pointer movement');
           }
           const precisePromise = preciseController.refreshRows();
+          const shorterPreciseDataset = {
+            productionHover: JSON.stringify([
+              [startMs, 0, 0, null],
+              [startMs + 20 * 60000, 8, 10, 81.2],
+            ]),
+            hoverStartMs: String(startMs),
+            hoverEndMs: String(startMs + 20 * 60000),
+          };
           const refreshedPrecise = preciseEnv.makeTrigger(
-            'precise', 'new interval detail', 'interval', 80, preciseDataset
+            'precise', 'new interval detail', 'interval', 80, shorterPreciseDataset
           );
           preciseEnv.parsed.precise = preciseEnv.makeRows(
             '2026-08-28', '1', [refreshedPrecise]
@@ -467,17 +475,28 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           preciseEnv.requests[0].pending.resolve(response({token: 'precise'}));
           await precisePromise;
           if (
-            preciseTip.textContent !== '7:30 AM\nProduction: 12.0 / 20.0\nUptime 75%'
-            || refreshedPrecise.marker.style.left !== '50%'
+            preciseTip.textContent !== '7:20 AM\nProduction: 8.0 / 10.0\nUptime 81%'
+            || refreshedPrecise.marker.style.left !== '100%'
           ) {
-            throw new Error('refresh did not restore the pinned precise minute');
+            throw new Error('refresh did not clamp the pinned minute to the shorter interval');
           }
           preciseController.destroy();
+          if (refreshedPrecise.marker.classList.contains('is-visible')) {
+            throw new Error('destroy did not hide the precise hover marker');
+          }
 
           const focusProductionEnv = makeEnvironment('0');
           focusProductionEnv.windowObject.Intl = Intl;
+          const fallbackDataset = {
+            productionHover: JSON.stringify([
+              [startMs, 0, 0, null],
+              [startMs + 30 * 60000, 12, 20, 75.4],
+            ]),
+            hoverStartMs: String(startMs),
+            hoverEndMs: String(startMs + 60 * 60000),
+          };
           const focusedProduction = focusProductionEnv.makeTrigger(
-            'focused-production', 'old production detail', 'interval', 80, preciseDataset
+            'focused-production', 'old production detail', 'interval', 80, fallbackDataset
           );
           focusProductionEnv.document.rows.triggers = [focusedProduction];
           const focusProductionController = makeController(
@@ -485,14 +504,118 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           );
           focusProductionController.init();
           focusProductionEnv.document.emit('focusin', event(focusedProduction));
-          if (!focusProductionEnv.getPopover().textContent.includes('30.0 / 40.0')) {
-            throw new Error('keyboard focus did not choose the last production point');
+          if (
+            focusProductionEnv.getPopover().textContent
+              !== '8:00 AM\nProduction: 12.0 / 20.0\nUptime 75%'
+            || focusedProduction.marker.style.left !== '100%'
+          ) {
+            throw new Error('keyboard focus did not select the interval end');
           }
           focusProductionEnv.document.emit('click', event(focusedProduction));
-          if (!focusProductionEnv.getPopover().textContent.includes('30.0 / 40.0')) {
-            throw new Error('tap did not choose the last production point');
+          if (
+            focusProductionEnv.getPopover().textContent
+              !== '8:00 AM\nProduction: 12.0 / 20.0\nUptime 75%'
+            || focusedProduction.marker.style.left !== '100%'
+          ) {
+            throw new Error('tap did not select the interval end');
+          }
+          focusProductionEnv.document.emit('click', event(focusedProduction));
+          if (focusedProduction.marker.classList.contains('is-visible')) {
+            throw new Error('closing production details did not hide the marker');
+          }
+          const tappedProduction = focusProductionEnv.makeTrigger(
+            'tapped-production', 'old tapped detail', 'interval', 80, fallbackDataset
+          );
+          focusProductionEnv.document.rows.triggers.push(tappedProduction);
+          focusProductionEnv.document.emit('click', event(tappedProduction));
+          if (
+            focusProductionEnv.getPopover().textContent
+              !== '8:00 AM\nProduction: 12.0 / 20.0\nUptime 75%'
+            || tappedProduction.marker.style.left !== '100%'
+          ) {
+            throw new Error('direct tap did not fall back to the interval end');
           }
           focusProductionController.destroy();
+
+          const shortProductionEnv = makeEnvironment('0');
+          shortProductionEnv.windowObject.Intl = Intl;
+          const shortProduction = shortProductionEnv.makeTrigger(
+            'short-production', 'old short detail', 'shortcut', 80, fallbackDataset
+          );
+          shortProductionEnv.document.rows.triggers = [shortProduction];
+          const shortProductionController = makeController(
+            shortProductionEnv.document, shortProductionEnv.windowObject
+          );
+          shortProductionController.init();
+          shortProductionEnv.document.emit('focusin', event(shortProduction));
+          if (
+            shortProductionEnv.getPopover().textContent
+              !== '8:00 AM\nProduction: 12.0 / 20.0\nUptime 75%'
+            || shortProduction.marker.style.left !== '100%'
+          ) {
+            throw new Error('production short move did not fall back to the interval end');
+          }
+          shortProductionController.destroy();
+
+          const malformedEnv = makeEnvironment('0');
+          malformedEnv.windowObject.Intl = Intl;
+          const malformed = malformedEnv.makeTrigger(
+            'malformed-production',
+            'old malformed detail',
+            'interval',
+            80,
+            {
+              productionHover: JSON.stringify([null, ['not-a-time', 4, 5, 50]]),
+              hoverStartMs: 'not-a-start',
+              hoverEndMs: 'not-an-end',
+            }
+          );
+          malformedEnv.document.rows.triggers = [malformed];
+          const malformedController = makeController(malformedEnv.document, malformedEnv.windowObject);
+          malformedController.init();
+          malformedEnv.document.emit('focusin', event(malformed));
+          if (malformedEnv.getPopover().textContent !== 'Time unavailable\nProduction: N/A\nUptime N/A') {
+            throw new Error('malformed production values did not use the safe N/A card');
+          }
+          malformedController.destroy();
+
+          const partialEnv = makeEnvironment('0');
+          partialEnv.windowObject.Intl = Intl;
+          const invalidProduction = partialEnv.makeTrigger(
+            'invalid-production',
+            'old invalid detail',
+            'interval',
+            80,
+            {
+              productionHover: JSON.stringify([[startMs, null, 20, 88.6]]),
+              hoverStartMs: String(startMs),
+              hoverEndMs: String(startMs + 30 * 60000),
+            }
+          );
+          partialEnv.document.rows.triggers = [invalidProduction];
+          const partialController = makeController(partialEnv.document, partialEnv.windowObject);
+          partialController.init();
+          partialEnv.document.emit('focusin', event(invalidProduction));
+          if (partialEnv.getPopover().textContent !== '7:30 AM\nProduction: N/A\nUptime 89%') {
+            throw new Error('valid uptime was lost when production was unavailable');
+          }
+          const unavailableUptime = partialEnv.makeTrigger(
+            'unavailable-uptime',
+            'old unavailable detail',
+            'interval',
+            80,
+            {
+              productionHover: JSON.stringify([[startMs, 10, 20, null]]),
+              hoverStartMs: String(startMs),
+              hoverEndMs: String(startMs + 30 * 60000),
+            }
+          );
+          partialEnv.document.rows.triggers.push(unavailableUptime);
+          partialEnv.document.emit('focusin', event(unavailableUptime));
+          if (partialEnv.getPopover().textContent !== '7:30 AM\nProduction: 10.0 / 20.0\nUptime N/A') {
+            throw new Error('valid production was lost when uptime was unavailable');
+          }
+          partialController.destroy();
 
           const emptyProductionEnv = makeEnvironment('0');
           emptyProductionEnv.windowObject.Intl = Intl;
