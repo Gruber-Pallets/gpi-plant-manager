@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Keep exact hover details dependable
+
+- **Exact production details now stay safe when a work bar closes, starts between minutes, or contains an unusable number.** The People page keeps your selected moment when it can and avoids showing a made-up value.
+
 ### See production at the exact minute
 
 - **Point at a measured work bar to see that worker's production, goal, and uptime at that exact minute.** The numbers keep adding up when the worker moves to another measured work area.
