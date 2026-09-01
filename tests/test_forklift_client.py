@@ -147,6 +147,33 @@ def test_fetch_completions_walks_cursor_and_sends_bearer(monkeypatch):
     assert calls[1]["params"]["cursor"] == "c1"
 
 
+def test_fetch_completions_refuses_to_return_a_max_page_truncation(monkeypatch):
+    monkeypatch.setenv("FORKLIFT_API_KEY", "gpifk__test")
+    monkeypatch.setattr(
+        forklift_client.requests,
+        "get",
+        lambda *args, **kwargs: _json_response(
+            {"items": [{"id": "a"}], "nextCursor": "still-more"}
+        ),
+    )
+
+    with pytest.raises(forklift_client.ForkliftError, match="pagination limit"):
+        forklift_client.fetch_completions(max_pages=2)
+
+
+@pytest.mark.parametrize("body", [{}, {"items": None}, {"items": {}}])
+def test_fetch_completions_requires_an_explicit_list_envelope(monkeypatch, body):
+    monkeypatch.setenv("FORKLIFT_API_KEY", "gpifk__test")
+    monkeypatch.setattr(
+        forklift_client.requests,
+        "get",
+        lambda *args, **kwargs: _json_response(body),
+    )
+
+    with pytest.raises(forklift_client.ForkliftError, match="items list"):
+        forklift_client.fetch_completions()
+
+
 def test_fetch_completions_raises_when_key_missing(monkeypatch):
     monkeypatch.delenv("FORKLIFT_API_KEY", raising=False)
 

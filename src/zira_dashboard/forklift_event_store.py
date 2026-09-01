@@ -1,10 +1,25 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 
 from . import db
 from .forklift_ingest import ForkliftCompletionEvent
+
+
+@dataclass(frozen=True)
+class ForkliftCompletionCoverage:
+    day: date
+    covered_through_utc: datetime
+    raw_event_count: int
+    successful_at: datetime
+
+
+def _aware_utc(value: datetime, field_name: str) -> datetime:
+    if not isinstance(value, datetime) or value.utcoffset() is None:
+        raise TypeError(f"{field_name} must be timezone-aware")
+    return value.astimezone(UTC)
 
 
 def upsert_completion_events(events: Sequence[ForkliftCompletionEvent]) -> int:
@@ -75,4 +90,50 @@ def completion_events_for_range(
             handling_ms=row["handling_ms"],
         )
         for row in rows
+    )
+
+
+def record_completion_coverage(
+    day: date,
+    *,
+    covered_through_utc: datetime,
+    raw_event_count: int,
+) -> None:
+    """Record proof only after a successful aggregate and raw-event write."""
+    if type(day) is not date:
+        raise TypeError("day must be a date")
+    if isinstance(raw_event_count, bool) or not isinstance(raw_event_count, int):
+        raise TypeError("raw_event_count must be an integer")
+    if raw_event_count < 0:
+        raise ValueError("raw_event_count cannot be negative")
+    covered = _aware_utc(covered_through_utc, "covered_through_utc")
+    db.execute(
+        "INSERT INTO forklift_completion_coverage "
+        "(day, covered_through_utc, raw_event_count, successful_at) "
+        "VALUES (%s, %s, %s, now()) "
+        "ON CONFLICT (day) DO UPDATE SET "
+        "covered_through_utc=EXCLUDED.covered_through_utc, "
+        "raw_event_count=EXCLUDED.raw_event_count, successful_at=now()",
+        (day, covered, raw_event_count),
+    )
+
+
+def completion_coverage_for_day(day: date) -> ForkliftCompletionCoverage | None:
+    if type(day) is not date:
+        raise TypeError("day must be a date")
+    rows = db.query(
+        "SELECT day, covered_through_utc, raw_event_count, successful_at "
+        "FROM forklift_completion_coverage WHERE day = %s",
+        (day,),
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    return ForkliftCompletionCoverage(
+        day=row["day"],
+        covered_through_utc=_aware_utc(
+            row["covered_through_utc"], "covered_through_utc"
+        ),
+        raw_event_count=int(row["raw_event_count"]),
+        successful_at=_aware_utc(row["successful_at"], "successful_at"),
     )

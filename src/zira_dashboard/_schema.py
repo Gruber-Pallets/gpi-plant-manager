@@ -2167,6 +2167,12 @@ CREATE TABLE IF NOT EXISTS forklift_completion_events (
 );
 CREATE INDEX IF NOT EXISTS idx_forklift_completion_events_time_driver
   ON forklift_completion_events (created_at_utc, driver_id);
+CREATE TABLE IF NOT EXISTS forklift_completion_coverage (
+  day                  DATE PRIMARY KEY,
+  covered_through_utc  TIMESTAMPTZ NOT NULL,
+  raw_event_count      INTEGER NOT NULL CHECK (raw_event_count >= 0),
+  successful_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- 2026-06-26: live "what's open right now" mirror for the Exception Inbox.
 -- Bookkeeping for the reconcile tick (inbox_reconcile): diffed against the
 -- freshly-computed open set to detect items that left without a human action

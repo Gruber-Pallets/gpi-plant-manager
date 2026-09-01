@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Bring each worker's day together safely
+
+- **Plant Manager can now bring work times, production, stops, and forklift calls into one safe day view.** If one source is down, the other facts stay visible and the missing part says it is not available.
+
 ### Put every worker in the right dashboard group
 
 - **Plant Manager can now place production workers, tablet drivers, and other workers in the right order.** A person who moves still stays on one line, and late calls or low results can move them to the top of their group.

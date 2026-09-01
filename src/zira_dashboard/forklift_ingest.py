@@ -71,6 +71,15 @@ def completion_events(
     )
 
 
+def require_complete_event_transform(
+    items: list[dict],
+    events: tuple[ForkliftCompletionEvent, ...],
+) -> None:
+    """Refuse coverage when any fetched completion was dropped or duplicated."""
+    if len(events) != len(items):
+        raise ValueError("completion feed contains malformed or duplicate rows")
+
+
 def build_calls_daily(day: date, dashboard: dict, history: list[dict]) -> dict:
     completed = [c for c in history if c.get("status") == "completed"]
     by_station = Counter(c.get("workstationName") for c in completed if c.get("workstationName"))

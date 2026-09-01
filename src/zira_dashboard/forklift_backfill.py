@@ -24,6 +24,23 @@ from . import (
 _log = logging.getLogger(__name__)
 
 
+def _utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
+
+
+def _zero_calls_row(day: dt.date) -> dict:
+    return {
+        "day": day,
+        "total_calls": 0,
+        "urgent_calls": 0,
+        "overload_count": 0,
+        "neglected_count": 0,
+        "by_hour": {},
+        "by_station": {},
+        "by_skill": {},
+    }
+
+
 def backfill_history(client=None, since: int = 0) -> dict:
     """Pull all completions from the external API, aggregate, and UPSERT into
     forklift_calls_daily + forklift_driver_daily. Re-runnable / idempotent.
@@ -34,21 +51,64 @@ def backfill_history(client=None, since: int = 0) -> dict:
     so a missing key or transient API error degrades to "nothing written".
     """
     try:
+        # Coverage ends when the request begins, not after local processing:
+        # calls arriving during the fetch/write window were not observed.
+        fetched_through = _utc_now()
         items = forklift_client.fetch_completions(since)
         drivers = forklift_client.fetch_drivers()
         id2name = {str(d.get("id")): d.get("name")
                    for d in (drivers or []) if d.get("id") is not None}
         events = forklift_ingest.completion_events(items, id2name)
+        forklift_ingest.require_complete_event_transform(items, events)
 
         calls_rows, driver_rows = forklift_ingest.aggregate_completions(
             items, id2name, shift_config.SITE_TZ)
 
+        rows_by_day = {row["day"]: row for row in calls_rows}
+        coverage_start_day = None
+        if since > 0:
+            local_since = dt.datetime.fromtimestamp(
+                since / 1000,
+                tz=dt.UTC,
+            ).astimezone(shift_config.SITE_TZ)
+            coverage_start_day = local_since.date()
+            if local_since.time() != dt.time.min:
+                coverage_start_day += dt.timedelta(days=1)
+        elif events:
+            coverage_start_day = min(
+                event.created_at_utc.astimezone(shift_config.SITE_TZ).date()
+                for event in events
+            )
+
+        coverage_days: list[dt.date] = []
+        coverage_end_day = fetched_through.astimezone(shift_config.SITE_TZ).date()
+        if coverage_start_day is None and since == 0:
+            # An empty all-history response proves Today is empty through this
+            # fetch, but supplies no trustworthy historical inception date.
+            coverage_start_day = coverage_end_day
+        if coverage_start_day is not None:
+            cursor = coverage_start_day
+            while cursor <= coverage_end_day:
+                rows_by_day.setdefault(cursor, _zero_calls_row(cursor))
+                coverage_days.append(cursor)
+                cursor += dt.timedelta(days=1)
+        complete_calls_rows = [rows_by_day[key] for key in sorted(rows_by_day)]
         total_calls = 0
-        for row in calls_rows:
+        for row in complete_calls_rows:
             forklift_store.upsert_calls_daily(row)
             total_calls += row["total_calls"]
         n_drivers = forklift_store.upsert_driver_daily(driver_rows)
         forklift_event_store.upsert_completion_events(events)
+        event_counts: dict[dt.date, int] = {}
+        for event in events:
+            local_day = event.created_at_utc.astimezone(shift_config.SITE_TZ).date()
+            event_counts[local_day] = event_counts.get(local_day, 0) + 1
+        for covered_day in coverage_days:
+            forklift_event_store.record_completion_coverage(
+                covered_day,
+                covered_through_utc=fetched_through,
+                raw_event_count=event_counts.get(covered_day, 0),
+            )
 
         # External /drivers may omit isOverloadResponder — only overwrite the
         # saved backup list when the payload actually carries that flag.
@@ -57,7 +117,11 @@ def backfill_history(client=None, since: int = 0) -> dict:
                        if d.get("isOverloadResponder") and d.get("name")]
             app_settings.set_setting("forklift_overload_responders", backups)
 
-        summary = {"days": len(calls_rows), "drivers": n_drivers, "calls": total_calls}
+        summary = {
+            "days": len(complete_calls_rows),
+            "drivers": n_drivers,
+            "calls": total_calls,
+        }
         _log.info("forklift backfill complete: %s", summary)
         return summary
     except Exception as e:  # noqa: BLE001 - never fatal; degrade to no-op

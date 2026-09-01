@@ -5,6 +5,8 @@ psycopg2's Json adapter."""
 from __future__ import annotations
 
 import json
+from collections import Counter
+from collections.abc import Collection, Mapping
 
 from psycopg2.extras import Json
 
@@ -98,6 +100,18 @@ def driver_rows_for_day(day) -> list[dict]:
     return db.query(
         "SELECT * FROM forklift_driver_daily WHERE day = %s", (day,)
     )
+
+
+def calls_row_for_day(day) -> dict | None:
+    from . import db
+
+    rows = db.query("SELECT * FROM forklift_calls_daily WHERE day = %s", (day,))
+    if not rows:
+        return None
+    row = dict(rows[0])
+    for field in ("by_hour", "by_station", "by_skill"):
+        row[field] = _coerce_json(row.get(field))
+    return row
 
 
 def driver_days_between(start, end) -> list[dict]:
@@ -251,6 +265,63 @@ def resolve_forklift_to_plant(forklift_names) -> dict[str, str]:
         matches = idx.get(parts[0].casefold(), []) if parts else []
         out[fn] = matches[0] if len(matches) == 1 else fn
     return out
+
+
+def resolve_forklift_driver_ids(
+    names_by_driver_id: Mapping[str, Collection[str]],
+    *,
+    allowed_employee_ids: Collection[int] | None = None,
+) -> dict[str, int]:
+    """Resolve external driver IDs to unique active Odoo employee IDs.
+
+    Names are only evidence used to establish the durable ID join. Conflicting
+    names, ambiguous roster matches, missing Odoo IDs, and two external IDs
+    claiming one employee all fail closed.
+    """
+    from . import staffing
+
+    allowed = set(allowed_employee_ids) if allowed_employee_ids is not None else None
+    people = tuple(
+        person
+        for person in staffing.load_roster()
+        if person.active
+        and person.employee_id is not None
+        and (allowed is None or person.employee_id in allowed)
+    )
+    by_full_name: dict[str, list] = {}
+    by_first_name: dict[str, list] = {}
+    for person in people:
+        full = person.name.strip()
+        if not full:
+            continue
+        by_full_name.setdefault(full.casefold(), []).append(person)
+        by_first_name.setdefault(full.split()[0].casefold(), []).append(person)
+    overrides = name_map("driver")
+    proposed: dict[str, int] = {}
+    for raw_driver_id, raw_names in names_by_driver_id.items():
+        driver_id = str(raw_driver_id).strip()
+        if not driver_id:
+            continue
+        names = {
+            str(value).strip()
+            for value in raw_names
+            if value is not None and str(value).strip()
+        }
+        if len(names) != 1:
+            continue
+        source_name = next(iter(names))
+        target_name = str(overrides.get(source_name, source_name)).strip()
+        exact = by_full_name.get(target_name.casefold(), [])
+        candidates = exact if exact else by_first_name.get(target_name.casefold(), [])
+        if len(candidates) != 1:
+            continue
+        proposed[driver_id] = int(candidates[0].employee_id)
+    claimed = Counter(proposed.values())
+    return {
+        driver_id: employee_id
+        for driver_id, employee_id in proposed.items()
+        if claimed[employee_id] == 1
+    }
 
 
 def resolve_plant_to_forklift(plant_name: str) -> str | None:

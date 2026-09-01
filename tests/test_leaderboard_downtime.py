@@ -197,6 +197,34 @@ def test_fetch_station_day_ignores_stopped_status_on_productive_rows(monkeypatch
     assert total.downtime_minutes == 0
 
 
+def test_fetch_station_day_total_excludes_positive_out_of_shift_readings(monkeypatch):
+    day = date(2026, 7, 3)
+    monkeypatch.setattr(leaderboard, "is_workday", lambda d: True)
+    monkeypatch.setattr(leaderboard, "shift_start_for", lambda d: time(6, 0))
+    monkeypatch.setattr(leaderboard, "shift_end_for", lambda d: time(14, 30))
+    monkeypatch.setattr(leaderboard, "breaks_for", lambda d: ())
+
+    class _Client:
+        def get_readings(self, **kwargs):
+            return {
+                "data": [
+                    {"event_date": _iso_z(5, 30, day), "units": 5},
+                    {"event_date": _iso_z(6, 5, day), "units": 7},
+                ],
+                "lastValue": None,
+            }
+
+    station = Station("d3", "Dismantler 3", "Dismantler", "Recycling")
+    start_iso, end_iso = leaderboard.day_window_utc(day)
+
+    total = leaderboard.fetch_station_day(
+        _Client(), station, start_iso, end_iso, now_utc=_utc(7, 0, day)
+    )
+
+    assert total.units == 7
+    assert total.samples == ((_utc(6, 5, day), 7),)
+
+
 def test_fetch_station_day_exposes_adjusted_downtime_intervals(monkeypatch):
     day = date(2026, 7, 3)
     monkeypatch.setattr(leaderboard, "is_workday", lambda d: True)

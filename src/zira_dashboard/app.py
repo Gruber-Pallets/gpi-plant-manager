@@ -11,7 +11,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -308,17 +308,46 @@ async def _tick_forklift():
     from the external completions API; once enough days are stored, just refresh
     today. No-ops gracefully (logs+swallows via _run_warmer; degrades to no data
     if FORKLIFT_API_KEY isn't set). Runs off the event loop (blocking HTTP)."""
-    from . import forklift_backfill, forklift_snapshot, forklift_store
+    from . import (
+        forklift_backfill,
+        forklift_event_store,
+        forklift_snapshot,
+        forklift_store,
+    )
 
     try:
         days = await asyncio.to_thread(forklift_store.history_day_count)
     except Exception:
         days = _FORKLIFT_MIN_HISTORY_DAYS  # can't tell -> just refresh today
+    today = plant_today()
+    current_day_covered = False
     if days < _FORKLIFT_MIN_HISTORY_DAYS:
+        try:
+            current_day_covered = (
+                await asyncio.to_thread(
+                    forklift_event_store.completion_coverage_for_day, today
+                )
+                is not None
+            )
+        except Exception:
+            current_day_covered = False
+    if days < _FORKLIFT_MIN_HISTORY_DAYS and not current_day_covered:
         result = await asyncio.to_thread(forklift_backfill.backfill_history, None, 0)
         _log.warning("forklift warmer: backfill (had %d days) -> %s", days, result)
     else:
-        result = await asyncio.to_thread(forklift_snapshot.snapshot_today, None, plant_today())
+        previous_day = today - timedelta(days=1)
+        try:
+            finalized = await asyncio.to_thread(
+                forklift_snapshot.day_is_finalized, previous_day
+            )
+            if not finalized:
+                previous = await asyncio.to_thread(
+                    forklift_snapshot.snapshot_today, None, previous_day
+                )
+                _log.warning("forklift warmer: finalized prior day -> %s", previous)
+        except Exception as exc:  # noqa: BLE001 - prior day must not block today
+            _log.warning("forklift warmer: prior-day finalization failed: %s", exc)
+        result = await asyncio.to_thread(forklift_snapshot.snapshot_today, None, today)
         _log.warning("forklift warmer: snapshot today (history=%d days) -> %s", days, result)
         await asyncio.to_thread(_capture_forklift_ontime)
         await _maybe_reconstruct_ontime()

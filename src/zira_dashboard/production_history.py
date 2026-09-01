@@ -465,6 +465,214 @@ def metered_station_totals(
     return cached_leaderboard(client, stations, day, now_utc)
 
 
+def metered_station_catalog():
+    """Return the authoritative configured stations that define metered work."""
+    from . import staffing
+    from .stations import Station
+
+    return tuple(
+        Station(loc.meter_id, loc.name, loc.skill, loc.bay)
+        for loc in staffing.LOCATIONS
+        if loc.meter_id
+    )
+
+
+def _identity_safe_breakdown_windows(
+    segments: Sequence,
+    raw_windows: Mapping[tuple, Sequence[tuple[datetime, datetime | None]]],
+) -> dict[tuple[int, str], tuple[tuple[datetime, datetime | None], ...]]:
+    ids_by_name_wc: dict[tuple[str, str], set[int]] = {}
+    known_id_wc: set[tuple[int, str]] = set()
+    for segment in segments:
+        if segment.person_odoo_id is None:
+            continue
+        identity = (segment.person_odoo_id, segment.wc_name)
+        known_id_wc.add(identity)
+        ids_by_name_wc.setdefault(
+            (segment.person_name, segment.wc_name), set()
+        ).add(segment.person_odoo_id)
+    safe: dict[tuple[int, str], list[tuple[datetime, datetime | None]]] = {}
+    for key, windows in raw_windows.items():
+        target: tuple[int, str] | None = None
+        if len(key) == 3 and isinstance(key[0], int) and not isinstance(key[0], bool):
+            candidate = (key[0], key[2])
+            if candidate in known_id_wc:
+                target = candidate
+        elif len(key) == 2:
+            employee_ids = ids_by_name_wc.get((key[0], key[1]), set())
+            if len(employee_ids) == 1:
+                target = (next(iter(employee_ids)), key[1])
+        if target is not None:
+            safe.setdefault(target, []).extend(windows)
+    return {key: tuple(windows) for key, windows in safe.items()}
+
+
+def production_scores_for_timeline(
+    client,
+    day: date,
+    spans,
+    *,
+    now_utc: datetime,
+    is_today: bool,
+    window_start_utc: datetime | None = None,
+    window_end_utc: datetime | None = None,
+    station_totals=None,
+    attribution_rows=None,
+):
+    """Score verified timestamped production against Odoo identity spans."""
+    from . import (
+        assignment_windows,
+        machine_breakdown,
+        production_segments,
+        settings_store,
+        shift_config,
+        wc_attributions,
+    )
+
+    now = _aware_utc(now_utc, "now_utc")
+    shift_start = (
+        _aware_utc(window_start_utc, "window_start_utc")
+        if window_start_utc is not None
+        else datetime.combine(
+            day, shift_config.shift_start_for(day), tzinfo=shift_config.SITE_TZ
+        ).astimezone(UTC)
+    )
+    shift_end = (
+        _aware_utc(window_end_utc, "window_end_utc")
+        if window_end_utc is not None
+        else datetime.combine(
+            day, shift_config.shift_end_for(day), tzinfo=shift_config.SITE_TZ
+        ).astimezone(UTC)
+    )
+    if shift_end <= shift_start:
+        raise ValueError("window_end_utc must be after window_start_utc")
+    cap_utc = min(now, shift_end)
+    segments = assignment_windows.work_segments_from_timeline(
+        spans,
+        window_start_utc=shift_start,
+        window_end_utc=cap_utc,
+    )
+    if not segments:
+        return ()
+    totals = tuple(
+        station_totals
+        if station_totals is not None
+        else metered_station_totals(client, day, cap_utc)
+    )
+    rows = (
+        tuple(attribution_rows)
+        if attribution_rows is not None
+        else tuple(wc_attributions.for_day(day))
+    )
+    testing = wc_attributions.testing_windows_for_day(day, rows=list(rows))
+    testing = {
+        wc_name: tuple((start, min(cap_utc, end or cap_utc)) for start, end in windows)
+        for wc_name, windows in testing.items()
+    }
+    breakdowns = wc_attributions.breakdown_windows_for_day(day, rows=list(rows))
+    safe_breakdowns = _identity_safe_breakdown_windows(segments, breakdowns)
+
+    wc_totals: dict[str, float] = {}
+    samples_by_wc: dict[str, list[tuple[datetime, float]]] = {}
+    stations_by_wc = {}
+    for total in totals:
+        wc_name = total.station.name
+        if wc_name in wc_totals:
+            raise ProductionSourceUnavailable(
+                f"Duplicate production total for {wc_name}"
+            )
+        if total.truncated:
+            raise ProductionSourceUnavailable(
+                f"Timestamped samples for {wc_name} are truncated"
+            )
+        raw_samples = []
+        for timestamp, units in total.samples:
+            sample_time = _aware_utc(timestamp, "sample timestamp")
+            try:
+                sample_units = float(units)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ProductionSourceUnavailable(
+                    f"Timestamped samples for {wc_name} contain invalid units"
+                ) from exc
+            if not math.isfinite(sample_units):
+                raise ProductionSourceUnavailable(
+                    f"Timestamped samples for {wc_name} contain invalid units"
+                )
+            if sample_units > 0:
+                raw_samples.append((sample_time, sample_units))
+        windows = testing.get(wc_name, ())
+        filtered_samples = [
+            (timestamp, units)
+            for timestamp, units in raw_samples
+            if not any(start <= timestamp < end for start, end in windows)
+        ]
+        testing_units = sum(
+            units
+            for timestamp, units in raw_samples
+            if any(start <= timestamp < end for start, end in windows)
+        )
+        try:
+            source_total = float(total.units)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ProductionSourceUnavailable(
+                f"Production total for {wc_name} is invalid"
+            ) from exc
+        if not math.isfinite(source_total) or source_total < 0:
+            raise ProductionSourceUnavailable(
+                f"Production total for {wc_name} is invalid"
+            )
+        adjusted_total = source_total - testing_units
+        sampled_total = sum(units for _timestamp, units in filtered_samples)
+        if abs(adjusted_total - sampled_total) > 1e-6:
+            raise ProductionSourceUnavailable(
+                f"Timestamped samples for {wc_name} do not match its source total"
+            )
+        wc_totals[wc_name] = adjusted_total
+        samples_by_wc[wc_name] = filtered_samples
+        stations_by_wc[wc_name] = total.station
+
+    def productive_for_segment(segment) -> float:
+        raw = shift_config.productive_minutes_in_window(
+            day, segment.start_utc, segment.end_utc
+        )
+        windows = (
+            safe_breakdowns.get((segment.person_odoo_id, segment.wc_name), ())
+            if segment.person_odoo_id is not None
+            else ()
+        )
+        excluded = machine_breakdown.excluded_minutes_overlapping(
+            list(windows),
+            segment.start_utc,
+            segment.end_utc,
+            cap_utc,
+            day,
+            shift_config.productive_minutes_in_window,
+        )
+        return max(0.0, raw - excluded)
+
+    credits = production_segments.credit_work_segments(
+        segments,
+        wc_totals=wc_totals,
+        samples_by_wc=samples_by_wc,
+        productive_minutes=lambda _person, _wc, _start, _end: 0.0,
+        productive_minutes_for_segment=productive_for_segment,
+        live_cap_utc=cap_utc if is_today else None,
+        allow_total_fallback=False,
+    )
+    scores_by_wc = production_segments.score_work_segments(
+        credits,
+        target_per_hour={
+            wc_name: settings_store.station_target(station)
+            for wc_name, station in stations_by_wc.items()
+        },
+    )
+    return tuple(
+        score
+        for wc_name in sorted(scores_by_wc)
+        for score in scores_by_wc[wc_name]
+    )
+
+
 def _metered_leaderboard(
     client,
     day: date,
