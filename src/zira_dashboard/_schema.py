@@ -2152,6 +2152,21 @@ CREATE TABLE IF NOT EXISTS forklift_name_map (
   plant_name     TEXT NOT NULL,
   PRIMARY KEY (kind, forklift_name)
 );
+CREATE TABLE IF NOT EXISTS forklift_completion_events (
+  external_id       TEXT PRIMARY KEY,
+  driver_id         TEXT NOT NULL,
+  driver_name       TEXT NOT NULL,
+  created_at_utc    TIMESTAMPTZ NOT NULL,
+  workstation_name  TEXT,
+  on_time            BOOLEAN,
+  late               BOOLEAN,
+  response_ms        BIGINT,
+  handling_ms        BIGINT,
+  ingested_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_forklift_completion_events_time_driver
+  ON forklift_completion_events (created_at_utc, driver_id);
 -- 2026-06-26: live "what's open right now" mirror for the Exception Inbox.
 -- Bookkeeping for the reconcile tick (inbox_reconcile): diffed against the
 -- freshly-computed open set to detect items that left without a human action

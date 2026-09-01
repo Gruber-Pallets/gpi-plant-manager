@@ -12,7 +12,14 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
-from . import app_settings, forklift_client, forklift_ingest, forklift_store, shift_config
+from . import (
+    app_settings,
+    forklift_client,
+    forklift_event_store,
+    forklift_ingest,
+    forklift_store,
+    shift_config,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -31,6 +38,7 @@ def backfill_history(client=None, since: int = 0) -> dict:
         drivers = forklift_client.fetch_drivers()
         id2name = {str(d.get("id")): d.get("name")
                    for d in (drivers or []) if d.get("id") is not None}
+        events = forklift_ingest.completion_events(items, id2name)
 
         calls_rows, driver_rows = forklift_ingest.aggregate_completions(
             items, id2name, shift_config.SITE_TZ)
@@ -40,6 +48,7 @@ def backfill_history(client=None, since: int = 0) -> dict:
             forklift_store.upsert_calls_daily(row)
             total_calls += row["total_calls"]
         n_drivers = forklift_store.upsert_driver_daily(driver_rows)
+        forklift_event_store.upsert_completion_events(events)
 
         # External /drivers may omit isOverloadResponder — only overwrite the
         # saved backup list when the payload actually carries that flag.

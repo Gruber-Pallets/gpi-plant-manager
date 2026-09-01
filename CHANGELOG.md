@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Keep each forklift call's time
+
+- **Plant Manager now keeps the time and result for each forklift call.** This will let managers see when calls happened without changing the current forklift totals.
+
 ### Salaried managers do not need a work center
 
 - **Salaried people from Odoo can clock in without a work center when they are not doing plant work.** When Luke records a work center, that work still counts normally.
