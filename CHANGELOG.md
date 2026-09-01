@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Plan precise production details for each moment
+
+- **A design is ready to show a worker's production, goal, and uptime for the exact minute a manager points to on the People page.** Nothing in the app has changed yet.
+
 ### Keep each worker's team after lunch
 
 - **Auto-Lunch now puts a worker back in the same Odoo team they had just before lunch.** It also remembers the worker's last plant spot when Odoo has no spot saved, so the afternoon record stays useful.
