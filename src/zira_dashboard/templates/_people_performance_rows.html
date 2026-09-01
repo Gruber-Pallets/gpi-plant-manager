@@ -5,31 +5,51 @@
      data-attention="{{ 1 if attention_only else 0 }}"
      data-as-of="{{ as_of }}"
      data-as-of-iso="{{ as_of_iso }}">
-  <div class="pp-counts" aria-label="Day totals">
-    <span><strong>{{ working_now }}</strong> working now</span>
-    <span><strong>{{ worked_earlier }}</strong> worked earlier</span>
-    <span><strong>{{ needs_attention }}</strong> need attention</span>
-  </div>
-  {% if source_warnings %}
-  <aside class="pp-source-warnings" role="status">
-    {% for warning in source_warnings %}<span>{{ warning }}</span>{% endfor %}
-  </aside>
-  {% endif %}
-  <div class="pp-axis" aria-hidden="true">
-    <span class="pp-axis-spacer"></span>
-    <div class="pp-axis-viewport pp-horizontal-scroll">
-      <div class="pp-axis-track">
-        {% for tick in axis_labels %}
-        <span style="left:{{ tick.left_pct }}%">{{ tick.label }}</span>
-        {% endfor %}
-      </div>
+  <form class="pp-manager-strip" action="/people-performance" method="get" aria-label="People dashboard controls">
+    <div class="pp-counts" aria-label="Day totals">
+      <span><strong>{{ working_now }}</strong> working now</span>
+      <span><strong>{{ worked_earlier }}</strong> worked earlier</span>
+      <span><strong>{{ needs_attention }}</strong> need attention</span>
     </div>
-    <span class="pp-axis-summary">Summary</span>
-  </div>
+    {% if source_warnings %}
+    <aside class="pp-source-warnings" role="status" aria-label="Source warnings">
+      {% for warning in source_warnings %}<span>{{ warning }}</span>{% endfor %}
+    </aside>
+    {% endif %}
+    <p class="pp-updated" id="pp-live-status" aria-live="polite">Updated {{ as_of }}</p>
+    <div class="pp-controls">
+      <label class="pp-date-control">
+        <span class="sr-only">Date</span>
+        <input data-pp-auto-submit type="date" name="day" value="{{ day }}" max="{{ today }}">
+      </label>
+      <label class="pp-check">
+        <input data-pp-auto-submit type="checkbox" name="attention" value="1"{% if attention_only %} checked{% endif %}>
+        Needs attention
+      </label>
+      {% if not is_today %}<a href="/people-performance">Today</a>{% endif %}
+    </div>
+  </form>
   <div id="people-performance-rows">
     {% for section in sections %}
     <section class="pp-section" data-section="{{ section.key }}">
-      <h2>{{ section.label }} <span>{{ section.rows|length }}</span></h2>
+      <header class="pp-section-header">
+        <h2>{{ section.label }} <span>{{ section.rows|length }}</span></h2>
+        <div class="pp-schedule-viewport pp-horizontal-scroll">
+          <div class="pp-schedule-track" aria-label="Workday schedule">
+            {% for marker in schedule_markers %}
+            <i class="pp-schedule-tick pp-schedule-tick-{{ marker.kind }}"
+               style="left:{{ marker.left_pct }}%">
+              <span class="sr-only">{{ marker.aria_label }}</span>
+            </i>
+            {% endfor %}
+            {% for group in schedule_time_groups %}
+            <span class="pp-schedule-time-group is-{{ group.edge }}"
+                  style="left:{{ group.left_pct }}%">{{ group.label }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        <span class="pp-section-summary">Summary</span>
+      </header>
       {% if not section.rows %}<p class="pp-empty">No people in this group.</p>{% endif %}
       {% for row in section.rows %}
       <article class="pp-row{% if not row.is_active %} is-complete{% endif %}"

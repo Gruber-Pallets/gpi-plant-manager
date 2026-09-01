@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -110,3 +111,65 @@ def test_only_production_triggers_carry_precise_hover_data_and_marker(rendered_h
     assert 'data-production-hover=' not in next(
         tag for tag in rendered_html.split('<button') if 'role-forklift' in tag
     ).split('</button>', 1)[0]
+
+
+def test_page_uses_one_compact_live_manager_strip(rendered_html):
+    assert 'class="pp-manager-strip"' in rendered_html
+    assert 'id="pp-live-status"' in rendered_html
+    assert '<strong>5</strong> working now' in rendered_html
+    assert '<strong>1</strong> worked earlier' in rendered_html
+    assert '<strong>4</strong> need attention' in rendered_html
+    assert "Forklift data unavailable" in rendered_html
+    assert 'name="day"' in rendered_html
+    assert 'name="attention"' in rendered_html
+    assert 'data-pp-auto-submit' in rendered_html
+    assert '>Apply<' not in rendered_html
+    assert '>Today<' not in rendered_html
+
+
+def test_manager_strip_omits_warning_region_when_sources_are_healthy(client, monkeypatch):
+    monkeypatch.setattr(
+        route,
+        "load_dashboard",
+        lambda day, client, now_utc=None: replace(
+            busy_dashboard_model(), day=day, source_warnings=()
+        ),
+    )
+
+    response = client.get(f"/people-performance?day={DAY.isoformat()}")
+
+    assert response.status_code == 200
+    assert 'class="pp-source-warnings"' not in response.text
+
+
+def test_historical_manager_strip_offers_today_shortcut(client, monkeypatch):
+    historical = DAY - timedelta(days=1)
+    monkeypatch.setattr(
+        route,
+        "load_dashboard",
+        lambda day, client, now_utc=None: replace(
+            busy_dashboard_model(), day=day, is_today=False
+        ),
+    )
+
+    response = client.get(f"/people-performance?day={historical.isoformat()}")
+
+    assert response.status_code == 200
+    assert '<a href="/people-performance">Today</a>' in response.text
+
+
+def test_page_does_not_repeat_tab_identity_or_render_hourly_axis(rendered_html):
+    assert 'class="pp-toolbar"' not in rendered_html
+    assert 'class="pp-eyebrow"' not in rendered_html
+    assert '<h1>Today</h1>' not in rendered_html
+    assert 'class="pp-axis"' not in rendered_html
+
+
+def test_each_green_section_header_contains_schedule_ticks_and_summary(rendered_html):
+    assert rendered_html.count('class="pp-section-header"') == 3
+    assert rendered_html.count('class="pp-schedule-tick ') == 9
+    assert rendered_html.count('class="pp-schedule-time-group ') == 9
+    assert rendered_html.count('class="pp-section-summary"') == 3
+    assert "Shift starts at 6:00 AM" in rendered_html
+    assert "Planned break starts at 10:30 AM" in rendered_html
+    assert "Shift ends at 2:00 PM" in rendered_html
