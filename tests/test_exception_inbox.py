@@ -1,5 +1,7 @@
 import json
+import subprocess
 from datetime import date, datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,6 +35,47 @@ _REAL_AUTO_LUNCH_CURRENT_SNAPSHOT = getattr(
 
 def _auto_lunch_snapshot(alert=None, *, degraded=False):
     return SimpleNamespace(alert=alert, degraded=degraded)
+
+
+class _ExceptionRowControlsParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.rows = {}
+        self._request_id = None
+        self._div_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        if self._request_id is None:
+            if tag != "div" or "exception-row" not in classes:
+                return
+            request_id = attributes.get("data-request-id")
+            if request_id is None:
+                return
+            self._request_id = request_id
+            self._div_depth = 1
+            self.rows[request_id] = {"classes": set(), "aria_labels": set()}
+        elif tag == "div":
+            self._div_depth += 1
+
+        row = self.rows[self._request_id]
+        row["classes"].update(classes)
+        if attributes.get("aria-label"):
+            row["aria_labels"].add(attributes["aria-label"])
+
+    def handle_endtag(self, tag):
+        if self._request_id is None or tag != "div":
+            return
+        self._div_depth -= 1
+        if self._div_depth == 0:
+            self._request_id = None
+
+
+def _exception_row_controls(html):
+    parser = _ExceptionRowControlsParser()
+    parser.feed(html)
+    return parser.rows
 
 
 @pytest.fixture(autouse=True)
@@ -1584,13 +1627,24 @@ def test_exceptions_page_renders_past_absence_pto_controls(monkeypatch):
 
     assert response.status_code == 200
     assert 'data-action-type="absence_pto"' in response.text
-    assert 'data-request-id="41"' in response.text
-    assert 'data-request-id="42"' in response.text
-    assert 'class="row-btn primary js-time-off-approve"' in response.text
-    assert 'class="row-btn danger js-time-off-refuse"' in response.text
-    assert 'aria-label="Reason to deny past PTO"' in response.text
-    assert 'aria-label="How this past PTO request was handled"' in response.text
-    assert 'class="row-btn primary js-absence-pto-handled"' in response.text
+    controls = _exception_row_controls(response.text)
+    assert set(controls) == {"41", "42"}
+
+    pending_controls = controls["41"]
+    assert {"js-time-off-approve", "js-time-off-refuse"} <= pending_controls["classes"]
+    assert pending_controls["classes"].isdisjoint(
+        {"js-absence-pto-note", "js-absence-pto-handled"}
+    )
+    assert pending_controls["aria_labels"] == {"Reason to deny past PTO"}
+
+    review_controls = controls["42"]
+    assert {"js-absence-pto-note", "js-absence-pto-handled"} <= review_controls["classes"]
+    assert review_controls["classes"].isdisjoint(
+        {"js-time-off-approve", "js-time-off-reason", "js-time-off-refuse"}
+    )
+    assert review_controls["aria_labels"] == {
+        "How this past PTO request was handled"
+    }
 
 
 def test_exceptions_page_renders_forgot_punch_in_controls(monkeypatch):
@@ -1765,6 +1819,185 @@ def test_inbox_js_requires_time_off_deny_reason_and_sends_source():
     assert "submitRowInput(input, '.js-time-off-refuse')" in js
     assert "input = event.target.closest('.js-absence-pto-note');" in js
     assert "submitRowInput(input, '.js-absence-pto-handled')" in js
+
+
+def test_past_absence_pto_js_routes_and_resolves_only_terminal_success():
+    source = json.dumps((STATIC_DIR / "exceptions.js").read_text(encoding="utf-8"))
+    harness = "const source = " + source + ";\n" + r"""
+const listeners = {};
+const calls = [];
+let nextOutcome = null;
+
+function classList(initial) {
+  const values = new Set(initial || []);
+  return {
+    add(name) { values.add(name); },
+    contains(name) { return values.has(name); },
+    remove(name) { values.delete(name); },
+    toggle(name, force) {
+      if (force === undefined) {
+        if (values.has(name)) values.delete(name);
+        else values.add(name);
+      } else if (force) values.add(name);
+      else values.delete(name);
+    },
+  };
+}
+
+function input(value) {
+  return {
+    disabled: false,
+    hidden: false,
+    value,
+    focus() {},
+  };
+}
+
+function makeRow(requestId, actionClass) {
+  const status = {hidden: true, textContent: ''};
+  const reason = input('Not enough PTO');
+  const note = input('Paid another way');
+  const row = {
+    dataset: {
+      actionType: 'absence_pto',
+      personName: 'Maria',
+      priority: 'info',
+      requestId: String(requestId),
+    },
+    classList: classList(),
+    removed: false,
+    querySelector(selector) {
+      if (selector === '.row-status') return status;
+      if (selector === '.js-time-off-reason') return reason;
+      if (selector === '.js-absence-pto-note') return note;
+      return null;
+    },
+    querySelectorAll() { return [this.button, reason, note]; },
+    remove() { this.removed = true; },
+  };
+  row.button = {
+    classList: classList(['row-btn', actionClass]),
+    disabled: false,
+    closest(selector) {
+      if (selector === '.row-btn') return this;
+      if (selector === '.exception-row') return row;
+      return null;
+    },
+    matches(selector) {
+      return selector.startsWith('.') && this.classList.contains(selector.slice(1));
+    },
+  };
+  row.status = status;
+  return row;
+}
+
+global.window = {
+  gpiFetch(url, options) {
+    calls.push({url, body: JSON.parse(options.body)});
+    if (nextOutcome.network) return Promise.reject(new Error('offline'));
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json() { return Promise.resolve(nextOutcome.body); },
+    });
+  },
+  location: {reload() {}},
+  setInterval() {},
+  setTimeout(callback) { callback(); return 1; },
+  clearTimeout() {},
+};
+global.document = {
+  hidden: false,
+  querySelector() { return null; },
+  querySelectorAll() { return []; },
+  addEventListener(type, listener) {
+    if (!listeners[type]) listeners[type] = [];
+    listeners[type].push(listener);
+  },
+};
+global.sessionStorage = {getItem() { return null; }, setItem() {}};
+global.setTimeout = window.setTimeout;
+global.clearTimeout = window.clearTimeout;
+
+eval(source);
+
+async function click(actionClass, requestId, outcome) {
+  const row = makeRow(requestId, actionClass);
+  nextOutcome = outcome;
+  const event = {
+    target: row.button,
+    preventDefault() {},
+    stopPropagation() {},
+  };
+  for (const listener of listeners.click || []) listener(event);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  return {removed: row.removed, status: row.status.textContent};
+}
+
+(async function () {
+  const results = {
+    pending: await click('js-time-off-approve', 41, {
+      body: {ok: false, status: 'pending', warning: 'Approval is still pending.'},
+    }),
+    needsReview: await click('js-time-off-approve', 41, {
+      body: {ok: true, status: 'needs_review', warning: 'Payroll review is required.'},
+    }),
+    approveSuccess: await click('js-time-off-approve', 41, {
+      body: {ok: true, status: 'approved', message: 'PTO approved.'},
+    }),
+    denyFailure: await click('js-time-off-refuse', 41, {
+      body: {ok: false, error: 'Denial failed.'},
+    }),
+    denySuccess: await click('js-time-off-refuse', 41, {
+      body: {ok: true, status: 'denied', message: 'Past PTO denied.'},
+    }),
+    handledNetwork: await click('js-absence-pto-handled', 42, {network: true}),
+    handledSuccess: await click('js-absence-pto-handled', 42, {
+      body: {ok: true, status: 'resolved_manually', message: 'Review handled.'},
+    }),
+  };
+  process.stdout.write(JSON.stringify({calls, results}));
+})().catch(function (error) {
+  process.stderr.write(String(error.stack || error));
+  process.exitCode = 1;
+});
+"""
+
+    completed = subprocess.run(
+        ["node", "--eval", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    approve = "/api/exceptions/absence-pto/41/approve"
+    deny = "/api/exceptions/absence-pto/41/deny"
+    handled = "/api/exceptions/absence-pto/42/handled"
+    assert [call["url"] for call in result["calls"]] == [
+        approve,
+        approve,
+        approve,
+        deny,
+        deny,
+        handled,
+        handled,
+    ]
+    assert [call["body"] for call in result["calls"][-2:]] == [
+        {"note": "Paid another way", "source": "inbox"},
+        {"note": "Paid another way", "source": "inbox"},
+    ]
+    assert result["results"] == {
+        "pending": {"removed": False, "status": "Approval is still pending."},
+        "needsReview": {"removed": False, "status": "Payroll review is required."},
+        "approveSuccess": {"removed": True, "status": "PTO approved."},
+        "denyFailure": {"removed": False, "status": "Denial failed."},
+        "denySuccess": {"removed": True, "status": "Past PTO denied."},
+        "handledNetwork": {"removed": False, "status": "Network error."},
+        "handledSuccess": {"removed": True, "status": "Review handled."},
+    }
 
 
 def test_late_report_footer_uses_direct_reason_free_actions():
