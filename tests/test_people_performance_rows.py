@@ -171,6 +171,21 @@ def test_production_summary_hides_all_values_when_one_interval_is_non_finite(mon
     )
 
 
+def test_production_summary_keeps_finite_large_units_consistent():
+    model = _assemble(
+        spans=(span(88, "Large Total", 0, 60, "Repair 1"),),
+        scores=(score(88, "Large Total", "Repair 1", 0, 60, 1e308, 1e308),),
+        downtime_by_wc={"Repair 1": ()},
+    )
+
+    assert model.rows[0].summary == (
+        ("Goal", "100%"),
+        ("Uptime", "100%"),
+        ("Downtime", "0 min"),
+        ("Production", f"{1e308:.0f}/{1e308:.0f}"),
+    )
+
+
 def test_same_location_across_lunch_does_not_create_transfer():
     lunch = BreakSpan(
         START + timedelta(minutes=60),

@@ -483,8 +483,12 @@ def weighted_production_summary(
     if totals is None:
         return None, None, 0.0
     actual, goal, available, downtime = totals
-    goal_pct = 100.0 * actual / goal if goal > 0 else None
-    uptime_pct = 100.0 * max(0.0, available - downtime) / available if available > 0 else None
+    goal_pct = (actual / goal) * 100.0 if goal > 0 else None
+    uptime_pct = (
+        (max(0.0, available - downtime) / available) * 100.0
+        if available > 0
+        else None
+    )
     if goal_pct is not None and not _is_finite_number(goal_pct):
         return None, None, 0.0
     if uptime_pct is not None and not _is_finite_number(uptime_pct):
@@ -799,11 +803,14 @@ def _production_summary(
     totals = _scoreable_production_totals(metrics)
     if complete and totals is not None:
         goal_pct, uptime_pct, downtime_minutes = weighted_production_summary(metrics)
-        goal = _pct_or_na(goal_pct)
-        uptime = _pct_or_na(uptime_pct)
-        downtime = f"{downtime_minutes:.0f} min"
-        actual_units, goal_units, _available_minutes, _downtime_minutes = totals
-        production = f"{actual_units:.0f}/{goal_units:.0f}"
+        if goal_pct is not None and uptime_pct is not None:
+            goal = _pct_or_na(goal_pct)
+            uptime = _pct_or_na(uptime_pct)
+            downtime = f"{downtime_minutes:.0f} min"
+            actual_units, goal_units, _available_minutes, _downtime_minutes = totals
+            production = f"{actual_units:.0f}/{goal_units:.0f}"
+        else:
+            goal = uptime = downtime = production = "N/A"
     else:
         goal = uptime = downtime = production = "N/A"
     return (
