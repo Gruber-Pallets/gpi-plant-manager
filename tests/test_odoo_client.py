@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -264,6 +264,39 @@ def test_target_department_resolver_uses_saved_work_center_identity(monkeypatch)
     monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda _name: 44)
 
     assert odoo_client.target_department_id_for_work_center(81) == 44
+
+
+def test_clock_in_explicit_department_overrides_work_center_department(monkeypatch):
+    monkeypatch.delenv("ODOO_KIOSK_WC_FIELD", raising=False)
+    monkeypatch.setenv("ODOO_KIOSK_DEPARTMENT_FIELD", "x_kiosk_department_id")
+    monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda _name: 8)
+    execute = MagicMock(return_value=5257)
+    monkeypatch.setattr(odoo_client, "execute", execute)
+
+    result = odoo_client.clock_in(
+        26,
+        "Tablets",
+        datetime(2026, 9, 1, 16, 30, tzinfo=timezone.utc),
+        odoo_department_id=4,
+    )
+
+    assert result == 5257
+    assert execute.call_args.args[2]["x_kiosk_department_id"] == 4
+
+
+def test_clock_in_without_explicit_department_uses_work_center_department(monkeypatch):
+    monkeypatch.delenv("ODOO_KIOSK_WC_FIELD", raising=False)
+    monkeypatch.setenv("ODOO_KIOSK_DEPARTMENT_FIELD", "x_kiosk_department_id")
+    monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda _name: 8)
+    execute = MagicMock(return_value=5257)
+    monkeypatch.setattr(odoo_client, "execute", execute)
+
+    result = odoo_client.clock_in(
+        26, "Tablets", datetime(2026, 9, 1, 16, 30, tzinfo=timezone.utc)
+    )
+
+    assert result == 5257
+    assert execute.call_args.args[2]["x_kiosk_department_id"] == 8
 
 
 def test_target_department_resolver_force_refreshes_preview_time_cache(monkeypatch):

@@ -38,7 +38,8 @@ def retry_unsynced_punches() -> int:
     Order: chronological by occurred_at, then by id (so a transfer's
     transfer_out is retried before its transfer_in)."""
     rows = db.query(
-        "SELECT id, person_odoo_id, action, wc_name, close_all_open_rows, "
+        "SELECT id, person_odoo_id, action, wc_name, odoo_department_id, "
+        "close_all_open_rows, "
         "COALESCE(rounded_at, occurred_at) AS occurred_at "
         "FROM timeclock_punches_log "
         "WHERE synced_to_odoo = FALSE "
@@ -67,6 +68,7 @@ def _retry_one(r: dict) -> None:
     action = r["action"]
     person_odoo_id = r["person_odoo_id"]
     wc_name = r["wc_name"]
+    odoo_department_id = r.get("odoo_department_id")
     ts = r["occurred_at"]
 
     if action in ("clock_in", "transfer_in"):
@@ -80,9 +82,20 @@ def _retry_one(r: dict) -> None:
             # Adopting Luke's already-open row must not clear its location.
             if wc_name is not None:
                 odoo_client.set_attendance_wc(existing["id"], wc_name)
+            if odoo_department_id is not None:
+                odoo_client.set_attendance_department_id(
+                    existing["id"], int(odoo_department_id)
+                )
             _mark_synced(r["id"], existing["id"])
             return
-        att_id = odoo_client.clock_in(person_odoo_id, wc_name, ts)
+        att_id = odoo_client.clock_in(
+            person_odoo_id,
+            wc_name,
+            ts,
+            odoo_department_id=(
+                int(odoo_department_id) if odoo_department_id is not None else None
+            ),
+        )
         _mark_synced(r["id"], att_id)
         return
 
@@ -144,7 +157,8 @@ def sync_one_by_id(log_id: int) -> None:
     next tick. So this function is "best-effort fast path" — the safety
     net always runs."""
     rows = db.query(
-        "SELECT id, person_odoo_id, action, wc_name, close_all_open_rows, "
+        "SELECT id, person_odoo_id, action, wc_name, odoo_department_id, "
+        "close_all_open_rows, "
         "COALESCE(rounded_at, occurred_at) AS occurred_at "
         "FROM timeclock_punches_log WHERE id = %s",
         (log_id,),

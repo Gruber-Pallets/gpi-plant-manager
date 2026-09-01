@@ -890,7 +890,11 @@ def _set_attendance_overtime_status(attendance_id: int) -> None:
 
 
 def _attendance_create_payload(
-    employee_odoo_id: int, wc_name: str | None, check_in: datetime
+    employee_odoo_id: int,
+    wc_name: str | None,
+    check_in: datetime,
+    *,
+    odoo_department_id: int | None = None,
 ) -> dict[str, Any]:
     """Build the common kiosk attendance-create payload."""
     payload: dict[str, Any] = {
@@ -906,13 +910,23 @@ def _attendance_create_payload(
             payload[wc_field] = odoo_wc_id
     dept_field = _kiosk_department_field()
     if dept_field:
-        dept_id = _department_id_for_wc(wc_name)
+        dept_id = (
+            int(odoo_department_id)
+            if odoo_department_id is not None
+            else _department_id_for_wc(wc_name)
+        )
         if dept_id:
             payload[dept_field] = dept_id
     return payload
 
 
-def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
+def clock_in(
+    employee_odoo_id: int,
+    wc_name: str | None,
+    ts: datetime,
+    *,
+    odoo_department_id: int | None = None,
+) -> int:
     """Create a new hr.attendance with check_in=ts. Returns the new id.
 
     Kiosk-created records are marked as ``approved`` so Odoo's manager-review
@@ -929,7 +943,12 @@ def clock_in(employee_odoo_id: int, wc_name: str | None, ts: datetime) -> int:
     return execute(
         "hr.attendance",
         "create",
-        _attendance_create_payload(employee_odoo_id, wc_name, ts),
+        _attendance_create_payload(
+            employee_odoo_id,
+            wc_name,
+            ts,
+            odoo_department_id=odoo_department_id,
+        ),
     )
 
 
