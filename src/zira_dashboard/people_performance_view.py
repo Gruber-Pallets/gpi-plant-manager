@@ -23,15 +23,6 @@ _SECTION_KEYS = ("production", "forklift", "other")
 _LOCATION_CLASSES = tuple(f"location-{index}" for index in range(1, 9))
 
 
-class _HoverPointView(tuple):
-    _INDEX_BY_NAME = {"at_ms": 0, "production": 1, "goal": 2, "uptime": 3}
-
-    def __getitem__(self, key):
-        if isinstance(key, str):
-            key = self._INDEX_BY_NAME[key]
-        return super().__getitem__(key)
-
-
 def _pct(value: datetime, start: datetime, end: datetime) -> float:
     total = (end - start).total_seconds()
     if total <= 0:
@@ -49,13 +40,11 @@ def _epoch_ms(value: datetime) -> int:
 
 
 def _hover_point_view(point: ProductionHoverPoint) -> tuple[int, float, float, float | None]:
-    return _HoverPointView(
-        (
-            _epoch_ms(point.at_utc),
-            round(point.actual_units, 6),
-            round(point.goal_units, 6),
-            None if point.uptime_pct is None else round(point.uptime_pct, 6),
-        )
+    return (
+        _epoch_ms(point.at_utc),
+        round(point.actual_units, 6),
+        round(point.goal_units, 6),
+        None if point.uptime_pct is None else round(point.uptime_pct, 6),
     )
 
 

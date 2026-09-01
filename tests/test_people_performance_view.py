@@ -188,21 +188,22 @@ def test_production_hover_values_are_cumulative_finite_and_timestamped():
     row = _row_named(context, "Mia Mixed")
     production = [item for item in row["intervals"] if item["role"] == "production"]
 
-    assert production[0]["hover_points"][0]["at_ms"] == production[0]["hover_start_ms"]
-    assert production[-1]["hover_points"][-1]["at_ms"] == production[-1]["hover_end_ms"]
+    assert type(production[0]["hover_points"][0]) is tuple
+    assert production[0]["hover_points"][0][0] == production[0]["hover_start_ms"]
+    assert production[-1]["hover_points"][-1][0] == production[-1]["hover_end_ms"]
     assert (
-        production[-1]["hover_points"][-1]["production"]
-        >= production[0]["hover_points"][-1]["production"]
+        production[-1]["hover_points"][-1][1]
+        >= production[0]["hover_points"][-1][1]
     )
     assert (
-        production[-1]["hover_points"][-1]["goal"]
-        >= production[0]["hover_points"][-1]["goal"]
+        production[-1]["hover_points"][-1][2]
+        >= production[0]["hover_points"][-1][2]
     )
     assert all(
         math.isfinite(value)
         for item in production
         for point in item["hover_points"]
-        for value in (point["production"], point["goal"])
+        for value in (point[1], point[2])
     )
 
 
