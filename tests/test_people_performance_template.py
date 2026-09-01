@@ -100,3 +100,13 @@ def test_performance_subnav_contains_horizontal_overflow_on_small_tablets():
 
     assert "overflow-x: auto" in css
     assert "overscroll-behavior-x: contain" in css
+
+
+def test_only_production_triggers_carry_precise_hover_data_and_marker(rendered_html):
+    assert 'data-production-hover="[[' in rendered_html
+    assert 'data-hover-start-ms="' in rendered_html
+    assert 'data-hover-end-ms="' in rendered_html
+    assert 'class="pp-hover-marker" aria-hidden="true"' in rendered_html
+    assert 'data-production-hover=' not in next(
+        tag for tag in rendered_html.split('<button') if 'role-forklift' in tag
+    ).split('</button>', 1)[0]

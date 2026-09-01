@@ -5,7 +5,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from . import shift_config
-from .people_performance import DashboardModel, PersonRow, TimelineInterval
+from .people_performance import (
+    DashboardModel,
+    PersonRow,
+    ProductionHoverPoint,
+    TimelineInterval,
+    cumulative_production_hover_points,
+)
 
 
 _SECTION_LABELS = {
@@ -15,6 +21,15 @@ _SECTION_LABELS = {
 }
 _SECTION_KEYS = ("production", "forklift", "other")
 _LOCATION_CLASSES = tuple(f"location-{index}" for index in range(1, 9))
+
+
+class _HoverPointView(tuple):
+    _INDEX_BY_NAME = {"at_ms": 0, "production": 1, "goal": 2, "uptime": 3}
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            key = self._INDEX_BY_NAME[key]
+        return super().__getitem__(key)
 
 
 def _pct(value: datetime, start: datetime, end: datetime) -> float:
@@ -27,6 +42,21 @@ def _pct(value: datetime, start: datetime, end: datetime) -> float:
 
 def _time(value: datetime) -> str:
     return value.astimezone(shift_config.SITE_TZ).strftime("%-I:%M %p")
+
+
+def _epoch_ms(value: datetime) -> int:
+    return round(value.timestamp() * 1000)
+
+
+def _hover_point_view(point: ProductionHoverPoint) -> tuple[int, float, float, float | None]:
+    return _HoverPointView(
+        (
+            _epoch_ms(point.at_utc),
+            round(point.actual_units, 6),
+            round(point.goal_units, 6),
+            None if point.uptime_pct is None else round(point.uptime_pct, 6),
+        )
+    )
 
 
 def _line_runs(points: list[dict]) -> tuple[tuple[dict, ...], ...]:
@@ -116,7 +146,12 @@ def _interval_state(item: TimelineInterval) -> str:
     return "neutral"
 
 
-def _interval_view(item: TimelineInterval, model: DashboardModel, location_class: str) -> dict:
+def _interval_view(
+    item: TimelineInterval,
+    model: DashboardModel,
+    location_class: str,
+    production_hover: tuple[ProductionHoverPoint, ...],
+) -> dict:
     left = _pct(item.start_utc, model.window_start_utc, model.window_end_utc)
     right = _pct(item.end_utc, model.window_start_utc, model.window_end_utc)
     line_points = []
@@ -176,6 +211,9 @@ def _interval_view(item: TimelineInterval, model: DashboardModel, location_class
         "time_label": time_label,
         "line_runs": _line_runs(line_points),
         "buckets": tuple(buckets),
+        "hover_points": tuple(_hover_point_view(point) for point in production_hover),
+        "hover_start_ms": _epoch_ms(item.start_utc) if item.role == "production" else None,
+        "hover_end_ms": _epoch_ms(item.end_utc) if item.role == "production" else None,
         "detail": detail,
         "aria_label": f"Transferred to {detail}" if item.is_transfer else detail,
     }
@@ -186,8 +224,15 @@ def _row_view(
     model: DashboardModel,
     location_classes: dict[str, str],
 ) -> dict:
+    production_hover = cumulative_production_hover_points(row.intervals)
     intervals = tuple(
-        _interval_view(item, model, location_classes[item.location_name]) for item in row.intervals
+        _interval_view(
+            item,
+            model,
+            location_classes[item.location_name],
+            production_hover.get(item.key, ()),
+        )
+        for item in row.intervals
     )
     return {
         "employee_odoo_id": row.employee_odoo_id,

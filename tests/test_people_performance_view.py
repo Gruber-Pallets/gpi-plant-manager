@@ -1,3 +1,4 @@
+import math
 from dataclasses import replace
 
 import pytest
@@ -180,3 +181,35 @@ def test_location_color_is_stable_when_another_location_appears():
         if item["location_name"] == "Repair 1"
     )
     assert refreshed["location_class"] == original["location_class"]
+
+
+def test_production_hover_values_are_cumulative_finite_and_timestamped():
+    context = dashboard_context(busy_dashboard_model())
+    row = _row_named(context, "Mia Mixed")
+    production = [item for item in row["intervals"] if item["role"] == "production"]
+
+    assert production[0]["hover_points"][0]["at_ms"] == production[0]["hover_start_ms"]
+    assert production[-1]["hover_points"][-1]["at_ms"] == production[-1]["hover_end_ms"]
+    assert (
+        production[-1]["hover_points"][-1]["production"]
+        >= production[0]["hover_points"][-1]["production"]
+    )
+    assert (
+        production[-1]["hover_points"][-1]["goal"]
+        >= production[0]["hover_points"][-1]["goal"]
+    )
+    assert all(
+        math.isfinite(value)
+        for item in production
+        for point in item["hover_points"]
+        for value in (point["production"], point["goal"])
+    )
+
+
+def test_nonproduction_intervals_do_not_receive_production_hover_values():
+    context = dashboard_context(busy_dashboard_model())
+    forklift = _row_named(context, "Ben Driver")["intervals"][0]
+
+    assert forklift["hover_points"] == ()
+    assert forklift["hover_start_ms"] is None
+    assert forklift["hover_end_ms"] is None

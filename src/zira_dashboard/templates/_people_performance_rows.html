@@ -55,6 +55,11 @@
                       data-interval-key="{{ item.key }}"
                       data-detail="{{ item.detail|e }}"
                       data-open="{{ 1 if item.is_open else 0 }}"
+                      {% if item.role == 'production' %}
+                      data-production-hover="{{ item.hover_points|tojson|forceescape }}"
+                      data-hover-start-ms="{{ item.hover_start_ms }}"
+                      data-hover-end-ms="{{ item.hover_end_ms }}"
+                      {% endif %}
                       aria-label="{{ item.aria_label|e }}"
                       aria-expanded="false">
                 <span class="pp-location-ribbon">
@@ -69,6 +74,7 @@
                     <polyline points="{% for point in run %}{{ point.x }},{{ point.y }} {% endfor %}"></polyline>
                     {% endfor %}
                   </svg>
+                  <span class="pp-hover-marker" aria-hidden="true"></span>
                   {% elif item.role == 'forklift' %}
                     {% if item.state == 'unavailable' %}
                     <span class="pp-result-text">Unavailable</span>
@@ -113,6 +119,11 @@
             <button type="button" class="pp-interval-shortcut"
                     data-interval-key="{{ item.key }}"
                     data-detail="{{ item.detail|e }}"
+                    {% if item.role == 'production' %}
+                    data-production-hover="{{ item.hover_points|tojson|forceescape }}"
+                    data-hover-start-ms="{{ item.hover_start_ms }}"
+                    data-hover-end-ms="{{ item.hover_end_ms }}"
+                    {% endif %}
                     aria-label="{{ item.aria_label|e }} Open details."
                     aria-expanded="false">
               {{ item.location_name }} · {{ item.time_label }}
