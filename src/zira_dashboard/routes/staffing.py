@@ -128,7 +128,10 @@ def _project_staffing_location_spans(
         rows = attendance_mirror.rows_overlapping(start_utc, end_utc)
     if not rows:
         return ()
-    rows = attendance_timeline._rows_with_employee_department_fallback(rows)
+    rows = attendance_timeline._rows_with_employee_department_fallback(
+        rows,
+        include_wage_type=True,
+    )
     verified_cap = min(as_of_utc, policy.refreshed_at)
     spans = attendance_timeline.project_rows(
         rows,

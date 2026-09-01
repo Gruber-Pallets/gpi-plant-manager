@@ -155,6 +155,16 @@ def test_first_pending_gap_that_closed_inside_grace_is_not_actionable(source):
     assert not [i for i in snapshot.issues if i.kind == "attendance_missing_location"]
 
 
+def test_exempt_no_location_span_does_not_create_an_attendance_inbox_item(source):
+    start = NOW - timedelta(minutes=10)
+    source["rows"] = (_raw(901, check_in=start),)
+    source["spans"] = (_span("exempt_no_location", start, NOW),)
+
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+
+    assert not [issue for issue in snapshot.issues if issue.kind == "attendance_missing_location"]
+
+
 def test_later_missing_gap_is_urgent_immediately(source):
     gap_start = NOW - timedelta(minutes=1)
     source["rows"] = (_raw(901), _raw(902, wc_id=7, wc_name="Dismantler 1"))

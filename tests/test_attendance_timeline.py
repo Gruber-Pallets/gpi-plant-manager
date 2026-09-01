@@ -1059,6 +1059,28 @@ def test_timeline_for_range_uses_local_monthly_wage_type_for_missing_location(
     assert spans == (expected_span(at(), at(minutes=10), "exempt_no_location"),)
 
 
+def test_department_fallback_can_skip_wage_lookup_when_not_needed(monkeypatch):
+    source = row(check_out=at(minutes=10))
+    source.pop("employee_wage_type")
+    monkeypatch.setattr(
+        attendance_timeline,
+        "db",
+        type(
+            "NoProfileLookupDb",
+            (),
+            {"query": staticmethod(lambda *_args: pytest.fail("profile lookup"))},
+        ),
+        raising=False,
+    )
+
+    rows = attendance_timeline._rows_with_employee_department_fallback(
+        (source,),
+        include_wage_type=False,
+    )
+
+    assert rows == (source,)
+
+
 def test_timeline_uses_employee_department_when_attendance_department_is_blank(
     monkeypatch,
 ):

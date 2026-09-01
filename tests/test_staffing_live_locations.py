@@ -280,7 +280,7 @@ def test_staffing_snapshot_survives_sync_commit_interleaving(monkeypatch):
     monkeypatch.setattr(
         staffing_routes.attendance_timeline,
         "_rows_with_employee_department_fallback",
-        lambda rows: rows,
+        lambda rows, **_kwargs: rows,
     )
     monkeypatch.setattr(
         staffing_routes.attendance_timeline,
@@ -417,7 +417,7 @@ def test_staffing_snapshot_caps_open_span_and_uses_half_open_selection(monkeypat
     monkeypatch.setattr(
         staffing_routes.attendance_timeline,
         "_rows_with_employee_department_fallback",
-        lambda rows: rows,
+        lambda rows, **_kwargs: rows,
     )
 
     def project_rows(_rows, **kwargs):
@@ -766,7 +766,7 @@ def test_projected_staffing_spans_use_canonical_roster_name_by_employee_id(monke
     monkeypatch.setattr(
         staffing_routes.attendance_timeline,
         "_rows_with_employee_department_fallback",
-        lambda rows: rows,
+        lambda rows, **_kwargs: rows,
     )
     monkeypatch.setattr(
         staffing_routes.attendance_timeline,

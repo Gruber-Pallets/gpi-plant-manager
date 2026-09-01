@@ -592,13 +592,15 @@ def _department_requires_work_center_for_mirror(
 
 def _rows_with_employee_department_fallback(
     rows: Sequence[Mapping[str, object]],
+    *,
+    include_wage_type: bool = False,
 ) -> tuple[Mapping[str, object], ...]:
     profile_ids = sorted(
         {
             int(row["employee_odoo_id"])
             for row in rows
             if not str(row.get("odoo_department_name") or "").strip()
-            or "employee_wage_type" not in row
+            or (include_wage_type and "employee_wage_type" not in row)
         }
     )
     if not profile_ids:
@@ -619,10 +621,18 @@ def _rows_with_employee_department_fallback(
             {
                 **row,
                 "odoo_department_name": effective,
-                "employee_wage_type": (
-                    profile.get("wage_type") if profile else row.get("employee_wage_type")
-                )
-                or None,
+                **(
+                    {
+                        "employee_wage_type": (
+                            profile.get("wage_type")
+                            if profile
+                            else row.get("employee_wage_type")
+                        )
+                        or None,
+                    }
+                    if include_wage_type
+                    else {}
+                ),
             }
         )
     return tuple(enriched)
@@ -651,7 +661,7 @@ def timeline_for_range(
         return ()
     if verified_through is None:
         raise RuntimeError("attendance mirror has no verified freshness")
-    rows = _rows_with_employee_department_fallback(rows)
+    rows = _rows_with_employee_department_fallback(rows, include_wage_type=True)
 
     projected = project_rows(
         rows,

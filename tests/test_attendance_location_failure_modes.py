@@ -40,6 +40,7 @@ def _install_shadow_refresh_origin(monkeypatch, *, rollout=None):
         work_center_names={},
         department_requirements={},
         employee_departments={},
+        employee_wage_types={},
         attribution_rows=(),
         metered_locations=(),
         workday=True,

@@ -196,6 +196,61 @@ def test_readiness_metrics_use_minutes_and_deterministic_blocker_order(monkeypat
     assert first.oldest_unassigned_age_seconds == 540.0
 
 
+@pytest.mark.parametrize(
+    ("wage_type", "expected_open_missing"),
+    [("monthly", 0), ("hourly", 1), (None, 1), ("unexpected", 1)],
+)
+def test_timeline_metrics_exempt_only_monthly_employee_without_work_center(
+    wage_type,
+    expected_open_missing,
+):
+    class MetricsCursor:
+        def __init__(self):
+            self.rows = []
+
+        def execute(self, sql, _params=None):
+            if "FROM odoo_attendance_mirror" in sql:
+                self.rows = [
+                    {
+                        "odoo_attendance_id": 501,
+                        "employee_odoo_id": 41,
+                        "employee_name": "Manager",
+                        "check_in_utc": NOW - timedelta(minutes=10),
+                        "check_out_utc": None,
+                        "odoo_work_center_id": None,
+                        "odoo_work_center_name": None,
+                        "odoo_department_id": 7,
+                        "odoo_department_name": "Production",
+                        "odoo_write_date": NOW - timedelta(minutes=1),
+                    }
+                ]
+            elif "FROM people" in sql:
+                self.rows = [
+                    {
+                        "odoo_id": 41,
+                        "department_name": "Production",
+                        "wage_type": wage_type,
+                    }
+                ]
+            elif "FROM work_centers" in sql:
+                self.rows = []
+            elif "FROM departments" in sql:
+                self.rows = [{"name": "Production", "requires_work_center": True}]
+            else:
+                raise AssertionError(sql)
+
+        def fetchall(self):
+            return self.rows
+
+    metrics = attendance_readiness._timeline_metrics_cur(
+        MetricsCursor(),
+        now_utc=NOW,
+        verified_through=NOW,
+    )
+
+    assert metrics[4] == expected_open_missing
+
+
 def test_report_digest_binds_exact_report_and_cutover(monkeypatch):
     monkeypatch.setattr(attendance_readiness, "_read_inputs", lambda _now: _ready_inputs())
     report = attendance_readiness.build_report(NOW)
