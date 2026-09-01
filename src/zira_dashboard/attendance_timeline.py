@@ -41,6 +41,7 @@ class LocationSpan:
     odoo_work_center_name: str | None
     attendance_ids: tuple[int, ...]
     department_repair: tuple[int, int, datetime] | None
+    is_open: bool = False
 
 
 @dataclass(frozen=True)
@@ -267,6 +268,7 @@ def _span(
     odoo_work_center_id: int | None = None,
     odoo_work_center_name: str | None = None,
     department_repair: tuple[int, int, datetime] | None = None,
+    as_of_utc: datetime | None = None,
 ) -> LocationSpan:
     first = source_rows[0]
     return LocationSpan(
@@ -280,6 +282,7 @@ def _span(
         odoo_work_center_name=odoo_work_center_name,
         attendance_ids=tuple(sorted(source.attendance_id for source in source_rows)),
         department_repair=department_repair,
+        is_open=(right == as_of_utc and any(source.check_out is None for source in source_rows)),
     )
 
 
@@ -293,6 +296,7 @@ def _semantic_key(span: LocationSpan) -> tuple[object, ...]:
         span.odoo_work_center_name,
         span.attendance_ids,
         span.department_repair,
+        span.is_open,
     )
 
 
@@ -442,6 +446,18 @@ def _project_employee(
                 if work_center_id is not None
                 else None
             )
+            attendance_ids = tuple(sorted(source.attendance_id for source in active))
+            previous = projected[-1] if projected else None
+            carried_app_work_center = (
+                previous.app_work_center_name
+                if previous is not None
+                and previous.employee_odoo_id == active[0].employee_id
+                and previous.end_utc == left
+                and previous.odoo_work_center_id == work_center_id
+                and previous.attendance_ids == attendance_ids
+                and previous.status in {"valid", "stale_open_location"}
+                else None
+            )
             projected.append(
                 _span(
                     active,
@@ -450,6 +466,8 @@ def _project_employee(
                     status="stale_open_location",
                     odoo_work_center_id=work_center_id,
                     odoo_work_center_name=work_center_name,
+                    app_work_center_name=carried_app_work_center,
+                    as_of_utc=as_of_utc,
                 )
             )
             continue
@@ -461,6 +479,7 @@ def _project_employee(
                     left=left,
                     right=right,
                     status="conflicting_location",
+                    as_of_utc=as_of_utc,
                 )
             )
             continue
@@ -479,7 +498,15 @@ def _project_employee(
                 status = "pending_first_location"
             else:
                 status = "missing_required_location"
-            projected.append(_span(active, left=left, right=right, status=status))
+            projected.append(
+                _span(
+                    active,
+                    left=left,
+                    right=right,
+                    status=status,
+                    as_of_utc=as_of_utc,
+                )
+            )
             continue
 
         work_center_id = distinct_work_centers[0]
@@ -494,6 +521,7 @@ def _project_employee(
                     status="unmapped_location",
                     odoo_work_center_id=work_center_id,
                     odoo_work_center_name=work_center_name,
+                    as_of_utc=as_of_utc,
                 )
             )
             continue
@@ -515,6 +543,7 @@ def _project_employee(
                     work_center_id=work_center_id,
                     target_department_id=target_department_id,
                 ),
+                as_of_utc=as_of_utc,
             )
         )
 
@@ -717,6 +746,7 @@ def timeline_for_range(
             span,
             start_utc=max(start, span.start_utc),
             end_utc=min(end, span.end_utc),
+            is_open=(span.is_open and min(end, span.end_utc) == span.end_utc),
         )
         for span in projected
         if min(end, span.end_utc) > max(start, span.start_utc)

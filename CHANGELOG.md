@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Put every worker in the right dashboard group
+
+- **Plant Manager can now place production workers, tablet drivers, and other workers in the right order.** A person who moves still stays on one line, and late calls or low results can move them to the top of their group.
+
 ### Keep each person's production goal separate
 
 - **Plant Manager can now work out one person's goal and uptime for each place they worked.** A move to a new work area starts a fresh result.
