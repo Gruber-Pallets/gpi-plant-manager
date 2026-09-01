@@ -51,6 +51,9 @@ def _interval(
         "needs_touch_target": width <= 6.25,
         "line_runs": line_runs,
         "buckets": buckets,
+        "hover_points": (),
+        "hover_start_ms": "",
+        "hover_end_ms": "",
         "detail": detail,
         "aria_label": ("Transferred to " if transfer else "") + detail,
     }
