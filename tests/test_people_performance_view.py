@@ -1,6 +1,7 @@
 import json
 import math
 from dataclasses import replace
+from datetime import timedelta
 
 import pytest
 
@@ -28,6 +29,19 @@ def test_presenter_uses_one_axis_and_preserves_short_intervals():
     short = next(item for item in row["intervals"] if item["location_name"] == "Repair 2")
     assert short["width_pct"] > 0
     assert short["aria_label"].startswith("Transferred to Repair 2")
+
+
+def test_axis_omits_partial_final_tick_and_bars_end_at_effective_window():
+    effective_end = END - timedelta(minutes=15)
+    model = replace(busy_dashboard_model(), window_end_utc=effective_end)
+
+    context = dashboard_context(model)
+    row = _row_named(context, "Amy Behind")
+
+    assert context["axis_labels"][-1]["label"] == "1:00 PM"
+    assert context["axis_labels"][-1]["left_pct"] < 100.0
+    assert row["intervals"][0]["left_pct"] == 0.0
+    assert row["intervals"][0]["width_pct"] == 100.0
 
 
 def test_attention_filter_keeps_every_reason_state_inside_fixed_sections():

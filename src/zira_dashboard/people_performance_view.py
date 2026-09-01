@@ -307,8 +307,6 @@ def dashboard_context(model: DashboardModel, *, attention_only: bool = False) ->
             }
         )
         value += timedelta(minutes=axis_step)
-    if not axis_labels or axis_labels[-1]["left_pct"] != 100.0:
-        axis_labels.append({"label": _time(model.window_end_utc), "left_pct": 100.0})
 
     return {
         "day": model.day.isoformat(),

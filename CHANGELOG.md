@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Keep the end of People work bars clear
+
+- **People work bars now stop when the last working time ends, before a cleanup break.** The final times also stay apart, so they are easy to read.
+
 ### Put all measured work without goals at the bottom
 
 - **The People page now places any measured work without a goal below measured work that has a goal.** Trim Saw follows the same rule as every other measured work area.
