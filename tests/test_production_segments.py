@@ -5,6 +5,7 @@ import pytest
 from zira_dashboard.assignment_windows import WorkSegment
 from zira_dashboard import production_segments as production_segments_module
 from zira_dashboard.production_segments import (
+    CreditedUnitPoint,
     SegmentCredit,
     SegmentScore,
     coalesce_display_scores,
@@ -238,6 +239,74 @@ def test_segment_score_keeps_odoo_employee_identity():
     ][0]
 
     assert scored.person_odoo_id == 44
+
+
+def test_timestamped_sample_shares_are_kept_with_each_worker_credit():
+    segments = [
+        WorkSegment("Repair 1", "Alex", t(12), t(13), "punch", person_odoo_id=44),
+        WorkSegment("Repair 1", "Blair", t(12), t(12, 30), "punch", person_odoo_id=45),
+    ]
+
+    credits = credit_work_segments(
+        segments,
+        wc_totals={"Repair 1": 30.0},
+        samples_by_wc={"Repair 1": [(t(12, 15), 20.0), (t(12, 45), 10.0)]},
+        productive_minutes=lambda _person, _wc, start, end: (
+            end - start
+        ).total_seconds()
+        / 60.0,
+        allow_total_fallback=False,
+    )["Repair 1"]
+
+    credits_by_person = {credit.person_name: credit for credit in credits}
+    alex = credits_by_person["Alex"]
+    blair = credits_by_person["Blair"]
+    assert alex.unit_points == (
+        CreditedUnitPoint(t(12, 15), 10.0),
+        CreditedUnitPoint(t(12, 45), 10.0),
+    )
+    assert blair.unit_points == (CreditedUnitPoint(t(12, 15), 10.0),)
+    assert sum(point.units for point in alex.unit_points) == alex.actual_units
+    assert sum(point.units for point in blair.unit_points) == blair.actual_units
+
+
+def test_scoring_and_display_coalescing_preserve_unit_point_order():
+    first = SegmentCredit(
+        1,
+        "Repair 1",
+        "Alex",
+        t(12),
+        t(12, 30),
+        "odoo",
+        30,
+        5,
+        False,
+        44,
+        (CreditedUnitPoint(t(12, 10), 5),),
+    )
+    second = SegmentCredit(
+        2,
+        "Repair 1",
+        "Alex",
+        t(13),
+        t(13, 30),
+        "odoo",
+        30,
+        7,
+        False,
+        44,
+        (CreditedUnitPoint(t(13, 20), 7),),
+    )
+
+    scored = score_work_segments(
+        {"Repair 1": (first, second)}, target_per_hour={"Repair 1": 10}
+    )["Repair 1"]
+    (joined,) = coalesce_display_scores(scored, ignored_gaps=((t(12, 30), t(13)),))
+
+    assert joined.unit_points == (
+        CreditedUnitPoint(t(12, 10), 5),
+        CreditedUnitPoint(t(13, 20), 7),
+    )
 
 
 def test_display_scores_do_not_join_same_name_with_different_odoo_identity():

@@ -17,6 +17,12 @@ PersonAttributionKey: TypeAlias = str | tuple[int, str]
 
 
 @dataclass(frozen=True)
+class CreditedUnitPoint:
+    at_utc: datetime
+    units: float
+
+
+@dataclass(frozen=True)
 class SegmentCredit:
     segment_id: int
     wc_name: str
@@ -28,6 +34,7 @@ class SegmentCredit:
     actual_units: float
     is_active: bool
     person_odoo_id: int | None = None
+    unit_points: tuple[CreditedUnitPoint, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -165,6 +172,7 @@ class SegmentScore:
     is_active: bool
     result: SegmentResult
     person_odoo_id: int | None = None
+    unit_points: tuple[CreditedUnitPoint, ...] = ()
 
 
 def _segment_result(
@@ -226,6 +234,9 @@ def _join_display_scores(left: SegmentScore, right: SegmentScore) -> SegmentScor
         is_active=left.is_active or right.is_active,
         result=_segment_result(left.person_name, actual, goal),
         person_odoo_id=left.person_odoo_id,
+        unit_points=tuple(
+            sorted((*left.unit_points, *right.unit_points), key=lambda point: point.at_utc)
+        ),
     )
 
 
@@ -342,6 +353,7 @@ def credit_work_segments(
             "productive_minutes": minutes,
             "actual_units": 0.0,
             "is_active": live_cap_utc is not None and segment.end_utc == live_cap_utc,
+            "unit_points": [],
         }
         indices_by_wc.setdefault(segment.wc_name, []).append(len(rows))
         rows.append(row)
@@ -375,6 +387,7 @@ def credit_work_segments(
                 share = units / len(active_by_person)
                 for index in active_by_person.values():
                     rows[index]["actual_units"] += share
+                    rows[index]["unit_points"].append(CreditedUnitPoint(timestamp, share))
                 continue
             bucket = unassigned.setdefault(
                 wc_name,
@@ -428,11 +441,13 @@ def credit_work_segments(
                 "productive_minutes": 0.0,
                 "actual_units": bucket["actual_units"],
                 "is_active": False,
+                "unit_points": [],
             }
         )
 
     by_wc: dict[str, list[SegmentCredit]] = {}
     for row in rows:
+        row["unit_points"] = tuple(row["unit_points"])
         credit = SegmentCredit(**row)
         by_wc.setdefault(credit.wc_name, []).append(credit)
     for wc_rows in by_wc.values():
@@ -478,6 +493,7 @@ def score_work_segments(
                     is_active=credit.is_active,
                     result=result,
                     person_odoo_id=credit.person_odoo_id,
+                    unit_points=tuple(credit.unit_points),
                 )
             )
         out[wc_name] = tuple(scored)
