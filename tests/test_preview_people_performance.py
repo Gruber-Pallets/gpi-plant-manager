@@ -60,9 +60,12 @@ def test_preview_contains_busy_people_fixture():
     assert 'class="pp-manager-strip"' in html
     assert 'class="pp-axis"' not in html
     assert html.count('class="pp-section-header"') == 3
+    assert html.count('class="pp-schedule-tick ') == 99
     assert "6:00 AM" in html
     assert "11:30" in html
     assert "2:00 PM" in html
+    assert "Attendance updates may be delayed while the time clock reconnects" in html
+    assert html.count('class="pp-source-warnings"') == 1
     assert ">Production<" in html
     assert ">126/168<" in html
     assert ">Centers<" not in html
@@ -152,6 +155,37 @@ def test_preview_fits_all_manager_viewports_with_compact_sticky_controls():
                           && view.getBoundingClientRect().right <= window.innerWidth
                           && ['auto', 'scroll'].includes(getComputedStyle(view).overflowX)
                         )),
+                      warningOverflowContained: (() => {
+                        const warning = document.querySelector('.pp-source-warnings');
+                        return Boolean(warning)
+                          && warning.scrollWidth > warning.clientWidth
+                          && warning.getBoundingClientRect().right <= window.innerWidth
+                          && ['auto', 'scroll'].includes(getComputedStyle(warning).overflowX);
+                      })(),
+                      controlsReachable: (() => {
+                        const controls = document.querySelector('.pp-controls');
+                        const box = controls.getBoundingClientRect();
+                        const last = controls.lastElementChild;
+                        controls.scrollLeft = controls.scrollWidth;
+                        const lastBox = last.getBoundingClientRect();
+                        const reachable = box.left >= 0 && box.right <= window.innerWidth
+                          && lastBox.right <= box.right + 0.5;
+                        controls.scrollLeft = 0;
+                        return reachable;
+                      })(),
+                      scheduleAndTimelineWidthsMatch: [...document.querySelectorAll('.pp-section')]
+                        .every(section => {
+                          const schedule = section.querySelector('.pp-schedule-track');
+                          const timeline = section.querySelector('.pp-timeline');
+                          return !timeline || Math.abs(schedule.getBoundingClientRect().width
+                            - timeline.getBoundingClientRect().width) < 0.5;
+                        }),
+                      scheduleOverflowContained: [...document.querySelectorAll('.pp-schedule-viewport')]
+                        .every(view => (
+                          view.scrollWidth > view.clientWidth
+                          && view.getBoundingClientRect().right <= window.innerWidth
+                          && ['auto', 'scroll'].includes(getComputedStyle(view).overflowX)
+                        )),
                       intervals: window.__peoplePreviewIntervals,
                     })
                     """
@@ -167,12 +201,15 @@ def test_preview_fits_all_manager_viewports_with_compact_sticky_controls():
                 assert geometry["identityNamesFit"] is True
                 assert page.locator(".pp-timeline").first.bounding_box()["width"] >= 480
                 assert geometry["localOverflowContained"] is True
-                if width == 768:
+                assert geometry["warningOverflowContained"] is True
+                assert geometry["controlsReachable"] is True
+                assert geometry["scheduleAndTimelineWidthsMatch"] is True
+                assert geometry["scheduleOverflowContained"] is True
+                if width <= 768:
                     assert after["height"] <= 88
-                elif width > 768:
-                    assert after["height"] <= 44
-                else:
                     assert len(geometry["managerRows"].split()) <= 2
+                else:
+                    assert after["height"] <= 44
                 assert 30000 not in geometry["intervals"]
                 assert errors == []
                 page.evaluate("window.scrollTo(0, 0)")

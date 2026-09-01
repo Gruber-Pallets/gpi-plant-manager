@@ -265,6 +265,17 @@
     );
   }
 
+  function managerControlFor(node) {
+    return node && node.closest ? node.closest("[data-pp-control-key]") : null;
+  }
+
+  function restoredManagerControl(key) {
+    if (!key) return null;
+    return document.querySelector(
+      '[data-pp-control-key="' + escapeSelector(key) + '"]'
+    );
+  }
+
   function horizontalScrollLeft() {
     var viewports = document.querySelectorAll(".pp-horizontal-scroll");
     return viewports.length ? viewports[0].scrollLeft : 0;
@@ -287,12 +298,20 @@
 
   function captureState() {
     var focused = triggerFor(document.activeElement);
+    var managerControl = managerControlFor(document.activeElement);
     return {
       scrollX: windowObject.scrollX,
       scrollY: windowObject.scrollY,
       horizontalScroll: horizontalScrollLeft(),
       focusKey: focused ? focused.dataset.intervalKey : null,
       focusKind: triggerKind(focused),
+      managerControlKey: managerControl ? managerControl.dataset.ppControlKey : null,
+      managerControlValue: managerControl && managerControl.dataset.ppControlKey === "day"
+        ? managerControl.value
+        : null,
+      managerControlChecked: managerControl && managerControl.dataset.ppControlKey === "attention"
+        ? managerControl.checked
+        : null,
       pinnedKey: pinned ? pinned.dataset.intervalKey : null,
       pinnedKind: triggerKind(pinned),
       pinnedAtMs: pinned ? selectedAtMs : null,
@@ -302,8 +321,17 @@
   function restoreState(state) {
     var focusTarget = restoredTrigger(state.focusKind, state.focusKey);
     var pinTarget = restoredTrigger(state.pinnedKind, state.pinnedKey);
+    var managerControl = restoredManagerControl(state.managerControlKey);
 
-    if (focusTarget) focusWithoutScrolling(focusTarget);
+    if (managerControl && state.managerControlKey === "day") {
+      managerControl.value = state.managerControlValue;
+    }
+    if (managerControl && state.managerControlKey === "attention") {
+      managerControl.checked = state.managerControlChecked;
+    }
+
+    if (managerControl) focusWithoutScrolling(managerControl);
+    else if (focusTarget) focusWithoutScrolling(focusTarget);
     if (pinTarget) open(pinTarget, true, state.pinnedAtMs);
     else if (focusTarget) open(focusTarget, false);
     else close(false);

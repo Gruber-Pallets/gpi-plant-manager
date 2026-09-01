@@ -122,6 +122,8 @@ def test_page_uses_one_compact_live_manager_strip(rendered_html):
     assert "Forklift data unavailable" in rendered_html
     assert 'name="day"' in rendered_html
     assert 'name="attention"' in rendered_html
+    assert 'data-pp-control-key="day"' in rendered_html
+    assert 'data-pp-control-key="attention"' in rendered_html
     assert 'data-pp-auto-submit' in rendered_html
     assert '>Apply<' not in rendered_html
     assert '>Today<' not in rendered_html
@@ -155,7 +157,12 @@ def test_historical_manager_strip_offers_today_shortcut(client, monkeypatch):
     response = client.get(f"/people-performance?day={historical.isoformat()}")
 
     assert response.status_code == 200
-    assert '<a href="/people-performance">Today</a>' in response.text
+    assert '<a data-pp-control-key="today" href="/people-performance">Today</a>' in response.text
+
+
+def test_live_partial_sets_one_shared_schedule_track_width(rendered_html):
+    assert 'style="--pp-track-width:' in rendered_html
+    assert rendered_html.count("--pp-track-width:") == 1
 
 
 def test_page_does_not_repeat_tab_identity_or_render_hourly_axis(rendered_html):

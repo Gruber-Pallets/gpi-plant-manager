@@ -80,6 +80,45 @@ def test_schedule_markers_deduplicate_equal_break_and_shift_end_times():
     assert context["schedule_time_groups"][-1]["edge"] == "end"
 
 
+@pytest.mark.parametrize(
+    ("boundary", "label", "expected"),
+    (
+        (START, "Opening huddle", "Shift starts at 6:00 AM; Opening huddle starts at 6:00 AM"),
+        (END, "Closing cleanup", "Shift ends at 2:00 PM; Closing cleanup starts at 2:00 PM"),
+    ),
+)
+def test_schedule_markers_keep_break_names_at_shift_boundaries(boundary, label, expected):
+    model = replace(
+        busy_dashboard_model(),
+        breaks=(BreakSpan(boundary, boundary, label),),
+    )
+
+    marker = next(
+        item
+        for item in dashboard_context(model)["schedule_markers"]
+        if item["left_pct"] == (0.0 if boundary == START else 100.0)
+    )
+
+    assert marker["kind"] == ("start" if boundary == START else "end")
+    assert marker["aria_label"] == expected
+
+
+def test_dense_schedule_expands_the_shared_timeline_track():
+    breaks = tuple(
+        BreakSpan(
+            START + timedelta(minutes=15 * index),
+            START + timedelta(minutes=15 * index + 5),
+            f"Break {index}",
+        )
+        for index in range(1, 31)
+    )
+
+    context = dashboard_context(replace(busy_dashboard_model(), breaks=breaks))
+
+    assert len(context["schedule_markers"]) == 32
+    assert context["schedule_track_width_rem"] > 38
+
+
 def test_schedule_markers_keep_shift_boundaries_for_out_of_window_breaks():
     model = replace(
         busy_dashboard_model(),

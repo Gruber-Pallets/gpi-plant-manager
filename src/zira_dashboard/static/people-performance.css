@@ -149,8 +149,7 @@
 
 .pp-schedule-track,
 .pp-timeline {
-  width: 100%;
-  min-width: 34rem;
+  width: max(100%, var(--pp-track-width));
 }
 
 .pp-schedule-track {
@@ -169,6 +168,7 @@
   position: absolute;
   top: 50%;
   color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: .75rem;
   font-style: normal;
   font-weight: 700;
@@ -535,11 +535,6 @@
   .pp-section-header,
   .pp-row {
     grid-template-columns: 12rem minmax(0, 1fr);
-  }
-
-  .pp-schedule-track,
-  .pp-timeline {
-    min-width: 38rem;
   }
 
   .pp-section-summary {

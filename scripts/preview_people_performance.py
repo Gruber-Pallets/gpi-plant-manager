@@ -13,6 +13,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from zira_dashboard.app import app  # noqa: E402
 from zira_dashboard.deps import templates  # noqa: E402
+from zira_dashboard.people_performance_view import (  # noqa: E402
+    _schedule_time_groups,
+    _schedule_track_width_rem,
+)
 from zira_dashboard.routes import people_performance  # noqa: E402
 
 
@@ -123,6 +127,12 @@ def _other_summary(clocked, location, locations, status):
         ("Locations", locations),
         ("Status", status),
     )
+
+
+def _schedule_time(index: int) -> str:
+    hour = 6 + index // 4
+    display_hour = hour if hour <= 12 else hour - 12
+    return f"{display_hour}:{15 * (index % 4):02d}"
 
 
 def _context() -> dict:
@@ -472,6 +482,28 @@ def _context() -> dict:
     production_rows = _ordered_rows(production_rows)
     forklift_rows = _ordered_rows(forklift_rows)
     other_rows = _ordered_rows(other_rows)
+    schedule_markers = tuple(
+        {
+            "left_pct": 100.0 * index / 32,
+            "kind": "start" if index == 0 else "end" if index == 32 else "break",
+            "visible_label": (
+                "6:00 AM"
+                if index == 0
+                else "2:00 PM"
+                if index == 32
+                else _schedule_time(index)
+            ),
+            "aria_label": (
+                "Shift starts at 6:00 AM"
+                if index == 0
+                else "Shift ends at 2:00 PM"
+                if index == 32
+                else f"Custom break {index} starts"
+            ),
+        }
+        for index in range(33)
+    )
+    schedule_time_groups = _schedule_time_groups(schedule_markers)
 
     return {
         "day": "2026-08-28",
@@ -491,21 +523,14 @@ def _context() -> dict:
                 "rows": other_rows,
             },
         ),
-        "schedule_markers": (
-            {"left_pct": 0.0, "kind": "start", "aria_label": "Shift starts at 6:00 AM"},
-            {
-                "left_pct": 68.75,
-                "kind": "break",
-                "aria_label": "Planned break starts at 11:30 AM",
-            },
-            {"left_pct": 100.0, "kind": "end", "aria_label": "Shift ends at 2:00 PM"},
+        "schedule_markers": schedule_markers,
+        "schedule_time_groups": schedule_time_groups,
+        "schedule_track_width_rem": _schedule_track_width_rem(schedule_time_groups),
+        "source_warnings": (
+            "Attendance updates may be delayed while the time clock reconnects at the north entrance.",
+            "Forklift call details are still loading from the tablet service for several busy work areas.",
+            "Production totals may be incomplete while the repair center sends its latest counts.",
         ),
-        "schedule_time_groups": (
-            {"left_pct": 0.0, "label": "6:00 AM", "edge": "start"},
-            {"left_pct": 68.75, "label": "11:30", "edge": "middle"},
-            {"left_pct": 100.0, "label": "2:00 PM", "edge": "end"},
-        ),
-        "source_warnings": (),
         "working_now": 8,
         "worked_earlier": 2,
         "needs_attention": 4,

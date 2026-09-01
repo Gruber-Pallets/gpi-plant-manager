@@ -37,6 +37,9 @@ def _time(value: datetime) -> str:
 
 
 _MIN_TIME_LABEL_GAP_PCT = 8.0
+_MIN_SCHEDULE_TRACK_WIDTH_REM = 34.0
+_TIME_LABEL_CHARACTER_WIDTH_REM = 0.5
+_TIME_LABEL_GAP_REM = 0.75
 
 
 def _break_time(value: datetime) -> str:
@@ -44,35 +47,35 @@ def _break_time(value: datetime) -> str:
 
 
 def _schedule_markers(model: DashboardModel) -> tuple[dict, ...]:
-    candidates = [
-        (model.window_start_utc, "start", "Shift starts"),
-        *((item.start_utc, "break", f"{item.label} starts") for item in model.breaks),
-        (model.window_end_utc, "end", "Shift ends"),
-    ]
-    clamped_candidates = [
-        (
-            min(max(value, model.window_start_utc), model.window_end_utc),
-            kind,
-            description,
-        )
-        for value, kind, description in candidates
-    ]
+    breaks_by_time: dict[datetime, list[str]] = {}
+    for item in model.breaks:
+        if model.window_start_utc <= item.start_utc <= model.window_end_utc:
+            breaks_by_time.setdefault(item.start_utc, []).append(f"{item.label} starts")
+
+    times = {model.window_start_utc, model.window_end_utc, *breaks_by_time}
     markers = []
-    seen = set()
-    for value, kind, description in sorted(
-        clamped_candidates,
-        key=lambda item: (item[0], item[1] == "break"),
-    ):
-        if value in seen:
-            continue
-        seen.add(value)
+    for value in sorted(times):
+        descriptions = []
+        if value == model.window_start_utc:
+            kind = "start"
+            descriptions.append("Shift starts")
+        elif value == model.window_end_utc:
+            kind = "end"
+            descriptions.append("Shift ends")
+        else:
+            kind = "break"
+        descriptions.extend(breaks_by_time.get(value, ()))
+        if value == model.window_end_utc and value == model.window_start_utc:
+            descriptions.append("Shift ends")
         full_time = _time(value)
         markers.append(
             {
                 "left_pct": _pct(value, model.window_start_utc, model.window_end_utc),
                 "kind": kind,
                 "visible_label": full_time if kind != "break" else _break_time(value),
-                "aria_label": f"{description} at {full_time}",
+                "aria_label": "; ".join(
+                    f"{description} at {full_time}" for description in descriptions
+                ),
             }
         )
     return tuple(markers)
@@ -81,7 +84,7 @@ def _schedule_markers(model: DashboardModel) -> tuple[dict, ...]:
 def _schedule_time_groups(markers: tuple[dict, ...]) -> tuple[dict, ...]:
     groups: list[list[dict]] = []
     for marker in markers:
-        if groups and marker["left_pct"] - groups[-1][-1]["left_pct"] < _MIN_TIME_LABEL_GAP_PCT:
+        if groups and marker["left_pct"] - groups[-1][0]["left_pct"] < _MIN_TIME_LABEL_GAP_PCT:
             groups[-1].append(marker)
         else:
             groups.append([marker])
@@ -99,6 +102,43 @@ def _schedule_time_groups(markers: tuple[dict, ...]) -> tuple[dict, ...]:
         }
         for group in groups
     )
+
+
+def _schedule_track_width_rem(groups: tuple[dict, ...]) -> float:
+    def label_width(group: dict) -> float:
+        return max(2.5, len(group["label"]) * _TIME_LABEL_CHARACTER_WIDTH_REM)
+
+    def left_offset(group: dict) -> float:
+        width = label_width(group)
+        if group["edge"] == "start":
+            return 0.0
+        if group["edge"] == "end":
+            return width
+        return width / 2.0
+
+    def right_offset(group: dict) -> float:
+        width = label_width(group)
+        if group["edge"] == "start":
+            return width
+        if group["edge"] == "end":
+            return 0.0
+        return width / 2.0
+
+    required = _MIN_SCHEDULE_TRACK_WIDTH_REM
+    for group in groups:
+        position = group["left_pct"] / 100.0
+        if position > 0:
+            required = max(required, left_offset(group) / position)
+        if position < 1:
+            required = max(required, right_offset(group) / (1.0 - position))
+    for previous, current in zip(groups, groups[1:], strict=False):
+        gap = (current["left_pct"] - previous["left_pct"]) / 100.0
+        if gap > 0:
+            required = max(
+                required,
+                (right_offset(previous) + left_offset(current) + _TIME_LABEL_GAP_REM) / gap,
+            )
+    return round(required, 2)
 
 
 def _epoch_ms(value: datetime) -> int:
@@ -361,6 +401,7 @@ def dashboard_context(model: DashboardModel, *, attention_only: bool = False) ->
     )
 
     schedule_markers = _schedule_markers(model)
+    schedule_time_groups = _schedule_time_groups(schedule_markers)
 
     return {
         "day": model.day.isoformat(),
@@ -369,7 +410,8 @@ def dashboard_context(model: DashboardModel, *, attention_only: bool = False) ->
         "as_of_iso": model.as_of_utc.isoformat(),
         "sections": sections,
         "schedule_markers": schedule_markers,
-        "schedule_time_groups": _schedule_time_groups(schedule_markers),
+        "schedule_time_groups": schedule_time_groups,
+        "schedule_track_width_rem": _schedule_track_width_rem(schedule_time_groups),
         "source_warnings": model.source_warnings,
         "working_now": sum(row.is_active for row in model.rows),
         "worked_earlier": sum(not row.is_active for row in model.rows),

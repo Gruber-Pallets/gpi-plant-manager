@@ -87,8 +87,9 @@ def test_section_headers_share_row_columns_and_time_tracks():
         "minmax(16rem, 1.35fr)"
     ) in shared_grid.group(1)
     assert shared_tracks
-    assert "width: 100%" in shared_tracks.group(1)
-    assert "min-width: 34rem" in shared_tracks.group(1)
+    assert "width: max(100%, var(--pp-track-width))" in shared_tracks.group(1)
+    time_group = re.search(r"\.pp-schedule-time-group\s*\{([^}]*)\}", css)
+    assert time_group and "ui-monospace" in time_group.group(1)
     assert ".pp-schedule-time-group.is-start" in css
     assert ".pp-schedule-time-group.is-end" in css
 
@@ -114,7 +115,7 @@ def test_compact_header_media_queries_preserve_shared_layout_contracts():
 
     assert tablet_grid
     assert "grid-template-columns: 12rem minmax(0, 1fr)" in tablet_grid.group(1)
-    assert tablet_tracks and "min-width: 38rem" in tablet_tracks.group(1)
+    assert tablet_tracks is None
     assert tablet_summary and "display: none" in tablet_summary.group(1)
     assert mobile_grid
     assert "grid-template-columns: 10rem minmax(0, 1fr)" in mobile_grid.group(1)
@@ -279,6 +280,25 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             };
           }
 
+          function makeControl(key, kind, value, checked) {
+            return {
+              dataset: {ppControlKey: key},
+              kind,
+              value: value == null ? '' : value,
+              checked: Boolean(checked),
+              focusCount: 0,
+              closest(selector) {
+                return selector === '[data-pp-control-key]' ? this : null;
+              },
+              focus(options) {
+                this.focusCount += 1;
+                focusOptions.push(options);
+                document.activeElement = this;
+                document.emit('focusin', {target: this});
+              },
+            };
+          }
+
           function makeTrigger(key, detail, kind, top, datasetValues) {
             const attributes = {};
             const markerClasses = new Set();
@@ -329,7 +349,7 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             return trigger;
           }
 
-          function makeRows(day, isToday, triggers) {
+          function makeRows(day, isToday, triggers, controls) {
             const attributes = {};
             const rows = {
               dataset: {
@@ -340,12 +360,14 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
                 asOf: '2:00 PM',
               },
               triggers: triggers || [],
+              controls: controls || [],
               viewports: [makeViewport('row')],
               setAttribute(name, value) { attributes[name] = String(value); },
               getAttribute(name) { return attributes[name]; },
               replaceWith(next) {
                 replacements.push(next);
                 document.rows = next;
+                document.controls = next.controls;
                 document.viewports = [document.axisViewport, ...next.viewports];
               },
             };
@@ -353,8 +375,13 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           }
 
           const first = makeTrigger('stable-open', 'Repair 1 working now', 'interval', 160);
+          const dateControl = makeControl('day', 'date', '2026-08-28');
+          const attentionControl = makeControl('attention', 'checkbox', '1', false);
           document.axisViewport = makeViewport('axis');
-          document.rows = makeRows('2026-08-28', today, [first]);
+          document.rows = makeRows(
+            '2026-08-28', today, [first], [dateControl, attentionControl]
+          );
+          document.controls = document.rows.controls;
           document.viewports = [document.axisViewport, ...document.rows.viewports];
 
           document.body = {
@@ -383,6 +410,10 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           document.querySelector = function (selector) {
             if (selector === '.pp-page[data-today="1"]') {
               return page.dataset.today === '1' ? page : null;
+            }
+            const controlMatch = selector.match(/data-pp-control-key="([^"]+)"/);
+            if (controlMatch) {
+              return this.controls.find((item) => item.dataset.ppControlKey === controlMatch[1]) || null;
             }
             const match = selector.match(/data-interval-key="([^"]+)"/);
             if (!match) return null;
@@ -442,8 +473,11 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             filterControl,
             parsed,
             makeTrigger,
+            makeControl,
             makeRows,
             first,
+            dateControl,
+            attentionControl,
             getPopover: () => popover,
             getBoundsReads: () => boundsReads,
           };
@@ -947,6 +981,88 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             throw new Error('un-pinned keyboard focus details were not restored');
           }
           focusController.destroy();
+
+          // Manager controls live inside the replaced partial. In-progress
+          // values and focus must survive a refresh without moving the page.
+          for (const kind of ['date', 'checkbox']) {
+            const controlEnv = makeEnvironment('1');
+            const oldControl = kind === 'date'
+              ? controlEnv.dateControl : controlEnv.attentionControl;
+            const controlController = makeController(
+              controlEnv.document, controlEnv.windowObject
+            );
+            controlController.init();
+            const controlPromise = controlController.refreshRows();
+            oldControl.focus();
+            if (kind === 'date') oldControl.value = '2026-08-29';
+            else oldControl.checked = true;
+            controlEnv.windowObject.scrollY = 654;
+            const newControl = controlEnv.makeControl(
+              kind === 'date' ? 'day' : 'attention',
+              kind,
+              kind === 'date' ? '2026-08-28' : '1',
+              false
+            );
+            controlEnv.parsed['control-' + kind] = controlEnv.makeRows(
+              '2026-08-28', '1', [], [newControl]
+            );
+            controlEnv.requests[0].pending.resolve(response({token: 'control-' + kind}));
+            await controlPromise;
+            if (newControl.focusCount !== 1) {
+              throw new Error(kind + ' control focus was not restored');
+            }
+            if (!controlEnv.focusOptions.some((value) => value && value.preventScroll === true)) {
+              throw new Error(kind + ' control focus was restored without preventScroll');
+            }
+            if (kind === 'date' && newControl.value !== '2026-08-29') {
+              throw new Error('in-progress date value was discarded');
+            }
+            if (kind === 'checkbox' && newControl.checked !== true) {
+              throw new Error('in-progress checkbox value was discarded');
+            }
+            if (controlEnv.windowObject.scrollY !== 654) {
+              throw new Error(kind + ' control restoration moved the page');
+            }
+            controlController.destroy();
+          }
+
+          const todayEnv = makeEnvironment('1');
+          const todayLink = todayEnv.makeControl('today', 'link');
+          todayEnv.document.controls = [todayLink];
+          todayEnv.document.rows.controls = [todayLink];
+          const todayController = makeController(todayEnv.document, todayEnv.windowObject);
+          todayController.init();
+          const todayPromise = todayController.refreshRows();
+          todayLink.focus();
+          const refreshedTodayLink = todayEnv.makeControl('today', 'link');
+          todayEnv.parsed.todayControl = todayEnv.makeRows(
+            '2026-08-28', '1', [], [refreshedTodayLink]
+          );
+          todayEnv.requests[0].pending.resolve(response({token: 'todayControl'}));
+          await todayPromise;
+          if (refreshedTodayLink.focusCount !== 1) {
+            throw new Error('Today link focus was not restored');
+          }
+          todayController.destroy();
+
+          const tornDownControlEnv = makeEnvironment('1');
+          const tornDownController = makeController(
+            tornDownControlEnv.document, tornDownControlEnv.windowObject
+          );
+          tornDownController.init();
+          const tornDownPromise = tornDownController.refreshRows();
+          tornDownControlEnv.dateControl.focus();
+          const forbiddenControl = tornDownControlEnv.makeControl(
+            'day', 'date', '2026-08-28'
+          );
+          tornDownControlEnv.parsed.tornDown = tornDownControlEnv.makeRows(
+            '2026-08-28', '1', [], [forbiddenControl]
+          );
+          tornDownController.destroy();
+          tornDownControlEnv.requests[0].pending.resolve(response({token: 'tornDown'}));
+          if (await tornDownPromise !== false || forbiddenControl.focusCount !== 0) {
+            throw new Error('destroyed refresh restored a detached manager control');
+          }
 
           // An open interval can age past the short-move threshold while a
           // request is in flight. Its stable key must restore focus and the pin
