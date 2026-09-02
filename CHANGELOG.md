@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Plan two clear rows for the People page bar
+
+- **A plan is ready to put People page warnings on their own row.** This will stop the top bar from overlapping or showing a sideways scroll bar. Nothing in the app has changed yet.
+
 ### Make the People page easier to scan
 
 - **The People page now keeps its totals, warnings, date, and filter in one thin bar.** Each green group shows only the workday start, break starts, and end, so managers can find the important times faster.
