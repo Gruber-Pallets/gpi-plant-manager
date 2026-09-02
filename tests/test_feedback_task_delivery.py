@@ -55,6 +55,8 @@ def claim(
     task_id: int | None = None,
     attachment_id: int | None = None,
     expires_at: datetime = EXPIRES,
+    desired_contract_version: int = 2,
+    last_synced_contract_version: int = 0,
 ):
     return delivery.TaskDeliveryClaim(
         feedback_id=42,
@@ -62,6 +64,8 @@ def claim(
         task_id=task_id,
         before_attachment_id=attachment_id,
         expires_at=expires_at,
+        desired_contract_version=desired_contract_version,
+        last_synced_contract_version=last_synced_contract_version,
     )
 
 
@@ -137,7 +141,18 @@ def test_enqueue_submission_records_requested_lifecycle_intent():
 
     sql, params = cursor.calls[0]
     assert "desired_version, last_synced_version, desired_status" in sql
-    assert params == (42, 1, "requested")
+    assert "desired_contract_version, last_synced_contract_version" in sql
+    assert params == (42, 1, "requested", delivery.TASK_SYNC_CONTRACT_VERSION)
+
+
+def test_task_delivery_claim_validates_contract_versions():
+    current = claim(desired_contract_version=2, last_synced_contract_version=1)
+
+    assert current.desired_contract_version == delivery.TASK_SYNC_CONTRACT_VERSION
+    assert current.last_synced_contract_version == 1
+
+    with pytest.raises(ValueError, match="contract versions are inverted"):
+        claim(desired_contract_version=1, last_synced_contract_version=2)
 
 
 def test_lifecycle_enqueue_advances_existing_intent():
@@ -150,8 +165,20 @@ def test_lifecycle_enqueue_advances_existing_intent():
     sql, params = cursor.calls[0]
     assert "desired_version = %s" in sql
     assert "desired_status = %s" in sql
-    assert "state = CASE WHEN state = 'in_flight' THEN state ELSE 'pending' END" in " ".join(sql.split())
-    assert params == (3, "completed", NOW, NOW, 42, 3)
+    assert "desired_contract_version = GREATEST(desired_contract_version, %s)" in sql
+    normalized = " ".join(sql.split())
+    assert "state = CASE WHEN state IN ('in_flight', 'blocked') THEN state ELSE 'pending' END" in normalized
+    assert "blocked_reason = CASE WHEN state = 'blocked' THEN blocked_reason ELSE NULL END" in normalized
+    assert params == (
+        3,
+        "completed",
+        delivery.TASK_SYNC_CONTRACT_VERSION,
+        NOW,
+        NOW,
+        42,
+        3,
+        delivery.TASK_SYNC_CONTRACT_VERSION,
+    )
 
 
 def test_existing_lifecycle_reconciliation_is_bounded_and_retains_task_identity(
@@ -167,8 +194,16 @@ def test_existing_lifecycle_reconciliation_is_bounded_and_retains_task_identity(
     assert "td.state <> 'blocked'" in sql
     assert "desired_version = candidates.projection_version" in sql
     assert "desired_status = candidates.status" in sql
+    assert "td.desired_contract_version < %s" in sql
+    assert "td.last_synced_contract_version < %s" in sql
+    assert "desired_contract_version = %s" in sql
     assert "odoo_task_id" not in sql.split(" SET ", 1)[1].split(" FROM ", 1)[0]
-    assert cursor.calls[0][1] == (100,)
+    assert cursor.calls[0][1] == (
+        delivery.TASK_SYNC_CONTRACT_VERSION,
+        delivery.TASK_SYNC_CONTRACT_VERSION,
+        100,
+        delivery.TASK_SYNC_CONTRACT_VERSION,
+    )
 
 
 def test_renew_claim_refuses_an_expired_or_reclaimed_lease(monkeypatch):
@@ -217,6 +252,9 @@ def test_mark_delivered_requires_current_claim_token(monkeypatch):
 
     statement = normalized_sql(cursor, 0)
     assert_current_claim_predicate(statement)
+    assert "last_synced_contract_version = %s" in statement
+    assert "desired_contract_version = %s" in statement
+    assert "last_synced_contract_version = %s" in statement
 
 
 def test_block_records_an_allowlisted_owner_reason_without_another_attempt(monkeypatch):

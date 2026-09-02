@@ -19,6 +19,7 @@ from .feedback_types import FEEDBACK_TYPES, feedback_type
 
 _MAX_SIGNED_64 = 9_223_372_036_854_775_807
 _MAX_WORKER_ID_LENGTH = 128
+TASK_SYNC_CONTRACT_VERSION = 2
 _CLAIM_LEASE = timedelta(minutes=2)
 _RETRY_SUMMARY = "Odoo task delivery needs attention and will retry."
 _BLOCKED_REASON = "Task delivery needs owner review."
@@ -53,6 +54,8 @@ class TaskDeliveryClaim:
     desired_version: int = 1
     last_synced_version: int = 0
     desired_status: str = "requested"
+    desired_contract_version: int = TASK_SYNC_CONTRACT_VERSION
+    last_synced_contract_version: int = 0
 
     def __post_init__(self) -> None:
         _positive_signed_64(self.feedback_id, "feedback id")
@@ -67,6 +70,12 @@ class TaskDeliveryClaim:
         if self.last_synced_version > self.desired_version:
             raise ValueError("task lifecycle versions are inverted")
         _lifecycle_status(self.desired_status)
+        _positive_signed_64(self.desired_contract_version, "desired contract version")
+        _nonnegative_signed_64(
+            self.last_synced_contract_version, "last synchronized contract version"
+        )
+        if self.last_synced_contract_version > self.desired_contract_version:
+            raise ValueError("task contract versions are inverted")
 
 
 @dataclass(frozen=True)
@@ -142,6 +151,10 @@ def _claim_from_row(row: Mapping[str, object]) -> TaskDeliveryClaim:
             desired_version=row.get("desired_version", 1),
             last_synced_version=row.get("last_synced_version", 0),
             desired_status=row.get("desired_status", "requested"),
+            desired_contract_version=row.get(
+                "desired_contract_version", TASK_SYNC_CONTRACT_VERSION
+            ),
+            last_synced_contract_version=row.get("last_synced_contract_version", 0),
         )
     except ValueError:
         raise StateTransitionError("database returned a malformed task delivery claim") from None
@@ -230,9 +243,10 @@ def enqueue_submission(
     safe_status = _lifecycle_status(desired_status)
     cur.execute(
         "INSERT INTO feedback_task_delivery "
-        "(feedback_id, state, due_at, desired_version, last_synced_version, desired_status) "
-        "VALUES (%s, 'pending', now(), %s, 0, %s)",
-        (safe_feedback_id, safe_version, safe_status),
+        "(feedback_id, state, due_at, desired_version, last_synced_version, desired_status, "
+        "desired_contract_version, last_synced_contract_version) "
+        "VALUES (%s, 'pending', now(), %s, 0, %s, %s, 0)",
+        (safe_feedback_id, safe_version, safe_status, TASK_SYNC_CONTRACT_VERSION),
     )
 
 
@@ -251,10 +265,24 @@ def enqueue_lifecycle(
     current = _aware_datetime(now, "lifecycle intent time")
     cur.execute(
         "UPDATE feedback_task_delivery SET desired_version = %s, desired_status = %s, "
-        "state = CASE WHEN state = 'in_flight' THEN state ELSE 'pending' END, "
-        "due_at = %s, last_error_summary = NULL, blocked_reason = NULL, updated_at = %s "
-        "WHERE feedback_id = %s AND desired_version < %s RETURNING feedback_id",
-        (safe_version, safe_status, current, current, safe_feedback_id, safe_version),
+        "desired_contract_version = GREATEST(desired_contract_version, %s), "
+        "state = CASE WHEN state IN ('in_flight', 'blocked') THEN state ELSE 'pending' END, "
+        "due_at = %s, last_error_summary = NULL, "
+        "blocked_reason = CASE WHEN state = 'blocked' THEN blocked_reason ELSE NULL END, "
+        "updated_at = %s "
+        "WHERE feedback_id = %s "
+        "AND (desired_version < %s OR desired_contract_version < %s) "
+        "RETURNING feedback_id",
+        (
+            safe_version,
+            safe_status,
+            TASK_SYNC_CONTRACT_VERSION,
+            current,
+            current,
+            safe_feedback_id,
+            safe_version,
+            TASK_SYNC_CONTRACT_VERSION,
+        ),
     )
     row = cur.fetchone()
     if not isinstance(row, Mapping) or row.get("feedback_id") != safe_feedback_id:
@@ -280,6 +308,8 @@ def queue_existing_lifecycle_mismatches(*, limit: int = 100) -> int:
                   td.desired_version <> f.projection_version
                   OR td.desired_status <> f.status
                   OR td.last_synced_version < f.projection_version
+                  OR td.desired_contract_version < %s
+                  OR td.last_synced_contract_version < %s
                 )
               ORDER BY f.id
               FOR UPDATE OF td SKIP LOCKED
@@ -288,6 +318,7 @@ def queue_existing_lifecycle_mismatches(*, limit: int = 100) -> int:
               UPDATE feedback_task_delivery td
               SET desired_version = candidates.projection_version,
                   desired_status = candidates.status,
+                  desired_contract_version = %s,
                   state = 'pending', due_at = now(), attempt_count = 0,
                   claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL,
                   last_error_summary = NULL, blocked_reason = NULL, updated_at = now()
@@ -297,7 +328,12 @@ def queue_existing_lifecycle_mismatches(*, limit: int = 100) -> int:
             )
             SELECT COUNT(*) AS queued FROM updated
             """,
-            (limit,),
+            (
+                TASK_SYNC_CONTRACT_VERSION,
+                TASK_SYNC_CONTRACT_VERSION,
+                limit,
+                TASK_SYNC_CONTRACT_VERSION,
+            ),
         )
         row = cursor.fetchone()
     if not isinstance(row, Mapping) or type(row.get("queued")) is not int:
@@ -322,7 +358,8 @@ def claim_due(
         cursor.execute(
             """
             SELECT feedback_id, odoo_task_id, before_attachment_id,
-                   desired_version, last_synced_version, desired_status
+                   desired_version, last_synced_version, desired_status,
+                   desired_contract_version, last_synced_contract_version
             FROM feedback_task_delivery
             WHERE (
                 state IN ('pending', 'attention') AND due_at <= %s
@@ -348,6 +385,10 @@ def claim_due(
                 desired_version = row.get("desired_version", 1)
                 last_synced_version = row.get("last_synced_version", 0)
                 desired_status = row.get("desired_status", "requested")
+                desired_contract_version = row.get(
+                    "desired_contract_version", TASK_SYNC_CONTRACT_VERSION
+                )
+                last_synced_contract_version = row.get("last_synced_contract_version", 0)
                 if task_id is not None:
                     _positive_signed_64(task_id, "task id")
                 if attachment_id is not None:
@@ -355,6 +396,12 @@ def claim_due(
                 _positive_signed_64(desired_version, "desired version")
                 _nonnegative_signed_64(last_synced_version, "last synchronized version")
                 _lifecycle_status(desired_status)
+                _positive_signed_64(desired_contract_version, "desired contract version")
+                _nonnegative_signed_64(
+                    last_synced_contract_version, "last synchronized contract version"
+                )
+                if last_synced_contract_version > desired_contract_version:
+                    raise ValueError("task contract versions are inverted")
             except ValueError:
                 raise StateTransitionError("database returned a malformed due-claim row") from None
             token = uuid4()
@@ -374,7 +421,8 @@ def claim_due(
                   AND before_attachment_id IS NOT DISTINCT FROM %s
                 RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
                           claim_expires_at, desired_version, last_synced_version,
-                          desired_status
+                          desired_status, desired_contract_version,
+                          last_synced_contract_version
                 """,
                 (
                     owner,
@@ -394,6 +442,7 @@ def claim_due(
                 TaskDeliveryClaim(
                     feedback_id, token, task_id, attachment_id, expires,
                     desired_version, last_synced_version, desired_status,
+                    desired_contract_version, last_synced_contract_version,
                 ),
             )
             claims.append(result)
@@ -422,7 +471,8 @@ def renew_claim(
               AND claim_expires_at > %s
             RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
                       claim_expires_at, desired_version, last_synced_version,
-                      desired_status
+                      desired_status, desired_contract_version,
+                      last_synced_contract_version
             """,
             (
                 expires,
@@ -517,7 +567,8 @@ def record_task_id(
               AND before_attachment_id IS NOT DISTINCT FROM %s
             RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
                       claim_expires_at, desired_version, last_synced_version,
-                      desired_status
+                      desired_status, desired_contract_version,
+                      last_synced_contract_version
             """,
             (
                 saved_task_id,
@@ -557,7 +608,8 @@ def record_before_attachment(
               AND before_attachment_id IS NOT DISTINCT FROM %s
             RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
                       claim_expires_at, desired_version, last_synced_version,
-                      desired_status
+                      desired_status, desired_contract_version,
+                      last_synced_contract_version
             """,
             (
                 saved_attachment_id,
@@ -584,11 +636,16 @@ def mark_delivered(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> 
             """
             UPDATE feedback_task_delivery
             SET last_synced_version = %s,
-                state = CASE WHEN desired_version = %s THEN 'delivered' ELSE 'pending' END,
+                last_synced_contract_version = %s,
+                state = CASE
+                  WHEN desired_version = %s AND desired_contract_version = %s
+                  THEN 'delivered' ELSE 'pending' END,
                 claim_owner = NULL, claim_token = NULL,
                 claim_expires_at = NULL, last_error_summary = NULL,
                 blocked_reason = NULL,
-                due_at = CASE WHEN desired_version > %s THEN %s ELSE due_at END,
+                due_at = CASE
+                  WHEN desired_version > %s OR desired_contract_version > %s
+                  THEN %s ELSE due_at END,
                 updated_at = %s
             WHERE feedback_id = %s
               AND claim_token = %s
@@ -596,7 +653,9 @@ def mark_delivered(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> 
               AND odoo_task_id = %s
               AND before_attachment_id IS NOT DISTINCT FROM %s
               AND desired_version >= %s
+              AND desired_contract_version >= %s
               AND last_synced_version = %s
+              AND last_synced_contract_version = %s
               AND (
                 NOT EXISTS (
                     SELECT 1 FROM feedback_images
@@ -609,8 +668,11 @@ def mark_delivered(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> 
             """,
             (
                 claim.desired_version,
+                claim.desired_contract_version,
                 claim.desired_version,
+                claim.desired_contract_version,
                 claim.desired_version,
+                claim.desired_contract_version,
                 current,
                 current,
                 claim.feedback_id,
@@ -618,7 +680,9 @@ def mark_delivered(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> 
                 claim.task_id,
                 claim.before_attachment_id,
                 claim.desired_version,
+                claim.desired_contract_version,
                 claim.last_synced_version,
+                claim.last_synced_contract_version,
             ),
         )
         row = _one_row(cursor, "delivery completion")
