@@ -193,6 +193,33 @@ def projection_snapshot(feedback_id: int, projection_version: int) -> Projection
     )
 
 
+def lifecycle_state(feedback_id: int) -> Mapping[str, object]:
+    """Read the exact local lifecycle fields needed by operator commands."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, status, lifecycle_origin, projection_version FROM feedback "
+            "WHERE id = %s",
+            (safe_feedback_id,),
+        )
+        row = cur.fetchone()
+
+    if not isinstance(row, Mapping):
+        raise InvalidTransition("feedback lifecycle state is unavailable")
+    state = dict(row)
+    if (
+        set(state) != {"id", "status", "lifecycle_origin", "projection_version"}
+        or type(state.get("id")) is not int
+        or state.get("id") != safe_feedback_id
+        or state.get("status") not in _TRANSITIONS
+        or state.get("lifecycle_origin") != "local"
+        or type(state.get("projection_version")) is not int
+        or not 0 < state["projection_version"] <= _MAX_SIGNED_64
+    ):
+        raise InvalidTransition("feedback lifecycle state is unavailable")
+    return MappingProxyType(state)
+
+
 def attempt_image_snapshot(
     feedback_id: int,
     binary_evidence: Mapping[str, Mapping[str, object]],

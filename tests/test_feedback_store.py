@@ -9,6 +9,9 @@ from zira_dashboard import db, feedback_store
 from zira_dashboard.feedback_image import NormalizedImage
 
 
+MAX_SIGNED_64 = 9_223_372_036_854_775_807
+
+
 class RecordingCursor:
     def __init__(self):
         self.calls = []
@@ -153,6 +156,97 @@ def test_for_submitter_selects_local_status(monkeypatch):
     selected = seen["sql"].split("FROM feedback", 1)[0]
     assert "status" in selected
     assert seen["params"] == ("tester@gruberpallets.com", 100)
+
+
+class LifecycleCursor:
+    def __init__(self, row):
+        self.row = row
+        self.calls = []
+
+    def execute(self, sql, params):
+        self.calls.append((" ".join(sql.split()), params))
+
+    def fetchone(self):
+        return self.row
+
+
+def _lifecycle_cursor(monkeypatch, row):
+    cursor = LifecycleCursor(row)
+
+    @contextmanager
+    def fake_cursor():
+        yield cursor
+
+    monkeypatch.setattr(feedback_store.db, "cursor", fake_cursor)
+    return cursor
+
+
+def test_lifecycle_state_reads_one_exact_local_row_without_sync_state(monkeypatch):
+    row = {
+        "id": 17,
+        "status": "in_progress",
+        "lifecycle_origin": "local",
+        "projection_version": 3,
+    }
+    cursor = _lifecycle_cursor(monkeypatch, row)
+
+    result = feedback_store.lifecycle_state(17)
+
+    assert dict(result) == row
+    assert len(cursor.calls) == 1
+    sql, params = cursor.calls[0]
+    assert sql.startswith(
+        "SELECT id, status, lifecycle_origin, projection_version FROM feedback"
+    )
+    assert "WHERE id = %s" in sql
+    assert "UPDATE" not in sql
+    assert "feedback_odoo_sync" not in sql
+    assert params == (17,)
+
+
+@pytest.mark.parametrize("feedback_id", [0, -1, MAX_SIGNED_64 + 1, True, "17"])
+def test_lifecycle_state_rejects_invalid_ids_before_opening_a_transaction(
+    monkeypatch, feedback_id
+):
+    monkeypatch.setattr(
+        feedback_store.db,
+        "cursor",
+        lambda: (_ for _ in ()).throw(AssertionError("transaction opened")),
+    )
+
+    with pytest.raises(ValueError, match="feedback id"):
+        feedback_store.lifecycle_state(feedback_id)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        None,
+        {
+            "id": 17,
+            "status": "requested",
+            "lifecycle_origin": "legacy_project_task",
+            "projection_version": 3,
+        },
+        {
+            "id": 17,
+            "status": "requested",
+            "lifecycle_origin": None,
+            "projection_version": 3,
+        },
+    ],
+)
+def test_lifecycle_state_rejects_missing_or_nonlocal_rows_without_sync_changes(
+    monkeypatch, row
+):
+    cursor = _lifecycle_cursor(monkeypatch, row)
+
+    with pytest.raises(feedback_store.InvalidTransition):
+        feedback_store.lifecycle_state(17)
+
+    assert len(cursor.calls) == 1
+    assert all("UPDATE" not in sql for sql, _params in cursor.calls)
+    assert all("feedback_odoo_sync" not in sql for sql, _params in cursor.calls)
 
 
 needs_postgres = pytest.mark.skipif(
