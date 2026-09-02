@@ -151,6 +151,42 @@ def test_completed_feature_maps_terminal_fields_and_escapes_note():
     )
 
 
+def test_resolution_note_escapes_html_text_but_keeps_quotes_literal():
+    projection = build_projection(
+        feedback(
+            status="completed",
+            resolution_note='They\'re "ready" & <safe>',
+            projection_version=2,
+        ),
+        images={},
+        employee_lookup=lambda _email: None,
+        start_type="date",
+        stop_type="date",
+    )
+
+    assert projection.fields["x_studio_notes"] == (
+        '<p>They\'re "ready" &amp; &lt;safe&gt;</p>'
+    )
+
+
+def test_verify_readback_accepts_odoo_normalized_literal_quotes_in_note():
+    projection = build_projection(
+        feedback(
+            status="completed",
+            resolution_note='They\'re "ready" & <safe>',
+            projection_version=2,
+        ),
+        images={},
+        employee_lookup=lambda _email: None,
+        start_type="date",
+        stop_type="date",
+    )
+    remote = dict(projection.fields)
+    remote["x_studio_notes"] = '<p>They\'re "ready" &amp; &lt;safe&gt;</p>'
+
+    verify_readback(projection, remote)
+
+
 @pytest.mark.parametrize(
     ("local_value", "odoo_value"),
     [

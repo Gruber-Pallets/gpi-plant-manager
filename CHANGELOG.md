@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Keep finished feedback moving
+
+- **Feedback notes with apostrophes or quote marks now match Odoo.** Plant Manager still protects the note from text that could change the page.
+
 ### Find why shared feedback stopped
 
 - **Plant Manager can safely name which parts of a shared feedback item do not match Odoo.** It shows only field names and keeps feedback text and pictures private.

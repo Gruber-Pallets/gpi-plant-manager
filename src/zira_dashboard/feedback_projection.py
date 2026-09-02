@@ -447,7 +447,7 @@ def build_projection(
     if note is not None:
         if type(note) is not str:
             raise ValueError("resolution note must be a string")
-        fields["x_studio_notes"] = f"<p>{html.escape(note, quote=True)}</p>"
+        fields["x_studio_notes"] = f"<p>{html.escape(note, quote=False)}</p>"
 
     binaries: dict[str, BinaryEvidence] = {}
     for role, image in images.items():
