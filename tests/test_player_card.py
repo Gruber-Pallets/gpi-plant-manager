@@ -143,6 +143,32 @@ def _bare_card_patches():
     ]
 
 
+def test_player_card_uses_staffing_employee_navigation():
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        for p in _bare_card_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch(
+            "zira_dashboard.routes.people._forklift_for_person",
+            return_value=None,
+        ))
+        html = TestClient(app).get("/staffing/people/Nav%20Carlos").text
+
+    assert 'href="/staffing"' in html
+    assert 'href="/staffing/people" class="active">Employee</a>' in html
+    assert 'href="/people-performance" class="active"' not in html
+    assert 'id="acknowledgement-history"' in html
+
+
+def test_staffing_subnav_exposes_employee_landing():
+    from pathlib import Path
+
+    html = Path("src/zira_dashboard/templates/_staffing_subnav.html").read_text()
+    assert 'href="/staffing/people"' in html
+    assert ">Employee</a>" in html
+
+
 def test_player_card_shows_forklift_block_when_mapped():
     import contextlib
 

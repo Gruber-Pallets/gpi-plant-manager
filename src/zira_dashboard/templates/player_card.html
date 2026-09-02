@@ -24,6 +24,13 @@
   .pc-totals .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.9rem; }
   .pc-totals .stat .lab { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; }
   .pc-totals .stat .v { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 0.2rem; }
+  .pc-ack-history { margin: 1rem 0; padding: 0.9rem 1rem; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+  .pc-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 0.45rem; }
+  .pc-section-head h3 { margin: 0; }
+  .pc-table-wrap { overflow-x: auto; }
+  .pc-ack-status { display: inline-block; border-radius: 999px; padding: 0.18rem 0.5rem; font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
+  .pc-ack-status.seen { color: var(--accent); background: var(--accent-dim); }
+  .pc-ack-status.waiting { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
   table.pc { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
   table.pc th, table.pc td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; }
   table.pc th { color: var(--muted); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -90,6 +97,9 @@
   .fk-day-detail-grid .lab::after { content: ": "; }
   .fk-day-score { margin-top: 0.55rem; font-size: 0.88rem; }
   .fk-day-score .sub { color: var(--muted); }
+  @media (max-width: 640px) {
+    .pc-section-head { align-items: flex-start; flex-direction: column; gap: 0.2rem; }
+  }
 {% endblock %}
 
 {% block content %}
@@ -141,6 +151,15 @@
   <div class="stat"><div class="lab">Days Absent</div><div class="v">{{ total_absent_days }}</div></div>
   <div class="stat"><div class="lab">Days Late</div><div class="v">{{ total_late_days }}</div></div>
 </div>
+
+<section id="acknowledgement-history"
+         class="pc-ack-history"
+         hx-get="/staffing/people/{{ name|urlencode }}/acknowledgements"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+  <h3>Acknowledgement history</h3>
+  <p class="hint">Loading acknowledgement history…</p>
+</section>
 
 {% if group_avgs %}
 <div class="pc-group-avgs">

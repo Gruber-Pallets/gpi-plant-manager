@@ -1,0 +1,27 @@
+<div class="pc-section-head">
+  <h3>Acknowledgement history</h3>
+  <span class="hint">Employee notices shown before the punch screen</span>
+</div>
+{% if not history_available %}
+  <p class="hint">Acknowledgement history is unavailable right now.</p>
+{% elif not notification_history %}
+  <p class="hint">No acknowledgement history yet.</p>
+{% else %}
+  <div class="pc-table-wrap">
+    <table class="pc pc-ack-table">
+      <thead>
+        <tr><th>Notice</th><th>Displayed</th><th>Details</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+      {% for row in notification_history %}
+        <tr>
+          <td>{{ row.notice }}</td>
+          <td>{{ row.displayed }}</td>
+          <td>{{ row.details }}</td>
+          <td><span class="pc-ack-status {{ 'seen' if row.acknowledged else 'waiting' }}">{{ row.status }}</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}

@@ -1,21 +1,19 @@
-"""Player card route. The People directory was folded into the People
-Matrix — clicking a name in the matrix opens that person's player card.
-The /staffing/people path now redirects to the matrix so old bookmarks
-keep working.
-"""
+"""Staffing employee landing, player cards, and acknowledgement history."""
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+import logging
+from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import production_metrics, shift_config, staffing
+from .. import employee_notifications, production_metrics, shift_config, staffing
 from ..deps import templates
 from ..plant_day import today as plant_today
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
 
 # Forklift player-card lookback for the windowed stat block (calls / on-time /
 # avg response / utilization). Independent of the production card's range.
@@ -155,6 +153,78 @@ def staffing_people_landing():
     return RedirectResponse(
         url=f"/staffing/people/{actives[0]}",
         status_code=307,
+    )
+
+
+def _history_time(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    local = value.astimezone(shift_config.SITE_TZ)
+    return f"{local.strftime('%b')} {local.day}, {local.year} · {local.strftime('%I:%M %p').lstrip('0')}"
+
+
+def _history_context(rows: list[dict]) -> list[dict]:
+    labels = {
+        "anniversary_pto_reminder": "Anniversary PTO reminder",
+        "time_off_approved": "Time off approved",
+        "time_off_denied": "Time off denied",
+        "time_off_cancelled": "Time off cancelled",
+        "saturday_work_cancelled": "Optional work cancelled",
+    }
+    result = []
+    for row in rows:
+        anniversary = row.get("anniversary_date")
+        amount = row.get("balance_amount")
+        unit = row.get("balance_unit")
+        detail = row.get("body") or "—"
+        if anniversary is not None and amount is not None and unit in {"days", "hours"}:
+            anniversary_label = (
+                f"{anniversary.strftime('%b')} {anniversary.day}, {anniversary.year}"
+            )
+            detail = f"{anniversary_label} · {format(amount.normalize(), 'f')} {unit}"
+        acknowledged = _history_time(row.get("acknowledged_at"))
+        result.append({
+            "notice": labels.get(row.get("kind"), row.get("title") or "Employee notice"),
+            "displayed": _history_time(row.get("presented_at")) or "Not recorded",
+            "details": detail,
+            "status": (
+                f"Acknowledged {acknowledged}"
+                if acknowledged
+                else "Waiting for acknowledgement"
+            ),
+            "acknowledged": acknowledged is not None,
+        })
+    return result
+
+
+@router.get(
+    "/staffing/people/{name}/acknowledgements",
+    response_class=HTMLResponse,
+)
+def employee_acknowledgement_history(request: Request, name: str):
+    """Load one employee's live notification audit outside the cached card."""
+    roster = {person.name: person for person in staffing.load_roster()}
+    person = roster.get(name)
+    if person is None:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    available = True
+    rows = []
+    if person.employee_id is not None:
+        try:
+            rows = employee_notifications.list_history(person.employee_id)
+        except Exception:  # noqa: BLE001 -- keep the main employee page usable
+            _log.exception(
+                "Could not load notification history for employee %s",
+                person.employee_id,
+            )
+            available = False
+    return templates.TemplateResponse(
+        request,
+        "_employee_acknowledgement_history.html",
+        {
+            "history_available": available,
+            "notification_history": _history_context(rows),
+        },
     )
 
 
@@ -310,7 +380,7 @@ def staffing_player_card(
         request,
         "player_card.html",
         {
-            "active": "people",
+            "active": "employee",
             "name": name,
             "start": start_d.isoformat(),
             "end": end_d.isoformat(),

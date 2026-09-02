@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Employees can confirm anniversary PTO reminders
+
+- **Employees now see a reminder before punching in when their work anniversary is close and they still have PTO.** They must confirm it before continuing. Managers can see the confirmation history on each employee's new Staffing page.
+
 ### Plan employee anniversary PTO reminders
 
 - **A step-by-step plan is ready to remind employees when their work anniversary is close and they still have PTO.** It also covers a new Employee tab and a clear history of which reminders were confirmed. Nothing in the app has changed yet.

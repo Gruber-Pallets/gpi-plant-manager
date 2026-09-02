@@ -79,6 +79,7 @@ def test_should_track_excludes_noise_but_keeps_real_pages():
     assert page_views.should_track("/auth/login") is False
     assert page_views.should_track("/auth/callback") is False
     assert page_views.should_track("/people-performance/rows") is False
+    assert page_views.should_track("/staffing/people/{name}/acknowledgements") is False
 
 
 def test_never_hit_returns_inventory_minus_observed_sorted():

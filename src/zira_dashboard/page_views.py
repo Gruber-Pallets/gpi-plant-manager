@@ -56,6 +56,7 @@ _EXCLUDE_PREFIXES = ("/static", "/auth")
 _EXCLUDE_EXACT = frozenset({
     "/tv/ping", "/healthz", "/favicon.ico", "/robots.txt",
     "/people-performance/rows",
+    "/staffing/people/{name}/acknowledgements",
     # FastAPI auto-docs (disabled in prod, but excluded here so the inventory
     # is correct even if they're ever re-enabled).
     "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect",
