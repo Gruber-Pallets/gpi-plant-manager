@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Plan time off on shared schedules
+
+- **A step-by-step plan is ready to show who is off on printed schedules and schedules sent to Slack.** Full-day names will show near the top, and part-day times will stay beside each person's name. Nothing in the app has changed yet.
+
 ### Keep the People page bar clear
 
 - **Warnings now have their own row in the People page bar.** The totals and controls stay above them, and everything wraps to fit without a sideways scroll bar.
