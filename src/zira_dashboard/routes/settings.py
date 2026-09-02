@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from urllib.parse import quote_plus, urlencode
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import (
@@ -274,9 +274,39 @@ def settings_page(
     section: str = Query(default="work_centers"),
     defaults_error: str = Query(default=""),
     error: str = Query(default=""),
+    identity_day: date | None = Query(default=None),
+    identity_saved: int = Query(default=0),
+    identity_error: str = Query(default=""),
 ):
     if section not in ("work_centers", "integrations", "api", "roster_filter", "tvs", "timeclock", "time_off", "forklift", "diagnostics"):
         section = "work_centers"
+    settings_today = plant_today()
+    forklift_identities_ctx: dict | None = None
+    if section == "forklift":
+        selected_identity_day = identity_day or settings_today
+        if selected_identity_day > settings_today:
+            raise HTTPException(
+                status_code=400, detail="Choose today or an earlier day"
+            )
+        try:
+            from .. import forklift_identity_view
+
+            forklift_identities_ctx = forklift_identity_view.identity_context(
+                selected_identity_day
+            )
+        except Exception:
+            logging.warning(
+                "Forklift identity Settings context unavailable", exc_info=True
+            )
+            forklift_identities_ctx = {
+                "day": selected_identity_day.isoformat(),
+                "mappings": (),
+                "unresolved": (),
+                "employee_options": (),
+                "unavailable": (
+                    "Forklift identities are unavailable right now. Try again later."
+                ),
+            }
     can_manage_api_keys = _can_manage_api_keys(request)
     if section == "api" and not can_manage_api_keys:
         return HTMLResponse("Forbidden", status_code=403)
@@ -517,7 +547,6 @@ def settings_page(
     forklift_ctx: dict | None = None
     try:
         from .. import forklift_advisor, forklift_settings
-        from ..plant_day import today as plant_today
         from .staffing import _next_working_day
         _fl = forklift_settings.current()
         _target_day = _next_working_day(plant_today())
@@ -595,6 +624,10 @@ def settings_page(
             },
             "time_off_settings": time_off_settings,
             "forklift": forklift_ctx,
+            "forklift_identities": forklift_identities_ctx,
+            "identity_saved": bool(identity_saved),
+            "identity_error": identity_error,
+            "today": settings_today.isoformat(),
         },
     )
 

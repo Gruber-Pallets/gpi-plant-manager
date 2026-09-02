@@ -973,7 +973,11 @@
   <!-- Forklift -->
   <section class="panel" id="forklift-panel"
            {% if active_section != 'forklift' %}style="display:none"{% endif %}>
-    <h2>Forklift Demand Advisor</h2>
+    <h2>Forklift</h2>
+    {% if forklift_identities %}
+      {% include "_settings_forklift_identities.html" %}
+    {% endif %}
+    <h3>Demand Advisor</h3>
     <p class="help">
       The scheduler shows a forklift-driver recommendation on the
       <strong>Forklift</strong> bay label (e.g. &ldquo;6 suggested (coverage)

@@ -185,6 +185,76 @@ def test_forklift_settings_section_renders_sliders_and_both_numbers():
     assert "Reset all to algorithm" in rendered
 
 
+def test_forklift_settings_renders_focused_identity_forms_without_raw_calls():
+    from zira_dashboard.deps import templates
+
+    forklift = _stub_forklift_ctx()
+    forklift.update(_stub_score_ctx())
+    identities = {
+        "day": "2026-09-02",
+        "unresolved": ({
+            "external_driver_id": "driver-8",
+            "source_names": ("Alex", "A."),
+            "call_count": 5,
+            "first_call": "7:10 AM",
+            "last_call": "8:45 AM",
+            "name_conflict": True,
+            "event_id": "raw-event-must-not-render",
+        },),
+        "mappings": ({
+            "external_driver_id": "driver-old",
+            "source_name": "Sam",
+            "employee_odoo_id": 708,
+            "employee_name": "Sam Rivera",
+            "version": 4,
+            "updated_at": "Sep 1, 10:30 AM",
+            "updated_by_upn": "manager@example.com",
+        },),
+        "employee_options": (
+            {"employee_odoo_id": 707, "employee_name": "Alex Chen"},
+            {"employee_odoo_id": 708, "employee_name": "Sam Rivera"},
+        ),
+    }
+
+    rendered = templates.env.from_string(_extract_forklift_section()).render(
+        forklift=forklift,
+        forklift_identities=identities,
+        today="2026-09-02",
+        identity_error="",
+        identity_saved=False,
+        saved=False,
+        active_section="forklift",
+    )
+
+    assert "<h2>Forklift</h2>" in rendered
+    assert "Forklift identities" in rendered
+    assert "Demand Advisor" in rendered
+    assert "GOAT Score" in rendered
+    assert "Alex Chen" in rendered and "Sam Rivera" in rendered
+    assert "Inactive Person" not in rendered
+    assert 'action="/settings/forklift-identities"' in rendered
+    assert 'name="action" value="save"' in rendered
+    assert 'name="action" value="remove"' in rendered
+    assert 'name="expected_version" value="4"' in rendered
+    assert 'name="identity_day" value="2026-09-02"' in rendered
+    assert 'max="2026-09-02"' in rendered
+    assert "raw-event-must-not-render" not in rendered
+
+
+def test_forklift_identity_styles_keep_controls_accessible_and_responsive():
+    from pathlib import Path
+
+    css = Path("src/zira_dashboard/static/settings.css").read_text()
+
+    assert ".forklift-identities" in css
+    assert ".forklift-identity-list" in css
+    assert ".forklift-identity-card" in css
+    assert "overflow-wrap: anywhere" in css
+    assert "min-height: 44px" in css
+    assert ":focus-visible" in css
+    assert "@media (max-width: 760px)" in css
+
+
 def test_forklift_panel_has_capacity_sliders_not_target():
     """Task 7 (capacity-coverage): the panel shows the driver utilization and
     throughput knobs and has retired the SLA 'Target time-to-claim' slider."""

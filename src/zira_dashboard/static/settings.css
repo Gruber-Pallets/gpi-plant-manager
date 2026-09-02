@@ -649,3 +649,44 @@ button:hover { filter: brightness(1.1); }
 }
 .tc-panel > form:first-child h3,
 .tc-panel > h3:first-child { margin-top: 0.2rem; }
+
+.forklift-identities {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.forklift-identity-day,
+.forklift-identity-card form {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: .6rem;
+}
+.forklift-identity-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));
+  gap: .75rem;
+}
+.forklift-identity-card {
+  min-width: 0;
+  padding: .8rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+}
+.forklift-identity-card code { overflow-wrap: anywhere; }
+.forklift-identity-card button,
+.forklift-identity-card select,
+.forklift-identity-day button,
+.forklift-identity-day input { min-height: 44px; }
+.forklift-identity-card :focus-visible,
+.forklift-identity-day :focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (max-width: 760px) {
+  .forklift-identity-day,
+  .forklift-identity-card form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

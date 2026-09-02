@@ -1,0 +1,68 @@
+<div id="forklift-identities" class="forklift-identities">
+  <h3>Forklift identities</h3>
+  <p class="help">Match an outside forklift driver ID to one active employee. Names are clues only; your choice is saved and recorded.</p>
+  <form method="get" action="/settings" class="forklift-identity-day">
+    <input type="hidden" name="section" value="forklift">
+    <label>Calls from <input type="date" name="identity_day" value="{{ forklift_identities.day }}" max="{{ today }}"></label>
+    <button type="submit">Show day</button>
+  </form>
+  {% if identity_error %}<p class="defaults-error" role="alert">{{ identity_error }}</p>{% endif %}
+  {% if identity_saved %}<p class="saved-flash" role="status">Identity mapping saved.</p>{% endif %}
+  {% if forklift_identities.unavailable is defined %}<p class="defaults-error" role="alert">{{ forklift_identities.unavailable }}</p>{% endif %}
+  <h4>Needs a match</h4>
+  <div class="forklift-identity-list">
+    {% for row in forklift_identities.unresolved %}
+    <article class="forklift-identity-card">
+      <h5>{{ row.source_names|join(', ') or 'Name unavailable' }}</h5>
+      <p><code>{{ row.external_driver_id }}</code> · {{ row.call_count }} call{% if row.call_count != 1 %}s{% endif %} · {{ row.first_call }} to {{ row.last_call }}</p>
+      {% if row.name_conflict %}<p class="hint">This ID used more than one name. Choose the employee from the roster.</p>{% endif %}
+      <form method="post" action="/settings/forklift-identities">
+        <input type="hidden" name="action" value="save">
+        <input type="hidden" name="external_driver_id" value="{{ row.external_driver_id }}">
+        <input type="hidden" name="expected_version" value="">
+        <input type="hidden" name="day" value="{{ forklift_identities.day }}">
+        <label>Active employee
+          <select name="employee_odoo_id" required>
+            <option value="">Choose an employee</option>
+            {% for person in forklift_identities.employee_options %}
+            <option value="{{ person.employee_odoo_id }}">{{ person.employee_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Save match</button>
+      </form>
+    </article>
+    {% else %}<p class="help">No unmatched forklift identities for this day.</p>{% endfor %}
+  </div>
+  <h4>Current matches</h4>
+  <div class="forklift-identity-list">
+    {% for row in forklift_identities.mappings %}
+    <article class="forklift-identity-card">
+      <h5><code>{{ row.external_driver_id }}</code></h5>
+      <p>Last name seen: {{ row.source_name or 'Name unavailable' }}</p>
+      <p>Last changed {{ row.updated_at }} by {{ row.updated_by_upn }}</p>
+      <form method="post" action="/settings/forklift-identities">
+        <input type="hidden" name="action" value="save">
+        <input type="hidden" name="external_driver_id" value="{{ row.external_driver_id }}">
+        <input type="hidden" name="expected_version" value="{{ row.version }}">
+        <input type="hidden" name="day" value="{{ forklift_identities.day }}">
+        <label>Active employee
+          <select name="employee_odoo_id" required>
+            {% for person in forklift_identities.employee_options %}
+            <option value="{{ person.employee_odoo_id }}" {% if person.employee_odoo_id == row.employee_odoo_id %}selected{% endif %}>{{ person.employee_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Change match</button>
+      </form>
+      <form method="post" action="/settings/forklift-identities">
+        <input type="hidden" name="action" value="remove">
+        <input type="hidden" name="external_driver_id" value="{{ row.external_driver_id }}">
+        <input type="hidden" name="expected_version" value="{{ row.version }}">
+        <input type="hidden" name="day" value="{{ forklift_identities.day }}">
+        <button type="submit" onclick="return confirm('Remove this forklift identity mapping?')">Remove match</button>
+      </form>
+    </article>
+    {% else %}<p class="help">No saved forklift identity matches.</p>{% endfor %}
+  </div>
+</div>

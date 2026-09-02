@@ -33,6 +33,7 @@ from .routes import (
     exceptions,
     feedback,
     feedback_admin,
+    forklift_identities,
     forklift_leaderboards,
     goat_watch,
     new_leaderboard,
@@ -745,6 +746,7 @@ app.include_router(time_off.router)
 app.include_router(time_off_approvals.router)
 app.include_router(trophies.router)
 app.include_router(settings.router)
+app.include_router(forklift_identities.router)
 app.include_router(object_api.router)
 app.include_router(api_layout.router)
 app.include_router(changelog.router)
