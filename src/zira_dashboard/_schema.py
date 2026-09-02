@@ -1510,6 +1510,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS employee_notifications_saturday_dedupe
   ON employee_notifications (person_odoo_id, saturday_day, kind)
   WHERE saturday_day IS NOT NULL;
 
+-- Anniversary PTO reminders carry an immutable snapshot once they have been
+-- shown.  Before first presentation, the reconciler may update or remove them
+-- as dates and balances change.
+ALTER TABLE employee_notifications ADD COLUMN IF NOT EXISTS anniversary_date DATE;
+ALTER TABLE employee_notifications ADD COLUMN IF NOT EXISTS balance_amount NUMERIC(8,2);
+ALTER TABLE employee_notifications ADD COLUMN IF NOT EXISTS balance_unit TEXT;
+ALTER TABLE employee_notifications ADD COLUMN IF NOT EXISTS presented_at TIMESTAMPTZ;
+ALTER TABLE employee_notifications
+  DROP CONSTRAINT IF EXISTS employee_notifications_balance_unit_check;
+ALTER TABLE employee_notifications
+  ADD CONSTRAINT employee_notifications_balance_unit_check
+  CHECK (balance_unit IS NULL OR balance_unit IN ('days', 'hours'));
+CREATE UNIQUE INDEX IF NOT EXISTS employee_notifications_anniversary_pto_dedupe
+  ON employee_notifications (person_odoo_id, anniversary_date, kind)
+  WHERE anniversary_date IS NOT NULL;
+
 -- Audit log of scheduler reassignments caused by time-off cascade. Bucket
 -- vocabulary: `from_bucket` / `to_bucket` are either a WC name from
 -- `staffing.LOCATIONS`, the special `TIME_OFF_KEY` constant `'__time_off'`

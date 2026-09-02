@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from datetime import date, datetime, UTC
+from decimal import Decimal
 from typing import Any
 
 from . import db, shift_config
@@ -29,6 +31,14 @@ _RESOLUTION_KIND = {
     "refuse": "time_off_denied",
     "cancel": "time_off_cancelled",
 }
+
+
+@dataclass(frozen=True)
+class AnniversaryPtoNotice:
+    person_odoo_id: int
+    anniversary_date: date
+    balance_amount: Decimal
+    balance_unit: str
 
 
 def notifications_enabled() -> bool:
@@ -144,6 +154,63 @@ def create_saturday_cancelled(
     )
 
 
+def reconcile_anniversary_pto(notices: tuple[AnniversaryPtoNotice, ...]) -> None:
+    """Make unpresented anniversary reminders match the latest fresh balances.
+
+    A row becomes an audit snapshot as soon as the kiosk presents it, so every
+    cleanup and update predicate deliberately excludes presented or acknowledged
+    rows.
+    """
+    expected = {(n.person_odoo_id, n.anniversary_date): n for n in notices}
+    with db.cursor() as cursor:
+        cursor.execute(
+            "SELECT id, person_odoo_id, anniversary_date "
+            "FROM employee_notifications "
+            "WHERE kind = 'anniversary_pto_reminder' "
+            "AND presented_at IS NULL AND acknowledged_at IS NULL FOR UPDATE"
+        )
+        for row in cursor.fetchall():
+            key = (row["person_odoo_id"], row["anniversary_date"])
+            if key not in expected:
+                cursor.execute(
+                    "DELETE FROM employee_notifications WHERE id = %s "
+                    "AND kind = 'anniversary_pto_reminder' "
+                    "AND presented_at IS NULL AND acknowledged_at IS NULL",
+                    (row["id"],),
+                )
+
+        for notice in notices:
+            amount = format(notice.balance_amount.normalize(), "f")
+            title = "Your work anniversary is coming up"
+            body = (
+                f"Your work anniversary is {_md(notice.anniversary_date)}. "
+                f"You have {amount} {notice.balance_unit} of unused Paid Time Off. "
+                "Please plan to use your time or talk with your supervisor if you "
+                "have questions."
+            )
+            cursor.execute(
+                "INSERT INTO employee_notifications "
+                "(person_odoo_id, kind, title, body, anniversary_date, "
+                "balance_amount, balance_unit) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (person_odoo_id, anniversary_date, kind) "
+                "WHERE anniversary_date IS NOT NULL DO UPDATE SET "
+                "title = EXCLUDED.title, body = EXCLUDED.body, "
+                "balance_amount = EXCLUDED.balance_amount, "
+                "balance_unit = EXCLUDED.balance_unit "
+                "WHERE employee_notifications.presented_at IS NULL "
+                "AND employee_notifications.acknowledged_at IS NULL",
+                (
+                    notice.person_odoo_id,
+                    "anniversary_pto_reminder",
+                    title,
+                    body,
+                    notice.anniversary_date,
+                    notice.balance_amount,
+                    notice.balance_unit,
+                ),
+            )
+
+
 def holiday_cancellation_event_name(row: dict[str, Any]) -> str | None:
     """Recover the escaped-at-render holiday name from stored cancellation copy."""
     if row.get("title") != "Holiday work cancelled":
@@ -257,11 +324,33 @@ def has_unacknowledged(person_odoo_id: int) -> bool:
 
 
 def list_unacknowledged(person_odoo_id: int) -> list[dict]:
-    return db.query(
+    rows = db.query(
         "SELECT id, kind, title, body, leave_date_from, leave_date_to, saturday_day, "
-        "created_at FROM employee_notifications "
+        "anniversary_date, balance_amount, balance_unit, created_at, presented_at "
+        "FROM employee_notifications "
         "WHERE person_odoo_id = %s AND acknowledged_at IS NULL "
         "ORDER BY created_at",
+        (person_odoo_id,),
+    )
+    ids = [row["id"] for row in rows]
+    if ids:
+        db.execute(
+            "UPDATE employee_notifications "
+            "SET presented_at = COALESCE(presented_at, now()) "
+            "WHERE id = ANY(%s) AND person_odoo_id = %s "
+            "AND acknowledged_at IS NULL",
+            (ids, person_odoo_id),
+        )
+    return rows
+
+
+def list_history(person_odoo_id: int) -> list[dict]:
+    """Return one employee's complete kiosk-notification audit history."""
+    return db.query(
+        "SELECT id, kind, title, body, leave_date_from, leave_date_to, saturday_day, "
+        "anniversary_date, balance_amount, balance_unit, created_at, presented_at, "
+        "acknowledged_at FROM employee_notifications "
+        "WHERE person_odoo_id = %s ORDER BY created_at DESC, id DESC",
         (person_odoo_id,),
     )
 

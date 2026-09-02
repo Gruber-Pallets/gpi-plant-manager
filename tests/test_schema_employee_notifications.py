@@ -19,3 +19,16 @@ def test_schema_has_employee_notifications_indexes():
     # Fast unacknowledged lookup at sign-in.
     assert "employee_notifications_unack" in SCHEMA_DDL
     assert "WHERE acknowledged_at IS NULL" in SCHEMA_DDL
+
+
+def test_schema_adds_anniversary_pto_audit_fields():
+    for column in (
+        "anniversary_date DATE",
+        "balance_amount NUMERIC(8,2)",
+        "balance_unit TEXT",
+        "presented_at TIMESTAMPTZ",
+    ):
+        assert column in SCHEMA_DDL
+    assert "employee_notifications_anniversary_pto_dedupe" in SCHEMA_DDL
+    assert "(person_odoo_id, anniversary_date, kind)" in SCHEMA_DDL
+    assert "anniversary_date IS NOT NULL" in SCHEMA_DDL

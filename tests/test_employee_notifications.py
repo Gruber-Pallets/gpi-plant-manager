@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
@@ -121,6 +123,82 @@ def test_list_unacknowledged_filters_by_person_and_unacked(fake_db):
     assert "ORDER BY created_at" in sql
     assert "saturday_day" in sql
     assert params == (5,)
+
+
+def test_list_unacknowledged_records_first_presentation(fake_db):
+    fake_db["query_result"] = [{"id": 9, "kind": "anniversary_pto_reminder"}]
+
+    assert en.list_unacknowledged(5)[0]["id"] == 9
+
+    sql, params = fake_db["executes"][0]
+    assert "presented_at = COALESCE(presented_at, now())" in sql
+    assert "person_odoo_id = %s" in sql
+    assert params == ([9], 5)
+
+
+def test_history_is_person_scoped_and_newest_first(fake_db):
+    en.list_history(5)
+
+    sql, params = fake_db["queries"][0]
+    assert "WHERE person_odoo_id = %s" in sql
+    assert "ORDER BY created_at DESC, id DESC" in sql
+    assert "anniversary_date" in sql and "presented_at" in sql
+    assert params == (5,)
+
+
+class _TransactionCursor:
+    def __init__(self, existing=()):
+        self.existing = list(existing)
+        self.executes = []
+
+    def execute(self, sql, params=None):
+        self.executes.append((sql, params))
+
+    def fetchall(self):
+        return self.existing
+
+
+def _install_transaction(monkeypatch, existing=()):
+    cursor = _TransactionCursor(existing)
+
+    @contextmanager
+    def transaction():
+        yield cursor
+
+    monkeypatch.setattr(en.db, "cursor", transaction)
+    return cursor
+
+
+def test_reconcile_updates_only_unpresented_anniversary_notice(monkeypatch):
+    cursor = _install_transaction(monkeypatch)
+    notice = en.AnniversaryPtoNotice(5, date(2026, 10, 2), Decimal("2.5"), "days")
+
+    en.reconcile_anniversary_pto((notice,))
+
+    insert_sql, params = cursor.executes[-1]
+    assert "ON CONFLICT (person_odoo_id, anniversary_date, kind)" in insert_sql
+    assert "employee_notifications.presented_at IS NULL" in insert_sql
+    assert "employee_notifications.acknowledged_at IS NULL" in insert_sql
+    assert params[:4] == (5, "anniversary_pto_reminder", "Your work anniversary is coming up", "Your work anniversary is Oct 2. You have 2.5 days of unused Paid Time Off. Please plan to use your time or talk with your supervisor if you have questions.")
+
+
+def test_reconcile_removes_only_stale_unpresented_anniversary_notice(monkeypatch):
+    cursor = _install_transaction(
+        monkeypatch,
+        [{"id": 7, "person_odoo_id": 5, "anniversary_date": date(2026, 10, 2)}],
+    )
+
+    en.reconcile_anniversary_pto(())
+
+    select_sql = cursor.executes[0][0]
+    delete_sql, params = cursor.executes[1]
+    assert "kind = 'anniversary_pto_reminder'" in select_sql
+    assert "presented_at IS NULL" in select_sql
+    assert "acknowledged_at IS NULL" in select_sql
+    assert "kind = 'anniversary_pto_reminder'" in delete_sql
+    assert "presented_at IS NULL" in delete_sql
+    assert "acknowledged_at IS NULL" in delete_sql
+    assert params == (7,)
 
 
 def test_acknowledge_all_is_person_scoped(fake_db):
