@@ -1,11 +1,10 @@
 """Focused unit and optional Postgres tests for feedback_store."""
 
 from contextlib import contextmanager
-import os
 
 import pytest
 
-from zira_dashboard import db, feedback_store
+from zira_dashboard import feedback_store
 from zira_dashboard.feedback_image import NormalizedImage
 
 
@@ -313,36 +312,3 @@ def test_lifecycle_state_rejects_missing_or_nonlocal_rows_without_sync_changes(
     assert len(cursor.calls) == 1
     assert all("UPDATE" not in sql for sql, _params in cursor.calls)
     assert all("feedback_odoo_sync" not in sql for sql, _params in cursor.calls)
-
-
-needs_postgres = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"), reason="needs Postgres"
-)
-
-
-@pytest.fixture
-def feedback_schema():
-    db.init_pool()
-    db.bootstrap_schema()
-
-
-@needs_postgres
-def test_insert_then_for_submitter_round_trip(feedback_schema):
-    new_id = feedback_store.insert(
-        message="Round-trip test message",
-        submitter="tester@gruberpallets.com",
-        page_url="/recycling",
-        task_type="bug",
-        odoo_task_id=999001,
-    )
-    try:
-        assert isinstance(new_id, int)
-        rows = feedback_store.for_submitter("tester@gruberpallets.com", limit=50)
-        match = next((row for row in rows if row["id"] == new_id), None)
-        assert match is not None
-        assert match["message"] == "Round-trip test message"
-        assert match["task_type"] == "bug"
-        assert match["odoo_task_id"] == 999001
-        assert match["status"] is None
-    finally:
-        db.execute("DELETE FROM feedback WHERE id = %s", (new_id,))

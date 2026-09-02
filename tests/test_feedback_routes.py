@@ -16,15 +16,18 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def resolved_timeclock_submitter(monkeypatch):
+def local_feedback_roster(monkeypatch):
     monkeypatch.setattr(
-        feedback_submitters,
-        "resolve_timeclock",
-        lambda employee_id: feedback_submitters.ResolvedSubmitter(
-            employee_id=employee_id,
-            name="Ana",
-            email="ana@gruberpallets.com",
-        ),
+        feedback_submitters.db,
+        "query",
+        lambda *_args: [
+            {
+                "employee_id": 41,
+                "name": "Ana",
+                "active": True,
+                "work_email": "ana@gruberpallets.com",
+            }
+        ],
     )
 
 
@@ -51,6 +54,8 @@ def _fail_if_odoo_is_called(monkeypatch) -> None:
         raise AssertionError((args, kwargs))
 
     for name in (
+        "fetch_employees",
+        "fetch_employee_statuses",
         "authenticate",
         "ensure_feedback_project",
         "ensure_feedback_tag",
@@ -93,27 +98,32 @@ def test_post_feedback_saves_locally_without_calling_odoo(monkeypatch):
     }
 
 
-def test_post_feedback_still_succeeds_when_odoo_is_unavailable(monkeypatch):
+@pytest.mark.parametrize("task_type", ["bug", "feature"])
+def test_private_feedback_still_persists_when_live_odoo_is_unavailable(
+    monkeypatch, task_type
+):
+    captured = {}
     monkeypatch.setattr(
-        feedback_store, "create_submission", lambda **values: 44, raising=False
+        feedback_store,
+        "create_submission",
+        lambda **values: captured.update(values) or 44,
+        raising=False,
     )
-    monkeypatch.setattr(
-        odoo_client,
-        "authenticate",
-        lambda: (_ for _ in ()).throw(RuntimeError("down")),
-    )
+    _fail_if_odoo_is_called(monkeypatch)
 
-    response = client.post(
+    response = private_client("ANA@gruberpallets.com").post(
         "/feedback",
         data={
-            "type": "feature",
+            "type": task_type,
             "description": "New view",
-            "submitter_employee_id": "41",
+            "submitter_employee_id": "999",
         },
     )
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "id": 44, "task_delivery": "queued"}
+    assert captured["submitter"] == "ana@gruberpallets.com"
+    assert captured["submitter_employee_odoo_id"] == 41
 
 
 @pytest.mark.parametrize("task_type", ["floor_issue", "floor_suggestion"])
@@ -309,26 +319,31 @@ def test_post_feedback_uses_authenticated_upn_and_ignores_posted_employee_id(
         raising=False,
     )
     monkeypatch.setattr(
-        feedback_submitters,
-        "resolve_timeclock",
-        lambda employee_id: (_ for _ in ()).throw(AssertionError(employee_id)),
+        feedback_submitters.db,
+        "query",
+        lambda *_args: [
+            {
+                "employee_id": 41,
+                "name": "Posted Person",
+                "active": True,
+                "work_email": "posted@example.com",
+            },
+            {
+                "employee_id": 52,
+                "name": "Private User",
+                "active": True,
+                "work_email": "private@example.com",
+            },
+        ],
     )
-    monkeypatch.setattr(
-        feedback_submitters,
-        "resolve_private",
-        lambda upn: feedback_submitters.ResolvedSubmitter(
-            employee_id=52,
-            name="Private User",
-            email=upn.strip().lower(),
-        ),
-    )
+    _fail_if_odoo_is_called(monkeypatch)
 
     response = private_client(" Private@Example.com ").post(
         "/feedback",
         data={
             "type": "bug",
             "description": "Private report",
-            "submitter_employee_id": "not-an-id",
+            "submitter_employee_id": "41",
         },
     )
 
@@ -339,11 +354,9 @@ def test_post_feedback_uses_authenticated_upn_and_ignores_posted_employee_id(
 
 def test_post_feedback_rejects_unresolved_submitter(monkeypatch):
     monkeypatch.setattr(
-        feedback_submitters,
-        "resolve_timeclock",
-        lambda _employee_id: (_ for _ in ()).throw(
-            feedback_submitters.SubmitterError("not exact")
-        ),
+        feedback_submitters.db,
+        "query",
+        lambda *_args: [],
     )
 
     response = client.post(

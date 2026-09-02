@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, UTC
 from threading import Lock
 
 from . import odoo_client
+from .feedback_submitters import normalize_work_email
 from .plant_day import today as plant_today
 
 log = logging.getLogger(__name__)
@@ -500,12 +501,13 @@ def _sync_locked(force: bool = False) -> SyncResult:
             spanish_speaker = spanish_level > 0
             is_flex = _m2o_id(emp.get("resource_calendar_id")) in flex_cal_ids
             cur.execute(
-                "INSERT INTO people (odoo_id, name, full_name, active, wage_type, "
+                "INSERT INTO people (odoo_id, name, full_name, work_email, active, wage_type, "
                 "department_name, spanish_speaker, spanish_level, resource_calendar_id, is_flexible, "
                 "last_pulled_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (odoo_id) DO UPDATE SET name = EXCLUDED.name, "
                 "full_name = EXCLUDED.full_name, "
+                "work_email = EXCLUDED.work_email, "
                 "active = EXCLUDED.active, wage_type = EXCLUDED.wage_type, "
                 "department_name = EXCLUDED.department_name, "
                 "spanish_speaker = EXCLUDED.spanish_speaker, "
@@ -517,6 +519,7 @@ def _sync_locked(force: bool = False) -> SyncResult:
                     emp["id"],
                     roster_names[int(emp["id"])],
                     (emp.get("name") or "").strip(),
+                    normalize_work_email(emp.get("work_email")),
                     True,
                     wage_type,
                     department_name,

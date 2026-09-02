@@ -3,34 +3,8 @@
 from zira_dashboard import feedback_store
 
 
-def test_insert_passes_all_columns(monkeypatch):
-    seen = {}
-
-    def fake_cursor():
-        class _Cur:
-            def __enter__(self_):
-                return self_
-            def __exit__(self_, *a):
-                return False
-            def execute(self_, sql, params):
-                seen["sql"] = sql
-                seen["params"] = params
-            def fetchone(self_):
-                return {"id": 42}
-        return _Cur()
-
-    monkeypatch.setattr(feedback_store.db, "cursor", fake_cursor)
-
-    new_id = feedback_store.insert(
-        message="hi",
-        submitter="dale@x.com",
-        page_url="/p",
-        task_type="bug",
-        odoo_task_id=7,
-    )
-
-    assert new_id == 42
-    assert seen["params"] == ("dale@x.com", "/p", "bug", 7, "hi")
+def test_feedback_store_has_no_unvalidated_insert_bypass():
+    assert not hasattr(feedback_store, "insert")
 
 
 def test_for_submitter_clamps_limit_and_filters(monkeypatch):

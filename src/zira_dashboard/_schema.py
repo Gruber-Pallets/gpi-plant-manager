@@ -87,6 +87,9 @@ ALTER TABLE people ADD COLUMN IF NOT EXISTS department_name TEXT;
 -- Raw Odoo name, kept alongside the compact roster label in `name` so the
 -- leaderboards can display un-abbreviated names.
 ALTER TABLE people ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE people ADD COLUMN IF NOT EXISTS work_email TEXT;
+CREATE INDEX IF NOT EXISTS people_active_work_email_idx
+  ON people (work_email) WHERE active = TRUE AND work_email IS NOT NULL;
 -- Celebration data is deliberately minimal: birthday month/day, never birth year.
 ALTER TABLE people ADD COLUMN IF NOT EXISTS birthday_month SMALLINT;
 ALTER TABLE people ADD COLUMN IF NOT EXISTS birthday_day SMALLINT;

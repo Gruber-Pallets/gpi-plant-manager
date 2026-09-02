@@ -4,6 +4,69 @@ from threading import Event, Lock, Thread, current_thread
 from zira_dashboard import db, employee_celebrations, odoo_sync
 
 
+def test_roster_sync_normalizes_and_persists_feedback_work_email(monkeypatch):
+    commands = []
+
+    class FakeCursor:
+        def execute(self, sql, params=None):
+            commands.append((" ".join(sql.split()), params))
+
+    @contextmanager
+    def fake_cursor():
+        yield FakeCursor()
+
+    monkeypatch.setattr(db, "cursor", fake_cursor)
+    monkeypatch.setattr(odoo_sync, "_read_last_sync", lambda: None)
+    monkeypatch.setattr(odoo_sync, "_write_last_sync", lambda _value: None)
+    monkeypatch.setattr(odoo_sync, "_set_roster_sync_alert", lambda _value: None)
+    monkeypatch.setattr(odoo_sync, "_claim_celebration_source_generation", lambda: 1)
+    monkeypatch.setattr(
+        odoo_sync,
+        "_celebration_source_generation_is_current",
+        lambda _cursor, _generation: True,
+    )
+    monkeypatch.setattr(odoo_sync, "refresh_work_schedule_hours", lambda: None)
+    employees = [
+        {
+            "id": 7,
+            "name": "Ana Person",
+            "active": True,
+            "work_email": " Ana@GruberPallets.com ",
+        },
+        {
+            "id": 8,
+            "name": "Bad Email",
+            "active": True,
+            "work_email": "not an email",
+        },
+    ]
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_employees", lambda: employees)
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employee_statuses",
+        lambda: [{"id": row["id"], "active": True} for row in employees],
+    )
+    monkeypatch.setattr(
+        odoo_sync.odoo_client,
+        "fetch_employee_celebration_dates",
+        lambda: odoo_sync.odoo_client.EmployeeCelebrationSource(False, False, {}),
+    )
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skills_for", lambda _ids: {})
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_spanish_skill_level_ids", lambda: {})
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_columns_with_types", lambda: [])
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_skill_level_buckets", lambda: {})
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_departments", lambda: [])
+    monkeypatch.setattr(odoo_sync.odoo_client, "fetch_work_schedules", lambda: [])
+
+    assert odoo_sync.sync(force=True).ok is True
+
+    people_writes = [item for item in commands if "INSERT INTO people" in item[0]]
+    assert len(people_writes) == 2
+    assert "full_name, work_email, active" in people_writes[0][0]
+    assert people_writes[0][1][3] == "ana@gruberpallets.com"
+    assert people_writes[1][1][3] is None
+
+
 def test_roster_writer_acquires_the_celebration_source_transaction_lock(monkeypatch):
     commands = []
 

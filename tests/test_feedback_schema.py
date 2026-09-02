@@ -25,6 +25,14 @@ def test_feedback_schema_keeps_exact_submitter_employee_id():
     )
 
 
+def test_people_schema_keeps_normalized_work_email_for_feedback_identity():
+    assert "ALTER TABLE people ADD COLUMN IF NOT EXISTS work_email TEXT" in SCHEMA_DDL
+    assert "CREATE INDEX IF NOT EXISTS people_active_work_email_idx" in SCHEMA_DDL
+    assert "ON people (work_email) WHERE active = TRUE AND work_email IS NOT NULL" in (
+        " ".join(SCHEMA_DDL.split())
+    )
+
+
 def test_schema_has_idempotent_alters_for_new_feedback_columns():
     assert "ADD COLUMN IF NOT EXISTS task_type" in SCHEMA_DDL
     assert "ADD COLUMN IF NOT EXISTS odoo_task_id" in SCHEMA_DDL

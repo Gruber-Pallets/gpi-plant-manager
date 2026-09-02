@@ -358,23 +358,6 @@ def record_sync_warning(
         )
 
 
-def insert(
-    message: str,
-    submitter: str | None = None,
-    page_url: str | None = None,
-    task_type: str | None = None,
-    odoo_task_id: int | None = None,
-) -> int:
-    """Insert one feedback row; return its new id."""
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO feedback (submitter, page_url, task_type, odoo_task_id, message) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (submitter, page_url, task_type, odoo_task_id, message),
-        )
-        return cur.fetchone()["id"]
-
-
 def create_submission(
     *,
     message: str,
