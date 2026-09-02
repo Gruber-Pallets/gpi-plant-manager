@@ -92,7 +92,10 @@ def encode_review_event(event: ReviewEvent) -> str:
 def _parse_positive_id(value: str) -> int | None:
     if re.fullmatch(r"[0-9]+", value) is None:
         return None
-    parsed = int(value)
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
     return parsed if parsed > 0 else None
 
 

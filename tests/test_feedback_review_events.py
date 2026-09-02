@@ -137,3 +137,27 @@ def test_review_event_parser_ignores_incomplete_or_unknown_blocks():
     assert parse_review_events(f"{malformed}\n{encode_review_event(CANONICAL_EVENT)}") == (
         CANONICAL_EVENT,
     )
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        encode_review_event(CANONICAL_EVENT).replace(
+            "Actor Odoo user ID: 7",
+            f"Actor Odoo user ID: {'9' * 5000}",
+        ),
+        encode_review_event(
+            replace(
+                CANONICAL_EVENT,
+                action="assign",
+                detail=None,
+                target_odoo_user_id=12,
+            )
+        ).replace(
+            "Target Odoo user ID: 12",
+            f"Target Odoo user ID: {'9' * 5000}",
+        ),
+    ],
+)
+def test_review_event_parser_ignores_ids_too_large_to_convert(encoded):
+    assert parse_review_events(encoded) == ()
