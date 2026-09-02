@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Finish the shared review workflow plan
+
+- **The step-by-step plan for one shared Odoo review task is ready.** It covers the six light-bulb choices, the Maintenance link, and matching review buttons in Sales Manager and OS Manager. Nothing in the app has changed yet.
+
 ### Plan one shared review task in every app
 
 - **A design is ready for Floor Issue, Floor Suggestion, and 2s Improvement to use one Odoo review task.** Dale will be able to accept, decline, assign, finish, or move it to the L10 meeting from the task apps. Repair will open the Maintenance request page. Nothing in the app has changed yet.
