@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from playwright.sync_api import Page, sync_playwright
@@ -41,6 +42,10 @@ def _install_console_capture(page: Page) -> list[str]:
     page.add_init_script(
         """
         window.__peoplePreviewIntervals = [];
+        window.__peoplePreviewPointerTypes = [];
+        window.addEventListener('pointerup', function (event) {
+          window.__peoplePreviewPointerTypes.push(event.pointerType);
+        });
         const nativeSetInterval = window.setInterval.bind(window);
         window.setInterval = function (callback, milliseconds) {
           window.__peoplePreviewIntervals.push(milliseconds);
@@ -59,6 +64,37 @@ def _install_console_capture(page: Page) -> list[str]:
         """
     )
     return errors
+
+
+def _install_preview_route(page: Page) -> str:
+    def serve(route):
+        parsed = urlparse(route.request.url)
+        request_path = parsed.path
+        if request_path == "/people-performance":
+            query = parse_qs(parsed.query)
+            state = (
+                query.get("status", [""])[0],
+                query.get("attention", ["0"])[0],
+            )
+            filename = {
+                ("", "0"): "all.html",
+                ("earlier", "0"): "earlier.html",
+                ("working", "1"): "working-attention.html",
+            }.get(state)
+            target = OUT / filename if filename else OUT / "missing-preview-state"
+        else:
+            target = OUT / (
+                "index.html"
+                if request_path in ("/", "/index.html")
+                else request_path.removeprefix("/")
+            )
+        if target.is_file():
+            route.fulfill(path=str(target))
+        else:
+            route.abort()
+
+    page.route("http://people-preview.test/**", serve)
+    return "http://people-preview.test/index.html"
 
 
 def test_preview_contains_busy_people_fixture():
@@ -116,6 +152,15 @@ def test_preview_contains_busy_people_fixture():
     assert "<strong>2</strong> worked earlier" in html
     assert 'data-status="working"' in html
     assert '<span class="sr-only">Selected filter.</span>' in html
+    zero_count_path = OUT / "zero-count.html"
+    assert zero_count_path.exists()
+    zero_count_html = zero_count_path.read_text(encoding="utf-8")
+    earlier_button = zero_count_html.split('data-filter-value="earlier"', 1)[1].split(
+        "</button>", 1
+    )[0]
+    assert "<strong>0</strong> worked earlier" in earlier_button
+    assert "disabled" in earlier_button
+    assert 'aria-describedby="pp-earlier-empty"' in earlier_button
     assert html.count('style="left:68.75%;width:6.25%"') == 10
     for label in (
         "location missing",
@@ -157,6 +202,128 @@ def test_preview_metric_marks_do_not_cross_the_planned_break():
                         assert marker_position <= 68.75 or marker_position >= 75.0
 
 
+def test_preview_zero_count_disables_the_exact_count_control():
+    _render_preview()
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 844}, has_touch=True)
+            page.goto((OUT / "zero-count.html").as_uri(), wait_until="load")
+            earlier = page.locator('[data-pp-control-key="earlier"]')
+
+            assert earlier.is_disabled()
+            assert earlier.locator("strong").text_content() == "0"
+            assert earlier.get_attribute("aria-describedby") == "pp-earlier-empty"
+            assert page.locator('[data-pp-control-key="working"]').is_enabled()
+            assert page.locator('[data-pp-control-key="attention"]').is_enabled()
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize(
+    ("control_key", "expected_query", "expected_pressed", "expected_rows", "summary"),
+    (
+        ("working", {"day": ["2026-08-28"]}, [], 10, ""),
+        (
+            "earlier",
+            {"day": ["2026-08-28"], "status": ["earlier"]},
+            ["earlier"],
+            2,
+            "Showing 2 of 2 worked earlier.",
+        ),
+        (
+            "attention",
+            {"day": ["2026-08-28"], "status": ["working"], "attention": ["1"]},
+            ["working", "attention"],
+            4,
+            "Showing 4 of 8 working now who need attention.",
+        ),
+    ),
+)
+def test_preview_count_filter_activation_preserves_combination_rules(
+    control_key, expected_query, expected_pressed, expected_rows, summary
+):
+    _render_preview()
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 1024, "height": 768})
+            errors = _install_console_capture(page)
+            fixture_url = _install_preview_route(page)
+            page.goto(fixture_url, wait_until="load")
+            assert (
+                page.locator("#people-performance-live").get_attribute("data-status") == "working"
+            )
+            assert page.locator("#people-performance-live").get_attribute("data-attention") == "0"
+
+            page.locator(f'[data-pp-control-key="{control_key}"]').click()
+
+            parsed = urlparse(page.url)
+            assert parsed.path == "/people-performance"
+            assert parse_qs(parsed.query) == expected_query
+            live = page.locator("#people-performance-live")
+            assert live.get_attribute("data-status") == expected_query.get("status", [""])[0]
+            assert live.get_attribute("data-attention") == expected_query.get("attention", ["0"])[0]
+            assert (
+                page.locator('.pp-counts > button[aria-pressed="true"]').evaluate_all(
+                    "buttons => buttons.map(button => button.dataset.ppControlKey)"
+                )
+                == expected_pressed
+            )
+            assert page.locator(".pp-row").count() == expected_rows
+            summaries = page.locator(".pp-filter-summary")
+            assert summaries.count() == bool(summary)
+            if summary:
+                assert summaries.text_content() == summary
+            assert errors == []
+        finally:
+            browser.close()
+
+
+def test_preview_warning_supports_native_keyboard_and_panel_action():
+    _render_preview()
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 1024, "height": 768})
+            errors = _install_console_capture(page)
+            page.goto((OUT / "index.html").as_uri(), wait_until="load")
+            warning_trigger = page.locator(".pp-warning-trigger").first
+            panel = page.locator("#pp-warning-popover")
+
+            warning_trigger.focus()
+            page.keyboard.press("Enter")
+            page.locator('#pp-warning-panel-content[data-warning-state="open"]').wait_for(
+                state="visible"
+            )
+            assert warning_trigger.get_attribute("aria-expanded") == "true"
+            page.keyboard.press("Escape")
+            assert not panel.is_visible()
+            assert warning_trigger.evaluate("trigger => document.activeElement === trigger")
+
+            warning_trigger.evaluate("trigger => trigger.blur()")
+            warning_trigger.focus()
+            page.keyboard.press("Space")
+            page.locator('#pp-warning-panel-content[data-warning-state="open"]').wait_for(
+                state="visible"
+            )
+            panel.locator('[data-pp-warning-action="check_again"]').click()
+            page.wait_for_function(
+                "document.getElementById('pp-action-status').textContent === "
+                "'The check could not finish.'"
+            )
+            assert "The check could not finish." in panel.text_content()
+            page.keyboard.press("Escape")
+            assert not panel.is_visible()
+            assert warning_trigger.evaluate("trigger => document.activeElement === trigger")
+            assert errors == []
+        finally:
+            browser.close()
+
+
 def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
     _render_preview()
     fixture_url = (OUT / "index.html").as_uri()
@@ -184,10 +351,7 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                 count_states = count_buttons.evaluate_all(
                     """
                     buttons => buttons.map(button => ({
-                      filter: button.dataset.filterValue,
                       pressed: button.getAttribute('aria-pressed'),
-                      disabled: button.disabled,
-                      count: Number(button.querySelector('strong').textContent),
                       height: button.getBoundingClientRect().height,
                     }))
                     """
@@ -198,7 +362,6 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                     "false",
                 ]
                 assert all(state["height"] >= 44 for state in count_states)
-                assert all(state["disabled"] is (state["count"] == 0) for state in count_states)
                 selected_count = page.locator('.pp-counts > button[aria-pressed="true"]')
                 assert selected_count.count() == 1
                 assert selected_count.locator(".pp-filter-selected").is_visible()
@@ -213,6 +376,21 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                         "Trim Saw 1 production could not be calculated."
                         in page.locator("#pp-warning-popover").text_content()
                     )
+                else:
+                    assert page.evaluate("matchMedia('(pointer: coarse)').matches") is True
+                    warning_trigger.hover()
+                    assert not page.locator("#pp-warning-popover").is_visible()
+                    assert warning_trigger.get_attribute("aria-expanded") == "false"
+                    warning_trigger.tap()
+                    touch_panel_content = page.locator(
+                        '#pp-warning-panel-content[data-warning-state="open"]'
+                    )
+                    touch_panel_content.wait_for(state="visible")
+                    assert "touch" in page.evaluate("window.__peoplePreviewPointerTypes")
+                    page.keyboard.press("Escape")
+                    assert not page.locator("#pp-warning-popover").is_visible()
+                    assert warning_trigger.evaluate("trigger => document.activeElement === trigger")
+                    warning_trigger.evaluate("trigger => trigger.blur()")
                 warning_trigger.focus()
                 assert warning_trigger.get_attribute("aria-expanded") == "true"
                 warning_trigger.click()
@@ -247,11 +425,11 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                     or panel_box["y"] + panel_box["height"] <= trigger_box["y"]
                     or trigger_box["y"] + trigger_box["height"] <= panel_box["y"]
                 )
-                action_heights = panel.locator("[data-pp-warning-action]").evaluate_all(
-                    "actions => actions.map(action => action.getBoundingClientRect().height)"
+                interactive_heights = panel.locator("button, a").evaluate_all(
+                    "targets => targets.map(target => target.getBoundingClientRect().height)"
                 )
-                assert action_heights
-                assert min(action_heights) >= 44
+                assert len(interactive_heights) == 3
+                assert min(interactive_heights) >= 44
                 if width <= 760:
                     mobile_panel_geometry = panel.evaluate(
                         """

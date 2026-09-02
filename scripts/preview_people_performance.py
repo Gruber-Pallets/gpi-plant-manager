@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from zira_dashboard.app import app  # noqa: E402
 from zira_dashboard.deps import templates  # noqa: E402
 from zira_dashboard.people_performance_view import (  # noqa: E402
+    _filter_summary,
     _schedule_time_groups,
     _schedule_track_width_rem,
 )
@@ -555,22 +556,94 @@ def _context() -> dict:
     }
 
 
+def _zero_count_context() -> dict:
+    context = _context()
+    sections = tuple(
+        {
+            **section,
+            "rows": tuple(row for row in section["rows"] if row["is_active"]),
+        }
+        for section in context["sections"]
+    )
+    return {
+        **context,
+        "sections": sections,
+        "worked_earlier": 0,
+        "status_filter": None,
+    }
+
+
+def _filter_context(status_filter: str | None, *, attention_only: bool = False) -> dict:
+    context = _context()
+    rows = tuple(row for section in context["sections"] for row in section["rows"])
+    visible_rows = tuple(
+        row
+        for row in rows
+        if (
+            status_filter is None
+            or (status_filter == "working" and row["is_active"])
+            or (status_filter == "earlier" and not row["is_active"])
+        )
+        and (not attention_only or row["attention_reasons"])
+    )
+    visible_ids = {row["employee_odoo_id"] for row in visible_rows}
+    sections = tuple(
+        {
+            **section,
+            "rows": tuple(row for row in section["rows"] if row["employee_odoo_id"] in visible_ids),
+        }
+        for section in context["sections"]
+    )
+    return {
+        **context,
+        "sections": sections,
+        "status_filter": status_filter,
+        "attention_only": attention_only,
+        "total_people": len(rows),
+        "visible_people": len(visible_rows),
+        "filtered_empty": bool((status_filter is not None or attention_only) and not visible_rows),
+        "filter_summary": _filter_summary(
+            status_filter=status_filter,
+            attention_only=attention_only,
+            visible=len(visible_rows),
+            total=len(rows),
+            working=context["working_now"],
+            earlier=context["worked_earlier"],
+        ),
+    }
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     shutil.copytree(STATIC, OUT / "static", dirs_exist_ok=True)
-    with (
-        patch.object(people_performance, "_context", lambda *args, **kwargs: _context()),
-        patch.dict(
-            templates.env.globals,
-            {"nav_inbox_summary": lambda: EMPTY_NAV_SUMMARY},
+    client = TestClient(app)
+    for filename, context in (
+        ("index.html", _context()),
+        ("all.html", _filter_context(None)),
+        ("earlier.html", _filter_context("earlier")),
+        (
+            "working-attention.html",
+            _filter_context("working", attention_only=True),
         ),
+        ("zero-count.html", _zero_count_context()),
     ):
-        response = TestClient(app).get("/people-performance?day=2026-08-28")
-    response.raise_for_status()
-    html = response.text.replace('href="/static/', 'href="static/').replace(
-        'src="/static/', 'src="static/'
-    )
-    (OUT / "index.html").write_text(html, encoding="utf-8")
+        with (
+            patch.object(
+                people_performance,
+                "_context",
+                lambda *args, context=context, **kwargs: context,
+            ),
+            patch.dict(
+                templates.env.globals,
+                {"nav_inbox_summary": lambda: EMPTY_NAV_SUMMARY},
+            ),
+        ):
+            response = client.get("/people-performance?day=2026-08-28")
+        response.raise_for_status()
+        html = response.text.replace('href="/static/', 'href="static/').replace(
+            'src="/static/', 'src="static/'
+        )
+        (OUT / filename).write_text(html, encoding="utf-8")
     print(OUT.resolve())
 
 
