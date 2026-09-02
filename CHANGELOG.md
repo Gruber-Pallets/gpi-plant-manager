@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Finish the People status button plan
+
+- **The step-by-step plan for useful People page buttons is ready.** It covers list filters, clear warning details, safe checks, and recorded forklift matches. Nothing in the app has changed yet.
+
 ### Keep feedback progress up to date
 
 - **Plant Manager now has a safe way to show when feedback work starts and ends.** It checks the exact feedback item and lets the normal shared-list update do its job.
