@@ -20,6 +20,7 @@ from .feedback_projection import (
     source_id_for,
     verify_readback,
 )
+from .feedback_types import FEEDBACK_TYPES
 from .odoo_improvements import (
     SOURCE_VALUE,
     TARGET_FIELDS,
@@ -56,9 +57,7 @@ _SELECTION_DIAGNOSTICS = frozenset(
         "x_studio_status:In-Progress",
         "x_studio_status:Completed",
         "x_studio_status:Declined",
-        "x_studio_type:Digital",
-        "x_studio_type:Digital - New Feature",
-        "x_studio_type:Physical",
+        *(f"x_studio_type:{item.odoo_value}" for item in FEEDBACK_TYPES),
     }
 )
 

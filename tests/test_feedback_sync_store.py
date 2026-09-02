@@ -26,6 +26,11 @@ ATTEMPT_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 MAX_SIGNED_64 = 9_223_372_036_854_775_807
 
 
+def test_pre_attempt_release_api_is_public():
+    assert "PreAttemptReleaseResult" in store.__all__
+    assert "release_pre_attempt_quarantine" in store.__all__
+
+
 class RecordingCursor(AbstractContextManager):
     """Cursor with one scripted fetch result per execute call."""
 

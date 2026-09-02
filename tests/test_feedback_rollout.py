@@ -259,6 +259,36 @@ def test_preflight_returns_detached_partial_safe_diagnostics():
     assert "Actual Company" not in serialized
 
 
+@pytest.mark.parametrize(
+    "missing_type",
+    (
+        "x_studio_type:Physical - Issue",
+        "x_studio_type:Physical - Suggestion",
+    ),
+)
+def test_preflight_preserves_each_canonical_physical_type_diagnostic(missing_type):
+    client = FakeClient(
+        inspection=good_inspection(missing_selections=(missing_type,))
+    )
+
+    report = preflight(client)
+
+    assert report.missing_selections == (missing_type,)
+
+
+def test_preflight_rejects_obsolete_generic_physical_type_diagnostic():
+    with pytest.raises(ValueError, match="diagnostics are malformed"):
+        PreflightReport(
+            database_uuid_matches=True,
+            company_matches=True,
+            fields_ok=False,
+            missing_fields=(),
+            wrong_types=(),
+            missing_selections=("x_studio_type:Physical",),
+            source_value_present=True,
+        )
+
+
 def test_readback_diagnostic_uses_saved_binary_and_outputs_only_mismatch_names(
     monkeypatch,
 ):

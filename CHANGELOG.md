@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Show the exact missing feedback choice
+
+- **Plant Manager can now name either missing floor feedback choice during its Odoo check.** This makes setup problems easier to find while keeping the check safe.
+
 ### Keep finished feedback moving
 
 - **Feedback notes with apostrophes or quote marks now match Odoo.** Plant Manager still protects the note from text that could change the page.
