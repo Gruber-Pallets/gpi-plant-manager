@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Plan one shared review task in every app
+
+- **A design is ready for Floor Issue, Floor Suggestion, and 2s Improvement to use one Odoo review task.** Dale will be able to accept, decline, assign, finish, or move it to the L10 meeting from the task apps. Repair will open the Maintenance request page. Nothing in the app has changed yet.
+
 ### Employees can confirm anniversary PTO reminders
 
 - **Employees now see a reminder before punching in when their work anniversary is close and they still have PTO.** They must confirm it before continuing. Managers can see the confirmation history on each employee's new Staffing page.
